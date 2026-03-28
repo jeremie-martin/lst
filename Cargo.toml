@@ -6,6 +6,7 @@ description = "Lucy's Simple Text editor — a fast, minimal editor for Linux"
 license = "MIT"
 
 [dependencies]
+fontdb = "0.23"
 iced = { version = "0.14", features = ["advanced"] }
 rfd = "0.17"
 

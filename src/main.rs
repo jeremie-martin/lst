@@ -11,7 +11,26 @@ use iced::{
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-const JB_MONO: Font = Font::with_name("JetBrains Mono");
+static EDITOR_FONT: LazyLock<Font> = LazyLock::new(|| {
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+
+    for &name in &["TX-02", "JetBrains Mono"] {
+        let query = fontdb::Query {
+            families: &[fontdb::Family::Name(name)],
+            weight: fontdb::Weight::NORMAL,
+            stretch: fontdb::Stretch::Normal,
+            style: fontdb::Style::Normal,
+        };
+        if db.query(&query).is_some() {
+            eprintln!("lst: using font '{name}'");
+            return Font::with_name(name);
+        }
+    }
+
+    eprintln!("lst: using system monospace font");
+    Font::MONOSPACE
+});
 
 fn editor_id() -> iced::widget::Id {
     iced::widget::Id::new("lst-editor")
@@ -359,7 +378,7 @@ impl App {
                 .join("\n");
 
             let line_numbers = mouse_area(
-                container(text(line_num_text).size(14).font(JB_MONO).color(text_muted)).padding(
+                container(text(line_num_text).size(14).font(*EDITOR_FONT).color(text_muted)).padding(
                     Padding {
                         top: 8.0,
                         bottom: 8.0 + overscroll,
@@ -379,7 +398,7 @@ impl App {
             let editor = text_editor(content_ref)
                 .id(EDITOR_ID.clone())
                 .on_action(Message::Edit)
-                .font(JB_MONO)
+                .font(*EDITOR_FONT)
                 .size(14)
                 .padding(Padding {
                     top: 8.0,
@@ -534,10 +553,7 @@ fn main() -> iced::Result {
         .title(App::title)
         .theme(App::theme)
         .subscription(App::subscription)
-        .font(include_bytes!(
-            "/usr/share/fonts/jetbrains-mono/JetBrainsMono[wght].ttf"
-        ))
-        .default_font(Font::DEFAULT)
+        .default_font(Font::MONOSPACE)
         .window_size(iced::Size::new(980.0, 680.0))
         .run()
 }
