@@ -2,20 +2,20 @@
 
 ## Must-have
 
-- [ ] Find & Replace (Ctrl+F / Ctrl+H)
-- [ ] Verify undo/redo works (Ctrl+Z / Ctrl+Shift+Z) — iced's text_editor may handle this already
+- [x] Find & Replace (Ctrl+F / Ctrl+H)
+- [x] Undo/redo (Ctrl+Z / Ctrl+Shift+Z) — snapshot-based, batched by edit kind
 - [ ] Unsaved changes warning on close tab / quit
 - [ ] Drag-and-drop file open
-- [ ] Derive line height from font metrics instead of hardcoded `20.0` in gutter click
+- [x] Derive line height from shared constant (LINE_HEIGHT_PX) for gutter + editor sync
 
 ## Should-have
 
 - [ ] File change detection — warn if modified externally
-- [ ] Tab reordering via drag
+- [x] Tab reordering (Ctrl+Shift+PageUp/PageDown)
 - [ ] Go to line (Ctrl+G)
-- [ ] Word wrap toggle
-- [ ] Indent / unindent selection (Tab / Shift+Tab)
-- [ ] Auto-indent on Enter
+- [x] Word wrap toggle (Alt+Z or status bar button)
+- [x] Indent / unindent selection (Tab / Shift+Tab)
+- [x] Auto-indent on Enter
 - [ ] Large file handling — virtual scrolling for line numbers (currently O(n) per frame)
 
 ## Nice ideas

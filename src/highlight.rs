@@ -4,15 +4,15 @@ use std::ops::Range;
 
 // ── Catppuccin Mocha palette ─────────────────────────────────────────────────
 
-const BLUE: Color = Color::from_rgb(0.537, 0.706, 0.980);     // #89b4fa
-const PEACH: Color = Color::from_rgb(0.980, 0.702, 0.529);    // #fab387
-const PINK: Color = Color::from_rgb(0.961, 0.761, 0.906);     // #f5c2e7
-const GREEN: Color = Color::from_rgb(0.651, 0.890, 0.631);    // #a6e3a1
+const BLUE: Color = Color::from_rgb(0.537, 0.706, 0.980); // #89b4fa
+const PEACH: Color = Color::from_rgb(0.980, 0.702, 0.529); // #fab387
+const PINK: Color = Color::from_rgb(0.961, 0.761, 0.906); // #f5c2e7
+const GREEN: Color = Color::from_rgb(0.651, 0.890, 0.631); // #a6e3a1
 const SAPPHIRE: Color = Color::from_rgb(0.455, 0.780, 0.925); // #74c7ec
 const OVERLAY0: Color = Color::from_rgb(0.424, 0.439, 0.525); // #6c7086
-const MAUVE: Color = Color::from_rgb(0.796, 0.651, 0.969);    // #cba6f7
+const MAUVE: Color = Color::from_rgb(0.796, 0.651, 0.969); // #cba6f7
 const LAVENDER: Color = Color::from_rgb(0.706, 0.745, 0.996); // #b4befe
-const YELLOW: Color = Color::from_rgb(0.976, 0.886, 0.659);   // #f9e2af
+const YELLOW: Color = Color::from_rgb(0.976, 0.886, 0.659); // #f9e2af
 const SURFACE1: Color = Color::from_rgb(0.271, 0.278, 0.353); // #45475a
 
 // ── Highlight types ──────────────────────────────────────────────────────────
@@ -190,7 +190,10 @@ fn highlight_block(line: &str, trimmed: &str, spans: &mut Vec<(Range<usize>, Hig
     }
 
     // Unordered list: - item, * item, + item
-    if trimmed.len() >= 2 && matches!(trimmed.as_bytes()[0], b'-' | b'*' | b'+') && trimmed.as_bytes()[1] == b' ' {
+    if trimmed.len() >= 2
+        && matches!(trimmed.as_bytes()[0], b'-' | b'*' | b'+')
+        && trimmed.as_bytes()[1] == b' '
+    {
         spans.push((indent..indent + 1, Highlight::ListMarker));
         highlight_inline(line, indent + 2, spans);
         return;
@@ -198,7 +201,10 @@ fn highlight_block(line: &str, trimmed: &str, spans: &mut Vec<(Range<usize>, Hig
 
     // Ordered list: 1. item, 2. item, etc.
     if let Some(dot) = trimmed.find(". ") {
-        if dot <= 9 && !trimmed[..dot].is_empty() && trimmed[..dot].bytes().all(|b| b.is_ascii_digit()) {
+        if dot <= 9
+            && !trimmed[..dot].is_empty()
+            && trimmed[..dot].bytes().all(|b| b.is_ascii_digit())
+        {
             spans.push((indent..indent + dot + 1, Highlight::ListMarker));
             highlight_inline(line, indent + dot + 2, spans);
             return;
@@ -255,7 +261,8 @@ fn highlight_inline(line: &str, start: usize, spans: &mut Vec<(Range<usize>, Hig
                 }
                 if let Some(end) = find_closing(bytes, i + 1, marker) {
                     if end + 1 >= len || bytes[end + 1] != marker {
-                        if marker == b'_' && end + 1 < len && bytes[end + 1].is_ascii_alphanumeric() {
+                        if marker == b'_' && end + 1 < len && bytes[end + 1].is_ascii_alphanumeric()
+                        {
                             i += 1;
                             continue;
                         }
@@ -301,11 +308,18 @@ fn parse_code_fence(trimmed: &str) -> Option<(char, usize)> {
         return None;
     }
     let count = trimmed.bytes().take_while(|&b| b == first).count();
-    if count >= 3 { Some((first as char, count)) } else { None }
+    if count >= 3 {
+        Some((first as char, count))
+    } else {
+        None
+    }
 }
 
 fn is_closing_fence(trimmed: &str, fence_char: char, fence_len: usize) -> bool {
-    let count = trimmed.bytes().take_while(|&b| b == fence_char as u8).count();
+    let count = trimmed
+        .bytes()
+        .take_while(|&b| b == fence_char as u8)
+        .count();
     count >= fence_len && trimmed[count..].trim().is_empty()
 }
 

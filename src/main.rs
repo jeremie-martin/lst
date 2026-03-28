@@ -1,77 +1,32 @@
+mod find;
 mod highlight;
+mod style;
+mod tab;
+
+use find::FindState;
+use style::{flat_btn, solid_bg, EDITOR_FONT, FONT_SIZE, LINE_HEIGHT_PX};
+use tab::{EditKind, Tab};
 
 use iced::event;
 use iced::keyboard;
 use iced::widget::{
-    button, column, container, mouse_area, responsive, row, scrollable, text, text_editor, Space,
+    button, column, container, mouse_area, responsive, row, scrollable, text, text_editor,
+    text_input, Space,
 };
 use iced::{
-    Background, Border, Color, Element, Font, Length, Padding, Point, Subscription, Task, Theme,
+    Background, Border, Color, Element, Font, Length, Padding, Pixels, Point, Subscription, Task,
+    Theme,
 };
-use std::borrow::Cow;
 use std::path::PathBuf;
-
-static EDITOR_FONT: LazyLock<Font> = LazyLock::new(|| {
-    let mut db = fontdb::Database::new();
-    db.load_system_fonts();
-
-    for &name in &["TX-02", "JetBrains Mono"] {
-        let query = fontdb::Query {
-            families: &[fontdb::Family::Name(name)],
-            weight: fontdb::Weight::NORMAL,
-            stretch: fontdb::Stretch::Normal,
-            style: fontdb::Style::Normal,
-        };
-        if db.query(&query).is_some() {
-            eprintln!("lst: using font '{name}'");
-            return Font::with_name(name);
-        }
-    }
-
-    eprintln!("lst: using system monospace font");
-    Font::MONOSPACE
-});
+use std::sync::{Arc, LazyLock};
 
 fn editor_id() -> iced::widget::Id {
     iced::widget::Id::new("lst-editor")
 }
 
-// Lazy static-like pattern: call once, clone as needed
-use std::sync::LazyLock;
 static EDITOR_ID: LazyLock<iced::widget::Id> = LazyLock::new(editor_id);
-
-// ── Tab ──────────────────────────────────────────────────────────────────────
-
-struct Tab {
-    path: Option<PathBuf>,
-    content: text_editor::Content,
-    modified: bool,
-}
-
-impl Tab {
-    fn new() -> Self {
-        Self {
-            path: None,
-            content: text_editor::Content::new(),
-            modified: false,
-        }
-    }
-
-    fn from_path(path: PathBuf, body: &str) -> Self {
-        Self {
-            path: Some(path),
-            content: text_editor::Content::with_text(body),
-            modified: false,
-        }
-    }
-
-    fn display_name(&self) -> Cow<'_, str> {
-        match &self.path {
-            Some(p) => p.file_name().unwrap_or_default().to_string_lossy(),
-            None => Cow::Borrowed("untitled"),
-        }
-    }
-}
+static FIND_INPUT_ID: LazyLock<iced::widget::Id> =
+    LazyLock::new(|| iced::widget::Id::new("lst-find"));
 
 // ── App ──────────────────────────────────────────────────────────────────────
 
@@ -80,6 +35,8 @@ struct App {
     active: usize,
     window_title: Option<String>,
     gutter_mouse_y: f32,
+    find: FindState,
+    word_wrap: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +53,25 @@ enum Message {
     GutterMove(Point),
     GutterClick,
     Quit,
+    // Undo / redo
+    Undo,
+    Redo,
+    AutoIndent,
+    // Find & replace
+    FindOpen,
+    FindOpenReplace,
+    FindClose,
+    FindQueryChanged(String),
+    FindReplaceChanged(String),
+    FindNext,
+    FindPrev,
+    ReplaceOne,
+    ReplaceAll,
+    // Word wrap
+    ToggleWordWrap,
+    // Tab reorder
+    MoveTabLeft,
+    MoveTabRight,
 }
 
 #[derive(Debug, Clone)]
@@ -119,7 +95,6 @@ fn parse_args() -> CliArgs {
             window_title = Some(value.to_owned());
             continue;
         }
-
         if arg == "--title" {
             let Some(value) = args.next() else {
                 eprintln!("lst: missing value for --title");
@@ -128,7 +103,6 @@ fn parse_args() -> CliArgs {
             window_title = Some(value);
             continue;
         }
-
         files.push(PathBuf::from(arg));
     }
 
@@ -161,6 +135,8 @@ impl App {
                 active: 0,
                 window_title: args.window_title,
                 gutter_mouse_y: 0.0,
+                find: FindState::new(),
+                word_wrap: false,
             },
             Task::none(),
         )
@@ -170,11 +146,10 @@ impl App {
         if let Some(title) = &self.window_title {
             return title.clone();
         }
-
         let tab = &self.tabs[self.active];
         match &tab.path {
-            Some(p) => format!("{} — lst", p.display()),
-            None => format!("{} — lst", tab.display_name()),
+            Some(p) => format!("{} \u{2014} lst", p.display()),
+            None => format!("{} \u{2014} lst", tab.display_name()),
         }
     }
 
@@ -193,13 +168,51 @@ impl App {
         }
     }
 
+    fn refresh_find_matches(&mut self) {
+        if self.find.visible {
+            self.find
+                .compute_matches(&self.tabs[self.active].content.text());
+        }
+    }
+
+    fn open_find(&mut self, show_replace: bool) -> Task<Message> {
+        self.find.visible = true;
+        self.find.show_replace = show_replace;
+        if let Some(sel) = self.tabs[self.active].content.selection() {
+            if !sel.contains('\n') {
+                self.find.query = sel;
+            }
+        }
+        self.find
+            .compute_matches(&self.tabs[self.active].content.text());
+        if !self.find.matches.is_empty() {
+            let pos = self.tabs[self.active].content.cursor().position;
+            self.find.find_nearest(&pos);
+        }
+        iced::widget::operation::focus(FIND_INPUT_ID.clone())
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Edit(action) => {
                 let is_edit = matches!(action, text_editor::Action::Edit(_));
+                if is_edit {
+                    let (kind, boundary) = match &action {
+                        text_editor::Action::Edit(edit) => match edit {
+                            text_editor::Edit::Insert(c) => (EditKind::Insert, c.is_whitespace()),
+                            text_editor::Edit::Backspace | text_editor::Edit::Delete => {
+                                (EditKind::Delete, false)
+                            }
+                            _ => (EditKind::Other, true),
+                        },
+                        _ => unreachable!(),
+                    };
+                    self.tabs[self.active].push_undo_snapshot(kind, boundary);
+                }
                 self.tabs[self.active].content.perform(action);
                 if is_edit {
                     self.tabs[self.active].modified = true;
+                    self.refresh_find_matches();
                 }
                 Task::none()
             }
@@ -230,7 +243,6 @@ impl App {
             Message::Open => Task::perform(open_file(), Message::Opened),
 
             Message::Opened(Ok((path, body))) => {
-                // If there's only one empty untitled tab, replace it
                 if self.tabs.len() == 1
                     && self.tabs[0].path.is_none()
                     && self.tabs[0].content.text().trim().is_empty()
@@ -267,32 +279,186 @@ impl App {
             }
 
             Message::GutterClick => {
-                // Compute which line was clicked from the Y position.
-                // The gutter has top padding of 8.0, and each line is ~20px tall
-                // (14px font size + cosmic-text line spacing).
                 const TOP_PAD: f32 = 8.0;
-                const LINE_HEIGHT: f32 = 20.0;
-                let line = ((self.gutter_mouse_y - TOP_PAD) / LINE_HEIGHT).max(0.0) as usize;
+                let line = ((self.gutter_mouse_y - TOP_PAD) / LINE_HEIGHT_PX).max(0.0) as usize;
 
                 let tab = &mut self.tabs[self.active];
                 let line = line.min(tab.content.line_count().saturating_sub(1));
-                let y = line as f32 * LINE_HEIGHT;
+                let y = line as f32 * LINE_HEIGHT_PX;
                 tab.content
                     .perform(text_editor::Action::Click(Point::new(0.0, y)));
                 tab.content.perform(text_editor::Action::SelectLine);
 
-                // Focus the text editor so the selection is visible
                 iced::widget::operation::focus(EDITOR_ID.clone())
             }
 
             Message::Quit => iced::exit(),
+
+            // ── Undo / Redo ──────────────────────────────────────────────
+            Message::Undo => {
+                self.tabs[self.active].undo();
+                self.refresh_find_matches();
+                Task::none()
+            }
+
+            Message::Redo => {
+                self.tabs[self.active].redo();
+                self.refresh_find_matches();
+                Task::none()
+            }
+
+            Message::AutoIndent => {
+                let tab = &mut self.tabs[self.active];
+                tab.push_undo_snapshot(EditKind::Other, true);
+
+                let line_idx = tab.content.cursor().position.line;
+                let indent: String = tab
+                    .content
+                    .line(line_idx)
+                    .map(|l| {
+                        let t = &*l.text;
+                        let ws = t.len() - t.trim_start().len();
+                        t[..ws].to_string()
+                    })
+                    .unwrap_or_default();
+
+                tab.content
+                    .perform(text_editor::Action::Edit(text_editor::Edit::Enter));
+                for c in indent.chars() {
+                    tab.content
+                        .perform(text_editor::Action::Edit(text_editor::Edit::Insert(c)));
+                }
+                tab.modified = true;
+                self.refresh_find_matches();
+                Task::none()
+            }
+
+            // ── Find & Replace ───────────────────────────────────────────
+            Message::FindOpen => self.open_find(false),
+            Message::FindOpenReplace => self.open_find(true),
+
+            Message::FindClose => {
+                if self.find.visible {
+                    self.find.visible = false;
+                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                }
+                Task::none()
+            }
+
+            Message::FindQueryChanged(q) => {
+                if q == self.find.query {
+                    return Task::none();
+                }
+                self.find.query = q;
+                self.find
+                    .compute_matches(&self.tabs[self.active].content.text());
+                if !self.find.matches.is_empty() {
+                    let pos = self.tabs[self.active].content.cursor().position;
+                    self.find.find_nearest(&pos);
+                    self.find
+                        .navigate_to_current(&mut self.tabs[self.active].content);
+                }
+                Task::none()
+            }
+
+            Message::FindReplaceChanged(r) => {
+                self.find.replacement = r;
+                Task::none()
+            }
+
+            Message::FindNext => {
+                self.find.next();
+                self.find
+                    .navigate_to_current(&mut self.tabs[self.active].content);
+                iced::widget::operation::focus(EDITOR_ID.clone())
+            }
+
+            Message::FindPrev => {
+                self.find.prev();
+                self.find
+                    .navigate_to_current(&mut self.tabs[self.active].content);
+                iced::widget::operation::focus(EDITOR_ID.clone())
+            }
+
+            Message::ReplaceOne => {
+                if self.find.matches.is_empty() {
+                    return Task::none();
+                }
+                let tab = &mut self.tabs[self.active];
+                tab.push_undo_snapshot(EditKind::Other, true);
+                self.find.navigate_to_current(&mut tab.content);
+                let replacement = Arc::new(self.find.replacement.clone());
+                tab.content
+                    .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
+                        replacement,
+                    )));
+                tab.modified = true;
+                // Advance cursor past the replacement so we don't re-match it
+                let cursor_after = tab.content.cursor().position;
+                self.find.compute_matches(&tab.content.text());
+                if !self.find.matches.is_empty() {
+                    self.find.find_nearest(&cursor_after);
+                    self.find
+                        .navigate_to_current(&mut self.tabs[self.active].content);
+                }
+                Task::none()
+            }
+
+            Message::ReplaceAll => {
+                if self.find.matches.is_empty() || self.find.query.is_empty() {
+                    return Task::none();
+                }
+                let tab = &mut self.tabs[self.active];
+                tab.push_undo_snapshot(EditKind::Other, true);
+                let cursor_pos = tab.content.cursor().position;
+                let new_text = tab
+                    .content
+                    .text()
+                    .replace(&self.find.query, &self.find.replacement);
+                tab.content = text_editor::Content::with_text(&new_text);
+                // Restore cursor (clamped to new content bounds)
+                let max_line = tab.content.line_count().saturating_sub(1);
+                let line = cursor_pos.line.min(max_line);
+                tab.content.move_to(text_editor::Cursor {
+                    position: text_editor::Position {
+                        line,
+                        column: cursor_pos.column,
+                    },
+                    selection: None,
+                });
+                tab.modified = true;
+                self.find.compute_matches(&new_text);
+                Task::none()
+            }
+
+            // ── Word Wrap ────────────────────────────────────────────────
+            Message::ToggleWordWrap => {
+                self.word_wrap = !self.word_wrap;
+                Task::none()
+            }
+
+            // ── Tab Reorder ──────────────────────────────────────────────
+            Message::MoveTabLeft => {
+                if self.active > 0 {
+                    self.tabs.swap(self.active, self.active - 1);
+                    self.active -= 1;
+                }
+                Task::none()
+            }
+
+            Message::MoveTabRight => {
+                if self.active + 1 < self.tabs.len() {
+                    self.tabs.swap(self.active, self.active + 1);
+                    self.active += 1;
+                }
+                Task::none()
+            }
         }
     }
 
     fn view(&self) -> Element<'_, Message> {
         let tab = &self.tabs[self.active];
 
-        // Extract palette colors upfront (Color is Copy, avoids lifetime issues)
         let theme = self.theme();
         let p = theme.extended_palette();
         let bg_base = p.background.base.color;
@@ -301,8 +467,9 @@ impl App {
         let text_main = p.background.base.text;
         let text_muted = p.background.strong.text;
         let primary = p.primary.base.color;
+        let editor_font = *EDITOR_FONT;
 
-        // ── Tab bar ──────────────────────────────────────────────────────────
+        // ── Tab bar ──────────────────────────────────────────────────────
         let tab_buttons: Vec<Element<Message>> = self
             .tabs
             .iter()
@@ -364,9 +531,83 @@ impl App {
             .width(Length::Fill)
             .style(solid_bg(bg_weak));
 
-        // ── Editor area ──────────────────────────────────────────────────────
+        // ── Find bar (conditional) ───────────────────────────────────────
+        let find_bar = if self.find.visible {
+            let match_label = if self.find.matches.is_empty() {
+                if self.find.query.is_empty() {
+                    String::new()
+                } else {
+                    "No matches".into()
+                }
+            } else {
+                format!("{}/{}", self.find.current + 1, self.find.matches.len())
+            };
+
+            let find_row = row![
+                text_input("Find\u{2026}", &self.find.query)
+                    .id(FIND_INPUT_ID.clone())
+                    .on_input(Message::FindQueryChanged)
+                    .on_submit(Message::FindNext)
+                    .font(editor_font)
+                    .size(13)
+                    .width(220),
+                text(match_label).size(12).color(text_muted),
+                button(text("\u{25b2}").size(10).color(text_muted))
+                    .style(flat_btn(bg_weak))
+                    .on_press(Message::FindPrev)
+                    .padding(Padding::from([4, 8])),
+                button(text("\u{25bc}").size(10).color(text_muted))
+                    .style(flat_btn(bg_weak))
+                    .on_press(Message::FindNext)
+                    .padding(Padding::from([4, 8])),
+                button(text("\u{00d7}").size(14).color(text_muted))
+                    .style(flat_btn(bg_weak))
+                    .on_press(Message::FindClose)
+                    .padding(Padding::from([4, 8])),
+            ]
+            .spacing(4)
+            .align_y(iced::Alignment::Center);
+
+            let mut find_col: iced::widget::Column<'_, Message> = column![find_row].spacing(4);
+
+            if self.find.show_replace {
+                let replace_row = row![
+                    text_input("Replace\u{2026}", &self.find.replacement)
+                        .on_input(Message::FindReplaceChanged)
+                        .on_submit(Message::ReplaceOne)
+                        .font(editor_font)
+                        .size(13)
+                        .width(220),
+                    button(text("Replace").size(12).color(text_muted))
+                        .style(flat_btn(bg_weak))
+                        .on_press(Message::ReplaceOne)
+                        .padding(Padding::from([4, 8])),
+                    button(text("All").size(12).color(text_muted))
+                        .style(flat_btn(bg_weak))
+                        .on_press(Message::ReplaceAll)
+                        .padding(Padding::from([4, 8])),
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center);
+
+                find_col = find_col.push(replace_row);
+            }
+
+            Some(
+                container(find_col)
+                    .padding(Padding::from([4, 8]))
+                    .width(Length::Fill)
+                    .style(solid_bg(bg_strong)),
+            )
+        } else {
+            None
+        };
+
+        // ── Editor area ──────────────────────────────────────────────────
         let n_lines = tab.content.line_count().max(1);
         let content_ref = &tab.content;
+        let word_wrap = self.word_wrap;
+        let find_visible = self.find.visible;
 
         let editor_area = responsive(move |size| {
             let vh = size.height;
@@ -378,14 +619,19 @@ impl App {
                 .join("\n");
 
             let line_numbers = mouse_area(
-                container(text(line_num_text).size(14).font(*EDITOR_FONT).color(text_muted)).padding(
-                    Padding {
-                        top: 8.0,
-                        bottom: 8.0 + overscroll,
-                        left: 4.0,
-                        right: 0.0,
-                    },
-                ),
+                container(
+                    text(line_num_text)
+                        .size(FONT_SIZE)
+                        .font(editor_font)
+                        .color(text_muted)
+                        .line_height(Pixels(LINE_HEIGHT_PX)),
+                )
+                .padding(Padding {
+                    top: 8.0,
+                    bottom: 8.0 + overscroll,
+                    left: 4.0,
+                    right: 0.0,
+                }),
             )
             .on_move(Message::GutterMove)
             .on_press(Message::GutterClick);
@@ -395,11 +641,19 @@ impl App {
                 .height(Length::Fill)
                 .style(solid_bg(bg_strong));
 
+            let wrapping = if word_wrap {
+                iced::widget::text::Wrapping::Word
+            } else {
+                iced::widget::text::Wrapping::None
+            };
+
             let editor = text_editor(content_ref)
                 .id(EDITOR_ID.clone())
                 .on_action(Message::Edit)
-                .font(*EDITOR_FONT)
-                .size(14)
+                .font(editor_font)
+                .size(FONT_SIZE)
+                .line_height(Pixels(LINE_HEIGHT_PX))
+                .wrapping(wrapping)
                 .padding(Padding {
                     top: 8.0,
                     bottom: 8.0 + overscroll,
@@ -409,6 +663,48 @@ impl App {
                 .height(Length::Shrink)
                 .min_height(vh)
                 .highlight_with::<highlight::MdHighlighter>(highlight::Settings, highlight::format)
+                .key_binding(move |key_press| {
+                    let key = &key_press.key;
+                    let mods = key_press.modifiers;
+
+                    match key {
+                        keyboard::Key::Named(named) => match named {
+                            keyboard::key::Named::Escape => {
+                                if find_visible {
+                                    return Some(text_editor::Binding::Custom(Message::FindClose));
+                                }
+                            }
+                            keyboard::key::Named::Tab => {
+                                if mods.shift() {
+                                    return Some(text_editor::Binding::Custom(Message::Edit(
+                                        text_editor::Action::Edit(text_editor::Edit::Unindent),
+                                    )));
+                                }
+                                return Some(text_editor::Binding::Custom(Message::Edit(
+                                    text_editor::Action::Edit(text_editor::Edit::Indent),
+                                )));
+                            }
+                            keyboard::key::Named::Enter
+                                if !mods.command() && !mods.shift() && !mods.alt() =>
+                            {
+                                return Some(text_editor::Binding::Custom(Message::AutoIndent));
+                            }
+                            _ => {}
+                        },
+                        keyboard::Key::Character(c) if mods.command() => match c.as_str() {
+                            "z" if mods.shift() => {
+                                return Some(text_editor::Binding::Custom(Message::Redo));
+                            }
+                            "z" => {
+                                return Some(text_editor::Binding::Custom(Message::Undo));
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+
+                    text_editor::Binding::from_key_press(key_press)
+                })
                 .style(move |_theme, _status| text_editor::Style {
                     background: Background::Color(bg_base),
                     border: Border::default().width(0),
@@ -423,7 +719,7 @@ impl App {
                 .into()
         });
 
-        // ── Status bar ───────────────────────────────────────────────────────
+        // ── Status bar ───────────────────────────────────────────────────
         let cursor = tab.content.cursor();
         let ln = cursor.position.line + 1;
         let col = cursor.position.column + 1;
@@ -435,6 +731,8 @@ impl App {
             name.into_owned()
         };
 
+        let wrap_label = if self.word_wrap { "Wrap" } else { "NoWrap" };
+
         let status_bar = container(
             row![
                 text(file_label).size(12).color(text_muted),
@@ -442,6 +740,11 @@ impl App {
                 text(format!("Ln {ln}, Col {col}"))
                     .size(12)
                     .color(text_muted),
+                text("  \u{00b7}  ").size(12).color(text_muted),
+                button(text(wrap_label).size(12).color(text_muted))
+                    .style(flat_btn(bg_weak))
+                    .on_press(Message::ToggleWordWrap)
+                    .padding(0),
                 text("  \u{00b7}  ").size(12).color(text_muted),
                 text("UTF-8").size(12).color(text_muted),
             ]
@@ -456,29 +759,17 @@ impl App {
         .width(Length::Fill)
         .style(solid_bg(bg_weak));
 
-        // ── Root ─────────────────────────────────────────────────────────────
-        column![tab_bar, editor_area, status_bar].into()
+        // ── Root ─────────────────────────────────────────────────────────
+        let mut layout = column![tab_bar];
+        if let Some(bar) = find_bar {
+            layout = layout.push(bar);
+        }
+        layout = layout.push(editor_area).push(status_bar);
+        layout.into()
     }
 
     fn subscription(&self) -> Subscription<Message> {
         event::listen_with(handle_key)
-    }
-}
-
-// ── Style helpers ────────────────────────────────────────────────────────────
-
-fn flat_btn(bg: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_theme, _status| button::Style {
-        background: Some(Background::Color(bg)),
-        border: Border::default().rounded(0),
-        ..button::Style::default()
-    }
-}
-
-fn solid_bg(color: Color) -> impl Fn(&Theme) -> container::Style {
-    move |_theme| container::Style {
-        background: Some(Background::Color(color)),
-        ..container::Style::default()
     }
 }
 
@@ -493,20 +784,43 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
         return None;
     };
 
+    // Non-modifier shortcuts
+    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+        return Some(Message::FindClose);
+    }
+
+    // Alt+Z — word wrap toggle (VS Code convention)
+    if modifiers.alt() && !modifiers.command() && !modifiers.shift() {
+        if let keyboard::Key::Character(ref c) = key {
+            if c.as_str() == "z" {
+                return Some(Message::ToggleWordWrap);
+            }
+        }
+    }
+
+    // Ctrl / Cmd shortcuts
     if !modifiers.command() {
         return None;
     }
 
-    let keyboard::Key::Character(ref c) = key else {
-        return None;
-    };
-
-    match c.as_str() {
-        "n" => Some(Message::New),
-        "o" => Some(Message::Open),
-        "s" => Some(Message::Save),
-        "w" => Some(Message::CloseActiveTab),
-        "q" => Some(Message::Quit),
+    match &key {
+        keyboard::Key::Character(c) => match c.as_str() {
+            "n" => Some(Message::New),
+            "o" => Some(Message::Open),
+            "s" => Some(Message::Save),
+            "w" => Some(Message::CloseActiveTab),
+            "q" => Some(Message::Quit),
+            "f" => Some(Message::FindOpen),
+            "h" => Some(Message::FindOpenReplace),
+            "z" if modifiers.shift() => Some(Message::Redo),
+            "z" => Some(Message::Undo),
+            _ => None,
+        },
+        keyboard::Key::Named(named) => match named {
+            keyboard::key::Named::PageUp if modifiers.shift() => Some(Message::MoveTabLeft),
+            keyboard::key::Named::PageDown if modifiers.shift() => Some(Message::MoveTabRight),
+            _ => None,
+        },
         _ => None,
     }
 }
