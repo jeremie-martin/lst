@@ -41,15 +41,7 @@ pub struct Settings {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct SyntectStyle {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub enum Highlight {
-    // Markdown
     Heading,
     HeadingMarker,
     Bold,
@@ -61,8 +53,7 @@ pub enum Highlight {
     ListMarker,
     BlockQuote,
     HorizontalRule,
-    // Syntect
-    Syntect(SyntectStyle),
+    Syntect(Color),
 }
 
 impl Highlight {
@@ -78,7 +69,7 @@ impl Highlight {
             Self::ListMarker => MAUVE,
             Self::BlockQuote => LAVENDER,
             Self::HorizontalRule => SURFACE1,
-            Self::Syntect(s) => Color::from_rgb8(s.r, s.g, s.b),
+            Self::Syntect(c) => c,
         }
     }
 }
@@ -100,7 +91,8 @@ enum HighlightMode {
 
 fn determine_mode(ext: &Option<String>) -> HighlightMode {
     match ext.as_deref() {
-        Some("md") | Some("markdown") | None => HighlightMode::Markdown,
+        Some("md") | Some("markdown") => HighlightMode::Markdown,
+        None => HighlightMode::PlainText,
         Some(ext) => match SYNTAX_SET.find_syntax_by_extension(ext) {
             Some(syntax) => HighlightMode::Syntect(syntax),
             None => HighlightMode::PlainText,
@@ -264,12 +256,7 @@ fn run_syntect_line(
     let line_nl = format!("{line}\n");
     let ops = match parse.parse_line(&line_nl, &SYNTAX_SET) {
         Ok(ops) => ops,
-        Err(_) => {
-            if line.is_empty() {
-                return Vec::new();
-            }
-            return vec![(0..line.len(), Highlight::CodeBlock)];
-        }
+        Err(_) => return Vec::new(),
     };
 
     let highlighter = SyntectHighlighter::new(&THEME);
@@ -282,11 +269,11 @@ fn run_syntect_line(
         if start < end {
             spans.push((
                 start..end,
-                Highlight::Syntect(SyntectStyle {
-                    r: style.foreground.r,
-                    g: style.foreground.g,
-                    b: style.foreground.b,
-                }),
+                Highlight::Syntect(Color::from_rgb8(
+                    style.foreground.r,
+                    style.foreground.g,
+                    style.foreground.b,
+                )),
             ));
         }
     }
@@ -327,13 +314,7 @@ impl Highlighter for LstHighlighter {
     fn change_line(&mut self, line: usize) {
         self.states.truncate(line);
         if line == 0 {
-            self.in_code_block = false;
-            self.fence = None;
-            self.code_lang = None;
-            self.syntect_parse = None;
-            self.syntect_hl = None;
-            self.full_file_parse = None;
-            self.full_file_hl = None;
+            self.reset();
             self.init_mode();
         } else if let Some(state) = self.states.last() {
             match state.clone() {

@@ -23,6 +23,6 @@
 - [ ] Zen mode — Ctrl+Shift+Enter hides tabs and status bar
 - [ ] Session restore — remember open tabs and cursor positions across launches
 - [ ] Smooth scroll animation
-- [ ] Syntax highlighting for more languages (detect from file extension, swap highlighter)
+- [x] Syntax highlighting for more languages (detect from file extension, swap highlighter)
 - [ ] Command palette (Ctrl+Shift+P) — fuzzy-search popup for all actions
 - [ ] Minimap column showing document structure

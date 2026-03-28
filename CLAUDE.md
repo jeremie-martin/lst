@@ -20,8 +20,9 @@
 
 * **Toolkit**: iced 0.14 (retained-mode, GPU-accelerated via wgpu)
 * **Font**: JetBrains Mono (loaded from system path)
-* **State**: `App { tabs: Vec<Tab>, active: usize, scratchpad_dir, last_edit_time }` — each Tab holds a `text_editor::Content` and `is_scratchpad` flag
+* **State**: `App { tabs: Vec<Tab>, active: usize, scratchpad_dir, needs_autosave }` — each Tab holds a `text_editor::Content` and `is_scratchpad` flag
 * **Messages**: `Edit`, `TabSelect`, `TabClose`, `New`, `Open`, `Save`, `SaveAs`, `AutosaveTick`, `AutosaveComplete`, `Quit`
 * **Keyboard shortcuts**: handled via `iced::event::listen_with` subscription
 * **Scratchpad mode**: new tabs create timestamped `.md` files in `~/.local/share/lst/` (override with `--scratchpad-dir`). Ctrl+Shift+S to Save As (changes path).
-* **Autosave**: debounced ~2s after last edit via `iced::time::every(500ms)` subscription. Saves all modified tabs.
+* **Autosave**: saves all modified tabs on the next 500ms tick after any edit.
+* **Syntax highlighting**: unified `LstHighlighter` via syntect (~170 languages). Markdown files use hand-rolled block/inline highlighting with syntect for fenced code block interiors. Non-MD files get full-file syntect highlighting. Catppuccin Mocha `.tmTheme` embedded at compile time.

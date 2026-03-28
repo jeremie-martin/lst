@@ -19,7 +19,7 @@ use iced::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn editor_id() -> iced::widget::Id {
     iced::widget::Id::new("lst-editor")
@@ -39,7 +39,7 @@ struct App {
     find: FindState,
     word_wrap: bool,
     scratchpad_dir: PathBuf,
-    last_edit_time: Option<Instant>,
+    needs_autosave: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -197,7 +197,7 @@ impl App {
                 find: FindState::new(),
                 word_wrap: false,
                 scratchpad_dir,
-                last_edit_time: None,
+                needs_autosave: false,
             },
             iced::widget::operation::focus(EDITOR_ID.clone()),
         )
@@ -273,7 +273,7 @@ impl App {
                 self.tabs[self.active].content.perform(action);
                 if is_edit {
                     self.tabs[self.active].modified = true;
-                    self.last_edit_time = Some(Instant::now());
+                    self.needs_autosave = true;
                     self.refresh_find_matches();
                 }
                 Task::none()
@@ -345,10 +345,10 @@ impl App {
             Message::Saved(Err(_)) => Task::none(),
 
             Message::AutosaveTick => {
-                if self.last_edit_time.is_none() {
+                if !self.needs_autosave {
                     return Task::none();
                 }
-                self.last_edit_time = None;
+                self.needs_autosave = false;
 
                 let saves: Vec<Task<Message>> = self
                     .tabs
@@ -438,7 +438,7 @@ impl App {
                         .perform(text_editor::Action::Edit(text_editor::Edit::Insert(c)));
                 }
                 tab.modified = true;
-                self.last_edit_time = Some(Instant::now());
+                self.needs_autosave = true;
                 self.refresh_find_matches();
                 Task::none()
             }
@@ -503,7 +503,7 @@ impl App {
                         replacement,
                     )));
                 tab.modified = true;
-                self.last_edit_time = Some(Instant::now());
+                self.needs_autosave = true;
                 // Advance cursor past the replacement so we don't re-match it
                 let cursor_after = tab.content.cursor().position;
                 self.find.compute_matches(&tab.content.text());
@@ -538,7 +538,7 @@ impl App {
                     selection: None,
                 });
                 tab.modified = true;
-                self.last_edit_time = Some(Instant::now());
+                self.needs_autosave = true;
                 self.find.compute_matches(&new_text);
                 Task::none()
             }
