@@ -2,12 +2,24 @@ mod highlight;
 
 use iced::event;
 use iced::keyboard;
-use iced::widget::{button, column, container, row, scrollable, text, text_editor, Space};
-use iced::{Background, Border, Color, Element, Font, Length, Padding, Subscription, Task, Theme};
+use iced::widget::{
+    button, column, container, mouse_area, responsive, row, scrollable, text, text_editor, Space,
+};
+use iced::{
+    Background, Border, Color, Element, Font, Length, Padding, Point, Subscription, Task, Theme,
+};
 use std::borrow::Cow;
 use std::path::PathBuf;
 
 const JB_MONO: Font = Font::with_name("JetBrains Mono");
+
+fn editor_id() -> iced::widget::Id {
+    iced::widget::Id::new("lst-editor")
+}
+
+// Lazy static-like pattern: call once, clone as needed
+use std::sync::LazyLock;
+static EDITOR_ID: LazyLock<iced::widget::Id> = LazyLock::new(editor_id);
 
 // ── Tab ──────────────────────────────────────────────────────────────────────
 
@@ -48,6 +60,7 @@ struct App {
     tabs: Vec<Tab>,
     active: usize,
     window_title: Option<String>,
+    gutter_mouse_y: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +74,8 @@ enum Message {
     Opened(Result<(PathBuf, String), Error>),
     Save,
     Saved(Result<PathBuf, Error>),
+    GutterMove(Point),
+    GutterClick,
     Quit,
 }
 
@@ -126,6 +141,7 @@ impl App {
                 tabs,
                 active: 0,
                 window_title: args.window_title,
+                gutter_mouse_y: 0.0,
             },
             Task::none(),
         )
@@ -226,6 +242,30 @@ impl App {
             }
             Message::Saved(Err(_)) => Task::none(),
 
+            Message::GutterMove(point) => {
+                self.gutter_mouse_y = point.y;
+                Task::none()
+            }
+
+            Message::GutterClick => {
+                // Compute which line was clicked from the Y position.
+                // The gutter has top padding of 8.0, and each line is ~20px tall
+                // (14px font size + cosmic-text line spacing).
+                const TOP_PAD: f32 = 8.0;
+                const LINE_HEIGHT: f32 = 20.0;
+                let line = ((self.gutter_mouse_y - TOP_PAD) / LINE_HEIGHT).max(0.0) as usize;
+
+                let tab = &mut self.tabs[self.active];
+                let line = line.min(tab.content.line_count().saturating_sub(1));
+                let y = line as f32 * LINE_HEIGHT;
+                tab.content
+                    .perform(text_editor::Action::Click(Point::new(0.0, y)));
+                tab.content.perform(text_editor::Action::SelectLine);
+
+                // Focus the text editor so the selection is visible
+                iced::widget::operation::focus(EDITOR_ID.clone())
+            }
+
             Message::Quit => iced::exit(),
         }
     }
@@ -307,49 +347,62 @@ impl App {
 
         // ── Editor area ──────────────────────────────────────────────────────
         let n_lines = tab.content.line_count().max(1);
+        let content_ref = &tab.content;
 
-        // Single text widget with all line numbers (avoids N widget allocations per frame)
-        let line_num_text: String = (1..=n_lines)
-            .map(|i| format!("{i:>4} "))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let editor_area = responsive(move |size| {
+            let vh = size.height;
+            let overscroll = vh * 0.4;
 
-        let line_numbers = container(text(line_num_text).size(14).font(JB_MONO).color(text_muted))
-            .padding(Padding {
-                top: 8.0,
-                bottom: 8.0,
-                left: 4.0,
-                right: 0.0,
-            });
+            let line_num_text: String = (1..=n_lines)
+                .map(|i| format!("{i:>4} "))
+                .collect::<Vec<_>>()
+                .join("\n");
 
-        let gutter = container(Space::new())
-            .width(1)
-            .height(Length::Fill)
-            .style(solid_bg(bg_strong));
+            let line_numbers = mouse_area(
+                container(text(line_num_text).size(14).font(JB_MONO).color(text_muted)).padding(
+                    Padding {
+                        top: 8.0,
+                        bottom: 8.0 + overscroll,
+                        left: 4.0,
+                        right: 0.0,
+                    },
+                ),
+            )
+            .on_move(Message::GutterMove)
+            .on_press(Message::GutterClick);
 
-        let editor = text_editor(&tab.content)
-            .on_action(Message::Edit)
-            .font(JB_MONO)
-            .size(14)
-            .padding(Padding {
-                top: 8.0,
-                bottom: 8.0,
-                left: 8.0,
-                right: 16.0,
-            })
-            .height(Length::Shrink)
-            .highlight_with::<highlight::MdHighlighter>(highlight::Settings, highlight::format)
-            .style(move |_theme, _status| text_editor::Style {
-                background: Background::Color(bg_base),
-                border: Border::default().width(0),
-                placeholder: text_muted,
-                value: text_main,
-                selection: Color { a: 0.3, ..primary },
-            });
+            let gutter_line = container(Space::new())
+                .width(1)
+                .height(Length::Fill)
+                .style(solid_bg(bg_strong));
 
-        let editor_area = scrollable(row![line_numbers, gutter, editor].width(Length::Fill))
-            .height(Length::Fill)
-            .width(Length::Fill);
+            let editor = text_editor(content_ref)
+                .id(EDITOR_ID.clone())
+                .on_action(Message::Edit)
+                .font(JB_MONO)
+                .size(14)
+                .padding(Padding {
+                    top: 8.0,
+                    bottom: 8.0 + overscroll,
+                    left: 8.0,
+                    right: 16.0,
+                })
+                .height(Length::Shrink)
+                .min_height(vh)
+                .highlight_with::<highlight::MdHighlighter>(highlight::Settings, highlight::format)
+                .style(move |_theme, _status| text_editor::Style {
+                    background: Background::Color(bg_base),
+                    border: Border::default().width(0),
+                    placeholder: text_muted,
+                    value: text_main,
+                    selection: Color { a: 0.3, ..primary },
+                });
+
+            scrollable(row![line_numbers, gutter_line, editor].width(Length::Fill))
+                .height(Length::Fill)
+                .width(Length::Fill)
+                .into()
+        });
 
         // ── Status bar ───────────────────────────────────────────────────────
         let cursor = tab.content.cursor();
