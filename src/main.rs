@@ -1,3 +1,5 @@
+mod highlight;
+
 use iced::event;
 use iced::keyboard;
 use iced::widget::{button, column, container, row, scrollable, text, text_editor, Space};
@@ -288,6 +290,7 @@ impl App {
                 right: 16.0,
             })
             .height(Length::Shrink)
+            .highlight_with::<highlight::MdHighlighter>(highlight::Settings, highlight::format)
             .style(move |_theme, _status| text_editor::Style {
                 background: Background::Color(bg_base),
                 border: Border::default().width(0),
