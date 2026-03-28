@@ -6,8 +6,9 @@ description = "Lucy's Simple Text editor — a fast, minimal editor for Linux"
 license = "MIT"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fontdb = "0.23"
-iced = { version = "0.14", features = ["advanced"] }
+iced = { version = "0.14", features = ["advanced", "tokio"] }
 rfd = "0.17"
 
 [profile.release]

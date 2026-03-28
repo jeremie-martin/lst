@@ -21,17 +21,19 @@ pub struct Tab {
     pub path: Option<PathBuf>,
     pub content: text_editor::Content,
     pub modified: bool,
+    pub is_scratchpad: bool,
     undo_stack: VecDeque<Snapshot>,
     redo_stack: Vec<Snapshot>,
     last_edit_kind: Option<EditKind>,
 }
 
 impl Tab {
-    pub fn new() -> Self {
+    pub fn new_scratchpad(path: PathBuf) -> Self {
         Self {
-            path: None,
+            path: Some(path),
             content: text_editor::Content::new(),
             modified: false,
+            is_scratchpad: true,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             last_edit_kind: None,
@@ -43,6 +45,7 @@ impl Tab {
             path: Some(path),
             content: text_editor::Content::with_text(body),
             modified: false,
+            is_scratchpad: false,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             last_edit_kind: None,

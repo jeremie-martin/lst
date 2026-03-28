@@ -11,17 +11,23 @@ Every existing simple text editor is either ugly (gedit, mousepad), slow (VS Cod
 - Catppuccin Mocha dark theme
 - Multiple tabs with Ctrl+N / Ctrl+W
 - Open files from CLI (`lst file.txt`) or Ctrl+O dialog
-- Save with Ctrl+S (Save As for new files)
-- Line numbers
+- Save with Ctrl+S, Save As with Ctrl+Shift+S
+- Scratchpad mode: new tabs are timestamped `.md` files in `~/.local/share/lst/`
+- Autosave: files save automatically ~2s after you stop typing
+- Find & Replace (Ctrl+F / Ctrl+H)
+- Markdown syntax highlighting
+- Word wrap toggle (Alt+Z)
+- Undo/redo with edit grouping (Ctrl+Z / Ctrl+Shift+Z)
+- Auto-indent on Enter
+- Line numbers with gutter click-to-select
+- Tab reorder (Shift+PageUp/PageDown)
 - JetBrains Mono font
 - GPU-accelerated rendering (wgpu)
 
 ### Planned
 
-- Syntax highlighting (Markdown first, then common languages)
-- Find & Replace (Ctrl+F)
 - Light/dark theme switching
-- Recent files
+- Recent files / session restore
 
 ## Install
 
@@ -40,9 +46,10 @@ Requires Rust 1.75+ and JetBrains Mono installed.
 
 ```bash
 cargo build --release
-./target/release/lst                    # empty editor
+./target/release/lst                    # new scratchpad file
 ./target/release/lst README.md          # open a file
 ./target/release/lst *.rs               # open multiple files
+./target/release/lst --scratchpad-dir ~/notes  # custom scratchpad directory
 ```
 
 ## LWM Scratchpad

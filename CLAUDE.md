@@ -20,6 +20,8 @@
 
 * **Toolkit**: iced 0.14 (retained-mode, GPU-accelerated via wgpu)
 * **Font**: JetBrains Mono (loaded from system path)
-* **State**: `App { tabs: Vec<Tab>, active: usize }` — each Tab holds a `text_editor::Content`
-* **Messages**: `Edit`, `TabSelect`, `TabClose`, `New`, `Open`, `Save`, `Quit`
+* **State**: `App { tabs: Vec<Tab>, active: usize, scratchpad_dir, last_edit_time }` — each Tab holds a `text_editor::Content` and `is_scratchpad` flag
+* **Messages**: `Edit`, `TabSelect`, `TabClose`, `New`, `Open`, `Save`, `SaveAs`, `AutosaveTick`, `AutosaveComplete`, `Quit`
 * **Keyboard shortcuts**: handled via `iced::event::listen_with` subscription
+* **Scratchpad mode**: new tabs create timestamped `.md` files in `~/.local/share/lst/` (override with `--scratchpad-dir`). Ctrl+Shift+S to Save As (changes path).
+* **Autosave**: debounced ~2s after last edit via `iced::time::every(500ms)` subscription. Saves all modified tabs.

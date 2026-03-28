@@ -17,8 +17,9 @@ use iced::{
     Background, Border, Color, Element, Font, Length, Padding, Pixels, Point, Subscription, Task,
     Theme,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
 
 fn editor_id() -> iced::widget::Id {
     iced::widget::Id::new("lst-editor")
@@ -37,6 +38,8 @@ struct App {
     gutter_mouse_y: f32,
     find: FindState,
     word_wrap: bool,
+    scratchpad_dir: PathBuf,
+    last_edit_time: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +52,10 @@ enum Message {
     Open,
     Opened(Result<(PathBuf, String), Error>),
     Save,
+    SaveAs,
     Saved(Result<PathBuf, Error>),
+    AutosaveTick,
+    AutosaveComplete(Result<PathBuf, Error>),
     GutterMove(Point),
     GutterClick,
     Quit,
@@ -83,12 +89,14 @@ enum Error {
 struct CliArgs {
     window_title: Option<String>,
     files: Vec<PathBuf>,
+    scratchpad_dir: Option<PathBuf>,
 }
 
 fn parse_args() -> CliArgs {
     let mut args = std::env::args().skip(1);
     let mut window_title = None;
     let mut files = Vec::new();
+    let mut scratchpad_dir = None;
 
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--title=") {
@@ -103,18 +111,69 @@ fn parse_args() -> CliArgs {
             window_title = Some(value);
             continue;
         }
+        if let Some(value) = arg.strip_prefix("--scratchpad-dir=") {
+            scratchpad_dir = Some(PathBuf::from(value));
+            continue;
+        }
+        if arg == "--scratchpad-dir" {
+            let Some(value) = args.next() else {
+                eprintln!("lst: missing value for --scratchpad-dir");
+                std::process::exit(2);
+            };
+            scratchpad_dir = Some(PathBuf::from(value));
+            continue;
+        }
         files.push(PathBuf::from(arg));
     }
 
     CliArgs {
         window_title,
         files,
+        scratchpad_dir,
     }
+}
+
+fn resolve_scratchpad_dir(cli_override: Option<PathBuf>) -> PathBuf {
+    let dir = cli_override.unwrap_or_else(|| {
+        let Some(home) = std::env::var_os("HOME") else {
+            eprintln!("lst: HOME environment variable not set");
+            std::process::exit(1);
+        };
+        PathBuf::from(home).join(".local/share/lst")
+    });
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("lst: failed to create scratchpad directory {}: {e}", dir.display());
+        std::process::exit(1);
+    }
+    dir
+}
+
+fn generate_scratchpad_path(dir: &Path) -> PathBuf {
+    use chrono::Local;
+    let name = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    let path = dir.join(format!("{name}.md"));
+    if !path.exists() {
+        return path;
+    }
+    for i in 1.. {
+        let path = dir.join(format!("{name}_{i}.md"));
+        if !path.exists() {
+            return path;
+        }
+    }
+    unreachable!()
+}
+
+fn create_scratchpad_tab(dir: &Path) -> Tab {
+    let path = generate_scratchpad_path(dir);
+    std::fs::write(&path, "").expect("failed to create scratchpad file");
+    Tab::new_scratchpad(path)
 }
 
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let args = parse_args();
+        let scratchpad_dir = resolve_scratchpad_dir(args.scratchpad_dir);
 
         let mut tabs: Vec<Tab> = args
             .files
@@ -126,7 +185,7 @@ impl App {
             .collect();
 
         if tabs.is_empty() {
-            tabs.push(Tab::new());
+            tabs.push(create_scratchpad_tab(&scratchpad_dir));
         }
 
         (
@@ -137,6 +196,8 @@ impl App {
                 gutter_mouse_y: 0.0,
                 find: FindState::new(),
                 word_wrap: false,
+                scratchpad_dir,
+                last_edit_time: None,
             },
             Task::none(),
         )
@@ -212,6 +273,7 @@ impl App {
                 self.tabs[self.active].content.perform(action);
                 if is_edit {
                     self.tabs[self.active].modified = true;
+                    self.last_edit_time = Some(Instant::now());
                     self.refresh_find_matches();
                 }
                 Task::none()
@@ -235,7 +297,7 @@ impl App {
             }
 
             Message::New => {
-                self.tabs.push(Tab::new());
+                self.tabs.push(create_scratchpad_tab(&self.scratchpad_dir));
                 self.active = self.tabs.len() - 1;
                 Task::none()
             }
@@ -244,9 +306,12 @@ impl App {
 
             Message::Opened(Ok((path, body))) => {
                 if self.tabs.len() == 1
-                    && self.tabs[0].path.is_none()
+                    && self.tabs[0].is_scratchpad
                     && self.tabs[0].content.text().trim().is_empty()
                 {
+                    if let Some(old_path) = &self.tabs[0].path {
+                        let _ = std::fs::remove_file(old_path);
+                    }
                     self.tabs[0] = Tab::from_path(path, &body);
                 } else {
                     self.tabs.push(Tab::from_path(path, &body));
@@ -265,13 +330,60 @@ impl App {
                 }
             }
 
+            Message::SaveAs => {
+                let body = self.tabs[self.active].content.text();
+                Task::perform(save_file_as(body), Message::Saved)
+            }
+
             Message::Saved(Ok(path)) => {
                 let tab = &mut self.tabs[self.active];
                 tab.path = Some(path);
                 tab.modified = false;
+                tab.is_scratchpad = false;
                 Task::none()
             }
             Message::Saved(Err(_)) => Task::none(),
+
+            Message::AutosaveTick => {
+                let Some(last_edit) = self.last_edit_time else {
+                    return Task::none();
+                };
+                if last_edit.elapsed() < Duration::from_secs(2) {
+                    return Task::none();
+                }
+                self.last_edit_time = None;
+
+                let saves: Vec<Task<Message>> = self
+                    .tabs
+                    .iter()
+                    .filter(|t| t.modified && t.path.is_some())
+                    .map(|t| {
+                        let path = t.path.clone().unwrap();
+                        let body = t.content.text();
+                        Task::perform(save_file(path, body), Message::AutosaveComplete)
+                    })
+                    .collect();
+
+                if saves.is_empty() {
+                    Task::none()
+                } else {
+                    Task::batch(saves)
+                }
+            }
+
+            Message::AutosaveComplete(Ok(path)) => {
+                for tab in &mut self.tabs {
+                    if tab.path.as_ref() == Some(&path) {
+                        tab.modified = false;
+                        break;
+                    }
+                }
+                Task::none()
+            }
+            Message::AutosaveComplete(Err(e)) => {
+                eprintln!("lst: autosave failed: {e:?}");
+                Task::none()
+            }
 
             Message::GutterMove(point) => {
                 self.gutter_mouse_y = point.y;
@@ -329,6 +441,7 @@ impl App {
                         .perform(text_editor::Action::Edit(text_editor::Edit::Insert(c)));
                 }
                 tab.modified = true;
+                self.last_edit_time = Some(Instant::now());
                 self.refresh_find_matches();
                 Task::none()
             }
@@ -393,6 +506,7 @@ impl App {
                         replacement,
                     )));
                 tab.modified = true;
+                self.last_edit_time = Some(Instant::now());
                 // Advance cursor past the replacement so we don't re-match it
                 let cursor_after = tab.content.cursor().position;
                 self.find.compute_matches(&tab.content.text());
@@ -427,6 +541,7 @@ impl App {
                     selection: None,
                 });
                 tab.modified = true;
+                self.last_edit_time = Some(Instant::now());
                 self.find.compute_matches(&new_text);
                 Task::none()
             }
@@ -769,7 +884,10 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(handle_key)
+        Subscription::batch([
+            event::listen_with(handle_key),
+            iced::time::every(Duration::from_millis(500)).map(|_| Message::AutosaveTick),
+        ])
     }
 }
 
@@ -807,6 +925,7 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
         keyboard::Key::Character(c) => match c.as_str() {
             "n" => Some(Message::New),
             "o" => Some(Message::Open),
+            "s" if modifiers.shift() => Some(Message::SaveAs),
             "s" => Some(Message::Save),
             "w" => Some(Message::CloseActiveTab),
             "q" => Some(Message::Quit),
