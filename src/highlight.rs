@@ -61,7 +61,7 @@ pub fn format(highlight: &Highlight, _theme: &Theme) -> highlighter::Format<Font
 
 // ── State cached per line (for multi-line code blocks) ───────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct LineState {
     in_code_block: bool,
     fence: Option<(char, usize)>,
@@ -230,7 +230,16 @@ fn highlight_inline(line: &str, start: usize, spans: &mut Vec<(Range<usize>, Hig
             // Bold (**text** or __text__)
             b'*' | b'_' if i + 2 < len && bytes[i + 1] == bytes[i] => {
                 let marker = bytes[i];
+                // _ requires word boundary (CommonMark flanking rules)
+                if marker == b'_' && i > 0 && bytes[i - 1].is_ascii_alphanumeric() {
+                    i += 1;
+                    continue;
+                }
                 if let Some(end) = find_double_closing(bytes, i + 2, marker) {
+                    if marker == b'_' && end + 2 < len && bytes[end + 2].is_ascii_alphanumeric() {
+                        i += 1;
+                        continue;
+                    }
                     spans.push((i..end + 2, Highlight::Bold));
                     i = end + 2;
                     continue;
@@ -240,8 +249,16 @@ fn highlight_inline(line: &str, start: usize, spans: &mut Vec<(Range<usize>, Hig
             // Italic (*text* or _text_), only if not start of bold
             b'*' | b'_' if i + 1 < len && bytes[i + 1] != bytes[i] => {
                 let marker = bytes[i];
+                if marker == b'_' && i > 0 && bytes[i - 1].is_ascii_alphanumeric() {
+                    i += 1;
+                    continue;
+                }
                 if let Some(end) = find_closing(bytes, i + 1, marker) {
                     if end + 1 >= len || bytes[end + 1] != marker {
+                        if marker == b'_' && end + 1 < len && bytes[end + 1].is_ascii_alphanumeric() {
+                            i += 1;
+                            continue;
+                        }
                         spans.push((i..end + 1, Highlight::Italic));
                         i = end + 1;
                         continue;
@@ -279,12 +296,12 @@ fn highlight_inline(line: &str, start: usize, spans: &mut Vec<(Range<usize>, Hig
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn parse_code_fence(trimmed: &str) -> Option<(char, usize)> {
-    let first = trimmed.chars().next()?;
-    if first != '`' && first != '~' {
+    let first = *trimmed.as_bytes().first()?;
+    if first != b'`' && first != b'~' {
         return None;
     }
-    let count = trimmed.bytes().take_while(|&b| b == first as u8).count();
-    if count >= 3 { Some((first, count)) } else { None }
+    let count = trimmed.bytes().take_while(|&b| b == first).count();
+    if count >= 3 { Some((first as char, count)) } else { None }
 }
 
 fn is_closing_fence(trimmed: &str, fence_char: char, fence_len: usize) -> bool {
