@@ -47,6 +47,7 @@ impl Tab {
 struct App {
     tabs: Vec<Tab>,
     active: usize,
+    window_title: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,12 +70,48 @@ enum Error {
     Io,
 }
 
+struct CliArgs {
+    window_title: Option<String>,
+    files: Vec<PathBuf>,
+}
+
+fn parse_args() -> CliArgs {
+    let mut args = std::env::args().skip(1);
+    let mut window_title = None;
+    let mut files = Vec::new();
+
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("--title=") {
+            window_title = Some(value.to_owned());
+            continue;
+        }
+
+        if arg == "--title" {
+            let Some(value) = args.next() else {
+                eprintln!("lst: missing value for --title");
+                std::process::exit(2);
+            };
+            window_title = Some(value);
+            continue;
+        }
+
+        files.push(PathBuf::from(arg));
+    }
+
+    CliArgs {
+        window_title,
+        files,
+    }
+}
+
 impl App {
     fn boot() -> (Self, Task<Message>) {
-        let mut tabs: Vec<Tab> = std::env::args()
-            .skip(1)
-            .filter_map(|arg| {
-                let path = PathBuf::from(&arg);
+        let args = parse_args();
+
+        let mut tabs: Vec<Tab> = args
+            .files
+            .into_iter()
+            .filter_map(|path| {
                 let body = std::fs::read_to_string(&path).ok()?;
                 Some(Tab::from_path(path.canonicalize().unwrap_or(path), &body))
             })
@@ -84,10 +121,21 @@ impl App {
             tabs.push(Tab::new());
         }
 
-        (Self { tabs, active: 0 }, Task::none())
+        (
+            Self {
+                tabs,
+                active: 0,
+                window_title: args.window_title,
+            },
+            Task::none(),
+        )
     }
 
     fn title(&self) -> String {
+        if let Some(title) = &self.window_title {
+            return title.clone();
+        }
+
         let tab = &self.tabs[self.active];
         match &tab.path {
             Some(p) => format!("{} — lst", p.display()),
@@ -299,11 +347,9 @@ impl App {
                 selection: Color { a: 0.3, ..primary },
             });
 
-        let editor_area = scrollable(
-            row![line_numbers, gutter, editor].width(Length::Fill),
-        )
-        .height(Length::Fill)
-        .width(Length::Fill);
+        let editor_area = scrollable(row![line_numbers, gutter, editor].width(Length::Fill))
+            .height(Length::Fill)
+            .width(Length::Fill);
 
         // ── Status bar ───────────────────────────────────────────────────────
         let cursor = tab.content.cursor();
@@ -321,7 +367,9 @@ impl App {
             row![
                 text(file_label).size(12).color(text_muted),
                 iced::widget::space::horizontal(),
-                text(format!("Ln {ln}, Col {col}")).size(12).color(text_muted),
+                text(format!("Ln {ln}, Col {col}"))
+                    .size(12)
+                    .color(text_muted),
                 text("  \u{00b7}  ").size(12).color(text_muted),
                 text("UTF-8").size(12).color(text_muted),
             ]
@@ -364,11 +412,7 @@ fn solid_bg(color: Color) -> impl Fn(&Theme) -> container::Style {
 
 // ── Keyboard shortcuts ───────────────────────────────────────────────────────
 
-fn handle_key(
-    event: iced::Event,
-    status: event::Status,
-    _id: iced::window::Id,
-) -> Option<Message> {
+fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) -> Option<Message> {
     if status != event::Status::Ignored {
         return None;
     }
@@ -399,7 +443,10 @@ fn handle_key(
 
 async fn open_file() -> Result<(PathBuf, String), Error> {
     let handle = rfd::AsyncFileDialog::new()
-        .add_filter("Text", &["txt", "md", "rs", "py", "toml", "yaml", "json", "sh"])
+        .add_filter(
+            "Text",
+            &["txt", "md", "rs", "py", "toml", "yaml", "json", "sh"],
+        )
         .add_filter("All files", &["*"])
         .pick_file()
         .await

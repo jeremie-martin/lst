@@ -23,6 +23,17 @@ Every existing simple text editor is either ugly (gedit, mousepad), slow (VS Cod
 - Light/dark theme switching
 - Recent files
 
+## Install
+
+Requires Rust 1.75+ and JetBrains Mono installed at `/usr/share/fonts/jetbrains-mono/JetBrainsMono[wght].ttf`.
+
+```bash
+./install.sh
+~/.local/bin/lst
+```
+
+`install.sh` uses `cargo install --path . --locked --root ~/.local` by default. Set `LST_PREFIX=/some/prefix` if you want a different install location.
+
 ## Build & Run
 
 Requires Rust 1.75+ and JetBrains Mono installed.
@@ -32,6 +43,28 @@ cargo build --release
 ./target/release/lst                    # empty editor
 ./target/release/lst README.md          # open a file
 ./target/release/lst *.rs               # open multiple files
+```
+
+## LWM Scratchpad
+
+`lst` supports a fixed window title for scratchpad setups:
+
+```bash
+lst --title lst-scratchpad
+```
+
+Example `~/.config/lwm/config.toml` entries:
+
+```toml
+[[binds]]
+key = "super+t"
+toggle_scratchpad = "lst"
+
+[[scratchpads]]
+name = "lst"
+spawn = { argv = ["/home/you/.local/bin/lst", "--title", "lst-scratchpad"] }
+match = { title = "^lst-scratchpad$" }
+size = { width = 0.8, height = 0.7 }
 ```
 
 ## Design
