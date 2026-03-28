@@ -1,8 +1,26 @@
 use iced::advanced::text::highlighter::{self, Highlighter};
 use iced::{Color, Font, Theme};
 use std::ops::Range;
+use std::sync::LazyLock;
 
-// ── Catppuccin Mocha palette ─────────────────────────────────────────────────
+use syntect::highlighting::{
+    HighlightState, Highlighter as SyntectHighlighter, RangedHighlightIterator,
+    Theme as SyntectTheme,
+};
+use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+
+// ── Shared syntect state (initialized once) ─────────────────────────────────
+
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+
+static THEME: LazyLock<SyntectTheme> = LazyLock::new(|| {
+    let data = include_bytes!("catppuccin-mocha.tmTheme");
+    let mut cursor = std::io::Cursor::new(&data[..]);
+    syntect::highlighting::ThemeSet::load_from_reader(&mut cursor)
+        .expect("embedded Catppuccin Mocha theme should be valid")
+});
+
+// ── Catppuccin Mocha palette (for hand-rolled Markdown highlights) ──────────
 
 const BLUE: Color = Color::from_rgb(0.537, 0.706, 0.980); // #89b4fa
 const PEACH: Color = Color::from_rgb(0.980, 0.702, 0.529); // #fab387
@@ -15,13 +33,23 @@ const LAVENDER: Color = Color::from_rgb(0.706, 0.745, 0.996); // #b4befe
 const YELLOW: Color = Color::from_rgb(0.976, 0.886, 0.659); // #f9e2af
 const SURFACE1: Color = Color::from_rgb(0.271, 0.278, 0.353); // #45475a
 
-// ── Highlight types ──────────────────────────────────────────────────────────
+// ── Highlight types ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Settings;
+#[derive(Clone, PartialEq)]
+pub struct Settings {
+    pub extension: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SyntectStyle {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Highlight {
+    // Markdown
     Heading,
     HeadingMarker,
     Bold,
@@ -33,6 +61,8 @@ pub enum Highlight {
     ListMarker,
     BlockQuote,
     HorizontalRule,
+    // Syntect
+    Syntect(SyntectStyle),
 }
 
 impl Highlight {
@@ -48,6 +78,7 @@ impl Highlight {
             Self::ListMarker => MAUVE,
             Self::BlockQuote => LAVENDER,
             Self::HorizontalRule => SURFACE1,
+            Self::Syntect(s) => Color::from_rgb8(s.r, s.g, s.b),
         }
     }
 }
@@ -59,106 +90,285 @@ pub fn format(highlight: &Highlight, _theme: &Theme) -> highlighter::Format<Font
     }
 }
 
-// ── State cached per line (for multi-line code blocks) ───────────────────────
+// ── Highlight mode ──────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy)]
-struct LineState {
-    in_code_block: bool,
-    fence: Option<(char, usize)>,
+enum HighlightMode {
+    Markdown,
+    Syntect(&'static SyntaxReference),
+    PlainText,
 }
 
-// ── Highlighter implementation ───────────────────────────────────────────────
+fn determine_mode(ext: &Option<String>) -> HighlightMode {
+    match ext.as_deref() {
+        Some("md") | Some("markdown") | None => HighlightMode::Markdown,
+        Some(ext) => match SYNTAX_SET.find_syntax_by_extension(ext) {
+            Some(syntax) => HighlightMode::Syntect(syntax),
+            None => HighlightMode::PlainText,
+        },
+    }
+}
 
-pub struct MdHighlighter {
-    /// `states[i]` = state AFTER processing line i (entering line i+1).
+// ── Per-line state cache ────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct MdLineState {
+    in_code_block: bool,
+    fence: Option<(char, usize)>,
+    code_lang: Option<String>,
+    syntect_parse: Option<ParseState>,
+    syntect_hl: Option<HighlightState>,
+}
+
+#[derive(Clone)]
+struct SyntectLineState {
+    parse_state: ParseState,
+    highlight_state: HighlightState,
+}
+
+#[derive(Clone)]
+enum LineState {
+    Md(MdLineState),
+    Syntect(SyntectLineState),
+}
+
+// ── Unified highlighter ─────────────────────────────────────────────────────
+
+pub struct LstHighlighter {
+    mode: HighlightMode,
     states: Vec<LineState>,
+    current_line: usize,
+    // Markdown working state
     in_code_block: bool,
     fence: Option<(char, usize)>,
-    current_line: usize,
+    code_lang: Option<String>,
+    syntect_parse: Option<ParseState>,
+    syntect_hl: Option<HighlightState>,
+    // Full-file syntect working state
+    full_file_parse: Option<ParseState>,
+    full_file_hl: Option<HighlightState>,
 }
 
-impl Highlighter for MdHighlighter {
+impl LstHighlighter {
+    fn init_mode(&mut self) {
+        if let HighlightMode::Syntect(syntax) = &self.mode {
+            let hl = SyntectHighlighter::new(&THEME);
+            self.full_file_parse = Some(ParseState::new(syntax));
+            self.full_file_hl = Some(HighlightState::new(&hl, ScopeStack::new()));
+        }
+    }
+
+    fn reset(&mut self) {
+        self.states.clear();
+        self.current_line = 0;
+        self.in_code_block = false;
+        self.fence = None;
+        self.code_lang = None;
+        self.syntect_parse = None;
+        self.syntect_hl = None;
+        self.full_file_parse = None;
+        self.full_file_hl = None;
+    }
+
+    // ── Markdown mode ───────────────────────────────────────────────────
+
+    fn highlight_md_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
+        let mut spans = Vec::new();
+        let trimmed = line.trim_start();
+
+        if self.in_code_block {
+            if let Some((fc, fl)) = self.fence {
+                if is_closing_fence(trimmed, fc, fl) {
+                    self.in_code_block = false;
+                    self.fence = None;
+                    self.code_lang = None;
+                    self.syntect_parse = None;
+                    self.syntect_hl = None;
+                    if !line.is_empty() {
+                        spans.push((0..line.len(), Highlight::CodeBlock));
+                    }
+                    self.push_md_state();
+                    return spans;
+                }
+            }
+
+            if self.syntect_parse.is_some() {
+                spans = self.highlight_code_line(line);
+            } else if !line.is_empty() {
+                spans.push((0..line.len(), Highlight::CodeBlock));
+            }
+            self.push_md_state();
+            return spans;
+        }
+
+        // Opening code fence
+        if let Some((fence, lang)) = parse_code_fence_with_lang(trimmed) {
+            self.in_code_block = true;
+            self.fence = Some(fence);
+            if let Some(ref lang) = lang {
+                if let Some(syntax) = SYNTAX_SET.find_syntax_by_token(lang) {
+                    let hl = SyntectHighlighter::new(&THEME);
+                    self.syntect_parse = Some(ParseState::new(syntax));
+                    self.syntect_hl = Some(HighlightState::new(&hl, ScopeStack::new()));
+                }
+            }
+            self.code_lang = lang;
+            if !line.is_empty() {
+                spans.push((0..line.len(), Highlight::CodeBlock));
+            }
+            self.push_md_state();
+            return spans;
+        }
+
+        highlight_block(line, trimmed, &mut spans);
+        self.push_md_state();
+        spans
+    }
+
+    fn push_md_state(&mut self) {
+        self.states.push(LineState::Md(MdLineState {
+            in_code_block: self.in_code_block,
+            fence: self.fence,
+            code_lang: self.code_lang.clone(),
+            syntect_parse: self.syntect_parse.clone(),
+            syntect_hl: self.syntect_hl.clone(),
+        }));
+    }
+
+    // ── Syntect line highlighting (shared by MD code blocks and full-file) ──
+
+    fn highlight_code_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
+        let parse = self.syntect_parse.as_mut().unwrap();
+        let hl_state = self.syntect_hl.as_mut().unwrap();
+        run_syntect_line(parse, hl_state, line)
+    }
+
+    // ── Full-file syntect mode ──────────────────────────────────────────
+
+    fn highlight_syntect_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
+        let parse = self.full_file_parse.as_mut().unwrap();
+        let hl_state = self.full_file_hl.as_mut().unwrap();
+        let spans = run_syntect_line(parse, hl_state, line);
+        self.states.push(LineState::Syntect(SyntectLineState {
+            parse_state: parse.clone(),
+            highlight_state: hl_state.clone(),
+        }));
+        spans
+    }
+}
+
+fn run_syntect_line(
+    parse: &mut ParseState,
+    hl_state: &mut HighlightState,
+    line: &str,
+) -> Vec<(Range<usize>, Highlight)> {
+    let line_nl = format!("{line}\n");
+    let ops = match parse.parse_line(&line_nl, &SYNTAX_SET) {
+        Ok(ops) => ops,
+        Err(_) => {
+            if line.is_empty() {
+                return Vec::new();
+            }
+            return vec![(0..line.len(), Highlight::CodeBlock)];
+        }
+    };
+
+    let highlighter = SyntectHighlighter::new(&THEME);
+    let iter = RangedHighlightIterator::new(hl_state, &ops, &line_nl, &highlighter);
+
+    let mut spans = Vec::new();
+    for (style, _text, range) in iter {
+        let start = range.start.min(line.len());
+        let end = range.end.min(line.len());
+        if start < end {
+            spans.push((
+                start..end,
+                Highlight::Syntect(SyntectStyle {
+                    r: style.foreground.r,
+                    g: style.foreground.g,
+                    b: style.foreground.b,
+                }),
+            ));
+        }
+    }
+    spans
+}
+
+// ── Highlighter trait implementation ────────────────────────────────────────
+
+impl Highlighter for LstHighlighter {
     type Settings = Settings;
     type Highlight = Highlight;
     type Iterator<'a> = std::vec::IntoIter<(Range<usize>, Highlight)>;
 
-    fn new(_settings: &Settings) -> Self {
-        Self {
+    fn new(settings: &Settings) -> Self {
+        let mode = determine_mode(&settings.extension);
+        let mut h = Self {
+            mode,
             states: Vec::new(),
+            current_line: 0,
             in_code_block: false,
             fence: None,
-            current_line: 0,
-        }
+            code_lang: None,
+            syntect_parse: None,
+            syntect_hl: None,
+            full_file_parse: None,
+            full_file_hl: None,
+        };
+        h.init_mode();
+        h
     }
 
-    fn update(&mut self, _settings: &Settings) {}
+    fn update(&mut self, settings: &Settings) {
+        self.mode = determine_mode(&settings.extension);
+        self.reset();
+        self.init_mode();
+    }
 
     fn change_line(&mut self, line: usize) {
         self.states.truncate(line);
         if line == 0 {
             self.in_code_block = false;
             self.fence = None;
-        } else if let Some(s) = self.states.last() {
-            self.in_code_block = s.in_code_block;
-            self.fence = s.fence;
+            self.code_lang = None;
+            self.syntect_parse = None;
+            self.syntect_hl = None;
+            self.full_file_parse = None;
+            self.full_file_hl = None;
+            self.init_mode();
+        } else if let Some(state) = self.states.last() {
+            match state.clone() {
+                LineState::Md(md) => {
+                    self.in_code_block = md.in_code_block;
+                    self.fence = md.fence;
+                    self.code_lang = md.code_lang;
+                    self.syntect_parse = md.syntect_parse;
+                    self.syntect_hl = md.syntect_hl;
+                }
+                LineState::Syntect(s) => {
+                    self.full_file_parse = Some(s.parse_state);
+                    self.full_file_hl = Some(s.highlight_state);
+                }
+            }
         }
         self.current_line = line;
+    }
+
+    fn highlight_line(&mut self, line: &str) -> Self::Iterator<'_> {
+        let spans = match &self.mode {
+            HighlightMode::Markdown => self.highlight_md_line(line),
+            HighlightMode::Syntect(_) => self.highlight_syntect_line(line),
+            HighlightMode::PlainText => Vec::new(),
+        };
+        self.current_line += 1;
+        spans.into_iter()
     }
 
     fn current_line(&self) -> usize {
         self.current_line
     }
-
-    fn highlight_line(&mut self, line: &str) -> Self::Iterator<'_> {
-        let spans = self.process_line(line);
-
-        self.states.push(LineState {
-            in_code_block: self.in_code_block,
-            fence: self.fence,
-        });
-        self.current_line += 1;
-
-        spans.into_iter()
-    }
 }
 
-impl MdHighlighter {
-    fn process_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
-        let mut spans = Vec::new();
-        let trimmed = line.trim_start();
-
-        // Inside a fenced code block?
-        if self.in_code_block {
-            if let Some((fc, fl)) = self.fence {
-                // Check for closing fence
-                if is_closing_fence(trimmed, fc, fl) {
-                    self.in_code_block = false;
-                    self.fence = None;
-                }
-            }
-            if !line.is_empty() {
-                spans.push((0..line.len(), Highlight::CodeBlock));
-            }
-            return spans;
-        }
-
-        // Opening code fence: ``` or ~~~
-        if let Some(fence) = parse_code_fence(trimmed) {
-            self.in_code_block = true;
-            self.fence = Some(fence);
-            if !line.is_empty() {
-                spans.push((0..line.len(), Highlight::CodeBlock));
-            }
-            return spans;
-        }
-
-        // Block-level patterns
-        highlight_block(line, trimmed, &mut spans);
-        spans
-    }
-}
-
-// ── Block-level highlighting ─────────────────────────────────────────────────
+// ── Block-level Markdown highlighting ───────────────────────────────────────
 
 fn highlight_block(line: &str, trimmed: &str, spans: &mut Vec<(Range<usize>, Highlight)>) {
     if trimmed.is_empty() {
@@ -215,7 +425,7 @@ fn highlight_block(line: &str, trimmed: &str, spans: &mut Vec<(Range<usize>, Hig
     highlight_inline(line, indent, spans);
 }
 
-// ── Inline highlighting ──────────────────────────────────────────────────────
+// ── Inline Markdown highlighting ────────────────────────────────────────────
 
 fn highlight_inline(line: &str, start: usize, spans: &mut Vec<(Range<usize>, Highlight)>) {
     let bytes = line.as_bytes();
@@ -236,7 +446,6 @@ fn highlight_inline(line: &str, start: usize, spans: &mut Vec<(Range<usize>, Hig
             // Bold (**text** or __text__)
             b'*' | b'_' if i + 2 < len && bytes[i + 1] == bytes[i] => {
                 let marker = bytes[i];
-                // _ requires word boundary (CommonMark flanking rules)
                 if marker == b'_' && i > 0 && bytes[i - 1].is_ascii_alphanumeric() {
                     i += 1;
                     continue;
@@ -300,19 +509,27 @@ fn highlight_inline(line: &str, start: usize, spans: &mut Vec<(Range<usize>, Hig
     }
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
-fn parse_code_fence(trimmed: &str) -> Option<(char, usize)> {
+fn parse_code_fence_with_lang(trimmed: &str) -> Option<((char, usize), Option<String>)> {
     let first = *trimmed.as_bytes().first()?;
     if first != b'`' && first != b'~' {
         return None;
     }
     let count = trimmed.bytes().take_while(|&b| b == first).count();
-    if count >= 3 {
-        Some((first as char, count))
-    } else {
-        None
+    if count < 3 {
+        return None;
     }
+    let info = trimmed[count..].trim();
+    let lang = if info.is_empty() {
+        None
+    } else {
+        info.split_whitespace()
+            .next()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_lowercase())
+    };
+    Some(((first as char, count), lang))
 }
 
 fn is_closing_fence(trimmed: &str, fence_char: char, fence_len: usize) -> bool {
@@ -334,12 +551,7 @@ fn is_horizontal_rule(trimmed: &str) -> bool {
 }
 
 fn find_closing(bytes: &[u8], start: usize, marker: u8) -> Option<usize> {
-    for i in start..bytes.len() {
-        if bytes[i] == marker && (i == start || bytes[i - 1] != b'\\') {
-            return Some(i);
-        }
-    }
-    None
+    (start..bytes.len()).find(|&i| bytes[i] == marker && (i == start || bytes[i - 1] != b'\\'))
 }
 
 fn find_double_closing(bytes: &[u8], start: usize, marker: u8) -> Option<usize> {

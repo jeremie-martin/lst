@@ -199,7 +199,7 @@ impl App {
                 scratchpad_dir,
                 last_edit_time: None,
             },
-            Task::none(),
+            iced::widget::operation::focus(EDITOR_ID.clone()),
         )
     }
 
@@ -345,10 +345,7 @@ impl App {
             Message::Saved(Err(_)) => Task::none(),
 
             Message::AutosaveTick => {
-                let Some(last_edit) = self.last_edit_time else {
-                    return Task::none();
-                };
-                if last_edit.elapsed() < Duration::from_secs(2) {
+                if self.last_edit_time.is_none() {
                     return Task::none();
                 }
                 self.last_edit_time = None;
@@ -723,6 +720,11 @@ impl App {
         let content_ref = &tab.content;
         let word_wrap = self.word_wrap;
         let find_visible = self.find.visible;
+        let highlight_ext = tab
+            .path
+            .as_ref()
+            .and_then(|p| p.extension())
+            .map(|e| e.to_string_lossy().into_owned());
 
         let editor_area = responsive(move |size| {
             let vh = size.height;
@@ -777,7 +779,10 @@ impl App {
                 })
                 .height(Length::Shrink)
                 .min_height(vh)
-                .highlight_with::<highlight::MdHighlighter>(highlight::Settings, highlight::format)
+                .highlight_with::<highlight::LstHighlighter>(
+                    highlight::Settings { extension: highlight_ext.clone() },
+                    highlight::format,
+                )
                 .key_binding(move |key_press| {
                     let key = &key_press.key;
                     let mods = key_press.modifiers;
