@@ -427,7 +427,10 @@ impl VimState {
             'v' => {
                 self.mode = Mode::Visual;
                 self.visual_anchor = Some(text.cursor);
-                vec![VimCommand::Noop]
+                vec![VimCommand::Select {
+                    anchor: text.cursor,
+                    head: text.cursor,
+                }]
             }
             'V' => {
                 self.mode = Mode::VisualLine;
@@ -599,6 +602,18 @@ impl VimState {
             return self.visual_select(target, text);
         }
 
+        // ; and , repeat/reverse last f/t
+        if (c == ';' || c == ',') && self.last_find.is_some() {
+            let motion = if c == ';' {
+                self.last_find.clone().unwrap()
+            } else {
+                reverse_find(self.last_find.as_ref().unwrap())
+            };
+            let count = self.pending.count.take();
+            let target = compute_motion(&motion, text, count);
+            return self.visual_select(target, text);
+        }
+
         // Search
         match c {
             '/' => return vec![VimCommand::OpenFind],
@@ -743,11 +758,13 @@ impl VimState {
             return vec![VimCommand::Noop];
         }
 
-        // vim: dw at end of line stops at EOL (doesn't eat newline)
+        // vim: dw at end of line stops at EOL (doesn't eat newline), becomes inclusive
+        let mut eol_clamped = false;
         let target = if op == Operator::Delete
             && target.line > text.cursor.line
             && matches!(motion, Motion::WordForward | Motion::BigWordForward)
         {
+            eol_clamped = true;
             let ll = line_len(text, text.cursor.line);
             pos(text.cursor.line, ll.saturating_sub(1))
         } else {
@@ -760,8 +777,8 @@ impl VimState {
 
         let (from, mut to) = ordered(text.cursor, target);
 
-        // Exclusive motions: don't include the target character
-        if !is_inclusive(&motion) {
+        // Exclusive motions: don't include the target character (skip if clamped to EOL)
+        if !is_inclusive(&motion) && !eol_clamped {
             // Shrink `to` by one character
             if to.column > 0 {
                 to.column -= 1;
@@ -1236,11 +1253,13 @@ fn pair_object(
     inner: bool,
 ) -> Option<(Position, Position)> {
     // Scan backward for unmatched opener
+    // If cursor is on the close delimiter, skip it (we're looking for its match)
     let open_pos = {
         let mut line = text.cursor.line;
         let mut chars = line_chars(text, line);
         let mut col = text.cursor.column.min(chars.len().saturating_sub(1));
-        let mut depth = 0i32;
+        let on_close = col < chars.len() && chars[col] == close;
+        let mut depth = if on_close { -1 } else { 0i32 };
         loop {
             if col < chars.len() {
                 let ch = chars[col];
@@ -1330,10 +1349,10 @@ fn quote_object(text: &TextSnapshot, quote: char, inner: bool) -> Option<(Positi
         if pair.len() == 2 && pair[0] <= col && col <= pair[1] {
             let (start, end) = (pair[0], pair[1]);
             return if inner {
-                if start < end.saturating_sub(1) {
+                if start + 1 < end {
                     Some((pos(line, start + 1), pos(line, end - 1)))
                 } else {
-                    Some((pos(line, start + 1), pos(line, start + 1)))
+                    None // empty interior (e.g., "")
                 }
             } else {
                 Some((pos(line, start), pos(line, end)))

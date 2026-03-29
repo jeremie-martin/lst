@@ -1791,6 +1791,9 @@ fn extract_text_range(
     from: &text_editor::Position,
     to: &text_editor::Position,
 ) -> String {
+    if from.line >= lines.len() || to.line >= lines.len() {
+        return String::new();
+    }
     if from.line == to.line {
         let chars: Vec<char> = lines[from.line].chars().collect();
         let start = from.column.min(chars.len());
@@ -1819,6 +1822,9 @@ fn remove_text_range(
     from: &text_editor::Position,
     to: &text_editor::Position,
 ) {
+    if from.line >= lines.len() || to.line >= lines.len() {
+        return;
+    }
     if from.line == to.line {
         let chars: Vec<char> = lines[from.line].chars().collect();
         let start = from.column.min(chars.len());
