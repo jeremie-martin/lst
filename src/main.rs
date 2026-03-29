@@ -12,8 +12,8 @@ use iced::event;
 use iced::keyboard;
 use iced::mouse;
 use iced::widget::{
-    button, column, container, mouse_area, responsive, row, scrollable, text, text_editor,
-    text_input, Space,
+    button, column, container, mouse_area, opaque, responsive, right, row, scrollable, stack, text,
+    text_editor, text_input, Space,
 };
 use iced::{
     Background, Border, Color, Element, Font, Length, Padding, Pixels, Point, Subscription, Task,
@@ -524,8 +524,20 @@ impl App {
             }
 
             // ── Find & Replace ───────────────────────────────────────────
-            Message::FindOpen => self.open_find(false),
-            Message::FindOpenReplace => self.open_find(true),
+            Message::FindOpen => {
+                if self.find.visible {
+                    self.find.visible = false;
+                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                }
+                self.open_find(false)
+            }
+            Message::FindOpenReplace => {
+                if self.find.visible && self.find.show_replace {
+                    self.find.visible = false;
+                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                }
+                self.open_find(true)
+            }
 
             Message::FindClose => {
                 if self.find.visible {
@@ -717,6 +729,10 @@ impl App {
 
             // ── Go to Line ──────────────────────────────────────────────
             Message::GotoLineOpen => {
+                if self.goto_line.is_some() {
+                    self.goto_line = None;
+                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                }
                 self.goto_line = Some(String::new());
                 iced::widget::operation::focus(GOTO_LINE_ID.clone())
             }
@@ -1205,7 +1221,6 @@ impl App {
             Some(
                 container(find_col)
                     .padding(Padding::from([4, 8]))
-                    .width(Length::Fill)
                     .style(solid_bg(bg_strong)),
             )
         } else {
@@ -1502,20 +1517,22 @@ impl App {
                 .align_y(iced::Alignment::Center),
             )
             .padding(Padding::from([4, 8]))
-            .width(Length::Fill)
             .style(solid_bg(bg_strong))
         });
 
         // ── Root ─────────────────────────────────────────────────────────
-        let mut layout = column![tab_bar];
+        let mut overlay_col: iced::widget::Column<'_, Message> = column![].spacing(0);
         if let Some(bar) = find_bar {
-            layout = layout.push(bar);
+            overlay_col = overlay_col.push(bar);
         }
         if let Some(bar) = goto_bar {
-            layout = layout.push(bar);
+            overlay_col = overlay_col.push(bar);
         }
-        layout = layout.push(editor_area).push(status_bar);
-        layout.into()
+
+        let content_area = column![editor_area, status_bar];
+        let stacked = stack![content_area, right(opaque(overlay_col))];
+
+        column![tab_bar, stacked].into()
     }
 
     fn subscription(&self) -> Subscription<Message> {
