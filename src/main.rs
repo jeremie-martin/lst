@@ -516,6 +516,9 @@ impl App {
                 tab.content
                     .perform(text_editor::Action::Click(Point::new(0.0, y)));
                 tab.content.perform(text_editor::Action::SelectLine);
+                if let Some(sel) = tab.content.selection() {
+                    copy_to_primary(&sel);
+                }
 
                 iced::widget::operation::focus(EDITOR_ID.clone())
             }
@@ -533,6 +536,9 @@ impl App {
             }
             Message::MulticlickReleased => {
                 self.multiclick_drag = false;
+                if let Some(sel) = self.tabs[self.active].content.selection() {
+                    copy_to_primary(&sel);
+                }
                 Task::none()
             }
 
@@ -1958,6 +1964,14 @@ fn copy_to_clipboard(text: &str) {
         pipe_to_command("wl-copy", &["--primary"], text);
     } else {
         pipe_to_command("xclip", &["-selection", "clipboard"], text);
+        pipe_to_command("xclip", &["-selection", "primary"], text);
+    }
+}
+
+fn copy_to_primary(text: &str) {
+    if is_wayland() {
+        pipe_to_command("wl-copy", &["--primary"], text);
+    } else {
         pipe_to_command("xclip", &["-selection", "primary"], text);
     }
 }
