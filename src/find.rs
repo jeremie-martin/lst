@@ -1,5 +1,6 @@
 use iced::widget::text_editor;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchPos {
     pub line: usize,
     pub col: usize,
@@ -71,6 +72,36 @@ impl FindState {
         });
     }
 
+    pub fn vim_next_from_cursor(
+        &mut self,
+        position: &text_editor::Position,
+    ) -> Option<text_editor::Position> {
+        let index = self
+            .matches
+            .iter()
+            .position(|m| {
+                m.line > position.line || (m.line == position.line && m.col > position.column)
+            })
+            .or_else(|| (!self.matches.is_empty()).then_some(0))?;
+        self.current = index;
+        Some(self.match_start(index))
+    }
+
+    pub fn vim_prev_from_cursor(
+        &mut self,
+        position: &text_editor::Position,
+    ) -> Option<text_editor::Position> {
+        let index = self
+            .matches
+            .iter()
+            .rposition(|m| {
+                m.line < position.line || (m.line == position.line && m.col < position.column)
+            })
+            .or_else(|| self.matches.len().checked_sub(1))?;
+        self.current = index;
+        Some(self.match_start(index))
+    }
+
     pub fn next(&mut self) {
         if !self.matches.is_empty() {
             self.current = (self.current + 1) % self.matches.len();
@@ -96,5 +127,57 @@ impl FindState {
             }
         }
         self.current = 0;
+    }
+
+    fn match_start(&self, index: usize) -> text_editor::Position {
+        let m = &self.matches[index];
+        text_editor::Position {
+            line: m.line,
+            column: m.col,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pos(line: usize, column: usize) -> text_editor::Position {
+        text_editor::Position { line, column }
+    }
+
+    #[test]
+    fn vim_next_is_cursor_relative_and_wraps() {
+        let mut find = FindState::new();
+        find.query = "foo".into();
+        find.compute_matches("foo bar foo");
+
+        assert_eq!(find.vim_next_from_cursor(&pos(0, 0)), Some(pos(0, 8)));
+        assert_eq!(find.current, 1);
+        assert_eq!(find.vim_next_from_cursor(&pos(0, 8)), Some(pos(0, 0)));
+        assert_eq!(find.current, 0);
+    }
+
+    #[test]
+    fn vim_prev_is_cursor_relative_and_wraps() {
+        let mut find = FindState::new();
+        find.query = "foo".into();
+        find.compute_matches("foo bar foo");
+
+        assert_eq!(find.vim_prev_from_cursor(&pos(0, 8)), Some(pos(0, 0)));
+        assert_eq!(find.current, 0);
+        assert_eq!(find.vim_prev_from_cursor(&pos(0, 0)), Some(pos(0, 8)));
+        assert_eq!(find.current, 1);
+    }
+
+    #[test]
+    fn vim_search_advances_from_cursor_not_stale_index() {
+        let mut find = FindState::new();
+        find.query = "foo".into();
+        find.compute_matches("foo\nbar\nfoo");
+        find.current = 1;
+
+        assert_eq!(find.vim_next_from_cursor(&pos(0, 0)), Some(pos(2, 0)));
+        assert_eq!(find.current, 1);
     }
 }

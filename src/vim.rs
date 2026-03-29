@@ -28,9 +28,10 @@ pub struct VimState {
     pub visual_anchor: Option<Position>,
     pending: Pending,
     last_find: Option<Motion>, // for ; and ,
+    preferred_column: Option<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum VimCommand {
     MoveTo(Position),
     Select {
@@ -80,6 +81,16 @@ pub enum VimCommand {
     OpenFind,
     FindNext,
     FindPrev,
+    TransformCaseRange {
+        from: Position,
+        to: Position,
+        uppercase: bool,
+    },
+    TransformCaseLines {
+        first: usize,
+        last: usize,
+        uppercase: bool,
+    },
     Noop,
 }
 
@@ -139,7 +150,7 @@ enum Motion {
     TillChar(char),
     FindCharBack(char),
     TillCharBack(char),
-    MatchBracket,
+    Percent,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -159,6 +170,7 @@ impl VimState {
             visual_anchor: None,
             pending: Pending::default(),
             last_find: None,
+            preferred_column: None,
         }
     }
 
@@ -199,11 +211,16 @@ impl VimState {
         self.pending = Pending::default();
     }
 
+    pub fn clear_preferred_column(&mut self) {
+        self.preferred_column = None;
+    }
+
     pub fn on_tab_switch(&mut self) {
+        self.clear_pending();
+        self.clear_preferred_column();
         if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
             self.mode = Mode::Normal;
             self.visual_anchor = None;
-            self.clear_pending();
         }
     }
 
@@ -228,6 +245,7 @@ impl VimState {
             Mode::Insert => {
                 self.mode = Mode::Normal;
                 self.clear_pending();
+                self.clear_preferred_column();
                 // vim: cursor moves left by 1 when leaving Insert (unless at col 0)
                 let ll = line_len(text, cursor.line);
                 let col = if cursor.column > 0 {
@@ -245,11 +263,13 @@ impl VimState {
                 self.mode = Mode::Normal;
                 self.visual_anchor = None;
                 self.clear_pending();
+                self.clear_preferred_column();
                 // Clear selection by moving to current cursor
                 vec![VimCommand::MoveTo(cursor)]
             }
             Mode::Normal => {
                 self.clear_pending();
+                self.clear_preferred_column();
                 vec![VimCommand::Noop]
             }
         }
@@ -267,6 +287,7 @@ impl VimState {
             if let keyboard::Key::Character(c) = key {
                 if c.as_str() == "r" {
                     self.clear_pending();
+                    self.clear_preferred_column();
                     return vec![VimCommand::Redo];
                 }
             }
@@ -375,6 +396,7 @@ impl VimState {
 
         let count = self.motion_count().unwrap_or(1);
         self.clear_pending();
+        self.clear_preferred_column();
 
         match c {
             'i' => vec![VimCommand::EnterInsert],
@@ -502,6 +524,7 @@ impl VimState {
                 if c.as_str() == "r" {
                     self.mode = Mode::Normal;
                     self.visual_anchor = None;
+                    self.clear_preferred_column();
                     return vec![VimCommand::Redo];
                 }
             }
@@ -511,7 +534,7 @@ impl VimState {
         if let keyboard::Key::Named(named) = key {
             if let Some(m) = named_key_to_motion(named) {
                 let count = self.pending.count.take();
-                let target = compute_motion(&m, text, count);
+                let target = self.cursor_motion_target(&m, text, count);
                 return self.visual_select(target, text);
             }
             return vec![VimCommand::Noop];
@@ -535,13 +558,16 @@ impl VimState {
                 _ => None,
             };
             if let Some(m) = motion {
-                let target = compute_motion(&m, text, None);
+                let count = self.pending.count.take();
+                let target = self.cursor_motion_target(&m, text, count);
                 return self.visual_select(target, text);
             }
             // Text objects in Visual mode (viw, vi", vab, etc.)
             if partial == 'i' || partial == 'a' {
-                if let Some((from, to)) = text_object(text, c, partial == 'i') {
+                let count = self.pending.count.take();
+                if let Some((from, to)) = text_object(text, c, partial == 'i', count) {
                     self.visual_anchor = Some(from);
+                    self.clear_preferred_column();
                     return vec![VimCommand::Select {
                         anchor: from,
                         head: to,
@@ -567,6 +593,7 @@ impl VimState {
                 self.mode = Mode::Normal;
                 self.visual_anchor = None;
                 self.clear_pending();
+                self.clear_preferred_column();
                 if is_line {
                     let (first, last) = ordered_lines(anchor.line, text.cursor.line);
                     return vec![VimCommand::DeleteLines { first, last }];
@@ -578,6 +605,7 @@ impl VimState {
                 self.mode = Mode::Normal;
                 self.visual_anchor = None;
                 self.clear_pending();
+                self.clear_preferred_column();
                 if is_line {
                     let (first, last) = ordered_lines(anchor.line, text.cursor.line);
                     return vec![VimCommand::ChangeLines { first, last }];
@@ -589,6 +617,7 @@ impl VimState {
                 self.mode = Mode::Normal;
                 self.visual_anchor = None;
                 self.clear_pending();
+                self.clear_preferred_column();
                 let (from, to) = ordered(anchor, text.cursor);
                 if is_line {
                     let (first, last) = ordered_lines(anchor.line, text.cursor.line);
@@ -604,9 +633,11 @@ impl VimState {
                     self.mode = Mode::Normal;
                     self.visual_anchor = None;
                     self.clear_pending();
+                    self.clear_preferred_column();
                     return vec![VimCommand::MoveTo(text.cursor)];
                 } else {
                     self.mode = Mode::Visual;
+                    self.clear_preferred_column();
                     return vec![VimCommand::Select {
                         anchor,
                         head: text.cursor,
@@ -618,11 +649,34 @@ impl VimState {
                     self.mode = Mode::Normal;
                     self.visual_anchor = None;
                     self.clear_pending();
+                    self.clear_preferred_column();
                     return vec![VimCommand::MoveTo(text.cursor)];
                 } else {
                     self.mode = Mode::VisualLine;
+                    self.clear_preferred_column();
                     return self.visual_select(text.cursor, text);
                 }
+            }
+            'u' | 'U' => {
+                self.mode = Mode::Normal;
+                self.visual_anchor = None;
+                self.clear_pending();
+                self.clear_preferred_column();
+                let uppercase = c == 'U';
+                if is_line {
+                    let (first, last) = ordered_lines(anchor.line, text.cursor.line);
+                    return vec![VimCommand::TransformCaseLines {
+                        first,
+                        last,
+                        uppercase,
+                    }];
+                }
+                let (from, to) = ordered(anchor, text.cursor);
+                return vec![VimCommand::TransformCaseRange {
+                    from,
+                    to,
+                    uppercase,
+                }];
             }
             _ => {}
         }
@@ -634,30 +688,34 @@ impl VimState {
 
         // Try as motion — extend selection
         if c == '0' && self.pending.count.is_none() {
-            let target = compute_motion(&Motion::LineStart, text, None);
+            let target = self.cursor_motion_target(&Motion::LineStart, text, None);
             return self.visual_select(target, text);
         }
         if let Some(motion) = char_to_motion(c) {
             let count = self.pending.count.take();
-            let target = compute_motion(&motion, text, count);
+            let target = self.cursor_motion_target(&motion, text, count);
             return self.visual_select(target, text);
         }
 
         if let Some(motion) = self.repeat_find(c) {
             let count = self.pending.count.take();
-            let target = compute_motion(&motion, text, count);
+            let target = self.cursor_motion_target(&motion, text, count);
             return self.visual_select(target, text);
         }
 
         // Search
         match c {
-            '/' => return vec![VimCommand::OpenFind],
-            'n' => return vec![VimCommand::FindNext],
-            'N' => return vec![VimCommand::FindPrev],
-            'u' => {
-                self.mode = Mode::Normal;
-                self.visual_anchor = None;
-                return vec![VimCommand::Undo];
+            '/' => {
+                self.clear_preferred_column();
+                return vec![VimCommand::OpenFind];
+            }
+            'n' => {
+                self.clear_preferred_column();
+                return vec![VimCommand::FindNext];
+            }
+            'N' => {
+                self.clear_preferred_column();
+                return vec![VimCommand::FindPrev];
             }
             _ => {}
         }
@@ -708,6 +766,7 @@ impl VimState {
             'r' => {
                 let count = self.motion_count().unwrap_or(1);
                 self.clear_pending();
+                self.clear_preferred_column();
                 if c == '\n' || line_len(text, text.cursor.line) == 0 {
                     vec![VimCommand::Noop]
                 } else {
@@ -715,20 +774,22 @@ impl VimState {
                 }
             }
             'i' | 'a' => {
-                // Text object after operator
                 let inner = partial == 'i';
-                if let Some(range) = text_object(text, c, inner) {
-                    if let Some(op) = self.pending.operator.take() {
-                        self.pending.count = None;
-                        self.pending.operator_count = None;
+                let count = self.motion_count();
+                if let Some(op) = self.pending.operator.take() {
+                    if let Some(range) = text_object(text, c, inner, count) {
+                        self.clear_pending();
+                        self.clear_preferred_column();
                         return self.range_operator(op, range.0, range.1);
                     }
                 }
                 self.clear_pending();
+                self.clear_preferred_column();
                 vec![VimCommand::Noop]
             }
             _ => {
                 self.clear_pending();
+                self.clear_preferred_column();
                 vec![VimCommand::Noop]
             }
         }
@@ -755,10 +816,27 @@ impl VimState {
         }
     }
 
+    fn cursor_motion_target(
+        &mut self,
+        motion: &Motion,
+        text: &TextSnapshot,
+        count: Option<usize>,
+    ) -> Position {
+        let preferred_column = if matches!(motion, Motion::Down | Motion::Up) {
+            let preferred = self.preferred_column.unwrap_or(text.cursor.column);
+            self.preferred_column = Some(preferred);
+            Some(preferred)
+        } else {
+            self.clear_preferred_column();
+            None
+        };
+        compute_motion(motion, text, count, preferred_column)
+    }
+
     fn motion_move(&mut self, motion: Motion, text: &TextSnapshot) -> Vec<VimCommand> {
         let count = self.motion_count();
         self.clear_pending();
-        let target = compute_motion(&motion, text, count);
+        let target = self.cursor_motion_target(&motion, text, count);
         vec![VimCommand::MoveTo(target)]
     }
 
@@ -781,14 +859,15 @@ impl VimState {
 
         let count = self.motion_count();
         self.clear_pending();
+        self.clear_preferred_column();
 
-        if is_line_wise(&motion) {
-            let target = compute_motion(&motion, text, count);
+        if motion_is_linewise(&motion, count) {
+            let target = compute_motion(&motion, text, count, None);
             let (first, last) = ordered_lines(text.cursor.line, target.line);
             return self.line_operator(op, first, last);
         }
 
-        let target = compute_motion(&motion, text, count);
+        let target = compute_motion(&motion, text, count, None);
         if target == text.cursor {
             return vec![VimCommand::Noop];
         }
@@ -815,7 +894,7 @@ impl VimState {
         let mut to = to;
 
         // Exclusive motions: don't include the target character (skip if clamped to EOL)
-        if !is_inclusive(&motion) && !eol_clamped {
+        if !motion_is_inclusive(&motion, count) && !eol_clamped {
             // Shrink `to` by one character
             if to.column > 0 {
                 to.column -= 1;
@@ -857,7 +936,12 @@ impl VimState {
 
 // ── Motion computation ──────────────────────────────────────────────────────
 
-fn compute_motion(motion: &Motion, text: &TextSnapshot, count: Option<usize>) -> Position {
+fn compute_motion(
+    motion: &Motion,
+    text: &TextSnapshot,
+    count: Option<usize>,
+    preferred_column: Option<usize>,
+) -> Position {
     let n = count.unwrap_or(1);
     match motion {
         Motion::Left => {
@@ -870,17 +954,15 @@ fn compute_motion(motion: &Motion, text: &TextSnapshot, count: Option<usize>) ->
         }
         Motion::Down => {
             let line = (text.cursor.line + n).min(text.line_count().saturating_sub(1));
-            let col = text
-                .cursor
-                .column
+            let col = preferred_column
+                .unwrap_or(text.cursor.column)
                 .min(line_len(text, line).saturating_sub(1));
             pos(line, col)
         }
         Motion::Up => {
             let line = text.cursor.line.saturating_sub(n);
-            let col = text
-                .cursor
-                .column
+            let col = preferred_column
+                .unwrap_or(text.cursor.column)
                 .min(line_len(text, line).saturating_sub(1));
             pos(line, col)
         }
@@ -940,8 +1022,10 @@ fn compute_motion(motion: &Motion, text: &TextSnapshot, count: Option<usize>) ->
         }
         Motion::LineStart => pos(text.cursor.line, 0),
         Motion::LineEnd => {
-            let ll = line_len(text, text.cursor.line);
-            pos(text.cursor.line, ll.saturating_sub(1))
+            let line =
+                (text.cursor.line + n.saturating_sub(1)).min(text.line_count().saturating_sub(1));
+            let ll = line_len(text, line);
+            pos(line, ll.saturating_sub(1))
         }
         Motion::FirstNonBlank => pos(text.cursor.line, first_non_blank(text, text.cursor.line)),
         Motion::DocumentStart => match count {
@@ -1016,7 +1100,15 @@ fn compute_motion(motion: &Motion, text: &TextSnapshot, count: Option<usize>) ->
             }
             text.cursor
         }
-        Motion::MatchBracket => match_bracket(text).unwrap_or(text.cursor),
+        Motion::Percent => match count {
+            Some(n) => {
+                let total = text.line_count().max(1);
+                let pct = n.clamp(1, 100);
+                let line = ((pct * total).saturating_add(99) / 100).saturating_sub(1);
+                pos(line, first_non_blank(text, line))
+            }
+            None => match_bracket(text).unwrap_or(text.cursor),
+        },
     }
 }
 
@@ -1047,19 +1139,20 @@ fn char_to_motion(c: char) -> Option<Motion> {
         '$' => Some(Motion::LineEnd),
         '^' => Some(Motion::FirstNonBlank),
         'G' => Some(Motion::DocumentEnd),
-        '%' => Some(Motion::MatchBracket),
+        '%' => Some(Motion::Percent),
         _ => None,
     }
 }
 
-fn is_line_wise(motion: &Motion) -> bool {
+fn motion_is_linewise(motion: &Motion, count: Option<usize>) -> bool {
     matches!(
         motion,
         Motion::Down | Motion::Up | Motion::DocumentStart | Motion::DocumentEnd
-    )
+    ) || matches!(motion, Motion::LineEnd) && count.unwrap_or(1) > 1
+        || matches!(motion, Motion::Percent) && count.is_some()
 }
 
-fn is_inclusive(motion: &Motion) -> bool {
+fn motion_is_inclusive(motion: &Motion, count: Option<usize>) -> bool {
     matches!(
         motion,
         Motion::WordEnd
@@ -1069,8 +1162,7 @@ fn is_inclusive(motion: &Motion) -> bool {
             | Motion::FindCharBack(_)
             | Motion::TillChar(_)
             | Motion::TillCharBack(_)
-            | Motion::MatchBracket
-    )
+    ) || matches!(motion, Motion::Percent) && count.is_none()
 }
 
 fn reverse_find(motion: &Motion) -> Motion {
@@ -1237,10 +1329,15 @@ fn word_end(text: &TextSnapshot, mut line: usize, mut col: usize, big: bool) -> 
 
 // ── Text objects ────────────────────────────────────────────────────────────
 
-fn text_object(text: &TextSnapshot, obj: char, inner: bool) -> Option<(Position, Position)> {
+fn text_object(
+    text: &TextSnapshot,
+    obj: char,
+    inner: bool,
+    count: Option<usize>,
+) -> Option<(Position, Position)> {
     match obj {
-        'w' => word_object(text, inner, false),
-        'W' => word_object(text, inner, true),
+        'w' => word_object(text, inner, false, count.unwrap_or(1)),
+        'W' => word_object(text, inner, true, count.unwrap_or(1)),
         '(' | ')' | 'b' => pair_object(text, '(', ')', inner),
         '{' | '}' | 'B' => pair_object(text, '{', '}', inner),
         '[' | ']' => pair_object(text, '[', ']', inner),
@@ -1252,37 +1349,70 @@ fn text_object(text: &TextSnapshot, obj: char, inner: bool) -> Option<(Position,
     }
 }
 
-fn word_object(text: &TextSnapshot, inner: bool, big: bool) -> Option<(Position, Position)> {
-    let line = text.cursor.line;
+fn word_object(
+    text: &TextSnapshot,
+    inner: bool,
+    big: bool,
+    count: usize,
+) -> Option<(Position, Position)> {
+    let mut range = word_object_at(text, text.cursor, inner, big)?;
+    for _ in 1..count.max(1) {
+        let Some(next_cursor) = advance_pos(text, range.1) else {
+            break;
+        };
+        let Some(next_range) = word_object_at(text, next_cursor, inner, big) else {
+            break;
+        };
+        range.1 = next_range.1;
+    }
+    Some(range)
+}
+
+fn word_object_at(
+    text: &TextSnapshot,
+    cursor: Position,
+    inner: bool,
+    big: bool,
+) -> Option<(Position, Position)> {
+    let line = cursor.line;
     let chars = line_chars(text, line);
     if chars.is_empty() {
         return None;
     }
-    let col = text.cursor.column.min(chars.len() - 1);
+    let col = cursor.column.min(chars.len() - 1);
     let cur_class = classify(chars[col], big);
 
-    // Find word start
     let mut start = col;
     while start > 0 && classify(chars[start - 1], big) == cur_class {
         start -= 1;
     }
 
-    // Find word end
     let mut end = col;
     while end + 1 < chars.len() && classify(chars[end + 1], big) == cur_class {
         end += 1;
     }
 
-    if !inner {
-        // "a word" includes trailing whitespace (or leading if at end)
-        if end + 1 < chars.len() && classify(chars[end + 1], big) == CharClass::Space {
-            while end + 1 < chars.len() && classify(chars[end + 1], big) == CharClass::Space {
-                end += 1;
-            }
-        } else if start > 0 && classify(chars[start - 1], big) == CharClass::Space {
-            while start > 0 && classify(chars[start - 1], big) == CharClass::Space {
-                start -= 1;
-            }
+    if inner {
+        return Some((pos(line, start), pos(line, end)));
+    }
+
+    if cur_class == CharClass::Space {
+        if let Some((_, next_end)) = next_non_space_range(&chars, end + 1, big) {
+            return Some((pos(line, start), pos(line, next_end)));
+        }
+        if let Some((prev_start, _)) = prev_non_space_range(&chars, start, big) {
+            return Some((pos(line, prev_start), pos(line, end)));
+        }
+        return Some((pos(line, start), pos(line, end)));
+    }
+
+    if end + 1 < chars.len() && classify(chars[end + 1], big) == CharClass::Space {
+        while end + 1 < chars.len() && classify(chars[end + 1], big) == CharClass::Space {
+            end += 1;
+        }
+    } else if start > 0 && classify(chars[start - 1], big) == CharClass::Space {
+        while start > 0 && classify(chars[start - 1], big) == CharClass::Space {
+            start -= 1;
         }
     }
 
@@ -1379,30 +1509,102 @@ fn quote_object(text: &TextSnapshot, quote: char, inner: bool) -> Option<(Positi
     let chars = line_chars(text, line);
     let col = text.cursor.column;
 
-    // Find all quote positions on the line
     let quotes: Vec<usize> = chars
         .iter()
         .enumerate()
-        .filter(|(_, &c)| c == quote)
+        .filter(|(i, &c)| c == quote && !is_escaped_quote(&chars, *i))
         .map(|(i, _)| i)
         .collect();
 
-    // Find the pair containing the cursor
-    for pair in quotes.chunks(2) {
-        if pair.len() == 2 && pair[0] <= col && col <= pair[1] {
-            let (start, end) = (pair[0], pair[1]);
-            return if inner {
-                if start + 1 < end {
-                    Some((pos(line, start + 1), pos(line, end - 1)))
-                } else {
-                    None // empty interior (e.g., "")
-                }
+    let (start, end) = quotes
+        .windows(2)
+        .filter_map(|pair| {
+            let [start, end] = <&[usize; 2]>::try_from(pair).ok()?;
+            if *start <= col
+                && col <= *end
+                && quote_can_open(&chars, *start)
+                && quote_can_close(&chars, *end)
+            {
+                Some((*start, *end))
             } else {
-                Some((pos(line, start), pos(line, end)))
-            };
+                None
+            }
+        })
+        .min_by_key(|(start, end)| end - start)?;
+
+    if inner {
+        if start + 1 < end {
+            Some((pos(line, start + 1), pos(line, end - 1)))
+        } else {
+            None
+        }
+    } else {
+        Some((pos(line, start), pos(line, end)))
+    }
+}
+
+fn next_non_space_range(chars: &[char], mut start: usize, big: bool) -> Option<(usize, usize)> {
+    while start < chars.len() && classify(chars[start], big) == CharClass::Space {
+        start += 1;
+    }
+    if start >= chars.len() {
+        return None;
+    }
+    let class = classify(chars[start], big);
+    let mut end = start;
+    while end + 1 < chars.len() && classify(chars[end + 1], big) == class {
+        end += 1;
+    }
+    Some((start, end))
+}
+
+fn prev_non_space_range(chars: &[char], start: usize, big: bool) -> Option<(usize, usize)> {
+    if start == 0 {
+        return None;
+    }
+    let mut end = start - 1;
+    loop {
+        if classify(chars[end], big) != CharClass::Space {
+            break;
+        }
+        if end == 0 {
+            return None;
+        }
+        end -= 1;
+    }
+
+    let class = classify(chars[end], big);
+    let mut range_start = end;
+    while range_start > 0 && classify(chars[range_start - 1], big) == class {
+        range_start -= 1;
+    }
+    Some((range_start, end))
+}
+
+fn is_escaped_quote(chars: &[char], idx: usize) -> bool {
+    let mut backslashes = 0;
+    let mut i = idx;
+    while i > 0 {
+        i -= 1;
+        if chars[i] == '\\' {
+            backslashes += 1;
+        } else {
+            break;
         }
     }
-    None
+    backslashes % 2 == 1
+}
+
+fn quote_can_open(chars: &[char], idx: usize) -> bool {
+    idx == 0 || !quote_neighbor_is_wordish(chars[idx - 1])
+}
+
+fn quote_can_close(chars: &[char], idx: usize) -> bool {
+    idx + 1 >= chars.len() || !quote_neighbor_is_wordish(chars[idx + 1])
+}
+
+fn quote_neighbor_is_wordish(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
 }
 
 // ── Bracket matching ────────────────────────────────────────────────────────
@@ -1554,5 +1756,259 @@ fn retreat_pos(text: &TextSnapshot, p: Position) -> Option<Position> {
         Some(pos(prev, line_len(text, prev).saturating_sub(1)))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(lines: &[&str], line: usize, column: usize) -> TextSnapshot {
+        TextSnapshot {
+            lines: lines.iter().map(|line| (*line).to_string()).collect(),
+            cursor: pos(line, column),
+        }
+    }
+
+    fn key(c: char) -> keyboard::Key {
+        keyboard::Key::Character(c.to_string().into())
+    }
+
+    #[test]
+    fn counted_line_end_motion_moves_across_lines() {
+        let mut vim = VimState::new();
+        vim.mode = Mode::Normal;
+        let text = snapshot(&["abc", "xyz", "123"], 0, 0);
+
+        assert_eq!(
+            vim.handle_key(&key('2'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        assert_eq!(
+            vim.handle_key(&key('$'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::MoveTo(pos(1, 2))]
+        );
+    }
+
+    #[test]
+    fn counted_line_end_operator_becomes_linewise() {
+        let mut vim = VimState::new();
+        vim.mode = Mode::Normal;
+        let text = snapshot(&["abc", "xyz", "123"], 0, 0);
+
+        assert_eq!(
+            vim.handle_key(&key('d'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        assert_eq!(
+            vim.handle_key(&key('2'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        assert_eq!(
+            vim.handle_key(&key('$'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 1 }]
+        );
+    }
+
+    #[test]
+    fn counted_percent_motion_jumps_by_file_percentage() {
+        let mut vim = VimState::new();
+        vim.mode = Mode::Normal;
+        let lines = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+        let text = snapshot(&lines, 0, 0);
+
+        assert_eq!(
+            vim.handle_key(&key('5'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        assert_eq!(
+            vim.handle_key(&key('0'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        assert_eq!(
+            vim.handle_key(&key('%'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::MoveTo(pos(4, 0))]
+        );
+    }
+
+    #[test]
+    fn counted_percent_operator_is_linewise() {
+        let mut vim = VimState::new();
+        vim.mode = Mode::Normal;
+        let lines = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+        let text = snapshot(&lines, 0, 0);
+
+        assert_eq!(
+            vim.handle_key(&key('d'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        assert_eq!(
+            vim.handle_key(&key('5'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        assert_eq!(
+            vim.handle_key(&key('0'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        assert_eq!(
+            vim.handle_key(&key('%'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 4 }]
+        );
+    }
+
+    #[test]
+    fn visual_find_partial_uses_counts() {
+        let mut vim = VimState::new();
+        vim.mode = Mode::Normal;
+        let text = snapshot(&["foo bar baz boom"], 0, 0);
+
+        assert_eq!(
+            vim.handle_key(&key('v'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 0),
+            }]
+        );
+        assert_eq!(
+            vim.handle_key(&key('3'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        assert_eq!(
+            vim.handle_key(&key('f'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        assert_eq!(
+            vim.handle_key(&key('b'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 12),
+            }]
+        );
+    }
+
+    #[test]
+    fn vertical_motions_preserve_preferred_column() {
+        let mut vim = VimState::new();
+        vim.mode = Mode::Normal;
+
+        let first = snapshot(&["ABCDEFGHIJ", "x", "ABCDEFGHIJ"], 0, 7);
+        assert_eq!(
+            vim.handle_key(
+                &keyboard::Key::Named(keyboard::key::Named::ArrowDown),
+                keyboard::Modifiers::default(),
+                &first,
+            ),
+            vec![VimCommand::MoveTo(pos(1, 0))]
+        );
+
+        let second = snapshot(&["ABCDEFGHIJ", "x", "ABCDEFGHIJ"], 1, 0);
+        assert_eq!(
+            vim.handle_key(
+                &keyboard::Key::Named(keyboard::key::Named::ArrowDown),
+                keyboard::Modifiers::default(),
+                &second,
+            ),
+            vec![VimCommand::MoveTo(pos(2, 7))]
+        );
+    }
+
+    #[test]
+    fn tab_switch_clears_pending_operator() {
+        let mut vim = VimState::new();
+        vim.mode = Mode::Normal;
+        let text = snapshot(&["foo bar"], 0, 0);
+
+        assert_eq!(
+            vim.handle_key(&key('d'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::Noop]
+        );
+        vim.on_tab_switch();
+        assert_eq!(
+            vim.handle_key(&key('w'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::MoveTo(pos(0, 4))]
+        );
+    }
+
+    #[test]
+    fn around_word_on_whitespace_selects_following_word() {
+        let text = snapshot(&["foo   bar"], 0, 4);
+        assert_eq!(
+            text_object(&text, 'w', false, None),
+            Some((pos(0, 3), pos(0, 8)))
+        );
+    }
+
+    #[test]
+    fn counted_inner_word_objects_expand_across_adjacent_objects() {
+        let text = snapshot(&["foo bar baz"], 0, 0);
+        assert_eq!(
+            text_object(&text, 'w', true, Some(2)),
+            Some((pos(0, 0), pos(0, 3)))
+        );
+    }
+
+    #[test]
+    fn counted_around_word_objects_expand_from_whitespace() {
+        let text = snapshot(&["foo   bar baz"], 0, 4);
+        assert_eq!(
+            text_object(&text, 'w', false, Some(2)),
+            Some((pos(0, 3), pos(0, 12)))
+        );
+    }
+
+    #[test]
+    fn quote_object_ignores_escaped_quotes() {
+        let text = snapshot(&["let s = \"a\\\"b\""], 0, 12);
+        assert_eq!(
+            text_object(&text, '"', true, None),
+            Some((pos(0, 9), pos(0, 12)))
+        );
+    }
+
+    #[test]
+    fn quote_object_uses_nearest_surrounding_pair() {
+        let text = snapshot(&["\"foo \"bar\""], 0, 7);
+        assert_eq!(
+            text_object(&text, '"', true, None),
+            Some((pos(0, 6), pos(0, 8)))
+        );
+    }
+
+    #[test]
+    fn quote_object_rejects_gap_between_adjacent_strings() {
+        let text = snapshot(&["\"one\" \"two\""], 0, 5);
+        assert_eq!(text_object(&text, '"', true, None), None);
+    }
+
+    #[test]
+    fn visual_u_maps_to_case_transform() {
+        let mut vim = VimState::new();
+        vim.mode = Mode::Visual;
+        vim.visual_anchor = Some(pos(0, 0));
+        let text = snapshot(&["ABC DEF"], 0, 2);
+
+        assert_eq!(
+            vim.handle_key(&key('u'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::TransformCaseRange {
+                from: pos(0, 0),
+                to: pos(0, 2),
+                uppercase: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn visual_search_repeat_keeps_visual_mode() {
+        let mut vim = VimState::new();
+        vim.mode = Mode::Visual;
+        vim.visual_anchor = Some(pos(0, 0));
+        let text = snapshot(&["foo bar foo"], 0, 2);
+
+        assert_eq!(
+            vim.handle_key(&key('n'), keyboard::Modifiers::default(), &text),
+            vec![VimCommand::FindNext]
+        );
+        assert_eq!(vim.mode, Mode::Visual);
+        assert_eq!(vim.visual_anchor, Some(pos(0, 0)));
     }
 }

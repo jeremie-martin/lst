@@ -263,6 +263,7 @@ impl App {
         if i >= self.tabs.len() {
             return Task::none();
         }
+        let closed_active = i == self.active;
         let tab = &self.tabs[i];
         if tab.is_scratchpad && tab.content.text().trim().is_empty() {
             if let Some(p) = &tab.path {
@@ -273,8 +274,9 @@ impl App {
             return self.exit_with_clipboard();
         }
         self.tabs.remove(i);
-        if self.active >= self.tabs.len() {
-            self.active = self.tabs.len() - 1;
+        if closed_active {
+            let new_active = self.active.min(self.tabs.len() - 1);
+            self.set_active_tab(new_active);
         } else if self.active > i {
             self.active -= 1;
         }
@@ -290,7 +292,7 @@ impl App {
     }
 
     fn refresh_find_matches(&mut self) {
-        if self.find.visible {
+        if !self.find.query.is_empty() {
             self.find
                 .compute_matches(&self.tabs[self.active].content.text());
         }
@@ -308,8 +310,21 @@ impl App {
             selection: None,
         });
         tab.modified = true;
+        self.vim.clear_preferred_column();
         self.needs_autosave = true;
         self.refresh_find_matches();
+    }
+
+    fn set_active_tab(&mut self, index: usize) {
+        self.active = index;
+        self.vim.on_tab_switch();
+        self.vim.clear_preferred_column();
+        self.refresh_find_matches();
+        self.apply_block_cursor_if_normal();
+    }
+
+    fn editor_selection_text(&self) -> Option<String> {
+        selection_text(&self.tabs[self.active].content, self.vim.mode)
     }
 
     fn jump_to_line(&mut self, target_line: usize, select: bool) {
@@ -327,6 +342,10 @@ impl App {
                 None
             },
         });
+        self.vim.clear_preferred_column();
+        if !select {
+            self.apply_block_cursor_if_normal();
+        }
     }
 
     fn vim_snapshot(&self) -> vim::TextSnapshot {
@@ -342,7 +361,7 @@ impl App {
     fn open_find(&mut self, show_replace: bool) -> Task<Message> {
         self.find.visible = true;
         self.find.show_replace = show_replace;
-        if let Some(sel) = self.tabs[self.active].content.selection() {
+        if let Some(sel) = self.editor_selection_text() {
             if !sel.contains('\n') {
                 self.find.query = sel;
             }
@@ -359,6 +378,7 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Edit(action) => {
+                self.vim.clear_preferred_column();
                 // Workaround for iced-rs/iced#3227 — remove when merged
                 match &action {
                     text_editor::Action::SelectWord | text_editor::Action::SelectLine => {
@@ -401,16 +421,13 @@ impl App {
                     self.refresh_find_matches();
                 }
                 // Reapply block cursor after mouse actions in Normal mode
-                if self.vim.mode == vim::Mode::Normal {
-                    self.apply_block_cursor();
-                }
+                self.apply_block_cursor_if_normal();
                 Task::none()
             }
 
             Message::TabSelect(i) => {
                 if i < self.tabs.len() {
-                    self.active = i;
-                    self.vim.on_tab_switch();
+                    self.set_active_tab(i);
                 }
                 Task::none()
             }
@@ -421,7 +438,7 @@ impl App {
 
             Message::New => {
                 self.tabs.push(create_scratchpad_tab(&self.scratchpad_dir));
-                self.active = self.tabs.len() - 1;
+                self.set_active_tab(self.tabs.len() - 1);
                 Task::none()
             }
 
@@ -436,9 +453,12 @@ impl App {
                         let _ = std::fs::remove_file(old_path);
                     }
                     self.tabs[0] = Tab::from_path(path, &body);
+                    self.vim.clear_preferred_column();
+                    self.refresh_find_matches();
+                    self.apply_block_cursor_if_normal();
                 } else {
                     self.tabs.push(Tab::from_path(path, &body));
-                    self.active = self.tabs.len() - 1;
+                    self.set_active_tab(self.tabs.len() - 1);
                 }
                 Task::none()
             }
@@ -511,13 +531,15 @@ impl App {
             }
 
             Message::GutterClick => {
+                self.vim.clear_preferred_column();
                 let y = ((self.gutter_mouse_y - EDITOR_PAD).max(0.0) / LINE_HEIGHT_PX).floor()
                     * LINE_HEIGHT_PX;
+                let vim_mode = self.vim.mode;
                 let tab = &mut self.tabs[self.active];
                 tab.content
                     .perform(text_editor::Action::Click(Point::new(0.0, y)));
                 tab.content.perform(text_editor::Action::SelectLine);
-                if let Some(sel) = tab.content.selection() {
+                if let Some(sel) = selection_text(&tab.content, vim_mode) {
                     copy_to_primary(&sel);
                 }
 
@@ -528,6 +550,7 @@ impl App {
             Message::EditorMouseMove(point) => {
                 self.editor_mouse_pos = point;
                 if self.multiclick_drag {
+                    self.vim.clear_preferred_column();
                     self.tabs[self.active]
                         .content
                         .perform(text_editor::Action::Drag(mouse_to_content(point)));
@@ -536,7 +559,7 @@ impl App {
             }
             Message::MulticlickReleased => {
                 self.multiclick_drag = false;
-                if let Some(sel) = self.tabs[self.active].content.selection() {
+                if let Some(sel) = self.editor_selection_text() {
                     copy_to_primary(&sel);
                 }
                 Task::none()
@@ -544,20 +567,21 @@ impl App {
             Message::MiddleClickPaste => {
                 if let Some(text) = read_primary_selection() {
                     if !text.is_empty() {
+                        self.vim.clear_preferred_column();
                         let tab = &mut self.tabs[self.active];
                         tab.push_undo_snapshot(EditKind::Other, true);
-                        tab.content.perform(text_editor::Action::Click(
-                            mouse_to_content(self.editor_mouse_pos),
-                        ));
-                        tab.content.perform(text_editor::Action::Edit(
-                            text_editor::Edit::Paste(Arc::new(text)),
-                        ));
+                        tab.content
+                            .perform(text_editor::Action::Click(mouse_to_content(
+                                self.editor_mouse_pos,
+                            )));
+                        tab.content
+                            .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
+                                Arc::new(text),
+                            )));
                         tab.modified = true;
                         self.needs_autosave = true;
                         self.refresh_find_matches();
-                        if self.vim.mode == vim::Mode::Normal {
-                            self.apply_block_cursor();
-                        }
+                        self.apply_block_cursor_if_normal();
                     }
                 }
                 Task::none()
@@ -568,12 +592,14 @@ impl App {
             // ── Undo / Redo ──────────────────────────────────────────────
             Message::Undo => {
                 self.tabs[self.active].undo();
+                self.vim.clear_preferred_column();
                 self.refresh_find_matches();
                 Task::none()
             }
 
             Message::Redo => {
                 self.tabs[self.active].redo();
+                self.vim.clear_preferred_column();
                 self.refresh_find_matches();
                 Task::none()
             }
@@ -600,6 +626,7 @@ impl App {
                         .perform(text_editor::Action::Edit(text_editor::Edit::Insert(c)));
                 }
                 tab.modified = true;
+                self.vim.clear_preferred_column();
                 self.needs_autosave = true;
                 self.refresh_find_matches();
                 Task::none()
@@ -609,6 +636,7 @@ impl App {
             Message::FindOpen => {
                 if self.find.visible {
                     self.find.visible = false;
+                    self.apply_block_cursor_if_normal();
                     return iced::widget::operation::focus(EDITOR_ID.clone());
                 }
                 self.open_find(false)
@@ -616,6 +644,7 @@ impl App {
             Message::FindOpenReplace => {
                 if self.find.visible && self.find.show_replace {
                     self.find.visible = false;
+                    self.apply_block_cursor_if_normal();
                     return iced::widget::operation::focus(EDITOR_ID.clone());
                 }
                 self.open_find(true)
@@ -624,6 +653,7 @@ impl App {
             Message::FindClose => {
                 if self.find.visible {
                     self.find.visible = false;
+                    self.apply_block_cursor_if_normal();
                     return iced::widget::operation::focus(EDITOR_ID.clone());
                 }
                 Task::none()
@@ -633,6 +663,7 @@ impl App {
                 if q == self.find.query {
                     return Task::none();
                 }
+                self.vim.clear_preferred_column();
                 self.find.query = q;
                 self.find
                     .compute_matches(&self.tabs[self.active].content.text());
@@ -651,6 +682,7 @@ impl App {
             }
 
             Message::FindNext => {
+                self.vim.clear_preferred_column();
                 self.find.next();
                 self.find
                     .navigate_to_current(&mut self.tabs[self.active].content);
@@ -658,6 +690,7 @@ impl App {
             }
 
             Message::FindPrev => {
+                self.vim.clear_preferred_column();
                 self.find.prev();
                 self.find
                     .navigate_to_current(&mut self.tabs[self.active].content);
@@ -677,6 +710,7 @@ impl App {
                         replacement,
                     )));
                 tab.modified = true;
+                self.vim.clear_preferred_column();
                 self.needs_autosave = true;
                 // Advance cursor past the replacement so we don't re-match it
                 let cursor_after = tab.content.cursor().position;
@@ -815,18 +849,19 @@ impl App {
             // ── Tab Cycling ─────────────────────────────────────────────
             Message::NextTab => {
                 if self.tabs.len() > 1 {
-                    self.active = (self.active + 1) % self.tabs.len();
+                    self.set_active_tab((self.active + 1) % self.tabs.len());
                 }
                 Task::none()
             }
 
             Message::PrevTab => {
                 if self.tabs.len() > 1 {
-                    self.active = if self.active == 0 {
+                    let prev = if self.active == 0 {
                         self.tabs.len() - 1
                     } else {
                         self.active - 1
                     };
+                    self.set_active_tab(prev);
                 }
                 Task::none()
             }
@@ -849,6 +884,7 @@ impl App {
                 // Also close find bar (Escape from subscription closes topmost overlay)
                 if self.find.visible {
                     self.find.visible = false;
+                    self.apply_block_cursor_if_normal();
                     return iced::widget::operation::focus(EDITOR_ID.clone());
                 }
                 // Vim: Escape cascades into mode transitions
@@ -876,6 +912,8 @@ impl App {
                             },
                             selection: None,
                         });
+                        self.vim.clear_preferred_column();
+                        self.apply_block_cursor_if_normal();
                     }
                 }
                 self.goto_line = None;
@@ -941,6 +979,7 @@ impl App {
                     self.vim.register = vim::Register::Line(yanked);
                 }
                 VimCommand::EnterInsert => {
+                    collapse_selection_to_caret(&mut self.tabs[self.active].content);
                     self.vim.mode = vim::Mode::Insert;
                 }
                 VimCommand::EnterNormal => {
@@ -954,40 +993,55 @@ impl App {
                 VimCommand::ReplaceChar { ch, count } => self.vim_replace_char(ch, count),
                 VimCommand::Undo => {
                     self.tabs[self.active].undo();
+                    self.vim.clear_preferred_column();
                     self.refresh_find_matches();
                 }
                 VimCommand::Redo => {
                     self.tabs[self.active].redo();
+                    self.vim.clear_preferred_column();
                     self.refresh_find_matches();
                 }
                 VimCommand::OpenFind => {
-                    // Clear block cursor selection so find bar starts empty
-                    let pos = self.tabs[self.active].content.cursor().position;
-                    self.tabs[self.active].content.move_to(text_editor::Cursor {
-                        position: pos,
-                        selection: None,
-                    });
+                    if self.vim.mode == vim::Mode::Normal {
+                        collapse_selection_to_caret(&mut self.tabs[self.active].content);
+                    }
                     task = self.open_find(false);
                 }
                 VimCommand::FindNext => {
-                    self.find.next();
-                    self.find
-                        .navigate_to_current(&mut self.tabs[self.active].content);
+                    let cursor = self.tabs[self.active].content.cursor().position;
+                    if let Some(target) = self.find.vim_next_from_cursor(&cursor) {
+                        self.move_to_vim_search_target(target);
+                    }
                     task = iced::widget::operation::focus(EDITOR_ID.clone());
                 }
                 VimCommand::FindPrev => {
-                    self.find.prev();
-                    self.find
-                        .navigate_to_current(&mut self.tabs[self.active].content);
+                    let cursor = self.tabs[self.active].content.cursor().position;
+                    if let Some(target) = self.find.vim_prev_from_cursor(&cursor) {
+                        self.move_to_vim_search_target(target);
+                    }
                     task = iced::widget::operation::focus(EDITOR_ID.clone());
                 }
+                VimCommand::TransformCaseRange {
+                    from,
+                    to,
+                    uppercase,
+                } => self.vim_transform_case_range(from, to, uppercase),
+                VimCommand::TransformCaseLines {
+                    first,
+                    last,
+                    uppercase,
+                } => self.vim_transform_case_lines(first, last, uppercase),
             }
         }
         // Block cursor in Normal mode: highlight the character under cursor
+        self.apply_block_cursor_if_normal();
+        task
+    }
+
+    fn apply_block_cursor_if_normal(&mut self) {
         if self.vim.mode == vim::Mode::Normal {
             self.apply_block_cursor();
         }
-        task
     }
 
     fn apply_block_cursor(&mut self) {
@@ -998,14 +1052,61 @@ impl App {
             .line(pos.line)
             .map(|l| l.text.chars().count())
             .unwrap_or(0);
-        if pos.column < line_len {
-            tab.content.move_to(text_editor::Cursor {
-                position: pos,
-                selection: Some(text_editor::Position {
-                    line: pos.line,
-                    column: pos.column + 1,
-                }),
-            });
+        let selection = if pos.column < line_len {
+            text_editor::Position {
+                line: pos.line,
+                column: pos.column + 1,
+            }
+        } else {
+            pos
+        };
+        tab.content.move_to(text_editor::Cursor {
+            position: pos,
+            selection: Some(selection),
+        });
+    }
+
+    fn move_to_vim_search_target(&mut self, target: text_editor::Position) {
+        match self.vim.mode {
+            vim::Mode::Visual => {
+                let anchor = self
+                    .vim
+                    .visual_anchor
+                    .unwrap_or(self.tabs[self.active].content.cursor().position);
+                self.tabs[self.active].content.move_to(text_editor::Cursor {
+                    position: target,
+                    selection: Some(anchor),
+                });
+            }
+            vim::Mode::VisualLine => {
+                let anchor = self
+                    .vim
+                    .visual_anchor
+                    .unwrap_or(self.tabs[self.active].content.cursor().position);
+                let first = anchor.line.min(target.line);
+                let last = anchor.line.max(target.line);
+                let last_col = self.tabs[self.active]
+                    .content
+                    .line(last)
+                    .map(|line| line.text.chars().count().saturating_sub(1))
+                    .unwrap_or(0);
+                self.tabs[self.active].content.move_to(text_editor::Cursor {
+                    position: text_editor::Position {
+                        line: last,
+                        column: last_col,
+                    },
+                    selection: Some(text_editor::Position {
+                        line: first,
+                        column: 0,
+                    }),
+                });
+            }
+            _ => {
+                self.tabs[self.active].content.move_to(text_editor::Cursor {
+                    position: target,
+                    selection: None,
+                });
+            }
         }
     }
 
@@ -1207,6 +1308,38 @@ impl App {
         lines[pos.line] = new_chars.into_iter().collect();
         let new_text = lines.join("\n");
         self.rebuild_content(&new_text, pos.line, pos.column + count - 1);
+    }
+
+    fn vim_transform_case_range(
+        &mut self,
+        from: text_editor::Position,
+        to: text_editor::Position,
+        uppercase: bool,
+    ) {
+        let tab = &mut self.tabs[self.active];
+        tab.push_undo_snapshot(EditKind::Other, true);
+        let full = tab.content.text();
+        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
+        transform_case_range(&mut lines, &from, &to, uppercase);
+        let new_text = lines.join("\n");
+        self.rebuild_content(&new_text, from.line, from.column);
+    }
+
+    fn vim_transform_case_lines(&mut self, first: usize, last: usize, uppercase: bool) {
+        let tab = &mut self.tabs[self.active];
+        tab.push_undo_snapshot(EditKind::Other, true);
+        let full = tab.content.text();
+        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
+        if lines.is_empty() {
+            return;
+        }
+        let first = first.min(lines.len().saturating_sub(1));
+        let last = last.min(lines.len().saturating_sub(1));
+        for line in &mut lines[first..=last] {
+            *line = transform_case_string(line, uppercase);
+        }
+        let new_text = lines.join("\n");
+        self.rebuild_content(&new_text, first, 0);
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -1870,6 +2003,91 @@ fn remove_text_range(
     }
 }
 
+fn selection_text(content: &text_editor::Content, vim_mode: vim::Mode) -> Option<String> {
+    if vim_mode == vim::Mode::Normal && is_block_cursor_selection(&content.cursor()) {
+        return None;
+    }
+    content
+        .selection()
+        .filter(|selection| !selection.is_empty())
+}
+
+fn is_block_cursor_selection(cursor: &text_editor::Cursor) -> bool {
+    let Some(selection) = cursor.selection else {
+        return false;
+    };
+    selection.line == cursor.position.line && selection.column == cursor.position.column + 1
+}
+
+fn collapse_selection_to_caret(content: &mut text_editor::Content) {
+    let pos = content.cursor().position;
+    content.move_to(text_editor::Cursor {
+        position: pos,
+        selection: Some(pos),
+    });
+}
+
+fn transform_case_string(text: &str, uppercase: bool) -> String {
+    transform_case_iter(text.chars(), uppercase)
+}
+
+fn transform_case_chars(chars: &[char], uppercase: bool) -> String {
+    transform_case_iter(chars.iter().copied(), uppercase)
+}
+
+fn transform_case_iter(chars: impl IntoIterator<Item = char>, uppercase: bool) -> String {
+    chars
+        .into_iter()
+        .flat_map(|ch| {
+            if uppercase {
+                ch.to_uppercase().collect::<Vec<_>>()
+            } else {
+                ch.to_lowercase().collect::<Vec<_>>()
+            }
+        })
+        .collect()
+}
+
+fn transform_case_range(
+    lines: &mut [String],
+    from: &text_editor::Position,
+    to: &text_editor::Position,
+    uppercase: bool,
+) {
+    if from.line >= lines.len() || to.line >= lines.len() {
+        return;
+    }
+
+    if from.line == to.line {
+        let chars: Vec<char> = lines[from.line].chars().collect();
+        let start = from.column.min(chars.len());
+        let end = (to.column + 1).min(chars.len());
+        let mut transformed = chars[..start].iter().collect::<String>();
+        transformed.push_str(&transform_case_chars(&chars[start..end], uppercase));
+        transformed.push_str(&chars[end..].iter().collect::<String>());
+        lines[from.line] = transformed;
+        return;
+    }
+
+    for line_idx in from.line..=to.line {
+        let chars: Vec<char> = lines[line_idx].chars().collect();
+        let transformed = if line_idx == from.line {
+            let start = from.column.min(chars.len());
+            let mut line = chars[..start].iter().collect::<String>();
+            line.push_str(&transform_case_chars(&chars[start..], uppercase));
+            line
+        } else if line_idx == to.line {
+            let end = (to.column + 1).min(chars.len());
+            let mut line = transform_case_chars(&chars[..end], uppercase);
+            line.push_str(&chars[end..].iter().collect::<String>());
+            line
+        } else {
+            transform_case_chars(&chars, uppercase)
+        };
+        lines[line_idx] = transformed;
+    }
+}
+
 // ── Keyboard shortcuts ───────────────────────────────────────────────────────
 
 fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) -> Option<Message> {
@@ -2045,6 +2263,56 @@ async fn save_file_as(body: String) -> Result<PathBuf, Error> {
     let path = handle.path().to_path_buf();
     std::fs::write(&path, &body).map_err(|_| Error::Io)?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pos(line: usize, column: usize) -> text_editor::Position {
+        text_editor::Position { line, column }
+    }
+
+    #[test]
+    fn collapse_selection_to_caret_prevents_insert_replacement() {
+        let mut content = text_editor::Content::with_text("abc");
+        content.move_to(text_editor::Cursor {
+            position: pos(0, 0),
+            selection: Some(pos(0, 1)),
+        });
+
+        collapse_selection_to_caret(&mut content);
+        assert_eq!(selection_text(&content, vim::Mode::Insert), None);
+
+        content.perform(text_editor::Action::Edit(text_editor::Edit::Insert('x')));
+        assert_eq!(content.text(), "xabc");
+    }
+
+    #[test]
+    fn selection_text_ignores_block_cursor_but_keeps_real_selections() {
+        let mut content = text_editor::Content::with_text("abcd");
+        content.move_to(text_editor::Cursor {
+            position: pos(0, 1),
+            selection: Some(pos(0, 2)),
+        });
+        assert_eq!(selection_text(&content, vim::Mode::Normal), None);
+
+        content.move_to(text_editor::Cursor {
+            position: pos(0, 3),
+            selection: Some(pos(0, 0)),
+        });
+        assert_eq!(
+            selection_text(&content, vim::Mode::Visual),
+            Some("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn transform_case_range_handles_multiline_spans() {
+        let mut lines = vec!["ABC".to_string(), "DeF".to_string()];
+        transform_case_range(&mut lines, &pos(0, 1), &pos(1, 1), false);
+        assert_eq!(lines, vec!["Abc".to_string(), "deF".to_string()]);
+    }
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
