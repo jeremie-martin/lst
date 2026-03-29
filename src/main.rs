@@ -1426,6 +1426,7 @@ impl App {
                 )
                 .key_binding(move |key_press| {
                     let key = &key_press.key;
+                    let modified_key = &key_press.modified_key;
                     let mods = key_press.modifiers;
 
                     // Phase 1: Ctrl/Cmd shortcuts — always active, all modes
@@ -1506,7 +1507,7 @@ impl App {
                     }
 
                     // PageUp/PageDown — all modes (vim doesn't handle these keys)
-                    if let keyboard::Key::Named(named) = key {
+                    if let keyboard::Key::Named(named) = modified_key {
                         let page = ((vh / LINE_HEIGHT_PX) as usize).saturating_sub(2);
                         match named {
                             keyboard::key::Named::PageUp => {
@@ -1532,13 +1533,13 @@ impl App {
                     ) && !mods.command()
                     {
                         return Some(text_editor::Binding::Custom(Message::VimKey(
-                            key.clone(),
+                            modified_key.clone(),
                             mods,
                         )));
                     }
 
                     // Phase 3: Insert mode — existing iced behavior
-                    if let keyboard::Key::Named(named) = key {
+                    if let keyboard::Key::Named(named) = modified_key {
                         match named {
                             keyboard::key::Named::Tab => {
                                 if mods.shift() {
