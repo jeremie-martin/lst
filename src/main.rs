@@ -10,7 +10,6 @@ use tab::{EditKind, Tab};
 
 use iced::event;
 use iced::keyboard;
-use iced::mouse;
 use iced::widget::{
     button, column, container, mouse_area, opaque, responsive, right, row, scrollable, stack, text,
     text_editor, text_input, Space,
@@ -48,6 +47,7 @@ struct App {
     needs_autosave: bool,
     shift_held: bool, // iced's Action::Click doesn't carry modifier state; track externally
     multiclick_drag: bool, // Workaround for iced-rs/iced#3227 — remove when merged
+    editor_mouse_pos: Point,
     goto_line: Option<String>,
     vim: vim::VimState,
 }
@@ -111,6 +111,7 @@ enum Message {
     // Workaround for iced-rs/iced#3227 — remove when merged
     EditorMouseMove(Point),
     MulticlickReleased,
+    MiddleClickPaste,
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +236,7 @@ impl App {
                 needs_autosave: false,
                 shift_held: false,
                 multiclick_drag: false,
+                editor_mouse_pos: Point::ORIGIN,
                 goto_line: None,
                 vim: vim::VimState::new(),
             },
@@ -525,6 +527,7 @@ impl App {
 
             // Workaround for iced-rs/iced#3227 — remove when merged
             Message::EditorMouseMove(point) => {
+                self.editor_mouse_pos = point;
                 if self.multiclick_drag {
                     let content_point =
                         Point::new((point.x - 8.0).max(0.0), (point.y - 8.0).max(0.0));
@@ -538,6 +541,27 @@ impl App {
                 self.multiclick_drag = false;
                 if let Some(sel) = self.tabs[self.active].content.selection() {
                     copy_to_primary(&sel);
+                }
+                Task::none()
+            }
+            Message::MiddleClickPaste => {
+                if let Some(text) = read_primary_selection() {
+                    if !text.is_empty() {
+                        let content_point = Point::new(
+                            (self.editor_mouse_pos.x - 8.0).max(0.0),
+                            (self.editor_mouse_pos.y - 8.0).max(0.0),
+                        );
+                        let tab = &mut self.tabs[self.active];
+                        tab.push_undo_snapshot(EditKind::Other, true);
+                        tab.content
+                            .perform(text_editor::Action::Click(content_point));
+                        tab.content.perform(text_editor::Action::Edit(
+                            text_editor::Edit::Paste(Arc::new(text)),
+                        ));
+                        tab.modified = true;
+                        self.needs_autosave = true;
+                        self.refresh_find_matches();
+                    }
                 }
                 Task::none()
             }
@@ -1613,7 +1637,8 @@ impl App {
             // Workaround for iced-rs/iced#3227 — remove when merged
             let editor = mouse_area(editor)
                 .on_move(Message::EditorMouseMove)
-                .on_release(Message::MulticlickReleased);
+                .on_release(Message::MulticlickReleased)
+                .on_middle_press(Message::MiddleClickPaste);
 
             scrollable(row![line_numbers, gutter_line, editor].width(Length::Fill))
                 .height(Length::Fill)
@@ -1861,16 +1886,6 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
     // Track modifier state regardless of whether a widget consumed the event
     if let iced::Event::Keyboard(keyboard::Event::ModifiersChanged(mods)) = event {
         return Some(Message::ModifiersChanged(mods));
-    }
-
-    if let iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle)) = &event {
-        if let Some(text) = read_primary_selection() {
-            if !text.is_empty() {
-                return Some(Message::Edit(text_editor::Action::Edit(
-                    text_editor::Edit::Paste(Arc::new(text)),
-                )));
-            }
-        }
     }
 
     // Escape closes overlays even if a text_input captured the event
