@@ -837,7 +837,8 @@ impl App {
 
     fn execute_vim_commands(&mut self, commands: Vec<vim::VimCommand>) -> Task<Message> {
         use vim::VimCommand;
-        let mut task = Task::none();
+        // Default to refocusing the editor so iced keeps the cursor visible
+        let mut task = iced::widget::operation::focus(EDITOR_ID.clone());
         for cmd in commands {
             match cmd {
                 VimCommand::Noop => {}
