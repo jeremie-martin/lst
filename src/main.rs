@@ -47,6 +47,7 @@ struct App {
     scratchpad_dir: PathBuf,
     needs_autosave: bool,
     shift_held: bool, // iced's Action::Click doesn't carry modifier state; track externally
+    multiclick_drag: bool, // Workaround for iced-rs/iced#3227 — remove when merged
     goto_line: Option<String>,
     vim: vim::VimState,
 }
@@ -107,6 +108,9 @@ enum Message {
     ModifiersChanged(keyboard::Modifiers),
     // Vim
     VimKey(keyboard::Key, keyboard::Modifiers),
+    // Workaround for iced-rs/iced#3227 — remove when merged
+    EditorMouseMove(Point),
+    MulticlickReleased,
 }
 
 #[derive(Debug, Clone)]
@@ -230,6 +234,7 @@ impl App {
                 scratchpad_dir,
                 needs_autosave: false,
                 shift_held: false,
+                multiclick_drag: false,
                 goto_line: None,
                 vim: vim::VimState::new(),
             },
@@ -352,6 +357,17 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Edit(action) => {
+                // Workaround for iced-rs/iced#3227 — remove when merged
+                match &action {
+                    text_editor::Action::SelectWord | text_editor::Action::SelectLine => {
+                        self.multiclick_drag = true;
+                    }
+                    text_editor::Action::Click(_) => {
+                        self.multiclick_drag = false;
+                    }
+                    _ => {}
+                }
+
                 // Shift+Click: extend selection instead of placing cursor
                 if let text_editor::Action::Click(point) = &action {
                     if self.shift_held {
@@ -489,16 +505,32 @@ impl App {
 
             Message::GutterClick => {
                 const TOP_PAD: f32 = 8.0;
-                let line = ((self.gutter_mouse_y - TOP_PAD) / LINE_HEIGHT_PX).max(0.0) as usize;
-
+                let y = ((self.gutter_mouse_y - TOP_PAD).max(0.0) / LINE_HEIGHT_PX).floor()
+                    * LINE_HEIGHT_PX;
                 let tab = &mut self.tabs[self.active];
-                let line = line.min(tab.content.line_count().saturating_sub(1));
-                let y = line as f32 * LINE_HEIGHT_PX;
                 tab.content
                     .perform(text_editor::Action::Click(Point::new(0.0, y)));
                 tab.content.perform(text_editor::Action::SelectLine);
 
                 iced::widget::operation::focus(EDITOR_ID.clone())
+            }
+
+            // Workaround for iced-rs/iced#3227 — remove when merged
+            Message::EditorMouseMove(point) => {
+                if self.multiclick_drag {
+                    let content_point = Point::new(
+                        (point.x - 8.0).max(0.0),
+                        (point.y - 8.0).max(0.0),
+                    );
+                    self.tabs[self.active]
+                        .content
+                        .perform(text_editor::Action::Drag(content_point));
+                }
+                Task::none()
+            }
+            Message::MulticlickReleased => {
+                self.multiclick_drag = false;
+                Task::none()
             }
 
             Message::Quit => self.exit_with_clipboard(),
@@ -891,7 +923,7 @@ impl App {
                 VimCommand::OpenLineBelow => self.vim_open_line(false),
                 VimCommand::OpenLineAbove => self.vim_open_line(true),
                 VimCommand::JoinLines { count } => self.vim_join_lines(count),
-                VimCommand::ReplaceChar(c) => self.vim_replace_char(c),
+                VimCommand::ReplaceChar { ch, count } => self.vim_replace_char(ch, count),
                 VimCommand::Undo => {
                     self.tabs[self.active].undo();
                     self.refresh_find_matches();
@@ -1133,7 +1165,7 @@ impl App {
         self.rebuild_content(&new_text, pos.line, join_col);
     }
 
-    fn vim_replace_char(&mut self, c: char) {
+    fn vim_replace_char(&mut self, c: char, count: usize) {
         let tab = &mut self.tabs[self.active];
         let pos = tab.content.cursor().position;
         let full = tab.content.text();
@@ -1141,15 +1173,17 @@ impl App {
         let chars: Vec<char> = lines
             .get(pos.line)
             .map_or(Vec::new(), |l| l.chars().collect());
-        if pos.column >= chars.len() {
+        if pos.column + count > chars.len() {
             return;
         }
         tab.push_undo_snapshot(EditKind::Other, true);
         let mut new_chars = chars;
-        new_chars[pos.column] = c;
+        for i in 0..count {
+            new_chars[pos.column + i] = c;
+        }
         lines[pos.line] = new_chars.into_iter().collect();
         let new_text = lines.join("\n");
-        self.rebuild_content(&new_text, pos.line, pos.column);
+        self.rebuild_content(&new_text, pos.line, pos.column + count - 1);
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -1163,7 +1197,8 @@ impl App {
         let text_main = p.background.base.text;
         let text_muted = p.background.strong.text;
         let primary = p.primary.base.color;
-        let editor_font = *EDITOR_FONT;
+        let editor_font = EDITOR_FONT.font;
+        let char_width = EDITOR_FONT.char_width;
         let vim_mode = self.vim.mode;
 
         // ── Tab bar ──────────────────────────────────────────────────────
@@ -1313,10 +1348,33 @@ impl App {
             let vh = size.height;
             let overscroll = vh * 0.4;
 
-            let line_num_text: String = (1..=n_lines)
-                .map(|i| format!("{i:>4} "))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let line_num_text = if word_wrap {
+                let gutter_width = char_width * 5.0 + 4.0; // 5 chars + left padding
+                let editor_text_width = size.width - gutter_width - 1.0 - 8.0 - 16.0;
+                let max_cols = (editor_text_width / char_width).floor().max(1.0) as usize;
+                use std::fmt::Write;
+                let mut buf = String::new();
+                for i in 0..n_lines {
+                    let line_text = content_ref
+                        .line(i)
+                        .map(|l| l.text.into_owned())
+                        .unwrap_or_default();
+                    let vlines = visual_line_count(&line_text, max_cols);
+                    let _ = write!(buf, "{:>4} ", i + 1);
+                    for _ in 1..vlines {
+                        buf.push_str("\n     ");
+                    }
+                    if i + 1 < n_lines {
+                        buf.push('\n');
+                    }
+                }
+                buf
+            } else {
+                (1..=n_lines)
+                    .map(|i| format!("{i:>4} "))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
 
             let line_numbers = mouse_area(
                 container(
@@ -1324,7 +1382,8 @@ impl App {
                         .size(FONT_SIZE)
                         .font(editor_font)
                         .color(text_muted)
-                        .line_height(Pixels(LINE_HEIGHT_PX)),
+                        .line_height(Pixels(LINE_HEIGHT_PX))
+                        .wrapping(iced::widget::text::Wrapping::None),
                 )
                 .padding(Padding {
                     top: 8.0,
@@ -1548,6 +1607,11 @@ impl App {
                     },
                 });
 
+            // Workaround for iced-rs/iced#3227 — remove when merged
+            let editor = mouse_area(editor)
+                .on_move(Message::EditorMouseMove)
+                .on_release(Message::MulticlickReleased);
+
             scrollable(row![line_numbers, gutter_line, editor].width(Length::Fill))
                 .height(Length::Fill)
                 .width(Length::Fill)
@@ -1662,6 +1726,64 @@ impl App {
             iced::time::every(Duration::from_millis(500)).map(|_| Message::AutosaveTick),
         ])
     }
+}
+
+// ── Word‑wrap visual‑line counter ──────────────────────────────────────────
+
+/// Count how many visual lines `line` occupies when word-wrapped at `max_cols`
+/// monospace characters. Simulates greedy word wrapping (matching cosmic_text's
+/// `Wrap::Word` for monospace ASCII).
+fn visual_line_count(line: &str, max_cols: usize) -> usize {
+    if line.is_empty() || max_cols == 0 {
+        return 1;
+    }
+
+    let mut lines = 1usize;
+    let mut col = 0usize; // current column on the visual line
+    let mut word_cols = 0usize; // columns consumed by the current word
+
+    for ch in line.chars() {
+        let ch_cols = if ch == '\t' {
+            // Tab advances to next 8-column stop
+            let next_stop = ((col + word_cols) / 8 + 1) * 8;
+            next_stop - (col + word_cols)
+        } else {
+            1
+        };
+
+        word_cols += ch_cols;
+
+        if ch.is_whitespace() {
+            // End of word — commit it to the current line or wrap first
+            if col + word_cols > max_cols && col > 0 {
+                lines += 1;
+                col = 0;
+            }
+            col += word_cols;
+            // Force-break if a single word (with trailing space) exceeds max_cols
+            while col > max_cols {
+                lines += 1;
+                col -= max_cols;
+            }
+            word_cols = 0;
+        }
+    }
+
+    // Flush remaining word (no trailing whitespace)
+    if word_cols > 0 {
+        if col + word_cols > max_cols && col > 0 {
+            lines += 1;
+            col = 0;
+        }
+        col += word_cols;
+        while col > max_cols {
+            lines += 1;
+            col -= max_cols;
+        }
+    }
+    let _ = col; // suppress unused warning
+
+    lines
 }
 
 // ── Vim text‑range helpers ──────────────────────────────────────────────────

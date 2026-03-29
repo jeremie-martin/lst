@@ -47,7 +47,7 @@ pub enum VimCommand {
     OpenLineBelow,
     OpenLineAbove,
     JoinLines { count: usize },
-    ReplaceChar(char),
+    ReplaceChar { ch: char, count: usize },
     Undo,
     Redo,
     OpenFind,
@@ -396,7 +396,11 @@ impl VimState {
                     to: pos(text.cursor.line, ll - 1),
                 }]
             }
-            'J' => vec![VimCommand::JoinLines { count }],
+            'J' => {
+                // vim: J = join 2 lines (1 op), 3J = join 3 lines (2 ops)
+                let joins = if count <= 1 { 1 } else { count - 1 };
+                vec![VimCommand::JoinLines { count: joins }]
+            }
             'p' => vec![VimCommand::PasteAfter],
             'P' => vec![VimCommand::PasteBefore],
             'u' => vec![VimCommand::Undo],
@@ -432,6 +436,8 @@ impl VimState {
         if mods.command() {
             if let keyboard::Key::Character(c) = key {
                 if c.as_str() == "r" {
+                    self.mode = Mode::Normal;
+                    self.visual_anchor = None;
                     return vec![VimCommand::Redo];
                 }
             }
@@ -456,7 +462,6 @@ impl VimState {
         };
 
         if let Some(partial) = self.pending.partial.take() {
-            // In visual mode, partial sequences are just motions (f, t, g)
             let motion = match partial {
                 'f' => Some(Motion::FindChar(c)),
                 't' => Some(Motion::TillChar(c)),
@@ -468,6 +473,13 @@ impl VimState {
             if let Some(m) = motion {
                 let target = compute_motion(&m, text, None);
                 return self.visual_select(target, text);
+            }
+            // Text objects in Visual mode (viw, vi", vab, etc.)
+            if partial == 'i' || partial == 'a' {
+                if let Some((from, to)) = text_object(text, c, partial == 'i') {
+                    self.visual_anchor = Some(from);
+                    return vec![VimCommand::Select { anchor: from, head: to }];
+                }
             }
             return vec![VimCommand::Noop];
         }
@@ -510,12 +522,18 @@ impl VimState {
                 self.mode = Mode::Normal;
                 self.visual_anchor = None;
                 self.clear_pending();
+                let (from, to) = ordered(anchor, text.cursor);
                 if is_line {
                     let (first, last) = ordered_lines(anchor.line, text.cursor.line);
-                    return vec![VimCommand::YankLines { first, last }];
+                    return vec![
+                        VimCommand::YankLines { first, last },
+                        VimCommand::MoveTo(pos(first, from.column)),
+                    ];
                 }
-                let (from, to) = ordered(anchor, text.cursor);
-                return vec![VimCommand::YankRange { from, to }];
+                return vec![
+                    VimCommand::YankRange { from, to },
+                    VimCommand::MoveTo(from),
+                ];
             }
             'v' => {
                 if self.mode == Mode::Visual {
@@ -545,8 +563,7 @@ impl VimState {
             _ => {}
         }
 
-        // Two-char sequence starters
-        if matches!(c, 'g' | 'f' | 't' | 'F' | 'T') {
+        if matches!(c, 'g' | 'f' | 't' | 'F' | 'T' | 'i' | 'a') {
             self.pending.partial = Some(c);
             return vec![VimCommand::Noop];
         }
@@ -567,7 +584,11 @@ impl VimState {
             '/' => return vec![VimCommand::OpenFind],
             'n' => return vec![VimCommand::FindNext],
             'N' => return vec![VimCommand::FindPrev],
-            'u' => return vec![VimCommand::Undo],
+            'u' => {
+                self.mode = Mode::Normal;
+                self.visual_anchor = None;
+                return vec![VimCommand::Undo];
+            }
             _ => {}
         }
 
@@ -603,11 +624,12 @@ impl VimState {
             'F' => self.resolve_motion_partial(Motion::FindCharBack(c), text),
             'T' => self.resolve_motion_partial(Motion::TillCharBack(c), text),
             'r' => {
+                let count = self.motion_count().unwrap_or(1);
                 self.clear_pending();
                 if c == '\n' || line_len(text, text.cursor.line) == 0 {
                     vec![VimCommand::Noop]
                 } else {
-                    vec![VimCommand::ReplaceChar(c)]
+                    vec![VimCommand::ReplaceChar { ch: c, count }]
                 }
             }
             'i' | 'a' => {
@@ -664,6 +686,17 @@ impl VimState {
         motion: Motion,
         text: &TextSnapshot,
     ) -> Vec<VimCommand> {
+        // vim special case: cw/cW behave like ce/cE (don't eat trailing whitespace)
+        let motion = if op == Operator::Change {
+            match motion {
+                Motion::WordForward => Motion::WordEnd,
+                Motion::BigWordForward => Motion::BigWordEnd,
+                _ => motion,
+            }
+        } else {
+            motion
+        };
+
         let count = self.motion_count();
         self.clear_pending();
 
@@ -971,7 +1004,7 @@ fn word_forward(text: &TextSnapshot, mut line: usize, mut col: usize, big: bool)
         }
     }
 
-    // Skip whitespace, crossing line boundaries
+    // Skip whitespace, crossing line boundaries (empty lines are word boundaries)
     loop {
         let chars = line_chars(text, line);
         while col < chars.len() && classify(chars[col], big) == CharClass::Space {
@@ -983,6 +1016,9 @@ fn word_forward(text: &TextSnapshot, mut line: usize, mut col: usize, big: bool)
         if line + 1 < text.line_count() {
             line += 1;
             col = 0;
+            if line_len(text, line) == 0 {
+                return (line, 0);
+            }
         } else {
             let ll = line_len(text, line);
             return (line, ll.saturating_sub(1));
@@ -1001,12 +1037,15 @@ fn word_backward(
         col -= 1;
     } else if line > 0 {
         line -= 1;
+        if line_len(text, line) == 0 {
+            return (line, 0); // empty line is a word boundary
+        }
         col = line_len(text, line).saturating_sub(1);
     } else {
         return (0, 0);
     }
 
-    // Skip whitespace backward, crossing lines
+    // Skip whitespace backward, crossing lines (empty lines are word boundaries)
     loop {
         let chars = line_chars(text, line);
         if !chars.is_empty() {
@@ -1017,9 +1056,11 @@ fn word_backward(
                 break;
             }
         }
-        // Still on whitespace (or empty line) — go to previous line
         if line > 0 {
             line -= 1;
+            if line_len(text, line) == 0 {
+                return (line, 0);
+            }
             col = line_len(text, line).saturating_sub(1);
         } else {
             return (0, 0);

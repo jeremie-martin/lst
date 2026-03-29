@@ -5,7 +5,13 @@ use std::sync::LazyLock;
 pub const FONT_SIZE: f32 = 14.0;
 pub const LINE_HEIGHT_PX: f32 = 20.0;
 
-pub static EDITOR_FONT: LazyLock<Font> = LazyLock::new(|| {
+pub struct EditorFont {
+    pub font: Font,
+    /// Advance width of a single monospace character at FONT_SIZE, in pixels.
+    pub char_width: f32,
+}
+
+pub static EDITOR_FONT: LazyLock<EditorFont> = LazyLock::new(|| {
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
 
@@ -16,15 +22,34 @@ pub static EDITOR_FONT: LazyLock<Font> = LazyLock::new(|| {
             stretch: fontdb::Stretch::Normal,
             style: fontdb::Style::Normal,
         };
-        if db.query(&query).is_some() {
-            eprintln!("lst: using font '{name}'");
-            return Font::with_name(name);
+        if let Some(id) = db.query(&query) {
+            let char_width = measure_char_width(&db, id);
+            eprintln!("lst: using font '{name}' (char_width={char_width:.2}px)");
+            return EditorFont {
+                font: Font::with_name(name),
+                char_width,
+            };
         }
     }
 
     eprintln!("lst: using system monospace font");
-    Font::MONOSPACE
+    EditorFont {
+        font: Font::MONOSPACE,
+        char_width: FONT_SIZE * 0.6,
+    }
 });
+
+fn measure_char_width(db: &fontdb::Database, id: fontdb::ID) -> f32 {
+    db.with_face_data(id, |data, index| {
+        let face = ttf_parser::Face::parse(data, index).ok()?;
+        let glyph_id = face.glyph_index('M')?;
+        let advance = face.glyph_hor_advance(glyph_id)?;
+        let upm = face.units_per_em();
+        Some(FONT_SIZE * advance as f32 / upm as f32)
+    })
+    .flatten()
+    .unwrap_or(FONT_SIZE * 0.6)
+}
 
 pub fn flat_btn(bg: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_theme, status| {
