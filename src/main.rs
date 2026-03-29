@@ -398,12 +398,22 @@ impl App {
                     self.needs_autosave = true;
                     self.refresh_find_matches();
                 }
+                // Reapply block cursor after mouse actions in Normal mode
+                if self.vim.mode == vim::Mode::Normal {
+                    self.apply_block_cursor();
+                }
                 Task::none()
             }
 
             Message::TabSelect(i) => {
                 if i < self.tabs.len() {
                     self.active = i;
+                    // Reset visual state to avoid stale anchor from previous tab
+                    if matches!(self.vim.mode, vim::Mode::Visual | vim::Mode::VisualLine) {
+                        self.vim.mode = vim::Mode::Normal;
+                        self.vim.visual_anchor = None;
+                        self.vim.clear_pending();
+                    }
                 }
                 Task::none()
             }

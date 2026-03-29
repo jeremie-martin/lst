@@ -182,10 +182,10 @@ impl VimState {
             Mode::Insert => {
                 self.mode = Mode::Normal;
                 self.clear_pending();
-                let col = if line_len(text, cursor.line) > 0 {
-                    cursor
-                        .column
-                        .min(line_len(text, cursor.line).saturating_sub(1))
+                // vim: cursor moves left by 1 when leaving Insert (unless at col 0)
+                let ll = line_len(text, cursor.line);
+                let col = if cursor.column > 0 {
+                    (cursor.column - 1).min(ll.saturating_sub(1))
                 } else {
                     0
                 };
@@ -771,11 +771,17 @@ impl VimState {
             target
         };
 
-        if target == text.cursor {
+        if target == text.cursor && !eol_clamped {
             return vec![VimCommand::Noop];
         }
 
-        let (from, mut to) = ordered(text.cursor, target);
+        let (from, to) = if eol_clamped && target == text.cursor {
+            // dw on last char of line: delete just that character
+            (text.cursor, text.cursor)
+        } else {
+            ordered(text.cursor, target)
+        };
+        let mut to = to;
 
         // Exclusive motions: don't include the target character (skip if clamped to EOL)
         if !is_inclusive(&motion) && !eol_clamped {
