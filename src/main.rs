@@ -30,6 +30,8 @@ fn editor_id() -> iced::widget::Id {
 static EDITOR_ID: LazyLock<iced::widget::Id> = LazyLock::new(editor_id);
 static FIND_INPUT_ID: LazyLock<iced::widget::Id> =
     LazyLock::new(|| iced::widget::Id::new("lst-find"));
+static GOTO_LINE_ID: LazyLock<iced::widget::Id> =
+    LazyLock::new(|| iced::widget::Id::new("lst-goto-line"));
 
 // ── App ──────────────────────────────────────────────────────────────────────
 
@@ -42,6 +44,8 @@ struct App {
     word_wrap: bool,
     scratchpad_dir: PathBuf,
     needs_autosave: bool,
+    shift_held: bool, // iced's Action::Click doesn't carry modifier state; track externally
+    goto_line: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +84,21 @@ enum Message {
     // Tab reorder
     MoveTabLeft,
     MoveTabRight,
+    // Line operations
+    DeleteLine,
+    MoveLineUp,
+    MoveLineDown,
+    DuplicateLine,
+    // Tab cycling
+    NextTab,
+    PrevTab,
+    // Go to line
+    GotoLineOpen,
+    GotoLineClose,
+    GotoLineChanged(String),
+    GotoLineSubmit,
+    // Modifier tracking (for Shift+Click)
+    ModifiersChanged(keyboard::Modifiers),
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +221,8 @@ impl App {
                 word_wrap: false,
                 scratchpad_dir,
                 needs_autosave: false,
+                shift_held: false,
+                goto_line: None,
             },
             iced::widget::operation::focus(EDITOR_ID.clone()),
         )
@@ -259,6 +280,22 @@ impl App {
         }
     }
 
+    fn rebuild_content(&mut self, new_text: &str, cursor_line: usize, cursor_col: usize) {
+        let tab = &mut self.tabs[self.active];
+        tab.content = text_editor::Content::with_text(new_text);
+        let line = cursor_line.min(tab.content.line_count().saturating_sub(1));
+        tab.content.move_to(text_editor::Cursor {
+            position: text_editor::Position {
+                line,
+                column: cursor_col,
+            },
+            selection: None,
+        });
+        tab.modified = true;
+        self.needs_autosave = true;
+        self.refresh_find_matches();
+    }
+
     fn open_find(&mut self, show_replace: bool) -> Task<Message> {
         self.find.visible = true;
         self.find.show_replace = show_replace;
@@ -279,6 +316,16 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Edit(action) => {
+                // Shift+Click: extend selection instead of placing cursor
+                if let text_editor::Action::Click(point) = &action {
+                    if self.shift_held {
+                        self.tabs[self.active]
+                            .content
+                            .perform(text_editor::Action::Drag(*point));
+                        return Task::none();
+                    }
+                }
+
                 let is_edit = matches!(action, text_editor::Action::Edit(_));
                 if is_edit {
                     let (kind, boundary) = match &action {
@@ -543,20 +590,7 @@ impl App {
                     .content
                     .text()
                     .replace(&self.find.query, &self.find.replacement);
-                tab.content = text_editor::Content::with_text(&new_text);
-                // Restore cursor (clamped to new content bounds)
-                let max_line = tab.content.line_count().saturating_sub(1);
-                let line = cursor_pos.line.min(max_line);
-                tab.content.move_to(text_editor::Cursor {
-                    position: text_editor::Position {
-                        line,
-                        column: cursor_pos.column,
-                    },
-                    selection: None,
-                });
-                tab.modified = true;
-                self.needs_autosave = true;
-                self.find.compute_matches(&new_text);
+                self.rebuild_content(&new_text, cursor_pos.line, cursor_pos.column);
                 Task::none()
             }
 
@@ -580,6 +614,137 @@ impl App {
                     self.tabs.swap(self.active, self.active + 1);
                     self.active += 1;
                 }
+                Task::none()
+            }
+
+            // ── Line Operations ─────────────────────────────────────────
+            Message::DeleteLine => {
+                let tab = &mut self.tabs[self.active];
+                tab.push_undo_snapshot(EditKind::Other, true);
+                let pos = tab.content.cursor().position;
+                let full = tab.content.text();
+                let mut lines: Vec<&str> = full.split('\n').collect();
+                let target = pos.line.min(lines.len().saturating_sub(1));
+                lines.remove(target);
+                if lines.is_empty() {
+                    lines.push("");
+                }
+                let new_text = lines.join("\n");
+                self.rebuild_content(&new_text, target, pos.column);
+                Task::none()
+            }
+
+            Message::MoveLineUp => {
+                let tab = &mut self.tabs[self.active];
+                let pos = tab.content.cursor().position;
+                if pos.line == 0 {
+                    return Task::none();
+                }
+                tab.push_undo_snapshot(EditKind::Other, true);
+                let full = tab.content.text();
+                let mut lines: Vec<&str> = full.split('\n').collect();
+                let target = pos.line.min(lines.len().saturating_sub(1));
+                lines.swap(target, target - 1);
+                let new_text = lines.join("\n");
+                self.rebuild_content(&new_text, target - 1, pos.column);
+                Task::none()
+            }
+
+            Message::MoveLineDown => {
+                let tab = &mut self.tabs[self.active];
+                let pos = tab.content.cursor().position;
+                let full = tab.content.text();
+                let mut lines: Vec<&str> = full.split('\n').collect();
+                let target = pos.line.min(lines.len().saturating_sub(1));
+                if target + 1 >= lines.len() {
+                    return Task::none();
+                }
+                tab.push_undo_snapshot(EditKind::Other, true);
+                lines.swap(target, target + 1);
+                let new_text = lines.join("\n");
+                self.rebuild_content(&new_text, target + 1, pos.column);
+                Task::none()
+            }
+
+            Message::DuplicateLine => {
+                let tab = &mut self.tabs[self.active];
+                tab.push_undo_snapshot(EditKind::Other, true);
+                let pos = tab.content.cursor().position;
+                let full = tab.content.text();
+                let mut lines: Vec<&str> = full.split('\n').collect();
+                let target = pos.line.min(lines.len().saturating_sub(1));
+                let dup = lines[target].to_string();
+                lines.insert(target + 1, &dup);
+                let new_text = lines.join("\n");
+                self.rebuild_content(&new_text, target + 1, pos.column);
+                Task::none()
+            }
+
+            // ── Tab Cycling ─────────────────────────────────────────────
+            Message::NextTab => {
+                if self.tabs.len() > 1 {
+                    self.active = (self.active + 1) % self.tabs.len();
+                }
+                Task::none()
+            }
+
+            Message::PrevTab => {
+                if self.tabs.len() > 1 {
+                    self.active = if self.active == 0 {
+                        self.tabs.len() - 1
+                    } else {
+                        self.active - 1
+                    };
+                }
+                Task::none()
+            }
+
+            // ── Go to Line ──────────────────────────────────────────────
+            Message::GotoLineOpen => {
+                self.goto_line = Some(String::new());
+                iced::widget::operation::focus(GOTO_LINE_ID.clone())
+            }
+
+            Message::GotoLineClose => {
+                if self.goto_line.is_some() {
+                    self.goto_line = None;
+                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                }
+                // Also close find bar (Escape from subscription closes topmost overlay)
+                if self.find.visible {
+                    self.find.visible = false;
+                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                }
+                Task::none()
+            }
+
+            Message::GotoLineChanged(s) => {
+                self.goto_line = Some(s);
+                Task::none()
+            }
+
+            Message::GotoLineSubmit => {
+                if let Some(ref text) = self.goto_line {
+                    if let Ok(line_num) = text.trim().parse::<usize>() {
+                        let tab = &mut self.tabs[self.active];
+                        let target = line_num.saturating_sub(1);
+                        let target = target.min(tab.content.line_count().saturating_sub(1));
+                        tab.content.move_to(text_editor::Cursor {
+                            position: text_editor::Position {
+                                line: target,
+                                column: 0,
+                            },
+                            selection: None,
+                        });
+                    }
+                }
+                self.goto_line = None;
+                iced::widget::operation::focus(EDITOR_ID.clone())
+            }
+
+            // ── Modifier Tracking ───────────────────────────────────────
+            Message::ModifiersChanged(mods) => {
+                self.shift_held = mods.shift();
                 Task::none()
             }
         }
@@ -736,7 +901,8 @@ impl App {
         let n_lines = tab.content.line_count().max(1);
         let content_ref = &tab.content;
         let word_wrap = self.word_wrap;
-        let find_visible = self.find.visible;
+        // Escape is handled by the subscription (handle_key), not key_binding,
+        // so find_visible / goto_visible are not needed in the closure.
         let highlight_ext = tab
             .path
             .as_ref()
@@ -808,12 +974,14 @@ impl App {
 
                     match key {
                         keyboard::Key::Named(named) => match named {
-                            keyboard::key::Named::Escape => {
-                                if find_visible {
-                                    return Some(text_editor::Binding::Custom(Message::FindClose));
-                                }
-                            }
                             keyboard::key::Named::Tab => {
+                                if mods.command() {
+                                    return Some(text_editor::Binding::Custom(if mods.shift() {
+                                        Message::PrevTab
+                                    } else {
+                                        Message::NextTab
+                                    }));
+                                }
                                 if mods.shift() {
                                     return Some(text_editor::Binding::Custom(Message::Edit(
                                         text_editor::Action::Edit(text_editor::Edit::Unindent),
@@ -828,6 +996,28 @@ impl App {
                             {
                                 return Some(text_editor::Binding::Custom(Message::AutoIndent));
                             }
+                            keyboard::key::Named::Backspace if mods.command() => {
+                                return Some(text_editor::Binding::Sequence(vec![
+                                    text_editor::Binding::Select(text_editor::Motion::WordLeft),
+                                    text_editor::Binding::Backspace,
+                                ]));
+                            }
+                            keyboard::key::Named::Delete if mods.command() => {
+                                return Some(text_editor::Binding::Sequence(vec![
+                                    text_editor::Binding::Select(text_editor::Motion::WordRight),
+                                    text_editor::Binding::Delete,
+                                ]));
+                            }
+                            keyboard::key::Named::ArrowUp
+                                if mods.alt() && !mods.command() && !mods.shift() =>
+                            {
+                                return Some(text_editor::Binding::Custom(Message::MoveLineUp));
+                            }
+                            keyboard::key::Named::ArrowDown
+                                if mods.alt() && !mods.command() && !mods.shift() =>
+                            {
+                                return Some(text_editor::Binding::Custom(Message::MoveLineDown));
+                            }
                             _ => {}
                         },
                         keyboard::Key::Character(c) if mods.command() => match c.as_str() {
@@ -836,6 +1026,18 @@ impl App {
                             }
                             "z" => {
                                 return Some(text_editor::Binding::Custom(Message::Undo));
+                            }
+                            "k" if mods.shift() => {
+                                return Some(text_editor::Binding::Custom(Message::DeleteLine));
+                            }
+                            "d" if mods.shift() => {
+                                return Some(text_editor::Binding::Custom(Message::DuplicateLine));
+                            }
+                            "l" => {
+                                return Some(text_editor::Binding::SelectLine);
+                            }
+                            "g" => {
+                                return Some(text_editor::Binding::Custom(Message::GotoLineOpen));
                             }
                             _ => {}
                         },
@@ -898,9 +1100,37 @@ impl App {
         .width(Length::Fill)
         .style(solid_bg(bg_weak));
 
+        // ── Go-to-line bar (conditional) ────────────────────────────────
+        let goto_bar = self.goto_line.as_ref().map(|goto_text| {
+            container(
+                row![
+                    text("Go to line:").size(13).color(text_muted),
+                    text_input("Line number", goto_text)
+                        .id(GOTO_LINE_ID.clone())
+                        .on_input(Message::GotoLineChanged)
+                        .on_submit(Message::GotoLineSubmit)
+                        .font(editor_font)
+                        .size(13)
+                        .width(100),
+                    button(text("\u{00d7}").size(14).color(text_muted))
+                        .style(flat_btn(bg_weak))
+                        .on_press(Message::GotoLineClose)
+                        .padding(Padding::from([4, 8])),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding(Padding::from([4, 8]))
+            .width(Length::Fill)
+            .style(solid_bg(bg_strong))
+        });
+
         // ── Root ─────────────────────────────────────────────────────────
         let mut layout = column![tab_bar];
         if let Some(bar) = find_bar {
+            layout = layout.push(bar);
+        }
+        if let Some(bar) = goto_bar {
             layout = layout.push(bar);
         }
         layout = layout.push(editor_area).push(status_bar);
@@ -925,6 +1155,20 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
         return Some(Message::Quit);
     }
 
+    // Track modifier state regardless of whether a widget consumed the event
+    if let iced::Event::Keyboard(keyboard::Event::ModifiersChanged(mods)) = event {
+        return Some(Message::ModifiersChanged(mods));
+    }
+
+    // Escape closes overlays even if a text_input captured the event
+    if let iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: keyboard::Key::Named(keyboard::key::Named::Escape),
+        ..
+    }) = &event
+    {
+        return Some(Message::GotoLineClose);
+    }
+
     if status != event::Status::Ignored {
         return None;
     }
@@ -932,11 +1176,6 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
     let iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event else {
         return None;
     };
-
-    // Non-modifier shortcuts
-    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
-        return Some(Message::FindClose);
-    }
 
     // Alt+Z — word wrap toggle (VS Code convention)
     if modifiers.alt() && !modifiers.command() && !modifiers.shift() {
@@ -964,11 +1203,17 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
             "h" => Some(Message::FindOpenReplace),
             "z" if modifiers.shift() => Some(Message::Redo),
             "z" => Some(Message::Undo),
+            "g" => Some(Message::GotoLineOpen),
             _ => None,
         },
         keyboard::Key::Named(named) => match named {
             keyboard::key::Named::PageUp if modifiers.shift() => Some(Message::MoveTabLeft),
             keyboard::key::Named::PageDown if modifiers.shift() => Some(Message::MoveTabRight),
+            keyboard::key::Named::Tab => Some(if modifiers.shift() {
+                Message::PrevTab
+            } else {
+                Message::NextTab
+            }),
             _ => None,
         },
         _ => None,
