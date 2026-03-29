@@ -13,7 +13,7 @@
 * Idiomatic Rust — no premature abstractions, no speculative generality.
 * Palette-based theming via `theme.extended_palette()` — never hardcode colors.
 * Use `Theme::CatppuccinMocha` as the default theme (built into iced).
-* Modules: `main.rs` (~1600 lines), `tab.rs`, `find.rs`, `highlight.rs`, `style.rs`, `vim.rs`. Split further if main.rs grows significantly.
+* Modules: `main.rs` (~1850 lines), `tab.rs`, `find.rs`, `highlight.rs`, `style.rs`, `vim.rs`. Split further if main.rs grows significantly.
 * All file I/O through async helpers + `Task::perform`.
 
 ## Architecture
@@ -21,13 +21,14 @@
 * **Toolkit**: iced 0.14 (retained-mode, GPU-accelerated via wgpu)
 * **Font**: TX-02 preferred, JetBrains Mono fallback, then system monospace (loaded via fontdb)
 * **State**: `App { tabs, active, scratchpad_dir, needs_autosave, shift_held, goto_line, vim, ... }` — each Tab holds a `text_editor::Content` and `is_scratchpad` flag
-* **Messages**: editing (`Edit`, `Undo`, `Redo`, `AutoIndent`), tabs (`TabSelect`, `TabClose`, `New`, `Open`, `Save`, `NextTab`, `PrevTab`), line ops (`DeleteLine`, `MoveLineUp/Down`, `DuplicateLine`), find (`FindOpen`, `FindNext`, `ReplaceOne`, `ReplaceAll`, etc.), go-to-line (`GotoLineOpen/Close/Changed/Submit`), gutter (`GutterMove`, `GutterClick`), `ModifiersChanged` for Shift+Click tracking, and `VimKey` for vim mode input
-* **Keyboard shortcuts**: three-phase `key_binding` closure on the text_editor widget: (1) Ctrl/Cmd shortcuts always active, (2) vim Normal/Visual interception captures all non-Ctrl keys, (3) Insert mode falls through to existing iced behavior. Global `iced::event::listen_with` subscription handles Escape, modifier tracking, middle-click, and Ctrl shortcuts when editor is unfocused. Escape cascades: close goto-line → close find bar → vim Insert→Normal → vim clear pending → vim Visual→Normal.
+* **Messages**: editing (`Edit`, `Undo`, `Redo`, `AutoIndent`), tabs (`TabSelect`, `TabClose`, `New`, `Open`, `Save`, `NextTab`, `PrevTab`), line ops (`DeleteLine`, `MoveLineUp/Down`, `DuplicateLine`), page movement (`PageUp`, `PageDown`), find (`FindOpen`, `FindNext`, `ReplaceOne`, `ReplaceAll`, etc.), go-to-line (`GotoLineOpen/Close/Changed/Submit`), gutter (`GutterMove`, `GutterClick`), `ModifiersChanged` for Shift+Click tracking, and `VimKey` for vim mode input
+* **Keyboard shortcuts**: `key_binding` closure on the text_editor widget runs in phases: (1) Ctrl/Cmd shortcuts always active, (1.5) PageUp/PageDown in all modes (vim doesn't handle these), (2) vim Normal/Visual interception captures all non-Ctrl keys, (3) Insert mode — Tab/Enter/Alt+Arrow/Arrow-boundary behavior. Global `iced::event::listen_with` subscription handles Escape, modifier tracking, middle-click, and Ctrl shortcuts when editor is unfocused. Escape cascades: close goto-line → close find bar → vim Insert→Normal → vim clear pending → vim Visual→Normal.
+* **Page movement**: PageUp/PageDown move cursor by `(viewport_height / line_height) - 2` lines. Computed from the `responsive` callback's viewport size so it adapts to window resizes. Shift+PageUp/Down extends selection. Ctrl+Shift+PageUp/Down reorders tabs. Arrow Up on first line moves to Home; Arrow Down on last line moves to End (Insert mode only — vim handles its own boundary behavior).
 * **Scratchpad mode**: new tabs create timestamped `.md` files in `~/.local/share/lst/` (override with `--scratchpad-dir`). Ctrl+Shift+S to Save As (changes path).
 * **Find & Replace** (`find.rs`): Ctrl+F opens find bar, Ctrl+H opens with replace. Matches recomputed on every edit when visible. Navigation via FindNext/FindPrev with nearest-match seeking. Replace one or all.
 * **Undo/Redo** (`tab.rs`): snapshot-based (full text + cursor position). Consecutive same-kind edits grouped; whitespace breaks insert groups. Max 100 snapshots per tab. Line ops and ReplaceAll push a single `EditKind::Other` snapshot.
 * **Auto-indent**: Enter key copies leading whitespace from current line (handled via `AutoIndent` message in key_binding).
-* **Word wrap**: Alt+Z toggles between `Wrapping::Word` and `Wrapping::None`.
+* **Word wrap**: enabled by default. Alt+Z toggles between `Wrapping::Word` and `Wrapping::None`.
 * **Gutter**: click selects entire line (`GutterClick`); mouse position tracked via `GutterMove`.
 * **Middle-click paste**: middle mouse button pastes from the primary selection (X11/Wayland) at the current cursor position. Handled in the subscription via `read_primary_selection()`, which calls `wl-paste --primary` or `xclip -selection primary -o`.
 * **Clipboard helpers**: `is_wayland()` detects display server; `copy_to_clipboard()` writes to both selections; `read_primary_selection()` reads the primary selection. All use sync subprocess calls.

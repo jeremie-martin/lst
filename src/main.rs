@@ -92,6 +92,9 @@ enum Message {
     MoveLineUp,
     MoveLineDown,
     DuplicateLine,
+    // Page movement
+    PageUp(usize, bool),
+    PageDown(usize, bool),
     // Tab cycling
     NextTab,
     PrevTab,
@@ -223,7 +226,7 @@ impl App {
                 window_title: args.window_title,
                 gutter_mouse_y: 0.0,
                 find: FindState::new(),
-                word_wrap: false,
+                word_wrap: true,
                 scratchpad_dir,
                 needs_autosave: false,
                 shift_held: false,
@@ -300,6 +303,23 @@ impl App {
         tab.modified = true;
         self.needs_autosave = true;
         self.refresh_find_matches();
+    }
+
+    fn jump_to_line(&mut self, target_line: usize, select: bool) {
+        let tab = &mut self.tabs[self.active];
+        let cursor = tab.content.cursor();
+        let pos = cursor.position;
+        tab.content.move_to(text_editor::Cursor {
+            position: text_editor::Position {
+                line: target_line,
+                column: pos.column,
+            },
+            selection: if select {
+                Some(cursor.selection.unwrap_or(pos))
+            } else {
+                None
+            },
+        });
     }
 
     fn vim_snapshot(&self) -> vim::TextSnapshot {
@@ -708,6 +728,28 @@ impl App {
                 Task::none()
             }
 
+            // ── Page Movement ───────────────────────────────────────
+            Message::PageUp(lines, select) => {
+                let target = self.tabs[self.active]
+                    .content
+                    .cursor()
+                    .position
+                    .line
+                    .saturating_sub(lines);
+                self.jump_to_line(target, select);
+                Task::none()
+            }
+
+            Message::PageDown(lines, select) => {
+                let pos = self.tabs[self.active].content.cursor().position;
+                let last = self.tabs[self.active]
+                    .content
+                    .line_count()
+                    .saturating_sub(1);
+                self.jump_to_line((pos.line + lines).min(last), select);
+                Task::none()
+            }
+
             // ── Tab Cycling ─────────────────────────────────────────────
             Message::NextTab => {
                 if self.tabs.len() > 1 {
@@ -1102,11 +1144,7 @@ impl App {
             .flat_map(|(i, t)| {
                 let is_active = i == self.active;
                 let name = t.display_name();
-                let label = if t.modified {
-                    format!(" {name} \u{25cf} ")
-                } else {
-                    format!(" {name} ")
-                };
+                let label = format!(" {name} ");
 
                 let bg = if is_active { bg_strong } else { bg_weak };
                 let fg = if is_active { text_main } else { text_muted };
@@ -1229,6 +1267,8 @@ impl App {
 
         // ── Editor area ──────────────────────────────────────────────────
         let n_lines = tab.content.line_count().max(1);
+        let cursor_line = tab.content.cursor().position.line;
+        let last_line = n_lines.saturating_sub(1);
         let content_ref = &tab.content;
         let word_wrap = self.word_wrap;
         // Escape is handled by the subscription (handle_key), not key_binding,
@@ -1327,6 +1367,16 @@ impl App {
                                         text_editor::Binding::Delete,
                                     ]));
                                 }
+                                keyboard::key::Named::PageUp if mods.shift() => {
+                                    return Some(text_editor::Binding::Custom(
+                                        Message::MoveTabLeft,
+                                    ));
+                                }
+                                keyboard::key::Named::PageDown if mods.shift() => {
+                                    return Some(text_editor::Binding::Custom(
+                                        Message::MoveTabRight,
+                                    ));
+                                }
                                 _ => {}
                             },
                             keyboard::Key::Character(c) => match c.as_str() {
@@ -1365,6 +1415,26 @@ impl App {
                                 }
                                 _ => {}
                             },
+                            _ => {}
+                        }
+                    }
+
+                    // PageUp/PageDown — all modes (vim doesn't handle these keys)
+                    if let keyboard::Key::Named(named) = key {
+                        let page = ((vh / LINE_HEIGHT_PX) as usize).saturating_sub(2);
+                        match named {
+                            keyboard::key::Named::PageUp => {
+                                return Some(text_editor::Binding::Custom(Message::PageUp(
+                                    page,
+                                    mods.shift(),
+                                )));
+                            }
+                            keyboard::key::Named::PageDown => {
+                                return Some(text_editor::Binding::Custom(Message::PageDown(
+                                    page,
+                                    mods.shift(),
+                                )));
+                            }
                             _ => {}
                         }
                     }
@@ -1409,6 +1479,24 @@ impl App {
                             {
                                 return Some(text_editor::Binding::Custom(Message::MoveLineDown));
                             }
+                            keyboard::key::Named::ArrowUp if !mods.alt() && !mods.command() => {
+                                if cursor_line == 0 {
+                                    return Some(if mods.shift() {
+                                        text_editor::Binding::Select(text_editor::Motion::Home)
+                                    } else {
+                                        text_editor::Binding::Move(text_editor::Motion::Home)
+                                    });
+                                }
+                            }
+                            keyboard::key::Named::ArrowDown if !mods.alt() && !mods.command() => {
+                                if cursor_line >= last_line {
+                                    return Some(if mods.shift() {
+                                        text_editor::Binding::Select(text_editor::Motion::End)
+                                    } else {
+                                        text_editor::Binding::Move(text_editor::Motion::End)
+                                    });
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -1435,11 +1523,7 @@ impl App {
         let col = cursor.position.column + 1;
         let name = tab.display_name();
 
-        let file_label = if tab.modified {
-            format!("{name} [modified]")
-        } else {
-            name.into_owned()
-        };
+        let file_label = name.into_owned();
 
         let wrap_label = if self.word_wrap { "Wrap" } else { "NoWrap" };
 
@@ -1667,16 +1751,11 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
             "g" => Some(Message::GotoLineOpen),
             _ => None,
         },
-        keyboard::Key::Named(named) => match named {
-            keyboard::key::Named::PageUp if modifiers.shift() => Some(Message::MoveTabLeft),
-            keyboard::key::Named::PageDown if modifiers.shift() => Some(Message::MoveTabRight),
-            keyboard::key::Named::Tab => Some(if modifiers.shift() {
-                Message::PrevTab
-            } else {
-                Message::NextTab
-            }),
-            _ => None,
-        },
+        keyboard::Key::Named(keyboard::key::Named::Tab) => Some(if modifiers.shift() {
+            Message::PrevTab
+        } else {
+            Message::NextTab
+        }),
         _ => None,
     }
 }
