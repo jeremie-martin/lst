@@ -901,6 +901,12 @@ impl App {
                     self.refresh_find_matches();
                 }
                 VimCommand::OpenFind => {
+                    // Clear block cursor selection so find bar starts empty
+                    let pos = self.tabs[self.active].content.cursor().position;
+                    self.tabs[self.active].content.move_to(text_editor::Cursor {
+                        position: pos,
+                        selection: None,
+                    });
                     task = self.open_find(false);
                 }
                 VimCommand::FindNext => {
@@ -917,7 +923,30 @@ impl App {
                 }
             }
         }
+        // Block cursor in Normal mode: highlight the character under cursor
+        if self.vim.mode == vim::Mode::Normal {
+            self.apply_block_cursor();
+        }
         task
+    }
+
+    fn apply_block_cursor(&mut self) {
+        let tab = &mut self.tabs[self.active];
+        let pos = tab.content.cursor().position;
+        let line_len = tab
+            .content
+            .line(pos.line)
+            .map(|l| l.text.chars().count())
+            .unwrap_or(0);
+        if pos.column < line_len {
+            tab.content.move_to(text_editor::Cursor {
+                position: pos,
+                selection: Some(text_editor::Position {
+                    line: pos.line,
+                    column: pos.column + 1,
+                }),
+            });
+        }
     }
 
     // ── Vim helpers ─────────────────────────────────────────────────────
@@ -1509,7 +1538,14 @@ impl App {
                     border: Border::default().width(0),
                     placeholder: text_muted,
                     value: text_main,
-                    selection: Color { a: 0.3, ..primary },
+                    selection: Color {
+                        a: if vim_mode == vim::Mode::Normal {
+                            0.5
+                        } else {
+                            0.3
+                        },
+                        ..primary
+                    },
                 });
 
             scrollable(row![line_numbers, gutter_line, editor].width(Length::Fill))
