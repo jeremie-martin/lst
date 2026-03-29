@@ -166,7 +166,6 @@ fn generate_scratchpad_path(dir: &Path) -> PathBuf {
 
 fn create_scratchpad_tab(dir: &Path) -> Tab {
     let path = generate_scratchpad_path(dir);
-    std::fs::write(&path, "").expect("failed to create scratchpad file");
     Tab::new_scratchpad(path)
 }
 
@@ -218,15 +217,26 @@ impl App {
         Theme::CatppuccinMocha
     }
 
-    fn close_tab(&mut self, i: usize) {
-        if i < self.tabs.len() && self.tabs.len() > 1 {
-            self.tabs.remove(i);
-            if self.active >= self.tabs.len() {
-                self.active = self.tabs.len() - 1;
-            } else if self.active > i {
-                self.active -= 1;
+    fn close_tab(&mut self, i: usize) -> Task<Message> {
+        if i >= self.tabs.len() {
+            return Task::none();
+        }
+        let tab = &self.tabs[i];
+        if tab.is_scratchpad && tab.content.text().trim().is_empty() {
+            if let Some(p) = &tab.path {
+                let _ = std::fs::remove_file(p);
             }
         }
+        if self.tabs.len() == 1 {
+            return iced::exit();
+        }
+        self.tabs.remove(i);
+        if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        } else if self.active > i {
+            self.active -= 1;
+        }
+        Task::none()
     }
 
     fn refresh_find_matches(&mut self) {
@@ -286,15 +296,9 @@ impl App {
                 Task::none()
             }
 
-            Message::TabClose(i) => {
-                self.close_tab(i);
-                Task::none()
-            }
+            Message::TabClose(i) => self.close_tab(i),
 
-            Message::CloseActiveTab => {
-                self.close_tab(self.active);
-                Task::none()
-            }
+            Message::CloseActiveTab => self.close_tab(self.active),
 
             Message::New => {
                 self.tabs.push(create_scratchpad_tab(&self.scratchpad_dir));
