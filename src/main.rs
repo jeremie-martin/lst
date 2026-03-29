@@ -9,6 +9,7 @@ use tab::{EditKind, Tab};
 
 use iced::event;
 use iced::keyboard;
+use iced::mouse;
 use iced::widget::{
     button, column, container, mouse_area, responsive, row, scrollable, text, text_editor,
     text_input, Space,
@@ -1160,6 +1161,16 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
         return Some(Message::ModifiersChanged(mods));
     }
 
+    if let iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle)) = &event {
+        if let Some(text) = read_primary_selection() {
+            if !text.is_empty() {
+                return Some(Message::Edit(text_editor::Action::Edit(
+                    text_editor::Edit::Paste(Arc::new(text)),
+                )));
+            }
+        }
+    }
+
     // Escape closes overlays even if a text_input captured the event
     if let iced::Event::Keyboard(keyboard::Event::KeyPressed {
         key: keyboard::Key::Named(keyboard::key::Named::Escape),
@@ -1222,8 +1233,36 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
 
 // ── Clipboard ───────────────────────────────────────────────────────────────
 
+fn is_wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
+fn read_primary_selection() -> Option<String> {
+    let output = if is_wayland() {
+        Command::new("wl-paste")
+            .arg("--primary")
+            .arg("--no-newline")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?
+    } else {
+        Command::new("xclip")
+            .args(["-selection", "primary", "-o"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?
+    };
+    if output.status.success() {
+        String::from_utf8(output.stdout).ok()
+    } else {
+        None
+    }
+}
+
 fn copy_to_clipboard(text: &str) {
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+    if is_wayland() {
         pipe_to_command("wl-copy", &[], text);
         pipe_to_command("wl-copy", &["--primary"], text);
     } else {
