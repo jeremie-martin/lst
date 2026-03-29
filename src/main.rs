@@ -1039,11 +1039,7 @@ impl App {
         }
     }
 
-    fn apply_vim_select(
-        &mut self,
-        anchor: text_editor::Position,
-        head: text_editor::Position,
-    ) {
+    fn apply_vim_select(&mut self, anchor: text_editor::Position, head: text_editor::Position) {
         self.tabs[self.active].content.move_to(text_editor::Cursor {
             position: head,
             selection: Some(anchor),
@@ -1074,40 +1070,15 @@ impl App {
 
     fn move_to_vim_search_target(&mut self, target: text_editor::Position) {
         match self.vim.mode {
-            vim::Mode::Visual => {
-                // Search repeat is a motion in Visual mode, so it extends the
-                // active selection instead of collapsing back to a caret.
-                let anchor = self
-                    .vim
-                    .visual_anchor
-                    .unwrap_or(self.tabs[self.active].content.cursor().position);
-                self.tabs[self.active].content.move_to(text_editor::Cursor {
-                    position: target,
-                    selection: Some(anchor),
-                });
-            }
-            vim::Mode::VisualLine => {
-                let anchor = self
-                    .vim
-                    .visual_anchor
-                    .unwrap_or(self.tabs[self.active].content.cursor().position);
-                let first = anchor.line.min(target.line);
-                let last = anchor.line.max(target.line);
-                let last_col = self.tabs[self.active]
-                    .content
-                    .line(last)
-                    .map(|line| line.text.chars().count().saturating_sub(1))
-                    .unwrap_or(0);
-                self.tabs[self.active].content.move_to(text_editor::Cursor {
-                    position: text_editor::Position {
-                        line: last,
-                        column: last_col,
-                    },
-                    selection: Some(text_editor::Position {
-                        line: first,
-                        column: 0,
-                    }),
-                });
+            vim::Mode::Visual | vim::Mode::VisualLine => {
+                // Search repeat is a motion in Visual mode, so reuse the Vim
+                // selection logic instead of rebuilding the range here.
+                let snapshot = self.vim_snapshot();
+                if let vim::VimCommand::Select { anchor, head } =
+                    self.vim.selection_command(target, &snapshot)
+                {
+                    self.apply_vim_select(anchor, head);
+                }
             }
             _ => {
                 self.tabs[self.active].content.move_to(text_editor::Cursor {
@@ -2046,16 +2017,15 @@ fn transform_case_chars(chars: &[char], uppercase: bool) -> String {
 }
 
 fn transform_case_iter(chars: impl IntoIterator<Item = char>, uppercase: bool) -> String {
-    chars
-        .into_iter()
-        .flat_map(|ch| {
-            if uppercase {
-                ch.to_uppercase().collect::<Vec<_>>()
-            } else {
-                ch.to_lowercase().collect::<Vec<_>>()
-            }
-        })
-        .collect()
+    let mut transformed = String::new();
+    for ch in chars {
+        if uppercase {
+            transformed.extend(ch.to_uppercase());
+        } else {
+            transformed.extend(ch.to_lowercase());
+        }
+    }
+    transformed
 }
 
 fn transform_case_range(

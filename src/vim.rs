@@ -1523,13 +1523,14 @@ fn quote_object(text: &TextSnapshot, quote: char, inner: bool) -> Option<(Positi
     let (start, end) = quotes
         .windows(2)
         .filter_map(|pair| {
-            let [start, end] = <&[usize; 2]>::try_from(pair).ok()?;
-            if *start <= col
-                && col <= *end
-                && quote_can_open(&chars, *start)
-                && quote_can_close(&chars, *end)
+            let start = pair[0];
+            let end = pair[1];
+            if start <= col
+                && col <= end
+                && quote_can_open(&chars, start)
+                && quote_can_close(&chars, end)
             {
-                Some((*start, *end))
+                Some((start, end))
             } else {
                 None
             }
