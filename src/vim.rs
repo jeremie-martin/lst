@@ -31,24 +31,50 @@ pub struct VimState {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum VimCommand {
     MoveTo(Position),
-    Select { anchor: Position, head: Position },
-    DeleteRange { from: Position, to: Position },
-    DeleteLines { first: usize, last: usize },
-    ChangeRange { from: Position, to: Position },
-    ChangeLines { first: usize, last: usize },
-    YankRange { from: Position, to: Position },
-    YankLines { first: usize, last: usize },
+    Select {
+        anchor: Position,
+        head: Position,
+    },
+    DeleteRange {
+        from: Position,
+        to: Position,
+    },
+    DeleteLines {
+        first: usize,
+        last: usize,
+    },
+    ChangeRange {
+        from: Position,
+        to: Position,
+    },
+    ChangeLines {
+        first: usize,
+        last: usize,
+    },
+    YankRange {
+        from: Position,
+        to: Position,
+    },
+    YankLines {
+        first: usize,
+        last: usize,
+    },
     EnterInsert,
+    #[allow(dead_code)]
     EnterNormal,
     PasteAfter,
     PasteBefore,
     OpenLineBelow,
     OpenLineAbove,
-    JoinLines { count: usize },
-    ReplaceChar { ch: char, count: usize },
+    JoinLines {
+        count: usize,
+    },
+    ReplaceChar {
+        ch: char,
+        count: usize,
+    },
     Undo,
     Redo,
     OpenFind,
@@ -173,6 +199,26 @@ impl VimState {
         self.pending = Pending::default();
     }
 
+    pub fn on_tab_switch(&mut self) {
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            self.mode = Mode::Normal;
+            self.visual_anchor = None;
+            self.clear_pending();
+        }
+    }
+
+    fn repeat_find(&self, c: char) -> Option<Motion> {
+        if c != ';' && c != ',' {
+            return None;
+        }
+        let last = self.last_find.as_ref()?;
+        Some(if c == ';' {
+            last.clone()
+        } else {
+            reverse_find(last)
+        })
+    }
+
     pub fn enter_normal_from_escape(
         &mut self,
         cursor: Position,
@@ -291,6 +337,10 @@ impl VimState {
                 return vec![VimCommand::Noop];
             }
 
+            if let Some(motion) = self.repeat_find(c) {
+                return self.operator_with_computed_motion(op, motion, text);
+            }
+
             // Unknown — cancel
             self.clear_pending();
             return vec![VimCommand::Noop];
@@ -301,16 +351,7 @@ impl VimState {
             return self.motion_move(motion, text);
         }
 
-        // ; and , repeat/reverse last f/t
-        if (c == ';' || c == ',') && self.last_find.is_some() {
-            let motion = if c == ';' {
-                self.last_find.clone().unwrap()
-            } else {
-                reverse_find(self.last_find.as_ref().unwrap())
-            };
-            if let Some(op) = self.pending.operator.take() {
-                return self.operator_with_computed_motion(op, motion, text);
-            }
+        if let Some(motion) = self.repeat_find(c) {
             return self.motion_move(motion, text);
         }
 
@@ -602,13 +643,7 @@ impl VimState {
             return self.visual_select(target, text);
         }
 
-        // ; and , repeat/reverse last f/t
-        if (c == ';' || c == ',') && self.last_find.is_some() {
-            let motion = if c == ';' {
-                self.last_find.clone().unwrap()
-            } else {
-                reverse_find(self.last_find.as_ref().unwrap())
-            };
+        if let Some(motion) = self.repeat_find(c) {
             let count = self.pending.count.take();
             let target = compute_motion(&motion, text, count);
             return self.visual_select(target, text);
@@ -771,10 +806,6 @@ impl VimState {
             target
         };
 
-        if target == text.cursor && !eol_clamped {
-            return vec![VimCommand::Noop];
-        }
-
         let (from, to) = if eol_clamped && target == text.cursor {
             // dw on last char of line: delete just that character
             (text.cursor, text.cursor)
@@ -804,7 +835,10 @@ impl VimState {
     fn line_operator(&self, op: Operator, first: usize, last: usize) -> Vec<VimCommand> {
         match op {
             Operator::Delete => vec![VimCommand::DeleteLines { first, last }],
-            Operator::Change => vec![VimCommand::ChangeLines { first, last }],
+            Operator::Change => vec![
+                VimCommand::ChangeLines { first, last },
+                VimCommand::EnterInsert,
+            ],
             Operator::Yank => vec![VimCommand::YankLines { first, last }],
         }
     }
@@ -812,7 +846,10 @@ impl VimState {
     fn range_operator(&self, op: Operator, from: Position, to: Position) -> Vec<VimCommand> {
         match op {
             Operator::Delete => vec![VimCommand::DeleteRange { from, to }],
-            Operator::Change => vec![VimCommand::ChangeRange { from, to }],
+            Operator::Change => vec![
+                VimCommand::ChangeRange { from, to },
+                VimCommand::EnterInsert,
+            ],
             Operator::Yank => vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)],
         }
     }

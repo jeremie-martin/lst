@@ -408,12 +408,7 @@ impl App {
             Message::TabSelect(i) => {
                 if i < self.tabs.len() {
                     self.active = i;
-                    // Reset visual state to avoid stale anchor from previous tab
-                    if matches!(self.vim.mode, vim::Mode::Visual | vim::Mode::VisualLine) {
-                        self.vim.mode = vim::Mode::Normal;
-                        self.vim.visual_anchor = None;
-                        self.vim.clear_pending();
-                    }
+                    self.vim.on_tab_switch();
                 }
                 Task::none()
             }
@@ -905,12 +900,10 @@ impl App {
                 VimCommand::ChangeRange { from, to } => {
                     let deleted = self.vim_delete_range(from, to);
                     self.vim.register = vim::Register::Char(deleted);
-                    self.vim.mode = vim::Mode::Insert;
                 }
                 VimCommand::ChangeLines { first, last } => {
                     let deleted = self.vim_change_lines(first, last);
                     self.vim.register = vim::Register::Line(deleted);
-                    self.vim.mode = vim::Mode::Insert;
                 }
                 VimCommand::YankRange { from, to } => {
                     let yanked = self.vim_extract_range(from, to);
@@ -1153,21 +1146,17 @@ impl App {
             return;
         }
         tab.push_undo_snapshot(EditKind::Other, true);
-        let mut join_col = 0;
-        for _ in 0..count {
-            if pos.line + 1 >= lines.len() {
-                break;
+        let join_end = (pos.line + count).min(lines.len() - 1);
+        let mut joined = lines[pos.line].trim_end().to_string();
+        let join_col = joined.chars().count();
+        for line in lines.drain((pos.line + 1)..=join_end) {
+            let trimmed = line.trim_start();
+            if !trimmed.is_empty() {
+                joined.push(' ');
+                joined.push_str(trimmed);
             }
-            let current_trimmed = lines[pos.line].trim_end().to_string();
-            join_col = current_trimmed.chars().count();
-            let next = lines[pos.line + 1].trim_start().to_string();
-            lines[pos.line] = if next.is_empty() {
-                current_trimmed
-            } else {
-                format!("{current_trimmed} {next}")
-            };
-            lines.remove(pos.line + 1);
         }
+        lines[pos.line] = joined;
         let new_text = lines.join("\n");
         self.rebuild_content(&new_text, pos.line, join_col);
     }
