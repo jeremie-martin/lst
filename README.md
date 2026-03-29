@@ -1,73 +1,74 @@
 # lst
 
-**Lucy's Simple Text editor** — a fast, minimal, good-looking text editor for Linux.
+**Lucy's Simple Text editor**, a fast, minimal, good-looking text editor for Linux.
 
-## Why
+`lst` is a native Linux text editor built with [`iced`](https://iced.rs). It focuses on fast startup, low-latency typing, and a clean UI with just the editing features you actually use.
 
-Every existing simple text editor is either ugly (gedit, mousepad), slow (VS Code, Atom), or both. lst aims to be the text editor you actually *want* to use for quick edits: beautiful dark theme, instant startup, zero typing latency, and nothing you don't need.
+## Highlights
 
-## Features
+- Catppuccin Mocha theme with GPU-rendered UI
+- Multiple tabs, tab cycling, and tab reordering
+- Open files from the CLI or with the file picker
+- Scratchpad tabs: starting `lst` without files, or pressing `Ctrl+N`, creates a timestamped Markdown note
+- Autosave every 500 ms for modified tabs
+- Find, replace, and go to line
+- Syntax highlighting for many languages via `syntect`, plus custom Markdown highlighting
+- Word wrap, grouped undo and redo, auto-indent, and line numbers
+- Line selection and editing helpers, including gutter click, word delete, duplicate line, move line, and delete line
+- Vim-style modal editing with Insert, Normal, Visual, and Visual Line modes
+- Status bar with file info, cursor position, wrap state, and Vim mode when active
 
-- Catppuccin Mocha dark theme
-- Multiple tabs with Ctrl+N / Ctrl+W
-- Open files from CLI (`lst file.txt`) or Ctrl+O dialog
-- Save with Ctrl+S, Save As with Ctrl+Shift+S
-- Scratchpad mode: launching without files creates a timestamped `.md` note
-- Autosave: files save automatically after any edit (500ms tick)
-- Find & Replace (Ctrl+F / Ctrl+H)
-- Syntax highlighting for ~170 languages via syntect (Catppuccin Mocha theme)
-- Word wrap toggle (Alt+Z)
-- Undo/redo with edit grouping (Ctrl+Z / Ctrl+Shift+Z)
-- Auto-indent on Enter
-- Line numbers with gutter click-to-select
-- Shift+Click to extend selection
-- Ctrl+Backspace / Ctrl+Delete to delete by word
-- Ctrl+Shift+K delete line, Alt+Up/Down move line, Ctrl+Shift+D duplicate line
-- Ctrl+L select line, Ctrl+G go to line
-- Ctrl+Tab / Ctrl+Shift+Tab cycle tabs, Ctrl+Shift+PageUp/PageDown reorder tabs
-- JetBrains Mono font
-- GPU-accelerated rendering (wgpu)
+## Common Shortcuts
 
-### Planned
-
-- Light/dark theme switching
-- Recent files / session restore
+- `Ctrl+N` new scratchpad, `Ctrl+O` open, `Ctrl+S` save, `Ctrl+Shift+S` save as, `Ctrl+W` close tab, `Ctrl+Q` quit
+- `Ctrl+F` find, `Ctrl+H` find and replace, `Ctrl+G` go to line
+- `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs, `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` reorder tabs
+- `Ctrl+Z` undo, `Ctrl+Shift+Z` redo, `Alt+Z` toggle word wrap
+- `Ctrl+Backspace` / `Ctrl+Delete` delete by word
+- `Ctrl+Shift+K` delete line, `Alt+Up` / `Alt+Down` move line, `Ctrl+Shift+D` duplicate line
+- `Ctrl+L` select line, `Shift+Click` extend selection, click the gutter to select a full line
+- `Tab` / `Shift+Tab` indent or unindent, `Enter` keeps the current indentation
+- `Esc` enters Vim Normal mode, `/` starts find in Vim mode, `n` / `N` move between matches
 
 ## Install
 
-Requires Rust 1.75+ and JetBrains Mono installed at `/usr/share/fonts/jetbrains-mono/JetBrainsMono[wght].ttf`.
+`install.sh` installs `lst` to `~/.local/bin/lst` by default.
+
+Requirements:
+
+- `cargo`
+- JetBrains Mono installed at `/usr/share/fonts/jetbrains-mono/JetBrainsMono[wght].ttf` if you use `install.sh`
 
 ```bash
 ./install.sh
 ~/.local/bin/lst
 ```
 
-`install.sh` uses `cargo install --path . --locked --root ~/.local` by default. Set `LST_PREFIX=/some/prefix` if you want a different install location.
+Set `LST_PREFIX=/some/prefix` to change the install root.
 
-## Build & Run
+## Build and Run
 
-Requires Rust 1.75+ and JetBrains Mono installed.
+A recent stable Rust toolchain is enough to build from source.
 
 ```bash
 cargo build --release
-./target/release/lst                    # new scratchpad file
-./target/release/lst README.md          # open a file
-./target/release/lst *.rs               # open multiple files
-./target/release/lst --scratchpad-dir ~/notes  # custom scratchpad directory
-./target/release/lst --title lst-scratchpad    # fixed window title
+./target/release/lst
+./target/release/lst README.md
+./target/release/lst README.md src/main.rs
+./target/release/lst --scratchpad-dir ~/notes
+./target/release/lst --title lst-scratchpad
 ```
 
-## Scratchpad
+At runtime, `lst` prefers `TX-02`, then `JetBrains Mono`, then the system monospace font.
 
-When you launch `lst` without file arguments, it creates a timestamped Markdown scratchpad in `~/.local/share/lst/`.
+## Notes
 
-Use `--scratchpad-dir` to store those files somewhere else, and `--title` to force a fixed window title.
-
-## Design
-
-- **Toolkit**: [iced](https://iced.rs) 0.14 — retained-mode GUI, GPU-rendered via wgpu
-- **Font rendering**: cosmic-text (same engine as System76's COSMIC desktop)
-- **Philosophy**: do one thing well. No plugins, no config files, no 200-line settings menu. Just a clean place to edit text.
+- Launching `lst` without file arguments creates a scratchpad in `~/.local/share/lst/`
+- `Ctrl+N` creates another scratchpad tab
+- Empty scratchpad tabs are deleted when you close them
+- Clipboard integration uses `wl-copy` / `wl-paste` on Wayland and `xclip` on X11 when available
+- The window title follows the active file unless `--title` is set
+- Linux only
 
 ## License
 
