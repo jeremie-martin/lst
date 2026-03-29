@@ -27,6 +27,7 @@ pub struct VimState {
     pub register: Register,
     pub visual_anchor: Option<Position>,
     pending: Pending,
+    last_find: Option<Motion>, // for ; and ,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +92,7 @@ enum Operator {
     Yank,
 }
 
+#[derive(Clone)]
 enum Motion {
     Left,
     Right,
@@ -130,6 +132,7 @@ impl VimState {
             register: Register::Empty,
             visual_anchor: None,
             pending: Pending::default(),
+            last_find: None,
         }
     }
 
@@ -298,6 +301,19 @@ impl VimState {
             return self.motion_move(motion, text);
         }
 
+        // ; and , repeat/reverse last f/t
+        if (c == ';' || c == ',') && self.last_find.is_some() {
+            let motion = if c == ';' {
+                self.last_find.clone().unwrap()
+            } else {
+                reverse_find(self.last_find.as_ref().unwrap())
+            };
+            if let Some(op) = self.pending.operator.take() {
+                return self.operator_with_computed_motion(op, motion, text);
+            }
+            return self.motion_move(motion, text);
+        }
+
         // Operators
         if matches!(c, 'd' | 'c' | 'y') {
             self.pending.operator = Some(match c {
@@ -342,8 +358,8 @@ impl VimState {
                     VimCommand::EnterInsert,
                 ]
             }
-            'o' => vec![VimCommand::OpenLineBelow],
-            'O' => vec![VimCommand::OpenLineAbove],
+            'o' => vec![VimCommand::OpenLineBelow, VimCommand::EnterInsert],
+            'O' => vec![VimCommand::OpenLineAbove, VimCommand::EnterInsert],
             'x' => {
                 let ll = line_len(text, text.cursor.line);
                 if ll == 0 {
@@ -400,6 +416,10 @@ impl VimState {
                 // vim: J = join 2 lines (1 op), 3J = join 3 lines (2 ops)
                 let joins = if count <= 1 { 1 } else { count - 1 };
                 vec![VimCommand::JoinLines { count: joins }]
+            }
+            'S' => {
+                let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
+                self.line_operator(Operator::Change, text.cursor.line, last)
             }
             'p' => vec![VimCommand::PasteAfter],
             'P' => vec![VimCommand::PasteBefore],
@@ -478,7 +498,10 @@ impl VimState {
             if partial == 'i' || partial == 'a' {
                 if let Some((from, to)) = text_object(text, c, partial == 'i') {
                     self.visual_anchor = Some(from);
-                    return vec![VimCommand::Select { anchor: from, head: to }];
+                    return vec![VimCommand::Select {
+                        anchor: from,
+                        head: to,
+                    }];
                 }
             }
             return vec![VimCommand::Noop];
@@ -530,10 +553,7 @@ impl VimState {
                         VimCommand::MoveTo(pos(first, from.column)),
                     ];
                 }
-                return vec![
-                    VimCommand::YankRange { from, to },
-                    VimCommand::MoveTo(from),
-                ];
+                return vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)];
             }
             'v' => {
                 if self.mode == Mode::Visual {
@@ -619,10 +639,22 @@ impl VimState {
                 }
                 self.motion_move(Motion::DocumentStart, text)
             }
-            'f' => self.resolve_motion_partial(Motion::FindChar(c), text),
-            't' => self.resolve_motion_partial(Motion::TillChar(c), text),
-            'F' => self.resolve_motion_partial(Motion::FindCharBack(c), text),
-            'T' => self.resolve_motion_partial(Motion::TillCharBack(c), text),
+            'f' => {
+                self.last_find = Some(Motion::FindChar(c));
+                self.resolve_motion_partial(Motion::FindChar(c), text)
+            }
+            't' => {
+                self.last_find = Some(Motion::TillChar(c));
+                self.resolve_motion_partial(Motion::TillChar(c), text)
+            }
+            'F' => {
+                self.last_find = Some(Motion::FindCharBack(c));
+                self.resolve_motion_partial(Motion::FindCharBack(c), text)
+            }
+            'T' => {
+                self.last_find = Some(Motion::TillCharBack(c));
+                self.resolve_motion_partial(Motion::TillCharBack(c), text)
+            }
             'r' => {
                 let count = self.motion_count().unwrap_or(1);
                 self.clear_pending();
@@ -707,6 +739,21 @@ impl VimState {
         }
 
         let target = compute_motion(&motion, text, count);
+        if target == text.cursor {
+            return vec![VimCommand::Noop];
+        }
+
+        // vim: dw at end of line stops at EOL (doesn't eat newline)
+        let target = if op == Operator::Delete
+            && target.line > text.cursor.line
+            && matches!(motion, Motion::WordForward | Motion::BigWordForward)
+        {
+            let ll = line_len(text, text.cursor.line);
+            pos(text.cursor.line, ll.saturating_sub(1))
+        } else {
+            target
+        };
+
         if target == text.cursor {
             return vec![VimCommand::Noop];
         }
@@ -886,7 +933,7 @@ fn compute_motion(motion: &Motion, text: &TextSnapshot, count: Option<usize>) ->
         Motion::FindCharBack(ch) => {
             let chars = line_chars(text, text.cursor.line);
             let mut found = 0;
-            for i in (0..text.cursor.column).rev() {
+            for i in (0..text.cursor.column.min(chars.len())).rev() {
                 if chars[i] == *ch {
                     found += 1;
                     if found == n {
@@ -899,7 +946,7 @@ fn compute_motion(motion: &Motion, text: &TextSnapshot, count: Option<usize>) ->
         Motion::TillCharBack(ch) => {
             let chars = line_chars(text, text.cursor.line);
             let mut found = 0;
-            for i in (0..text.cursor.column).rev() {
+            for i in (0..text.cursor.column.min(chars.len())).rev() {
                 if chars[i] == *ch {
                     found += 1;
                     if found == n {
@@ -964,6 +1011,16 @@ fn is_inclusive(motion: &Motion) -> bool {
             | Motion::TillCharBack(_)
             | Motion::MatchBracket
     )
+}
+
+fn reverse_find(motion: &Motion) -> Motion {
+    match motion {
+        Motion::FindChar(c) => Motion::FindCharBack(*c),
+        Motion::FindCharBack(c) => Motion::FindChar(*c),
+        Motion::TillChar(c) => Motion::TillCharBack(*c),
+        Motion::TillCharBack(c) => Motion::TillChar(*c),
+        other => other.clone(),
+    }
 }
 
 // ── Word motions ────────────────────────────────────────────────────────────

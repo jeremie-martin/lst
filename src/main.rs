@@ -518,10 +518,8 @@ impl App {
             // Workaround for iced-rs/iced#3227 — remove when merged
             Message::EditorMouseMove(point) => {
                 if self.multiclick_drag {
-                    let content_point = Point::new(
-                        (point.x - 8.0).max(0.0),
-                        (point.y - 8.0).max(0.0),
-                    );
+                    let content_point =
+                        Point::new((point.x - 8.0).max(0.0), (point.y - 8.0).max(0.0));
                     self.tabs[self.active]
                         .content
                         .perform(text_editor::Action::Drag(content_point));
@@ -1134,7 +1132,6 @@ impl App {
         lines.insert(idx, indent.clone());
         let new_text = lines.join("\n");
         self.rebuild_content(&new_text, idx, indent.chars().count());
-        self.vim.mode = vim::Mode::Insert;
     }
 
     fn vim_join_lines(&mut self, count: usize) {
