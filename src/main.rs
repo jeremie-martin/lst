@@ -375,6 +375,12 @@ impl App {
         iced::widget::operation::focus(FIND_INPUT_ID.clone())
     }
 
+    fn close_find(&mut self) -> Task<Message> {
+        self.find.visible = false;
+        self.apply_block_cursor_if_normal();
+        iced::widget::operation::focus(EDITOR_ID.clone())
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Edit(action) => {
@@ -635,26 +641,20 @@ impl App {
             // ── Find & Replace ───────────────────────────────────────────
             Message::FindOpen => {
                 if self.find.visible {
-                    self.find.visible = false;
-                    self.apply_block_cursor_if_normal();
-                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                    return self.close_find();
                 }
                 self.open_find(false)
             }
             Message::FindOpenReplace => {
                 if self.find.visible && self.find.show_replace {
-                    self.find.visible = false;
-                    self.apply_block_cursor_if_normal();
-                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                    return self.close_find();
                 }
                 self.open_find(true)
             }
 
             Message::FindClose => {
                 if self.find.visible {
-                    self.find.visible = false;
-                    self.apply_block_cursor_if_normal();
-                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                    return self.close_find();
                 }
                 Task::none()
             }
@@ -883,9 +883,7 @@ impl App {
                 }
                 // Also close find bar (Escape from subscription closes topmost overlay)
                 if self.find.visible {
-                    self.find.visible = false;
-                    self.apply_block_cursor_if_normal();
-                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                    return self.close_find();
                 }
                 // Vim: Escape cascades into mode transitions
                 let snapshot = self.vim_snapshot();
@@ -949,10 +947,7 @@ impl App {
                     });
                 }
                 VimCommand::Select { anchor, head } => {
-                    self.tabs[self.active].content.move_to(text_editor::Cursor {
-                        position: head,
-                        selection: Some(anchor),
-                    });
+                    self.apply_vim_select(anchor, head);
                 }
                 VimCommand::DeleteRange { from, to } => {
                     let deleted = self.vim_delete_range(from, to);
@@ -1044,6 +1039,17 @@ impl App {
         }
     }
 
+    fn apply_vim_select(
+        &mut self,
+        anchor: text_editor::Position,
+        head: text_editor::Position,
+    ) {
+        self.tabs[self.active].content.move_to(text_editor::Cursor {
+            position: head,
+            selection: Some(anchor),
+        });
+    }
+
     fn apply_block_cursor(&mut self) {
         let tab = &mut self.tabs[self.active];
         let pos = tab.content.cursor().position;
@@ -1069,6 +1075,8 @@ impl App {
     fn move_to_vim_search_target(&mut self, target: text_editor::Position) {
         match self.vim.mode {
             vim::Mode::Visual => {
+                // Search repeat is a motion in Visual mode, so it extends the
+                // active selection instead of collapsing back to a caret.
                 let anchor = self
                     .vim
                     .visual_anchor
@@ -2021,6 +2029,8 @@ fn is_block_cursor_selection(cursor: &text_editor::Cursor) -> bool {
 
 fn collapse_selection_to_caret(content: &mut text_editor::Content) {
     let pos = content.cursor().position;
+    // Iced keeps the old selection when moved with `selection: None`; use an
+    // empty selection to clear the synthetic Normal-mode block cursor.
     content.move_to(text_editor::Cursor {
         position: pos,
         selection: Some(pos),

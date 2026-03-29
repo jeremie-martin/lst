@@ -723,18 +723,22 @@ impl VimState {
         vec![VimCommand::Noop]
     }
 
-    fn visual_select(&self, head: Position, text: &TextSnapshot) -> Vec<VimCommand> {
+    pub fn selection_command(&self, head: Position, text: &TextSnapshot) -> VimCommand {
         let anchor = self.visual_anchor.unwrap_or(text.cursor);
         if self.mode == Mode::VisualLine {
             let (first, last) = ordered_lines(anchor.line, head.line);
             let last_col = line_len(text, last).saturating_sub(1);
-            vec![VimCommand::Select {
+            VimCommand::Select {
                 anchor: pos(first, 0),
                 head: pos(last, last_col),
-            }]
+            }
         } else {
-            vec![VimCommand::Select { anchor, head }]
+            VimCommand::Select { anchor, head }
         }
+    }
+
+    fn visual_select(&self, head: Position, text: &TextSnapshot) -> Vec<VimCommand> {
+        vec![self.selection_command(head, text)]
     }
 
     // ── Partial resolution ──────────────────────────────────────────────
