@@ -13,14 +13,18 @@ Every existing simple text editor is either ugly (gedit, mousepad), slow (VS Cod
 - Open files from CLI (`lst file.txt`) or Ctrl+O dialog
 - Save with Ctrl+S, Save As with Ctrl+Shift+S
 - Scratchpad mode: new tabs are timestamped `.md` files in `~/.local/share/lst/`
-- Autosave: files save automatically ~2s after you stop typing
+- Autosave: files save automatically after any edit (500ms tick)
 - Find & Replace (Ctrl+F / Ctrl+H)
-- Markdown syntax highlighting
+- Syntax highlighting for ~170 languages via syntect (Catppuccin Mocha theme)
 - Word wrap toggle (Alt+Z)
 - Undo/redo with edit grouping (Ctrl+Z / Ctrl+Shift+Z)
 - Auto-indent on Enter
 - Line numbers with gutter click-to-select
-- Tab reorder (Shift+PageUp/PageDown)
+- Shift+Click to extend selection
+- Ctrl+Backspace / Ctrl+Delete to delete by word
+- Ctrl+Shift+K delete line, Alt+Up/Down move line, Ctrl+Shift+D duplicate line
+- Ctrl+L select line, Ctrl+G go to line
+- Ctrl+Tab / Ctrl+Shift+Tab cycle tabs, Ctrl+Shift+PageUp/PageDown reorder tabs
 - JetBrains Mono font
 - GPU-accelerated rendering (wgpu)
 

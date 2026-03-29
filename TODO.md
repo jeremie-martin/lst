@@ -12,7 +12,7 @@
 
 - [ ] File change detection — warn if modified externally
 - [x] Tab reordering (Ctrl+Shift+PageUp/PageDown)
-- [ ] Go to line (Ctrl+G)
+- [x] Go to line (Ctrl+G)
 - [x] Word wrap toggle (Alt+Z or status bar button)
 - [x] Indent / unindent selection (Tab / Shift+Tab)
 - [x] Auto-indent on Enter
