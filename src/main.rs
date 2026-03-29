@@ -17,7 +17,9 @@ use iced::{
     Background, Border, Color, Element, Font, Length, Padding, Pixels, Point, Subscription, Task,
     Theme,
 };
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -142,7 +144,10 @@ fn resolve_scratchpad_dir(cli_override: Option<PathBuf>) -> PathBuf {
         PathBuf::from(home).join(".local/share/lst")
     });
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("lst: failed to create scratchpad directory {}: {e}", dir.display());
+        eprintln!(
+            "lst: failed to create scratchpad directory {}: {e}",
+            dir.display()
+        );
         std::process::exit(1);
     }
     dir
@@ -228,7 +233,7 @@ impl App {
             }
         }
         if self.tabs.len() == 1 {
-            return iced::exit();
+            return self.exit_with_clipboard();
         }
         self.tabs.remove(i);
         if self.active >= self.tabs.len() {
@@ -237,6 +242,14 @@ impl App {
             self.active -= 1;
         }
         Task::none()
+    }
+
+    fn exit_with_clipboard(&self) -> Task<Message> {
+        let text = self.tabs[self.active].content.text();
+        if !text.trim().is_empty() {
+            copy_to_clipboard(&text);
+        }
+        iced::exit()
     }
 
     fn refresh_find_matches(&mut self) {
@@ -405,7 +418,7 @@ impl App {
                 iced::widget::operation::focus(EDITOR_ID.clone())
             }
 
-            Message::Quit => iced::exit(),
+            Message::Quit => self.exit_with_clipboard(),
 
             // ── Undo / Redo ──────────────────────────────────────────────
             Message::Undo => {
@@ -784,7 +797,9 @@ impl App {
                 .height(Length::Shrink)
                 .min_height(vh)
                 .highlight_with::<highlight::LstHighlighter>(
-                    highlight::Settings { extension: highlight_ext.clone() },
+                    highlight::Settings {
+                        extension: highlight_ext.clone(),
+                    },
                     highlight::format,
                 )
                 .key_binding(move |key_press| {
@@ -903,6 +918,13 @@ impl App {
 // ── Keyboard shortcuts ───────────────────────────────────────────────────────
 
 fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) -> Option<Message> {
+    if matches!(
+        event,
+        iced::Event::Window(iced::window::Event::CloseRequested)
+    ) {
+        return Some(Message::Quit);
+    }
+
     if status != event::Status::Ignored {
         return None;
     }
@@ -953,6 +975,36 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
     }
 }
 
+// ── Clipboard ───────────────────────────────────────────────────────────────
+
+fn copy_to_clipboard(text: &str) {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        pipe_to_command("wl-copy", &[], text);
+        pipe_to_command("wl-copy", &["--primary"], text);
+    } else {
+        pipe_to_command("xclip", &["-selection", "clipboard"], text);
+        pipe_to_command("xclip", &["-selection", "primary"], text);
+    }
+}
+
+fn pipe_to_command(program: &str, args: &[&str], text: &str) {
+    match Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(mut child) => {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+        }
+        Err(e) => eprintln!("lst: clipboard: failed to run {program}: {e}"),
+    }
+}
+
 // ── File I/O ─────────────────────────────────────────────────────────────────
 
 async fn open_file() -> Result<(PathBuf, String), Error> {
@@ -997,5 +1049,6 @@ fn main() -> iced::Result {
         .subscription(App::subscription)
         .default_font(Font::MONOSPACE)
         .window_size(iced::Size::new(980.0, 680.0))
+        .exit_on_close_request(false)
         .run()
 }
