@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 pub const FONT_SIZE: f32 = 14.0;
 pub const LINE_HEIGHT_PX: f32 = 20.0;
+pub const EDITOR_PAD: f32 = 8.0;
 
 pub struct EditorFont {
     pub font: Font,

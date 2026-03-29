@@ -5,7 +5,7 @@ mod tab;
 mod vim;
 
 use find::FindState;
-use style::{flat_btn, solid_bg, EDITOR_FONT, FONT_SIZE, LINE_HEIGHT_PX};
+use style::{flat_btn, solid_bg, EDITOR_FONT, EDITOR_PAD, FONT_SIZE, LINE_HEIGHT_PX};
 use tab::{EditKind, Tab};
 
 use iced::event;
@@ -511,8 +511,7 @@ impl App {
             }
 
             Message::GutterClick => {
-                const TOP_PAD: f32 = 8.0;
-                let y = ((self.gutter_mouse_y - TOP_PAD).max(0.0) / LINE_HEIGHT_PX).floor()
+                let y = ((self.gutter_mouse_y - EDITOR_PAD).max(0.0) / LINE_HEIGHT_PX).floor()
                     * LINE_HEIGHT_PX;
                 let tab = &mut self.tabs[self.active];
                 tab.content
@@ -529,11 +528,9 @@ impl App {
             Message::EditorMouseMove(point) => {
                 self.editor_mouse_pos = point;
                 if self.multiclick_drag {
-                    let content_point =
-                        Point::new((point.x - 8.0).max(0.0), (point.y - 8.0).max(0.0));
                     self.tabs[self.active]
                         .content
-                        .perform(text_editor::Action::Drag(content_point));
+                        .perform(text_editor::Action::Drag(mouse_to_content(point)));
                 }
                 Task::none()
             }
@@ -547,20 +544,20 @@ impl App {
             Message::MiddleClickPaste => {
                 if let Some(text) = read_primary_selection() {
                     if !text.is_empty() {
-                        let content_point = Point::new(
-                            (self.editor_mouse_pos.x - 8.0).max(0.0),
-                            (self.editor_mouse_pos.y - 8.0).max(0.0),
-                        );
                         let tab = &mut self.tabs[self.active];
                         tab.push_undo_snapshot(EditKind::Other, true);
-                        tab.content
-                            .perform(text_editor::Action::Click(content_point));
+                        tab.content.perform(text_editor::Action::Click(
+                            mouse_to_content(self.editor_mouse_pos),
+                        ));
                         tab.content.perform(text_editor::Action::Edit(
                             text_editor::Edit::Paste(Arc::new(text)),
                         ));
                         tab.modified = true;
                         self.needs_autosave = true;
                         self.refresh_find_matches();
+                        if self.vim.mode == vim::Mode::Normal {
+                            self.apply_block_cursor();
+                        }
                     }
                 }
                 Task::none()
@@ -1412,8 +1409,8 @@ impl App {
                         .wrapping(iced::widget::text::Wrapping::None),
                 )
                 .padding(Padding {
-                    top: 8.0,
-                    bottom: 8.0 + overscroll,
+                    top: EDITOR_PAD,
+                    bottom: EDITOR_PAD + overscroll,
                     left: 4.0,
                     right: 0.0,
                 }),
@@ -1440,9 +1437,9 @@ impl App {
                 .line_height(Pixels(LINE_HEIGHT_PX))
                 .wrapping(wrapping)
                 .padding(Padding {
-                    top: 8.0,
-                    bottom: 8.0 + overscroll,
-                    left: 8.0,
+                    top: EDITOR_PAD,
+                    bottom: EDITOR_PAD + overscroll,
+                    left: EDITOR_PAD,
                     right: 16.0,
                 })
                 .height(Length::Shrink)
@@ -1973,14 +1970,20 @@ fn read_primary_selection() -> Option<String> {
     }
 }
 
+fn mouse_to_content(point: Point) -> Point {
+    Point::new(
+        (point.x - EDITOR_PAD).max(0.0),
+        (point.y - EDITOR_PAD).max(0.0),
+    )
+}
+
 fn copy_to_clipboard(text: &str) {
     if is_wayland() {
         pipe_to_command("wl-copy", &[], text);
-        pipe_to_command("wl-copy", &["--primary"], text);
     } else {
         pipe_to_command("xclip", &["-selection", "clipboard"], text);
-        pipe_to_command("xclip", &["-selection", "primary"], text);
     }
+    copy_to_primary(text);
 }
 
 fn copy_to_primary(text: &str) {
