@@ -12,7 +12,7 @@ Every existing simple text editor is either ugly (gedit, mousepad), slow (VS Cod
 - Multiple tabs with Ctrl+N / Ctrl+W
 - Open files from CLI (`lst file.txt`) or Ctrl+O dialog
 - Save with Ctrl+S, Save As with Ctrl+Shift+S
-- Scratchpad mode: new tabs are timestamped `.md` files in `~/.local/share/lst/`
+- Scratchpad mode: launching without files creates a timestamped `.md` note
 - Autosave: files save automatically after any edit (500ms tick)
 - Find & Replace (Ctrl+F / Ctrl+H)
 - Syntax highlighting for ~170 languages via syntect (Catppuccin Mocha theme)
@@ -54,29 +54,14 @@ cargo build --release
 ./target/release/lst README.md          # open a file
 ./target/release/lst *.rs               # open multiple files
 ./target/release/lst --scratchpad-dir ~/notes  # custom scratchpad directory
+./target/release/lst --title lst-scratchpad    # fixed window title
 ```
 
-## LWM Scratchpad
+## Scratchpad
 
-`lst` supports a fixed window title for scratchpad setups:
+When you launch `lst` without file arguments, it creates a timestamped Markdown scratchpad in `~/.local/share/lst/`.
 
-```bash
-lst --title lst-scratchpad
-```
-
-Example `~/.config/lwm/config.toml` entries:
-
-```toml
-[[binds]]
-key = "super+t"
-toggle_scratchpad = "lst"
-
-[[scratchpads]]
-name = "lst"
-spawn = { argv = ["/home/you/.local/bin/lst", "--title", "lst-scratchpad"] }
-match = { title = "^lst-scratchpad$" }
-size = { width = 0.8, height = 0.7 }
-```
+Use `--scratchpad-dir` to store those files somewhere else, and `--title` to force a fixed window title.
 
 ## Design
 
