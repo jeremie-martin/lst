@@ -2,6 +2,7 @@ mod find;
 mod highlight;
 mod style;
 mod tab;
+mod vim;
 
 use find::FindState;
 use style::{flat_btn, solid_bg, EDITOR_FONT, FONT_SIZE, LINE_HEIGHT_PX};
@@ -47,6 +48,7 @@ struct App {
     needs_autosave: bool,
     shift_held: bool, // iced's Action::Click doesn't carry modifier state; track externally
     goto_line: Option<String>,
+    vim: vim::VimState,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +102,8 @@ enum Message {
     GotoLineSubmit,
     // Modifier tracking (for Shift+Click)
     ModifiersChanged(keyboard::Modifiers),
+    // Vim
+    VimKey(keyboard::Key, keyboard::Modifiers),
 }
 
 #[derive(Debug, Clone)]
@@ -224,6 +228,7 @@ impl App {
                 needs_autosave: false,
                 shift_held: false,
                 goto_line: None,
+                vim: vim::VimState::new(),
             },
             iced::widget::operation::focus(EDITOR_ID.clone()),
         )
@@ -295,6 +300,16 @@ impl App {
         tab.modified = true;
         self.needs_autosave = true;
         self.refresh_find_matches();
+    }
+
+    fn vim_snapshot(&self) -> vim::TextSnapshot {
+        let tab = &self.tabs[self.active];
+        let text = tab.content.text();
+        let cursor = tab.content.cursor().position;
+        vim::TextSnapshot {
+            lines: text.split('\n').map(String::from).collect(),
+            cursor,
+        }
     }
 
     fn open_find(&mut self, show_replace: bool) -> Task<Message> {
@@ -716,7 +731,11 @@ impl App {
                     self.find.visible = false;
                     return iced::widget::operation::focus(EDITOR_ID.clone());
                 }
-                Task::none()
+                // Vim: Escape cascades into mode transitions
+                let snapshot = self.vim_snapshot();
+                let cursor = snapshot.cursor;
+                let commands = self.vim.enter_normal_from_escape(cursor, &snapshot);
+                self.execute_vim_commands(commands)
             }
 
             Message::GotoLineChanged(s) => {
@@ -748,7 +767,301 @@ impl App {
                 self.shift_held = mods.shift();
                 Task::none()
             }
+
+            // ── Vim ────────────────────────────────────────────────────
+            Message::VimKey(ref key, mods) => {
+                let snapshot = self.vim_snapshot();
+                let commands = self.vim.handle_key(key, mods, &snapshot);
+                self.execute_vim_commands(commands)
+            }
         }
+    }
+
+    fn execute_vim_commands(&mut self, commands: Vec<vim::VimCommand>) -> Task<Message> {
+        use vim::VimCommand;
+        let mut task = Task::none();
+        for cmd in commands {
+            match cmd {
+                VimCommand::Noop => {}
+                VimCommand::MoveTo(p) => {
+                    self.tabs[self.active].content.move_to(text_editor::Cursor {
+                        position: p,
+                        selection: None,
+                    });
+                }
+                VimCommand::Select { anchor, head } => {
+                    self.tabs[self.active].content.move_to(text_editor::Cursor {
+                        position: head,
+                        selection: Some(anchor),
+                    });
+                }
+                VimCommand::DeleteRange { from, to } => {
+                    let deleted = self.vim_delete_range(from, to);
+                    self.vim.register = vim::Register::Char(deleted);
+                }
+                VimCommand::DeleteLines { first, last } => {
+                    let deleted = self.vim_delete_lines(first, last);
+                    self.vim.register = vim::Register::Line(deleted);
+                }
+                VimCommand::ChangeRange { from, to } => {
+                    let deleted = self.vim_delete_range(from, to);
+                    self.vim.register = vim::Register::Char(deleted);
+                    self.vim.mode = vim::Mode::Insert;
+                }
+                VimCommand::ChangeLines { first, last } => {
+                    let deleted = self.vim_change_lines(first, last);
+                    self.vim.register = vim::Register::Line(deleted);
+                    self.vim.mode = vim::Mode::Insert;
+                }
+                VimCommand::YankRange { from, to } => {
+                    let yanked = self.vim_extract_range(from, to);
+                    self.vim.register = vim::Register::Char(yanked);
+                }
+                VimCommand::YankLines { first, last } => {
+                    let yanked = self.vim_extract_lines(first, last);
+                    self.vim.register = vim::Register::Line(yanked);
+                }
+                VimCommand::EnterInsert => {
+                    self.vim.mode = vim::Mode::Insert;
+                }
+                VimCommand::EnterNormal => {
+                    self.vim.mode = vim::Mode::Normal;
+                }
+                VimCommand::PasteAfter => self.vim_paste(false),
+                VimCommand::PasteBefore => self.vim_paste(true),
+                VimCommand::OpenLineBelow => self.vim_open_line(false),
+                VimCommand::OpenLineAbove => self.vim_open_line(true),
+                VimCommand::JoinLines { count } => self.vim_join_lines(count),
+                VimCommand::ReplaceChar(c) => self.vim_replace_char(c),
+                VimCommand::Undo => {
+                    self.tabs[self.active].undo();
+                    self.refresh_find_matches();
+                }
+                VimCommand::Redo => {
+                    self.tabs[self.active].redo();
+                    self.refresh_find_matches();
+                }
+                VimCommand::OpenFind => {
+                    task = self.open_find(false);
+                }
+                VimCommand::FindNext => {
+                    self.find.next();
+                    self.find
+                        .navigate_to_current(&mut self.tabs[self.active].content);
+                    task = iced::widget::operation::focus(EDITOR_ID.clone());
+                }
+                VimCommand::FindPrev => {
+                    self.find.prev();
+                    self.find
+                        .navigate_to_current(&mut self.tabs[self.active].content);
+                    task = iced::widget::operation::focus(EDITOR_ID.clone());
+                }
+            }
+        }
+        task
+    }
+
+    // ── Vim helpers ─────────────────────────────────────────────────────
+
+    fn vim_delete_range(
+        &mut self,
+        from: text_editor::Position,
+        to: text_editor::Position,
+    ) -> String {
+        let tab = &mut self.tabs[self.active];
+        tab.push_undo_snapshot(EditKind::Other, true);
+        let full = tab.content.text();
+        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
+        let deleted = extract_text_range(&lines, &from, &to);
+        remove_text_range(&mut lines, &from, &to);
+        let new_text = lines.join("\n");
+        let cursor_col = from.column.min(
+            lines
+                .get(from.line)
+                .map_or(0, |l| l.chars().count().saturating_sub(1)),
+        );
+        self.rebuild_content(&new_text, from.line, cursor_col);
+        deleted
+    }
+
+    fn vim_delete_lines(&mut self, first: usize, last: usize) -> String {
+        let tab = &mut self.tabs[self.active];
+        tab.push_undo_snapshot(EditKind::Other, true);
+        let full = tab.content.text();
+        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
+        let first = first.min(lines.len().saturating_sub(1));
+        let last = last.min(lines.len().saturating_sub(1));
+        let deleted: String = lines[first..=last].join("\n");
+        lines.drain(first..=last);
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        let new_text = lines.join("\n");
+        let cursor_line = first.min(lines.len().saturating_sub(1));
+        self.rebuild_content(&new_text, cursor_line, 0);
+        deleted
+    }
+
+    fn vim_change_lines(&mut self, first: usize, last: usize) -> String {
+        let tab = &mut self.tabs[self.active];
+        tab.push_undo_snapshot(EditKind::Other, true);
+        let full = tab.content.text();
+        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
+        let first = first.min(lines.len().saturating_sub(1));
+        let last = last.min(lines.len().saturating_sub(1));
+        let indent: String = lines[first]
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .collect();
+        let deleted: String = lines[first..=last].join("\n");
+        lines.drain(first..=last);
+        lines.insert(first, indent.clone());
+        let new_text = lines.join("\n");
+        self.rebuild_content(&new_text, first, indent.chars().count());
+        deleted
+    }
+
+    fn vim_extract_range(&self, from: text_editor::Position, to: text_editor::Position) -> String {
+        let full = self.tabs[self.active].content.text();
+        let lines: Vec<String> = full.split('\n').map(String::from).collect();
+        extract_text_range(&lines, &from, &to)
+    }
+
+    fn vim_extract_lines(&self, first: usize, last: usize) -> String {
+        let full = self.tabs[self.active].content.text();
+        let lines: Vec<String> = full.split('\n').map(String::from).collect();
+        let first = first.min(lines.len().saturating_sub(1));
+        let last = last.min(lines.len().saturating_sub(1));
+        lines[first..=last].join("\n")
+    }
+
+    fn vim_paste(&mut self, before: bool) {
+        let register = self.vim.register.clone();
+        match register {
+            vim::Register::Empty => {}
+            vim::Register::Char(ref paste_text) => {
+                let tab = &mut self.tabs[self.active];
+                tab.push_undo_snapshot(EditKind::Other, true);
+                let cursor = tab.content.cursor().position;
+                let full = tab.content.text();
+                let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
+                let line_chars: Vec<char> = lines[cursor.line].chars().collect();
+                let insert_col = if before {
+                    cursor.column.min(line_chars.len())
+                } else {
+                    (cursor.column + 1).min(line_chars.len())
+                };
+                let prefix: String = line_chars[..insert_col].iter().collect();
+                let suffix: String = line_chars[insert_col..].iter().collect();
+
+                let paste_lines: Vec<&str> = paste_text.split('\n').collect();
+                if paste_lines.len() == 1 {
+                    lines[cursor.line] = format!("{prefix}{}{suffix}", paste_lines[0]);
+                    let cursor_col = insert_col + paste_lines[0].chars().count().saturating_sub(1);
+                    let new_text = lines.join("\n");
+                    self.rebuild_content(&new_text, cursor.line, cursor_col);
+                } else {
+                    let first_new = format!("{prefix}{}", paste_lines[0]);
+                    let last_new = format!("{}{suffix}", paste_lines.last().unwrap_or(&""));
+                    let mut new_lines: Vec<String> = lines[..cursor.line].to_vec();
+                    new_lines.push(first_new);
+                    for pl in &paste_lines[1..paste_lines.len() - 1] {
+                        new_lines.push(pl.to_string());
+                    }
+                    new_lines.push(last_new);
+                    new_lines.extend(lines[cursor.line + 1..].iter().cloned());
+                    let cursor_line = cursor.line + paste_lines.len() - 1;
+                    let cursor_col = paste_lines
+                        .last()
+                        .unwrap_or(&"")
+                        .chars()
+                        .count()
+                        .saturating_sub(1);
+                    let new_text = new_lines.join("\n");
+                    self.rebuild_content(&new_text, cursor_line, cursor_col);
+                }
+            }
+            vim::Register::Line(ref paste_text) => {
+                let tab = &mut self.tabs[self.active];
+                tab.push_undo_snapshot(EditKind::Other, true);
+                let cursor = tab.content.cursor().position;
+                let full = tab.content.text();
+                let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
+                let insert_at = if before { cursor.line } else { cursor.line + 1 };
+                lines.splice(
+                    insert_at..insert_at,
+                    paste_text.split('\n').map(String::from),
+                );
+                let new_text = lines.join("\n");
+                let indent = lines
+                    .get(insert_at)
+                    .map_or(0, |l| l.chars().take_while(|c| c.is_whitespace()).count());
+                self.rebuild_content(&new_text, insert_at, indent);
+            }
+        }
+    }
+
+    fn vim_open_line(&mut self, above: bool) {
+        let tab = &mut self.tabs[self.active];
+        tab.push_undo_snapshot(EditKind::Other, true);
+        let pos = tab.content.cursor().position;
+        let full = tab.content.text();
+        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
+        let indent: String = lines.get(pos.line).map_or(String::new(), |l| {
+            l.chars().take_while(|c| c.is_whitespace()).collect()
+        });
+        let idx = if above { pos.line } else { pos.line + 1 };
+        lines.insert(idx, indent.clone());
+        let new_text = lines.join("\n");
+        self.rebuild_content(&new_text, idx, indent.chars().count());
+        self.vim.mode = vim::Mode::Insert;
+    }
+
+    fn vim_join_lines(&mut self, count: usize) {
+        let tab = &mut self.tabs[self.active];
+        let pos = tab.content.cursor().position;
+        let full = tab.content.text();
+        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
+        if pos.line + 1 >= lines.len() {
+            return;
+        }
+        tab.push_undo_snapshot(EditKind::Other, true);
+        let mut join_col = 0;
+        for _ in 0..count {
+            if pos.line + 1 >= lines.len() {
+                break;
+            }
+            let current_trimmed = lines[pos.line].trim_end().to_string();
+            join_col = current_trimmed.chars().count();
+            let next = lines[pos.line + 1].trim_start().to_string();
+            lines[pos.line] = if next.is_empty() {
+                current_trimmed
+            } else {
+                format!("{current_trimmed} {next}")
+            };
+            lines.remove(pos.line + 1);
+        }
+        let new_text = lines.join("\n");
+        self.rebuild_content(&new_text, pos.line, join_col);
+    }
+
+    fn vim_replace_char(&mut self, c: char) {
+        let tab = &mut self.tabs[self.active];
+        let pos = tab.content.cursor().position;
+        let full = tab.content.text();
+        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
+        let chars: Vec<char> = lines
+            .get(pos.line)
+            .map_or(Vec::new(), |l| l.chars().collect());
+        if pos.column >= chars.len() {
+            return;
+        }
+        tab.push_undo_snapshot(EditKind::Other, true);
+        let mut new_chars = chars;
+        new_chars[pos.column] = c;
+        lines[pos.line] = new_chars.into_iter().collect();
+        let new_text = lines.join("\n");
+        self.rebuild_content(&new_text, pos.line, pos.column);
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -763,6 +1076,7 @@ impl App {
         let text_muted = p.background.strong.text;
         let primary = p.primary.base.color;
         let editor_font = *EDITOR_FONT;
+        let vim_mode = self.vim.mode;
 
         // ── Tab bar ──────────────────────────────────────────────────────
         let tab_buttons: Vec<Element<Message>> = self
@@ -973,16 +1287,89 @@ impl App {
                     let key = &key_press.key;
                     let mods = key_press.modifiers;
 
-                    match key {
-                        keyboard::Key::Named(named) => match named {
-                            keyboard::key::Named::Tab => {
-                                if mods.command() {
+                    // Phase 1: Ctrl/Cmd shortcuts — always active, all modes
+                    if mods.command() {
+                        match key {
+                            keyboard::Key::Named(named) => match named {
+                                keyboard::key::Named::Tab => {
                                     return Some(text_editor::Binding::Custom(if mods.shift() {
                                         Message::PrevTab
                                     } else {
                                         Message::NextTab
                                     }));
                                 }
+                                keyboard::key::Named::Backspace => {
+                                    return Some(text_editor::Binding::Sequence(vec![
+                                        text_editor::Binding::Select(text_editor::Motion::WordLeft),
+                                        text_editor::Binding::Backspace,
+                                    ]));
+                                }
+                                keyboard::key::Named::Delete => {
+                                    return Some(text_editor::Binding::Sequence(vec![
+                                        text_editor::Binding::Select(
+                                            text_editor::Motion::WordRight,
+                                        ),
+                                        text_editor::Binding::Delete,
+                                    ]));
+                                }
+                                _ => {}
+                            },
+                            keyboard::Key::Character(c) => match c.as_str() {
+                                "z" if mods.shift() => {
+                                    return Some(text_editor::Binding::Custom(Message::Redo));
+                                }
+                                "z" => {
+                                    return Some(text_editor::Binding::Custom(Message::Undo));
+                                }
+                                "k" if mods.shift() => {
+                                    return Some(text_editor::Binding::Custom(Message::DeleteLine));
+                                }
+                                "d" if mods.shift() => {
+                                    return Some(text_editor::Binding::Custom(
+                                        Message::DuplicateLine,
+                                    ));
+                                }
+                                "l" => {
+                                    return Some(text_editor::Binding::SelectLine);
+                                }
+                                "g" => {
+                                    return Some(text_editor::Binding::Custom(
+                                        Message::GotoLineOpen,
+                                    ));
+                                }
+                                // Vim: Ctrl+R = redo in Normal mode
+                                "r" if matches!(
+                                    vim_mode,
+                                    vim::Mode::Normal | vim::Mode::Visual | vim::Mode::VisualLine
+                                ) =>
+                                {
+                                    return Some(text_editor::Binding::Custom(Message::VimKey(
+                                        key.clone(),
+                                        mods,
+                                    )));
+                                }
+                                _ => {}
+                            },
+                            _ => {}
+                        }
+                    }
+
+                    // Phase 2: Vim Normal/Visual — intercept all non-Ctrl keys
+                    if matches!(
+                        vim_mode,
+                        vim::Mode::Normal | vim::Mode::Visual | vim::Mode::VisualLine
+                    ) && !mods.command()
+                    {
+                        return Some(text_editor::Binding::Custom(Message::VimKey(
+                            key.clone(),
+                            mods,
+                        )));
+                    }
+
+                    // Phase 3: Insert mode — existing iced behavior
+                    if let keyboard::Key::Named(named) = key {
+                        match named {
+                            keyboard::key::Named::Tab => {
                                 if mods.shift() {
                                     return Some(text_editor::Binding::Custom(Message::Edit(
                                         text_editor::Action::Edit(text_editor::Edit::Unindent),
@@ -997,18 +1384,6 @@ impl App {
                             {
                                 return Some(text_editor::Binding::Custom(Message::AutoIndent));
                             }
-                            keyboard::key::Named::Backspace if mods.command() => {
-                                return Some(text_editor::Binding::Sequence(vec![
-                                    text_editor::Binding::Select(text_editor::Motion::WordLeft),
-                                    text_editor::Binding::Backspace,
-                                ]));
-                            }
-                            keyboard::key::Named::Delete if mods.command() => {
-                                return Some(text_editor::Binding::Sequence(vec![
-                                    text_editor::Binding::Select(text_editor::Motion::WordRight),
-                                    text_editor::Binding::Delete,
-                                ]));
-                            }
                             keyboard::key::Named::ArrowUp
                                 if mods.alt() && !mods.command() && !mods.shift() =>
                             {
@@ -1020,29 +1395,7 @@ impl App {
                                 return Some(text_editor::Binding::Custom(Message::MoveLineDown));
                             }
                             _ => {}
-                        },
-                        keyboard::Key::Character(c) if mods.command() => match c.as_str() {
-                            "z" if mods.shift() => {
-                                return Some(text_editor::Binding::Custom(Message::Redo));
-                            }
-                            "z" => {
-                                return Some(text_editor::Binding::Custom(Message::Undo));
-                            }
-                            "k" if mods.shift() => {
-                                return Some(text_editor::Binding::Custom(Message::DeleteLine));
-                            }
-                            "d" if mods.shift() => {
-                                return Some(text_editor::Binding::Custom(Message::DuplicateLine));
-                            }
-                            "l" => {
-                                return Some(text_editor::Binding::SelectLine);
-                            }
-                            "g" => {
-                                return Some(text_editor::Binding::Custom(Message::GotoLineOpen));
-                            }
-                            _ => {}
-                        },
-                        _ => {}
+                        }
                     }
 
                     text_editor::Binding::from_key_press(key_press)
@@ -1075,31 +1428,58 @@ impl App {
 
         let wrap_label = if self.word_wrap { "Wrap" } else { "NoWrap" };
 
-        let status_bar = container(
-            row![
-                text(file_label).size(12).color(text_muted),
-                iced::widget::space::horizontal(),
+        let mode_label = match self.vim.mode {
+            vim::Mode::Normal => "NORMAL",
+            vim::Mode::Insert => "INSERT",
+            vim::Mode::Visual => "VISUAL",
+            vim::Mode::VisualLine => "V-LINE",
+        };
+        let pending = self.vim.pending_display();
+
+        let mut status_row = row![].align_y(iced::Alignment::Center);
+
+        // Mode indicator (accent color when not in Insert mode)
+        if self.vim.mode != vim::Mode::Insert {
+            status_row = status_row
+                .push(text(mode_label).size(12).color(primary))
+                .push(text("  \u{00b7}  ").size(12).color(text_muted));
+        }
+
+        status_row = status_row.push(text(file_label).size(12).color(text_muted));
+        status_row = status_row.push(iced::widget::space::horizontal());
+
+        // Pending vim command
+        if !pending.is_empty() {
+            status_row = status_row
+                .push(text(pending).size(12).color(primary))
+                .push(text("  ").size(12));
+        }
+
+        status_row = status_row
+            .push(
                 text(format!("Ln {ln}, Col {col}"))
                     .size(12)
                     .color(text_muted),
-                text("  \u{00b7}  ").size(12).color(text_muted),
+            )
+            .push(text("  \u{00b7}  ").size(12).color(text_muted))
+            .push(
                 button(text(wrap_label).size(12).color(text_muted))
                     .style(flat_btn(bg_weak))
                     .on_press(Message::ToggleWordWrap)
                     .padding(0),
-                text("  \u{00b7}  ").size(12).color(text_muted),
-                text("UTF-8").size(12).color(text_muted),
-            ]
-            .align_y(iced::Alignment::Center),
-        )
-        .padding(Padding {
-            top: 4.0,
-            bottom: 4.0,
-            left: 14.0,
-            right: 14.0,
-        })
-        .width(Length::Fill)
-        .style(solid_bg(bg_weak));
+            )
+            .push(text("  \u{00b7}  ").size(12).color(text_muted))
+            .push(text("UTF-8").size(12).color(text_muted));
+
+        let status_bar = container(status_row)
+            .padding(Padding {
+                top: 4.0,
+                bottom: 4.0,
+                left: 14.0,
+                right: 14.0,
+            })
+            .width(Length::Fill)
+            .style(solid_bg(bg_weak));
 
         // ── Go-to-line bar (conditional) ────────────────────────────────
         let goto_bar = self.goto_line.as_ref().map(|goto_text| {
@@ -1143,6 +1523,59 @@ impl App {
             event::listen_with(handle_key),
             iced::time::every(Duration::from_millis(500)).map(|_| Message::AutosaveTick),
         ])
+    }
+}
+
+// ── Vim text‑range helpers ──────────────────────────────────────────────────
+
+fn extract_text_range(
+    lines: &[String],
+    from: &text_editor::Position,
+    to: &text_editor::Position,
+) -> String {
+    if from.line == to.line {
+        let chars: Vec<char> = lines[from.line].chars().collect();
+        let start = from.column.min(chars.len());
+        let end = (to.column + 1).min(chars.len());
+        if start >= end {
+            return String::new();
+        }
+        chars[start..end].iter().collect()
+    } else {
+        let mut result = String::new();
+        let first: Vec<char> = lines[from.line].chars().collect();
+        result.extend(&first[from.column.min(first.len())..]);
+        for line in lines.iter().take(to.line).skip(from.line + 1) {
+            result.push('\n');
+            result.push_str(line);
+        }
+        result.push('\n');
+        let last: Vec<char> = lines[to.line].chars().collect();
+        result.extend(&last[..(to.column + 1).min(last.len())]);
+        result
+    }
+}
+
+fn remove_text_range(
+    lines: &mut Vec<String>,
+    from: &text_editor::Position,
+    to: &text_editor::Position,
+) {
+    if from.line == to.line {
+        let chars: Vec<char> = lines[from.line].chars().collect();
+        let start = from.column.min(chars.len());
+        let end = (to.column + 1).min(chars.len());
+        let remaining: String = chars[..start].iter().chain(chars[end..].iter()).collect();
+        lines[from.line] = remaining;
+    } else {
+        let first: Vec<char> = lines[from.line].chars().collect();
+        let last: Vec<char> = lines[to.line].chars().collect();
+        let prefix: String = first[..from.column.min(first.len())].iter().collect();
+        let suffix: String = last[(to.column + 1).min(last.len())..].iter().collect();
+        lines[from.line] = format!("{prefix}{suffix}");
+        if from.line < to.line {
+            lines.drain((from.line + 1)..=to.line);
+        }
     }
 }
 

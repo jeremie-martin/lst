@@ -13,16 +13,16 @@
 * Idiomatic Rust — no premature abstractions, no speculative generality.
 * Palette-based theming via `theme.extended_palette()` — never hardcode colors.
 * Use `Theme::CatppuccinMocha` as the default theme (built into iced).
-* Modules: `main.rs` (~1300 lines), `tab.rs`, `find.rs`, `highlight.rs`, `style.rs`. Split further if main.rs grows significantly.
+* Modules: `main.rs` (~1600 lines), `tab.rs`, `find.rs`, `highlight.rs`, `style.rs`, `vim.rs`. Split further if main.rs grows significantly.
 * All file I/O through async helpers + `Task::perform`.
 
 ## Architecture
 
 * **Toolkit**: iced 0.14 (retained-mode, GPU-accelerated via wgpu)
 * **Font**: TX-02 preferred, JetBrains Mono fallback, then system monospace (loaded via fontdb)
-* **State**: `App { tabs, active, scratchpad_dir, needs_autosave, shift_held, goto_line, ... }` — each Tab holds a `text_editor::Content` and `is_scratchpad` flag
-* **Messages**: editing (`Edit`, `Undo`, `Redo`, `AutoIndent`), tabs (`TabSelect`, `TabClose`, `New`, `Open`, `Save`, `NextTab`, `PrevTab`), line ops (`DeleteLine`, `MoveLineUp/Down`, `DuplicateLine`), find (`FindOpen`, `FindNext`, `ReplaceOne`, `ReplaceAll`, etc.), go-to-line (`GotoLineOpen/Close/Changed/Submit`), gutter (`GutterMove`, `GutterClick`), and `ModifiersChanged` for Shift+Click tracking
-* **Keyboard shortcuts**: two layers — `key_binding` closure on the text_editor widget (editor-focused shortcuts) and `iced::event::listen_with` subscription (global shortcuts, modifier tracking, Escape, middle-click). Escape is handled in the subscription before the status check so it always closes overlays in a single press.
+* **State**: `App { tabs, active, scratchpad_dir, needs_autosave, shift_held, goto_line, vim, ... }` — each Tab holds a `text_editor::Content` and `is_scratchpad` flag
+* **Messages**: editing (`Edit`, `Undo`, `Redo`, `AutoIndent`), tabs (`TabSelect`, `TabClose`, `New`, `Open`, `Save`, `NextTab`, `PrevTab`), line ops (`DeleteLine`, `MoveLineUp/Down`, `DuplicateLine`), find (`FindOpen`, `FindNext`, `ReplaceOne`, `ReplaceAll`, etc.), go-to-line (`GotoLineOpen/Close/Changed/Submit`), gutter (`GutterMove`, `GutterClick`), `ModifiersChanged` for Shift+Click tracking, and `VimKey` for vim mode input
+* **Keyboard shortcuts**: three-phase `key_binding` closure on the text_editor widget: (1) Ctrl/Cmd shortcuts always active, (2) vim Normal/Visual interception captures all non-Ctrl keys, (3) Insert mode falls through to existing iced behavior. Global `iced::event::listen_with` subscription handles Escape, modifier tracking, middle-click, and Ctrl shortcuts when editor is unfocused. Escape cascades: close goto-line → close find bar → vim Insert→Normal → vim clear pending → vim Visual→Normal.
 * **Scratchpad mode**: new tabs create timestamped `.md` files in `~/.local/share/lst/` (override with `--scratchpad-dir`). Ctrl+Shift+S to Save As (changes path).
 * **Find & Replace** (`find.rs`): Ctrl+F opens find bar, Ctrl+H opens with replace. Matches recomputed on every edit when visible. Navigation via FindNext/FindPrev with nearest-match seeking. Replace one or all.
 * **Undo/Redo** (`tab.rs`): snapshot-based (full text + cursor position). Consecutive same-kind edits grouped; whitespace breaks insert groups. Max 100 snapshots per tab. Line ops and ReplaceAll push a single `EditKind::Other` snapshot.
@@ -36,4 +36,5 @@
 * **Line operations**: `DeleteLine`, `MoveLineUp/Down`, `DuplicateLine` use a text-rebuild pattern via `rebuild_content()` (split by `'\n'`, manipulate, rejoin, replace Content). Same pattern used by `ReplaceAll`.
 * **Shift+Click**: iced's `Action::Click` doesn't carry modifier state, so `shift_held` is tracked via `ModifiersChanged` events in the subscription. Shift+Click is converted to `Action::Drag` in the `Message::Edit` handler to extend selection.
 * **Go to line**: Ctrl+G opens a small overlay bar (same style as find bar). Input parsed as 1-based line number on submit.
+* **Vim mode** (`vim.rs`): always-on modal editing. Starts in Insert mode (editor behaves normally). Escape enters Normal mode. Pure state machine: receives keystrokes + `TextSnapshot` (read-only view of text/cursor), returns `Vec<VimCommand>` that `main.rs` executes via `content.move_to()` / `rebuild_content()`. Modes: Normal, Insert, Visual, VisualLine. Features: motions (hjkl, w/b/e/W/B/E, 0/$, gg/G, f/t/F/T, %), operators with motions (d/c/y), text objects (iw/aw, ib/ab/iB/aB, i"/a", i(/a(, etc.), counts, visual selection, single unnamed register (yank/paste), `/` opens find bar, `n`/`N` navigate. `VimState` is shared across tabs (mode persists on tab switch). Status bar shows mode indicator (NORMAL/VISUAL/V-LINE) and pending command display.
 * **Syntax highlighting**: unified `LstHighlighter` via syntect (~170 languages). Markdown files use hand-rolled block/inline highlighting with syntect for fenced code block interiors. Non-MD files get full-file syntect highlighting. Catppuccin Mocha `.tmTheme` embedded at compile time.
