@@ -977,9 +977,6 @@ impl App {
                     collapse_selection_to_caret(&mut self.tabs[self.active].content);
                     self.vim.mode = vim::Mode::Insert;
                 }
-                VimCommand::EnterNormal => {
-                    self.vim.mode = vim::Mode::Normal;
-                }
                 VimCommand::PasteAfter => self.vim_paste(false),
                 VimCommand::PasteBefore => self.vim_paste(true),
                 VimCommand::OpenLineBelow => self.vim_open_line(false),

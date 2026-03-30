@@ -63,8 +63,6 @@ pub enum VimCommand {
         last: usize,
     },
     EnterInsert,
-    #[allow(dead_code)]
-    EnterNormal,
     PasteAfter,
     PasteBefore,
     OpenLineBelow,
@@ -224,6 +222,13 @@ impl VimState {
         }
     }
 
+    fn exit_visual(&mut self) {
+        self.mode = Mode::Normal;
+        self.visual_anchor = None;
+        self.clear_pending();
+        self.clear_preferred_column();
+    }
+
     fn repeat_find(&self, c: char) -> Option<Motion> {
         if c != ';' && c != ',' {
             return None;
@@ -234,6 +239,19 @@ impl VimState {
         } else {
             reverse_find(last)
         })
+    }
+
+    fn resolve_find_partial(&mut self, partial: char, c: char) -> Option<Motion> {
+        let motion = match partial {
+            'f' => Motion::FindChar(c),
+            't' => Motion::TillChar(c),
+            'F' => Motion::FindCharBack(c),
+            'T' => Motion::TillCharBack(c),
+            'g' if c == 'g' => return Some(Motion::DocumentStart),
+            _ => return None,
+        };
+        self.last_find = Some(motion.clone());
+        Some(motion)
     }
 
     pub fn enter_normal_from_escape(
@@ -260,11 +278,7 @@ impl VimState {
                 }
             }
             Mode::Visual | Mode::VisualLine => {
-                self.mode = Mode::Normal;
-                self.visual_anchor = None;
-                self.clear_pending();
-                self.clear_preferred_column();
-                // Clear selection by moving to current cursor
+                self.exit_visual();
                 vec![VimCommand::MoveTo(cursor)]
             }
             Mode::Normal => {
@@ -296,10 +310,7 @@ impl VimState {
 
         if let keyboard::Key::Named(named) = key {
             if let Some(m) = named_key_to_motion(named) {
-                if let Some(op) = self.pending.operator.take() {
-                    return self.operator_with_computed_motion(op, m, text);
-                }
-                return self.motion_move(m, text);
+                return self.apply_motion(m, text);
             }
             return vec![VimCommand::Noop];
         }
@@ -317,11 +328,7 @@ impl VimState {
         }
 
         if c == '0' && self.pending.count.is_none() {
-            // 0 with no count in progress = line start motion
-            if let Some(op) = self.pending.operator.take() {
-                return self.operator_with_computed_motion(op, Motion::LineStart, text);
-            }
-            return self.motion_move(Motion::LineStart, text);
+            return self.apply_motion(Motion::LineStart, text);
         }
         if c.is_ascii_digit() {
             let digit = c.to_digit(10).unwrap() as usize;
@@ -349,7 +356,7 @@ impl VimState {
 
             // Try as motion
             if let Some(motion) = char_to_motion(c) {
-                return self.operator_with_computed_motion(op, motion, text);
+                return self.apply_motion(motion, text);
             }
 
             // Two-char sequence starters
@@ -359,7 +366,7 @@ impl VimState {
             }
 
             if let Some(motion) = self.repeat_find(c) {
-                return self.operator_with_computed_motion(op, motion, text);
+                return self.apply_motion(motion, text);
             }
 
             // Unknown — cancel
@@ -367,13 +374,12 @@ impl VimState {
             return vec![VimCommand::Noop];
         }
 
-        // No operator pending — try motion
         if let Some(motion) = char_to_motion(c) {
-            return self.motion_move(motion, text);
+            return self.apply_motion(motion, text);
         }
 
         if let Some(motion) = self.repeat_find(c) {
-            return self.motion_move(motion, text);
+            return self.apply_motion(motion, text);
         }
 
         // Operators
@@ -498,11 +504,7 @@ impl VimState {
             'V' => {
                 self.mode = Mode::VisualLine;
                 self.visual_anchor = Some(text.cursor);
-                let ll = line_len(text, text.cursor.line);
-                vec![VimCommand::Select {
-                    anchor: pos(text.cursor.line, 0),
-                    head: pos(text.cursor.line, ll.saturating_sub(1)),
-                }]
+                self.visual_select(text.cursor, text)
             }
             '/' => vec![VimCommand::OpenFind],
             'n' => vec![VimCommand::FindNext],
@@ -522,9 +524,7 @@ impl VimState {
         if mods.command() {
             if let keyboard::Key::Character(c) = key {
                 if c.as_str() == "r" {
-                    self.mode = Mode::Normal;
-                    self.visual_anchor = None;
-                    self.clear_preferred_column();
+                    self.exit_visual();
                     return vec![VimCommand::Redo];
                 }
             }
@@ -533,9 +533,7 @@ impl VimState {
 
         if let keyboard::Key::Named(named) = key {
             if let Some(m) = named_key_to_motion(named) {
-                let count = self.pending.count.take();
-                let target = self.cursor_motion_target(&m, text, count);
-                return self.visual_select(target, text);
+                return self.apply_motion(m, text);
             }
             return vec![VimCommand::Noop];
         }
@@ -549,18 +547,8 @@ impl VimState {
         };
 
         if let Some(partial) = self.pending.partial.take() {
-            let motion = match partial {
-                'f' => Some(Motion::FindChar(c)),
-                't' => Some(Motion::TillChar(c)),
-                'F' => Some(Motion::FindCharBack(c)),
-                'T' => Some(Motion::TillCharBack(c)),
-                'g' if c == 'g' => Some(Motion::DocumentStart),
-                _ => None,
-            };
-            if let Some(m) = motion {
-                let count = self.pending.count.take();
-                let target = self.cursor_motion_target(&m, text, count);
-                return self.visual_select(target, text);
+            if let Some(motion) = self.resolve_find_partial(partial, c) {
+                return self.apply_motion(motion, text);
             }
             // Text objects in Visual mode (viw, vi", vab, etc.)
             if partial == 'i' || partial == 'a' {
@@ -590,10 +578,7 @@ impl VimState {
         // Operators on selection
         match c {
             'd' | 'x' => {
-                self.mode = Mode::Normal;
-                self.visual_anchor = None;
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.exit_visual();
                 if is_line {
                     let (first, last) = ordered_lines(anchor.line, text.cursor.line);
                     return vec![VimCommand::DeleteLines { first, last }];
@@ -602,38 +587,29 @@ impl VimState {
                 return vec![VimCommand::DeleteRange { from, to }];
             }
             'c' | 's' => {
-                self.mode = Mode::Normal;
-                self.visual_anchor = None;
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.exit_visual();
                 if is_line {
                     let (first, last) = ordered_lines(anchor.line, text.cursor.line);
-                    return vec![VimCommand::ChangeLines { first, last }];
+                    return vec![VimCommand::ChangeLines { first, last }, VimCommand::EnterInsert];
                 }
                 let (from, to) = ordered(anchor, text.cursor);
-                return vec![VimCommand::ChangeRange { from, to }];
+                return vec![VimCommand::ChangeRange { from, to }, VimCommand::EnterInsert];
             }
             'y' => {
-                self.mode = Mode::Normal;
-                self.visual_anchor = None;
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.exit_visual();
                 let (from, to) = ordered(anchor, text.cursor);
                 if is_line {
                     let (first, last) = ordered_lines(anchor.line, text.cursor.line);
                     return vec![
                         VimCommand::YankLines { first, last },
-                        VimCommand::MoveTo(pos(first, from.column)),
+                        VimCommand::MoveTo(pos(first, 0)),
                     ];
                 }
                 return vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)];
             }
             'v' => {
                 if self.mode == Mode::Visual {
-                    self.mode = Mode::Normal;
-                    self.visual_anchor = None;
-                    self.clear_pending();
-                    self.clear_preferred_column();
+                    self.exit_visual();
                     return vec![VimCommand::MoveTo(text.cursor)];
                 } else {
                     self.mode = Mode::Visual;
@@ -646,10 +622,7 @@ impl VimState {
             }
             'V' => {
                 if self.mode == Mode::VisualLine {
-                    self.mode = Mode::Normal;
-                    self.visual_anchor = None;
-                    self.clear_pending();
-                    self.clear_preferred_column();
+                    self.exit_visual();
                     return vec![VimCommand::MoveTo(text.cursor)];
                 } else {
                     self.mode = Mode::VisualLine;
@@ -658,10 +631,7 @@ impl VimState {
                 }
             }
             'u' | 'U' => {
-                self.mode = Mode::Normal;
-                self.visual_anchor = None;
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.exit_visual();
                 let uppercase = c == 'U';
                 if is_line {
                     let (first, last) = ordered_lines(anchor.line, text.cursor.line);
@@ -688,19 +658,13 @@ impl VimState {
 
         // Try as motion — extend selection
         if c == '0' && self.pending.count.is_none() {
-            let target = self.cursor_motion_target(&Motion::LineStart, text, None);
-            return self.visual_select(target, text);
+            return self.apply_motion(Motion::LineStart, text);
         }
         if let Some(motion) = char_to_motion(c) {
-            let count = self.pending.count.take();
-            let target = self.cursor_motion_target(&motion, text, count);
-            return self.visual_select(target, text);
+            return self.apply_motion(motion, text);
         }
-
         if let Some(motion) = self.repeat_find(c) {
-            let count = self.pending.count.take();
-            let target = self.cursor_motion_target(&motion, text, count);
-            return self.visual_select(target, text);
+            return self.apply_motion(motion, text);
         }
 
         // Search
@@ -744,29 +708,10 @@ impl VimState {
     // ── Partial resolution ──────────────────────────────────────────────
 
     fn resolve_partial(&mut self, partial: char, c: char, text: &TextSnapshot) -> Vec<VimCommand> {
+        if let Some(motion) = self.resolve_find_partial(partial, c) {
+            return self.apply_motion(motion, text);
+        }
         match partial {
-            'g' if c == 'g' => {
-                if let Some(op) = self.pending.operator.take() {
-                    return self.operator_with_computed_motion(op, Motion::DocumentStart, text);
-                }
-                self.motion_move(Motion::DocumentStart, text)
-            }
-            'f' => {
-                self.last_find = Some(Motion::FindChar(c));
-                self.resolve_motion_partial(Motion::FindChar(c), text)
-            }
-            't' => {
-                self.last_find = Some(Motion::TillChar(c));
-                self.resolve_motion_partial(Motion::TillChar(c), text)
-            }
-            'F' => {
-                self.last_find = Some(Motion::FindCharBack(c));
-                self.resolve_motion_partial(Motion::FindCharBack(c), text)
-            }
-            'T' => {
-                self.last_find = Some(Motion::TillCharBack(c));
-                self.resolve_motion_partial(Motion::TillCharBack(c), text)
-            }
             'r' => {
                 let count = self.motion_count().unwrap_or(1);
                 self.clear_pending();
@@ -796,14 +741,6 @@ impl VimState {
                 self.clear_preferred_column();
                 vec![VimCommand::Noop]
             }
-        }
-    }
-
-    fn resolve_motion_partial(&mut self, motion: Motion, text: &TextSnapshot) -> Vec<VimCommand> {
-        if let Some(op) = self.pending.operator.take() {
-            self.operator_with_computed_motion(op, motion, text)
-        } else {
-            self.motion_move(motion, text)
         }
     }
 
@@ -837,11 +774,19 @@ impl VimState {
         compute_motion(motion, text, count, preferred_column)
     }
 
-    fn motion_move(&mut self, motion: Motion, text: &TextSnapshot) -> Vec<VimCommand> {
-        let count = self.motion_count();
-        self.clear_pending();
-        let target = self.cursor_motion_target(&motion, text, count);
-        vec![VimCommand::MoveTo(target)]
+    fn apply_motion(&mut self, motion: Motion, text: &TextSnapshot) -> Vec<VimCommand> {
+        if let Some(op) = self.pending.operator.take() {
+            self.operator_with_computed_motion(op, motion, text)
+        } else {
+            let count = self.motion_count();
+            self.clear_pending();
+            let target = self.cursor_motion_target(&motion, text, count);
+            if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+                self.visual_select(target, text)
+            } else {
+                vec![VimCommand::MoveTo(target)]
+            }
+        }
     }
 
     fn operator_with_computed_motion(
