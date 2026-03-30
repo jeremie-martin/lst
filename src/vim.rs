@@ -795,12 +795,21 @@ impl VimState {
         motion: Motion,
         text: &TextSnapshot,
     ) -> Vec<VimCommand> {
-        // vim special case: cw/cW behave like ce/cE (don't eat trailing whitespace)
+        // vim: cw/cW behave like ce/cE when cursor is on a non-whitespace char
         let motion = if op == Operator::Change {
-            match motion {
-                Motion::WordForward => Motion::WordEnd,
-                Motion::BigWordForward => Motion::BigWordEnd,
-                _ => motion,
+            let cursor_on_non_space = {
+                let chars = line_chars(text, text.cursor.line);
+                let col = text.cursor.column.min(chars.len().saturating_sub(1));
+                !chars.is_empty() && !chars[col].is_whitespace()
+            };
+            if cursor_on_non_space {
+                match motion {
+                    Motion::WordForward => Motion::WordEnd,
+                    Motion::BigWordForward => Motion::BigWordEnd,
+                    _ => motion,
+                }
+            } else {
+                motion
             }
         } else {
             motion
@@ -817,41 +826,56 @@ impl VimState {
         }
 
         let target = compute_motion(&motion, text, count, None);
-        if target == text.cursor {
+
+        // Motions that return cursor on failure (no match / no bracket) are true no-ops.
+        // Forward motions that return cursor due to clamping (l at EOL, e at EOF, etc.)
+        // should still operate on the char at cursor.
+        if target == text.cursor && motion_noop_on_same_pos(&motion) {
             return vec![VimCommand::Noop];
         }
 
-        // vim: dw at end of line stops at EOL (doesn't eat newline), becomes inclusive
+        let backward = pos_lt(&target, &text.cursor);
+
+        // vim: dw at end of line stops at EOL (doesn't eat newline)
+        // vim: w at end of file can't find next word start — treat as inclusive
         let mut eol_clamped = false;
-        let target = if op == Operator::Delete
-            && target.line > text.cursor.line
-            && matches!(motion, Motion::WordForward | Motion::BigWordForward)
-        {
-            eol_clamped = true;
-            let ll = line_len(text, text.cursor.line);
-            pos(text.cursor.line, ll.saturating_sub(1))
+        let target = if matches!(motion, Motion::WordForward | Motion::BigWordForward) {
+            if op == Operator::Delete && target.line > text.cursor.line {
+                eol_clamped = true;
+                let ll = line_len(text, text.cursor.line);
+                pos(text.cursor.line, ll.saturating_sub(1))
+            } else if target.line == text.line_count().saturating_sub(1)
+                && line_len(text, target.line) > 0
+                && target.column == line_len(text, target.line).saturating_sub(1)
+            {
+                // w landed at last char of last line — no next word exists
+                eol_clamped = true;
+                target
+            } else {
+                target
+            }
         } else {
             target
         };
 
         let (from, to) = if eol_clamped && target == text.cursor {
-            // dw on last char of line: delete just that character
             (text.cursor, text.cursor)
         } else {
             ordered(text.cursor, target)
         };
         let mut to = to;
 
-        // Exclusive motions: don't include the target character (skip if clamped to EOL)
-        if !motion_is_inclusive(&motion, count) && !eol_clamped {
-            // Shrink `to` by one character
+        // Shrink `to` by one character when:
+        // - exclusive motions (standard vim rule), OR
+        // - backward motions (cursor char is never included for backward ops)
+        // Skip when eol_clamped (already adjusted to be inclusive)
+        if (!motion_is_inclusive(&motion, count) || backward) && !eol_clamped {
             if to.column > 0 {
                 to.column -= 1;
             } else if to.line > from.line {
                 to.line -= 1;
                 to.column = line_len(text, to.line).saturating_sub(1);
             }
-            // If range collapsed, it's a noop
             if pos_lt(&to, &from) {
                 return vec![VimCommand::Noop];
             }
@@ -1112,6 +1136,25 @@ fn motion_is_inclusive(motion: &Motion, count: Option<usize>) -> bool {
             | Motion::TillChar(_)
             | Motion::TillCharBack(_)
     ) || matches!(motion, Motion::Percent) && count.is_none()
+}
+
+/// Motions where target == cursor means "failed to find" (no-op), NOT "clamped at boundary".
+/// Forward motions clamped at boundary (l at EOL, e at EOF, $ at end) should still operate
+/// on the cursor character, so they are NOT listed here.
+fn motion_noop_on_same_pos(motion: &Motion) -> bool {
+    matches!(
+        motion,
+        Motion::Left
+            | Motion::WordBackward
+            | Motion::BigWordBackward
+            | Motion::LineStart
+            | Motion::FirstNonBlank
+            | Motion::FindChar(_)
+            | Motion::TillChar(_)
+            | Motion::FindCharBack(_)
+            | Motion::TillCharBack(_)
+            | Motion::Percent
+    )
 }
 
 fn reverse_find(motion: &Motion) -> Motion {
@@ -1713,6 +1756,8 @@ fn retreat_pos(text: &TextSnapshot, p: Position) -> Option<Position> {
 mod tests {
     use super::*;
 
+    // ── Helpers ─────────────────────────────────────────────────────────────
+
     fn snapshot(lines: &[&str], line: usize, column: usize) -> TextSnapshot {
         TextSnapshot {
             lines: lines.iter().map(|line| (*line).to_string()).collect(),
@@ -1724,241 +1769,2027 @@ mod tests {
         keyboard::Key::Character(c.to_string().into())
     }
 
-    #[test]
-    fn counted_line_end_motion_moves_across_lines() {
-        let mut vim = VimState::new();
-        vim.mode = Mode::Normal;
-        let text = snapshot(&["abc", "xyz", "123"], 0, 0);
+    fn normal() -> VimState {
+        let mut v = VimState::new();
+        v.mode = Mode::Normal;
+        v
+    }
 
+    fn mods() -> keyboard::Modifiers {
+        keyboard::Modifiers::default()
+    }
+
+    fn press(vim: &mut VimState, c: char, text: &TextSnapshot) -> Vec<VimCommand> {
+        vim.handle_key(&key(c), mods(), text)
+    }
+
+    /// Press a sequence of character keys, returning the result of the last one.
+    fn press_keys(vim: &mut VimState, keys: &str, text: &TextSnapshot) -> Vec<VimCommand> {
+        let mut result = vec![VimCommand::Noop];
+        for c in keys.chars() {
+            result = vim.handle_key(&key(c), mods(), text);
+        }
+        result
+    }
+
+    fn press_named(
+        vim: &mut VimState,
+        n: keyboard::key::Named,
+        text: &TextSnapshot,
+    ) -> Vec<VimCommand> {
+        vim.handle_key(&keyboard::Key::Named(n), mods(), text)
+    }
+
+    fn press_ctrl(vim: &mut VimState, c: char, text: &TextSnapshot) -> Vec<VimCommand> {
+        vim.handle_key(&key(c), keyboard::Modifiers::COMMAND, text)
+    }
+
+    // ── Motions: horizontal (h, l) ──────────────────────────────────────────
+
+    #[test]
+    fn h_moves_left() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'h', &snapshot(&["hello"], 0, 3)), vec![VimCommand::MoveTo(pos(0, 2))]);
+    }
+
+    #[test]
+    fn h_clamps_at_column_zero() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'h', &snapshot(&["hello"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn l_moves_right() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'l', &snapshot(&["hello"], 0, 2)), vec![VimCommand::MoveTo(pos(0, 3))]);
+    }
+
+    #[test]
+    fn l_clamps_at_last_char() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'l', &snapshot(&["hello"], 0, 4)), vec![VimCommand::MoveTo(pos(0, 4))]);
+    }
+
+    #[test]
+    fn h_on_empty_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'h', &snapshot(&[""], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn l_on_empty_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'l', &snapshot(&[""], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    // ── Motions: vertical (j, k) ────────────────────────────────────────────
+
+    #[test]
+    fn j_moves_down() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'j', &snapshot(&["abc", "xyz"], 0, 0)), vec![VimCommand::MoveTo(pos(1, 0))]);
+    }
+
+    #[test]
+    fn j_clamps_at_last_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'j', &snapshot(&["abc"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn j_clamps_column_to_shorter_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'j', &snapshot(&["abcdef", "xy"], 0, 4)), vec![VimCommand::MoveTo(pos(1, 1))]);
+    }
+
+    #[test]
+    fn k_moves_up() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'k', &snapshot(&["abc", "xyz"], 1, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn k_clamps_at_first_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'k', &snapshot(&["abc"], 0, 2)), vec![VimCommand::MoveTo(pos(0, 2))]);
+    }
+
+    // ── Motions: word (w, b, e, W, B, E) ────────────────────────────────────
+
+    #[test]
+    fn w_to_next_word() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'w', &snapshot(&["foo bar"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 4))]);
+    }
+
+    #[test]
+    fn w_stops_at_punctuation() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'w', &snapshot(&["foo.bar"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 3))]);
+    }
+
+    #[test]
+    fn w_crosses_line_boundary() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'w', &snapshot(&["foo", "bar"], 0, 0)), vec![VimCommand::MoveTo(pos(1, 0))]);
+    }
+
+    #[test]
+    fn w_stops_at_empty_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'w', &snapshot(&["foo", "", "bar"], 0, 0)), vec![VimCommand::MoveTo(pos(1, 0))]);
+    }
+
+    #[test]
+    fn w_at_end_of_file() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'w', &snapshot(&["foo"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 2))]);
+    }
+
+    #[test]
+    fn b_to_prev_word() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'b', &snapshot(&["foo bar"], 0, 4)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn b_crosses_line_boundary() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'b', &snapshot(&["foo", "bar"], 1, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn b_at_start_of_file() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'b', &snapshot(&["foo"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn e_to_word_end() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'e', &snapshot(&["foo bar"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 2))]);
+    }
+
+    #[test]
+    fn e_skips_to_next_word_end() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'e', &snapshot(&["foo bar"], 0, 2)), vec![VimCommand::MoveTo(pos(0, 6))]);
+    }
+
+    #[test]
+    fn e_crosses_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'e', &snapshot(&["foo", "bar"], 0, 2)), vec![VimCommand::MoveTo(pos(1, 2))]);
+    }
+
+    #[test]
+    fn big_w_skips_punctuation() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'W', &snapshot(&["foo.bar baz"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 8))]);
+    }
+
+    #[test]
+    fn big_b_skips_punctuation() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'B', &snapshot(&["foo.bar baz"], 0, 8)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn big_e_skips_punctuation() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'E', &snapshot(&["foo.bar baz"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 6))]);
+    }
+
+    // ── Motions: line position (0, $, ^) ────────────────────────────────────
+
+    #[test]
+    fn zero_to_line_start() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '0', &snapshot(&["  hello"], 0, 5)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn dollar_to_line_end() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '$', &snapshot(&["hello"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 4))]);
+    }
+
+    #[test]
+    fn dollar_on_empty_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '$', &snapshot(&[""], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn caret_to_first_non_blank() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '^', &snapshot(&["  hello"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 2))]);
+    }
+
+    #[test]
+    fn caret_no_indent() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '^', &snapshot(&["hello"], 0, 3)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    // ── Motions: document (gg, G) ───────────────────────────────────────────
+
+    #[test]
+    fn gg_to_document_start() {
+        let mut v = normal();
+        let text = snapshot(&["  aaa", "bbb", "ccc", "ddd", "eee"], 3, 2);
+        assert_eq!(press_keys(&mut v, "gg", &text), vec![VimCommand::MoveTo(pos(0, 2))]);
+    }
+
+    #[test]
+    fn gg_with_count_to_line_n() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb", "ccc", "ddd", "eee"], 0, 0);
+        assert_eq!(press_keys(&mut v, "3gg", &text), vec![VimCommand::MoveTo(pos(2, 0))]);
+    }
+
+    #[test]
+    fn gg_count_clamps_to_last_line() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb", "ccc"], 0, 0);
+        assert_eq!(press_keys(&mut v, "99gg", &text), vec![VimCommand::MoveTo(pos(2, 0))]);
+    }
+
+    #[test]
+    fn big_g_to_document_end() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb", "  ccc"], 0, 0);
+        assert_eq!(press(&mut v, 'G', &text), vec![VimCommand::MoveTo(pos(2, 2))]);
+    }
+
+    #[test]
+    fn big_g_with_count() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "  bbb", "ccc"], 0, 0);
+        assert_eq!(press_keys(&mut v, "2G", &text), vec![VimCommand::MoveTo(pos(1, 2))]);
+    }
+
+    // ── Motions: find char (f, t, F, T) ─────────────────────────────────────
+
+    #[test]
+    fn f_finds_char_forward() {
+        let mut v = normal();
+        assert_eq!(press_keys(&mut v, "fw", &snapshot(&["hello world"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 6))]);
+    }
+
+    #[test]
+    fn f_no_match_stays() {
+        let mut v = normal();
+        assert_eq!(press_keys(&mut v, "fz", &snapshot(&["hello"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn f_with_count() {
+        let mut v = normal();
+        assert_eq!(press_keys(&mut v, "2fa", &snapshot(&["banana"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 3))]);
+    }
+
+    #[test]
+    fn t_till_before_char() {
+        let mut v = normal();
+        assert_eq!(press_keys(&mut v, "tw", &snapshot(&["hello world"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 5))]);
+    }
+
+    #[test]
+    fn big_f_finds_backward() {
+        let mut v = normal();
+        // "hello world": o at col 4 and col 7. From col 10, nearest backward 'o' is col 7.
+        assert_eq!(press_keys(&mut v, "Fo", &snapshot(&["hello world"], 0, 10)), vec![VimCommand::MoveTo(pos(0, 7))]);
+    }
+
+    #[test]
+    fn big_t_till_after_backward() {
+        let mut v = normal();
+        // From col 10, Fo finds 'o' at col 7, To stops one after = col 8.
+        assert_eq!(press_keys(&mut v, "To", &snapshot(&["hello world"], 0, 10)), vec![VimCommand::MoveTo(pos(0, 8))]);
+    }
+
+    // ── Motions: bracket match (%) ──────────────────────────────────────────
+
+    #[test]
+    fn percent_matches_forward() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '%', &snapshot(&["(foo)"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 4))]);
+    }
+
+    #[test]
+    fn percent_matches_backward() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '%', &snapshot(&["(foo)"], 0, 4)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn percent_nested() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '%', &snapshot(&["((()))"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 5))]);
+    }
+
+    #[test]
+    fn percent_scans_forward_for_bracket() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '%', &snapshot(&["foo(bar)"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 7))]);
+    }
+
+    #[test]
+    fn percent_no_bracket_stays() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '%', &snapshot(&["hello"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn percent_cross_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '%', &snapshot(&["(", "foo", ")"], 0, 0)), vec![VimCommand::MoveTo(pos(2, 0))]);
+    }
+
+    #[test]
+    fn percent_with_count_is_file_percentage() {
+        let mut v = normal();
+        let lines: Vec<&str> = (0..10).map(|_| "x").collect();
+        assert_eq!(press_keys(&mut v, "50%", &snapshot(&lines, 0, 0)), vec![VimCommand::MoveTo(pos(4, 0))]);
+    }
+
+    // ── Motions: arrow keys ─────────────────────────────────────────────────
+
+    #[test]
+    fn arrow_keys_match_hjkl() {
+        let text = snapshot(&["abc", "xyz"], 0, 1);
+        let mut v1 = normal();
+        let mut v2 = normal();
         assert_eq!(
-            vim.handle_key(&key('2'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
+            press_named(&mut v1, keyboard::key::Named::ArrowLeft, &text),
+            press(&mut v2, 'h', &text),
         );
+        let mut v1 = normal();
+        let mut v2 = normal();
         assert_eq!(
-            vim.handle_key(&key('$'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::MoveTo(pos(1, 2))]
+            press_named(&mut v1, keyboard::key::Named::ArrowRight, &text),
+            press(&mut v2, 'l', &text),
+        );
+        let mut v1 = normal();
+        let mut v2 = normal();
+        assert_eq!(
+            press_named(&mut v1, keyboard::key::Named::ArrowDown, &text),
+            press(&mut v2, 'j', &text),
+        );
+        let mut v1 = normal();
+        let mut v2 = normal();
+        let text_k = snapshot(&["abc", "xyz"], 1, 1);
+        assert_eq!(
+            press_named(&mut v1, keyboard::key::Named::ArrowUp, &text_k),
+            press(&mut v2, 'k', &text_k),
         );
     }
 
     #[test]
-    fn counted_line_end_operator_becomes_linewise() {
-        let mut vim = VimState::new();
-        vim.mode = Mode::Normal;
-        let text = snapshot(&["abc", "xyz", "123"], 0, 0);
+    fn home_end_match_zero_dollar() {
+        let text = snapshot(&["hello"], 0, 2);
+        let mut v1 = normal();
+        let mut v2 = normal();
+        assert_eq!(
+            press_named(&mut v1, keyboard::key::Named::Home, &text),
+            press(&mut v2, '0', &text),
+        );
+        let mut v1 = normal();
+        let mut v2 = normal();
+        assert_eq!(
+            press_named(&mut v1, keyboard::key::Named::End, &text),
+            press(&mut v2, '$', &text),
+        );
+    }
 
+    // ── Motions: counts ─────────────────────────────────────────────────────
+
+    #[test]
+    fn counted_h() {
+        let mut v = normal();
+        assert_eq!(press_keys(&mut v, "3h", &snapshot(&["hello"], 0, 4)), vec![VimCommand::MoveTo(pos(0, 1))]);
+    }
+
+    #[test]
+    fn counted_j() {
+        let mut v = normal();
+        let text = snapshot(&["a", "b", "c", "d", "e"], 0, 0);
+        assert_eq!(press_keys(&mut v, "3j", &text), vec![VimCommand::MoveTo(pos(3, 0))]);
+    }
+
+    #[test]
+    fn counted_w() {
+        let mut v = normal();
+        assert_eq!(press_keys(&mut v, "2w", &snapshot(&["foo bar baz"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 8))]);
+    }
+
+    #[test]
+    fn multi_digit_count() {
+        let mut v = normal();
+        let lines: Vec<&str> = (0..20).map(|_| "x").collect();
+        assert_eq!(press_keys(&mut v, "12j", &snapshot(&lines, 0, 0)), vec![VimCommand::MoveTo(pos(12, 0))]);
+    }
+
+    #[test]
+    fn count_clamps() {
+        let mut v = normal();
+        let text = snapshot(&["a", "b", "c"], 0, 0);
+        assert_eq!(press_keys(&mut v, "99j", &text), vec![VimCommand::MoveTo(pos(2, 0))]);
+    }
+
+    #[test]
+    fn zero_is_motion_not_digit_when_no_count() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '0', &snapshot(&["hello"], 0, 3)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn zero_is_digit_after_nonzero_digit() {
+        let mut v = normal();
+        let text = snapshot(&["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"], 0, 0);
+        assert_eq!(press_keys(&mut v, "10j", &text), vec![VimCommand::MoveTo(pos(10, 0))]);
+    }
+
+    // ── Motions: preferred column ───────────────────────────────────────────
+
+    #[test]
+    fn preferred_column_survives_short_line() {
+        let mut v = normal();
+        let t1 = snapshot(&["ABCDEFGHIJ", "x", "ABCDEFGHIJ"], 0, 7);
+        assert_eq!(press(&mut v, 'j', &t1), vec![VimCommand::MoveTo(pos(1, 0))]);
+        let t2 = snapshot(&["ABCDEFGHIJ", "x", "ABCDEFGHIJ"], 1, 0);
+        assert_eq!(press(&mut v, 'j', &t2), vec![VimCommand::MoveTo(pos(2, 7))]);
+    }
+
+    #[test]
+    fn preferred_column_cleared_by_horizontal_motion() {
+        let mut v = normal();
+        let t1 = snapshot(&["ABCDEFGHIJ", "x", "ABCDEFGHIJ"], 0, 7);
+        press(&mut v, 'j', &t1); // sets preferred_column = 7
+        let t2 = snapshot(&["ABCDEFGHIJ", "x", "ABCDEFGHIJ"], 1, 0);
+        press(&mut v, 'l', &t2); // should clear preferred_column
+        let t3 = snapshot(&["ABCDEFGHIJ", "x", "ABCDEFGHIJ"], 1, 0);
+        // After l, preferred_column is cleared, so j uses current column
+        assert_eq!(press(&mut v, 'j', &t3), vec![VimCommand::MoveTo(pos(2, 0))]);
+    }
+
+    // ── Operators: delete + motion ──────────────────────────────────────────
+
+    #[test]
+    fn dw_deletes_word() {
+        let mut v = normal();
+        let text = snapshot(&["foo bar"], 0, 0);
+        assert_eq!(press_keys(&mut v, "dw", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 3) }]);
+    }
+
+    #[test]
+    fn de_deletes_to_word_end_inclusive() {
+        let mut v = normal();
+        let text = snapshot(&["foo bar"], 0, 0);
+        assert_eq!(press_keys(&mut v, "de", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 2) }]);
+    }
+
+    #[test]
+    fn d_dollar_deletes_to_end_inclusive() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 1);
+        assert_eq!(press_keys(&mut v, "d$", &text), vec![VimCommand::DeleteRange { from: pos(0, 1), to: pos(0, 4) }]);
+    }
+
+    #[test]
+    fn d0_deletes_to_start() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 3);
+        assert_eq!(press_keys(&mut v, "d0", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 2) }]);
+    }
+
+    #[test]
+    fn dj_is_linewise() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz", "123"], 0, 0);
+        assert_eq!(press_keys(&mut v, "dj", &text), vec![VimCommand::DeleteLines { first: 0, last: 1 }]);
+    }
+
+    #[test]
+    fn dk_is_linewise() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz", "123"], 2, 0);
+        assert_eq!(press_keys(&mut v, "dk", &text), vec![VimCommand::DeleteLines { first: 1, last: 2 }]);
+    }
+
+    #[test]
+    fn dgg_is_linewise() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz", "123", "456"], 3, 0);
+        assert_eq!(press_keys(&mut v, "dgg", &text), vec![VimCommand::DeleteLines { first: 0, last: 3 }]);
+    }
+
+    #[test]
+    fn d_big_g_is_linewise() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz", "123"], 0, 0);
+        assert_eq!(press_keys(&mut v, "dG", &text), vec![VimCommand::DeleteLines { first: 0, last: 2 }]);
+    }
+
+    #[test]
+    fn df_is_inclusive() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 0);
+        assert_eq!(press_keys(&mut v, "dfw", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 6) }]);
+    }
+
+    #[test]
+    fn dt_is_inclusive() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 0);
+        assert_eq!(press_keys(&mut v, "dtw", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 5) }]);
+    }
+
+    #[test]
+    fn d_percent_no_count_is_charwise() {
+        let mut v = normal();
+        let text = snapshot(&["(foo)"], 0, 0);
+        assert_eq!(press_keys(&mut v, "d%", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 4) }]);
+    }
+
+    #[test]
+    fn dw_at_eol_clamps_to_line() {
+        let mut v = normal();
+        // cursor on "bar", w would cross to next line; vim clamps to EOL
+        let text = snapshot(&["foo bar", "baz"], 0, 4);
+        assert_eq!(press_keys(&mut v, "dw", &text), vec![VimCommand::DeleteRange { from: pos(0, 4), to: pos(0, 6) }]);
+    }
+
+    // ── Operators: change + motion ──────────────────────────────────────────
+
+    #[test]
+    fn cw_becomes_ce() {
+        let mut v = normal();
+        let text = snapshot(&["foo bar"], 0, 0);
+        // cw remapped to ce: inclusive to word end
         assert_eq!(
-            vim.handle_key(&key('d'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
-        );
-        assert_eq!(
-            vim.handle_key(&key('2'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
-        );
-        assert_eq!(
-            vim.handle_key(&key('$'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::DeleteLines { first: 0, last: 1 }]
+            press_keys(&mut v, "cw", &text),
+            vec![VimCommand::ChangeRange { from: pos(0, 0), to: pos(0, 2) }, VimCommand::EnterInsert],
         );
     }
 
     #[test]
-    fn counted_percent_motion_jumps_by_file_percentage() {
-        let mut vim = VimState::new();
-        vim.mode = Mode::Normal;
-        let lines = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+    fn c_big_w_becomes_c_big_e() {
+        let mut v = normal();
+        let text = snapshot(&["foo.bar baz"], 0, 0);
+        assert_eq!(
+            press_keys(&mut v, "cW", &text),
+            vec![VimCommand::ChangeRange { from: pos(0, 0), to: pos(0, 6) }, VimCommand::EnterInsert],
+        );
+    }
+
+    #[test]
+    fn c_dollar_changes_to_end() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 1);
+        assert_eq!(
+            press_keys(&mut v, "c$", &text),
+            vec![VimCommand::ChangeRange { from: pos(0, 1), to: pos(0, 4) }, VimCommand::EnterInsert],
+        );
+    }
+
+    #[test]
+    fn cj_is_linewise() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz"], 0, 0);
+        assert_eq!(
+            press_keys(&mut v, "cj", &text),
+            vec![VimCommand::ChangeLines { first: 0, last: 1 }, VimCommand::EnterInsert],
+        );
+    }
+
+    // ── Operators: yank + motion ────────────────────────────────────────────
+
+    #[test]
+    fn yw_yanks_and_stays() {
+        let mut v = normal();
+        let text = snapshot(&["foo bar"], 0, 0);
+        assert_eq!(
+            press_keys(&mut v, "yw", &text),
+            vec![VimCommand::YankRange { from: pos(0, 0), to: pos(0, 3) }, VimCommand::MoveTo(pos(0, 0))],
+        );
+    }
+
+    #[test]
+    fn ye_inclusive() {
+        let mut v = normal();
+        let text = snapshot(&["foo bar"], 0, 0);
+        assert_eq!(
+            press_keys(&mut v, "ye", &text),
+            vec![VimCommand::YankRange { from: pos(0, 0), to: pos(0, 2) }, VimCommand::MoveTo(pos(0, 0))],
+        );
+    }
+
+    #[test]
+    fn yj_linewise() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz"], 0, 0);
+        assert_eq!(
+            press_keys(&mut v, "yj", &text),
+            vec![VimCommand::YankLines { first: 0, last: 1 }],
+        );
+    }
+
+    // ── Operators: count multiplication ──────────────────────────────────────
+
+    #[test]
+    fn operator_count_times_motion_count() {
+        // 2d3j = delete lines 0..6 (2*3=6 lines down)
+        let mut v = normal();
+        let lines: Vec<&str> = (0..10).map(|_| "x").collect();
         let text = snapshot(&lines, 0, 0);
+        assert_eq!(press_keys(&mut v, "2d3j", &text), vec![VimCommand::DeleteLines { first: 0, last: 6 }]);
+    }
 
+    #[test]
+    fn count_before_operator() {
+        // 3dw = delete 3 words (operator_count=3, motion_count=None -> 3)
+        let mut v = normal();
+        let text = snapshot(&["aaa bbb ccc ddd"], 0, 0);
+        let result = press_keys(&mut v, "3dw", &text);
+        // 3 words forward from col 0: aaa→bbb→ccc→ddd, so target is (0,12)
+        // exclusive: to = (0,11)
+        assert_eq!(result, vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 11) }]);
+    }
+
+    #[test]
+    fn count_after_operator() {
+        // d3w = same as 3dw
+        let mut v = normal();
+        let text = snapshot(&["aaa bbb ccc ddd"], 0, 0);
+        let result = press_keys(&mut v, "d3w", &text);
+        assert_eq!(result, vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 11) }]);
+    }
+
+    // ── Operators: doubled (dd, cc, yy) ─────────────────────────────────────
+
+    #[test]
+    fn dd_deletes_current_line() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz", "123"], 1, 0);
+        assert_eq!(press_keys(&mut v, "dd", &text), vec![VimCommand::DeleteLines { first: 1, last: 1 }]);
+    }
+
+    #[test]
+    fn cc_changes_current_line() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz"], 0, 0);
         assert_eq!(
-            vim.handle_key(&key('5'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
+            press_keys(&mut v, "cc", &text),
+            vec![VimCommand::ChangeLines { first: 0, last: 0 }, VimCommand::EnterInsert],
         );
-        assert_eq!(
-            vim.handle_key(&key('0'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
-        );
-        assert_eq!(
-            vim.handle_key(&key('%'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::MoveTo(pos(4, 0))]
-        );
+    }
+
+    #[test]
+    fn yy_yanks_current_line() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz"], 0, 0);
+        assert_eq!(press_keys(&mut v, "yy", &text), vec![VimCommand::YankLines { first: 0, last: 0 }]);
+    }
+
+    #[test]
+    fn counted_dd() {
+        let mut v = normal();
+        let text = snapshot(&["a", "b", "c", "d", "e"], 1, 0);
+        assert_eq!(press_keys(&mut v, "3dd", &text), vec![VimCommand::DeleteLines { first: 1, last: 3 }]);
+    }
+
+    #[test]
+    fn dd_clamps_at_end_of_file() {
+        let mut v = normal();
+        let text = snapshot(&["a", "b", "c"], 1, 0);
+        assert_eq!(press_keys(&mut v, "5dd", &text), vec![VimCommand::DeleteLines { first: 1, last: 2 }]);
+    }
+
+    #[test]
+    fn counted_line_end_motion_is_linewise() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz", "123"], 0, 0);
+        // d2$ — count > 1 makes $ linewise
+        assert_eq!(press_keys(&mut v, "d2$", &text), vec![VimCommand::DeleteLines { first: 0, last: 1 }]);
     }
 
     #[test]
     fn counted_percent_operator_is_linewise() {
-        let mut vim = VimState::new();
-        vim.mode = Mode::Normal;
-        let lines = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+        let mut v = normal();
+        let lines: Vec<&str> = (0..10).map(|_| "x").collect();
         let text = snapshot(&lines, 0, 0);
+        assert_eq!(press_keys(&mut v, "d50%", &text), vec![VimCommand::DeleteLines { first: 0, last: 4 }]);
+    }
 
+    // ── Single-key actions ──────────────────────────────────────────────────
+
+    #[test]
+    fn i_enters_insert() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'i', &snapshot(&["hello"], 0, 2)), vec![VimCommand::EnterInsert]);
+    }
+
+    #[test]
+    fn a_moves_right_and_inserts() {
+        let mut v = normal();
         assert_eq!(
-            vim.handle_key(&key('d'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
+            press(&mut v, 'a', &snapshot(&["hello"], 0, 2)),
+            vec![VimCommand::MoveTo(pos(0, 3)), VimCommand::EnterInsert],
         );
+    }
+
+    #[test]
+    fn a_at_end_of_line() {
+        let mut v = normal();
+        // col 4 is last char of "hello" (len=5), a moves to col 5 (= line_len)
         assert_eq!(
-            vim.handle_key(&key('5'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
+            press(&mut v, 'a', &snapshot(&["hello"], 0, 4)),
+            vec![VimCommand::MoveTo(pos(0, 5)), VimCommand::EnterInsert],
         );
+    }
+
+    #[test]
+    fn a_on_empty_line() {
+        let mut v = normal();
         assert_eq!(
-            vim.handle_key(&key('0'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
+            press(&mut v, 'a', &snapshot(&[""], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0)), VimCommand::EnterInsert],
         );
+    }
+
+    #[test]
+    fn big_i_to_first_non_blank() {
+        let mut v = normal();
         assert_eq!(
-            vim.handle_key(&key('%'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::DeleteLines { first: 0, last: 4 }]
+            press(&mut v, 'I', &snapshot(&["  hello"], 0, 5)),
+            vec![VimCommand::MoveTo(pos(0, 2)), VimCommand::EnterInsert],
+        );
+    }
+
+    #[test]
+    fn big_a_to_end_of_line() {
+        let mut v = normal();
+        assert_eq!(
+            press(&mut v, 'A', &snapshot(&["hello"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 5)), VimCommand::EnterInsert],
+        );
+    }
+
+    #[test]
+    fn o_opens_line_below() {
+        let mut v = normal();
+        assert_eq!(
+            press(&mut v, 'o', &snapshot(&["hello"], 0, 0)),
+            vec![VimCommand::OpenLineBelow, VimCommand::EnterInsert],
+        );
+    }
+
+    #[test]
+    fn big_o_opens_line_above() {
+        let mut v = normal();
+        assert_eq!(
+            press(&mut v, 'O', &snapshot(&["hello"], 0, 0)),
+            vec![VimCommand::OpenLineAbove, VimCommand::EnterInsert],
+        );
+    }
+
+    #[test]
+    fn x_deletes_char() {
+        let mut v = normal();
+        assert_eq!(
+            press(&mut v, 'x', &snapshot(&["hello"], 0, 2)),
+            vec![VimCommand::DeleteRange { from: pos(0, 2), to: pos(0, 2) }],
+        );
+    }
+
+    #[test]
+    fn x_on_empty_line_is_noop() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'x', &snapshot(&[""], 0, 0)), vec![VimCommand::Noop]);
+    }
+
+    #[test]
+    fn counted_x() {
+        let mut v = normal();
+        assert_eq!(
+            press_keys(&mut v, "3x", &snapshot(&["hello"], 0, 1)),
+            vec![VimCommand::DeleteRange { from: pos(0, 1), to: pos(0, 3) }],
+        );
+    }
+
+    #[test]
+    fn x_clamps_at_line_end() {
+        let mut v = normal();
+        assert_eq!(
+            press_keys(&mut v, "99x", &snapshot(&["hi"], 0, 0)),
+            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 1) }],
+        );
+    }
+
+    #[test]
+    fn big_x_deletes_before_cursor() {
+        let mut v = normal();
+        assert_eq!(
+            press(&mut v, 'X', &snapshot(&["hello"], 0, 3)),
+            vec![VimCommand::DeleteRange { from: pos(0, 2), to: pos(0, 2) }],
+        );
+    }
+
+    #[test]
+    fn big_x_at_column_zero_is_noop() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'X', &snapshot(&["hello"], 0, 0)), vec![VimCommand::Noop]);
+    }
+
+    #[test]
+    fn s_changes_char() {
+        let mut v = normal();
+        assert_eq!(
+            press(&mut v, 's', &snapshot(&["hello"], 0, 2)),
+            vec![VimCommand::ChangeRange { from: pos(0, 2), to: pos(0, 2) }],
+        );
+    }
+
+    #[test]
+    fn s_on_empty_line_enters_insert() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 's', &snapshot(&[""], 0, 0)), vec![VimCommand::EnterInsert]);
+    }
+
+    #[test]
+    fn big_d_deletes_to_eol() {
+        let mut v = normal();
+        assert_eq!(
+            press(&mut v, 'D', &snapshot(&["hello"], 0, 1)),
+            vec![VimCommand::DeleteRange { from: pos(0, 1), to: pos(0, 4) }],
+        );
+    }
+
+    #[test]
+    fn big_d_on_empty_line_is_noop() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'D', &snapshot(&[""], 0, 0)), vec![VimCommand::Noop]);
+    }
+
+    #[test]
+    fn big_c_changes_to_eol() {
+        let mut v = normal();
+        assert_eq!(
+            press(&mut v, 'C', &snapshot(&["hello"], 0, 1)),
+            vec![VimCommand::ChangeRange { from: pos(0, 1), to: pos(0, 4) }],
+        );
+    }
+
+    #[test]
+    fn big_c_on_empty_line_enters_insert() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'C', &snapshot(&[""], 0, 0)), vec![VimCommand::EnterInsert]);
+    }
+
+    #[test]
+    fn big_j_joins_two_lines() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'J', &snapshot(&["a", "b"], 0, 0)), vec![VimCommand::JoinLines { count: 1 }]);
+    }
+
+    #[test]
+    fn counted_big_j() {
+        let mut v = normal();
+        // 3J joins 3 lines = 2 join operations
+        assert_eq!(press_keys(&mut v, "3J", &snapshot(&["a", "b", "c", "d"], 0, 0)), vec![VimCommand::JoinLines { count: 2 }]);
+    }
+
+    #[test]
+    fn big_s_changes_line() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz"], 0, 0);
+        assert_eq!(
+            press(&mut v, 'S', &text),
+            vec![VimCommand::ChangeLines { first: 0, last: 0 }, VimCommand::EnterInsert],
+        );
+    }
+
+    #[test]
+    fn p_paste_after() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'p', &snapshot(&["x"], 0, 0)), vec![VimCommand::PasteAfter]);
+    }
+
+    #[test]
+    fn big_p_paste_before() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'P', &snapshot(&["x"], 0, 0)), vec![VimCommand::PasteBefore]);
+    }
+
+    #[test]
+    fn u_undo() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'u', &snapshot(&["x"], 0, 0)), vec![VimCommand::Undo]);
+    }
+
+    #[test]
+    fn ctrl_r_redo() {
+        let mut v = normal();
+        assert_eq!(press_ctrl(&mut v, 'r', &snapshot(&["x"], 0, 0)), vec![VimCommand::Redo]);
+    }
+
+    #[test]
+    fn r_replaces_char() {
+        let mut v = normal();
+        assert_eq!(
+            press_keys(&mut v, "ra", &snapshot(&["hello"], 0, 2)),
+            vec![VimCommand::ReplaceChar { ch: 'a', count: 1 }],
+        );
+    }
+
+    #[test]
+    fn r_on_empty_line_is_noop() {
+        let mut v = normal();
+        assert_eq!(press_keys(&mut v, "ra", &snapshot(&[""], 0, 0)), vec![VimCommand::Noop]);
+    }
+
+    #[test]
+    fn counted_r() {
+        let mut v = normal();
+        assert_eq!(
+            press_keys(&mut v, "3ra", &snapshot(&["hello"], 0, 0)),
+            vec![VimCommand::ReplaceChar { ch: 'a', count: 3 }],
+        );
+    }
+
+    #[test]
+    fn slash_opens_find() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '/', &snapshot(&["x"], 0, 0)), vec![VimCommand::OpenFind]);
+    }
+
+    #[test]
+    fn n_find_next() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'n', &snapshot(&["x"], 0, 0)), vec![VimCommand::FindNext]);
+    }
+
+    #[test]
+    fn big_n_find_prev() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'N', &snapshot(&["x"], 0, 0)), vec![VimCommand::FindPrev]);
+    }
+
+    // ── Visual mode: entering and exiting ───────────────────────────────────
+
+    #[test]
+    fn v_enters_visual() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 2);
+        let result = press(&mut v, 'v', &text);
+        assert_eq!(v.mode, Mode::Visual);
+        assert_eq!(v.visual_anchor, Some(pos(0, 2)));
+        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 2), head: pos(0, 2) }]);
+    }
+
+    #[test]
+    fn big_v_enters_visual_line() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 2);
+        let result = press(&mut v, 'V', &text);
+        assert_eq!(v.mode, Mode::VisualLine);
+        assert_eq!(v.visual_anchor, Some(pos(0, 2)));
+        // VisualLine selects full line via selection_command
+        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 4) }]);
+    }
+
+    #[test]
+    fn v_in_visual_exits() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 2);
+        press(&mut v, 'v', &text); // enter Visual
+        let result = press(&mut v, 'v', &text); // exit
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(v.visual_anchor, None);
+        assert_eq!(result, vec![VimCommand::MoveTo(pos(0, 2))]);
+    }
+
+    #[test]
+    fn big_v_in_visual_line_exits() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 2);
+        press(&mut v, 'V', &text);
+        let result = press(&mut v, 'V', &text);
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(result, vec![VimCommand::MoveTo(pos(0, 2))]);
+    }
+
+    #[test]
+    fn v_in_visual_line_switches_to_charwise() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 2);
+        press(&mut v, 'V', &text); // enter VisualLine
+        let result = press(&mut v, 'v', &text); // switch to Visual
+        assert_eq!(v.mode, Mode::Visual);
+        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 2), head: pos(0, 2) }]);
+    }
+
+    #[test]
+    fn big_v_in_visual_switches_to_linewise() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 2);
+        press(&mut v, 'v', &text); // enter Visual
+        let result = press(&mut v, 'V', &text); // switch to VisualLine
+        assert_eq!(v.mode, Mode::VisualLine);
+        // VisualLine expands to full line
+        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 4) }]);
+    }
+
+    // ── Visual mode: motions extend selection ───────────────────────────────
+
+    #[test]
+    fn visual_l_extends_selection() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 1);
+        press(&mut v, 'v', &text);
+        assert_eq!(
+            press(&mut v, 'l', &text),
+            vec![VimCommand::Select { anchor: pos(0, 1), head: pos(0, 2) }],
+        );
+    }
+
+    #[test]
+    fn visual_j_extends_selection() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz"], 0, 1);
+        press(&mut v, 'v', &text);
+        assert_eq!(
+            press(&mut v, 'j', &text),
+            vec![VimCommand::Select { anchor: pos(0, 1), head: pos(1, 1) }],
+        );
+    }
+
+    #[test]
+    fn visual_w_extends_selection() {
+        let mut v = normal();
+        let text = snapshot(&["foo bar baz"], 0, 0);
+        press(&mut v, 'v', &text);
+        assert_eq!(
+            press(&mut v, 'w', &text),
+            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 4) }],
+        );
+    }
+
+    #[test]
+    fn visual_dollar_extends_to_eol() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 1);
+        press(&mut v, 'v', &text);
+        assert_eq!(
+            press(&mut v, '$', &text),
+            vec![VimCommand::Select { anchor: pos(0, 1), head: pos(0, 4) }],
+        );
+    }
+
+    #[test]
+    fn visual_gg_extends_to_top() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb", "ccc"], 2, 1);
+        press(&mut v, 'v', &text);
+        assert_eq!(
+            press_keys(&mut v, "gg", &text),
+            vec![VimCommand::Select { anchor: pos(2, 1), head: pos(0, 0) }],
+        );
+    }
+
+    #[test]
+    fn visual_big_g_extends_to_bottom() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb", "ccc"], 0, 0);
+        press(&mut v, 'v', &text);
+        assert_eq!(
+            press(&mut v, 'G', &text),
+            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(2, 0) }],
+        );
+    }
+
+    #[test]
+    fn visual_f_extends_selection() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 0);
+        press(&mut v, 'v', &text);
+        assert_eq!(
+            press_keys(&mut v, "fw", &text),
+            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 6) }],
+        );
+    }
+
+    #[test]
+    fn visual_percent_extends_selection() {
+        let mut v = normal();
+        let text = snapshot(&["(foo)"], 0, 0);
+        press(&mut v, 'v', &text);
+        assert_eq!(
+            press(&mut v, '%', &text),
+            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 4) }],
+        );
+    }
+
+    #[test]
+    fn visual_line_j_extends_full_lines() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz", "123"], 0, 1);
+        press(&mut v, 'V', &text);
+        let result = press(&mut v, 'j', &text);
+        // VisualLine: full first to last line
+        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(1, 2) }]);
+    }
+
+    #[test]
+    fn visual_count_motion() {
+        let mut v = normal();
+        let text = snapshot(&["abcdefghij"], 0, 0);
+        press(&mut v, 'v', &text);
+        assert_eq!(
+            press_keys(&mut v, "3l", &text),
+            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 3) }],
         );
     }
 
     #[test]
     fn visual_find_partial_uses_counts() {
-        let mut vim = VimState::new();
-        vim.mode = Mode::Normal;
+        let mut v = normal();
         let text = snapshot(&["foo bar baz boom"], 0, 0);
-
+        press(&mut v, 'v', &text);
         assert_eq!(
-            vim.handle_key(&key('v'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Select {
-                anchor: pos(0, 0),
-                head: pos(0, 0),
-            }]
-        );
-        assert_eq!(
-            vim.handle_key(&key('3'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
-        );
-        assert_eq!(
-            vim.handle_key(&key('f'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
-        );
-        assert_eq!(
-            vim.handle_key(&key('b'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Select {
-                anchor: pos(0, 0),
-                head: pos(0, 12),
-            }]
+            press_keys(&mut v, "3fb", &text),
+            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 12) }],
         );
     }
 
     #[test]
-    fn vertical_motions_preserve_preferred_column() {
-        let mut vim = VimState::new();
-        vim.mode = Mode::Normal;
-
-        let first = snapshot(&["ABCDEFGHIJ", "x", "ABCDEFGHIJ"], 0, 7);
+    fn visual_zero_is_motion_not_digit() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 3);
+        press(&mut v, 'v', &text);
         assert_eq!(
-            vim.handle_key(
-                &keyboard::Key::Named(keyboard::key::Named::ArrowDown),
-                keyboard::Modifiers::default(),
-                &first,
-            ),
-            vec![VimCommand::MoveTo(pos(1, 0))]
+            press(&mut v, '0', &text),
+            vec![VimCommand::Select { anchor: pos(0, 3), head: pos(0, 0) }],
         );
+    }
 
-        let second = snapshot(&["ABCDEFGHIJ", "x", "ABCDEFGHIJ"], 1, 0);
+    // ── Visual mode: operators on selection ──────────────────────────────────
+
+    #[test]
+    fn visual_d_deletes_charwise() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 2);
+        press(&mut v, 'v', &text); // anchor = (0,2)
+        // Simulate cursor at col 4 after motions
+        let text2 = snapshot(&["hello world"], 0, 4);
+        let result = press(&mut v, 'd', &text2);
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(result, vec![VimCommand::DeleteRange { from: pos(0, 2), to: pos(0, 4) }]);
+    }
+
+    #[test]
+    fn visual_x_same_as_d() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 1);
+        press(&mut v, 'v', &text); // anchor = (0,1)
+        let text2 = snapshot(&["hello"], 0, 2);
+        let result = press(&mut v, 'x', &text2);
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(result, vec![VimCommand::DeleteRange { from: pos(0, 1), to: pos(0, 2) }]);
+    }
+
+    #[test]
+    fn visual_c_changes_and_enters_insert() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 1);
+        press(&mut v, 'v', &text); // anchor = (0,1)
+        let text2 = snapshot(&["hello"], 0, 2);
+        let result = press(&mut v, 'c', &text2);
+        assert_eq!(v.mode, Mode::Normal); // exit_visual sets Normal, then EnterInsert changes to Insert in main.rs
+        assert_eq!(result, vec![VimCommand::ChangeRange { from: pos(0, 1), to: pos(0, 2) }, VimCommand::EnterInsert]);
+    }
+
+    #[test]
+    fn visual_s_same_as_c() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 1);
+        press(&mut v, 'v', &text); // anchor = (0,1)
+        let text2 = snapshot(&["hello"], 0, 2);
+        let result = press(&mut v, 's', &text2);
+        assert_eq!(result, vec![VimCommand::ChangeRange { from: pos(0, 1), to: pos(0, 2) }, VimCommand::EnterInsert]);
+    }
+
+    #[test]
+    fn visual_y_yanks_and_moves_to_start() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 1);
+        press(&mut v, 'v', &text);
+        // Simulate cursor moved to col 3 by pressing 'l' twice
+        let text_end = snapshot(&["hello"], 0, 3);
+        let result = press(&mut v, 'y', &text_end);
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(result, vec![VimCommand::YankRange { from: pos(0, 1), to: pos(0, 3) }, VimCommand::MoveTo(pos(0, 1))]);
+    }
+
+    #[test]
+    fn visual_line_d_deletes_lines() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz", "123"], 0, 0);
+        press(&mut v, 'V', &text);
+        let text2 = snapshot(&["abc", "xyz", "123"], 1, 0);
+        press(&mut v, 'j', &text2);
+        let result = press(&mut v, 'd', &text2);
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(result, vec![VimCommand::DeleteLines { first: 0, last: 1 }]);
+    }
+
+    #[test]
+    fn visual_line_c_changes_lines_and_inserts() {
+        let mut v = normal();
+        let text = snapshot(&["abc", "xyz"], 0, 0);
+        press(&mut v, 'V', &text);
+        let result = press(&mut v, 'c', &text);
+        assert_eq!(result, vec![VimCommand::ChangeLines { first: 0, last: 0 }, VimCommand::EnterInsert]);
+    }
+
+    #[test]
+    fn visual_line_y_moves_to_col_zero() {
+        let mut v = normal();
+        let text = snapshot(&["  abc", "  xyz"], 0, 3);
+        press(&mut v, 'V', &text);
+        let text2 = snapshot(&["  abc", "  xyz"], 1, 2);
+        press(&mut v, 'j', &text2);
+        let result = press(&mut v, 'y', &text2);
         assert_eq!(
-            vim.handle_key(
-                &keyboard::Key::Named(keyboard::key::Named::ArrowDown),
-                keyboard::Modifiers::default(),
-                &second,
-            ),
-            vec![VimCommand::MoveTo(pos(2, 7))]
+            result,
+            vec![VimCommand::YankLines { first: 0, last: 1 }, VimCommand::MoveTo(pos(0, 0))],
+        );
+    }
+
+    // ── Visual mode: case transform ─────────────────────────────────────────
+
+    #[test]
+    fn visual_u_lowercases() {
+        let mut v = normal();
+        v.mode = Mode::Visual;
+        v.visual_anchor = Some(pos(0, 0));
+        let text = snapshot(&["ABC DEF"], 0, 2);
+        assert_eq!(
+            press(&mut v, 'u', &text),
+            vec![VimCommand::TransformCaseRange { from: pos(0, 0), to: pos(0, 2), uppercase: false }],
         );
     }
 
     #[test]
-    fn tab_switch_clears_pending_operator() {
-        let mut vim = VimState::new();
-        vim.mode = Mode::Normal;
-        let text = snapshot(&["foo bar"], 0, 0);
-
+    fn visual_big_u_uppercases() {
+        let mut v = normal();
+        v.mode = Mode::Visual;
+        v.visual_anchor = Some(pos(0, 0));
+        let text = snapshot(&["abc def"], 0, 2);
         assert_eq!(
-            vim.handle_key(&key('d'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::Noop]
-        );
-        vim.on_tab_switch();
-        assert_eq!(
-            vim.handle_key(&key('w'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::MoveTo(pos(0, 4))]
+            press(&mut v, 'U', &text),
+            vec![VimCommand::TransformCaseRange { from: pos(0, 0), to: pos(0, 2), uppercase: true }],
         );
     }
 
     #[test]
-    fn around_word_on_whitespace_selects_following_word() {
+    fn visual_line_u_lowercases_lines() {
+        let mut v = normal();
+        v.mode = Mode::VisualLine;
+        v.visual_anchor = Some(pos(0, 0));
+        let text = snapshot(&["ABC", "DEF"], 1, 0);
+        assert_eq!(
+            press(&mut v, 'u', &text),
+            vec![VimCommand::TransformCaseLines { first: 0, last: 1, uppercase: false }],
+        );
+    }
+
+    // ── Visual mode: search ─────────────────────────────────────────────────
+
+    #[test]
+    fn visual_slash_opens_find_stays_visual() {
+        let mut v = normal();
+        v.mode = Mode::Visual;
+        v.visual_anchor = Some(pos(0, 0));
+        let text = snapshot(&["hello"], 0, 2);
+        assert_eq!(press(&mut v, '/', &text), vec![VimCommand::OpenFind]);
+        assert_eq!(v.mode, Mode::Visual);
+    }
+
+    #[test]
+    fn visual_n_find_next_stays_visual() {
+        let mut v = normal();
+        v.mode = Mode::Visual;
+        v.visual_anchor = Some(pos(0, 0));
+        let text = snapshot(&["hello"], 0, 2);
+        assert_eq!(press(&mut v, 'n', &text), vec![VimCommand::FindNext]);
+        assert_eq!(v.mode, Mode::Visual);
+        assert_eq!(v.visual_anchor, Some(pos(0, 0)));
+    }
+
+    // ── Visual mode: text objects ───────────────────────────────────────────
+
+    #[test]
+    fn visual_iw_selects_word() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 2);
+        press(&mut v, 'v', &text);
+        let result = press_keys(&mut v, "iw", &text);
+        assert_eq!(v.visual_anchor, Some(pos(0, 0)));
+        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 4) }]);
+    }
+
+    #[test]
+    fn visual_ib_selects_inside_parens() {
+        let mut v = normal();
+        let text = snapshot(&["foo(bar)baz"], 0, 5);
+        press(&mut v, 'v', &text);
+        let result = press_keys(&mut v, "ib", &text);
+        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 4), head: pos(0, 6) }]);
+    }
+
+    // ── Visual mode: ctrl+r ─────────────────────────────────────────────────
+
+    #[test]
+    fn visual_ctrl_r_exits_and_redoes() {
+        let mut v = normal();
+        v.mode = Mode::Visual;
+        v.visual_anchor = Some(pos(0, 0));
+        let text = snapshot(&["hello"], 0, 2);
+        let result = press_ctrl(&mut v, 'r', &text);
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(v.visual_anchor, None);
+        assert_eq!(result, vec![VimCommand::Redo]);
+    }
+
+    // ── Find repeat (; and ,) ───────────────────────────────────────────────
+
+    #[test]
+    fn semicolon_repeats_f() {
+        let mut v = normal();
+        let text = snapshot(&["abcabc"], 0, 0);
+        press_keys(&mut v, "fa", &text); // find first 'a' (stays at 0 since first match is at col 0+skip)
+        // Actually fa from col 0 finds 'a' at col 3 (skips current col)
+        let text2 = snapshot(&["abcabc"], 0, 3);
+        let result = press(&mut v, ';', &text2);
+        // repeats FindChar('a'), from col 3 finds nothing after col 3... wait
+        // "abcabc": chars are a(0) b(1) c(2) a(3) b(4) c(5)
+        // fa from col 0: skip col 0, check col 1 (b), col 2 (c), col 3 (a) -> match! MoveTo(0,3)
+        // ; from col 3: FindChar('a'), skip col 3, check col 4 (b), col 5 (c) -> no match, stays
+        // So this test should show the cursor staying at (0,3)
+        assert_eq!(result, vec![VimCommand::MoveTo(pos(0, 3))]);
+    }
+
+    #[test]
+    fn semicolon_repeats_t() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 0);
+        press_keys(&mut v, "tw", &text); // till 'w' -> col 5
+        let text2 = snapshot(&["hello world"], 0, 5);
+        let result = press(&mut v, ';', &text2);
+        // TillChar('w') from col 5: finds 'w' at col 6, till = col 5. Stays.
+        assert_eq!(result, vec![VimCommand::MoveTo(pos(0, 5))]);
+    }
+
+    #[test]
+    fn comma_reverses_f() {
+        let mut v = normal();
+        let text = snapshot(&["abcabc"], 0, 0);
+        press_keys(&mut v, "fa", &text); // sets last_find to FindChar('a')
+        let text2 = snapshot(&["abcabc"], 0, 3);
+        let result = press(&mut v, ',', &text2);
+        // , reverses to FindCharBack('a'): from col 3, scan backward cols 2,1,0. Col 0 is 'a' -> match
+        assert_eq!(result, vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn comma_reverses_big_f() {
+        let mut v = normal();
+        let text = snapshot(&["abcabc"], 0, 5);
+        press_keys(&mut v, "Fa", &text); // FindCharBack('a'), finds 'a' at col 3
+        let text2 = snapshot(&["abcabc"], 0, 3);
+        let result = press(&mut v, ',', &text2);
+        // , reverses FindCharBack to FindChar: from col 3, skip col 3+1=4, find 'a'... no more 'a' after col 4
+        // stays at (0,3)
+        assert_eq!(result, vec![VimCommand::MoveTo(pos(0, 3))]);
+    }
+
+    #[test]
+    fn semicolon_without_prior_find_is_noop() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 0);
+        // no prior find, repeat_find returns None, falls through to Noop
+        assert_eq!(press(&mut v, ';', &text), vec![VimCommand::Noop]);
+    }
+
+    #[test]
+    fn find_persists_across_other_commands() {
+        let mut v = normal();
+        let text = snapshot(&["abcabc"], 0, 0);
+        press_keys(&mut v, "fa", &text); // find 'a' at col 3
+        let text2 = snapshot(&["abcabc"], 0, 3);
+        press(&mut v, 'l', &text2); // some other motion
+        let text3 = snapshot(&["abcabc"], 0, 4);
+        // ; should still repeat the find
+        // repeat_find returns FindChar('a'), but from col 4: skip to 5, no more 'a' -> stays
+        let result = press(&mut v, ';', &text3);
+        assert_eq!(result, vec![VimCommand::MoveTo(pos(0, 4))]);
+    }
+
+    #[test]
+    fn find_repeat_with_operator() {
+        let mut v = normal();
+        let text = snapshot(&["abcabc"], 0, 0);
+        press_keys(&mut v, "fa", &text); // sets last_find
+        let text2 = snapshot(&["abcabc"], 0, 3);
+        // d; should delete to next 'a' using repeat find
+        // But from col 3, FindChar('a') finds no match after col 3+1=4 (cols 4=b, 5=c)
+        // target == cursor -> Noop
+        let result = press_keys(&mut v, "d;", &text2);
+        assert_eq!(result, vec![VimCommand::Noop]);
+    }
+
+    #[test]
+    fn find_repeat_in_visual_extends_selection() {
+        let mut v = normal();
+        let text = snapshot(&["aXbXcXd"], 0, 0);
+        press_keys(&mut v, "fX", &text); // find 'X' at col 1
+        let text2 = snapshot(&["aXbXcXd"], 0, 1);
+        press(&mut v, 'v', &text2); // enter Visual at col 1
+        let result = press(&mut v, ';', &text2); // repeat find, extends selection
+        // FindChar('X') from col 1: skip col 1+1=2, col 2 is 'b', col 3 is 'X' -> match
+        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 1), head: pos(0, 3) }]);
+    }
+
+    #[test]
+    fn visual_find_updates_last_find() {
+        // Regression test: visual mode f/t must update last_find for ; to work
+        let mut v = normal();
+        let text = snapshot(&["aXbXcXd"], 0, 0);
+        press(&mut v, 'v', &text); // enter Visual
+        press_keys(&mut v, "fX", &text); // find 'X' in visual mode
+        // last_find should now be set to FindChar('X')
+        let text2 = snapshot(&["aXbXcXd"], 0, 1);
+        let result = press(&mut v, ';', &text2); // repeat should work
+        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 3) }]);
+    }
+
+    // ── Text objects: word (iw, aw) ─────────────────────────────────────────
+
+    #[test]
+    fn iw_selects_word() {
+        let text = snapshot(&["hello world"], 0, 2);
+        assert_eq!(text_object(&text, 'w', true, None), Some((pos(0, 0), pos(0, 4))));
+    }
+
+    #[test]
+    fn aw_includes_trailing_space() {
+        let text = snapshot(&["hello world"], 0, 2);
+        assert_eq!(text_object(&text, 'w', false, None), Some((pos(0, 0), pos(0, 5))));
+    }
+
+    #[test]
+    fn iw_on_whitespace() {
         let text = snapshot(&["foo   bar"], 0, 4);
-        assert_eq!(
-            text_object(&text, 'w', false, None),
-            Some((pos(0, 3), pos(0, 8)))
-        );
+        assert_eq!(text_object(&text, 'w', true, None), Some((pos(0, 3), pos(0, 5))));
     }
 
     #[test]
-    fn counted_inner_word_objects_expand_across_adjacent_objects() {
+    fn aw_on_whitespace_includes_following_word() {
+        let text = snapshot(&["foo   bar"], 0, 4);
+        assert_eq!(text_object(&text, 'w', false, None), Some((pos(0, 3), pos(0, 8))));
+    }
+
+    #[test]
+    fn iw_on_empty_line() {
+        let text = snapshot(&[""], 0, 0);
+        assert_eq!(text_object(&text, 'w', true, None), None);
+    }
+
+    #[test]
+    fn counted_iw() {
         let text = snapshot(&["foo bar baz"], 0, 0);
-        assert_eq!(
-            text_object(&text, 'w', true, Some(2)),
-            Some((pos(0, 0), pos(0, 3)))
-        );
+        assert_eq!(text_object(&text, 'w', true, Some(2)), Some((pos(0, 0), pos(0, 3))));
     }
 
     #[test]
-    fn counted_around_word_objects_expand_from_whitespace() {
-        let text = snapshot(&["foo   bar baz"], 0, 4);
-        assert_eq!(
-            text_object(&text, 'w', false, Some(2)),
-            Some((pos(0, 3), pos(0, 12)))
-        );
+    fn big_iw() {
+        let text = snapshot(&["foo.bar baz"], 0, 2);
+        assert_eq!(text_object(&text, 'W', true, None), Some((pos(0, 0), pos(0, 6))));
+    }
+
+    // ── Text objects: pairs (ib, ab, iB, aB, etc.) ──────────────────────────
+
+    #[test]
+    fn ib_inside_parens() {
+        let text = snapshot(&["foo(bar)baz"], 0, 5);
+        assert_eq!(text_object(&text, 'b', true, None), Some((pos(0, 4), pos(0, 6))));
     }
 
     #[test]
-    fn quote_object_ignores_escaped_quotes() {
+    fn ab_around_parens() {
+        let text = snapshot(&["foo(bar)baz"], 0, 5);
+        assert_eq!(text_object(&text, 'b', false, None), Some((pos(0, 3), pos(0, 7))));
+    }
+
+    #[test]
+    fn ib_empty_parens_is_none() {
+        let text = snapshot(&["()"], 0, 0);
+        assert_eq!(text_object(&text, 'b', true, None), None);
+    }
+
+    #[test]
+    fn ib_nested() {
+        let text = snapshot(&["((foo))"], 0, 3);
+        assert_eq!(text_object(&text, 'b', true, None), Some((pos(0, 2), pos(0, 4))));
+    }
+
+    #[test]
+    fn ib_cursor_on_close_paren() {
+        let text = snapshot(&["(foo)"], 0, 4);
+        assert_eq!(text_object(&text, 'b', true, None), Some((pos(0, 1), pos(0, 3))));
+    }
+
+    #[test]
+    fn i_brace_inside_braces() {
+        let text = snapshot(&["{foo}"], 0, 2);
+        assert_eq!(text_object(&text, 'B', true, None), Some((pos(0, 1), pos(0, 3))));
+    }
+
+    #[test]
+    fn i_bracket() {
+        let text = snapshot(&["[foo]"], 0, 2);
+        assert_eq!(text_object(&text, '[', true, None), Some((pos(0, 1), pos(0, 3))));
+    }
+
+    #[test]
+    fn i_angle() {
+        let text = snapshot(&["<foo>"], 0, 2);
+        assert_eq!(text_object(&text, '<', true, None), Some((pos(0, 1), pos(0, 3))));
+    }
+
+    #[test]
+    fn pair_cross_line() {
+        let text = snapshot(&["(", "foo", ")"], 1, 1);
+        assert_eq!(text_object(&text, 'b', true, None), Some((pos(1, 0), pos(1, 2))));
+    }
+
+    #[test]
+    fn pair_no_match() {
+        let text = snapshot(&["foo(bar"], 0, 5);
+        // Unclosed paren: forward scan finds no match
+        assert_eq!(text_object(&text, 'b', true, None), None);
+    }
+
+    // ── Text objects: quotes (i", a", i', a', i`, a`) ───────────────────────
+
+    #[test]
+    fn i_double_quote() {
+        let text = snapshot(&["say \"hello\" ok"], 0, 6);
+        assert_eq!(text_object(&text, '"', true, None), Some((pos(0, 5), pos(0, 9))));
+    }
+
+    #[test]
+    fn a_double_quote() {
+        let text = snapshot(&["say \"hello\" ok"], 0, 6);
+        assert_eq!(text_object(&text, '"', false, None), Some((pos(0, 4), pos(0, 10))));
+    }
+
+    #[test]
+    fn i_single_quote() {
+        let text = snapshot(&["say 'hi' ok"], 0, 6);
+        assert_eq!(text_object(&text, '\'', true, None), Some((pos(0, 5), pos(0, 6))));
+    }
+
+    #[test]
+    fn i_backtick() {
+        let text = snapshot(&["say `hi` ok"], 0, 6);
+        assert_eq!(text_object(&text, '`', true, None), Some((pos(0, 5), pos(0, 6))));
+    }
+
+    #[test]
+    fn quote_escaped() {
         let text = snapshot(&["let s = \"a\\\"b\""], 0, 12);
-        assert_eq!(
-            text_object(&text, '"', true, None),
-            Some((pos(0, 9), pos(0, 12)))
-        );
+        assert_eq!(text_object(&text, '"', true, None), Some((pos(0, 9), pos(0, 12))));
     }
 
     #[test]
-    fn quote_object_uses_nearest_surrounding_pair() {
+    fn quote_nearest_pair() {
         let text = snapshot(&["\"foo \"bar\""], 0, 7);
-        assert_eq!(
-            text_object(&text, '"', true, None),
-            Some((pos(0, 6), pos(0, 8)))
-        );
+        assert_eq!(text_object(&text, '"', true, None), Some((pos(0, 6), pos(0, 8))));
     }
 
     #[test]
-    fn quote_object_rejects_gap_between_adjacent_strings() {
+    fn quote_gap_between_strings() {
         let text = snapshot(&["\"one\" \"two\""], 0, 5);
         assert_eq!(text_object(&text, '"', true, None), None);
     }
 
     #[test]
-    fn visual_u_maps_to_case_transform() {
-        let mut vim = VimState::new();
-        vim.mode = Mode::Visual;
-        vim.visual_anchor = Some(pos(0, 0));
-        let text = snapshot(&["ABC DEF"], 0, 2);
+    fn quote_empty_inner_is_none() {
+        let text = snapshot(&["\"\""], 0, 0);
+        assert_eq!(text_object(&text, '"', true, None), None);
+    }
 
+    // ── Text objects: with operators ────────────────────────────────────────
+
+    #[test]
+    fn diw() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 2);
         assert_eq!(
-            vim.handle_key(&key('u'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::TransformCaseRange {
-                from: pos(0, 0),
-                to: pos(0, 2),
-                uppercase: false,
-            }]
+            press_keys(&mut v, "diw", &text),
+            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 4) }],
         );
     }
 
     #[test]
-    fn visual_search_repeat_keeps_visual_mode() {
-        let mut vim = VimState::new();
-        vim.mode = Mode::Visual;
-        vim.visual_anchor = Some(pos(0, 0));
-        let text = snapshot(&["foo bar foo"], 0, 2);
-
+    fn ciw() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 2);
         assert_eq!(
-            vim.handle_key(&key('n'), keyboard::Modifiers::default(), &text),
-            vec![VimCommand::FindNext]
+            press_keys(&mut v, "ciw", &text),
+            vec![VimCommand::ChangeRange { from: pos(0, 0), to: pos(0, 4) }, VimCommand::EnterInsert],
         );
-        assert_eq!(vim.mode, Mode::Visual);
-        assert_eq!(vim.visual_anchor, Some(pos(0, 0)));
+    }
+
+    #[test]
+    fn yiw() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 2);
+        assert_eq!(
+            press_keys(&mut v, "yiw", &text),
+            vec![VimCommand::YankRange { from: pos(0, 0), to: pos(0, 4) }, VimCommand::MoveTo(pos(0, 0))],
+        );
+    }
+
+    #[test]
+    fn dib() {
+        let mut v = normal();
+        let text = snapshot(&["foo(bar)"], 0, 5);
+        assert_eq!(
+            press_keys(&mut v, "dib", &text),
+            vec![VimCommand::DeleteRange { from: pos(0, 4), to: pos(0, 6) }],
+        );
+    }
+
+    // ── Escape handling ─────────────────────────────────────────────────────
+
+    #[test]
+    fn escape_from_insert_moves_cursor_left() {
+        let mut v = VimState::new(); // starts in Insert
+        let text = snapshot(&["hello"], 0, 3);
+        let result = v.enter_normal_from_escape(text.cursor, &text);
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(result, vec![VimCommand::MoveTo(pos(0, 2))]);
+    }
+
+    #[test]
+    fn escape_from_insert_at_col_zero_stays() {
+        let mut v = VimState::new();
+        let text = snapshot(&["hello"], 0, 0);
+        let result = v.enter_normal_from_escape(text.cursor, &text);
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(result, vec![VimCommand::Noop]);
+    }
+
+    #[test]
+    fn escape_from_visual_clears_selection() {
+        let mut v = normal();
+        v.mode = Mode::Visual;
+        v.visual_anchor = Some(pos(0, 0));
+        let text = snapshot(&["hello"], 0, 3);
+        let result = v.enter_normal_from_escape(text.cursor, &text);
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(v.visual_anchor, None);
+        assert_eq!(result, vec![VimCommand::MoveTo(pos(0, 3))]);
+    }
+
+    #[test]
+    fn escape_from_visual_line_clears_selection() {
+        let mut v = normal();
+        v.mode = Mode::VisualLine;
+        v.visual_anchor = Some(pos(0, 0));
+        let text = snapshot(&["hello"], 0, 3);
+        let result = v.enter_normal_from_escape(text.cursor, &text);
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(v.visual_anchor, None);
+        assert_eq!(result, vec![VimCommand::MoveTo(pos(0, 3))]);
+    }
+
+    #[test]
+    fn escape_in_normal_clears_pending() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 0);
+        press(&mut v, 'd', &text); // set pending operator
+        let result = v.enter_normal_from_escape(text.cursor, &text);
+        assert_eq!(v.pending_display(), "");
+        assert_eq!(result, vec![VimCommand::Noop]);
+    }
+
+    // ── Pending state ───────────────────────────────────────────────────────
+
+    #[test]
+    fn f_waits_for_char() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 0);
+        assert_eq!(press(&mut v, 'f', &text), vec![VimCommand::Noop]);
+        assert_eq!(v.pending_display(), "f");
+    }
+
+    #[test]
+    fn g_waits_for_second_g() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb"], 1, 0);
+        assert_eq!(press(&mut v, 'g', &text), vec![VimCommand::Noop]);
+        assert_eq!(v.pending_display(), "g");
+    }
+
+    #[test]
+    fn g_then_non_g_cancels() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb"], 1, 0);
+        press(&mut v, 'g', &text);
+        let result = press(&mut v, 'x', &text);
+        assert_eq!(result, vec![VimCommand::Noop]);
+        assert_eq!(v.pending_display(), "");
+    }
+
+    #[test]
+    fn r_waits_for_char() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 2);
+        assert_eq!(press(&mut v, 'r', &text), vec![VimCommand::Noop]);
+        assert_eq!(v.pending_display(), "r");
+    }
+
+    #[test]
+    fn d_then_unknown_cancels() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 0);
+        press(&mut v, 'd', &text);
+        let result = press(&mut v, 'z', &text);
+        assert_eq!(result, vec![VimCommand::Noop]);
+        assert_eq!(v.pending_display(), "");
+    }
+
+    #[test]
+    fn d_f_x_deletes_to_char() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 0);
+        assert_eq!(
+            press_keys(&mut v, "dfo", &text),
+            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 4) }],
+        );
+    }
+
+    #[test]
+    fn d_gg_deletes_to_top() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb", "ccc"], 2, 0);
+        assert_eq!(
+            press_keys(&mut v, "dgg", &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 2 }],
+        );
+    }
+
+    #[test]
+    fn d_i_w_text_object() {
+        let mut v = normal();
+        let text = snapshot(&["hello world"], 0, 2);
+        assert_eq!(
+            press_keys(&mut v, "diw", &text),
+            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 4) }],
+        );
+    }
+
+    #[test]
+    fn d_i_unknown_cancels() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 0);
+        let result = press_keys(&mut v, "diz", &text);
+        assert_eq!(result, vec![VimCommand::Noop]);
+        assert_eq!(v.pending_display(), "");
+    }
+
+    #[test]
+    fn pending_display_shows_count_operator_count_partial() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 0);
+        press(&mut v, '3', &text);
+        assert_eq!(v.pending_display(), "3");
+        press(&mut v, 'd', &text);
+        assert_eq!(v.pending_display(), "3d");
+        press(&mut v, '2', &text);
+        assert_eq!(v.pending_display(), "3d2");
+        press(&mut v, 'f', &text);
+        assert_eq!(v.pending_display(), "3d2f");
+    }
+
+    #[test]
+    fn pending_display_empty_by_default() {
+        let v = normal();
+        assert_eq!(v.pending_display(), "");
+    }
+
+    // ── Tab switch ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn tab_switch_clears_pending_operator() {
+        let mut v = normal();
+        let text = snapshot(&["foo bar"], 0, 0);
+        press(&mut v, 'd', &text);
+        v.on_tab_switch();
+        assert_eq!(press(&mut v, 'w', &text), vec![VimCommand::MoveTo(pos(0, 4))]);
+    }
+
+    #[test]
+    fn tab_switch_exits_visual() {
+        let mut v = normal();
+        v.mode = Mode::Visual;
+        v.visual_anchor = Some(pos(0, 0));
+        v.on_tab_switch();
+        assert_eq!(v.mode, Mode::Normal);
+        assert_eq!(v.visual_anchor, None);
+    }
+
+    #[test]
+    fn tab_switch_preserves_insert() {
+        let mut v = VimState::new(); // starts Insert
+        v.on_tab_switch();
+        assert_eq!(v.mode, Mode::Insert);
+    }
+
+    // ── Insert mode passthrough ─────────────────────────────────────────────
+
+    #[test]
+    fn insert_mode_returns_empty() {
+        let mut v = VimState::new(); // Insert mode
+        let text = snapshot(&["hello"], 0, 0);
+        assert_eq!(v.handle_key(&key('x'), mods(), &text), vec![]);
+    }
+
+    // ── Ctrl passthrough in normal mode ─────────────────────────────────────
+
+    #[test]
+    fn ctrl_non_r_is_noop() {
+        let mut v = normal();
+        let text = snapshot(&["hello"], 0, 0);
+        assert_eq!(press_ctrl(&mut v, 'x', &text), vec![VimCommand::Noop]);
+    }
+
+    // ── Edge cases ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn w_from_empty_line_to_next() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'w', &snapshot(&["", "foo"], 0, 0)), vec![VimCommand::MoveTo(pos(1, 0))]);
+    }
+
+    #[test]
+    fn b_to_empty_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'b', &snapshot(&["", "foo"], 1, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn x_on_single_char_line() {
+        let mut v = normal();
+        assert_eq!(
+            press(&mut v, 'x', &snapshot(&["a"], 0, 0)),
+            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 0) }],
+        );
+    }
+
+    #[test]
+    fn dollar_on_single_char_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, '$', &snapshot(&["a"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn l_on_single_char_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'l', &snapshot(&["a"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn big_g_on_single_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'G', &snapshot(&["foo"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn gg_on_single_line() {
+        let mut v = normal();
+        assert_eq!(press_keys(&mut v, "gg", &snapshot(&["foo"], 0, 2)), vec![VimCommand::MoveTo(pos(0, 0))]);
+    }
+
+    #[test]
+    fn dw_at_last_word_of_file_deletes() {
+        let mut v = normal();
+        // vim: dw on last word of file deletes to end (w can't find next word, becomes inclusive)
+        assert_eq!(
+            press_keys(&mut v, "dw", &snapshot(&["foo"], 0, 2)),
+            vec![VimCommand::DeleteRange { from: pos(0, 2), to: pos(0, 2) }],
+        );
+    }
+
+    #[test]
+    fn dw_on_only_word_deletes_all() {
+        let mut v = normal();
+        // dw from start of sole word: deletes entire word
+        assert_eq!(
+            press_keys(&mut v, "dw", &snapshot(&["hello"], 0, 0)),
+            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 4) }],
+        );
+    }
+
+    #[test]
+    fn d_dollar_on_single_char_deletes() {
+        let mut v = normal();
+        // d$ on "a" at col 0: $ returns col 0, still deletes the char
+        assert_eq!(
+            press_keys(&mut v, "d$", &snapshot(&["a"], 0, 0)),
+            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 0) }],
+        );
+    }
+
+    #[test]
+    fn dl_on_single_char_deletes() {
+        let mut v = normal();
+        // dl on "a": l clamped to col 0, but still deletes (vim exception for 0-char motions)
+        assert_eq!(
+            press_keys(&mut v, "dl", &snapshot(&["a"], 0, 0)),
+            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 0) }],
+        );
+    }
+
+    #[test]
+    fn de_at_end_of_file_deletes() {
+        let mut v = normal();
+        assert_eq!(
+            press_keys(&mut v, "de", &snapshot(&["x"], 0, 0)),
+            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 0) }],
+        );
+    }
+
+    #[test]
+    fn w_on_whitespace_only_line() {
+        let mut v = normal();
+        assert_eq!(press(&mut v, 'w', &snapshot(&["   ", "foo"], 0, 0)), vec![VimCommand::MoveTo(pos(1, 0))]);
+    }
+
+    // ── Backward inclusive motion fixes ─────────────────────────────────
+
+    #[test]
+    fn d_big_f_excludes_cursor_char() {
+        let mut v = normal();
+        // "hello world", cursor at col 7 ('o' in world), dFo finds 'o' at col 4
+        // vim: deletes cols 4-6 ("o w"), NOT including cursor char at col 7
+        let text = snapshot(&["hello world"], 0, 7);
+        assert_eq!(
+            press_keys(&mut v, "dFo", &text),
+            vec![VimCommand::DeleteRange { from: pos(0, 4), to: pos(0, 6) }],
+        );
+    }
+
+    #[test]
+    fn d_big_t_excludes_cursor_char() {
+        let mut v = normal();
+        // "hello world", cursor at col 7, dTo: T finds 'o' at col 4, stops at col 5
+        // vim: deletes cols 5-6 (" w")
+        let text = snapshot(&["hello world"], 0, 7);
+        assert_eq!(
+            press_keys(&mut v, "dTo", &text),
+            vec![VimCommand::DeleteRange { from: pos(0, 5), to: pos(0, 6) }],
+        );
+    }
+
+    // ── cw on whitespace ────────────────────────────────────────────────
+
+    #[test]
+    fn cw_on_whitespace_does_not_remap_to_ce() {
+        let mut v = normal();
+        // "foo   bar" cursor on space at col 3: cw should change only spaces (to col 5),
+        // NOT remap to ce which would change spaces + "bar"
+        let text = snapshot(&["foo   bar"], 0, 3);
+        assert_eq!(
+            press_keys(&mut v, "cw", &text),
+            vec![VimCommand::ChangeRange { from: pos(0, 3), to: pos(0, 5) }, VimCommand::EnterInsert],
+        );
+    }
+
+    #[test]
+    fn cw_on_word_still_remaps_to_ce() {
+        let mut v = normal();
+        // "foo bar" cursor on 'f': cw should remap to ce, changing only "foo"
+        let text = snapshot(&["foo bar"], 0, 0);
+        assert_eq!(
+            press_keys(&mut v, "cw", &text),
+            vec![VimCommand::ChangeRange { from: pos(0, 0), to: pos(0, 2) }, VimCommand::EnterInsert],
+        );
     }
 }
