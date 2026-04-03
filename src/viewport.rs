@@ -46,8 +46,17 @@ impl ViewportState {
         self.width
     }
 
+    pub fn height(&self) -> f32 {
+        self.height
+    }
+
     pub fn can_reveal(&self) -> bool {
         self.width > 0.0 && self.height > 0.0
+    }
+
+    pub fn with_content_height(mut self, content_height: f32) -> Self {
+        self.content_height = content_height;
+        self
     }
 
     pub fn reveal_offset(&self, caret_top: f32, caret_height: f32, margin: f32) -> Option<f32> {
@@ -143,7 +152,6 @@ pub fn cursor_visual_row_in_line(line: &str, column: usize, max_cols: usize) -> 
     layout.cursor_rows[column.min(max_column)]
 }
 
-#[cfg(test)]
 pub fn content_height(viewport_height: f32, visual_lines: usize) -> f32 {
     let overscroll = viewport_height * 0.4;
     let text_height =

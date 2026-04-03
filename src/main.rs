@@ -373,6 +373,7 @@ impl App {
         let caret_top = self.caret_top(cursor);
         let margin = LINE_HEIGHT_PX * 2.0;
         self.viewport
+            .with_content_height(self.estimated_content_height())
             .reveal_offset(caret_top, LINE_HEIGHT_PX, margin)
     }
 
@@ -415,6 +416,32 @@ impl App {
         });
 
         EDITOR_PAD + visual_row as f32 * LINE_HEIGHT_PX
+    }
+
+    fn estimated_content_height(&self) -> f32 {
+        viewport::content_height(self.viewport.height(), self.visual_line_count())
+    }
+
+    fn visual_line_count(&self) -> usize {
+        let content = &self.tabs[self.active].content;
+        if !self.word_wrap {
+            return content.line_count().max(1);
+        }
+
+        let max_cols = viewport::wrap_columns(
+            self.viewport.width(),
+            EDITOR_FONT.char_width,
+            content.line_count().max(1),
+        );
+
+        (0..content.line_count())
+            .map(|line_idx| {
+                content.line(line_idx).map_or(1, |line| {
+                    viewport::visual_line_count(line.text.as_ref(), max_cols)
+                })
+            })
+            .sum::<usize>()
+            .max(1)
     }
 
     fn finish_update(&self, result: UpdateResult) -> Task<Message> {
@@ -642,10 +669,11 @@ impl App {
             }
 
             Message::TabSelect(i) => {
-                if i < self.tabs.len() {
+                if i < self.tabs.len() && i != self.active {
                     self.set_active_tab(i);
+                    return UpdateResult::reveal(Task::none());
                 }
-                UpdateResult::reveal(Task::none())
+                UpdateResult::none()
             }
 
             Message::TabClose(i) => {
@@ -1138,8 +1166,9 @@ impl App {
             Message::NextTab => {
                 if self.tabs.len() > 1 {
                     self.set_active_tab((self.active + 1) % self.tabs.len());
+                    return UpdateResult::reveal(Task::none());
                 }
-                UpdateResult::reveal(Task::none())
+                UpdateResult::none()
             }
 
             Message::PrevTab => {
@@ -1150,8 +1179,9 @@ impl App {
                         self.active - 1
                     };
                     self.set_active_tab(prev);
+                    return UpdateResult::reveal(Task::none());
                 }
-                UpdateResult::reveal(Task::none())
+                UpdateResult::none()
             }
 
             // ── Go to Line ──────────────────────────────────────────────
@@ -2668,6 +2698,24 @@ mod tests {
     }
 
     #[test]
+    fn noop_tab_actions_do_not_request_reveal() {
+        let mut app = test_app("one");
+
+        assert_eq!(
+            app.update_inner(Message::TabSelect(0)).reveal,
+            RevealIntent::None
+        );
+        assert_eq!(
+            app.update_inner(Message::NextTab).reveal,
+            RevealIntent::None
+        );
+        assert_eq!(
+            app.update_inner(Message::PrevTab).reveal,
+            RevealIntent::None
+        );
+    }
+
+    #[test]
     fn goto_line_submit_requests_reveal_on_valid_input() {
         let mut app = test_app("one\ntwo\nthree");
         app.goto_line = Some("3".to_string());
@@ -2717,6 +2765,52 @@ mod tests {
         });
 
         assert_eq!(app.caret_reveal_target(), Some(40.0));
+    }
+
+    #[test]
+    fn tab_switch_reveal_uses_active_document_height() {
+        let width = viewport::line_number_gutter_width(10, EDITOR_FONT.char_width)
+            + viewport::GUTTER_SEPARATOR_WIDTH
+            + EDITOR_PAD
+            + viewport::EDITOR_RIGHT_PAD
+            + EDITOR_FONT.char_width * 20.0;
+        let height = 60.0;
+        let mut app = App {
+            tabs: vec![
+                Tab::from_path(PathBuf::from("/tmp/short.txt"), "short"),
+                Tab::from_path(
+                    PathBuf::from("/tmp/long.txt"),
+                    "1\n2\n3\n4\n5\n6\n7\n8\n9\n10",
+                ),
+            ],
+            active: 0,
+            window_title: None,
+            gutter_mouse_y: 0.0,
+            find: FindState::new(),
+            word_wrap: true,
+            scratchpad_dir: PathBuf::from("/tmp"),
+            needs_autosave: false,
+            shift_held: false,
+            multiclick_drag: false,
+            editor_mouse_pos: Point::ORIGIN,
+            goto_line: None,
+            vim: vim::VimState::new(),
+            viewport: ViewportState::from_metrics(
+                width,
+                height,
+                viewport::content_height(height, 1),
+                0.0,
+            ),
+        };
+        app.tabs[1].content.move_to(text_editor::Cursor {
+            position: pos(9, 0),
+            selection: None,
+        });
+
+        let result = app.update_inner(Message::TabSelect(1));
+
+        assert_eq!(result.reveal, RevealIntent::RevealCaret);
+        assert_eq!(app.caret_reveal_target(), Some(180.0));
     }
 }
 
