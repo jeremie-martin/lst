@@ -79,6 +79,7 @@ pub enum VimCommand {
     OpenFind,
     FindNext,
     FindPrev,
+    SearchWordUnderCursor { word: String, forward: bool },
     TransformCaseRange {
         from: Position,
         to: Position,
@@ -509,6 +510,16 @@ impl VimState {
             '/' => vec![VimCommand::OpenFind],
             'n' => vec![VimCommand::FindNext],
             'N' => vec![VimCommand::FindPrev],
+            '*' | '#' => {
+                if let Some(word) = word_under_cursor(text) {
+                    vec![VimCommand::SearchWordUnderCursor {
+                        word,
+                        forward: c == '*',
+                    }]
+                } else {
+                    vec![VimCommand::Noop]
+                }
+            }
             _ => vec![VimCommand::Noop],
         }
     }
@@ -729,6 +740,10 @@ impl VimState {
                     if let Some(range) = text_object(text, c, inner, count) {
                         self.clear_pending();
                         self.clear_preferred_column();
+                        // Paragraph text objects are linewise
+                        if c == 'p' {
+                            return self.line_operator(op, range.0.line, range.1.line);
+                        }
                         return self.range_operator(op, range.0, range.1);
                     }
                 }
@@ -1330,6 +1345,7 @@ fn text_object(
     match obj {
         'w' => word_object(text, inner, false, count.unwrap_or(1)),
         'W' => word_object(text, inner, true, count.unwrap_or(1)),
+        'p' => paragraph_object(text, inner),
         '(' | ')' | 'b' => pair_object(text, '(', ')', inner),
         '{' | '}' | 'B' => pair_object(text, '{', '}', inner),
         '[' | ']' => pair_object(text, '[', ']', inner),
@@ -1409,6 +1425,33 @@ fn word_object_at(
     }
 
     Some((pos(line, start), pos(line, end)))
+}
+
+fn paragraph_object(text: &TextSnapshot, inner: bool) -> Option<(Position, Position)> {
+    let total = text.line_count();
+    if total == 0 {
+        return None;
+    }
+    let cur = text.cursor.line;
+    let is_blank = |l: usize| text.lines.get(l).is_none_or(|s| s.trim().is_empty());
+    let on_blank = is_blank(cur);
+    let same = |l: usize| is_blank(l) == on_blank;
+
+    let mut first = cur;
+    while first > 0 && same(first - 1) {
+        first -= 1;
+    }
+    let mut last = cur;
+    while last + 1 < total && same(last + 1) {
+        last += 1;
+    }
+    if !inner {
+        while last + 1 < total && !same(last + 1) {
+            last += 1;
+        }
+    }
+    let last_col = line_len(text, last).max(1).saturating_sub(1);
+    Some((pos(first, 0), pos(last, last_col)))
 }
 
 fn pair_object(
@@ -1697,6 +1740,26 @@ fn line_chars(text: &TextSnapshot, line: usize) -> Vec<char> {
     text.lines
         .get(line)
         .map_or(Vec::new(), |l| l.chars().collect())
+}
+
+fn word_under_cursor(text: &TextSnapshot) -> Option<String> {
+    let chars = line_chars(text, text.cursor.line);
+    if chars.is_empty() {
+        return None;
+    }
+    let col = text.cursor.column.min(chars.len().saturating_sub(1));
+    if !chars[col].is_alphanumeric() && chars[col] != '_' {
+        return None;
+    }
+    let mut start = col;
+    while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+        start -= 1;
+    }
+    let mut end = col;
+    while end + 1 < chars.len() && (chars[end + 1].is_alphanumeric() || chars[end + 1] == '_') {
+        end += 1;
+    }
+    Some(chars[start..=end].iter().collect())
 }
 
 fn first_non_blank(text: &TextSnapshot, line: usize) -> usize {
@@ -3790,6 +3853,106 @@ mod tests {
         assert_eq!(
             press_keys(&mut v, "cw", &text),
             vec![VimCommand::ChangeRange { from: pos(0, 0), to: pos(0, 2) }, VimCommand::EnterInsert],
+        );
+    }
+
+    // ── Paragraph text object (ip/ap) ──────────────────────────────────────
+
+    #[test]
+    fn dip_deletes_inner_paragraph() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb", "", "ccc"], 0, 0);
+        assert_eq!(
+            press_keys(&mut v, "dip", &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 1 }],
+        );
+    }
+
+    #[test]
+    fn dap_deletes_paragraph_with_trailing_blank() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb", "", "ccc"], 0, 0);
+        assert_eq!(
+            press_keys(&mut v, "dap", &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 2 }],
+        );
+    }
+
+    #[test]
+    fn dip_on_blank_line_deletes_blank_region() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "", "", "bbb"], 1, 0);
+        assert_eq!(
+            press_keys(&mut v, "dip", &text),
+            vec![VimCommand::DeleteLines { first: 1, last: 2 }],
+        );
+    }
+
+    #[test]
+    fn dap_on_blank_line_includes_following_paragraph() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "", "", "bbb", "ccc"], 1, 0);
+        assert_eq!(
+            press_keys(&mut v, "dap", &text),
+            vec![VimCommand::DeleteLines { first: 1, last: 4 }],
+        );
+    }
+
+    #[test]
+    fn yip_yanks_paragraph() {
+        let mut v = normal();
+        let text = snapshot(&["", "aaa", "bbb", "", "ccc"], 2, 0);
+        assert_eq!(
+            press_keys(&mut v, "yip", &text),
+            vec![VimCommand::YankLines { first: 1, last: 2 }],
+        );
+    }
+
+    #[test]
+    fn visual_ip_selects_paragraph() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb", "", "ccc"], 0, 1);
+        press(&mut v, 'v', &text);
+        let result = press_keys(&mut v, "ip", &text);
+        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(1, 2) }]);
+    }
+
+    // ── * and # (search word under cursor) ──────────────────────────────
+
+    #[test]
+    fn star_searches_word_under_cursor() {
+        let mut v = normal();
+        let text = snapshot(&["foo bar foo"], 0, 0);
+        assert_eq!(
+            press(&mut v, '*', &text),
+            vec![VimCommand::SearchWordUnderCursor { word: "foo".into(), forward: true }],
+        );
+    }
+
+    #[test]
+    fn hash_searches_word_backward() {
+        let mut v = normal();
+        let text = snapshot(&["foo bar foo"], 0, 8);
+        assert_eq!(
+            press(&mut v, '#', &text),
+            vec![VimCommand::SearchWordUnderCursor { word: "foo".into(), forward: false }],
+        );
+    }
+
+    #[test]
+    fn star_on_non_word_is_noop() {
+        let mut v = normal();
+        let text = snapshot(&["  "], 0, 0);
+        assert_eq!(press(&mut v, '*', &text), vec![VimCommand::Noop]);
+    }
+
+    #[test]
+    fn star_mid_word() {
+        let mut v = normal();
+        let text = snapshot(&["hello_world"], 0, 3);
+        assert_eq!(
+            press(&mut v, '*', &text),
+            vec![VimCommand::SearchWordUnderCursor { word: "hello_world".into(), forward: true }],
         );
     }
 }

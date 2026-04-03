@@ -12,7 +12,7 @@ use iced::event;
 use iced::keyboard;
 use iced::widget::{
     button, column, container, mouse_area, opaque, responsive, right, row, scrollable, stack, text,
-    text_editor, text_input, Space,
+    text_editor, text_input, scrollable::Viewport, Space,
 };
 use iced::{
     Background, Border, Color, Element, Font, Length, Padding, Pixels, Point, Subscription, Task,
@@ -29,6 +29,8 @@ fn editor_id() -> iced::widget::Id {
 }
 
 static EDITOR_ID: LazyLock<iced::widget::Id> = LazyLock::new(editor_id);
+static SCROLLABLE_ID: LazyLock<iced::widget::Id> =
+    LazyLock::new(|| iced::widget::Id::new("lst-scroll"));
 static FIND_INPUT_ID: LazyLock<iced::widget::Id> =
     LazyLock::new(|| iced::widget::Id::new("lst-find"));
 static GOTO_LINE_ID: LazyLock<iced::widget::Id> =
@@ -50,6 +52,8 @@ struct App {
     editor_mouse_pos: Point,
     goto_line: Option<String>,
     vim: vim::VimState,
+    viewport_height: f32,
+    scroll_y: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +97,7 @@ enum Message {
     MoveLineUp,
     MoveLineDown,
     DuplicateLine,
+    ToggleComment,
     // Page movement
     PageUp(usize, bool),
     PageDown(usize, bool),
@@ -112,6 +117,8 @@ enum Message {
     EditorMouseMove(Point),
     MulticlickReleased,
     MiddleClickPaste,
+    // Scroll tracking
+    Scrolled(Viewport),
 }
 
 #[derive(Debug, Clone)]
@@ -239,6 +246,8 @@ impl App {
                 editor_mouse_pos: Point::ORIGIN,
                 goto_line: None,
                 vim: vim::VimState::new(),
+                viewport_height: 0.0,
+                scroll_y: 0.0,
             },
             iced::widget::operation::focus(EDITOR_ID.clone()),
         )
@@ -292,7 +301,7 @@ impl App {
     }
 
     fn refresh_find_matches(&mut self) {
-        if !self.find.query.is_empty() {
+        if self.find.visible && !self.find.query.is_empty() {
             self.find
                 .compute_matches(&self.tabs[self.active].content.text());
         }
@@ -325,6 +334,32 @@ impl App {
 
     fn editor_selection_text(&self) -> Option<String> {
         selection_text(&self.tabs[self.active].content, self.vim.mode)
+    }
+
+    fn scroll_to_cursor(&self) -> Task<Message> {
+        let cursor_line = self.tabs[self.active].content.cursor().position.line;
+        let cursor_y = cursor_line as f32 * LINE_HEIGHT_PX + EDITOR_PAD;
+        let vh = self.viewport_height;
+        if vh <= 0.0 {
+            return Task::none();
+        }
+        let margin = LINE_HEIGHT_PX * 2.0;
+        let offset = |y: f32| {
+            iced::widget::operation::scroll_to(
+                SCROLLABLE_ID.clone(),
+                iced::widget::operation::AbsoluteOffset::<Option<f32>> {
+                    x: None,
+                    y: Some(y.max(0.0)),
+                },
+            )
+        };
+        if cursor_y < self.scroll_y + margin {
+            offset(cursor_y - margin)
+        } else if cursor_y + LINE_HEIGHT_PX > self.scroll_y + vh - margin {
+            offset(cursor_y + LINE_HEIGHT_PX + margin - vh)
+        } else {
+            Task::none()
+        }
     }
 
     fn jump_to_line(&mut self, target_line: usize, select: bool) {
@@ -382,6 +417,11 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.update_inner(message);
+        Task::batch([task, self.scroll_to_cursor()])
+    }
+
+    fn update_inner(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Edit(action) => {
                 self.vim.clear_preferred_column();
@@ -407,6 +447,93 @@ impl App {
                 }
 
                 let is_edit = matches!(action, text_editor::Action::Edit(_));
+
+                // ── Bracket auto-close (Insert mode only) ────────────
+                let mut auto_close_char: Option<char> = None;
+                let mut skip_close = false;
+                let mut delete_pair = false;
+                if is_edit && self.vim.mode == vim::Mode::Insert {
+                    if let text_editor::Action::Edit(ref edit) = action {
+                        match edit {
+                            text_editor::Edit::Insert(c) => {
+                                auto_close_char = match c {
+                                    '(' => Some(')'),
+                                    '{' => Some('}'),
+                                    '[' => Some(']'),
+                                    '"' => Some('"'),
+                                    '\'' => Some('\''),
+                                    _ => None,
+                                };
+                                // Overtype: typing a close bracket when next char matches
+                                if matches!(c, ')' | '}' | ']') {
+                                    let tab = &self.tabs[self.active];
+                                    let pos = tab.content.cursor().position;
+                                    if let Some(line) = tab.content.line(pos.line) {
+                                        let chars: Vec<char> = line.text.chars().collect();
+                                        if pos.column < chars.len() && chars[pos.column] == *c {
+                                            skip_close = true;
+                                            auto_close_char = None;
+                                        }
+                                    }
+                                }
+                                // Quote handling
+                                if matches!(c, '"' | '\'') && !skip_close {
+                                    let tab = &self.tabs[self.active];
+                                    let pos = tab.content.cursor().position;
+                                    if let Some(line) = tab.content.line(pos.line) {
+                                        let chars: Vec<char> = line.text.chars().collect();
+                                        // Overtype: next char is same quote
+                                        if pos.column < chars.len() && chars[pos.column] == *c {
+                                            skip_close = true;
+                                            auto_close_char = None;
+                                        }
+                                        // Don't auto-close next to word chars
+                                        if auto_close_char.is_some()
+                                            && pos.column < chars.len()
+                                            && (chars[pos.column].is_alphanumeric()
+                                                || chars[pos.column] == '_')
+                                        {
+                                            auto_close_char = None;
+                                        }
+                                        // Don't auto-close after word chars
+                                        if auto_close_char.is_some()
+                                            && pos.column > 0
+                                            && (chars[pos.column - 1].is_alphanumeric()
+                                                || chars[pos.column - 1] == '_')
+                                        {
+                                            auto_close_char = None;
+                                        }
+                                    }
+                                }
+                            }
+                            text_editor::Edit::Backspace => {
+                                let tab = &self.tabs[self.active];
+                                let pos = tab.content.cursor().position;
+                                if pos.column > 0 {
+                                    if let Some(line) = tab.content.line(pos.line) {
+                                        let chars: Vec<char> = line.text.chars().collect();
+                                        if pos.column < chars.len() {
+                                            delete_pair = matches!(
+                                                (chars[pos.column - 1], chars[pos.column]),
+                                                ('(', ')') | ('{', '}') | ('[', ']')
+                                                    | ('"', '"') | ('\'', '\'')
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if skip_close {
+                    self.tabs[self.active]
+                        .content
+                        .perform(text_editor::Action::Move(text_editor::Motion::Right));
+                    return Task::none();
+                }
+
                 if is_edit {
                     let (kind, boundary) = match &action {
                         text_editor::Action::Edit(edit) => match edit {
@@ -421,12 +548,26 @@ impl App {
                     self.tabs[self.active].push_undo_snapshot(kind, boundary);
                 }
                 self.tabs[self.active].content.perform(action);
+
+                if let Some(closer) = auto_close_char {
+                    self.tabs[self.active]
+                        .content
+                        .perform(text_editor::Action::Edit(text_editor::Edit::Insert(closer)));
+                    self.tabs[self.active]
+                        .content
+                        .perform(text_editor::Action::Move(text_editor::Motion::Left));
+                }
+                if delete_pair {
+                    self.tabs[self.active]
+                        .content
+                        .perform(text_editor::Action::Edit(text_editor::Edit::Delete));
+                }
+
                 if is_edit {
                     self.tabs[self.active].modified = true;
                     self.needs_autosave = true;
                     self.refresh_find_matches();
                 }
-                // Reapply block cursor after mouse actions in Normal mode
                 self.apply_block_cursor_if_normal();
                 Task::none()
             }
@@ -560,6 +701,7 @@ impl App {
                     self.tabs[self.active]
                         .content
                         .perform(text_editor::Action::Drag(mouse_to_content(point)));
+                    return Task::none();
                 }
                 Task::none()
             }
@@ -824,6 +966,58 @@ impl App {
                 Task::none()
             }
 
+            Message::ToggleComment => {
+                let tab = &mut self.tabs[self.active];
+                let prefix = tab
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.extension())
+                    .and_then(|e| comment_prefix(e.to_string_lossy().as_ref()))
+                    .unwrap_or("//");
+                tab.push_undo_snapshot(EditKind::Other, true);
+                let cursor = tab.content.cursor();
+                let sel_anchor = cursor.selection.unwrap_or(cursor.position);
+                let first = cursor.position.line.min(sel_anchor.line);
+                let last = cursor.position.line.max(sel_anchor.line);
+                let cursor_col = cursor.position.column;
+                let cursor_line = cursor.position.line;
+                let new_text = {
+                    let full = tab.content.text();
+                    let lines: Vec<&str> = full.split('\n').collect();
+                    let all_commented = (first..=last).all(|i| {
+                        let trimmed = lines.get(i).map_or("", |l| l.trim_start());
+                        trimmed.is_empty() || trimmed.starts_with(prefix)
+                    });
+                    let new_lines: Vec<String> = lines
+                        .iter()
+                        .enumerate()
+                        .map(|(i, line)| {
+                            if i < first || i > last {
+                                return line.to_string();
+                            }
+                            if all_commented {
+                                let ws_len = line.len() - line.trim_start().len();
+                                let rest = &line[ws_len..];
+                                if let Some(after) = rest.strip_prefix(prefix) {
+                                    let after = after.strip_prefix(' ').unwrap_or(after);
+                                    format!("{}{after}", &line[..ws_len])
+                                } else {
+                                    line.to_string()
+                                }
+                            } else if line.trim_start().is_empty() {
+                                line.to_string()
+                            } else {
+                                let ws_len = line.len() - line.trim_start().len();
+                                format!("{}{prefix} {}", &line[..ws_len], &line[ws_len..])
+                            }
+                        })
+                        .collect();
+                    new_lines.join("\n")
+                };
+                self.rebuild_content(&new_text, cursor_line, cursor_col);
+                Task::none()
+            }
+
             // ── Page Movement ───────────────────────────────────────
             Message::PageUp(lines, select) => {
                 let target = self.tabs[self.active]
@@ -924,6 +1118,13 @@ impl App {
                 Task::none()
             }
 
+            // ── Scroll Tracking ─────────────────────────────────────────
+            Message::Scrolled(viewport) => {
+                self.viewport_height = viewport.bounds().height;
+                self.scroll_y = viewport.absolute_offset().y;
+                Task::none()
+            }
+
             // ── Vim ────────────────────────────────────────────────────
             Message::VimKey(ref key, mods) => {
                 let snapshot = self.vim_snapshot();
@@ -1013,6 +1214,21 @@ impl App {
                     }
                     task = iced::widget::operation::focus(EDITOR_ID.clone());
                 }
+                VimCommand::SearchWordUnderCursor { word, forward } => {
+                    self.find.query = word;
+                    self.find
+                        .compute_matches(&self.tabs[self.active].content.text());
+                    let cursor = self.tabs[self.active].content.cursor().position;
+                    let target = if forward {
+                        self.find.vim_next_from_cursor(&cursor)
+                    } else {
+                        self.find.vim_prev_from_cursor(&cursor)
+                    };
+                    if let Some(target) = target {
+                        self.move_to_vim_search_target(target);
+                    }
+                    task = iced::widget::operation::focus(EDITOR_ID.clone());
+                }
                 VimCommand::TransformCaseRange {
                     from,
                     to,
@@ -1025,7 +1241,6 @@ impl App {
                 } => self.vim_transform_case_lines(first, last, uppercase),
             }
         }
-        // Block cursor in Normal mode: highlight the character under cursor
         self.apply_block_cursor_if_normal();
         task
     }
@@ -1485,7 +1700,7 @@ impl App {
                 let editor_text_width = size.width - gutter_width - 1.0 - 8.0 - 16.0;
                 let max_cols = (editor_text_width / char_width).floor().max(1.0) as usize;
                 use std::fmt::Write;
-                let mut buf = String::new();
+                let mut buf = String::with_capacity(n_lines * 6);
                 for i in 0..n_lines {
                     let line_text = content_ref
                         .line(i)
@@ -1502,10 +1717,15 @@ impl App {
                 }
                 buf
             } else {
-                (1..=n_lines)
-                    .map(|i| format!("{i:>4} "))
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                use std::fmt::Write;
+                let mut buf = String::with_capacity(n_lines * 6);
+                for i in 1..=n_lines {
+                    let _ = write!(buf, "{i:>4} ");
+                    if i < n_lines {
+                        buf.push('\n');
+                    }
+                }
+                buf
             };
 
             let line_numbers = mouse_area(
@@ -1614,6 +1834,11 @@ impl App {
                                 "d" if mods.shift() => {
                                     return Some(text_editor::Binding::Custom(
                                         Message::DuplicateLine,
+                                    ));
+                                }
+                                "/" => {
+                                    return Some(text_editor::Binding::Custom(
+                                        Message::ToggleComment,
                                     ));
                                 }
                                 "l" => {
@@ -1747,6 +1972,8 @@ impl App {
                 .on_middle_press(Message::MiddleClickPaste);
 
             scrollable(row![line_numbers, gutter_line, editor].width(Length::Fill))
+                .id(SCROLLABLE_ID.clone())
+                .on_scroll(Message::Scrolled)
                 .height(Length::Fill)
                 .width(Length::Fill)
                 .into()
@@ -2005,6 +2232,25 @@ fn collapse_selection_to_caret(content: &mut text_editor::Content) {
     });
 }
 
+fn comment_prefix(ext: &str) -> Option<&'static str> {
+    match ext {
+        "rs" | "js" | "ts" | "jsx" | "tsx" | "c" | "cpp" | "cc" | "h" | "hpp" | "java"
+        | "go" | "cs" | "swift" | "kt" | "kts" | "scala" | "zig" | "v" | "sv" | "d"
+        | "groovy" | "jsonc" | "json5" | "scss" | "less" | "proto" => Some("//"),
+        "py" | "sh" | "bash" | "zsh" | "fish" | "rb" | "pl" | "pm" | "r" | "jl" | "yaml"
+        | "yml" | "toml" | "conf" | "cfg" | "ini" | "cmake" | "mk" | "tcl" | "awk" | "sed"
+        | "ps1" | "elixir" | "ex" | "exs" | "nim" | "cr" | "gd" => Some("#"),
+        "lua" | "hs" | "sql" | "ada" | "adb" | "ads" | "vhdl" | "vhd" => Some("--"),
+        "lisp" | "cl" | "el" | "clj" | "cljs" | "scm" | "rkt" => Some(";;"),
+        "vim" => Some("\""),
+        "tex" | "sty" | "cls" | "bib" | "erl" | "hrl" => Some("%"),
+        "bat" | "cmd" => Some("REM"),
+        "asm" | "s" => Some(";"),
+        "f90" | "f95" | "f03" | "f08" => Some("!"),
+        _ => None,
+    }
+}
+
 fn transform_case_string(text: &str, uppercase: bool) -> String {
     transform_case_iter(text.chars(), uppercase)
 }
@@ -2124,6 +2370,7 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
             "z" if modifiers.shift() => Some(Message::Redo),
             "z" => Some(Message::Undo),
             "g" => Some(Message::GotoLineOpen),
+            "/" => Some(Message::ToggleComment),
             _ => None,
         },
         keyboard::Key::Named(keyboard::key::Named::Tab) => Some(if modifiers.shift() {
