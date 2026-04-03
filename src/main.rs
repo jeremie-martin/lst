@@ -2,17 +2,19 @@ mod find;
 mod highlight;
 mod style;
 mod tab;
+mod viewport;
 mod vim;
 
 use find::FindState;
 use style::{flat_btn, solid_bg, EDITOR_FONT, EDITOR_PAD, FONT_SIZE, LINE_HEIGHT_PX};
 use tab::{EditKind, Tab};
+use viewport::{RevealIntent, ViewportState};
 
 use iced::event;
 use iced::keyboard;
 use iced::widget::{
-    button, column, container, mouse_area, opaque, responsive, right, row, scrollable, stack, text,
-    text_editor, text_input, scrollable::Viewport, Space,
+    button, column, container, mouse_area, opaque, responsive, right, row, scrollable,
+    scrollable::Viewport, stack, text, text_editor, text_input, Space,
 };
 use iced::{
     Background, Border, Color, Element, Font, Length, Padding, Pixels, Point, Subscription, Task,
@@ -52,8 +54,7 @@ struct App {
     editor_mouse_pos: Point,
     goto_line: Option<String>,
     vim: vim::VimState,
-    viewport_height: f32,
-    scroll_y: f32,
+    viewport: ViewportState,
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +126,34 @@ enum Message {
 enum Error {
     DialogClosed,
     Io,
+}
+
+struct UpdateResult {
+    task: Task<Message>,
+    reveal: RevealIntent,
+}
+
+impl UpdateResult {
+    fn none() -> Self {
+        Self {
+            task: Task::none(),
+            reveal: RevealIntent::None,
+        }
+    }
+
+    fn task(task: Task<Message>) -> Self {
+        Self {
+            task,
+            reveal: RevealIntent::None,
+        }
+    }
+
+    fn reveal(task: Task<Message>) -> Self {
+        Self {
+            task,
+            reveal: RevealIntent::RevealCaret,
+        }
+    }
 }
 
 struct CliArgs {
@@ -246,8 +275,7 @@ impl App {
                 editor_mouse_pos: Point::ORIGIN,
                 goto_line: None,
                 vim: vim::VimState::new(),
-                viewport_height: 0.0,
-                scroll_y: 0.0,
+                viewport: ViewportState::default(),
             },
             iced::widget::operation::focus(EDITOR_ID.clone()),
         )
@@ -336,29 +364,63 @@ impl App {
         selection_text(&self.tabs[self.active].content, self.vim.mode)
     }
 
-    fn scroll_to_cursor(&self) -> Task<Message> {
-        let cursor_line = self.tabs[self.active].content.cursor().position.line;
-        let cursor_y = cursor_line as f32 * LINE_HEIGHT_PX + EDITOR_PAD;
-        let vh = self.viewport_height;
-        if vh <= 0.0 {
-            return Task::none();
+    fn caret_reveal_target(&self) -> Option<f32> {
+        if !self.viewport.can_reveal() {
+            return None;
         }
+
+        let cursor = self.tabs[self.active].content.cursor().position;
+        let caret_top = self.caret_top(cursor);
         let margin = LINE_HEIGHT_PX * 2.0;
-        let offset = |y: f32| {
-            iced::widget::operation::scroll_to(
-                SCROLLABLE_ID.clone(),
-                iced::widget::operation::AbsoluteOffset::<Option<f32>> {
-                    x: None,
-                    y: Some(y.max(0.0)),
-                },
-            )
+        self.viewport
+            .reveal_offset(caret_top, LINE_HEIGHT_PX, margin)
+    }
+
+    fn reveal_caret_task(&self) -> Task<Message> {
+        let Some(target) = self.caret_reveal_target() else {
+            return Task::none();
         };
-        if cursor_y < self.scroll_y + margin {
-            offset(cursor_y - margin)
-        } else if cursor_y + LINE_HEIGHT_PX > self.scroll_y + vh - margin {
-            offset(cursor_y + LINE_HEIGHT_PX + margin - vh)
-        } else {
-            Task::none()
+
+        iced::widget::operation::scroll_to(
+            SCROLLABLE_ID.clone(),
+            iced::widget::operation::AbsoluteOffset::<Option<f32>> {
+                x: None,
+                y: Some(target),
+            },
+        )
+    }
+
+    fn caret_top(&self, cursor: text_editor::Position) -> f32 {
+        if !self.word_wrap {
+            return cursor.line as f32 * LINE_HEIGHT_PX + EDITOR_PAD;
+        }
+
+        let content = &self.tabs[self.active].content;
+        let max_cols = viewport::wrap_columns(
+            self.viewport.width(),
+            EDITOR_FONT.char_width,
+            content.line_count().max(1),
+        );
+        let mut visual_row = 0usize;
+
+        for line_idx in 0..cursor.line {
+            let line_rows = content.line(line_idx).map_or(1, |line| {
+                viewport::visual_line_count(line.text.as_ref(), max_cols)
+            });
+            visual_row += line_rows;
+        }
+
+        visual_row += content.line(cursor.line).map_or(0, |line| {
+            viewport::cursor_visual_row_in_line(line.text.as_ref(), cursor.column, max_cols)
+        });
+
+        EDITOR_PAD + visual_row as f32 * LINE_HEIGHT_PX
+    }
+
+    fn finish_update(&self, result: UpdateResult) -> Task<Message> {
+        match result.reveal {
+            RevealIntent::None => result.task,
+            RevealIntent::RevealCaret => Task::batch([result.task, self.reveal_caret_task()]),
         }
     }
 
@@ -417,13 +479,14 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
-        let task = self.update_inner(message);
-        Task::batch([task, self.scroll_to_cursor()])
+        let result = self.update_inner(message);
+        self.finish_update(result)
     }
 
-    fn update_inner(&mut self, message: Message) -> Task<Message> {
+    fn update_inner(&mut self, message: Message) -> UpdateResult {
         match message {
             Message::Edit(action) => {
+                let reveal = reveal_intent_for_edit_action(&action);
                 self.vim.clear_preferred_column();
                 // Workaround for iced-rs/iced#3227 — remove when merged
                 match &action {
@@ -442,7 +505,7 @@ impl App {
                         self.tabs[self.active]
                             .content
                             .perform(text_editor::Action::Drag(*point));
-                        return Task::none();
+                        return UpdateResult::none();
                     }
                 }
 
@@ -515,8 +578,11 @@ impl App {
                                         if pos.column < chars.len() {
                                             delete_pair = matches!(
                                                 (chars[pos.column - 1], chars[pos.column]),
-                                                ('(', ')') | ('{', '}') | ('[', ']')
-                                                    | ('"', '"') | ('\'', '\'')
+                                                ('(', ')')
+                                                    | ('{', '}')
+                                                    | ('[', ']')
+                                                    | ('"', '"')
+                                                    | ('\'', '\'')
                                             );
                                         }
                                     }
@@ -531,7 +597,7 @@ impl App {
                     self.tabs[self.active]
                         .content
                         .perform(text_editor::Action::Move(text_editor::Motion::Right));
-                    return Task::none();
+                    return UpdateResult::reveal(Task::none());
                 }
 
                 if is_edit {
@@ -569,27 +635,47 @@ impl App {
                     self.refresh_find_matches();
                 }
                 self.apply_block_cursor_if_normal();
-                Task::none()
+                UpdateResult {
+                    task: Task::none(),
+                    reveal,
+                }
             }
 
             Message::TabSelect(i) => {
                 if i < self.tabs.len() {
                     self.set_active_tab(i);
                 }
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
-            Message::TabClose(i) => self.close_tab(i),
+            Message::TabClose(i) => {
+                let reveal = if i < self.tabs.len() && i == self.active && self.tabs.len() > 1 {
+                    RevealIntent::RevealCaret
+                } else {
+                    RevealIntent::None
+                };
+                UpdateResult {
+                    task: self.close_tab(i),
+                    reveal,
+                }
+            }
 
-            Message::CloseActiveTab => self.close_tab(self.active),
+            Message::CloseActiveTab => UpdateResult {
+                task: self.close_tab(self.active),
+                reveal: if self.tabs.len() > 1 {
+                    RevealIntent::RevealCaret
+                } else {
+                    RevealIntent::None
+                },
+            },
 
             Message::New => {
                 self.tabs.push(create_scratchpad_tab(&self.scratchpad_dir));
                 self.set_active_tab(self.tabs.len() - 1);
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
-            Message::Open => Task::perform(open_file(), Message::Opened),
+            Message::Open => UpdateResult::task(Task::perform(open_file(), Message::Opened)),
 
             Message::Opened(Ok((path, body))) => {
                 if self.tabs.len() == 1
@@ -607,22 +693,22 @@ impl App {
                     self.tabs.push(Tab::from_path(path, &body));
                     self.set_active_tab(self.tabs.len() - 1);
                 }
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
-            Message::Opened(Err(_)) => Task::none(),
+            Message::Opened(Err(_)) => UpdateResult::none(),
 
             Message::Save => {
                 let tab = &self.tabs[self.active];
                 let body = tab.content.text();
-                match tab.path.clone() {
+                UpdateResult::task(match tab.path.clone() {
                     Some(path) => Task::perform(save_file(path, body), Message::Saved),
                     None => Task::perform(save_file_as(body), Message::Saved),
-                }
+                })
             }
 
             Message::SaveAs => {
                 let body = self.tabs[self.active].content.text();
-                Task::perform(save_file_as(body), Message::Saved)
+                UpdateResult::task(Task::perform(save_file_as(body), Message::Saved))
             }
 
             Message::Saved(Ok(path)) => {
@@ -630,13 +716,13 @@ impl App {
                 tab.path = Some(path);
                 tab.modified = false;
                 tab.is_scratchpad = false;
-                Task::none()
+                UpdateResult::none()
             }
-            Message::Saved(Err(_)) => Task::none(),
+            Message::Saved(Err(_)) => UpdateResult::none(),
 
             Message::AutosaveTick => {
                 if !self.needs_autosave {
-                    return Task::none();
+                    return UpdateResult::none();
                 }
                 self.needs_autosave = false;
 
@@ -652,9 +738,9 @@ impl App {
                     .collect();
 
                 if saves.is_empty() {
-                    Task::none()
+                    UpdateResult::none()
                 } else {
-                    Task::batch(saves)
+                    UpdateResult::task(Task::batch(saves))
                 }
             }
 
@@ -665,16 +751,16 @@ impl App {
                         break;
                     }
                 }
-                Task::none()
+                UpdateResult::none()
             }
             Message::AutosaveComplete(Err(e)) => {
                 eprintln!("lst: autosave failed: {e:?}");
-                Task::none()
+                UpdateResult::none()
             }
 
             Message::GutterMove(point) => {
                 self.gutter_mouse_y = point.y;
-                Task::none()
+                UpdateResult::none()
             }
 
             Message::GutterClick => {
@@ -690,7 +776,7 @@ impl App {
                     copy_to_primary(&sel);
                 }
 
-                iced::widget::operation::focus(EDITOR_ID.clone())
+                UpdateResult::task(iced::widget::operation::focus(EDITOR_ID.clone()))
             }
 
             // Workaround for iced-rs/iced#3227 — remove when merged
@@ -701,16 +787,16 @@ impl App {
                     self.tabs[self.active]
                         .content
                         .perform(text_editor::Action::Drag(mouse_to_content(point)));
-                    return Task::none();
+                    return UpdateResult::none();
                 }
-                Task::none()
+                UpdateResult::none()
             }
             Message::MulticlickReleased => {
                 self.multiclick_drag = false;
                 if let Some(sel) = self.editor_selection_text() {
                     copy_to_primary(&sel);
                 }
-                Task::none()
+                UpdateResult::none()
             }
             Message::MiddleClickPaste => {
                 if let Some(text) = read_primary_selection() {
@@ -730,26 +816,27 @@ impl App {
                         self.needs_autosave = true;
                         self.refresh_find_matches();
                         self.apply_block_cursor_if_normal();
+                        return UpdateResult::reveal(Task::none());
                     }
                 }
-                Task::none()
+                UpdateResult::none()
             }
 
-            Message::Quit => self.exit_with_clipboard(),
+            Message::Quit => UpdateResult::task(self.exit_with_clipboard()),
 
             // ── Undo / Redo ──────────────────────────────────────────────
             Message::Undo => {
                 self.tabs[self.active].undo();
                 self.vim.clear_preferred_column();
                 self.refresh_find_matches();
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             Message::Redo => {
                 self.tabs[self.active].redo();
                 self.vim.clear_preferred_column();
                 self.refresh_find_matches();
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             Message::AutoIndent => {
@@ -777,33 +864,33 @@ impl App {
                 self.vim.clear_preferred_column();
                 self.needs_autosave = true;
                 self.refresh_find_matches();
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             // ── Find & Replace ───────────────────────────────────────────
             Message::FindOpen => {
                 if self.find.visible {
-                    return self.close_find();
+                    return UpdateResult::task(self.close_find());
                 }
-                self.open_find(false)
+                UpdateResult::task(self.open_find(false))
             }
             Message::FindOpenReplace => {
                 if self.find.visible && self.find.show_replace {
-                    return self.close_find();
+                    return UpdateResult::task(self.close_find());
                 }
-                self.open_find(true)
+                UpdateResult::task(self.open_find(true))
             }
 
             Message::FindClose => {
                 if self.find.visible {
-                    return self.close_find();
+                    return UpdateResult::task(self.close_find());
                 }
-                Task::none()
+                UpdateResult::none()
             }
 
             Message::FindQueryChanged(q) => {
                 if q == self.find.query {
-                    return Task::none();
+                    return UpdateResult::none();
                 }
                 self.vim.clear_preferred_column();
                 self.find.query = q;
@@ -815,12 +902,12 @@ impl App {
                     self.find
                         .navigate_to_current(&mut self.tabs[self.active].content);
                 }
-                Task::none()
+                UpdateResult::none()
             }
 
             Message::FindReplaceChanged(r) => {
                 self.find.replacement = r;
-                Task::none()
+                UpdateResult::none()
             }
 
             Message::FindNext => {
@@ -828,7 +915,7 @@ impl App {
                 self.find.next();
                 self.find
                     .navigate_to_current(&mut self.tabs[self.active].content);
-                iced::widget::operation::focus(EDITOR_ID.clone())
+                UpdateResult::reveal(iced::widget::operation::focus(EDITOR_ID.clone()))
             }
 
             Message::FindPrev => {
@@ -836,12 +923,12 @@ impl App {
                 self.find.prev();
                 self.find
                     .navigate_to_current(&mut self.tabs[self.active].content);
-                iced::widget::operation::focus(EDITOR_ID.clone())
+                UpdateResult::reveal(iced::widget::operation::focus(EDITOR_ID.clone()))
             }
 
             Message::ReplaceOne => {
                 if self.find.matches.is_empty() {
-                    return Task::none();
+                    return UpdateResult::none();
                 }
                 let tab = &mut self.tabs[self.active];
                 tab.push_undo_snapshot(EditKind::Other, true);
@@ -862,12 +949,12 @@ impl App {
                     self.find
                         .navigate_to_current(&mut self.tabs[self.active].content);
                 }
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             Message::ReplaceAll => {
                 if self.find.matches.is_empty() || self.find.query.is_empty() {
-                    return Task::none();
+                    return UpdateResult::none();
                 }
                 let tab = &mut self.tabs[self.active];
                 tab.push_undo_snapshot(EditKind::Other, true);
@@ -877,13 +964,13 @@ impl App {
                     .text()
                     .replace(&self.find.query, &self.find.replacement);
                 self.rebuild_content(&new_text, cursor_pos.line, cursor_pos.column);
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             // ── Word Wrap ────────────────────────────────────────────────
             Message::ToggleWordWrap => {
                 self.word_wrap = !self.word_wrap;
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             // ── Tab Reorder ──────────────────────────────────────────────
@@ -892,7 +979,7 @@ impl App {
                     self.tabs.swap(self.active, self.active - 1);
                     self.active -= 1;
                 }
-                Task::none()
+                UpdateResult::none()
             }
 
             Message::MoveTabRight => {
@@ -900,7 +987,7 @@ impl App {
                     self.tabs.swap(self.active, self.active + 1);
                     self.active += 1;
                 }
-                Task::none()
+                UpdateResult::none()
             }
 
             // ── Line Operations ─────────────────────────────────────────
@@ -917,14 +1004,14 @@ impl App {
                 }
                 let new_text = lines.join("\n");
                 self.rebuild_content(&new_text, target, pos.column);
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             Message::MoveLineUp => {
                 let tab = &mut self.tabs[self.active];
                 let pos = tab.content.cursor().position;
                 if pos.line == 0 {
-                    return Task::none();
+                    return UpdateResult::none();
                 }
                 tab.push_undo_snapshot(EditKind::Other, true);
                 let full = tab.content.text();
@@ -933,7 +1020,7 @@ impl App {
                 lines.swap(target, target - 1);
                 let new_text = lines.join("\n");
                 self.rebuild_content(&new_text, target - 1, pos.column);
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             Message::MoveLineDown => {
@@ -943,13 +1030,13 @@ impl App {
                 let mut lines: Vec<&str> = full.split('\n').collect();
                 let target = pos.line.min(lines.len().saturating_sub(1));
                 if target + 1 >= lines.len() {
-                    return Task::none();
+                    return UpdateResult::none();
                 }
                 tab.push_undo_snapshot(EditKind::Other, true);
                 lines.swap(target, target + 1);
                 let new_text = lines.join("\n");
                 self.rebuild_content(&new_text, target + 1, pos.column);
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             Message::DuplicateLine => {
@@ -963,7 +1050,7 @@ impl App {
                 lines.insert(target + 1, &dup);
                 let new_text = lines.join("\n");
                 self.rebuild_content(&new_text, target + 1, pos.column);
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             Message::ToggleComment => {
@@ -1022,7 +1109,7 @@ impl App {
                 };
                 self.rebuild_content(&new_text, cursor_line, cursor_col);
                 self.apply_block_cursor_if_normal();
-                self.scroll_to_cursor()
+                UpdateResult::reveal(Task::none())
             }
 
             // ── Page Movement ───────────────────────────────────────
@@ -1034,7 +1121,7 @@ impl App {
                     .line
                     .saturating_sub(lines);
                 self.jump_to_line(target, select);
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             Message::PageDown(lines, select) => {
@@ -1044,7 +1131,7 @@ impl App {
                     .line_count()
                     .saturating_sub(1);
                 self.jump_to_line((pos.line + lines).min(last), select);
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             // ── Tab Cycling ─────────────────────────────────────────────
@@ -1052,7 +1139,7 @@ impl App {
                 if self.tabs.len() > 1 {
                     self.set_active_tab((self.active + 1) % self.tabs.len());
                 }
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             Message::PrevTab => {
@@ -1064,27 +1151,27 @@ impl App {
                     };
                     self.set_active_tab(prev);
                 }
-                Task::none()
+                UpdateResult::reveal(Task::none())
             }
 
             // ── Go to Line ──────────────────────────────────────────────
             Message::GotoLineOpen => {
                 if self.goto_line.is_some() {
                     self.goto_line = None;
-                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                    return UpdateResult::task(iced::widget::operation::focus(EDITOR_ID.clone()));
                 }
                 self.goto_line = Some(String::new());
-                iced::widget::operation::focus(GOTO_LINE_ID.clone())
+                UpdateResult::task(iced::widget::operation::focus(GOTO_LINE_ID.clone()))
             }
 
             Message::GotoLineClose => {
                 if self.goto_line.is_some() {
                     self.goto_line = None;
-                    return iced::widget::operation::focus(EDITOR_ID.clone());
+                    return UpdateResult::task(iced::widget::operation::focus(EDITOR_ID.clone()));
                 }
                 // Also close find bar (Escape from subscription closes topmost overlay)
                 if self.find.visible {
-                    return self.close_find();
+                    return UpdateResult::task(self.close_find());
                 }
                 // Vim: Escape cascades into mode transitions
                 let snapshot = self.vim_snapshot();
@@ -1095,10 +1182,11 @@ impl App {
 
             Message::GotoLineChanged(s) => {
                 self.goto_line = Some(s);
-                Task::none()
+                UpdateResult::none()
             }
 
             Message::GotoLineSubmit => {
+                let mut reveal = RevealIntent::None;
                 if let Some(ref text) = self.goto_line {
                     if let Ok(line_num) = text.trim().parse::<usize>() {
                         let tab = &mut self.tabs[self.active];
@@ -1113,23 +1201,26 @@ impl App {
                         });
                         self.vim.clear_preferred_column();
                         self.apply_block_cursor_if_normal();
+                        reveal = RevealIntent::RevealCaret;
                     }
                 }
                 self.goto_line = None;
-                iced::widget::operation::focus(EDITOR_ID.clone())
+                UpdateResult {
+                    task: iced::widget::operation::focus(EDITOR_ID.clone()),
+                    reveal,
+                }
             }
 
             // ── Modifier Tracking ───────────────────────────────────────
             Message::ModifiersChanged(mods) => {
                 self.shift_held = mods.shift();
-                Task::none()
+                UpdateResult::none()
             }
 
             // ── Scroll Tracking ─────────────────────────────────────────
             Message::Scrolled(viewport) => {
-                self.viewport_height = viewport.bounds().height;
-                self.scroll_y = viewport.absolute_offset().y;
-                Task::none()
+                self.viewport.update(viewport);
+                UpdateResult::none()
             }
 
             // ── Vim ────────────────────────────────────────────────────
@@ -1141,10 +1232,10 @@ impl App {
         }
     }
 
-    fn execute_vim_commands(&mut self, commands: Vec<vim::VimCommand>) -> Task<Message> {
+    fn execute_vim_commands(&mut self, commands: Vec<vim::VimCommand>) -> UpdateResult {
         use vim::VimCommand;
-        // Default to refocusing the editor so iced keeps the cursor visible
         let mut task = iced::widget::operation::focus(EDITOR_ID.clone());
+        let mut reveal = RevealIntent::None;
         for cmd in commands {
             match cmd {
                 VimCommand::Noop => {}
@@ -1153,25 +1244,31 @@ impl App {
                         position: p,
                         selection: None,
                     });
+                    reveal = RevealIntent::RevealCaret;
                 }
                 VimCommand::Select { anchor, head } => {
                     self.apply_vim_select(anchor, head);
+                    reveal = RevealIntent::RevealCaret;
                 }
                 VimCommand::DeleteRange { from, to } => {
                     let deleted = self.vim_delete_range(from, to);
                     self.vim.register = vim::Register::Char(deleted);
+                    reveal = RevealIntent::RevealCaret;
                 }
                 VimCommand::DeleteLines { first, last } => {
                     let deleted = self.vim_delete_lines(first, last);
                     self.vim.register = vim::Register::Line(deleted);
+                    reveal = RevealIntent::RevealCaret;
                 }
                 VimCommand::ChangeRange { from, to } => {
                     let deleted = self.vim_delete_range(from, to);
                     self.vim.register = vim::Register::Char(deleted);
+                    reveal = RevealIntent::RevealCaret;
                 }
                 VimCommand::ChangeLines { first, last } => {
                     let deleted = self.vim_change_lines(first, last);
                     self.vim.register = vim::Register::Line(deleted);
+                    reveal = RevealIntent::RevealCaret;
                 }
                 VimCommand::YankRange { from, to } => {
                     let yanked = self.vim_extract_range(from, to);
@@ -1185,21 +1282,41 @@ impl App {
                     collapse_selection_to_caret(&mut self.tabs[self.active].content);
                     self.vim.mode = vim::Mode::Insert;
                 }
-                VimCommand::PasteAfter => self.vim_paste(false),
-                VimCommand::PasteBefore => self.vim_paste(true),
-                VimCommand::OpenLineBelow => self.vim_open_line(false),
-                VimCommand::OpenLineAbove => self.vim_open_line(true),
-                VimCommand::JoinLines { count } => self.vim_join_lines(count),
-                VimCommand::ReplaceChar { ch, count } => self.vim_replace_char(ch, count),
+                VimCommand::PasteAfter => {
+                    self.vim_paste(false);
+                    reveal = RevealIntent::RevealCaret;
+                }
+                VimCommand::PasteBefore => {
+                    self.vim_paste(true);
+                    reveal = RevealIntent::RevealCaret;
+                }
+                VimCommand::OpenLineBelow => {
+                    self.vim_open_line(false);
+                    reveal = RevealIntent::RevealCaret;
+                }
+                VimCommand::OpenLineAbove => {
+                    self.vim_open_line(true);
+                    reveal = RevealIntent::RevealCaret;
+                }
+                VimCommand::JoinLines { count } => {
+                    self.vim_join_lines(count);
+                    reveal = RevealIntent::RevealCaret;
+                }
+                VimCommand::ReplaceChar { ch, count } => {
+                    self.vim_replace_char(ch, count);
+                    reveal = RevealIntent::RevealCaret;
+                }
                 VimCommand::Undo => {
                     self.tabs[self.active].undo();
                     self.vim.clear_preferred_column();
                     self.refresh_find_matches();
+                    reveal = RevealIntent::RevealCaret;
                 }
                 VimCommand::Redo => {
                     self.tabs[self.active].redo();
                     self.vim.clear_preferred_column();
                     self.refresh_find_matches();
+                    reveal = RevealIntent::RevealCaret;
                 }
                 VimCommand::OpenFind => {
                     if self.vim.mode == vim::Mode::Normal {
@@ -1211,6 +1328,7 @@ impl App {
                     let cursor = self.tabs[self.active].content.cursor().position;
                     if let Some(target) = self.find.vim_next_from_cursor(&cursor) {
                         self.move_to_vim_search_target(target);
+                        reveal = RevealIntent::RevealCaret;
                     }
                     task = iced::widget::operation::focus(EDITOR_ID.clone());
                 }
@@ -1218,6 +1336,7 @@ impl App {
                     let cursor = self.tabs[self.active].content.cursor().position;
                     if let Some(target) = self.find.vim_prev_from_cursor(&cursor) {
                         self.move_to_vim_search_target(target);
+                        reveal = RevealIntent::RevealCaret;
                     }
                     task = iced::widget::operation::focus(EDITOR_ID.clone());
                 }
@@ -1233,6 +1352,7 @@ impl App {
                     };
                     if let Some(target) = target {
                         self.move_to_vim_search_target(target);
+                        reveal = RevealIntent::RevealCaret;
                     }
                     task = iced::widget::operation::focus(EDITOR_ID.clone());
                 }
@@ -1240,16 +1360,22 @@ impl App {
                     from,
                     to,
                     uppercase,
-                } => self.vim_transform_case_range(from, to, uppercase),
+                } => {
+                    self.vim_transform_case_range(from, to, uppercase);
+                    reveal = RevealIntent::RevealCaret;
+                }
                 VimCommand::TransformCaseLines {
                     first,
                     last,
                     uppercase,
-                } => self.vim_transform_case_lines(first, last, uppercase),
+                } => {
+                    self.vim_transform_case_lines(first, last, uppercase);
+                    reveal = RevealIntent::RevealCaret;
+                }
             }
         }
         self.apply_block_cursor_if_normal();
-        task
+        UpdateResult { task, reveal }
     }
 
     fn apply_block_cursor_if_normal(&mut self) {
@@ -1701,22 +1827,21 @@ impl App {
         let editor_area = responsive(move |size| {
             let vh = size.height;
             let overscroll = vh * 0.4;
+            let line_number_digits = viewport::line_number_digits_width(n_lines);
+            let continuation_prefix = viewport::continuation_prefix(n_lines);
 
             let line_num_text = if word_wrap {
-                let gutter_width = char_width * 5.0 + 4.0; // 5 chars + left padding
-                let editor_text_width = size.width - gutter_width - 1.0 - 8.0 - 16.0;
-                let max_cols = (editor_text_width / char_width).floor().max(1.0) as usize;
+                let max_cols = viewport::wrap_columns(size.width, char_width, n_lines);
                 use std::fmt::Write;
                 let mut buf = String::with_capacity(n_lines * 6);
                 for i in 0..n_lines {
-                    let line_text = content_ref
-                        .line(i)
-                        .map(|l| l.text.into_owned())
-                        .unwrap_or_default();
-                    let vlines = visual_line_count(&line_text, max_cols);
-                    let _ = write!(buf, "{:>4} ", i + 1);
+                    let vlines = content_ref.line(i).map_or(1, |line| {
+                        viewport::visual_line_count(line.text.as_ref(), max_cols)
+                    });
+                    let _ = write!(buf, "{:>width$} ", i + 1, width = line_number_digits);
                     for _ in 1..vlines {
-                        buf.push_str("\n     ");
+                        buf.push('\n');
+                        buf.push_str(&continuation_prefix);
                     }
                     if i + 1 < n_lines {
                         buf.push('\n');
@@ -1727,7 +1852,7 @@ impl App {
                 use std::fmt::Write;
                 let mut buf = String::with_capacity(n_lines * 6);
                 for i in 1..=n_lines {
-                    let _ = write!(buf, "{i:>4} ");
+                    let _ = write!(buf, "{i:>width$} ", width = line_number_digits);
                     if i < n_lines {
                         buf.push('\n');
                     }
@@ -1747,7 +1872,7 @@ impl App {
                 .padding(Padding {
                     top: EDITOR_PAD,
                     bottom: EDITOR_PAD + overscroll,
-                    left: 4.0,
+                    left: viewport::LINE_NUMBER_LEFT_PAD,
                     right: 0.0,
                 }),
             )
@@ -1755,7 +1880,7 @@ impl App {
             .on_press(Message::GutterClick);
 
             let gutter_line = container(Space::new())
-                .width(1)
+                .width(viewport::GUTTER_SEPARATOR_WIDTH)
                 .height(Length::Fill)
                 .style(solid_bg(bg_strong));
 
@@ -1776,7 +1901,7 @@ impl App {
                     top: EDITOR_PAD,
                     bottom: EDITOR_PAD + overscroll,
                     left: EDITOR_PAD,
-                    right: 16.0,
+                    right: viewport::EDITOR_RIGHT_PAD,
                 })
                 .height(Length::Shrink)
                 .min_height(vh)
@@ -2096,64 +2221,6 @@ impl App {
     }
 }
 
-// ── Word‑wrap visual‑line counter ──────────────────────────────────────────
-
-/// Count how many visual lines `line` occupies when word-wrapped at `max_cols`
-/// monospace characters. Simulates greedy word wrapping (matching cosmic_text's
-/// `Wrap::Word` for monospace ASCII).
-fn visual_line_count(line: &str, max_cols: usize) -> usize {
-    if line.is_empty() || max_cols == 0 {
-        return 1;
-    }
-
-    let mut lines = 1usize;
-    let mut col = 0usize; // current column on the visual line
-    let mut word_cols = 0usize; // columns consumed by the current word
-
-    for ch in line.chars() {
-        let ch_cols = if ch == '\t' {
-            // Tab advances to next 8-column stop
-            let next_stop = ((col + word_cols) / 8 + 1) * 8;
-            next_stop - (col + word_cols)
-        } else {
-            1
-        };
-
-        word_cols += ch_cols;
-
-        if ch.is_whitespace() {
-            // End of word — commit it to the current line or wrap first
-            if col + word_cols > max_cols && col > 0 {
-                lines += 1;
-                col = 0;
-            }
-            col += word_cols;
-            // Force-break if a single word (with trailing space) exceeds max_cols
-            while col > max_cols {
-                lines += 1;
-                col -= max_cols;
-            }
-            word_cols = 0;
-        }
-    }
-
-    // Flush remaining word (no trailing whitespace)
-    if word_cols > 0 {
-        if col + word_cols > max_cols && col > 0 {
-            lines += 1;
-            col = 0;
-        }
-        col += word_cols;
-        while col > max_cols {
-            lines += 1;
-            col -= max_cols;
-        }
-    }
-    let _ = col; // suppress unused warning
-
-    lines
-}
-
 // ── Vim text‑range helpers ──────────────────────────────────────────────────
 
 fn extract_text_range(
@@ -2241,9 +2308,9 @@ fn collapse_selection_to_caret(content: &mut text_editor::Content) {
 
 fn comment_prefix(ext: &str) -> Option<&'static str> {
     match ext {
-        "rs" | "js" | "ts" | "jsx" | "tsx" | "c" | "cpp" | "cc" | "h" | "hpp" | "java"
-        | "go" | "cs" | "swift" | "kt" | "kts" | "scala" | "zig" | "v" | "sv" | "d"
-        | "groovy" | "jsonc" | "json5" | "scss" | "less" | "proto" => Some("//"),
+        "rs" | "js" | "ts" | "jsx" | "tsx" | "c" | "cpp" | "cc" | "h" | "hpp" | "java" | "go"
+        | "cs" | "swift" | "kt" | "kts" | "scala" | "zig" | "v" | "sv" | "d" | "groovy"
+        | "jsonc" | "json5" | "scss" | "less" | "proto" => Some("//"),
         "py" | "sh" | "bash" | "zsh" | "fish" | "rb" | "pl" | "pm" | "r" | "jl" | "yaml"
         | "yml" | "toml" | "conf" | "cfg" | "ini" | "cmake" | "mk" | "tcl" | "awk" | "sed"
         | "ps1" | "elixir" | "ex" | "exs" | "nim" | "cr" | "gd" => Some("#"),
@@ -2315,6 +2382,20 @@ fn transform_case_range(
             transform_case_chars(&chars, uppercase)
         };
         lines[line_idx] = transformed;
+    }
+}
+
+fn reveal_intent_for_edit_action(action: &text_editor::Action) -> RevealIntent {
+    match action {
+        text_editor::Action::Move(_)
+        | text_editor::Action::Select(_)
+        | text_editor::Action::Edit(_) => RevealIntent::RevealCaret,
+        text_editor::Action::SelectWord
+        | text_editor::Action::SelectLine
+        | text_editor::Action::SelectAll
+        | text_editor::Action::Click(_)
+        | text_editor::Action::Drag(_)
+        | text_editor::Action::Scroll { .. } => RevealIntent::None,
     }
 }
 
@@ -2504,6 +2585,25 @@ mod tests {
         text_editor::Position { line, column }
     }
 
+    fn test_app(text: &str) -> App {
+        App {
+            tabs: vec![Tab::from_path(PathBuf::from("/tmp/test.txt"), text)],
+            active: 0,
+            window_title: None,
+            gutter_mouse_y: 0.0,
+            find: FindState::new(),
+            word_wrap: true,
+            scratchpad_dir: PathBuf::from("/tmp"),
+            needs_autosave: false,
+            shift_held: false,
+            multiclick_drag: false,
+            editor_mouse_pos: Point::ORIGIN,
+            goto_line: None,
+            vim: vim::VimState::new(),
+            viewport: ViewportState::default(),
+        }
+    }
+
     #[test]
     fn collapse_selection_to_caret_prevents_insert_replacement() {
         let mut content = text_editor::Content::with_text("abc");
@@ -2543,6 +2643,80 @@ mod tests {
         let mut lines = vec!["ABC".to_string(), "DeF".to_string()];
         transform_case_range(&mut lines, &pos(0, 1), &pos(1, 1), false);
         assert_eq!(lines, vec!["Abc".to_string(), "deF".to_string()]);
+    }
+
+    #[test]
+    fn scroll_actions_do_not_request_reveal_but_moves_do() {
+        assert_eq!(
+            reveal_intent_for_edit_action(&text_editor::Action::Scroll { lines: 3 }),
+            RevealIntent::None
+        );
+        assert_eq!(
+            reveal_intent_for_edit_action(&text_editor::Action::Move(text_editor::Motion::Down)),
+            RevealIntent::RevealCaret
+        );
+    }
+
+    #[test]
+    fn page_down_requests_reveal() {
+        let mut app = test_app("one\ntwo\nthree\nfour\nfive");
+
+        let result = app.update_inner(Message::PageDown(2, false));
+
+        assert_eq!(result.reveal, RevealIntent::RevealCaret);
+        assert_eq!(app.tabs[0].content.cursor().position.line, 2);
+    }
+
+    #[test]
+    fn goto_line_submit_requests_reveal_on_valid_input() {
+        let mut app = test_app("one\ntwo\nthree");
+        app.goto_line = Some("3".to_string());
+
+        let result = app.update_inner(Message::GotoLineSubmit);
+
+        assert_eq!(result.reveal, RevealIntent::RevealCaret);
+        assert_eq!(app.tabs[0].content.cursor().position, pos(2, 0));
+    }
+
+    #[test]
+    fn find_next_requests_reveal() {
+        let mut app = test_app("foo\nbar\nfoo");
+        app.find.query = "foo".to_string();
+        app.find.compute_matches("foo\nbar\nfoo");
+
+        let result = app.update_inner(Message::FindNext);
+
+        assert_eq!(result.reveal, RevealIntent::RevealCaret);
+        assert_eq!(app.tabs[0].content.cursor().position, pos(2, 3));
+    }
+
+    #[test]
+    fn vim_move_to_requests_reveal() {
+        let mut app = test_app("one\ntwo\nthree");
+
+        let result = app.execute_vim_commands(vec![vim::VimCommand::MoveTo(pos(2, 1))]);
+
+        assert_eq!(result.reveal, RevealIntent::RevealCaret);
+        assert_eq!(app.tabs[0].content.cursor().position, pos(2, 1));
+    }
+
+    #[test]
+    fn wrapped_caret_reveal_target_matches_layout_math() {
+        let mut app = test_app("abcdefghij");
+        let width = viewport::line_number_gutter_width(1, EDITOR_FONT.char_width)
+            + viewport::GUTTER_SEPARATOR_WIDTH
+            + EDITOR_PAD
+            + viewport::EDITOR_RIGHT_PAD
+            + EDITOR_FONT.char_width * 4.25;
+        let height = 60.0;
+        app.viewport =
+            ViewportState::from_metrics(width, height, viewport::content_height(height, 3), 0.0);
+        app.tabs[0].content.move_to(text_editor::Cursor {
+            position: pos(0, 9),
+            selection: None,
+        });
+
+        assert_eq!(app.caret_reveal_target(), Some(40.0));
     }
 }
 
