@@ -301,7 +301,7 @@ impl App {
     }
 
     fn refresh_find_matches(&mut self) {
-        if self.find.visible && !self.find.query.is_empty() {
+        if !self.find.query.is_empty() {
             self.find
                 .compute_matches(&self.tabs[self.active].content.text());
         }
@@ -979,9 +979,8 @@ impl App {
                 let sel_anchor = cursor.selection.unwrap_or(cursor.position);
                 let first = cursor.position.line.min(sel_anchor.line);
                 let last = cursor.position.line.max(sel_anchor.line);
-                let cursor_col = cursor.position.column;
                 let cursor_line = cursor.position.line;
-                let new_text = {
+                let (all_commented, new_text) = {
                     let full = tab.content.text();
                     let lines: Vec<&str> = full.split('\n').collect();
                     let all_commented = (first..=last).all(|i| {
@@ -1012,10 +1011,18 @@ impl App {
                             }
                         })
                         .collect();
-                    new_lines.join("\n")
+                    (all_commented, new_lines.join("\n"))
+                };
+                // Adjust cursor column for inserted/removed prefix
+                let delta = prefix.len() + 1; // prefix + space
+                let cursor_col = if all_commented {
+                    cursor.position.column.saturating_sub(delta)
+                } else {
+                    cursor.position.column + delta
                 };
                 self.rebuild_content(&new_text, cursor_line, cursor_col);
-                Task::none()
+                self.apply_block_cursor_if_normal();
+                self.scroll_to_cursor()
             }
 
             // ── Page Movement ───────────────────────────────────────

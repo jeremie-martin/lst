@@ -1450,7 +1450,7 @@ fn paragraph_object(text: &TextSnapshot, inner: bool) -> Option<(Position, Posit
             last += 1;
         }
     }
-    let last_col = line_len(text, last).max(1).saturating_sub(1);
+    let last_col = line_len(text, last).saturating_sub(1);
     Some((pos(first, 0), pos(last, last_col)))
 }
 
