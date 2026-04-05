@@ -1,4 +1,5 @@
 use iced::widget::text_editor;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchPos {
@@ -13,6 +14,8 @@ pub struct FindState {
     pub replacement: String,
     pub matches: Vec<MatchPos>,
     pub current: usize,
+    indexed_revision: Option<u64>,
+    dirty_since: Option<Instant>,
 }
 
 impl FindState {
@@ -24,7 +27,16 @@ impl FindState {
             replacement: String::new(),
             matches: Vec::new(),
             current: 0,
+            indexed_revision: None,
+            dirty_since: None,
         }
+    }
+
+    pub fn clear_results(&mut self) {
+        self.matches.clear();
+        self.current = 0;
+        self.indexed_revision = None;
+        self.dirty_since = None;
     }
 
     /// Recompute match positions from the full document text.
@@ -127,6 +139,48 @@ impl FindState {
             }
         }
         self.current = 0;
+    }
+
+    pub fn select_exact(&mut self, position: &text_editor::Position) -> bool {
+        let Some(index) = self
+            .matches
+            .iter()
+            .position(|m| m.line == position.line && m.col == position.column)
+        else {
+            return false;
+        };
+
+        self.current = index;
+        true
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.mark_dirty_at(Instant::now());
+    }
+
+    pub fn mark_dirty_at(&mut self, when: Instant) {
+        self.dirty_since = Some(when);
+    }
+
+    pub fn finish_reindex(&mut self, revision: u64) {
+        self.indexed_revision = Some(revision);
+        self.dirty_since = None;
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty_since.is_some()
+    }
+
+    pub fn dirty_since(&self) -> Option<Instant> {
+        self.dirty_since
+    }
+
+    pub fn indexed_revision(&self) -> Option<u64> {
+        self.indexed_revision
+    }
+
+    pub fn is_stale(&self, revision: u64) -> bool {
+        !self.query.is_empty() && (self.is_dirty() || self.indexed_revision != Some(revision))
     }
 
     fn match_start(&self, index: usize) -> text_editor::Position {

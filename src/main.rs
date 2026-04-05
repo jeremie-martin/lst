@@ -20,11 +20,13 @@ use iced::{
     Background, Border, Color, Element, Font, Length, Padding, Pixels, Point, Subscription, Task,
     Theme,
 };
+use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn editor_id() -> iced::widget::Id {
     iced::widget::Id::new("lst-editor")
@@ -86,6 +88,7 @@ enum Message {
     FindReplaceChanged(String),
     FindNext,
     FindPrev,
+    FindRefreshTick,
     ReplaceOne,
     ReplaceAll,
     // Word wrap
@@ -328,11 +331,127 @@ impl App {
         iced::exit()
     }
 
-    fn refresh_find_matches(&mut self) {
-        if !self.find.query.is_empty() {
-            self.find
-                .compute_matches(&self.tabs[self.active].content.text());
+    fn active_tab_revision(&self) -> u64 {
+        self.tabs[self.active].revision()
+    }
+
+    fn active_wrap_cols(&self) -> Option<usize> {
+        self.word_wrap
+            .then(|| {
+                wrapped_cols(
+                    self.viewport.width(),
+                    self.tabs[self.active].content.line_count().max(1),
+                )
+            })
+            .flatten()
+    }
+
+    fn ensure_active_layout_cache(&mut self) {
+        let Some(wrap_cols) = self.active_wrap_cols() else {
+            return;
+        };
+
+        self.tabs[self.active].ensure_layout_cache(wrap_cols);
+    }
+
+    fn selected_find_match_start(&self) -> Option<text_editor::Position> {
+        if self.find.query.is_empty() {
+            return None;
         }
+
+        let cursor = self.tabs[self.active].content.cursor();
+        let anchor = cursor.selection?;
+        let (start, end) = if anchor.line < cursor.position.line
+            || (anchor.line == cursor.position.line && anchor.column <= cursor.position.column)
+        {
+            (anchor, cursor.position)
+        } else {
+            (cursor.position, anchor)
+        };
+
+        let query_len = self.find.query.chars().count();
+        if start.line == end.line && end.column == start.column + query_len {
+            Some(start)
+        } else {
+            None
+        }
+    }
+
+    fn align_find_current_to_visible_match(&mut self) {
+        if self.find.matches.is_empty() {
+            return;
+        }
+
+        if let Some(start) = self.selected_find_match_start() {
+            if self.find.select_exact(&start) {
+                return;
+            }
+        }
+
+        let pos = self.tabs[self.active].content.cursor().position;
+        self.find.find_nearest(&pos);
+    }
+
+    fn reindex_find_matches(&mut self) {
+        if self.find.query.is_empty() {
+            self.find.clear_results();
+            return;
+        }
+
+        let text = self.tabs[self.active].content.text();
+        self.find.compute_matches(&text);
+        self.find.finish_reindex(self.active_tab_revision());
+    }
+
+    fn reindex_find_matches_to_nearest(&mut self) {
+        self.reindex_find_matches();
+
+        if !self.find.matches.is_empty() {
+            self.align_find_current_to_visible_match();
+        }
+    }
+
+    fn find_matches_stale(&self) -> bool {
+        self.find.is_stale(self.active_tab_revision())
+    }
+
+    fn ensure_find_matches_current(&mut self) -> bool {
+        if self.find_matches_stale() {
+            self.reindex_find_matches();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn mark_find_dirty(&mut self) {
+        if self.find.query.is_empty() {
+            return;
+        }
+
+        self.find.mark_dirty();
+    }
+
+    fn should_refresh_find_idle(&self) -> bool {
+        self.find.visible && !self.find.query.is_empty() && self.find.is_dirty()
+    }
+
+    fn should_poll_autosave(&self) -> bool {
+        self.needs_autosave
+    }
+
+    fn mark_active_document_changed(&mut self) {
+        self.tabs[self.active].modified = true;
+        self.needs_autosave = true;
+        self.mark_find_dirty();
+        if self.word_wrap {
+            self.ensure_active_layout_cache();
+        }
+    }
+
+    fn mark_active_content_changed(&mut self) {
+        self.tabs[self.active].touch_content();
+        self.mark_active_document_changed();
     }
 
     fn rebuild_content(&mut self, new_text: &str, cursor_line: usize, cursor_col: usize) {
@@ -346,17 +465,16 @@ impl App {
             },
             selection: None,
         });
-        tab.modified = true;
         self.vim.clear_preferred_column();
-        self.needs_autosave = true;
-        self.refresh_find_matches();
+        self.mark_active_content_changed();
     }
 
     fn set_active_tab(&mut self, index: usize) {
         self.active = index;
         self.vim.on_tab_switch();
         self.vim.clear_preferred_column();
-        self.refresh_find_matches();
+        self.reindex_find_matches_to_nearest();
+        self.ensure_active_layout_cache();
         self.apply_block_cursor_if_normal();
     }
 
@@ -397,23 +515,27 @@ impl App {
         }
 
         let content = &self.tabs[self.active].content;
-        let max_cols = viewport::wrap_columns(
-            self.viewport.width(),
-            EDITOR_FONT.char_width,
-            content.line_count().max(1),
-        );
-        let mut visual_row = 0usize;
+        let Some(wrap_cols) = self.active_wrap_cols() else {
+            return cursor.line as f32 * LINE_HEIGHT_PX + EDITOR_PAD;
+        };
 
-        for line_idx in 0..cursor.line {
-            let line_rows = content.line(line_idx).map_or(1, |line| {
-                viewport::visual_line_count(line.text.as_ref(), max_cols)
+        let rows_before = self.tabs[self.active]
+            .layout_cache_for(wrap_cols)
+            .and_then(|cache| cache.line_start_visual_row.get(cursor.line).copied())
+            .unwrap_or_else(|| {
+                (0..cursor.line)
+                    .map(|line_idx| {
+                        content.line(line_idx).map_or(1, |line| {
+                            viewport::visual_line_count(line.text.as_ref(), wrap_cols)
+                        })
+                    })
+                    .sum()
             });
-            visual_row += line_rows;
-        }
 
-        visual_row += content.line(cursor.line).map_or(0, |line| {
-            viewport::cursor_visual_row_in_line(line.text.as_ref(), cursor.column, max_cols)
-        });
+        let visual_row = rows_before
+            + content.line(cursor.line).map_or(0, |line| {
+                viewport::cursor_visual_row_in_line(line.text.as_ref(), cursor.column, wrap_cols)
+            });
 
         EDITOR_PAD + visual_row as f32 * LINE_HEIGHT_PX
     }
@@ -428,20 +550,23 @@ impl App {
             return content.line_count().max(1);
         }
 
-        let max_cols = viewport::wrap_columns(
-            self.viewport.width(),
-            EDITOR_FONT.char_width,
-            content.line_count().max(1),
-        );
+        let Some(wrap_cols) = self.active_wrap_cols() else {
+            return content.line_count().max(1);
+        };
 
-        (0..content.line_count())
-            .map(|line_idx| {
-                content.line(line_idx).map_or(1, |line| {
-                    viewport::visual_line_count(line.text.as_ref(), max_cols)
-                })
+        self.tabs[self.active]
+            .layout_cache_for(wrap_cols)
+            .map(|cache| cache.total_visual_rows)
+            .unwrap_or_else(|| {
+                (0..content.line_count())
+                    .map(|line_idx| {
+                        content.line(line_idx).map_or(1, |line| {
+                            viewport::visual_line_count(line.text.as_ref(), wrap_cols)
+                        })
+                    })
+                    .sum::<usize>()
+                    .max(1)
             })
-            .sum::<usize>()
-            .max(1)
     }
 
     fn finish_update(&self, result: UpdateResult) -> Task<Message> {
@@ -490,12 +615,7 @@ impl App {
                 self.find.query = sel;
             }
         }
-        self.find
-            .compute_matches(&self.tabs[self.active].content.text());
-        if !self.find.matches.is_empty() {
-            let pos = self.tabs[self.active].content.cursor().position;
-            self.find.find_nearest(&pos);
-        }
+        self.reindex_find_matches_to_nearest();
         iced::widget::operation::focus(FIND_INPUT_ID.clone())
     }
 
@@ -657,9 +777,7 @@ impl App {
                 }
 
                 if is_edit {
-                    self.tabs[self.active].modified = true;
-                    self.needs_autosave = true;
-                    self.refresh_find_matches();
+                    self.mark_active_content_changed();
                 }
                 self.apply_block_cursor_if_normal();
                 UpdateResult {
@@ -715,7 +833,8 @@ impl App {
                     }
                     self.tabs[0] = Tab::from_path(path, &body);
                     self.vim.clear_preferred_column();
-                    self.refresh_find_matches();
+                    self.reindex_find_matches_to_nearest();
+                    self.ensure_active_layout_cache();
                     self.apply_block_cursor_if_normal();
                 } else {
                     self.tabs.push(Tab::from_path(path, &body));
@@ -772,17 +891,18 @@ impl App {
                 }
             }
 
-            Message::AutosaveComplete(Ok(path)) => {
-                for tab in &mut self.tabs {
-                    if tab.path.as_ref() == Some(&path) {
-                        tab.modified = false;
-                        break;
+            Message::AutosaveComplete(result) => {
+                match result {
+                    Ok(path) => {
+                        for tab in &mut self.tabs {
+                            if tab.path.as_ref() == Some(&path) {
+                                tab.modified = false;
+                                break;
+                            }
+                        }
                     }
+                    Err(e) => eprintln!("lst: autosave failed: {e:?}"),
                 }
-                UpdateResult::none()
-            }
-            Message::AutosaveComplete(Err(e)) => {
-                eprintln!("lst: autosave failed: {e:?}");
                 UpdateResult::none()
             }
 
@@ -840,9 +960,7 @@ impl App {
                             .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
                                 Arc::new(text),
                             )));
-                        tab.modified = true;
-                        self.needs_autosave = true;
-                        self.refresh_find_matches();
+                        self.mark_active_content_changed();
                         self.apply_block_cursor_if_normal();
                         return UpdateResult::reveal(Task::none());
                     }
@@ -854,16 +972,18 @@ impl App {
 
             // ── Undo / Redo ──────────────────────────────────────────────
             Message::Undo => {
-                self.tabs[self.active].undo();
-                self.vim.clear_preferred_column();
-                self.refresh_find_matches();
+                if self.tabs[self.active].undo() {
+                    self.vim.clear_preferred_column();
+                    self.mark_active_document_changed();
+                }
                 UpdateResult::reveal(Task::none())
             }
 
             Message::Redo => {
-                self.tabs[self.active].redo();
-                self.vim.clear_preferred_column();
-                self.refresh_find_matches();
+                if self.tabs[self.active].redo() {
+                    self.vim.clear_preferred_column();
+                    self.mark_active_document_changed();
+                }
                 UpdateResult::reveal(Task::none())
             }
 
@@ -888,10 +1008,8 @@ impl App {
                     tab.content
                         .perform(text_editor::Action::Edit(text_editor::Edit::Insert(c)));
                 }
-                tab.modified = true;
                 self.vim.clear_preferred_column();
-                self.needs_autosave = true;
-                self.refresh_find_matches();
+                self.mark_active_content_changed();
                 UpdateResult::reveal(Task::none())
             }
 
@@ -922,13 +1040,14 @@ impl App {
                 }
                 self.vim.clear_preferred_column();
                 self.find.query = q;
-                self.find
-                    .compute_matches(&self.tabs[self.active].content.text());
-                if !self.find.matches.is_empty() {
-                    let pos = self.tabs[self.active].content.cursor().position;
-                    self.find.find_nearest(&pos);
-                    self.find
-                        .navigate_to_current(&mut self.tabs[self.active].content);
+                if self.find.query.is_empty() {
+                    self.find.clear_results();
+                } else {
+                    self.reindex_find_matches_to_nearest();
+                    if !self.find.matches.is_empty() {
+                        self.find
+                            .navigate_to_current(&mut self.tabs[self.active].content);
+                    }
                 }
                 UpdateResult::none()
             }
@@ -940,7 +1059,13 @@ impl App {
 
             Message::FindNext => {
                 self.vim.clear_preferred_column();
-                self.find.next();
+                let was_stale = self.ensure_find_matches_current();
+                if was_stale {
+                    let cursor = self.tabs[self.active].content.cursor().position;
+                    let _ = self.find.vim_next_from_cursor(&cursor);
+                } else {
+                    self.find.next();
+                }
                 self.find
                     .navigate_to_current(&mut self.tabs[self.active].content);
                 UpdateResult::reveal(iced::widget::operation::focus(EDITOR_ID.clone()))
@@ -948,30 +1073,57 @@ impl App {
 
             Message::FindPrev => {
                 self.vim.clear_preferred_column();
-                self.find.prev();
+                let was_stale = self.ensure_find_matches_current();
+                if was_stale {
+                    let cursor = self.tabs[self.active].content.cursor().position;
+                    let _ = self.find.vim_prev_from_cursor(&cursor);
+                } else {
+                    self.find.prev();
+                }
                 self.find
                     .navigate_to_current(&mut self.tabs[self.active].content);
                 UpdateResult::reveal(iced::widget::operation::focus(EDITOR_ID.clone()))
             }
 
+            Message::FindRefreshTick => {
+                if !self.should_refresh_find_idle() {
+                    return UpdateResult::none();
+                }
+
+                let Some(dirty_since) = self.find.dirty_since() else {
+                    return UpdateResult::none();
+                };
+
+                if dirty_since.elapsed() < Duration::from_millis(200) {
+                    return UpdateResult::none();
+                }
+
+                self.reindex_find_matches_to_nearest();
+                UpdateResult::none()
+            }
+
             Message::ReplaceOne => {
+                let was_stale = self.ensure_find_matches_current();
                 if self.find.matches.is_empty() {
                     return UpdateResult::none();
                 }
-                let tab = &mut self.tabs[self.active];
-                tab.push_undo_snapshot(EditKind::Other, true);
-                self.find.navigate_to_current(&mut tab.content);
-                let replacement = Arc::new(self.find.replacement.clone());
-                tab.content
-                    .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
-                        replacement,
-                    )));
-                tab.modified = true;
+                if was_stale {
+                    self.align_find_current_to_visible_match();
+                }
+                let cursor_after = {
+                    let tab = &mut self.tabs[self.active];
+                    tab.push_undo_snapshot(EditKind::Other, true);
+                    self.find.navigate_to_current(&mut tab.content);
+                    let replacement = Arc::new(self.find.replacement.clone());
+                    tab.content
+                        .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
+                            replacement,
+                        )));
+                    tab.content.cursor().position
+                };
                 self.vim.clear_preferred_column();
-                self.needs_autosave = true;
-                // Advance cursor past the replacement so we don't re-match it
-                let cursor_after = tab.content.cursor().position;
-                self.find.compute_matches(&tab.content.text());
+                self.mark_active_content_changed();
+                self.reindex_find_matches();
                 if !self.find.matches.is_empty() {
                     self.find.find_nearest(&cursor_after);
                     self.find
@@ -981,23 +1133,27 @@ impl App {
             }
 
             Message::ReplaceAll => {
-                if self.find.matches.is_empty() || self.find.query.is_empty() {
+                if self.find.query.is_empty() {
                     return UpdateResult::none();
                 }
                 let tab = &mut self.tabs[self.active];
-                tab.push_undo_snapshot(EditKind::Other, true);
                 let cursor_pos = tab.content.cursor().position;
-                let new_text = tab
-                    .content
-                    .text()
-                    .replace(&self.find.query, &self.find.replacement);
+                let old_text = tab.content.text();
+                let new_text = old_text.replace(&self.find.query, &self.find.replacement);
+                if new_text == old_text {
+                    self.reindex_find_matches_to_nearest();
+                    return UpdateResult::none();
+                }
+                tab.push_undo_snapshot(EditKind::Other, true);
                 self.rebuild_content(&new_text, cursor_pos.line, cursor_pos.column);
+                self.reindex_find_matches_to_nearest();
                 UpdateResult::reveal(Task::none())
             }
 
             // ── Word Wrap ────────────────────────────────────────────────
             Message::ToggleWordWrap => {
                 self.word_wrap = !self.word_wrap;
+                self.ensure_active_layout_cache();
                 UpdateResult::reveal(Task::none())
             }
 
@@ -1249,7 +1405,11 @@ impl App {
 
             // ── Scroll Tracking ─────────────────────────────────────────
             Message::Scrolled(viewport) => {
+                let previous_wrap_cols = self.active_wrap_cols();
                 self.viewport.update(viewport);
+                if self.active_wrap_cols() != previous_wrap_cols {
+                    self.ensure_active_layout_cache();
+                }
                 UpdateResult::none()
             }
 
@@ -1337,16 +1497,18 @@ impl App {
                     reveal = RevealIntent::RevealCaret;
                 }
                 VimCommand::Undo => {
-                    self.tabs[self.active].undo();
-                    self.vim.clear_preferred_column();
-                    self.refresh_find_matches();
-                    reveal = RevealIntent::RevealCaret;
+                    if self.tabs[self.active].undo() {
+                        self.vim.clear_preferred_column();
+                        self.mark_active_document_changed();
+                        reveal = RevealIntent::RevealCaret;
+                    }
                 }
                 VimCommand::Redo => {
-                    self.tabs[self.active].redo();
-                    self.vim.clear_preferred_column();
-                    self.refresh_find_matches();
-                    reveal = RevealIntent::RevealCaret;
+                    if self.tabs[self.active].redo() {
+                        self.vim.clear_preferred_column();
+                        self.mark_active_document_changed();
+                        reveal = RevealIntent::RevealCaret;
+                    }
                 }
                 VimCommand::OpenFind => {
                     if self.vim.mode == vim::Mode::Normal {
@@ -1355,6 +1517,7 @@ impl App {
                     task = self.open_find(false);
                 }
                 VimCommand::FindNext => {
+                    self.ensure_find_matches_current();
                     let cursor = self.tabs[self.active].content.cursor().position;
                     if let Some(target) = self.find.vim_next_from_cursor(&cursor) {
                         self.move_to_vim_search_target(target);
@@ -1363,6 +1526,7 @@ impl App {
                     task = iced::widget::operation::focus(EDITOR_ID.clone());
                 }
                 VimCommand::FindPrev => {
+                    self.ensure_find_matches_current();
                     let cursor = self.tabs[self.active].content.cursor().position;
                     if let Some(target) = self.find.vim_prev_from_cursor(&cursor) {
                         self.move_to_vim_search_target(target);
@@ -1372,8 +1536,7 @@ impl App {
                 }
                 VimCommand::SearchWordUnderCursor { word, forward } => {
                     self.find.query = word;
-                    self.find
-                        .compute_matches(&self.tabs[self.active].content.text());
+                    self.reindex_find_matches();
                     let cursor = self.tabs[self.active].content.cursor().position;
                     let target = if forward {
                         self.find.vim_next_from_cursor(&cursor)
@@ -1708,7 +1871,6 @@ impl App {
         let text_muted = p.background.strong.text;
         let primary = p.primary.base.color;
         let editor_font = EDITOR_FONT.font;
-        let char_width = EDITOR_FONT.char_width;
         let vim_mode = self.vim.mode;
 
         // ── Tab bar ──────────────────────────────────────────────────────
@@ -1771,7 +1933,9 @@ impl App {
 
         // ── Find bar (conditional) ───────────────────────────────────────
         let find_bar = if self.find.visible {
-            let match_label = if self.find.matches.is_empty() {
+            let match_label = if self.find.is_dirty() && !self.find.query.is_empty() {
+                "Updating...".to_string()
+            } else if self.find.matches.is_empty() {
                 if self.find.query.is_empty() {
                     String::new()
                 } else {
@@ -1857,37 +2021,13 @@ impl App {
         let editor_area = responsive(move |size| {
             let vh = size.height;
             let overscroll = vh * 0.4;
-            let line_number_digits = viewport::line_number_digits_width(n_lines);
-            let continuation_prefix = viewport::continuation_prefix(n_lines);
-
-            let line_num_text = if word_wrap {
-                let max_cols = viewport::wrap_columns(size.width, char_width, n_lines);
-                use std::fmt::Write;
-                let mut buf = String::with_capacity(n_lines * 6);
-                for i in 0..n_lines {
-                    let vlines = content_ref.line(i).map_or(1, |line| {
-                        viewport::visual_line_count(line.text.as_ref(), max_cols)
-                    });
-                    let _ = write!(buf, "{:>width$} ", i + 1, width = line_number_digits);
-                    for _ in 1..vlines {
-                        buf.push('\n');
-                        buf.push_str(&continuation_prefix);
-                    }
-                    if i + 1 < n_lines {
-                        buf.push('\n');
-                    }
-                }
-                buf
+            let line_num_text: Cow<'_, str> = if word_wrap {
+                let wrap_cols = wrapped_cols(size.width, n_lines).unwrap_or(1);
+                tab.layout_cache_for(wrap_cols)
+                    .map(|cache| Cow::Borrowed(cache.gutter_text.as_str()))
+                    .unwrap_or_else(|| Cow::Owned(tab.build_layout_cache(wrap_cols).gutter_text))
             } else {
-                use std::fmt::Write;
-                let mut buf = String::with_capacity(n_lines * 6);
-                for i in 1..=n_lines {
-                    let _ = write!(buf, "{i:>width$} ", width = line_number_digits);
-                    if i < n_lines {
-                        buf.push('\n');
-                    }
-                }
-                buf
+                Cow::Owned(unwrapped_gutter_text(n_lines))
             };
 
             let line_numbers = mouse_area(
@@ -2244,11 +2384,47 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
-            event::listen_with(handle_key),
-            iced::time::every(Duration::from_millis(500)).map(|_| Message::AutosaveTick),
-        ])
+        let mut subscriptions = vec![event::listen_with(handle_key)];
+
+        if self.should_poll_autosave() {
+            subscriptions
+                .push(iced::time::every(Duration::from_millis(500)).map(|_| Message::AutosaveTick));
+        }
+
+        if self.should_refresh_find_idle() {
+            subscriptions.push(
+                iced::time::every(Duration::from_millis(50)).map(|_| Message::FindRefreshTick),
+            );
+        }
+
+        Subscription::batch(subscriptions)
     }
+}
+
+fn wrapped_cols(viewport_width: f32, line_count: usize) -> Option<usize> {
+    if viewport_width <= 0.0 {
+        return None;
+    }
+
+    Some(viewport::wrap_columns(
+        viewport_width,
+        EDITOR_FONT.char_width,
+        line_count,
+    ))
+}
+
+fn unwrapped_gutter_text(line_count: usize) -> String {
+    let width = viewport::line_number_digits_width(line_count);
+    let mut gutter_text = String::with_capacity(line_count * (width + 2));
+
+    for line_no in 1..=line_count {
+        let _ = write!(gutter_text, "{line_no:>width$} ", width = width);
+        if line_no < line_count {
+            gutter_text.push('\n');
+        }
+    }
+
+    gutter_text
 }
 
 // ── Vim text‑range helpers ──────────────────────────────────────────────────
@@ -2736,6 +2912,139 @@ mod tests {
 
         assert_eq!(result.reveal, RevealIntent::RevealCaret);
         assert_eq!(app.tabs[0].content.cursor().position, pos(2, 3));
+    }
+
+    #[test]
+    fn edits_mark_find_matches_dirty_until_idle_refresh() {
+        let mut app = test_app("foo\nbar\nfoo");
+        app.find.visible = true;
+        app.find.query = "foo".to_string();
+        app.reindex_find_matches();
+
+        let result = app.update_inner(Message::Edit(text_editor::Action::Edit(
+            text_editor::Edit::Insert('x'),
+        )));
+
+        assert_eq!(result.reveal, RevealIntent::RevealCaret);
+        assert!(app.find.is_dirty());
+        assert!(app.find_matches_stale());
+
+        app.find
+            .mark_dirty_at(Instant::now() - Duration::from_millis(250));
+
+        let refresh = app.update_inner(Message::FindRefreshTick);
+
+        assert_eq!(refresh.reveal, RevealIntent::None);
+        assert!(!app.find.is_dirty());
+        assert_eq!(app.find.indexed_revision(), Some(app.tabs[0].revision()));
+    }
+
+    #[test]
+    fn idle_find_refresh_preserves_selected_match() {
+        let mut app = test_app("foo\nbar\nfoo");
+        app.find.visible = true;
+        app.find.query = "foo".to_string();
+        app.reindex_find_matches();
+        app.find.current = 1;
+        app.find.navigate_to_current(&mut app.tabs[0].content);
+        app.find
+            .mark_dirty_at(Instant::now() - Duration::from_millis(250));
+
+        let result = app.update_inner(Message::FindRefreshTick);
+
+        assert_eq!(result.reveal, RevealIntent::None);
+        assert_eq!(app.find.current, 1);
+        assert_eq!(app.tabs[0].content.cursor().position, pos(2, 3));
+    }
+
+    #[test]
+    fn replace_one_with_stale_matches_uses_visible_selection() {
+        let mut app = test_app("foo foo");
+        app.find.query = "foo".to_string();
+        app.find.replacement = "bar".to_string();
+        app.reindex_find_matches();
+        app.find.current = 1;
+        app.find.navigate_to_current(&mut app.tabs[0].content);
+        app.find.finish_reindex(0);
+        app.find.mark_dirty();
+
+        let result = app.update_inner(Message::ReplaceOne);
+
+        assert_eq!(result.reveal, RevealIntent::RevealCaret);
+        assert_eq!(app.tabs[0].content.text(), "foo bar");
+    }
+
+    #[test]
+    fn timers_only_run_when_background_work_exists() {
+        let mut app = test_app("foo");
+
+        assert!(!app.should_poll_autosave());
+        assert!(!app.should_refresh_find_idle());
+
+        app.needs_autosave = true;
+        assert!(app.should_poll_autosave());
+
+        app.needs_autosave = false;
+        app.find.visible = true;
+        app.find.query = "foo".to_string();
+        app.find.mark_dirty();
+        assert!(app.should_refresh_find_idle());
+
+        app.find.visible = false;
+        assert!(!app.should_refresh_find_idle());
+    }
+
+    #[test]
+    fn layout_cache_only_rebuilds_when_wrap_width_changes() {
+        let mut app = test_app("abcdefghij");
+        let height = 60.0;
+        let width_narrow = viewport::line_number_gutter_width(1, EDITOR_FONT.char_width)
+            + viewport::GUTTER_SEPARATOR_WIDTH
+            + EDITOR_PAD
+            + viewport::EDITOR_RIGHT_PAD
+            + EDITOR_FONT.char_width * 4.25;
+        let width_wide = viewport::line_number_gutter_width(1, EDITOR_FONT.char_width)
+            + viewport::GUTTER_SEPARATOR_WIDTH
+            + EDITOR_PAD
+            + viewport::EDITOR_RIGHT_PAD
+            + EDITOR_FONT.char_width * 6.25;
+
+        app.viewport = ViewportState::from_metrics(
+            width_narrow,
+            height,
+            viewport::content_height(height, 3),
+            0.0,
+        );
+        let narrow_cols = app
+            .active_wrap_cols()
+            .expect("narrow viewport should produce wrap columns");
+        app.ensure_active_layout_cache();
+        assert!(app.tabs[0].layout_cache_for(narrow_cols).is_some());
+
+        app.viewport = ViewportState::from_metrics(
+            width_narrow,
+            height,
+            viewport::content_height(height, 3),
+            40.0,
+        );
+        assert_eq!(app.active_wrap_cols(), Some(narrow_cols));
+        assert!(app.tabs[0].layout_cache_for(narrow_cols).is_some());
+
+        app.viewport = ViewportState::from_metrics(
+            width_wide,
+            height,
+            viewport::content_height(height, 2),
+            40.0,
+        );
+        let wide_cols = app
+            .active_wrap_cols()
+            .expect("wide viewport should produce wrap columns");
+        assert_ne!(narrow_cols, wide_cols);
+
+        app.ensure_active_layout_cache();
+
+        assert!(app.tabs[0].layout_cache_for(wide_cols).is_some());
+        assert!(app.tabs[0].layout_cache_for(narrow_cols).is_none());
     }
 
     #[test]
