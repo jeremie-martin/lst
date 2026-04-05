@@ -25,16 +25,10 @@ struct CachedLines {
     lines: Arc<[String]>,
 }
 
-struct UnwrappedGutterCache {
-    line_count: usize,
-    gutter_text: String,
-}
-
 pub struct LayoutCache {
     pub wrap_cols: usize,
     pub line_start_visual_row: Vec<usize>,
     pub total_visual_rows: usize,
-    pub gutter_text: String,
 }
 
 pub struct Tab {
@@ -45,7 +39,6 @@ pub struct Tab {
     revision: u64,
     line_cache: Option<CachedLines>,
     layout_cache: Option<LayoutCache>,
-    unwrapped_gutter_cache: UnwrappedGutterCache,
     undo_stack: VecDeque<Snapshot>,
     redo_stack: Vec<Snapshot>,
     last_edit_kind: Option<EditKind>,
@@ -54,7 +47,6 @@ pub struct Tab {
 impl Tab {
     pub fn new_scratchpad(path: PathBuf) -> Self {
         let content = text_editor::Content::new();
-        let unwrapped_gutter_cache = build_unwrapped_gutter_cache(content.line_count().max(1));
 
         Self {
             path: Some(path),
@@ -64,7 +56,6 @@ impl Tab {
             revision: 0,
             line_cache: None,
             layout_cache: None,
-            unwrapped_gutter_cache,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             last_edit_kind: None,
@@ -73,7 +64,6 @@ impl Tab {
 
     pub fn from_path(path: PathBuf, body: &str) -> Self {
         let content = text_editor::Content::with_text(body);
-        let unwrapped_gutter_cache = build_unwrapped_gutter_cache(content.line_count().max(1));
 
         Self {
             path: Some(path),
@@ -83,7 +73,6 @@ impl Tab {
             revision: 0,
             line_cache: None,
             layout_cache: None,
-            unwrapped_gutter_cache,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             last_edit_kind: None,
@@ -122,7 +111,6 @@ impl Tab {
         self.revision = self.revision.wrapping_add(1);
         self.line_cache = None;
         self.layout_cache = None;
-        self.sync_unwrapped_gutter_cache();
     }
 
     pub fn lines(&mut self) -> Arc<[String]> {
@@ -148,8 +136,24 @@ impl Tab {
         lines
     }
 
-    pub fn unwrapped_gutter_text(&self) -> &str {
-        &self.unwrapped_gutter_cache.gutter_text
+    pub fn visible_unwrapped_gutter_text(&self, start_row: usize, end_row: usize) -> String {
+        let line_count = self.content.line_count().max(1);
+        if start_row >= end_row || start_row >= line_count {
+            return String::new();
+        }
+
+        let end_row = end_row.min(line_count);
+        let width = viewport::line_number_digits_width(line_count);
+        let mut gutter_text = String::with_capacity((end_row - start_row) * (width + 2));
+
+        for line_no in (start_row + 1)..=end_row {
+            let _ = write!(gutter_text, "{line_no:>width$} ", width = width);
+            if line_no < end_row {
+                gutter_text.push('\n');
+            }
+        }
+
+        gutter_text
     }
 
     pub fn layout_cache_for(&self, wrap_cols: usize) -> Option<&LayoutCache> {
@@ -210,23 +214,13 @@ impl Tab {
             false
         }
     }
-
-    fn sync_unwrapped_gutter_cache(&mut self) {
-        let line_count = self.content.line_count().max(1);
-        if self.unwrapped_gutter_cache.line_count != line_count {
-            self.unwrapped_gutter_cache = build_unwrapped_gutter_cache(line_count);
-        }
-    }
 }
 
 impl LayoutCache {
     fn build(content: &text_editor::Content, wrap_cols: usize) -> Self {
         let line_count = content.line_count().max(1);
-        let line_number_digits = viewport::line_number_digits_width(line_count);
-        let continuation_prefix = viewport::continuation_prefix(line_count);
         let mut line_start_visual_row = Vec::with_capacity(line_count + 1);
         let mut total_visual_rows = 0usize;
-        let mut gutter_text = String::with_capacity(line_count * (line_number_digits + 2));
 
         for line_idx in 0..line_count {
             line_start_visual_row.push(total_visual_rows);
@@ -236,22 +230,6 @@ impl LayoutCache {
             });
 
             total_visual_rows += visual_rows;
-
-            let _ = write!(
-                gutter_text,
-                "{:>width$} ",
-                line_idx + 1,
-                width = line_number_digits
-            );
-
-            for _ in 1..visual_rows {
-                gutter_text.push('\n');
-                gutter_text.push_str(&continuation_prefix);
-            }
-
-            if line_idx + 1 < line_count {
-                gutter_text.push('\n');
-            }
         }
 
         line_start_visual_row.push(total_visual_rows);
@@ -260,25 +238,55 @@ impl LayoutCache {
             wrap_cols,
             line_start_visual_row,
             total_visual_rows: total_visual_rows.max(1),
-            gutter_text,
-        }
-    }
-}
-
-fn build_unwrapped_gutter_cache(line_count: usize) -> UnwrappedGutterCache {
-    let width = viewport::line_number_digits_width(line_count);
-    let mut gutter_text = String::with_capacity(line_count * (width + 2));
-
-    for line_no in 1..=line_count {
-        let _ = write!(gutter_text, "{line_no:>width$} ", width = width);
-        if line_no < line_count {
-            gutter_text.push('\n');
         }
     }
 
-    UnwrappedGutterCache {
-        line_count,
-        gutter_text,
+    pub fn visible_gutter_text(
+        &self,
+        line_count: usize,
+        start_row: usize,
+        end_row: usize,
+    ) -> String {
+        if start_row >= end_row || start_row >= self.total_visual_rows || line_count == 0 {
+            return String::new();
+        }
+
+        let end_row = end_row.min(self.total_visual_rows);
+        let width = viewport::line_number_digits_width(line_count);
+        let continuation_prefix = viewport::continuation_prefix(line_count);
+        let start_line = self
+            .line_start_visual_row
+            .partition_point(|&row| row <= start_row)
+            .saturating_sub(1)
+            .min(line_count.saturating_sub(1));
+        let mut gutter_text = String::with_capacity((end_row - start_row) * (width + 2));
+        let mut first_row = true;
+
+        for line_idx in start_line..line_count {
+            let line_start = self.line_start_visual_row[line_idx];
+            if line_start >= end_row {
+                break;
+            }
+
+            let line_end = self.line_start_visual_row[line_idx + 1];
+            let visible_start = start_row.max(line_start);
+            let visible_end = end_row.min(line_end);
+
+            for row in visible_start..visible_end {
+                if !first_row {
+                    gutter_text.push('\n');
+                }
+                first_row = false;
+
+                if row == line_start {
+                    let _ = write!(gutter_text, "{:>width$} ", line_idx + 1, width = width);
+                } else {
+                    gutter_text.push_str(&continuation_prefix);
+                }
+            }
+        }
+
+        gutter_text
     }
 }
 
@@ -287,14 +295,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layout_cache_tracks_prefix_rows_and_gutter_for_wrapped_lines() {
+    fn layout_cache_tracks_prefix_rows_and_visible_wrapped_gutter() {
         let mut tab = Tab::from_path(PathBuf::from("/tmp/test.txt"), "abcd\nef");
 
         let cache = tab.ensure_layout_cache(2);
 
         assert_eq!(cache.line_start_visual_row, vec![0, 2, 3]);
         assert_eq!(cache.total_visual_rows, 3);
-        assert_eq!(cache.gutter_text, "   1 \n     \n   2 ");
+        assert_eq!(cache.visible_gutter_text(2, 0, 3), "   1 \n     \n   2 ");
     }
 
     #[test]
@@ -328,20 +336,30 @@ mod tests {
     }
 
     #[test]
-    fn unwrapped_gutter_cache_updates_only_when_line_count_changes() {
+    fn visible_unwrapped_gutter_text_uses_current_line_count() {
         let mut tab = Tab::from_path(PathBuf::from("/tmp/test.txt"), "one");
-        let original = tab.unwrapped_gutter_cache.gutter_text.clone();
 
-        tab.content = text_editor::Content::with_text("two");
-        tab.touch_content();
-
-        assert_eq!(tab.unwrapped_gutter_cache.line_count, 1);
-        assert_eq!(tab.unwrapped_gutter_cache.gutter_text, original);
+        assert_eq!(tab.visible_unwrapped_gutter_text(0, 1), "   1 ");
 
         tab.content = text_editor::Content::with_text("one\ntwo");
         tab.touch_content();
 
-        assert_eq!(tab.unwrapped_gutter_cache.line_count, 2);
-        assert_eq!(tab.unwrapped_gutter_text(), "   1 \n   2 ");
+        assert_eq!(tab.visible_unwrapped_gutter_text(0, 2), "   1 \n   2 ");
+    }
+
+    #[test]
+    fn wrapped_visible_gutter_text_only_builds_requested_rows() {
+        let mut tab = Tab::from_path(PathBuf::from("/tmp/test.txt"), "abcd\nef");
+
+        let cache = tab.ensure_layout_cache(2);
+
+        assert_eq!(cache.visible_gutter_text(2, 1, 3), "     \n   2 ");
+    }
+
+    #[test]
+    fn unwrapped_visible_gutter_text_only_builds_requested_rows() {
+        let tab = Tab::from_path(PathBuf::from("/tmp/test.txt"), "one\ntwo\nthree");
+
+        assert_eq!(tab.visible_unwrapped_gutter_text(1, 3), "   2 \n   3 ");
     }
 }

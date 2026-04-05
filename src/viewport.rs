@@ -1,5 +1,6 @@
-use crate::style::EDITOR_PAD;
+use crate::style::{EDITOR_PAD, LINE_HEIGHT_PX};
 use iced::widget::scrollable;
+use std::ops::Range;
 
 const MIN_LINE_NUMBER_DIGITS: usize = 4;
 const LINE_NUMBER_GAP_CHARS: usize = 1;
@@ -50,6 +51,14 @@ impl ViewportState {
         self.height
     }
 
+    pub fn scroll_y(&self) -> f32 {
+        self.scroll_y
+    }
+
+    pub fn set_scroll_y(&mut self, scroll_y: f32) {
+        self.scroll_y = scroll_y;
+    }
+
     pub fn can_reveal(&self) -> bool {
         self.width > 0.0 && self.height > 0.0
     }
@@ -85,6 +94,20 @@ impl ViewportState {
     fn max_scroll_y(&self) -> f32 {
         (self.content_height - self.height).max(0.0)
     }
+}
+
+pub fn visible_row_range(scroll_y: f32, viewport_height: f32, total_rows: usize) -> Range<usize> {
+    if total_rows == 0 {
+        return 0..0;
+    }
+
+    let top = (scroll_y - EDITOR_PAD).max(0.0);
+    let bottom = (scroll_y + viewport_height - EDITOR_PAD).max(0.0);
+    let start = (top / LINE_HEIGHT_PX).floor() as usize;
+    let start = start.min(total_rows.saturating_sub(1));
+    let end = ((bottom / LINE_HEIGHT_PX).ceil() as usize).clamp(start + 1, total_rows);
+
+    start..end
 }
 
 pub fn line_number_digits_width(line_count: usize) -> usize {
@@ -349,5 +372,16 @@ mod tests {
         assert_eq!(cursor_visual_row_in_line(line, 2, 4), 1);
         assert_eq!(cursor_visual_row_in_line(line, 3, 4), 3);
         assert_eq!(cursor_visual_row_in_line(line, line.chars().count(), 4), 3);
+    }
+
+    #[test]
+    fn visible_row_range_accounts_for_padding_and_partial_rows() {
+        assert_eq!(visible_row_range(0.0, 40.0, 10), 0..2);
+        assert_eq!(visible_row_range(28.0, 40.0, 10), 1..3);
+    }
+
+    #[test]
+    fn visible_row_range_clamps_to_last_row() {
+        assert_eq!(visible_row_range(500.0, 100.0, 3), 2..3);
     }
 }

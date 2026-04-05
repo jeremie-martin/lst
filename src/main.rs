@@ -20,7 +20,6 @@ use iced::{
     Background, Border, Color, Element, Font, Length, Padding, Pixels, Point, Subscription, Task,
     Theme,
 };
-use std::borrow::Cow;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -542,11 +541,7 @@ impl App {
             .reveal_offset(caret_top, LINE_HEIGHT_PX, margin)
     }
 
-    fn reveal_caret_task(&self) -> Task<Message> {
-        let Some(target) = self.caret_reveal_target() else {
-            return Task::none();
-        };
-
+    fn reveal_scroll_task(target: f32) -> Task<Message> {
         iced::widget::operation::scroll_to(
             SCROLLABLE_ID.clone(),
             iced::widget::operation::AbsoluteOffset::<Option<f32>> {
@@ -616,10 +611,16 @@ impl App {
             })
     }
 
-    fn finish_update(&self, result: UpdateResult) -> Task<Message> {
+    fn finish_update(&mut self, result: UpdateResult) -> Task<Message> {
         match result.reveal {
             RevealIntent::None => result.task,
-            RevealIntent::RevealCaret => Task::batch([result.task, self.reveal_caret_task()]),
+            RevealIntent::RevealCaret => {
+                if let Some(target) = self.caret_reveal_target() {
+                    self.viewport.set_scroll_y(target);
+                    return Task::batch([result.task, Self::reveal_scroll_task(target)]);
+                }
+                result.task
+            }
         }
     }
 
@@ -2038,6 +2039,7 @@ impl App {
         let last_line = n_lines.saturating_sub(1);
         let content_ref = &tab.content;
         let word_wrap = self.word_wrap;
+        let scroll_y = self.viewport.scroll_y();
         // Escape is handled by the subscription (handle_key), not key_binding,
         // so find_visible / goto_visible are not needed in the closure.
         let highlight_ext = tab
@@ -2049,24 +2051,47 @@ impl App {
         let editor_area = responsive(move |size| {
             let vh = size.height;
             let overscroll = vh * 0.4;
-            let line_num_text: Cow<'_, str> = if word_wrap {
+            let (line_num_text, top_gap, bottom_gap) = if word_wrap {
                 let wrap_cols = wrapped_cols(size.width, n_lines).unwrap_or(1);
-                tab.layout_cache_for(wrap_cols)
-                    .map(|cache| Cow::Borrowed(cache.gutter_text.as_str()))
-                    .unwrap_or_else(|| Cow::Owned(tab.build_layout_cache(wrap_cols).gutter_text))
+                let temporary_layout_cache;
+                let layout_cache = if let Some(cache) = tab.layout_cache_for(wrap_cols) {
+                    cache
+                } else {
+                    temporary_layout_cache = tab.build_layout_cache(wrap_cols);
+                    &temporary_layout_cache
+                };
+                let visible_rows =
+                    viewport::visible_row_range(scroll_y, vh, layout_cache.total_visual_rows);
+
+                (
+                    layout_cache.visible_gutter_text(n_lines, visible_rows.start, visible_rows.end),
+                    visible_rows.start as f32 * LINE_HEIGHT_PX,
+                    layout_cache
+                        .total_visual_rows
+                        .saturating_sub(visible_rows.end) as f32
+                        * LINE_HEIGHT_PX,
+                )
             } else {
-                Cow::Borrowed(tab.unwrapped_gutter_text())
+                let visible_rows = viewport::visible_row_range(scroll_y, vh, n_lines);
+
+                (
+                    tab.visible_unwrapped_gutter_text(visible_rows.start, visible_rows.end),
+                    visible_rows.start as f32 * LINE_HEIGHT_PX,
+                    n_lines.saturating_sub(visible_rows.end) as f32 * LINE_HEIGHT_PX,
+                )
             };
 
             let line_numbers = mouse_area(
-                container(
+                container(column![
+                    Space::new().height(top_gap),
                     text(line_num_text)
                         .size(FONT_SIZE)
                         .font(editor_font)
                         .color(text_muted)
                         .line_height(Pixels(LINE_HEIGHT_PX))
                         .wrapping(iced::widget::text::Wrapping::None),
-                )
+                    Space::new().height(bottom_gap),
+                ])
                 .padding(Padding {
                     top: EDITOR_PAD,
                     bottom: EDITOR_PAD + overscroll,
@@ -3201,6 +3226,27 @@ mod tests {
         });
 
         assert_eq!(app.caret_reveal_target(), Some(40.0));
+    }
+
+    #[test]
+    fn finish_update_syncs_viewport_scroll_for_reveal() {
+        let mut app = test_app("abcdefghij");
+        let width = viewport::line_number_gutter_width(1, EDITOR_FONT.char_width)
+            + viewport::GUTTER_SEPARATOR_WIDTH
+            + EDITOR_PAD
+            + viewport::EDITOR_RIGHT_PAD
+            + EDITOR_FONT.char_width * 4.25;
+        let height = 60.0;
+        app.viewport =
+            ViewportState::from_metrics(width, height, viewport::content_height(height, 3), 0.0);
+        app.tabs[0].content.move_to(text_editor::Cursor {
+            position: pos(0, 9),
+            selection: None,
+        });
+
+        let _ = app.finish_update(UpdateResult::reveal(Task::none()));
+
+        assert_eq!(app.viewport.scroll_y(), 40.0);
     }
 
     #[test]

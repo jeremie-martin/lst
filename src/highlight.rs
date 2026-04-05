@@ -20,6 +20,9 @@ static THEME: LazyLock<SyntectTheme> = LazyLock::new(|| {
         .expect("embedded Catppuccin Mocha theme should be valid")
 });
 
+static SYNTECT_HIGHLIGHTER: LazyLock<SyntectHighlighter<'static>> =
+    LazyLock::new(|| SyntectHighlighter::new(&THEME));
+
 // ── Catppuccin Mocha palette (for hand-rolled Markdown highlights) ──────────
 
 const BLUE: Color = Color::from_rgb(0.537, 0.706, 0.980); // #89b4fa
@@ -129,6 +132,7 @@ pub struct LstHighlighter {
     mode: HighlightMode,
     states: Vec<LineState>,
     current_line: usize,
+    line_buffer: String,
     // Markdown working state
     in_code_block: bool,
     fence: Option<(char, usize)>,
@@ -143,15 +147,15 @@ pub struct LstHighlighter {
 impl LstHighlighter {
     fn init_mode(&mut self) {
         if let HighlightMode::Syntect(syntax) = &self.mode {
-            let hl = SyntectHighlighter::new(&THEME);
             self.full_file_parse = Some(ParseState::new(syntax));
-            self.full_file_hl = Some(HighlightState::new(&hl, ScopeStack::new()));
+            self.full_file_hl = Some(HighlightState::new(&SYNTECT_HIGHLIGHTER, ScopeStack::new()));
         }
     }
 
     fn reset(&mut self) {
         self.states.clear();
         self.current_line = 0;
+        self.line_buffer.clear();
         self.in_code_block = false;
         self.fence = None;
         self.code_lang = None;
@@ -198,9 +202,9 @@ impl LstHighlighter {
             self.fence = Some(fence);
             if let Some(ref lang) = lang {
                 if let Some(syntax) = SYNTAX_SET.find_syntax_by_token(lang) {
-                    let hl = SyntectHighlighter::new(&THEME);
                     self.syntect_parse = Some(ParseState::new(syntax));
-                    self.syntect_hl = Some(HighlightState::new(&hl, ScopeStack::new()));
+                    self.syntect_hl =
+                        Some(HighlightState::new(&SYNTECT_HIGHLIGHTER, ScopeStack::new()));
                 }
             }
             self.code_lang = lang;
@@ -231,7 +235,7 @@ impl LstHighlighter {
     fn highlight_code_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
         let parse = self.syntect_parse.as_mut().unwrap();
         let hl_state = self.syntect_hl.as_mut().unwrap();
-        run_syntect_line(parse, hl_state, line)
+        run_syntect_line(parse, hl_state, &mut self.line_buffer, line)
     }
 
     // ── Full-file syntect mode ──────────────────────────────────────────
@@ -239,7 +243,7 @@ impl LstHighlighter {
     fn highlight_syntect_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
         let parse = self.full_file_parse.as_mut().unwrap();
         let hl_state = self.full_file_hl.as_mut().unwrap();
-        let spans = run_syntect_line(parse, hl_state, line);
+        let spans = run_syntect_line(parse, hl_state, &mut self.line_buffer, line);
         self.states.push(LineState::Syntect(SyntectLineState {
             parse_state: parse.clone(),
             highlight_state: hl_state.clone(),
@@ -251,16 +255,19 @@ impl LstHighlighter {
 fn run_syntect_line(
     parse: &mut ParseState,
     hl_state: &mut HighlightState,
+    line_buffer: &mut String,
     line: &str,
 ) -> Vec<(Range<usize>, Highlight)> {
-    let line_nl = format!("{line}\n");
-    let ops = match parse.parse_line(&line_nl, &SYNTAX_SET) {
+    line_buffer.clear();
+    line_buffer.push_str(line);
+    line_buffer.push('\n');
+
+    let ops = match parse.parse_line(line_buffer, &SYNTAX_SET) {
         Ok(ops) => ops,
         Err(_) => return Vec::new(),
     };
 
-    let highlighter = SyntectHighlighter::new(&THEME);
-    let iter = RangedHighlightIterator::new(hl_state, &ops, &line_nl, &highlighter);
+    let iter = RangedHighlightIterator::new(hl_state, &ops, line_buffer, &SYNTECT_HIGHLIGHTER);
 
     let mut spans = Vec::new();
     for (style, _text, range) in iter {
@@ -293,6 +300,7 @@ impl Highlighter for LstHighlighter {
             mode,
             states: Vec::new(),
             current_line: 0,
+            line_buffer: String::new(),
             in_code_block: false,
             fence: None,
             code_lang: None,
