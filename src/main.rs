@@ -21,12 +21,13 @@ use iced::{
     Theme,
 };
 use std::borrow::Cow;
-use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
 fn editor_id() -> iced::widget::Id {
     iced::widget::Id::new("lst-editor")
@@ -40,20 +41,26 @@ static FIND_INPUT_ID: LazyLock<iced::widget::Id> =
 static GOTO_LINE_ID: LazyLock<iced::widget::Id> =
     LazyLock::new(|| iced::widget::Id::new("lst-goto-line"));
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EditorPointerCell {
+    column: usize,
+    row: usize,
+}
+
 // ── App ──────────────────────────────────────────────────────────────────────
 
 struct App {
     tabs: Vec<Tab>,
     active: usize,
     window_title: Option<String>,
-    gutter_mouse_y: f32,
+    gutter_hover_line: Option<usize>,
     find: FindState,
     word_wrap: bool,
     scratchpad_dir: PathBuf,
     needs_autosave: bool,
     shift_held: bool, // iced's Action::Click doesn't carry modifier state; track externally
     multiclick_drag: bool, // Workaround for iced-rs/iced#3227 — remove when merged
-    editor_mouse_pos: Point,
+    editor_pointer_cell: Option<EditorPointerCell>,
     goto_line: Option<String>,
     vim: vim::VimState,
     viewport: ViewportState,
@@ -268,14 +275,14 @@ impl App {
                 tabs,
                 active: 0,
                 window_title: args.window_title,
-                gutter_mouse_y: 0.0,
+                gutter_hover_line: None,
                 find: FindState::new(),
                 word_wrap: true,
                 scratchpad_dir,
                 needs_autosave: false,
                 shift_held: false,
                 multiclick_drag: false,
-                editor_mouse_pos: Point::ORIGIN,
+                editor_pointer_cell: None,
                 goto_line: None,
                 vim: vim::VimState::new(),
                 viewport: ViewportState::default(),
@@ -352,6 +359,46 @@ impl App {
         };
 
         self.tabs[self.active].ensure_layout_cache(wrap_cols);
+    }
+
+    fn replace_active_lines(&mut self, lines: Vec<String>, cursor_line: usize, cursor_col: usize) {
+        self.rebuild_content(&lines.join("\n"), cursor_line, cursor_col);
+    }
+
+    fn move_active_cursor(&mut self, cursor_line: usize, cursor_col: usize) {
+        let tab = &mut self.tabs[self.active];
+        let line = cursor_line.min(tab.content.line_count().saturating_sub(1));
+        tab.content.move_to(text_editor::Cursor {
+            position: text_editor::Position {
+                line,
+                column: cursor_col,
+            },
+            selection: None,
+        });
+        self.vim.clear_preferred_column();
+    }
+
+    fn apply_line_edit<R, F>(&mut self, edit: F) -> Option<R>
+    where
+        F: FnOnce(&mut Vec<String>) -> Option<(R, usize, usize)>,
+    {
+        let cached_lines = self.tabs[self.active].lines();
+        let mut lines: Vec<String> = cached_lines.iter().cloned().collect();
+        let (result, cursor_line, cursor_col) = edit(&mut lines)?;
+        if lines.as_slice() == cached_lines.as_ref() {
+            let cursor = self.tabs[self.active].content.cursor().position;
+            if cursor.line == cursor_line && cursor.column == cursor_col {
+                return None;
+            }
+
+            self.move_active_cursor(cursor_line, cursor_col);
+            return Some(result);
+        }
+
+        self.tabs[self.active].push_undo_snapshot(EditKind::Other, true);
+        self.replace_active_lines(lines, cursor_line, cursor_col);
+
+        Some(result)
     }
 
     fn selected_find_match_start(&self) -> Option<text_editor::Position> {
@@ -597,12 +644,11 @@ impl App {
         }
     }
 
-    fn vim_snapshot(&self) -> vim::TextSnapshot {
-        let tab = &self.tabs[self.active];
-        let text = tab.content.text();
+    fn vim_snapshot(&mut self) -> vim::TextSnapshot {
+        let tab = &mut self.tabs[self.active];
         let cursor = tab.content.cursor().position;
         vim::TextSnapshot {
-            lines: text.split('\n').map(String::from).collect(),
+            lines: tab.lines(),
             cursor,
         }
     }
@@ -907,14 +953,17 @@ impl App {
             }
 
             Message::GutterMove(point) => {
-                self.gutter_mouse_y = point.y;
+                let line = gutter_line_at(point);
+                if self.gutter_hover_line == Some(line) {
+                    return UpdateResult::none();
+                }
+                self.gutter_hover_line = Some(line);
                 UpdateResult::none()
             }
 
             Message::GutterClick => {
                 self.vim.clear_preferred_column();
-                let y = ((self.gutter_mouse_y - EDITOR_PAD).max(0.0) / LINE_HEIGHT_PX).floor()
-                    * LINE_HEIGHT_PX;
+                let y = self.gutter_hover_line.unwrap_or(0) as f32 * LINE_HEIGHT_PX;
                 let vim_mode = self.vim.mode;
                 let tab = &mut self.tabs[self.active];
                 tab.content
@@ -929,12 +978,16 @@ impl App {
 
             // Workaround for iced-rs/iced#3227 — remove when merged
             Message::EditorMouseMove(point) => {
-                self.editor_mouse_pos = point;
+                let cell = editor_pointer_cell(point);
+                if self.editor_pointer_cell == Some(cell) {
+                    return UpdateResult::none();
+                }
+                self.editor_pointer_cell = Some(cell);
                 if self.multiclick_drag {
                     self.vim.clear_preferred_column();
                     self.tabs[self.active]
                         .content
-                        .perform(text_editor::Action::Drag(mouse_to_content(point)));
+                        .perform(text_editor::Action::Drag(content_point_for_cell(cell)));
                     return UpdateResult::none();
                 }
                 UpdateResult::none()
@@ -952,10 +1005,11 @@ impl App {
                         self.vim.clear_preferred_column();
                         let tab = &mut self.tabs[self.active];
                         tab.push_undo_snapshot(EditKind::Other, true);
-                        tab.content
-                            .perform(text_editor::Action::Click(mouse_to_content(
-                                self.editor_mouse_pos,
-                            )));
+                        let point = self
+                            .editor_pointer_cell
+                            .map(content_point_for_cell)
+                            .unwrap_or(Point::ORIGIN);
+                        tab.content.perform(text_editor::Action::Click(point));
                         tab.content
                             .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
                                 Arc::new(text),
@@ -1136,16 +1190,29 @@ impl App {
                 if self.find.query.is_empty() {
                     return UpdateResult::none();
                 }
-                let tab = &mut self.tabs[self.active];
-                let cursor_pos = tab.content.cursor().position;
-                let old_text = tab.content.text();
-                let new_text = old_text.replace(&self.find.query, &self.find.replacement);
-                if new_text == old_text {
+                let cursor_pos = self.tabs[self.active].content.cursor().position;
+                let query = self.find.query.clone();
+                let replacement = self.find.replacement.clone();
+
+                if self
+                    .apply_line_edit(|lines| {
+                        let new_lines: Vec<String> = lines
+                            .iter()
+                            .map(|line| line.replace(&query, &replacement))
+                            .collect();
+
+                        if new_lines == *lines {
+                            return None;
+                        }
+
+                        *lines = new_lines;
+                        Some(((), cursor_pos.line, cursor_pos.column))
+                    })
+                    .is_none()
+                {
                     self.reindex_find_matches_to_nearest();
                     return UpdateResult::none();
                 }
-                tab.push_undo_snapshot(EditKind::Other, true);
-                self.rebuild_content(&new_text, cursor_pos.line, cursor_pos.column);
                 self.reindex_find_matches_to_nearest();
                 UpdateResult::reveal(Task::none())
             }
@@ -1176,122 +1243,105 @@ impl App {
 
             // ── Line Operations ─────────────────────────────────────────
             Message::DeleteLine => {
-                let tab = &mut self.tabs[self.active];
-                tab.push_undo_snapshot(EditKind::Other, true);
-                let pos = tab.content.cursor().position;
-                let full = tab.content.text();
-                let mut lines: Vec<&str> = full.split('\n').collect();
-                let target = pos.line.min(lines.len().saturating_sub(1));
-                lines.remove(target);
-                if lines.is_empty() {
-                    lines.push("");
-                }
-                let new_text = lines.join("\n");
-                self.rebuild_content(&new_text, target, pos.column);
+                let pos = self.tabs[self.active].content.cursor().position;
+                let _ = self.apply_line_edit(|lines| {
+                    let target = pos.line.min(lines.len().saturating_sub(1));
+                    lines.remove(target);
+                    if lines.is_empty() {
+                        lines.push(String::new());
+                    }
+                    Some(((), target, pos.column))
+                });
                 UpdateResult::reveal(Task::none())
             }
 
             Message::MoveLineUp => {
-                let tab = &mut self.tabs[self.active];
-                let pos = tab.content.cursor().position;
+                let pos = self.tabs[self.active].content.cursor().position;
                 if pos.line == 0 {
                     return UpdateResult::none();
                 }
-                tab.push_undo_snapshot(EditKind::Other, true);
-                let full = tab.content.text();
-                let mut lines: Vec<&str> = full.split('\n').collect();
-                let target = pos.line.min(lines.len().saturating_sub(1));
-                lines.swap(target, target - 1);
-                let new_text = lines.join("\n");
-                self.rebuild_content(&new_text, target - 1, pos.column);
+                let _ = self.apply_line_edit(|lines| {
+                    let target = pos.line.min(lines.len().saturating_sub(1));
+                    lines.swap(target, target - 1);
+                    Some(((), target - 1, pos.column))
+                });
                 UpdateResult::reveal(Task::none())
             }
 
             Message::MoveLineDown => {
-                let tab = &mut self.tabs[self.active];
-                let pos = tab.content.cursor().position;
-                let full = tab.content.text();
-                let mut lines: Vec<&str> = full.split('\n').collect();
-                let target = pos.line.min(lines.len().saturating_sub(1));
-                if target + 1 >= lines.len() {
+                let pos = self.tabs[self.active].content.cursor().position;
+                let changed = self.apply_line_edit(|lines| {
+                    let target = pos.line.min(lines.len().saturating_sub(1));
+                    if target + 1 >= lines.len() {
+                        return None;
+                    }
+
+                    lines.swap(target, target + 1);
+                    Some(((), target + 1, pos.column))
+                });
+
+                if changed.is_none() {
                     return UpdateResult::none();
                 }
-                tab.push_undo_snapshot(EditKind::Other, true);
-                lines.swap(target, target + 1);
-                let new_text = lines.join("\n");
-                self.rebuild_content(&new_text, target + 1, pos.column);
                 UpdateResult::reveal(Task::none())
             }
 
             Message::DuplicateLine => {
-                let tab = &mut self.tabs[self.active];
-                tab.push_undo_snapshot(EditKind::Other, true);
-                let pos = tab.content.cursor().position;
-                let full = tab.content.text();
-                let mut lines: Vec<&str> = full.split('\n').collect();
-                let target = pos.line.min(lines.len().saturating_sub(1));
-                let dup = lines[target].to_string();
-                lines.insert(target + 1, &dup);
-                let new_text = lines.join("\n");
-                self.rebuild_content(&new_text, target + 1, pos.column);
+                let pos = self.tabs[self.active].content.cursor().position;
+                let _ = self.apply_line_edit(|lines| {
+                    let target = pos.line.min(lines.len().saturating_sub(1));
+                    let dup = lines[target].clone();
+                    lines.insert(target + 1, dup);
+                    Some(((), target + 1, pos.column))
+                });
                 UpdateResult::reveal(Task::none())
             }
 
             Message::ToggleComment => {
-                let tab = &mut self.tabs[self.active];
-                let prefix = tab
+                let prefix = self.tabs[self.active]
                     .path
                     .as_ref()
                     .and_then(|p| p.extension())
                     .and_then(|e| comment_prefix(e.to_string_lossy().as_ref()))
                     .unwrap_or("//");
-                tab.push_undo_snapshot(EditKind::Other, true);
-                let cursor = tab.content.cursor();
+                let cursor = self.tabs[self.active].content.cursor();
                 let sel_anchor = cursor.selection.unwrap_or(cursor.position);
                 let first = cursor.position.line.min(sel_anchor.line);
                 let last = cursor.position.line.max(sel_anchor.line);
                 let cursor_line = cursor.position.line;
-                let (all_commented, new_text) = {
-                    let full = tab.content.text();
-                    let lines: Vec<&str> = full.split('\n').collect();
+                let _ = self.apply_line_edit(|lines| {
                     let all_commented = (first..=last).all(|i| {
-                        let trimmed = lines.get(i).map_or("", |l| l.trim_start());
+                        let trimmed = lines.get(i).map_or("", |line| line.trim_start());
                         trimmed.is_empty() || trimmed.starts_with(prefix)
                     });
-                    let new_lines: Vec<String> = lines
-                        .iter()
-                        .enumerate()
-                        .map(|(i, line)| {
-                            if i < first || i > last {
-                                return line.to_string();
+
+                    for (i, line) in lines.iter_mut().enumerate() {
+                        if i < first || i > last {
+                            continue;
+                        }
+
+                        if all_commented {
+                            let ws_len = line.len() - line.trim_start().len();
+                            let rest = &line[ws_len..];
+                            if let Some(after) = rest.strip_prefix(prefix) {
+                                let after = after.strip_prefix(' ').unwrap_or(after);
+                                *line = format!("{}{after}", &line[..ws_len]);
                             }
-                            if all_commented {
-                                let ws_len = line.len() - line.trim_start().len();
-                                let rest = &line[ws_len..];
-                                if let Some(after) = rest.strip_prefix(prefix) {
-                                    let after = after.strip_prefix(' ').unwrap_or(after);
-                                    format!("{}{after}", &line[..ws_len])
-                                } else {
-                                    line.to_string()
-                                }
-                            } else if line.trim_start().is_empty() {
-                                line.to_string()
-                            } else {
-                                let ws_len = line.len() - line.trim_start().len();
-                                format!("{}{prefix} {}", &line[..ws_len], &line[ws_len..])
-                            }
-                        })
-                        .collect();
-                    (all_commented, new_lines.join("\n"))
-                };
-                // Adjust cursor column for inserted/removed prefix
-                let delta = prefix.len() + 1; // prefix + space
-                let cursor_col = if all_commented {
-                    cursor.position.column.saturating_sub(delta)
-                } else {
-                    cursor.position.column + delta
-                };
-                self.rebuild_content(&new_text, cursor_line, cursor_col);
+                        } else if !line.trim_start().is_empty() {
+                            let ws_len = line.len() - line.trim_start().len();
+                            *line = format!("{}{prefix} {}", &line[..ws_len], &line[ws_len..]);
+                        }
+                    }
+
+                    let delta = prefix.len() + 1;
+                    let cursor_col = if all_commented {
+                        cursor.position.column.saturating_sub(delta)
+                    } else {
+                        cursor.position.column + delta
+                    };
+
+                    Some(((), cursor_line, cursor_col))
+                });
                 self.apply_block_cursor_if_normal();
                 UpdateResult::reveal(Task::none())
             }
@@ -1634,68 +1684,61 @@ impl App {
         from: text_editor::Position,
         to: text_editor::Position,
     ) -> String {
-        let tab = &mut self.tabs[self.active];
-        tab.push_undo_snapshot(EditKind::Other, true);
-        let full = tab.content.text();
-        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
-        let deleted = extract_text_range(&lines, &from, &to);
-        remove_text_range(&mut lines, &from, &to);
-        let new_text = lines.join("\n");
-        let cursor_col = from.column.min(
-            lines
-                .get(from.line)
-                .map_or(0, |l| l.chars().count().saturating_sub(1)),
-        );
-        self.rebuild_content(&new_text, from.line, cursor_col);
-        deleted
+        self.apply_line_edit(|lines| {
+            let deleted = extract_text_range(lines, &from, &to);
+            remove_text_range(lines, &from, &to);
+            let cursor_col = from.column.min(
+                lines
+                    .get(from.line)
+                    .map_or(0, |line| line.chars().count().saturating_sub(1)),
+            );
+            Some((deleted, from.line, cursor_col))
+        })
+        .unwrap_or_default()
     }
 
     fn vim_delete_lines(&mut self, first: usize, last: usize) -> String {
-        let tab = &mut self.tabs[self.active];
-        tab.push_undo_snapshot(EditKind::Other, true);
-        let full = tab.content.text();
-        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
-        let first = first.min(lines.len().saturating_sub(1));
-        let last = last.min(lines.len().saturating_sub(1));
-        let deleted: String = lines[first..=last].join("\n");
-        lines.drain(first..=last);
-        if lines.is_empty() {
-            lines.push(String::new());
-        }
-        let new_text = lines.join("\n");
-        let cursor_line = first.min(lines.len().saturating_sub(1));
-        self.rebuild_content(&new_text, cursor_line, 0);
-        deleted
+        self.apply_line_edit(|lines| {
+            let first = first.min(lines.len().saturating_sub(1));
+            let last = last.min(lines.len().saturating_sub(1));
+            let deleted = lines[first..=last].join("\n");
+            lines.drain(first..=last);
+            if lines.is_empty() {
+                lines.push(String::new());
+            }
+            let cursor_line = first.min(lines.len().saturating_sub(1));
+            Some((deleted, cursor_line, 0))
+        })
+        .unwrap_or_default()
     }
 
     fn vim_change_lines(&mut self, first: usize, last: usize) -> String {
-        let tab = &mut self.tabs[self.active];
-        tab.push_undo_snapshot(EditKind::Other, true);
-        let full = tab.content.text();
-        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
-        let first = first.min(lines.len().saturating_sub(1));
-        let last = last.min(lines.len().saturating_sub(1));
-        let indent: String = lines[first]
-            .chars()
-            .take_while(|c| c.is_whitespace())
-            .collect();
-        let deleted: String = lines[first..=last].join("\n");
-        lines.drain(first..=last);
-        lines.insert(first, indent.clone());
-        let new_text = lines.join("\n");
-        self.rebuild_content(&new_text, first, indent.chars().count());
-        deleted
+        self.apply_line_edit(|lines| {
+            let first = first.min(lines.len().saturating_sub(1));
+            let last = last.min(lines.len().saturating_sub(1));
+            let indent: String = lines[first]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
+            let deleted = lines[first..=last].join("\n");
+            lines.drain(first..=last);
+            lines.insert(first, indent.clone());
+            Some((deleted, first, indent.chars().count()))
+        })
+        .unwrap_or_default()
     }
 
-    fn vim_extract_range(&self, from: text_editor::Position, to: text_editor::Position) -> String {
-        let full = self.tabs[self.active].content.text();
-        let lines: Vec<String> = full.split('\n').map(String::from).collect();
-        extract_text_range(&lines, &from, &to)
+    fn vim_extract_range(
+        &mut self,
+        from: text_editor::Position,
+        to: text_editor::Position,
+    ) -> String {
+        let lines = self.tabs[self.active].lines();
+        extract_text_range(lines.as_ref(), &from, &to)
     }
 
-    fn vim_extract_lines(&self, first: usize, last: usize) -> String {
-        let full = self.tabs[self.active].content.text();
-        let lines: Vec<String> = full.split('\n').map(String::from).collect();
+    fn vim_extract_lines(&mut self, first: usize, last: usize) -> String {
+        let lines = self.tabs[self.active].lines();
         let first = first.min(lines.len().saturating_sub(1));
         let last = last.min(lines.len().saturating_sub(1));
         lines[first..=last].join("\n")
@@ -1706,36 +1749,35 @@ impl App {
         match register {
             vim::Register::Empty => {}
             vim::Register::Char(ref paste_text) => {
-                let tab = &mut self.tabs[self.active];
-                tab.push_undo_snapshot(EditKind::Other, true);
-                let cursor = tab.content.cursor().position;
-                let full = tab.content.text();
-                let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
-                let line_chars: Vec<char> = lines[cursor.line].chars().collect();
-                let insert_col = if before {
-                    cursor.column.min(line_chars.len())
-                } else {
-                    (cursor.column + 1).min(line_chars.len())
-                };
-                let prefix: String = line_chars[..insert_col].iter().collect();
-                let suffix: String = line_chars[insert_col..].iter().collect();
+                let cursor = self.tabs[self.active].content.cursor().position;
+                let _ = self.apply_line_edit(|lines| {
+                    let line_chars: Vec<char> = lines[cursor.line].chars().collect();
+                    let insert_col = if before {
+                        cursor.column.min(line_chars.len())
+                    } else {
+                        (cursor.column + 1).min(line_chars.len())
+                    };
+                    let prefix: String = line_chars[..insert_col].iter().collect();
+                    let suffix: String = line_chars[insert_col..].iter().collect();
 
-                let paste_lines: Vec<&str> = paste_text.split('\n').collect();
-                if paste_lines.len() == 1 {
-                    lines[cursor.line] = format!("{prefix}{}{suffix}", paste_lines[0]);
-                    let cursor_col = insert_col + paste_lines[0].chars().count().saturating_sub(1);
-                    let new_text = lines.join("\n");
-                    self.rebuild_content(&new_text, cursor.line, cursor_col);
-                } else {
+                    let paste_lines: Vec<&str> = paste_text.split('\n').collect();
+                    if paste_lines.len() == 1 {
+                        lines[cursor.line] = format!("{prefix}{}{suffix}", paste_lines[0]);
+                        let cursor_col =
+                            insert_col + paste_lines[0].chars().count().saturating_sub(1);
+                        return Some(((), cursor.line, cursor_col));
+                    }
+
                     let first_new = format!("{prefix}{}", paste_lines[0]);
                     let last_new = format!("{}{suffix}", paste_lines.last().unwrap_or(&""));
                     let mut new_lines: Vec<String> = lines[..cursor.line].to_vec();
                     new_lines.push(first_new);
-                    for pl in &paste_lines[1..paste_lines.len() - 1] {
-                        new_lines.push(pl.to_string());
+                    for paste_line in &paste_lines[1..paste_lines.len() - 1] {
+                        new_lines.push((*paste_line).to_string());
                     }
                     new_lines.push(last_new);
                     new_lines.extend(lines[cursor.line + 1..].iter().cloned());
+
                     let cursor_line = cursor.line + paste_lines.len() - 1;
                     let cursor_col = paste_lines
                         .last()
@@ -1743,88 +1785,79 @@ impl App {
                         .chars()
                         .count()
                         .saturating_sub(1);
-                    let new_text = new_lines.join("\n");
-                    self.rebuild_content(&new_text, cursor_line, cursor_col);
-                }
+
+                    *lines = new_lines;
+                    Some(((), cursor_line, cursor_col))
+                });
             }
             vim::Register::Line(ref paste_text) => {
-                let tab = &mut self.tabs[self.active];
-                tab.push_undo_snapshot(EditKind::Other, true);
-                let cursor = tab.content.cursor().position;
-                let full = tab.content.text();
-                let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
-                let insert_at = if before { cursor.line } else { cursor.line + 1 };
-                lines.splice(
-                    insert_at..insert_at,
-                    paste_text.split('\n').map(String::from),
-                );
-                let new_text = lines.join("\n");
-                let indent = lines
-                    .get(insert_at)
-                    .map_or(0, |l| l.chars().take_while(|c| c.is_whitespace()).count());
-                self.rebuild_content(&new_text, insert_at, indent);
+                let cursor = self.tabs[self.active].content.cursor().position;
+                let _ = self.apply_line_edit(|lines| {
+                    let insert_at = if before { cursor.line } else { cursor.line + 1 };
+                    lines.splice(
+                        insert_at..insert_at,
+                        paste_text.split('\n').map(String::from),
+                    );
+                    let indent = lines.get(insert_at).map_or(0, |line| {
+                        line.chars().take_while(|c| c.is_whitespace()).count()
+                    });
+                    Some(((), insert_at, indent))
+                });
             }
         }
     }
 
     fn vim_open_line(&mut self, above: bool) {
-        let tab = &mut self.tabs[self.active];
-        tab.push_undo_snapshot(EditKind::Other, true);
-        let pos = tab.content.cursor().position;
-        let full = tab.content.text();
-        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
-        let indent: String = lines.get(pos.line).map_or(String::new(), |l| {
-            l.chars().take_while(|c| c.is_whitespace()).collect()
+        let pos = self.tabs[self.active].content.cursor().position;
+        let _ = self.apply_line_edit(|lines| {
+            let indent: String = lines.get(pos.line).map_or(String::new(), |line| {
+                line.chars().take_while(|c| c.is_whitespace()).collect()
+            });
+            let idx = if above { pos.line } else { pos.line + 1 };
+            lines.insert(idx, indent.clone());
+            Some(((), idx, indent.chars().count()))
         });
-        let idx = if above { pos.line } else { pos.line + 1 };
-        lines.insert(idx, indent.clone());
-        let new_text = lines.join("\n");
-        self.rebuild_content(&new_text, idx, indent.chars().count());
     }
 
     fn vim_join_lines(&mut self, count: usize) {
-        let tab = &mut self.tabs[self.active];
-        let pos = tab.content.cursor().position;
-        let full = tab.content.text();
-        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
-        if pos.line + 1 >= lines.len() {
-            return;
-        }
-        tab.push_undo_snapshot(EditKind::Other, true);
-        let join_end = (pos.line + count).min(lines.len() - 1);
-        let mut joined = lines[pos.line].trim_end().to_string();
-        let join_col = joined.chars().count();
-        for line in lines.drain((pos.line + 1)..=join_end) {
-            let trimmed = line.trim_start();
-            if !trimmed.is_empty() {
-                joined.push(' ');
-                joined.push_str(trimmed);
+        let pos = self.tabs[self.active].content.cursor().position;
+        let _ = self.apply_line_edit(|lines| {
+            if pos.line + 1 >= lines.len() {
+                return None;
             }
-        }
-        lines[pos.line] = joined;
-        let new_text = lines.join("\n");
-        self.rebuild_content(&new_text, pos.line, join_col);
+
+            let join_end = (pos.line + count).min(lines.len() - 1);
+            let mut joined = lines[pos.line].trim_end().to_string();
+            let join_col = joined.chars().count();
+            for line in lines.drain((pos.line + 1)..=join_end) {
+                let trimmed = line.trim_start();
+                if !trimmed.is_empty() {
+                    joined.push(' ');
+                    joined.push_str(trimmed);
+                }
+            }
+            lines[pos.line] = joined;
+            Some(((), pos.line, join_col))
+        });
     }
 
     fn vim_replace_char(&mut self, c: char, count: usize) {
-        let tab = &mut self.tabs[self.active];
-        let pos = tab.content.cursor().position;
-        let full = tab.content.text();
-        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
-        let chars: Vec<char> = lines
-            .get(pos.line)
-            .map_or(Vec::new(), |l| l.chars().collect());
-        if pos.column + count > chars.len() {
-            return;
-        }
-        tab.push_undo_snapshot(EditKind::Other, true);
-        let mut new_chars = chars;
-        for i in 0..count {
-            new_chars[pos.column + i] = c;
-        }
-        lines[pos.line] = new_chars.into_iter().collect();
-        let new_text = lines.join("\n");
-        self.rebuild_content(&new_text, pos.line, pos.column + count - 1);
+        let pos = self.tabs[self.active].content.cursor().position;
+        let _ = self.apply_line_edit(|lines| {
+            let chars: Vec<char> = lines
+                .get(pos.line)
+                .map_or(Vec::new(), |line| line.chars().collect());
+            if pos.column + count > chars.len() {
+                return None;
+            }
+
+            let mut new_chars = chars;
+            for i in 0..count {
+                new_chars[pos.column + i] = c;
+            }
+            lines[pos.line] = new_chars.into_iter().collect();
+            Some(((), pos.line, pos.column + count - 1))
+        });
     }
 
     fn vim_transform_case_range(
@@ -1833,30 +1866,25 @@ impl App {
         to: text_editor::Position,
         uppercase: bool,
     ) {
-        let tab = &mut self.tabs[self.active];
-        tab.push_undo_snapshot(EditKind::Other, true);
-        let full = tab.content.text();
-        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
-        transform_case_range(&mut lines, &from, &to, uppercase);
-        let new_text = lines.join("\n");
-        self.rebuild_content(&new_text, from.line, from.column);
+        let _ = self.apply_line_edit(|lines| {
+            transform_case_range(lines, &from, &to, uppercase);
+            Some(((), from.line, from.column))
+        });
     }
 
     fn vim_transform_case_lines(&mut self, first: usize, last: usize, uppercase: bool) {
-        let tab = &mut self.tabs[self.active];
-        tab.push_undo_snapshot(EditKind::Other, true);
-        let full = tab.content.text();
-        let mut lines: Vec<String> = full.split('\n').map(String::from).collect();
-        if lines.is_empty() {
-            return;
-        }
-        let first = first.min(lines.len().saturating_sub(1));
-        let last = last.min(lines.len().saturating_sub(1));
-        for line in &mut lines[first..=last] {
-            *line = transform_case_string(line, uppercase);
-        }
-        let new_text = lines.join("\n");
-        self.rebuild_content(&new_text, first, 0);
+        let _ = self.apply_line_edit(|lines| {
+            if lines.is_empty() {
+                return None;
+            }
+
+            let first = first.min(lines.len().saturating_sub(1));
+            let last = last.min(lines.len().saturating_sub(1));
+            for line in &mut lines[first..=last] {
+                *line = transform_case_string(line, uppercase);
+            }
+            Some(((), first, 0))
+        });
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -2027,7 +2055,7 @@ impl App {
                     .map(|cache| Cow::Borrowed(cache.gutter_text.as_str()))
                     .unwrap_or_else(|| Cow::Owned(tab.build_layout_cache(wrap_cols).gutter_text))
             } else {
-                Cow::Owned(unwrapped_gutter_text(n_lines))
+                Cow::Borrowed(tab.unwrapped_gutter_text())
             };
 
             let line_numbers = mouse_area(
@@ -2413,20 +2441,6 @@ fn wrapped_cols(viewport_width: f32, line_count: usize) -> Option<usize> {
     ))
 }
 
-fn unwrapped_gutter_text(line_count: usize) -> String {
-    let width = viewport::line_number_digits_width(line_count);
-    let mut gutter_text = String::with_capacity(line_count * (width + 2));
-
-    for line_no in 1..=line_count {
-        let _ = write!(gutter_text, "{line_no:>width$} ", width = width);
-        if line_no < line_count {
-            gutter_text.push('\n');
-        }
-    }
-
-    gutter_text
-}
-
 // ── Vim text‑range helpers ──────────────────────────────────────────────────
 
 fn extract_text_range(
@@ -2572,8 +2586,13 @@ fn transform_case_range(
         return;
     }
 
-    for line_idx in from.line..=to.line {
-        let chars: Vec<char> = lines[line_idx].chars().collect();
+    for (line_idx, line) in lines
+        .iter_mut()
+        .enumerate()
+        .take(to.line + 1)
+        .skip(from.line)
+    {
+        let chars: Vec<char> = line.chars().collect();
         let transformed = if line_idx == from.line {
             let start = from.column.min(chars.len());
             let mut line = chars[..start].iter().collect::<String>();
@@ -2587,7 +2606,7 @@ fn transform_case_range(
         } else {
             transform_case_chars(&chars, uppercase)
         };
-        lines[line_idx] = transformed;
+        *line = transformed;
     }
 }
 
@@ -2706,10 +2725,24 @@ fn read_primary_selection() -> Option<String> {
     }
 }
 
-fn mouse_to_content(point: Point) -> Point {
+fn gutter_line_at(point: Point) -> usize {
+    ((point.y - EDITOR_PAD).max(0.0) / LINE_HEIGHT_PX).floor() as usize
+}
+
+fn editor_pointer_cell(point: Point) -> EditorPointerCell {
+    let x = (point.x - EDITOR_PAD).max(0.0);
+    let y = (point.y - EDITOR_PAD).max(0.0);
+
+    EditorPointerCell {
+        column: (x / EDITOR_FONT.char_width).floor() as usize,
+        row: (y / LINE_HEIGHT_PX).floor() as usize,
+    }
+}
+
+fn content_point_for_cell(cell: EditorPointerCell) -> Point {
     Point::new(
-        (point.x - EDITOR_PAD).max(0.0),
-        (point.y - EDITOR_PAD).max(0.0),
+        cell.column as f32 * EDITOR_FONT.char_width,
+        cell.row as f32 * LINE_HEIGHT_PX,
     )
 }
 
@@ -2796,14 +2829,14 @@ mod tests {
             tabs: vec![Tab::from_path(PathBuf::from("/tmp/test.txt"), text)],
             active: 0,
             window_title: None,
-            gutter_mouse_y: 0.0,
+            gutter_hover_line: None,
             find: FindState::new(),
             word_wrap: true,
             scratchpad_dir: PathBuf::from("/tmp"),
             needs_autosave: false,
             shift_held: false,
             multiclick_drag: false,
-            editor_mouse_pos: Point::ORIGIN,
+            editor_pointer_cell: None,
             goto_line: None,
             vim: vim::VimState::new(),
             viewport: ViewportState::default(),
@@ -2995,6 +3028,100 @@ mod tests {
     }
 
     #[test]
+    fn vim_snapshot_reuses_cached_lines_until_revision_changes() {
+        let mut app = test_app("one\ntwo");
+
+        let first = app.vim_snapshot().lines;
+
+        app.jump_to_line(1, false);
+        let second = app.vim_snapshot().lines;
+
+        assert!(Arc::ptr_eq(&first, &second));
+
+        app.tabs[0].content = text_editor::Content::with_text("one\ntwo\nthree");
+        app.tabs[0].touch_content();
+
+        let third = app.vim_snapshot().lines;
+
+        assert!(!Arc::ptr_eq(&first, &third));
+    }
+
+    #[test]
+    fn pointer_state_only_changes_after_crossing_snapped_boundaries() {
+        let mut app = test_app("one\ntwo");
+
+        app.update_inner(Message::GutterMove(Point::new(
+            8.0,
+            EDITOR_PAD + LINE_HEIGHT_PX * 0.25,
+        )));
+        assert_eq!(app.gutter_hover_line, Some(0));
+
+        app.update_inner(Message::GutterMove(Point::new(
+            24.0,
+            EDITOR_PAD + LINE_HEIGHT_PX * 0.9,
+        )));
+        assert_eq!(app.gutter_hover_line, Some(0));
+
+        app.update_inner(Message::EditorMouseMove(Point::new(
+            EDITOR_PAD + EDITOR_FONT.char_width * 0.2,
+            EDITOR_PAD + LINE_HEIGHT_PX * 0.2,
+        )));
+        assert_eq!(
+            app.editor_pointer_cell,
+            Some(EditorPointerCell { column: 0, row: 0 })
+        );
+
+        app.update_inner(Message::EditorMouseMove(Point::new(
+            EDITOR_PAD + EDITOR_FONT.char_width * 0.9,
+            EDITOR_PAD + LINE_HEIGHT_PX * 0.8,
+        )));
+        assert_eq!(
+            app.editor_pointer_cell,
+            Some(EditorPointerCell { column: 0, row: 0 })
+        );
+
+        app.update_inner(Message::EditorMouseMove(Point::new(
+            EDITOR_PAD + EDITOR_FONT.char_width * 1.2,
+            EDITOR_PAD + LINE_HEIGHT_PX * 1.1,
+        )));
+        assert_eq!(
+            app.editor_pointer_cell,
+            Some(EditorPointerCell { column: 1, row: 1 })
+        );
+    }
+
+    #[test]
+    fn move_line_down_with_identical_neighbors_still_moves_cursor() {
+        let mut app = test_app("same\nsame");
+        app.tabs[0].content.move_to(text_editor::Cursor {
+            position: pos(0, 2),
+            selection: None,
+        });
+
+        let result = app.update_inner(Message::MoveLineDown);
+
+        assert_eq!(result.reveal, RevealIntent::RevealCaret);
+        assert_eq!(app.tabs[0].content.text(), "same\nsame");
+        assert_eq!(app.tabs[0].content.cursor().position, pos(1, 2));
+    }
+
+    #[test]
+    fn toggle_comment_on_blank_line_can_still_move_cursor_without_editing() {
+        let mut app = test_app("    ");
+        app.tabs[0].path = Some(PathBuf::from("/tmp/test.rs"));
+        app.tabs[0].content.move_to(text_editor::Cursor {
+            position: pos(0, 4),
+            selection: None,
+        });
+
+        let result = app.update_inner(Message::ToggleComment);
+
+        assert_eq!(result.reveal, RevealIntent::RevealCaret);
+        assert_eq!(app.tabs[0].content.text(), "    ");
+        assert_eq!(app.tabs[0].content.cursor().position, pos(0, 1));
+    }
+
+    #[test]
     fn layout_cache_only_rebuilds_when_wrap_width_changes() {
         let mut app = test_app("abcdefghij");
         let height = 60.0;
@@ -3094,14 +3221,14 @@ mod tests {
             ],
             active: 0,
             window_title: None,
-            gutter_mouse_y: 0.0,
+            gutter_hover_line: None,
             find: FindState::new(),
             word_wrap: true,
             scratchpad_dir: PathBuf::from("/tmp"),
             needs_autosave: false,
             shift_held: false,
             multiclick_drag: false,
-            editor_mouse_pos: Point::ORIGIN,
+            editor_pointer_cell: None,
             goto_line: None,
             vim: vim::VimState::new(),
             viewport: ViewportState::from_metrics(

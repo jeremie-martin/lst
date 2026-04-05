@@ -5,6 +5,7 @@
 
 use iced::keyboard;
 use iced::widget::text_editor;
+use std::sync::Arc;
 
 type Position = text_editor::Position;
 
@@ -79,7 +80,10 @@ pub enum VimCommand {
     OpenFind,
     FindNext,
     FindPrev,
-    SearchWordUnderCursor { word: String, forward: bool },
+    SearchWordUnderCursor {
+        word: String,
+        forward: bool,
+    },
     TransformCaseRange {
         from: Position,
         to: Position,
@@ -94,7 +98,7 @@ pub enum VimCommand {
 }
 
 pub struct TextSnapshot {
-    pub lines: Vec<String>,
+    pub lines: Arc<[String]>,
     pub cursor: Position,
 }
 
@@ -601,10 +605,16 @@ impl VimState {
                 self.exit_visual();
                 if is_line {
                     let (first, last) = ordered_lines(anchor.line, text.cursor.line);
-                    return vec![VimCommand::ChangeLines { first, last }, VimCommand::EnterInsert];
+                    return vec![
+                        VimCommand::ChangeLines { first, last },
+                        VimCommand::EnterInsert,
+                    ];
                 }
                 let (from, to) = ordered(anchor, text.cursor);
-                return vec![VimCommand::ChangeRange { from, to }, VimCommand::EnterInsert];
+                return vec![
+                    VimCommand::ChangeRange { from, to },
+                    VimCommand::EnterInsert,
+                ];
             }
             'y' => {
                 self.exit_visual();
@@ -1823,7 +1833,11 @@ mod tests {
 
     fn snapshot(lines: &[&str], line: usize, column: usize) -> TextSnapshot {
         TextSnapshot {
-            lines: lines.iter().map(|line| (*line).to_string()).collect(),
+            lines: lines
+                .iter()
+                .map(|line| (*line).to_string())
+                .collect::<Vec<_>>()
+                .into(),
             cursor: pos(line, column),
         }
     }
@@ -1872,37 +1886,55 @@ mod tests {
     #[test]
     fn h_moves_left() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'h', &snapshot(&["hello"], 0, 3)), vec![VimCommand::MoveTo(pos(0, 2))]);
+        assert_eq!(
+            press(&mut v, 'h', &snapshot(&["hello"], 0, 3)),
+            vec![VimCommand::MoveTo(pos(0, 2))]
+        );
     }
 
     #[test]
     fn h_clamps_at_column_zero() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'h', &snapshot(&["hello"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'h', &snapshot(&["hello"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn l_moves_right() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'l', &snapshot(&["hello"], 0, 2)), vec![VimCommand::MoveTo(pos(0, 3))]);
+        assert_eq!(
+            press(&mut v, 'l', &snapshot(&["hello"], 0, 2)),
+            vec![VimCommand::MoveTo(pos(0, 3))]
+        );
     }
 
     #[test]
     fn l_clamps_at_last_char() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'l', &snapshot(&["hello"], 0, 4)), vec![VimCommand::MoveTo(pos(0, 4))]);
+        assert_eq!(
+            press(&mut v, 'l', &snapshot(&["hello"], 0, 4)),
+            vec![VimCommand::MoveTo(pos(0, 4))]
+        );
     }
 
     #[test]
     fn h_on_empty_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'h', &snapshot(&[""], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'h', &snapshot(&[""], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn l_on_empty_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'l', &snapshot(&[""], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'l', &snapshot(&[""], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     // ── Motions: vertical (j, k) ────────────────────────────────────────────
@@ -1910,31 +1942,46 @@ mod tests {
     #[test]
     fn j_moves_down() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'j', &snapshot(&["abc", "xyz"], 0, 0)), vec![VimCommand::MoveTo(pos(1, 0))]);
+        assert_eq!(
+            press(&mut v, 'j', &snapshot(&["abc", "xyz"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(1, 0))]
+        );
     }
 
     #[test]
     fn j_clamps_at_last_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'j', &snapshot(&["abc"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'j', &snapshot(&["abc"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn j_clamps_column_to_shorter_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'j', &snapshot(&["abcdef", "xy"], 0, 4)), vec![VimCommand::MoveTo(pos(1, 1))]);
+        assert_eq!(
+            press(&mut v, 'j', &snapshot(&["abcdef", "xy"], 0, 4)),
+            vec![VimCommand::MoveTo(pos(1, 1))]
+        );
     }
 
     #[test]
     fn k_moves_up() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'k', &snapshot(&["abc", "xyz"], 1, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'k', &snapshot(&["abc", "xyz"], 1, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn k_clamps_at_first_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'k', &snapshot(&["abc"], 0, 2)), vec![VimCommand::MoveTo(pos(0, 2))]);
+        assert_eq!(
+            press(&mut v, 'k', &snapshot(&["abc"], 0, 2)),
+            vec![VimCommand::MoveTo(pos(0, 2))]
+        );
     }
 
     // ── Motions: word (w, b, e, W, B, E) ────────────────────────────────────
@@ -1942,85 +1989,127 @@ mod tests {
     #[test]
     fn w_to_next_word() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'w', &snapshot(&["foo bar"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 4))]);
+        assert_eq!(
+            press(&mut v, 'w', &snapshot(&["foo bar"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 4))]
+        );
     }
 
     #[test]
     fn w_stops_at_punctuation() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'w', &snapshot(&["foo.bar"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 3))]);
+        assert_eq!(
+            press(&mut v, 'w', &snapshot(&["foo.bar"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 3))]
+        );
     }
 
     #[test]
     fn w_crosses_line_boundary() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'w', &snapshot(&["foo", "bar"], 0, 0)), vec![VimCommand::MoveTo(pos(1, 0))]);
+        assert_eq!(
+            press(&mut v, 'w', &snapshot(&["foo", "bar"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(1, 0))]
+        );
     }
 
     #[test]
     fn w_stops_at_empty_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'w', &snapshot(&["foo", "", "bar"], 0, 0)), vec![VimCommand::MoveTo(pos(1, 0))]);
+        assert_eq!(
+            press(&mut v, 'w', &snapshot(&["foo", "", "bar"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(1, 0))]
+        );
     }
 
     #[test]
     fn w_at_end_of_file() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'w', &snapshot(&["foo"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 2))]);
+        assert_eq!(
+            press(&mut v, 'w', &snapshot(&["foo"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 2))]
+        );
     }
 
     #[test]
     fn b_to_prev_word() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'b', &snapshot(&["foo bar"], 0, 4)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'b', &snapshot(&["foo bar"], 0, 4)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn b_crosses_line_boundary() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'b', &snapshot(&["foo", "bar"], 1, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'b', &snapshot(&["foo", "bar"], 1, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn b_at_start_of_file() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'b', &snapshot(&["foo"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'b', &snapshot(&["foo"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn e_to_word_end() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'e', &snapshot(&["foo bar"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 2))]);
+        assert_eq!(
+            press(&mut v, 'e', &snapshot(&["foo bar"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 2))]
+        );
     }
 
     #[test]
     fn e_skips_to_next_word_end() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'e', &snapshot(&["foo bar"], 0, 2)), vec![VimCommand::MoveTo(pos(0, 6))]);
+        assert_eq!(
+            press(&mut v, 'e', &snapshot(&["foo bar"], 0, 2)),
+            vec![VimCommand::MoveTo(pos(0, 6))]
+        );
     }
 
     #[test]
     fn e_crosses_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'e', &snapshot(&["foo", "bar"], 0, 2)), vec![VimCommand::MoveTo(pos(1, 2))]);
+        assert_eq!(
+            press(&mut v, 'e', &snapshot(&["foo", "bar"], 0, 2)),
+            vec![VimCommand::MoveTo(pos(1, 2))]
+        );
     }
 
     #[test]
     fn big_w_skips_punctuation() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'W', &snapshot(&["foo.bar baz"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 8))]);
+        assert_eq!(
+            press(&mut v, 'W', &snapshot(&["foo.bar baz"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 8))]
+        );
     }
 
     #[test]
     fn big_b_skips_punctuation() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'B', &snapshot(&["foo.bar baz"], 0, 8)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'B', &snapshot(&["foo.bar baz"], 0, 8)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn big_e_skips_punctuation() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'E', &snapshot(&["foo.bar baz"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 6))]);
+        assert_eq!(
+            press(&mut v, 'E', &snapshot(&["foo.bar baz"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 6))]
+        );
     }
 
     // ── Motions: line position (0, $, ^) ────────────────────────────────────
@@ -2028,31 +2117,46 @@ mod tests {
     #[test]
     fn zero_to_line_start() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '0', &snapshot(&["  hello"], 0, 5)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, '0', &snapshot(&["  hello"], 0, 5)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn dollar_to_line_end() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '$', &snapshot(&["hello"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 4))]);
+        assert_eq!(
+            press(&mut v, '$', &snapshot(&["hello"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 4))]
+        );
     }
 
     #[test]
     fn dollar_on_empty_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '$', &snapshot(&[""], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, '$', &snapshot(&[""], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn caret_to_first_non_blank() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '^', &snapshot(&["  hello"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 2))]);
+        assert_eq!(
+            press(&mut v, '^', &snapshot(&["  hello"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 2))]
+        );
     }
 
     #[test]
     fn caret_no_indent() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '^', &snapshot(&["hello"], 0, 3)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, '^', &snapshot(&["hello"], 0, 3)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     // ── Motions: document (gg, G) ───────────────────────────────────────────
@@ -2061,35 +2165,50 @@ mod tests {
     fn gg_to_document_start() {
         let mut v = normal();
         let text = snapshot(&["  aaa", "bbb", "ccc", "ddd", "eee"], 3, 2);
-        assert_eq!(press_keys(&mut v, "gg", &text), vec![VimCommand::MoveTo(pos(0, 2))]);
+        assert_eq!(
+            press_keys(&mut v, "gg", &text),
+            vec![VimCommand::MoveTo(pos(0, 2))]
+        );
     }
 
     #[test]
     fn gg_with_count_to_line_n() {
         let mut v = normal();
         let text = snapshot(&["aaa", "bbb", "ccc", "ddd", "eee"], 0, 0);
-        assert_eq!(press_keys(&mut v, "3gg", &text), vec![VimCommand::MoveTo(pos(2, 0))]);
+        assert_eq!(
+            press_keys(&mut v, "3gg", &text),
+            vec![VimCommand::MoveTo(pos(2, 0))]
+        );
     }
 
     #[test]
     fn gg_count_clamps_to_last_line() {
         let mut v = normal();
         let text = snapshot(&["aaa", "bbb", "ccc"], 0, 0);
-        assert_eq!(press_keys(&mut v, "99gg", &text), vec![VimCommand::MoveTo(pos(2, 0))]);
+        assert_eq!(
+            press_keys(&mut v, "99gg", &text),
+            vec![VimCommand::MoveTo(pos(2, 0))]
+        );
     }
 
     #[test]
     fn big_g_to_document_end() {
         let mut v = normal();
         let text = snapshot(&["aaa", "bbb", "  ccc"], 0, 0);
-        assert_eq!(press(&mut v, 'G', &text), vec![VimCommand::MoveTo(pos(2, 2))]);
+        assert_eq!(
+            press(&mut v, 'G', &text),
+            vec![VimCommand::MoveTo(pos(2, 2))]
+        );
     }
 
     #[test]
     fn big_g_with_count() {
         let mut v = normal();
         let text = snapshot(&["aaa", "  bbb", "ccc"], 0, 0);
-        assert_eq!(press_keys(&mut v, "2G", &text), vec![VimCommand::MoveTo(pos(1, 2))]);
+        assert_eq!(
+            press_keys(&mut v, "2G", &text),
+            vec![VimCommand::MoveTo(pos(1, 2))]
+        );
     }
 
     // ── Motions: find char (f, t, F, T) ─────────────────────────────────────
@@ -2097,39 +2216,57 @@ mod tests {
     #[test]
     fn f_finds_char_forward() {
         let mut v = normal();
-        assert_eq!(press_keys(&mut v, "fw", &snapshot(&["hello world"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 6))]);
+        assert_eq!(
+            press_keys(&mut v, "fw", &snapshot(&["hello world"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 6))]
+        );
     }
 
     #[test]
     fn f_no_match_stays() {
         let mut v = normal();
-        assert_eq!(press_keys(&mut v, "fz", &snapshot(&["hello"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press_keys(&mut v, "fz", &snapshot(&["hello"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn f_with_count() {
         let mut v = normal();
-        assert_eq!(press_keys(&mut v, "2fa", &snapshot(&["banana"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 3))]);
+        assert_eq!(
+            press_keys(&mut v, "2fa", &snapshot(&["banana"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 3))]
+        );
     }
 
     #[test]
     fn t_till_before_char() {
         let mut v = normal();
-        assert_eq!(press_keys(&mut v, "tw", &snapshot(&["hello world"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 5))]);
+        assert_eq!(
+            press_keys(&mut v, "tw", &snapshot(&["hello world"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 5))]
+        );
     }
 
     #[test]
     fn big_f_finds_backward() {
         let mut v = normal();
         // "hello world": o at col 4 and col 7. From col 10, nearest backward 'o' is col 7.
-        assert_eq!(press_keys(&mut v, "Fo", &snapshot(&["hello world"], 0, 10)), vec![VimCommand::MoveTo(pos(0, 7))]);
+        assert_eq!(
+            press_keys(&mut v, "Fo", &snapshot(&["hello world"], 0, 10)),
+            vec![VimCommand::MoveTo(pos(0, 7))]
+        );
     }
 
     #[test]
     fn big_t_till_after_backward() {
         let mut v = normal();
         // From col 10, Fo finds 'o' at col 7, To stops one after = col 8.
-        assert_eq!(press_keys(&mut v, "To", &snapshot(&["hello world"], 0, 10)), vec![VimCommand::MoveTo(pos(0, 8))]);
+        assert_eq!(
+            press_keys(&mut v, "To", &snapshot(&["hello world"], 0, 10)),
+            vec![VimCommand::MoveTo(pos(0, 8))]
+        );
     }
 
     // ── Motions: bracket match (%) ──────────────────────────────────────────
@@ -2137,44 +2274,65 @@ mod tests {
     #[test]
     fn percent_matches_forward() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '%', &snapshot(&["(foo)"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 4))]);
+        assert_eq!(
+            press(&mut v, '%', &snapshot(&["(foo)"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 4))]
+        );
     }
 
     #[test]
     fn percent_matches_backward() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '%', &snapshot(&["(foo)"], 0, 4)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, '%', &snapshot(&["(foo)"], 0, 4)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn percent_nested() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '%', &snapshot(&["((()))"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 5))]);
+        assert_eq!(
+            press(&mut v, '%', &snapshot(&["((()))"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 5))]
+        );
     }
 
     #[test]
     fn percent_scans_forward_for_bracket() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '%', &snapshot(&["foo(bar)"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 7))]);
+        assert_eq!(
+            press(&mut v, '%', &snapshot(&["foo(bar)"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 7))]
+        );
     }
 
     #[test]
     fn percent_no_bracket_stays() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '%', &snapshot(&["hello"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, '%', &snapshot(&["hello"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn percent_cross_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '%', &snapshot(&["(", "foo", ")"], 0, 0)), vec![VimCommand::MoveTo(pos(2, 0))]);
+        assert_eq!(
+            press(&mut v, '%', &snapshot(&["(", "foo", ")"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(2, 0))]
+        );
     }
 
     #[test]
     fn percent_with_count_is_file_percentage() {
         let mut v = normal();
         let lines: Vec<&str> = (0..10).map(|_| "x").collect();
-        assert_eq!(press_keys(&mut v, "50%", &snapshot(&lines, 0, 0)), vec![VimCommand::MoveTo(pos(4, 0))]);
+        assert_eq!(
+            press_keys(&mut v, "50%", &snapshot(&lines, 0, 0)),
+            vec![VimCommand::MoveTo(pos(4, 0))]
+        );
     }
 
     // ── Motions: arrow keys ─────────────────────────────────────────────────
@@ -2231,47 +2389,72 @@ mod tests {
     #[test]
     fn counted_h() {
         let mut v = normal();
-        assert_eq!(press_keys(&mut v, "3h", &snapshot(&["hello"], 0, 4)), vec![VimCommand::MoveTo(pos(0, 1))]);
+        assert_eq!(
+            press_keys(&mut v, "3h", &snapshot(&["hello"], 0, 4)),
+            vec![VimCommand::MoveTo(pos(0, 1))]
+        );
     }
 
     #[test]
     fn counted_j() {
         let mut v = normal();
         let text = snapshot(&["a", "b", "c", "d", "e"], 0, 0);
-        assert_eq!(press_keys(&mut v, "3j", &text), vec![VimCommand::MoveTo(pos(3, 0))]);
+        assert_eq!(
+            press_keys(&mut v, "3j", &text),
+            vec![VimCommand::MoveTo(pos(3, 0))]
+        );
     }
 
     #[test]
     fn counted_w() {
         let mut v = normal();
-        assert_eq!(press_keys(&mut v, "2w", &snapshot(&["foo bar baz"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 8))]);
+        assert_eq!(
+            press_keys(&mut v, "2w", &snapshot(&["foo bar baz"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 8))]
+        );
     }
 
     #[test]
     fn multi_digit_count() {
         let mut v = normal();
         let lines: Vec<&str> = (0..20).map(|_| "x").collect();
-        assert_eq!(press_keys(&mut v, "12j", &snapshot(&lines, 0, 0)), vec![VimCommand::MoveTo(pos(12, 0))]);
+        assert_eq!(
+            press_keys(&mut v, "12j", &snapshot(&lines, 0, 0)),
+            vec![VimCommand::MoveTo(pos(12, 0))]
+        );
     }
 
     #[test]
     fn count_clamps() {
         let mut v = normal();
         let text = snapshot(&["a", "b", "c"], 0, 0);
-        assert_eq!(press_keys(&mut v, "99j", &text), vec![VimCommand::MoveTo(pos(2, 0))]);
+        assert_eq!(
+            press_keys(&mut v, "99j", &text),
+            vec![VimCommand::MoveTo(pos(2, 0))]
+        );
     }
 
     #[test]
     fn zero_is_motion_not_digit_when_no_count() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '0', &snapshot(&["hello"], 0, 3)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, '0', &snapshot(&["hello"], 0, 3)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn zero_is_digit_after_nonzero_digit() {
         let mut v = normal();
-        let text = snapshot(&["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"], 0, 0);
-        assert_eq!(press_keys(&mut v, "10j", &text), vec![VimCommand::MoveTo(pos(10, 0))]);
+        let text = snapshot(
+            &["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"],
+            0,
+            0,
+        );
+        assert_eq!(
+            press_keys(&mut v, "10j", &text),
+            vec![VimCommand::MoveTo(pos(10, 0))]
+        );
     }
 
     // ── Motions: preferred column ───────────────────────────────────────────
@@ -2303,77 +2486,131 @@ mod tests {
     fn dw_deletes_word() {
         let mut v = normal();
         let text = snapshot(&["foo bar"], 0, 0);
-        assert_eq!(press_keys(&mut v, "dw", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 3) }]);
+        assert_eq!(
+            press_keys(&mut v, "dw", &text),
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 3)
+            }]
+        );
     }
 
     #[test]
     fn de_deletes_to_word_end_inclusive() {
         let mut v = normal();
         let text = snapshot(&["foo bar"], 0, 0);
-        assert_eq!(press_keys(&mut v, "de", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 2) }]);
+        assert_eq!(
+            press_keys(&mut v, "de", &text),
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 2)
+            }]
+        );
     }
 
     #[test]
     fn d_dollar_deletes_to_end_inclusive() {
         let mut v = normal();
         let text = snapshot(&["hello"], 0, 1);
-        assert_eq!(press_keys(&mut v, "d$", &text), vec![VimCommand::DeleteRange { from: pos(0, 1), to: pos(0, 4) }]);
+        assert_eq!(
+            press_keys(&mut v, "d$", &text),
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 1),
+                to: pos(0, 4)
+            }]
+        );
     }
 
     #[test]
     fn d0_deletes_to_start() {
         let mut v = normal();
         let text = snapshot(&["hello"], 0, 3);
-        assert_eq!(press_keys(&mut v, "d0", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 2) }]);
+        assert_eq!(
+            press_keys(&mut v, "d0", &text),
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 2)
+            }]
+        );
     }
 
     #[test]
     fn dj_is_linewise() {
         let mut v = normal();
         let text = snapshot(&["abc", "xyz", "123"], 0, 0);
-        assert_eq!(press_keys(&mut v, "dj", &text), vec![VimCommand::DeleteLines { first: 0, last: 1 }]);
+        assert_eq!(
+            press_keys(&mut v, "dj", &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 1 }]
+        );
     }
 
     #[test]
     fn dk_is_linewise() {
         let mut v = normal();
         let text = snapshot(&["abc", "xyz", "123"], 2, 0);
-        assert_eq!(press_keys(&mut v, "dk", &text), vec![VimCommand::DeleteLines { first: 1, last: 2 }]);
+        assert_eq!(
+            press_keys(&mut v, "dk", &text),
+            vec![VimCommand::DeleteLines { first: 1, last: 2 }]
+        );
     }
 
     #[test]
     fn dgg_is_linewise() {
         let mut v = normal();
         let text = snapshot(&["abc", "xyz", "123", "456"], 3, 0);
-        assert_eq!(press_keys(&mut v, "dgg", &text), vec![VimCommand::DeleteLines { first: 0, last: 3 }]);
+        assert_eq!(
+            press_keys(&mut v, "dgg", &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 3 }]
+        );
     }
 
     #[test]
     fn d_big_g_is_linewise() {
         let mut v = normal();
         let text = snapshot(&["abc", "xyz", "123"], 0, 0);
-        assert_eq!(press_keys(&mut v, "dG", &text), vec![VimCommand::DeleteLines { first: 0, last: 2 }]);
+        assert_eq!(
+            press_keys(&mut v, "dG", &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 2 }]
+        );
     }
 
     #[test]
     fn df_is_inclusive() {
         let mut v = normal();
         let text = snapshot(&["hello world"], 0, 0);
-        assert_eq!(press_keys(&mut v, "dfw", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 6) }]);
+        assert_eq!(
+            press_keys(&mut v, "dfw", &text),
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 6)
+            }]
+        );
     }
 
     #[test]
     fn dt_is_inclusive() {
         let mut v = normal();
         let text = snapshot(&["hello world"], 0, 0);
-        assert_eq!(press_keys(&mut v, "dtw", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 5) }]);
+        assert_eq!(
+            press_keys(&mut v, "dtw", &text),
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 5)
+            }]
+        );
     }
 
     #[test]
     fn d_percent_no_count_is_charwise() {
         let mut v = normal();
         let text = snapshot(&["(foo)"], 0, 0);
-        assert_eq!(press_keys(&mut v, "d%", &text), vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 4) }]);
+        assert_eq!(
+            press_keys(&mut v, "d%", &text),
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 4)
+            }]
+        );
     }
 
     #[test]
@@ -2381,7 +2618,13 @@ mod tests {
         let mut v = normal();
         // cursor on "bar", w would cross to next line; vim clamps to EOL
         let text = snapshot(&["foo bar", "baz"], 0, 4);
-        assert_eq!(press_keys(&mut v, "dw", &text), vec![VimCommand::DeleteRange { from: pos(0, 4), to: pos(0, 6) }]);
+        assert_eq!(
+            press_keys(&mut v, "dw", &text),
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 4),
+                to: pos(0, 6)
+            }]
+        );
     }
 
     // ── Operators: change + motion ──────────────────────────────────────────
@@ -2393,7 +2636,13 @@ mod tests {
         // cw remapped to ce: inclusive to word end
         assert_eq!(
             press_keys(&mut v, "cw", &text),
-            vec![VimCommand::ChangeRange { from: pos(0, 0), to: pos(0, 2) }, VimCommand::EnterInsert],
+            vec![
+                VimCommand::ChangeRange {
+                    from: pos(0, 0),
+                    to: pos(0, 2)
+                },
+                VimCommand::EnterInsert
+            ],
         );
     }
 
@@ -2403,7 +2652,13 @@ mod tests {
         let text = snapshot(&["foo.bar baz"], 0, 0);
         assert_eq!(
             press_keys(&mut v, "cW", &text),
-            vec![VimCommand::ChangeRange { from: pos(0, 0), to: pos(0, 6) }, VimCommand::EnterInsert],
+            vec![
+                VimCommand::ChangeRange {
+                    from: pos(0, 0),
+                    to: pos(0, 6)
+                },
+                VimCommand::EnterInsert
+            ],
         );
     }
 
@@ -2413,7 +2668,13 @@ mod tests {
         let text = snapshot(&["hello"], 0, 1);
         assert_eq!(
             press_keys(&mut v, "c$", &text),
-            vec![VimCommand::ChangeRange { from: pos(0, 1), to: pos(0, 4) }, VimCommand::EnterInsert],
+            vec![
+                VimCommand::ChangeRange {
+                    from: pos(0, 1),
+                    to: pos(0, 4)
+                },
+                VimCommand::EnterInsert
+            ],
         );
     }
 
@@ -2423,7 +2684,10 @@ mod tests {
         let text = snapshot(&["abc", "xyz"], 0, 0);
         assert_eq!(
             press_keys(&mut v, "cj", &text),
-            vec![VimCommand::ChangeLines { first: 0, last: 1 }, VimCommand::EnterInsert],
+            vec![
+                VimCommand::ChangeLines { first: 0, last: 1 },
+                VimCommand::EnterInsert
+            ],
         );
     }
 
@@ -2435,7 +2699,13 @@ mod tests {
         let text = snapshot(&["foo bar"], 0, 0);
         assert_eq!(
             press_keys(&mut v, "yw", &text),
-            vec![VimCommand::YankRange { from: pos(0, 0), to: pos(0, 3) }, VimCommand::MoveTo(pos(0, 0))],
+            vec![
+                VimCommand::YankRange {
+                    from: pos(0, 0),
+                    to: pos(0, 3)
+                },
+                VimCommand::MoveTo(pos(0, 0))
+            ],
         );
     }
 
@@ -2445,7 +2715,13 @@ mod tests {
         let text = snapshot(&["foo bar"], 0, 0);
         assert_eq!(
             press_keys(&mut v, "ye", &text),
-            vec![VimCommand::YankRange { from: pos(0, 0), to: pos(0, 2) }, VimCommand::MoveTo(pos(0, 0))],
+            vec![
+                VimCommand::YankRange {
+                    from: pos(0, 0),
+                    to: pos(0, 2)
+                },
+                VimCommand::MoveTo(pos(0, 0))
+            ],
         );
     }
 
@@ -2467,7 +2743,10 @@ mod tests {
         let mut v = normal();
         let lines: Vec<&str> = (0..10).map(|_| "x").collect();
         let text = snapshot(&lines, 0, 0);
-        assert_eq!(press_keys(&mut v, "2d3j", &text), vec![VimCommand::DeleteLines { first: 0, last: 6 }]);
+        assert_eq!(
+            press_keys(&mut v, "2d3j", &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 6 }]
+        );
     }
 
     #[test]
@@ -2478,7 +2757,13 @@ mod tests {
         let result = press_keys(&mut v, "3dw", &text);
         // 3 words forward from col 0: aaa→bbb→ccc→ddd, so target is (0,12)
         // exclusive: to = (0,11)
-        assert_eq!(result, vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 11) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 11)
+            }]
+        );
     }
 
     #[test]
@@ -2487,7 +2772,13 @@ mod tests {
         let mut v = normal();
         let text = snapshot(&["aaa bbb ccc ddd"], 0, 0);
         let result = press_keys(&mut v, "d3w", &text);
-        assert_eq!(result, vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 11) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 11)
+            }]
+        );
     }
 
     // ── Operators: doubled (dd, cc, yy) ─────────────────────────────────────
@@ -2496,7 +2787,10 @@ mod tests {
     fn dd_deletes_current_line() {
         let mut v = normal();
         let text = snapshot(&["abc", "xyz", "123"], 1, 0);
-        assert_eq!(press_keys(&mut v, "dd", &text), vec![VimCommand::DeleteLines { first: 1, last: 1 }]);
+        assert_eq!(
+            press_keys(&mut v, "dd", &text),
+            vec![VimCommand::DeleteLines { first: 1, last: 1 }]
+        );
     }
 
     #[test]
@@ -2505,7 +2799,10 @@ mod tests {
         let text = snapshot(&["abc", "xyz"], 0, 0);
         assert_eq!(
             press_keys(&mut v, "cc", &text),
-            vec![VimCommand::ChangeLines { first: 0, last: 0 }, VimCommand::EnterInsert],
+            vec![
+                VimCommand::ChangeLines { first: 0, last: 0 },
+                VimCommand::EnterInsert
+            ],
         );
     }
 
@@ -2513,21 +2810,30 @@ mod tests {
     fn yy_yanks_current_line() {
         let mut v = normal();
         let text = snapshot(&["abc", "xyz"], 0, 0);
-        assert_eq!(press_keys(&mut v, "yy", &text), vec![VimCommand::YankLines { first: 0, last: 0 }]);
+        assert_eq!(
+            press_keys(&mut v, "yy", &text),
+            vec![VimCommand::YankLines { first: 0, last: 0 }]
+        );
     }
 
     #[test]
     fn counted_dd() {
         let mut v = normal();
         let text = snapshot(&["a", "b", "c", "d", "e"], 1, 0);
-        assert_eq!(press_keys(&mut v, "3dd", &text), vec![VimCommand::DeleteLines { first: 1, last: 3 }]);
+        assert_eq!(
+            press_keys(&mut v, "3dd", &text),
+            vec![VimCommand::DeleteLines { first: 1, last: 3 }]
+        );
     }
 
     #[test]
     fn dd_clamps_at_end_of_file() {
         let mut v = normal();
         let text = snapshot(&["a", "b", "c"], 1, 0);
-        assert_eq!(press_keys(&mut v, "5dd", &text), vec![VimCommand::DeleteLines { first: 1, last: 2 }]);
+        assert_eq!(
+            press_keys(&mut v, "5dd", &text),
+            vec![VimCommand::DeleteLines { first: 1, last: 2 }]
+        );
     }
 
     #[test]
@@ -2535,7 +2841,10 @@ mod tests {
         let mut v = normal();
         let text = snapshot(&["abc", "xyz", "123"], 0, 0);
         // d2$ — count > 1 makes $ linewise
-        assert_eq!(press_keys(&mut v, "d2$", &text), vec![VimCommand::DeleteLines { first: 0, last: 1 }]);
+        assert_eq!(
+            press_keys(&mut v, "d2$", &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 1 }]
+        );
     }
 
     #[test]
@@ -2543,7 +2852,10 @@ mod tests {
         let mut v = normal();
         let lines: Vec<&str> = (0..10).map(|_| "x").collect();
         let text = snapshot(&lines, 0, 0);
-        assert_eq!(press_keys(&mut v, "d50%", &text), vec![VimCommand::DeleteLines { first: 0, last: 4 }]);
+        assert_eq!(
+            press_keys(&mut v, "d50%", &text),
+            vec![VimCommand::DeleteLines { first: 0, last: 4 }]
+        );
     }
 
     // ── Single-key actions ──────────────────────────────────────────────────
@@ -2551,7 +2863,10 @@ mod tests {
     #[test]
     fn i_enters_insert() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'i', &snapshot(&["hello"], 0, 2)), vec![VimCommand::EnterInsert]);
+        assert_eq!(
+            press(&mut v, 'i', &snapshot(&["hello"], 0, 2)),
+            vec![VimCommand::EnterInsert]
+        );
     }
 
     #[test]
@@ -2623,14 +2938,20 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press(&mut v, 'x', &snapshot(&["hello"], 0, 2)),
-            vec![VimCommand::DeleteRange { from: pos(0, 2), to: pos(0, 2) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 2),
+                to: pos(0, 2)
+            }],
         );
     }
 
     #[test]
     fn x_on_empty_line_is_noop() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'x', &snapshot(&[""], 0, 0)), vec![VimCommand::Noop]);
+        assert_eq!(
+            press(&mut v, 'x', &snapshot(&[""], 0, 0)),
+            vec![VimCommand::Noop]
+        );
     }
 
     #[test]
@@ -2638,7 +2959,10 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press_keys(&mut v, "3x", &snapshot(&["hello"], 0, 1)),
-            vec![VimCommand::DeleteRange { from: pos(0, 1), to: pos(0, 3) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 1),
+                to: pos(0, 3)
+            }],
         );
     }
 
@@ -2647,7 +2971,10 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press_keys(&mut v, "99x", &snapshot(&["hi"], 0, 0)),
-            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 1) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 1)
+            }],
         );
     }
 
@@ -2656,14 +2983,20 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press(&mut v, 'X', &snapshot(&["hello"], 0, 3)),
-            vec![VimCommand::DeleteRange { from: pos(0, 2), to: pos(0, 2) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 2),
+                to: pos(0, 2)
+            }],
         );
     }
 
     #[test]
     fn big_x_at_column_zero_is_noop() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'X', &snapshot(&["hello"], 0, 0)), vec![VimCommand::Noop]);
+        assert_eq!(
+            press(&mut v, 'X', &snapshot(&["hello"], 0, 0)),
+            vec![VimCommand::Noop]
+        );
     }
 
     #[test]
@@ -2671,14 +3004,20 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press(&mut v, 's', &snapshot(&["hello"], 0, 2)),
-            vec![VimCommand::ChangeRange { from: pos(0, 2), to: pos(0, 2) }],
+            vec![VimCommand::ChangeRange {
+                from: pos(0, 2),
+                to: pos(0, 2)
+            }],
         );
     }
 
     #[test]
     fn s_on_empty_line_enters_insert() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 's', &snapshot(&[""], 0, 0)), vec![VimCommand::EnterInsert]);
+        assert_eq!(
+            press(&mut v, 's', &snapshot(&[""], 0, 0)),
+            vec![VimCommand::EnterInsert]
+        );
     }
 
     #[test]
@@ -2686,14 +3025,20 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press(&mut v, 'D', &snapshot(&["hello"], 0, 1)),
-            vec![VimCommand::DeleteRange { from: pos(0, 1), to: pos(0, 4) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 1),
+                to: pos(0, 4)
+            }],
         );
     }
 
     #[test]
     fn big_d_on_empty_line_is_noop() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'D', &snapshot(&[""], 0, 0)), vec![VimCommand::Noop]);
+        assert_eq!(
+            press(&mut v, 'D', &snapshot(&[""], 0, 0)),
+            vec![VimCommand::Noop]
+        );
     }
 
     #[test]
@@ -2701,27 +3046,39 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press(&mut v, 'C', &snapshot(&["hello"], 0, 1)),
-            vec![VimCommand::ChangeRange { from: pos(0, 1), to: pos(0, 4) }],
+            vec![VimCommand::ChangeRange {
+                from: pos(0, 1),
+                to: pos(0, 4)
+            }],
         );
     }
 
     #[test]
     fn big_c_on_empty_line_enters_insert() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'C', &snapshot(&[""], 0, 0)), vec![VimCommand::EnterInsert]);
+        assert_eq!(
+            press(&mut v, 'C', &snapshot(&[""], 0, 0)),
+            vec![VimCommand::EnterInsert]
+        );
     }
 
     #[test]
     fn big_j_joins_two_lines() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'J', &snapshot(&["a", "b"], 0, 0)), vec![VimCommand::JoinLines { count: 1 }]);
+        assert_eq!(
+            press(&mut v, 'J', &snapshot(&["a", "b"], 0, 0)),
+            vec![VimCommand::JoinLines { count: 1 }]
+        );
     }
 
     #[test]
     fn counted_big_j() {
         let mut v = normal();
         // 3J joins 3 lines = 2 join operations
-        assert_eq!(press_keys(&mut v, "3J", &snapshot(&["a", "b", "c", "d"], 0, 0)), vec![VimCommand::JoinLines { count: 2 }]);
+        assert_eq!(
+            press_keys(&mut v, "3J", &snapshot(&["a", "b", "c", "d"], 0, 0)),
+            vec![VimCommand::JoinLines { count: 2 }]
+        );
     }
 
     #[test]
@@ -2730,32 +3087,47 @@ mod tests {
         let text = snapshot(&["abc", "xyz"], 0, 0);
         assert_eq!(
             press(&mut v, 'S', &text),
-            vec![VimCommand::ChangeLines { first: 0, last: 0 }, VimCommand::EnterInsert],
+            vec![
+                VimCommand::ChangeLines { first: 0, last: 0 },
+                VimCommand::EnterInsert
+            ],
         );
     }
 
     #[test]
     fn p_paste_after() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'p', &snapshot(&["x"], 0, 0)), vec![VimCommand::PasteAfter]);
+        assert_eq!(
+            press(&mut v, 'p', &snapshot(&["x"], 0, 0)),
+            vec![VimCommand::PasteAfter]
+        );
     }
 
     #[test]
     fn big_p_paste_before() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'P', &snapshot(&["x"], 0, 0)), vec![VimCommand::PasteBefore]);
+        assert_eq!(
+            press(&mut v, 'P', &snapshot(&["x"], 0, 0)),
+            vec![VimCommand::PasteBefore]
+        );
     }
 
     #[test]
     fn u_undo() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'u', &snapshot(&["x"], 0, 0)), vec![VimCommand::Undo]);
+        assert_eq!(
+            press(&mut v, 'u', &snapshot(&["x"], 0, 0)),
+            vec![VimCommand::Undo]
+        );
     }
 
     #[test]
     fn ctrl_r_redo() {
         let mut v = normal();
-        assert_eq!(press_ctrl(&mut v, 'r', &snapshot(&["x"], 0, 0)), vec![VimCommand::Redo]);
+        assert_eq!(
+            press_ctrl(&mut v, 'r', &snapshot(&["x"], 0, 0)),
+            vec![VimCommand::Redo]
+        );
     }
 
     #[test]
@@ -2770,7 +3142,10 @@ mod tests {
     #[test]
     fn r_on_empty_line_is_noop() {
         let mut v = normal();
-        assert_eq!(press_keys(&mut v, "ra", &snapshot(&[""], 0, 0)), vec![VimCommand::Noop]);
+        assert_eq!(
+            press_keys(&mut v, "ra", &snapshot(&[""], 0, 0)),
+            vec![VimCommand::Noop]
+        );
     }
 
     #[test]
@@ -2785,19 +3160,28 @@ mod tests {
     #[test]
     fn slash_opens_find() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '/', &snapshot(&["x"], 0, 0)), vec![VimCommand::OpenFind]);
+        assert_eq!(
+            press(&mut v, '/', &snapshot(&["x"], 0, 0)),
+            vec![VimCommand::OpenFind]
+        );
     }
 
     #[test]
     fn n_find_next() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'n', &snapshot(&["x"], 0, 0)), vec![VimCommand::FindNext]);
+        assert_eq!(
+            press(&mut v, 'n', &snapshot(&["x"], 0, 0)),
+            vec![VimCommand::FindNext]
+        );
     }
 
     #[test]
     fn big_n_find_prev() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'N', &snapshot(&["x"], 0, 0)), vec![VimCommand::FindPrev]);
+        assert_eq!(
+            press(&mut v, 'N', &snapshot(&["x"], 0, 0)),
+            vec![VimCommand::FindPrev]
+        );
     }
 
     // ── Visual mode: entering and exiting ───────────────────────────────────
@@ -2809,7 +3193,13 @@ mod tests {
         let result = press(&mut v, 'v', &text);
         assert_eq!(v.mode, Mode::Visual);
         assert_eq!(v.visual_anchor, Some(pos(0, 2)));
-        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 2), head: pos(0, 2) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::Select {
+                anchor: pos(0, 2),
+                head: pos(0, 2)
+            }]
+        );
     }
 
     #[test]
@@ -2820,7 +3210,13 @@ mod tests {
         assert_eq!(v.mode, Mode::VisualLine);
         assert_eq!(v.visual_anchor, Some(pos(0, 2)));
         // VisualLine selects full line via selection_command
-        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 4) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 4)
+            }]
+        );
     }
 
     #[test]
@@ -2851,7 +3247,13 @@ mod tests {
         press(&mut v, 'V', &text); // enter VisualLine
         let result = press(&mut v, 'v', &text); // switch to Visual
         assert_eq!(v.mode, Mode::Visual);
-        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 2), head: pos(0, 2) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::Select {
+                anchor: pos(0, 2),
+                head: pos(0, 2)
+            }]
+        );
     }
 
     #[test]
@@ -2862,7 +3264,13 @@ mod tests {
         let result = press(&mut v, 'V', &text); // switch to VisualLine
         assert_eq!(v.mode, Mode::VisualLine);
         // VisualLine expands to full line
-        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 4) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 4)
+            }]
+        );
     }
 
     // ── Visual mode: motions extend selection ───────────────────────────────
@@ -2874,7 +3282,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press(&mut v, 'l', &text),
-            vec![VimCommand::Select { anchor: pos(0, 1), head: pos(0, 2) }],
+            vec![VimCommand::Select {
+                anchor: pos(0, 1),
+                head: pos(0, 2)
+            }],
         );
     }
 
@@ -2885,7 +3296,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press(&mut v, 'j', &text),
-            vec![VimCommand::Select { anchor: pos(0, 1), head: pos(1, 1) }],
+            vec![VimCommand::Select {
+                anchor: pos(0, 1),
+                head: pos(1, 1)
+            }],
         );
     }
 
@@ -2896,7 +3310,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press(&mut v, 'w', &text),
-            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 4) }],
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 4)
+            }],
         );
     }
 
@@ -2907,7 +3324,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press(&mut v, '$', &text),
-            vec![VimCommand::Select { anchor: pos(0, 1), head: pos(0, 4) }],
+            vec![VimCommand::Select {
+                anchor: pos(0, 1),
+                head: pos(0, 4)
+            }],
         );
     }
 
@@ -2918,7 +3338,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press_keys(&mut v, "gg", &text),
-            vec![VimCommand::Select { anchor: pos(2, 1), head: pos(0, 0) }],
+            vec![VimCommand::Select {
+                anchor: pos(2, 1),
+                head: pos(0, 0)
+            }],
         );
     }
 
@@ -2929,7 +3352,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press(&mut v, 'G', &text),
-            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(2, 0) }],
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(2, 0)
+            }],
         );
     }
 
@@ -2940,7 +3366,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press_keys(&mut v, "fw", &text),
-            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 6) }],
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 6)
+            }],
         );
     }
 
@@ -2951,7 +3380,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press(&mut v, '%', &text),
-            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 4) }],
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 4)
+            }],
         );
     }
 
@@ -2962,7 +3394,13 @@ mod tests {
         press(&mut v, 'V', &text);
         let result = press(&mut v, 'j', &text);
         // VisualLine: full first to last line
-        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(1, 2) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(1, 2)
+            }]
+        );
     }
 
     #[test]
@@ -2972,7 +3410,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press_keys(&mut v, "3l", &text),
-            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 3) }],
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 3)
+            }],
         );
     }
 
@@ -2983,7 +3424,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press_keys(&mut v, "3fb", &text),
-            vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 12) }],
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 12)
+            }],
         );
     }
 
@@ -2994,7 +3438,10 @@ mod tests {
         press(&mut v, 'v', &text);
         assert_eq!(
             press(&mut v, '0', &text),
-            vec![VimCommand::Select { anchor: pos(0, 3), head: pos(0, 0) }],
+            vec![VimCommand::Select {
+                anchor: pos(0, 3),
+                head: pos(0, 0)
+            }],
         );
     }
 
@@ -3005,11 +3452,17 @@ mod tests {
         let mut v = normal();
         let text = snapshot(&["hello world"], 0, 2);
         press(&mut v, 'v', &text); // anchor = (0,2)
-        // Simulate cursor at col 4 after motions
+                                   // Simulate cursor at col 4 after motions
         let text2 = snapshot(&["hello world"], 0, 4);
         let result = press(&mut v, 'd', &text2);
         assert_eq!(v.mode, Mode::Normal);
-        assert_eq!(result, vec![VimCommand::DeleteRange { from: pos(0, 2), to: pos(0, 4) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 2),
+                to: pos(0, 4)
+            }]
+        );
     }
 
     #[test]
@@ -3020,7 +3473,13 @@ mod tests {
         let text2 = snapshot(&["hello"], 0, 2);
         let result = press(&mut v, 'x', &text2);
         assert_eq!(v.mode, Mode::Normal);
-        assert_eq!(result, vec![VimCommand::DeleteRange { from: pos(0, 1), to: pos(0, 2) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 1),
+                to: pos(0, 2)
+            }]
+        );
     }
 
     #[test]
@@ -3031,7 +3490,16 @@ mod tests {
         let text2 = snapshot(&["hello"], 0, 2);
         let result = press(&mut v, 'c', &text2);
         assert_eq!(v.mode, Mode::Normal); // exit_visual sets Normal, then EnterInsert changes to Insert in main.rs
-        assert_eq!(result, vec![VimCommand::ChangeRange { from: pos(0, 1), to: pos(0, 2) }, VimCommand::EnterInsert]);
+        assert_eq!(
+            result,
+            vec![
+                VimCommand::ChangeRange {
+                    from: pos(0, 1),
+                    to: pos(0, 2)
+                },
+                VimCommand::EnterInsert
+            ]
+        );
     }
 
     #[test]
@@ -3041,7 +3509,16 @@ mod tests {
         press(&mut v, 'v', &text); // anchor = (0,1)
         let text2 = snapshot(&["hello"], 0, 2);
         let result = press(&mut v, 's', &text2);
-        assert_eq!(result, vec![VimCommand::ChangeRange { from: pos(0, 1), to: pos(0, 2) }, VimCommand::EnterInsert]);
+        assert_eq!(
+            result,
+            vec![
+                VimCommand::ChangeRange {
+                    from: pos(0, 1),
+                    to: pos(0, 2)
+                },
+                VimCommand::EnterInsert
+            ]
+        );
     }
 
     #[test]
@@ -3053,7 +3530,16 @@ mod tests {
         let text_end = snapshot(&["hello"], 0, 3);
         let result = press(&mut v, 'y', &text_end);
         assert_eq!(v.mode, Mode::Normal);
-        assert_eq!(result, vec![VimCommand::YankRange { from: pos(0, 1), to: pos(0, 3) }, VimCommand::MoveTo(pos(0, 1))]);
+        assert_eq!(
+            result,
+            vec![
+                VimCommand::YankRange {
+                    from: pos(0, 1),
+                    to: pos(0, 3)
+                },
+                VimCommand::MoveTo(pos(0, 1))
+            ]
+        );
     }
 
     #[test]
@@ -3074,7 +3560,13 @@ mod tests {
         let text = snapshot(&["abc", "xyz"], 0, 0);
         press(&mut v, 'V', &text);
         let result = press(&mut v, 'c', &text);
-        assert_eq!(result, vec![VimCommand::ChangeLines { first: 0, last: 0 }, VimCommand::EnterInsert]);
+        assert_eq!(
+            result,
+            vec![
+                VimCommand::ChangeLines { first: 0, last: 0 },
+                VimCommand::EnterInsert
+            ]
+        );
     }
 
     #[test]
@@ -3087,7 +3579,10 @@ mod tests {
         let result = press(&mut v, 'y', &text2);
         assert_eq!(
             result,
-            vec![VimCommand::YankLines { first: 0, last: 1 }, VimCommand::MoveTo(pos(0, 0))],
+            vec![
+                VimCommand::YankLines { first: 0, last: 1 },
+                VimCommand::MoveTo(pos(0, 0))
+            ],
         );
     }
 
@@ -3101,7 +3596,11 @@ mod tests {
         let text = snapshot(&["ABC DEF"], 0, 2);
         assert_eq!(
             press(&mut v, 'u', &text),
-            vec![VimCommand::TransformCaseRange { from: pos(0, 0), to: pos(0, 2), uppercase: false }],
+            vec![VimCommand::TransformCaseRange {
+                from: pos(0, 0),
+                to: pos(0, 2),
+                uppercase: false
+            }],
         );
     }
 
@@ -3113,7 +3612,11 @@ mod tests {
         let text = snapshot(&["abc def"], 0, 2);
         assert_eq!(
             press(&mut v, 'U', &text),
-            vec![VimCommand::TransformCaseRange { from: pos(0, 0), to: pos(0, 2), uppercase: true }],
+            vec![VimCommand::TransformCaseRange {
+                from: pos(0, 0),
+                to: pos(0, 2),
+                uppercase: true
+            }],
         );
     }
 
@@ -3125,7 +3628,11 @@ mod tests {
         let text = snapshot(&["ABC", "DEF"], 1, 0);
         assert_eq!(
             press(&mut v, 'u', &text),
-            vec![VimCommand::TransformCaseLines { first: 0, last: 1, uppercase: false }],
+            vec![VimCommand::TransformCaseLines {
+                first: 0,
+                last: 1,
+                uppercase: false
+            }],
         );
     }
 
@@ -3161,7 +3668,13 @@ mod tests {
         press(&mut v, 'v', &text);
         let result = press_keys(&mut v, "iw", &text);
         assert_eq!(v.visual_anchor, Some(pos(0, 0)));
-        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 4) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 4)
+            }]
+        );
     }
 
     #[test]
@@ -3170,7 +3683,13 @@ mod tests {
         let text = snapshot(&["foo(bar)baz"], 0, 5);
         press(&mut v, 'v', &text);
         let result = press_keys(&mut v, "ib", &text);
-        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 4), head: pos(0, 6) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::Select {
+                anchor: pos(0, 4),
+                head: pos(0, 6)
+            }]
+        );
     }
 
     // ── Visual mode: ctrl+r ─────────────────────────────────────────────────
@@ -3194,7 +3713,7 @@ mod tests {
         let mut v = normal();
         let text = snapshot(&["abcabc"], 0, 0);
         press_keys(&mut v, "fa", &text); // find first 'a' (stays at 0 since first match is at col 0+skip)
-        // Actually fa from col 0 finds 'a' at col 3 (skips current col)
+                                         // Actually fa from col 0 finds 'a' at col 3 (skips current col)
         let text2 = snapshot(&["abcabc"], 0, 3);
         let result = press(&mut v, ';', &text2);
         // repeats FindChar('a'), from col 3 finds nothing after col 3... wait
@@ -3282,8 +3801,14 @@ mod tests {
         let text2 = snapshot(&["aXbXcXd"], 0, 1);
         press(&mut v, 'v', &text2); // enter Visual at col 1
         let result = press(&mut v, ';', &text2); // repeat find, extends selection
-        // FindChar('X') from col 1: skip col 1+1=2, col 2 is 'b', col 3 is 'X' -> match
-        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 1), head: pos(0, 3) }]);
+                                                 // FindChar('X') from col 1: skip col 1+1=2, col 2 is 'b', col 3 is 'X' -> match
+        assert_eq!(
+            result,
+            vec![VimCommand::Select {
+                anchor: pos(0, 1),
+                head: pos(0, 3)
+            }]
+        );
     }
 
     #[test]
@@ -3293,10 +3818,16 @@ mod tests {
         let text = snapshot(&["aXbXcXd"], 0, 0);
         press(&mut v, 'v', &text); // enter Visual
         press_keys(&mut v, "fX", &text); // find 'X' in visual mode
-        // last_find should now be set to FindChar('X')
+                                         // last_find should now be set to FindChar('X')
         let text2 = snapshot(&["aXbXcXd"], 0, 1);
         let result = press(&mut v, ';', &text2); // repeat should work
-        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(0, 3) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(0, 3)
+            }]
+        );
     }
 
     // ── Text objects: word (iw, aw) ─────────────────────────────────────────
@@ -3304,25 +3835,37 @@ mod tests {
     #[test]
     fn iw_selects_word() {
         let text = snapshot(&["hello world"], 0, 2);
-        assert_eq!(text_object(&text, 'w', true, None), Some((pos(0, 0), pos(0, 4))));
+        assert_eq!(
+            text_object(&text, 'w', true, None),
+            Some((pos(0, 0), pos(0, 4)))
+        );
     }
 
     #[test]
     fn aw_includes_trailing_space() {
         let text = snapshot(&["hello world"], 0, 2);
-        assert_eq!(text_object(&text, 'w', false, None), Some((pos(0, 0), pos(0, 5))));
+        assert_eq!(
+            text_object(&text, 'w', false, None),
+            Some((pos(0, 0), pos(0, 5)))
+        );
     }
 
     #[test]
     fn iw_on_whitespace() {
         let text = snapshot(&["foo   bar"], 0, 4);
-        assert_eq!(text_object(&text, 'w', true, None), Some((pos(0, 3), pos(0, 5))));
+        assert_eq!(
+            text_object(&text, 'w', true, None),
+            Some((pos(0, 3), pos(0, 5)))
+        );
     }
 
     #[test]
     fn aw_on_whitespace_includes_following_word() {
         let text = snapshot(&["foo   bar"], 0, 4);
-        assert_eq!(text_object(&text, 'w', false, None), Some((pos(0, 3), pos(0, 8))));
+        assert_eq!(
+            text_object(&text, 'w', false, None),
+            Some((pos(0, 3), pos(0, 8)))
+        );
     }
 
     #[test]
@@ -3334,13 +3877,19 @@ mod tests {
     #[test]
     fn counted_iw() {
         let text = snapshot(&["foo bar baz"], 0, 0);
-        assert_eq!(text_object(&text, 'w', true, Some(2)), Some((pos(0, 0), pos(0, 3))));
+        assert_eq!(
+            text_object(&text, 'w', true, Some(2)),
+            Some((pos(0, 0), pos(0, 3)))
+        );
     }
 
     #[test]
     fn big_iw() {
         let text = snapshot(&["foo.bar baz"], 0, 2);
-        assert_eq!(text_object(&text, 'W', true, None), Some((pos(0, 0), pos(0, 6))));
+        assert_eq!(
+            text_object(&text, 'W', true, None),
+            Some((pos(0, 0), pos(0, 6)))
+        );
     }
 
     // ── Text objects: pairs (ib, ab, iB, aB, etc.) ──────────────────────────
@@ -3348,13 +3897,19 @@ mod tests {
     #[test]
     fn ib_inside_parens() {
         let text = snapshot(&["foo(bar)baz"], 0, 5);
-        assert_eq!(text_object(&text, 'b', true, None), Some((pos(0, 4), pos(0, 6))));
+        assert_eq!(
+            text_object(&text, 'b', true, None),
+            Some((pos(0, 4), pos(0, 6)))
+        );
     }
 
     #[test]
     fn ab_around_parens() {
         let text = snapshot(&["foo(bar)baz"], 0, 5);
-        assert_eq!(text_object(&text, 'b', false, None), Some((pos(0, 3), pos(0, 7))));
+        assert_eq!(
+            text_object(&text, 'b', false, None),
+            Some((pos(0, 3), pos(0, 7)))
+        );
     }
 
     #[test]
@@ -3366,37 +3921,55 @@ mod tests {
     #[test]
     fn ib_nested() {
         let text = snapshot(&["((foo))"], 0, 3);
-        assert_eq!(text_object(&text, 'b', true, None), Some((pos(0, 2), pos(0, 4))));
+        assert_eq!(
+            text_object(&text, 'b', true, None),
+            Some((pos(0, 2), pos(0, 4)))
+        );
     }
 
     #[test]
     fn ib_cursor_on_close_paren() {
         let text = snapshot(&["(foo)"], 0, 4);
-        assert_eq!(text_object(&text, 'b', true, None), Some((pos(0, 1), pos(0, 3))));
+        assert_eq!(
+            text_object(&text, 'b', true, None),
+            Some((pos(0, 1), pos(0, 3)))
+        );
     }
 
     #[test]
     fn i_brace_inside_braces() {
         let text = snapshot(&["{foo}"], 0, 2);
-        assert_eq!(text_object(&text, 'B', true, None), Some((pos(0, 1), pos(0, 3))));
+        assert_eq!(
+            text_object(&text, 'B', true, None),
+            Some((pos(0, 1), pos(0, 3)))
+        );
     }
 
     #[test]
     fn i_bracket() {
         let text = snapshot(&["[foo]"], 0, 2);
-        assert_eq!(text_object(&text, '[', true, None), Some((pos(0, 1), pos(0, 3))));
+        assert_eq!(
+            text_object(&text, '[', true, None),
+            Some((pos(0, 1), pos(0, 3)))
+        );
     }
 
     #[test]
     fn i_angle() {
         let text = snapshot(&["<foo>"], 0, 2);
-        assert_eq!(text_object(&text, '<', true, None), Some((pos(0, 1), pos(0, 3))));
+        assert_eq!(
+            text_object(&text, '<', true, None),
+            Some((pos(0, 1), pos(0, 3)))
+        );
     }
 
     #[test]
     fn pair_cross_line() {
         let text = snapshot(&["(", "foo", ")"], 1, 1);
-        assert_eq!(text_object(&text, 'b', true, None), Some((pos(1, 0), pos(1, 2))));
+        assert_eq!(
+            text_object(&text, 'b', true, None),
+            Some((pos(1, 0), pos(1, 2)))
+        );
     }
 
     #[test]
@@ -3411,37 +3984,55 @@ mod tests {
     #[test]
     fn i_double_quote() {
         let text = snapshot(&["say \"hello\" ok"], 0, 6);
-        assert_eq!(text_object(&text, '"', true, None), Some((pos(0, 5), pos(0, 9))));
+        assert_eq!(
+            text_object(&text, '"', true, None),
+            Some((pos(0, 5), pos(0, 9)))
+        );
     }
 
     #[test]
     fn a_double_quote() {
         let text = snapshot(&["say \"hello\" ok"], 0, 6);
-        assert_eq!(text_object(&text, '"', false, None), Some((pos(0, 4), pos(0, 10))));
+        assert_eq!(
+            text_object(&text, '"', false, None),
+            Some((pos(0, 4), pos(0, 10)))
+        );
     }
 
     #[test]
     fn i_single_quote() {
         let text = snapshot(&["say 'hi' ok"], 0, 6);
-        assert_eq!(text_object(&text, '\'', true, None), Some((pos(0, 5), pos(0, 6))));
+        assert_eq!(
+            text_object(&text, '\'', true, None),
+            Some((pos(0, 5), pos(0, 6)))
+        );
     }
 
     #[test]
     fn i_backtick() {
         let text = snapshot(&["say `hi` ok"], 0, 6);
-        assert_eq!(text_object(&text, '`', true, None), Some((pos(0, 5), pos(0, 6))));
+        assert_eq!(
+            text_object(&text, '`', true, None),
+            Some((pos(0, 5), pos(0, 6)))
+        );
     }
 
     #[test]
     fn quote_escaped() {
         let text = snapshot(&["let s = \"a\\\"b\""], 0, 12);
-        assert_eq!(text_object(&text, '"', true, None), Some((pos(0, 9), pos(0, 12))));
+        assert_eq!(
+            text_object(&text, '"', true, None),
+            Some((pos(0, 9), pos(0, 12)))
+        );
     }
 
     #[test]
     fn quote_nearest_pair() {
         let text = snapshot(&["\"foo \"bar\""], 0, 7);
-        assert_eq!(text_object(&text, '"', true, None), Some((pos(0, 6), pos(0, 8))));
+        assert_eq!(
+            text_object(&text, '"', true, None),
+            Some((pos(0, 6), pos(0, 8)))
+        );
     }
 
     #[test]
@@ -3464,7 +4055,10 @@ mod tests {
         let text = snapshot(&["hello world"], 0, 2);
         assert_eq!(
             press_keys(&mut v, "diw", &text),
-            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 4) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 4)
+            }],
         );
     }
 
@@ -3474,7 +4068,13 @@ mod tests {
         let text = snapshot(&["hello world"], 0, 2);
         assert_eq!(
             press_keys(&mut v, "ciw", &text),
-            vec![VimCommand::ChangeRange { from: pos(0, 0), to: pos(0, 4) }, VimCommand::EnterInsert],
+            vec![
+                VimCommand::ChangeRange {
+                    from: pos(0, 0),
+                    to: pos(0, 4)
+                },
+                VimCommand::EnterInsert
+            ],
         );
     }
 
@@ -3484,7 +4084,13 @@ mod tests {
         let text = snapshot(&["hello world"], 0, 2);
         assert_eq!(
             press_keys(&mut v, "yiw", &text),
-            vec![VimCommand::YankRange { from: pos(0, 0), to: pos(0, 4) }, VimCommand::MoveTo(pos(0, 0))],
+            vec![
+                VimCommand::YankRange {
+                    from: pos(0, 0),
+                    to: pos(0, 4)
+                },
+                VimCommand::MoveTo(pos(0, 0))
+            ],
         );
     }
 
@@ -3494,7 +4100,10 @@ mod tests {
         let text = snapshot(&["foo(bar)"], 0, 5);
         assert_eq!(
             press_keys(&mut v, "dib", &text),
-            vec![VimCommand::DeleteRange { from: pos(0, 4), to: pos(0, 6) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 4),
+                to: pos(0, 6)
+            }],
         );
     }
 
@@ -3604,7 +4213,10 @@ mod tests {
         let text = snapshot(&["hello world"], 0, 0);
         assert_eq!(
             press_keys(&mut v, "dfo", &text),
-            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 4) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 4)
+            }],
         );
     }
 
@@ -3624,7 +4236,10 @@ mod tests {
         let text = snapshot(&["hello world"], 0, 2);
         assert_eq!(
             press_keys(&mut v, "diw", &text),
-            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 4) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 4)
+            }],
         );
     }
 
@@ -3665,7 +4280,10 @@ mod tests {
         let text = snapshot(&["foo bar"], 0, 0);
         press(&mut v, 'd', &text);
         v.on_tab_switch();
-        assert_eq!(press(&mut v, 'w', &text), vec![VimCommand::MoveTo(pos(0, 4))]);
+        assert_eq!(
+            press(&mut v, 'w', &text),
+            vec![VimCommand::MoveTo(pos(0, 4))]
+        );
     }
 
     #[test]
@@ -3708,13 +4326,19 @@ mod tests {
     #[test]
     fn w_from_empty_line_to_next() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'w', &snapshot(&["", "foo"], 0, 0)), vec![VimCommand::MoveTo(pos(1, 0))]);
+        assert_eq!(
+            press(&mut v, 'w', &snapshot(&["", "foo"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(1, 0))]
+        );
     }
 
     #[test]
     fn b_to_empty_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'b', &snapshot(&["", "foo"], 1, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'b', &snapshot(&["", "foo"], 1, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
@@ -3722,32 +4346,47 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press(&mut v, 'x', &snapshot(&["a"], 0, 0)),
-            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 0) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 0)
+            }],
         );
     }
 
     #[test]
     fn dollar_on_single_char_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, '$', &snapshot(&["a"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, '$', &snapshot(&["a"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn l_on_single_char_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'l', &snapshot(&["a"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'l', &snapshot(&["a"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn big_g_on_single_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'G', &snapshot(&["foo"], 0, 0)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press(&mut v, 'G', &snapshot(&["foo"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
     fn gg_on_single_line() {
         let mut v = normal();
-        assert_eq!(press_keys(&mut v, "gg", &snapshot(&["foo"], 0, 2)), vec![VimCommand::MoveTo(pos(0, 0))]);
+        assert_eq!(
+            press_keys(&mut v, "gg", &snapshot(&["foo"], 0, 2)),
+            vec![VimCommand::MoveTo(pos(0, 0))]
+        );
     }
 
     #[test]
@@ -3756,7 +4395,10 @@ mod tests {
         // vim: dw on last word of file deletes to end (w can't find next word, becomes inclusive)
         assert_eq!(
             press_keys(&mut v, "dw", &snapshot(&["foo"], 0, 2)),
-            vec![VimCommand::DeleteRange { from: pos(0, 2), to: pos(0, 2) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 2),
+                to: pos(0, 2)
+            }],
         );
     }
 
@@ -3766,7 +4408,10 @@ mod tests {
         // dw from start of sole word: deletes entire word
         assert_eq!(
             press_keys(&mut v, "dw", &snapshot(&["hello"], 0, 0)),
-            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 4) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 4)
+            }],
         );
     }
 
@@ -3776,7 +4421,10 @@ mod tests {
         // d$ on "a" at col 0: $ returns col 0, still deletes the char
         assert_eq!(
             press_keys(&mut v, "d$", &snapshot(&["a"], 0, 0)),
-            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 0) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 0)
+            }],
         );
     }
 
@@ -3786,7 +4434,10 @@ mod tests {
         // dl on "a": l clamped to col 0, but still deletes (vim exception for 0-char motions)
         assert_eq!(
             press_keys(&mut v, "dl", &snapshot(&["a"], 0, 0)),
-            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 0) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 0)
+            }],
         );
     }
 
@@ -3795,14 +4446,20 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press_keys(&mut v, "de", &snapshot(&["x"], 0, 0)),
-            vec![VimCommand::DeleteRange { from: pos(0, 0), to: pos(0, 0) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 0),
+                to: pos(0, 0)
+            }],
         );
     }
 
     #[test]
     fn w_on_whitespace_only_line() {
         let mut v = normal();
-        assert_eq!(press(&mut v, 'w', &snapshot(&["   ", "foo"], 0, 0)), vec![VimCommand::MoveTo(pos(1, 0))]);
+        assert_eq!(
+            press(&mut v, 'w', &snapshot(&["   ", "foo"], 0, 0)),
+            vec![VimCommand::MoveTo(pos(1, 0))]
+        );
     }
 
     // ── Backward inclusive motion fixes ─────────────────────────────────
@@ -3815,7 +4472,10 @@ mod tests {
         let text = snapshot(&["hello world"], 0, 7);
         assert_eq!(
             press_keys(&mut v, "dFo", &text),
-            vec![VimCommand::DeleteRange { from: pos(0, 4), to: pos(0, 6) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 4),
+                to: pos(0, 6)
+            }],
         );
     }
 
@@ -3827,7 +4487,10 @@ mod tests {
         let text = snapshot(&["hello world"], 0, 7);
         assert_eq!(
             press_keys(&mut v, "dTo", &text),
-            vec![VimCommand::DeleteRange { from: pos(0, 5), to: pos(0, 6) }],
+            vec![VimCommand::DeleteRange {
+                from: pos(0, 5),
+                to: pos(0, 6)
+            }],
         );
     }
 
@@ -3841,7 +4504,13 @@ mod tests {
         let text = snapshot(&["foo   bar"], 0, 3);
         assert_eq!(
             press_keys(&mut v, "cw", &text),
-            vec![VimCommand::ChangeRange { from: pos(0, 3), to: pos(0, 5) }, VimCommand::EnterInsert],
+            vec![
+                VimCommand::ChangeRange {
+                    from: pos(0, 3),
+                    to: pos(0, 5)
+                },
+                VimCommand::EnterInsert
+            ],
         );
     }
 
@@ -3852,7 +4521,13 @@ mod tests {
         let text = snapshot(&["foo bar"], 0, 0);
         assert_eq!(
             press_keys(&mut v, "cw", &text),
-            vec![VimCommand::ChangeRange { from: pos(0, 0), to: pos(0, 2) }, VimCommand::EnterInsert],
+            vec![
+                VimCommand::ChangeRange {
+                    from: pos(0, 0),
+                    to: pos(0, 2)
+                },
+                VimCommand::EnterInsert
+            ],
         );
     }
 
@@ -3914,7 +4589,13 @@ mod tests {
         let text = snapshot(&["aaa", "bbb", "", "ccc"], 0, 1);
         press(&mut v, 'v', &text);
         let result = press_keys(&mut v, "ip", &text);
-        assert_eq!(result, vec![VimCommand::Select { anchor: pos(0, 0), head: pos(1, 2) }]);
+        assert_eq!(
+            result,
+            vec![VimCommand::Select {
+                anchor: pos(0, 0),
+                head: pos(1, 2)
+            }]
+        );
     }
 
     // ── * and # (search word under cursor) ──────────────────────────────
@@ -3925,7 +4606,10 @@ mod tests {
         let text = snapshot(&["foo bar foo"], 0, 0);
         assert_eq!(
             press(&mut v, '*', &text),
-            vec![VimCommand::SearchWordUnderCursor { word: "foo".into(), forward: true }],
+            vec![VimCommand::SearchWordUnderCursor {
+                word: "foo".into(),
+                forward: true
+            }],
         );
     }
 
@@ -3935,7 +4619,10 @@ mod tests {
         let text = snapshot(&["foo bar foo"], 0, 8);
         assert_eq!(
             press(&mut v, '#', &text),
-            vec![VimCommand::SearchWordUnderCursor { word: "foo".into(), forward: false }],
+            vec![VimCommand::SearchWordUnderCursor {
+                word: "foo".into(),
+                forward: false
+            }],
         );
     }
 
@@ -3952,7 +4639,10 @@ mod tests {
         let text = snapshot(&["hello_world"], 0, 3);
         assert_eq!(
             press(&mut v, '*', &text),
-            vec![VimCommand::SearchWordUnderCursor { word: "hello_world".into(), forward: true }],
+            vec![VimCommand::SearchWordUnderCursor {
+                word: "hello_world".into(),
+                forward: true
+            }],
         );
     }
 }

@@ -175,6 +175,7 @@ impl FindState {
         self.dirty_since
     }
 
+    #[cfg(test)]
     pub fn indexed_revision(&self) -> Option<u64> {
         self.indexed_revision
     }

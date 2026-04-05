@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 const MAX_UNDO: usize = 100;
 
@@ -19,6 +20,16 @@ struct Snapshot {
     cursor: text_editor::Position,
 }
 
+struct CachedLines {
+    revision: u64,
+    lines: Arc<[String]>,
+}
+
+struct UnwrappedGutterCache {
+    line_count: usize,
+    gutter_text: String,
+}
+
 pub struct LayoutCache {
     pub wrap_cols: usize,
     pub line_start_visual_row: Vec<usize>,
@@ -32,7 +43,9 @@ pub struct Tab {
     pub modified: bool,
     pub is_scratchpad: bool,
     revision: u64,
+    line_cache: Option<CachedLines>,
     layout_cache: Option<LayoutCache>,
+    unwrapped_gutter_cache: UnwrappedGutterCache,
     undo_stack: VecDeque<Snapshot>,
     redo_stack: Vec<Snapshot>,
     last_edit_kind: Option<EditKind>,
@@ -40,13 +53,18 @@ pub struct Tab {
 
 impl Tab {
     pub fn new_scratchpad(path: PathBuf) -> Self {
+        let content = text_editor::Content::new();
+        let unwrapped_gutter_cache = build_unwrapped_gutter_cache(content.line_count().max(1));
+
         Self {
             path: Some(path),
-            content: text_editor::Content::new(),
+            content,
             modified: false,
             is_scratchpad: true,
             revision: 0,
+            line_cache: None,
             layout_cache: None,
+            unwrapped_gutter_cache,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             last_edit_kind: None,
@@ -54,13 +72,18 @@ impl Tab {
     }
 
     pub fn from_path(path: PathBuf, body: &str) -> Self {
+        let content = text_editor::Content::with_text(body);
+        let unwrapped_gutter_cache = build_unwrapped_gutter_cache(content.line_count().max(1));
+
         Self {
             path: Some(path),
-            content: text_editor::Content::with_text(body),
+            content,
             modified: false,
             is_scratchpad: false,
             revision: 0,
+            line_cache: None,
             layout_cache: None,
+            unwrapped_gutter_cache,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             last_edit_kind: None,
@@ -97,7 +120,36 @@ impl Tab {
 
     pub fn touch_content(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+        self.line_cache = None;
         self.layout_cache = None;
+        self.sync_unwrapped_gutter_cache();
+    }
+
+    pub fn lines(&mut self) -> Arc<[String]> {
+        if let Some(cache) = &self.line_cache {
+            if cache.revision == self.revision {
+                return Arc::clone(&cache.lines);
+            }
+        }
+
+        let lines: Arc<[String]> = self
+            .content
+            .text()
+            .split('\n')
+            .map(String::from)
+            .collect::<Vec<_>>()
+            .into();
+
+        self.line_cache = Some(CachedLines {
+            revision: self.revision,
+            lines: Arc::clone(&lines),
+        });
+
+        lines
+    }
+
+    pub fn unwrapped_gutter_text(&self) -> &str {
+        &self.unwrapped_gutter_cache.gutter_text
     }
 
     pub fn layout_cache_for(&self, wrap_cols: usize) -> Option<&LayoutCache> {
@@ -158,6 +210,13 @@ impl Tab {
             false
         }
     }
+
+    fn sync_unwrapped_gutter_cache(&mut self) {
+        let line_count = self.content.line_count().max(1);
+        if self.unwrapped_gutter_cache.line_count != line_count {
+            self.unwrapped_gutter_cache = build_unwrapped_gutter_cache(line_count);
+        }
+    }
 }
 
 impl LayoutCache {
@@ -206,6 +265,23 @@ impl LayoutCache {
     }
 }
 
+fn build_unwrapped_gutter_cache(line_count: usize) -> UnwrappedGutterCache {
+    let width = viewport::line_number_digits_width(line_count);
+    let mut gutter_text = String::with_capacity(line_count * (width + 2));
+
+    for line_no in 1..=line_count {
+        let _ = write!(gutter_text, "{line_no:>width$} ", width = width);
+        if line_no < line_count {
+            gutter_text.push('\n');
+        }
+    }
+
+    UnwrappedGutterCache {
+        line_count,
+        gutter_text,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,5 +307,41 @@ mod tests {
 
         assert!(tab.layout_cache_for(8).is_none());
         assert_ne!(tab.revision(), initial_revision);
+    }
+
+    #[test]
+    fn line_cache_reuses_revision_and_invalidates_after_touch() {
+        let mut tab = Tab::from_path(PathBuf::from("/tmp/test.txt"), "one\ntwo");
+
+        let first = tab.lines();
+        let second = tab.lines();
+
+        assert!(Arc::ptr_eq(&first, &second));
+
+        tab.content = text_editor::Content::with_text("one\ntwo\nthree");
+        tab.touch_content();
+
+        let third = tab.lines();
+
+        assert!(!Arc::ptr_eq(&first, &third));
+        assert_eq!(third.as_ref(), ["one", "two", "three"]);
+    }
+
+    #[test]
+    fn unwrapped_gutter_cache_updates_only_when_line_count_changes() {
+        let mut tab = Tab::from_path(PathBuf::from("/tmp/test.txt"), "one");
+        let original = tab.unwrapped_gutter_cache.gutter_text.clone();
+
+        tab.content = text_editor::Content::with_text("two");
+        tab.touch_content();
+
+        assert_eq!(tab.unwrapped_gutter_cache.line_count, 1);
+        assert_eq!(tab.unwrapped_gutter_cache.gutter_text, original);
+
+        tab.content = text_editor::Content::with_text("one\ntwo");
+        tab.touch_content();
+
+        assert_eq!(tab.unwrapped_gutter_cache.line_count, 2);
+        assert_eq!(tab.unwrapped_gutter_text(), "   1 \n   2 ");
     }
 }
