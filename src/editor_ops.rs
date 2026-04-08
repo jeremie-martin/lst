@@ -52,6 +52,10 @@ pub fn toggle_comment(
     cursor_col: usize,
     prefix: &str,
 ) -> (usize, usize) {
+    if first > last || last >= lines.len() {
+        return (cursor_line, cursor_col);
+    }
+
     let all_commented = (first..=last).all(|i| {
         let trimmed = lines.get(i).map_or("", |line| line.trim_start());
         trimmed.is_empty() || trimmed.starts_with(prefix)
