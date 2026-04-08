@@ -1,14 +1,13 @@
-mod find;
-mod highlight;
-mod style;
-mod tab;
-mod viewport;
-mod vim;
-
-use find::FindState;
-use style::{flat_btn, solid_bg, EDITOR_FONT, EDITOR_PAD, FONT_SIZE, LINE_HEIGHT_PX};
-use tab::{EditKind, Tab};
-use viewport::{RevealIntent, ViewportState};
+use lst::clipboard::{Clipboard, SystemClipboard};
+#[cfg(test)]
+use lst::clipboard::NullClipboard;
+use lst::editor_ops;
+use lst::find::FindState;
+use lst::highlight;
+use lst::style::{flat_btn, solid_bg, EDITOR_FONT, EDITOR_PAD, FONT_SIZE, LINE_HEIGHT_PX};
+use lst::tab::{EditKind, Tab};
+use lst::vim;
+use lst::viewport::{self, RevealIntent, ViewportState};
 
 use iced::event;
 use iced::keyboard;
@@ -20,9 +19,7 @@ use iced::{
     Background, Border, Color, Element, Font, Length, Padding, Pixels, Point, Subscription, Task,
     Theme,
 };
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 #[cfg(test)]
@@ -63,6 +60,7 @@ struct App {
     goto_line: Option<String>,
     vim: vim::VimState,
     viewport: ViewportState,
+    clipboard: Box<dyn Clipboard>,
 }
 
 #[derive(Debug, Clone)]
@@ -285,6 +283,7 @@ impl App {
                 goto_line: None,
                 vim: vim::VimState::new(),
                 viewport: ViewportState::default(),
+                clipboard: Box::new(SystemClipboard),
             },
             iced::widget::operation::focus(EDITOR_ID.clone()),
         )
@@ -332,7 +331,7 @@ impl App {
     fn exit_with_clipboard(&self) -> Task<Message> {
         let text = self.tabs[self.active].content.text();
         if !text.trim().is_empty() {
-            copy_to_clipboard(&text);
+            self.clipboard.copy(&text);
         }
         iced::exit()
     }
@@ -971,7 +970,7 @@ impl App {
                     .perform(text_editor::Action::Click(Point::new(0.0, y)));
                 tab.content.perform(text_editor::Action::SelectLine);
                 if let Some(sel) = selection_text(&tab.content, vim_mode) {
-                    copy_to_primary(&sel);
+                    self.clipboard.copy_primary(&sel);
                 }
 
                 UpdateResult::task(iced::widget::operation::focus(EDITOR_ID.clone()))
@@ -996,12 +995,12 @@ impl App {
             Message::MulticlickReleased => {
                 self.multiclick_drag = false;
                 if let Some(sel) = self.editor_selection_text() {
-                    copy_to_primary(&sel);
+                    self.clipboard.copy_primary(&sel);
                 }
                 UpdateResult::none()
             }
             Message::MiddleClickPaste => {
-                if let Some(text) = read_primary_selection() {
+                if let Some(text) = self.clipboard.read_primary() {
                     if !text.is_empty() {
                         self.vim.clear_preferred_column();
                         let tab = &mut self.tabs[self.active];
@@ -1246,39 +1245,29 @@ impl App {
             Message::DeleteLine => {
                 let pos = self.tabs[self.active].content.cursor().position;
                 let _ = self.apply_line_edit(|lines| {
-                    let target = pos.line.min(lines.len().saturating_sub(1));
-                    lines.remove(target);
-                    if lines.is_empty() {
-                        lines.push(String::new());
-                    }
-                    Some(((), target, pos.column))
+                    let line = editor_ops::delete_line(lines, pos.line);
+                    Some(((), line, pos.column))
                 });
                 UpdateResult::reveal(Task::none())
             }
 
             Message::MoveLineUp => {
                 let pos = self.tabs[self.active].content.cursor().position;
-                if pos.line == 0 {
+                let changed = self.apply_line_edit(|lines| {
+                    let line = editor_ops::move_line_up(lines, pos.line)?;
+                    Some(((), line, pos.column))
+                });
+                if changed.is_none() {
                     return UpdateResult::none();
                 }
-                let _ = self.apply_line_edit(|lines| {
-                    let target = pos.line.min(lines.len().saturating_sub(1));
-                    lines.swap(target, target - 1);
-                    Some(((), target - 1, pos.column))
-                });
                 UpdateResult::reveal(Task::none())
             }
 
             Message::MoveLineDown => {
                 let pos = self.tabs[self.active].content.cursor().position;
                 let changed = self.apply_line_edit(|lines| {
-                    let target = pos.line.min(lines.len().saturating_sub(1));
-                    if target + 1 >= lines.len() {
-                        return None;
-                    }
-
-                    lines.swap(target, target + 1);
-                    Some(((), target + 1, pos.column))
+                    let line = editor_ops::move_line_down(lines, pos.line)?;
+                    Some(((), line, pos.column))
                 });
 
                 if changed.is_none() {
@@ -1290,10 +1279,8 @@ impl App {
             Message::DuplicateLine => {
                 let pos = self.tabs[self.active].content.cursor().position;
                 let _ = self.apply_line_edit(|lines| {
-                    let target = pos.line.min(lines.len().saturating_sub(1));
-                    let dup = lines[target].clone();
-                    lines.insert(target + 1, dup);
-                    Some(((), target + 1, pos.column))
+                    let line = editor_ops::duplicate_line(lines, pos.line);
+                    Some(((), line, pos.column))
                 });
                 UpdateResult::reveal(Task::none())
             }
@@ -1303,45 +1290,18 @@ impl App {
                     .path
                     .as_ref()
                     .and_then(|p| p.extension())
-                    .and_then(|e| comment_prefix(e.to_string_lossy().as_ref()))
+                    .and_then(|e| editor_ops::comment_prefix(e.to_string_lossy().as_ref()))
                     .unwrap_or("//");
                 let cursor = self.tabs[self.active].content.cursor();
                 let sel_anchor = cursor.selection.unwrap_or(cursor.position);
                 let first = cursor.position.line.min(sel_anchor.line);
                 let last = cursor.position.line.max(sel_anchor.line);
                 let cursor_line = cursor.position.line;
+                let cursor_col = cursor.position.column;
                 let _ = self.apply_line_edit(|lines| {
-                    let all_commented = (first..=last).all(|i| {
-                        let trimmed = lines.get(i).map_or("", |line| line.trim_start());
-                        trimmed.is_empty() || trimmed.starts_with(prefix)
-                    });
-
-                    for (i, line) in lines.iter_mut().enumerate() {
-                        if i < first || i > last {
-                            continue;
-                        }
-
-                        if all_commented {
-                            let ws_len = line.len() - line.trim_start().len();
-                            let rest = &line[ws_len..];
-                            if let Some(after) = rest.strip_prefix(prefix) {
-                                let after = after.strip_prefix(' ').unwrap_or(after);
-                                *line = format!("{}{after}", &line[..ws_len]);
-                            }
-                        } else if !line.trim_start().is_empty() {
-                            let ws_len = line.len() - line.trim_start().len();
-                            *line = format!("{}{prefix} {}", &line[..ws_len], &line[ws_len..]);
-                        }
-                    }
-
-                    let delta = prefix.len() + 1;
-                    let cursor_col = if all_commented {
-                        cursor.position.column.saturating_sub(delta)
-                    } else {
-                        cursor.position.column + delta
-                    };
-
-                    Some(((), cursor_line, cursor_col))
+                    let (line, col) =
+                        editor_ops::toggle_comment(lines, first, last, cursor_line, cursor_col, prefix);
+                    Some(((), line, col))
                 });
                 self.apply_block_cursor_if_normal();
                 UpdateResult::reveal(Task::none())
@@ -1868,7 +1828,7 @@ impl App {
         uppercase: bool,
     ) {
         let _ = self.apply_line_edit(|lines| {
-            transform_case_range(lines, &from, &to, uppercase);
+            editor_ops::transform_case_range(lines, from.line, from.column, to.line, to.column, uppercase);
             Some(((), from.line, from.column))
         });
     }
@@ -1882,7 +1842,11 @@ impl App {
             let first = first.min(lines.len().saturating_sub(1));
             let last = last.min(lines.len().saturating_sub(1));
             for line in &mut lines[first..=last] {
-                *line = transform_case_string(line, uppercase);
+                *line = if uppercase {
+                    line.to_uppercase()
+                } else {
+                    line.to_lowercase()
+                };
             }
             Some(((), first, 0))
         });
@@ -2551,90 +2515,6 @@ fn collapse_selection_to_caret(content: &mut text_editor::Content) {
     });
 }
 
-fn comment_prefix(ext: &str) -> Option<&'static str> {
-    match ext {
-        "rs" | "js" | "ts" | "jsx" | "tsx" | "c" | "cpp" | "cc" | "h" | "hpp" | "java" | "go"
-        | "cs" | "swift" | "kt" | "kts" | "scala" | "zig" | "v" | "sv" | "d" | "groovy"
-        | "jsonc" | "json5" | "scss" | "less" | "proto" => Some("//"),
-        "py" | "sh" | "bash" | "zsh" | "fish" | "rb" | "pl" | "pm" | "r" | "jl" | "yaml"
-        | "yml" | "toml" | "conf" | "cfg" | "ini" | "cmake" | "mk" | "tcl" | "awk" | "sed"
-        | "ps1" | "elixir" | "ex" | "exs" | "nim" | "cr" | "gd" => Some("#"),
-        "lua" | "hs" | "sql" | "ada" | "adb" | "ads" | "vhdl" | "vhd" => Some("--"),
-        "lisp" | "cl" | "el" | "clj" | "cljs" | "scm" | "rkt" => Some(";;"),
-        "vim" => Some("\""),
-        "tex" | "sty" | "cls" | "bib" | "erl" | "hrl" => Some("%"),
-        "bat" | "cmd" => Some("REM"),
-        "asm" | "s" => Some(";"),
-        "f90" | "f95" | "f03" | "f08" => Some("!"),
-        _ => None,
-    }
-}
-
-fn transform_case_string(text: &str, uppercase: bool) -> String {
-    transform_case_iter(text.chars(), uppercase)
-}
-
-fn transform_case_chars(chars: &[char], uppercase: bool) -> String {
-    transform_case_iter(chars.iter().copied(), uppercase)
-}
-
-fn transform_case_iter(chars: impl IntoIterator<Item = char>, uppercase: bool) -> String {
-    let mut transformed = String::new();
-    for ch in chars {
-        if uppercase {
-            transformed.extend(ch.to_uppercase());
-        } else {
-            transformed.extend(ch.to_lowercase());
-        }
-    }
-    transformed
-}
-
-fn transform_case_range(
-    lines: &mut [String],
-    from: &text_editor::Position,
-    to: &text_editor::Position,
-    uppercase: bool,
-) {
-    if from.line >= lines.len() || to.line >= lines.len() {
-        return;
-    }
-
-    if from.line == to.line {
-        let chars: Vec<char> = lines[from.line].chars().collect();
-        let start = from.column.min(chars.len());
-        let end = (to.column + 1).min(chars.len());
-        let mut transformed = chars[..start].iter().collect::<String>();
-        transformed.push_str(&transform_case_chars(&chars[start..end], uppercase));
-        transformed.push_str(&chars[end..].iter().collect::<String>());
-        lines[from.line] = transformed;
-        return;
-    }
-
-    for (line_idx, line) in lines
-        .iter_mut()
-        .enumerate()
-        .take(to.line + 1)
-        .skip(from.line)
-    {
-        let chars: Vec<char> = line.chars().collect();
-        let transformed = if line_idx == from.line {
-            let start = from.column.min(chars.len());
-            let mut line = chars[..start].iter().collect::<String>();
-            line.push_str(&transform_case_chars(&chars[start..], uppercase));
-            line
-        } else if line_idx == to.line {
-            let end = (to.column + 1).min(chars.len());
-            let mut line = transform_case_chars(&chars[..end], uppercase);
-            line.push_str(&chars[end..].iter().collect::<String>());
-            line
-        } else {
-            transform_case_chars(&chars, uppercase)
-        };
-        *line = transformed;
-    }
-}
-
 fn reveal_intent_for_edit_action(action: &text_editor::Action) -> RevealIntent {
     match action {
         text_editor::Action::Move(_)
@@ -2720,36 +2600,6 @@ fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) 
     }
 }
 
-// ── Clipboard ───────────────────────────────────────────────────────────────
-
-fn is_wayland() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some()
-}
-
-fn read_primary_selection() -> Option<String> {
-    let output = if is_wayland() {
-        Command::new("wl-paste")
-            .arg("--primary")
-            .arg("--no-newline")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?
-    } else {
-        Command::new("xclip")
-            .args(["-selection", "primary", "-o"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?
-    };
-    if output.status.success() {
-        String::from_utf8(output.stdout).ok()
-    } else {
-        None
-    }
-}
-
 fn gutter_line_at(point: Point) -> usize {
     ((point.y - EDITOR_PAD).max(0.0) / LINE_HEIGHT_PX).floor() as usize
 }
@@ -2769,41 +2619,6 @@ fn content_point_for_cell(cell: EditorPointerCell) -> Point {
         cell.column as f32 * EDITOR_FONT.char_width,
         cell.row as f32 * LINE_HEIGHT_PX,
     )
-}
-
-fn copy_to_clipboard(text: &str) {
-    if is_wayland() {
-        pipe_to_command("wl-copy", &[], text);
-    } else {
-        pipe_to_command("xclip", &["-selection", "clipboard"], text);
-    }
-    copy_to_primary(text);
-}
-
-fn copy_to_primary(text: &str) {
-    if is_wayland() {
-        pipe_to_command("wl-copy", &["--primary"], text);
-    } else {
-        pipe_to_command("xclip", &["-selection", "primary"], text);
-    }
-}
-
-fn pipe_to_command(program: &str, args: &[&str], text: &str) {
-    match Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(mut child) => {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-            let _ = child.wait();
-        }
-        Err(e) => eprintln!("lst: clipboard: failed to run {program}: {e}"),
-    }
 }
 
 // ── File I/O ─────────────────────────────────────────────────────────────────
@@ -2865,6 +2680,7 @@ mod tests {
             goto_line: None,
             vim: vim::VimState::new(),
             viewport: ViewportState::default(),
+            clipboard: Box::new(NullClipboard),
         }
     }
 
@@ -2905,7 +2721,7 @@ mod tests {
     #[test]
     fn transform_case_range_handles_multiline_spans() {
         let mut lines = vec!["ABC".to_string(), "DeF".to_string()];
-        transform_case_range(&mut lines, &pos(0, 1), &pos(1, 1), false);
+        editor_ops::transform_case_range(&mut lines, 0, 1, 1, 1, false);
         assert_eq!(lines, vec!["Abc".to_string(), "deF".to_string()]);
     }
 
@@ -3283,6 +3099,7 @@ mod tests {
                 viewport::content_height(height, 1),
                 0.0,
             ),
+            clipboard: Box::new(NullClipboard),
         };
         app.tabs[1].content.move_to(text_editor::Cursor {
             position: pos(9, 0),

@@ -33,7 +33,6 @@ impl ViewportState {
         self.scroll_y = viewport.absolute_offset().y;
     }
 
-    #[cfg(test)]
     pub fn from_metrics(width: f32, height: f32, content_height: f32, scroll_y: f32) -> Self {
         Self {
             width,
