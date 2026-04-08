@@ -57,11 +57,7 @@ pub fn toggle_comment(
         trimmed.is_empty() || trimmed.starts_with(prefix)
     });
 
-    for (i, line) in lines.iter_mut().enumerate() {
-        if i < first || i > last {
-            continue;
-        }
-
+    for line in &mut lines[first..=last] {
         if all_commented {
             let ws_len = line.len() - line.trim_start().len();
             let rest = &line[ws_len..];
