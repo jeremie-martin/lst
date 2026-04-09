@@ -4,8 +4,8 @@ use std::ops::Range;
 use std::sync::LazyLock;
 
 use syntect::highlighting::{
-    HighlightState, Highlighter as SyntectHighlighter, RangedHighlightIterator,
-    Theme as SyntectTheme,
+    Color as SyntectColor, HighlightState, Highlighter as SyntectHighlighter,
+    RangedHighlightIterator, Theme as SyntectTheme,
 };
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 
@@ -22,6 +22,9 @@ static THEME: LazyLock<SyntectTheme> = LazyLock::new(|| {
 
 static SYNTECT_HIGHLIGHTER: LazyLock<SyntectHighlighter<'static>> =
     LazyLock::new(|| SyntectHighlighter::new(&THEME));
+
+static DEFAULT_SYNTECT_FOREGROUND: LazyLock<Option<SyntectColor>> =
+    LazyLock::new(|| THEME.settings.foreground);
 
 // ── Catppuccin Mocha palette (for hand-rolled Markdown highlights) ──────────
 
@@ -269,22 +272,38 @@ fn run_syntect_line(
 
     let iter = RangedHighlightIterator::new(hl_state, &ops, line_buffer, &SYNTECT_HIGHLIGHTER);
 
-    let mut spans = Vec::new();
+    let mut spans = Vec::with_capacity(ops.len().max(1));
     for (style, _text, range) in iter {
         let start = range.start.min(line.len());
         let end = range.end.min(line.len());
         if start < end {
-            spans.push((
-                start..end,
-                Highlight::Syntect(Color::from_rgb8(
-                    style.foreground.r,
-                    style.foreground.g,
-                    style.foreground.b,
-                )),
-            ));
+            push_syntect_span(&mut spans, start..end, style.foreground);
         }
     }
     spans
+}
+
+fn push_syntect_span(
+    spans: &mut Vec<(Range<usize>, Highlight)>,
+    range: Range<usize>,
+    color: SyntectColor,
+) {
+    // The editor already renders plain text with Catppuccin Mocha's default
+    // foreground, so explicit spans for the same color are redundant.
+    if Some(color) == *DEFAULT_SYNTECT_FOREGROUND {
+        return;
+    }
+
+    let color = Color::from_rgb8(color.r, color.g, color.b);
+
+    if let Some((last_range, Highlight::Syntect(last_color))) = spans.last_mut() {
+        if *last_color == color && last_range.end == range.start {
+            last_range.end = range.end;
+            return;
+        }
+    }
+
+    spans.push((range, Highlight::Syntect(color)));
 }
 
 // ── Highlighter trait implementation ────────────────────────────────────────
@@ -562,6 +581,45 @@ fn parse_link(bytes: &[u8], open: usize) -> Option<(usize, usize)> {
     }
     let close_paren = find_closing(bytes, close_bracket + 2, b')')?;
     Some((close_bracket, close_paren))
+}
+
+#[cfg(test)]
+mod fast_path_tests {
+    use super::*;
+
+    fn non_default_syntect_color() -> SyntectColor {
+        SyntectColor {
+            r: 0x89,
+            g: 0xb4,
+            b: 0xfa,
+            a: 0xff,
+        }
+    }
+
+    #[test]
+    fn push_syntect_span_skips_default_foreground() {
+        let mut spans = Vec::new();
+
+        push_syntect_span(
+            &mut spans,
+            0..4,
+            (*DEFAULT_SYNTECT_FOREGROUND).expect("theme should define a foreground"),
+        );
+
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn push_syntect_span_merges_adjacent_equal_colors() {
+        let mut spans = Vec::new();
+        let color = non_default_syntect_color();
+
+        push_syntect_span(&mut spans, 0..2, color);
+        push_syntect_span(&mut spans, 2..5, color);
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].0, 0..5);
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
