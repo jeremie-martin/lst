@@ -12,7 +12,7 @@
 - Scratchpad tabs: starting `lst` without files, or pressing `Ctrl+N`, creates a timestamped Markdown note
 - Autosave every 500 ms for modified tabs
 - Find, replace, and go to line
-- Syntax highlighting for many languages via `syntect`, plus custom Markdown highlighting
+- Rust syntax highlighting via a lightweight tree-sitter path, many other languages via `syntect`, plus custom Markdown highlighting
 - Word wrap, grouped undo and redo, auto-indent, and line numbers
 - Line selection and editing helpers, including gutter click, word delete, duplicate line, move line, and delete line
 - Vim-style modal editing with Insert, Normal, Visual, and Visual Line modes
@@ -72,13 +72,20 @@ cargo test
 That suite is intended to stay focused on user-visible behavior and refactor-stable contracts.
 In practice, it compiles the integration-style suites under `tests/` and does not compile the source-file unit tests in `src/`.
 
-There is also an opt-in internal invariant suite for cache, reveal, and scheduling details:
+## Benchmarking
+
+The current performance optimization workflow is documented in [docs/performance-optimization.md](/home/jmartin/lst/docs/performance-optimization.md).
+
+Build both binaries, then run the recommended next X11 real-display paste benchmark:
 
 ```bash
-cargo test --features internal-invariants
+cargo build --release --bin lst --bin bench_paste_x11
+./target/release/bench_paste_x11
 ```
 
-Those tests are useful for implementation work, but they are allowed to fail during benign internal refactors that preserve external behavior.
+The benchmark prints diagnostics plus a final `score=...` line. The current paste benchmark score is median process CPU time for a fixed real-display pure-append paste trace against `benchmarks/paste-corpus.rs`, and lower is better. The current default Rust highlighting path is the tree-sitter backend; the paste benchmark setup uses real `Ctrl+A`, `Ctrl+C`, `Ctrl+End`, and the separate scroll benchmark remains available via `bench_scroll_x11`.
+
+Recent benchmark attribution notes, including the Rust highlighter comparison and the `syntect` fallback command, are in [docs/highlight-attribution.md](/home/jmartin/lst/docs/highlight-attribution.md).
 
 ## Notes
 

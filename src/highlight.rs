@@ -1,5 +1,6 @@
 use iced::advanced::text::highlighter::{self, Highlighter};
 use iced::{Color, Font, Theme};
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::sync::LazyLock;
 
@@ -8,6 +9,10 @@ use syntect::highlighting::{
     Theme as SyntectTheme,
 };
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+use tree_sitter_highlight::{
+    Highlight as TreeSitterHighlight, HighlightConfiguration,
+    HighlightEvent as TreeSitterHighlightEvent, Highlighter as TreeSitterHighlighter,
+};
 
 // ── Shared syntect state (initialized once) ─────────────────────────────────
 
@@ -22,6 +27,36 @@ static THEME: LazyLock<SyntectTheme> = LazyLock::new(|| {
 
 static SYNTECT_HIGHLIGHTER: LazyLock<SyntectHighlighter<'static>> =
     LazyLock::new(|| SyntectHighlighter::new(&THEME));
+static TREE_SITTER_CAPTURE_NAMES: &[&str] = &[
+    "attribute",
+    "comment",
+    "constant",
+    "constructor",
+    "escape",
+    "function",
+    "keyword",
+    "module",
+    "number",
+    "operator",
+    "property",
+    "punctuation",
+    "string",
+    "type",
+    "variable",
+];
+const TREE_SITTER_TEXT_CACHE_LIMIT: usize = 4_096;
+static TREE_SITTER_RUST_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
+    let mut config = HighlightConfiguration::new(
+        tree_sitter_rust::LANGUAGE.into(),
+        "rust",
+        tree_sitter_rust::HIGHLIGHTS_QUERY,
+        tree_sitter_rust::INJECTIONS_QUERY,
+        "",
+    )
+    .expect("embedded tree-sitter Rust highlight query should be valid");
+    config.configure(TREE_SITTER_CAPTURE_NAMES);
+    config
+});
 
 // ── Catppuccin Mocha palette (for hand-rolled Markdown highlights) ──────────
 
@@ -89,12 +124,26 @@ pub fn format(highlight: &Highlight, _theme: &Theme) -> highlighter::Format<Font
 enum HighlightMode {
     Markdown,
     Syntect(&'static SyntaxReference),
+    TreeSitterRust,
     PlainText,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RustHighlightBackend {
+    TreeSitter,
+    Syntect,
 }
 
 fn determine_mode(ext: &Option<String>) -> HighlightMode {
     match ext.as_deref() {
         Some("md") | Some("markdown") => HighlightMode::Markdown,
+        Some("rs") => match rust_highlight_backend() {
+            RustHighlightBackend::TreeSitter => HighlightMode::TreeSitterRust,
+            RustHighlightBackend::Syntect => SYNTAX_SET
+                .find_syntax_by_extension("rs")
+                .map(HighlightMode::Syntect)
+                .unwrap_or(HighlightMode::PlainText),
+        },
         None => HighlightMode::PlainText,
         Some(ext) => match SYNTAX_SET.find_syntax_by_extension(ext) {
             Some(syntax) => HighlightMode::Syntect(syntax),
@@ -142,6 +191,9 @@ pub struct LstHighlighter {
     // Full-file syntect working state
     full_file_parse: Option<ParseState>,
     full_file_hl: Option<HighlightState>,
+    tree_sitter: Option<TreeSitterHighlighter>,
+    tree_sitter_text_cache: HashMap<String, Vec<(Range<usize>, Highlight)>>,
+    tree_sitter_text_cache_order: VecDeque<String>,
 }
 
 impl LstHighlighter {
@@ -149,6 +201,8 @@ impl LstHighlighter {
         if let HighlightMode::Syntect(syntax) = &self.mode {
             self.full_file_parse = Some(ParseState::new(syntax));
             self.full_file_hl = Some(HighlightState::new(&SYNTECT_HIGHLIGHTER, ScopeStack::new()));
+        } else if matches!(self.mode, HighlightMode::TreeSitterRust) {
+            self.tree_sitter = Some(TreeSitterHighlighter::new());
         }
     }
 
@@ -163,6 +217,9 @@ impl LstHighlighter {
         self.syntect_hl = None;
         self.full_file_parse = None;
         self.full_file_hl = None;
+        self.tree_sitter = None;
+        self.tree_sitter_text_cache.clear();
+        self.tree_sitter_text_cache_order.clear();
     }
 
     // ── Markdown mode ───────────────────────────────────────────────────
@@ -250,6 +307,57 @@ impl LstHighlighter {
         }));
         spans
     }
+
+    fn highlight_tree_sitter_rust_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
+        if let Some(cached) = self.tree_sitter_text_cache.get(line) {
+            return cached.clone();
+        }
+
+        let Some(highlighter) = self.tree_sitter.as_mut() else {
+            return Vec::new();
+        };
+
+        let Ok(events) =
+            highlighter.highlight(&TREE_SITTER_RUST_CONFIG, line.as_bytes(), None, |_| None)
+        else {
+            return Vec::new();
+        };
+
+        let mut spans = Vec::new();
+        let mut stack: Vec<TreeSitterHighlight> = Vec::new();
+
+        for event in events {
+            match event {
+                Ok(TreeSitterHighlightEvent::HighlightStart(highlight)) => stack.push(highlight),
+                Ok(TreeSitterHighlightEvent::HighlightEnd) => {
+                    let _ = stack.pop();
+                }
+                Ok(TreeSitterHighlightEvent::Source { start, end }) if start < end => {
+                    let Some(color) = stack.last().and_then(|highlight| {
+                        tree_sitter_color_for_capture(highlight.0)
+                    }) else {
+                        continue;
+                    };
+                    spans.push((start..end, Highlight::Syntect(color)));
+                }
+                Ok(TreeSitterHighlightEvent::Source { .. }) => {}
+                Err(_) => return Vec::new(),
+            }
+        }
+
+        if self.tree_sitter_text_cache.len() >= TREE_SITTER_TEXT_CACHE_LIMIT {
+            if let Some(oldest) = self.tree_sitter_text_cache_order.pop_front() {
+                self.tree_sitter_text_cache.remove(&oldest);
+            }
+        }
+
+        let cache_key = line.to_string();
+        self.tree_sitter_text_cache_order.push_back(cache_key.clone());
+        self.tree_sitter_text_cache
+            .insert(cache_key, spans.clone());
+
+        spans
+    }
 }
 
 fn run_syntect_line(
@@ -308,6 +416,9 @@ impl Highlighter for LstHighlighter {
             syntect_hl: None,
             full_file_parse: None,
             full_file_hl: None,
+            tree_sitter: None,
+            tree_sitter_text_cache: HashMap::new(),
+            tree_sitter_text_cache_order: VecDeque::new(),
         };
         h.init_mode();
         h
@@ -346,6 +457,7 @@ impl Highlighter for LstHighlighter {
         let spans = match &self.mode {
             HighlightMode::Markdown => self.highlight_md_line(line),
             HighlightMode::Syntect(_) => self.highlight_syntect_line(line),
+            HighlightMode::TreeSitterRust => self.highlight_tree_sitter_rust_line(line),
             HighlightMode::PlainText => Vec::new(),
         };
         self.current_line += 1;
@@ -354,6 +466,38 @@ impl Highlighter for LstHighlighter {
 
     fn current_line(&self) -> usize {
         self.current_line
+    }
+}
+
+fn tree_sitter_color_for_capture(index: usize) -> Option<Color> {
+    match TREE_SITTER_CAPTURE_NAMES.get(index).copied() {
+        Some("attribute") => Some(YELLOW),
+        Some("comment") => Some(OVERLAY0),
+        Some("constant") => Some(PEACH),
+        Some("constructor") => Some(SAPPHIRE),
+        Some("escape") => Some(PINK),
+        Some("function") => Some(BLUE),
+        Some("keyword") => Some(MAUVE),
+        Some("module") => Some(LAVENDER),
+        Some("number") => Some(PEACH),
+        Some("operator") => Some(SAPPHIRE),
+        Some("property") => Some(LAVENDER),
+        Some("punctuation") => Some(SURFACE1),
+        Some("string") => Some(GREEN),
+        Some("type") => Some(YELLOW),
+        Some("variable") => None,
+        _ => None,
+    }
+}
+
+fn rust_highlight_backend() -> RustHighlightBackend {
+    rust_highlight_backend_from_env(std::env::var("LST_HIGHLIGHT_BACKEND").ok().as_deref())
+}
+
+fn rust_highlight_backend_from_env(value: Option<&str>) -> RustHighlightBackend {
+    match value {
+        Some("syntect") => RustHighlightBackend::Syntect,
+        _ => RustHighlightBackend::TreeSitter,
     }
 }
 
@@ -986,7 +1130,7 @@ mod tests {
     }
 
     #[test]
-    fn syntect_mode_returns_colored_spans() {
+    fn rust_mode_returns_colored_spans() {
         let mut h = LstHighlighter::new(&Settings {
             extension: Some("rs".to_string()),
         });
@@ -995,6 +1139,69 @@ mod tests {
         assert!(spans
             .iter()
             .all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
+    }
+
+    #[test]
+    fn rust_tree_sitter_cache_reuses_same_text_on_a_different_line() {
+        let mut h = LstHighlighter::new(&Settings {
+            extension: Some("rs".to_string()),
+        });
+        let _first: Vec<_> = h.highlight_line("fn alpha() {}").collect();
+        let expected: Vec<_> = h.highlight_line("let beta = 1;").collect();
+
+        h.change_line(50);
+        h.tree_sitter = None;
+
+        let reused: Vec<_> = h.highlight_line("let beta = 1;").collect();
+        assert_eq!(
+            reused.iter().map(|(range, _)| range.clone()).collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|(range, _)| range.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(reused
+            .iter()
+            .all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
+    }
+
+    #[test]
+    fn rust_tree_sitter_cache_does_not_reuse_stale_line_text() {
+        let mut h = LstHighlighter::new(&Settings {
+            extension: Some("rs".to_string()),
+        });
+        let _first: Vec<_> = h.highlight_line("fn alpha() {}").collect();
+        let _second: Vec<_> = h.highlight_line("let beta = 1;").collect();
+
+        h.change_line(50);
+        h.tree_sitter = None;
+
+        let changed: Vec<_> = h.highlight_line("let gamma = 2;").collect();
+        assert!(changed.is_empty());
+    }
+
+    #[test]
+    fn rust_backend_defaults_to_tree_sitter() {
+        assert_eq!(
+            rust_highlight_backend_from_env(None),
+            RustHighlightBackend::TreeSitter
+        );
+        assert_eq!(
+            rust_highlight_backend_from_env(Some("tree-sitter")),
+            RustHighlightBackend::TreeSitter
+        );
+        assert_eq!(
+            rust_highlight_backend_from_env(Some("unexpected")),
+            RustHighlightBackend::TreeSitter
+        );
+    }
+
+    #[test]
+    fn rust_backend_accepts_syntect_fallback() {
+        assert_eq!(
+            rust_highlight_backend_from_env(Some("syntect")),
+            RustHighlightBackend::Syntect
+        );
     }
 
     #[test]
