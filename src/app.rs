@@ -203,11 +203,6 @@ pub struct App {
     pub runtime_mode: RuntimeMode,
 }
 
-struct AppendLayoutHint {
-    previous_cache: crate::tab::LayoutCache,
-    first_changed_line: usize,
-}
-
 #[derive(Debug, Clone)]
 pub enum Message {
     Edit(text_editor::Action),
@@ -764,51 +759,6 @@ impl App {
         self.mark_active_document_changed();
     }
 
-    fn mark_active_content_changed_with_layout_hint(&mut self, hint: Option<AppendLayoutHint>) {
-        self.tabs[self.active].touch_content();
-        if let Some(hint) = hint {
-            self.tabs[self.active]
-                .rebuild_layout_cache_from(hint.previous_cache, hint.first_changed_line);
-        }
-        self.mark_active_document_changed();
-    }
-
-    fn append_layout_hint_for_edit(
-        &self,
-        action: &text_editor::Action,
-    ) -> Option<AppendLayoutHint> {
-        if !self.word_wrap {
-            return None;
-        }
-
-        let text_editor::Action::Edit(text_editor::Edit::Paste(_)) = action else {
-            return None;
-        };
-
-        let wrap_cols = self.active_wrap_cols()?;
-        let tab = &self.tabs[self.active];
-        let cache = tab.layout_cache_for(wrap_cols)?.clone();
-        let cursor = tab.content.cursor();
-        if cursor.selection.is_some() {
-            return None;
-        }
-
-        let last_line = tab.content.line_count().saturating_sub(1);
-        if cursor.position.line != last_line {
-            return None;
-        }
-
-        let line = tab.content.line(last_line)?;
-        if cursor.position.column != line.text.chars().count() {
-            return None;
-        }
-
-        Some(AppendLayoutHint {
-            previous_cache: cache,
-            first_changed_line: last_line,
-        })
-    }
-
     fn rebuild_content(&mut self, new_text: &str, cursor_line: usize, cursor_col: usize) {
         let tab = &mut self.tabs[self.active];
         tab.content = text_editor::Content::with_text(new_text);
@@ -1198,7 +1148,6 @@ impl App {
                     return UpdateResult::reveal(Task::none());
                 }
 
-                let append_layout_hint = is_edit.then(|| self.append_layout_hint_for_edit(&action)).flatten();
                 if is_edit {
                     let (kind, boundary) = match &action {
                         text_editor::Action::Edit(edit) => match edit {
@@ -1229,7 +1178,7 @@ impl App {
                 }
 
                 if is_edit {
-                    self.mark_active_content_changed_with_layout_hint(append_layout_hint);
+                    self.mark_active_content_changed();
                 }
                 self.apply_block_cursor_if_normal();
                 UpdateResult {
