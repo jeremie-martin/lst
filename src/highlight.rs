@@ -1154,16 +1154,7 @@ mod tests {
         h.tree_sitter = None;
 
         let reused: Vec<_> = h.highlight_line("let beta = 1;").collect();
-        assert_eq!(
-            reused.iter().map(|(range, _)| range.clone()).collect::<Vec<_>>(),
-            expected
-                .iter()
-                .map(|(range, _)| range.clone())
-                .collect::<Vec<_>>()
-        );
-        assert!(reused
-            .iter()
-            .all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
+        assert_eq!(reused, expected);
     }
 
     #[test]
