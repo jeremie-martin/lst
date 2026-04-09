@@ -136,12 +136,6 @@ pub fn visual_line_count(line: &str, max_cols: usize) -> usize {
         return 1;
     }
 
-    // Fast path: no tab and byte length fits in one row → 1 visual line.
-    // char_width() returns 1 for every non-tab char, so display width ≤ len().
-    if line.len() <= max_cols && !line.as_bytes().contains(&b'\t') {
-        return 1;
-    }
-
     let mut lines = 1usize;
     let mut col = 0usize;
     let mut chars = line.chars().peekable();
