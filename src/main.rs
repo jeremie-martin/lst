@@ -1,9 +1,6 @@
 use iced::Font;
 use lst::app::App;
 
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 fn main() -> iced::Result {
     iced::application(App::boot, App::update, App::view)
         .title(App::title)
