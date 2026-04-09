@@ -136,6 +136,10 @@ pub fn visual_line_count(line: &str, max_cols: usize) -> usize {
         return 1;
     }
 
+    if !line.contains('\t') {
+        return visual_line_count_no_tabs(line, max_cols);
+    }
+
     let mut lines = 1usize;
     let mut col = 0usize;
     let mut chars = line.chars().peekable();
@@ -198,6 +202,10 @@ fn line_layout(line: &str, max_cols: usize) -> LineLayout {
         };
     }
 
+    if !line.contains('\t') {
+        return line_layout_no_tabs(line, max_cols);
+    }
+
     let chars: Vec<char> = line.chars().collect();
     let mut cursor_rows = vec![0; chars.len() + 1];
     let mut row = 0usize;
@@ -255,6 +263,103 @@ fn token_end(chars: &[char], start: usize) -> usize {
     }
 
     end
+}
+
+fn visual_line_count_no_tabs(line: &str, max_cols: usize) -> usize {
+    let mut lines = 1usize;
+    let mut col = 0usize;
+    let mut chars = line.chars().peekable();
+
+    while let Some(first) = chars.peek().copied() {
+        let whitespace = first.is_whitespace();
+        let mut token_len = 0usize;
+        let mut in_trailing_whitespace = false;
+
+        while let Some(ch) = chars.peek().copied() {
+            if whitespace {
+                if !ch.is_whitespace() {
+                    break;
+                }
+            } else if !in_trailing_whitespace {
+                if ch.is_whitespace() {
+                    in_trailing_whitespace = true;
+                }
+            } else if !ch.is_whitespace() {
+                break;
+            }
+
+            token_len += 1;
+            chars.next();
+        }
+
+        if col > 0 && token_len > max_cols.saturating_sub(col) {
+            lines += 1;
+            col = 0;
+        }
+
+        col += token_len;
+        while col > max_cols {
+            lines += 1;
+            col -= max_cols;
+        }
+    }
+
+    lines
+}
+
+fn line_layout_no_tabs(line: &str, max_cols: usize) -> LineLayout {
+    let chars: Vec<char> = line.chars().collect();
+    let mut cursor_rows = vec![0; chars.len() + 1];
+    let mut row = 0usize;
+    let mut col = 0usize;
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        let whitespace = chars[index].is_whitespace();
+        let token_end = {
+            let mut end = index;
+            let mut in_trailing_whitespace = false;
+
+            while end < chars.len() {
+                let ch = chars[end];
+                if whitespace {
+                    if !ch.is_whitespace() {
+                        break;
+                    }
+                } else if !in_trailing_whitespace {
+                    if ch.is_whitespace() {
+                        in_trailing_whitespace = true;
+                    }
+                } else if !ch.is_whitespace() {
+                    break;
+                }
+                end += 1;
+            }
+
+            end
+        };
+
+        let token_len = token_end - index;
+        if col > 0 && token_len > max_cols.saturating_sub(col) {
+            row += 1;
+            col = 0;
+            cursor_rows[index] = row;
+        }
+
+        while index < token_end {
+            cursor_rows[index] = row;
+            col += 1;
+            while col > max_cols {
+                row += 1;
+                col -= max_cols;
+            }
+
+            index += 1;
+            cursor_rows[index] = row;
+        }
+    }
+
+    LineLayout { cursor_rows }
 }
 
 fn span_width(chars: &[char], start_col: usize) -> usize {
