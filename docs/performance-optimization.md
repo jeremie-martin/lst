@@ -76,12 +76,6 @@ The blind refactor gate is:
 cargo test
 ```
 
-Optional secondary confidence pass:
-
-```bash
-cargo test --features internal-invariants
-```
-
 The default rule is: do not trust a performance change unless `cargo test` stays green.
 
 ## Intended edit scope

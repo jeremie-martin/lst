@@ -72,14 +72,6 @@ cargo test
 That suite is intended to stay focused on user-visible behavior and refactor-stable contracts.
 In practice, it compiles the integration-style suites under `tests/` and does not compile the source-file unit tests in `src/`.
 
-There is also an opt-in internal invariant suite for cache, reveal, and scheduling details:
-
-```bash
-cargo test --features internal-invariants
-```
-
-Those tests are useful for implementation work, but they are allowed to fail during benign internal refactors that preserve external behavior.
-
 ## Benchmarking
 
 The current performance optimization workflow is documented in [docs/performance-optimization.md](/home/jmartin/lst/docs/performance-optimization.md).
