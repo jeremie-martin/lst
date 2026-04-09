@@ -25,6 +25,7 @@ struct CachedLines {
     lines: Arc<[String]>,
 }
 
+#[derive(Clone)]
 pub struct LayoutCache {
     pub wrap_cols: usize,
     pub line_start_visual_row: Vec<usize>,
@@ -176,6 +177,31 @@ impl Tab {
 
     pub fn build_layout_cache(&self, wrap_cols: usize) -> LayoutCache {
         LayoutCache::build(&self.content, wrap_cols)
+    }
+
+    pub fn rebuild_layout_cache_from(&mut self, previous: LayoutCache, start_line: usize) {
+        let line_count = self.content.line_count().max(1);
+        let start_line = start_line.min(line_count.saturating_sub(1));
+        let mut line_start_visual_row = previous.line_start_visual_row;
+        line_start_visual_row.truncate(start_line);
+        let mut total_visual_rows = line_start_visual_row.last().copied().unwrap_or(0);
+
+        for line_idx in start_line..line_count {
+            line_start_visual_row.push(total_visual_rows);
+
+            let visual_rows = self.content.line(line_idx).map_or(1, |line| {
+                viewport::visual_line_count(line.text.as_ref(), previous.wrap_cols)
+            });
+
+            total_visual_rows += visual_rows;
+        }
+
+        line_start_visual_row.push(total_visual_rows);
+        self.layout_cache = Some(LayoutCache {
+            wrap_cols: previous.wrap_cols,
+            line_start_visual_row,
+            total_visual_rows: total_visual_rows.max(1),
+        });
     }
 
     /// Push an undo snapshot if this edit starts a new logical group.
