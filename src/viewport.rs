@@ -136,10 +136,6 @@ pub fn visual_line_count(line: &str, max_cols: usize) -> usize {
         return 1;
     }
 
-    if line.is_ascii() && !line.as_bytes().contains(&b'\t') {
-        return ascii_visual_line_count(line.as_bytes(), max_cols);
-    }
-
     let mut lines = 1usize;
     let mut col = 0usize;
     let mut chars = line.chars().peekable();
@@ -173,10 +169,6 @@ pub fn visual_line_count(line: &str, max_cols: usize) -> usize {
 }
 
 pub fn cursor_visual_row_in_line(line: &str, column: usize, max_cols: usize) -> usize {
-    if line.is_ascii() && !line.as_bytes().contains(&b'\t') {
-        return ascii_cursor_visual_row_in_line(line.as_bytes(), column, max_cols);
-    }
-
     let layout = line_layout(line, max_cols);
     let max_column = layout.cursor_rows.len().saturating_sub(1);
     layout.cursor_rows[column.min(max_column)]
@@ -258,92 +250,6 @@ fn token_end(chars: &[char], start: usize) -> usize {
             end += 1;
         }
         while end < chars.len() && chars[end].is_whitespace() {
-            end += 1;
-        }
-    }
-
-    end
-}
-
-fn ascii_visual_line_count(line: &[u8], max_cols: usize) -> usize {
-    if line.is_empty() || max_cols == 0 {
-        return 1;
-    }
-
-    if line.len() <= max_cols {
-        return 1;
-    }
-
-    let mut lines = 1usize;
-    let mut col = 0usize;
-    let mut index = 0usize;
-
-    while index < line.len() {
-        let token_end = ascii_token_end(line, index);
-        let token_width = token_end - index;
-
-        if col > 0 && token_width > max_cols.saturating_sub(col) {
-            lines += 1;
-            col = 0;
-        }
-
-        let total = col + token_width;
-        if total > 0 {
-            lines += (total - 1) / max_cols;
-            col = ((total - 1) % max_cols) + 1;
-        }
-
-        index = token_end;
-    }
-
-    lines
-}
-
-fn ascii_cursor_visual_row_in_line(line: &[u8], column: usize, max_cols: usize) -> usize {
-    if line.is_empty() || max_cols == 0 {
-        return 0;
-    }
-
-    let target = column.min(line.len());
-    let mut row = 0usize;
-    let mut col = 0usize;
-    let mut index = 0usize;
-
-    while index < target {
-        let token_end = ascii_token_end(line, index);
-        let token_width = token_end - index;
-
-        if col > 0 && token_width > max_cols.saturating_sub(col) {
-            row += 1;
-            col = 0;
-        }
-
-        while index < token_end && index < target {
-            col += 1;
-            if col > max_cols {
-                row += 1;
-                col = 1;
-            }
-            index += 1;
-        }
-    }
-
-    row
-}
-
-fn ascii_token_end(line: &[u8], start: usize) -> usize {
-    let whitespace = line[start].is_ascii_whitespace();
-    let mut end = start;
-
-    if whitespace {
-        while end < line.len() && line[end].is_ascii_whitespace() {
-            end += 1;
-        }
-    } else {
-        while end < line.len() && !line[end].is_ascii_whitespace() {
-            end += 1;
-        }
-        while end < line.len() && line[end].is_ascii_whitespace() {
             end += 1;
         }
     }
@@ -465,23 +371,6 @@ mod tests {
         assert_eq!(cursor_visual_row_in_line(line, 2, 4), 1);
         assert_eq!(cursor_visual_row_in_line(line, 3, 4), 3);
         assert_eq!(cursor_visual_row_in_line(line, line.chars().count(), 4), 3);
-    }
-
-    #[test]
-    fn ascii_fast_path_preserves_wrapped_word_boundaries() {
-        let line = "alpha beta gamma";
-
-        assert_eq!(visual_line_count(line, 6), 3);
-        assert_eq!(cursor_visual_row_in_line(line, 7, 6), 1);
-        assert_eq!(cursor_visual_row_in_line(line, line.len(), 6), 2);
-    }
-
-    #[test]
-    fn non_ascii_lines_fall_back_to_unicode_layout() {
-        let line = "éééé";
-
-        assert_eq!(visual_line_count(line, 2), 2);
-        assert_eq!(cursor_visual_row_in_line(line, 2, 2), 1);
     }
 
     #[test]
