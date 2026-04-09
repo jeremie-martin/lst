@@ -45,17 +45,11 @@ impl FindState {
         if self.query.is_empty() {
             return;
         }
-        let query_is_ascii = self.query.is_ascii();
         for (line_idx, line) in text.lines().enumerate() {
             let mut start = 0;
-            let ascii_columns = query_is_ascii && line.is_ascii();
             while let Some(byte_pos) = line[start..].find(&self.query) {
                 let abs_byte = start + byte_pos;
-                let col = if ascii_columns {
-                    abs_byte
-                } else {
-                    line[..abs_byte].chars().count()
-                };
+                let col = line[..abs_byte].chars().count();
                 self.matches.push(MatchPos {
                     line: line_idx,
                     col,
@@ -239,15 +233,5 @@ mod tests {
 
         assert_eq!(find.vim_next_from_cursor(&pos(0, 0)), Some(pos(2, 0)));
         assert_eq!(find.current, 1);
-    }
-
-    #[test]
-    fn compute_matches_preserves_unicode_columns() {
-        let mut find = FindState::new();
-        find.query = "é".into();
-
-        find.compute_matches("aéa");
-
-        assert_eq!(find.matches, vec![MatchPos { line: 0, col: 1 }]);
     }
 }
