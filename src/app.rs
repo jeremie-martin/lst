@@ -2406,7 +2406,7 @@ impl App {
         let editor_area = responsive(move |size| {
             let vh = size.height;
             let overscroll = vh * 0.4;
-            let (line_num_text, top_gap, bottom_gap) = if word_wrap {
+            let (line_num_text, top_gap, bottom_gap, total_visual) = if word_wrap {
                 let wrap_cols = wrapped_cols(size.width, n_lines).unwrap_or(1);
                 let temporary_layout_cache;
                 let layout_cache = if let Some(cache) = tab.layout_cache_for(wrap_cols) {
@@ -2425,6 +2425,7 @@ impl App {
                         .total_visual_rows
                         .saturating_sub(visible_rows.end) as f32
                         * LINE_HEIGHT_PX,
+                    layout_cache.total_visual_rows,
                 )
             } else {
                 let visible_rows = viewport::visible_row_range(scroll_y, vh, n_lines);
@@ -2433,6 +2434,7 @@ impl App {
                     tab.visible_unwrapped_gutter_text(visible_rows.start, visible_rows.end),
                     visible_rows.start as f32 * LINE_HEIGHT_PX,
                     n_lines.saturating_sub(visible_rows.end) as f32 * LINE_HEIGHT_PX,
+                    n_lines,
                 )
             };
 
@@ -2481,8 +2483,10 @@ impl App {
                     left: EDITOR_PAD,
                     right: viewport::EDITOR_RIGHT_PAD,
                 })
-                .height(Length::Shrink)
-                .min_height(vh)
+                .height(Length::Fixed(
+                    (total_visual as f32 * LINE_HEIGHT_PX + 2.0 * EDITOR_PAD + overscroll)
+                        .max(vh),
+                ))
                 .highlight_with::<highlight::LstHighlighter>(
                     highlight::Settings {
                         extension: highlight_ext.clone(),
