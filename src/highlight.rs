@@ -1,5 +1,6 @@
 use iced::advanced::text::highlighter::{self, Highlighter};
 use iced::{Color, Font, Theme};
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::sync::LazyLock;
 
@@ -43,6 +44,7 @@ static TREE_SITTER_CAPTURE_NAMES: &[&str] = &[
     "type",
     "variable",
 ];
+const TREE_SITTER_TEXT_CACHE_LIMIT: usize = 4_096;
 static TREE_SITTER_RUST_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
     let mut config = HighlightConfiguration::new(
         tree_sitter_rust::LANGUAGE.into(),
@@ -190,6 +192,8 @@ pub struct LstHighlighter {
     full_file_parse: Option<ParseState>,
     full_file_hl: Option<HighlightState>,
     tree_sitter: Option<TreeSitterHighlighter>,
+    tree_sitter_text_cache: HashMap<String, Vec<(Range<usize>, Highlight)>>,
+    tree_sitter_text_cache_order: VecDeque<String>,
 }
 
 impl LstHighlighter {
@@ -214,6 +218,8 @@ impl LstHighlighter {
         self.full_file_parse = None;
         self.full_file_hl = None;
         self.tree_sitter = None;
+        self.tree_sitter_text_cache.clear();
+        self.tree_sitter_text_cache_order.clear();
     }
 
     // ── Markdown mode ───────────────────────────────────────────────────
@@ -303,6 +309,10 @@ impl LstHighlighter {
     }
 
     fn highlight_tree_sitter_rust_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
+        if let Some(cached) = self.tree_sitter_text_cache.get(line) {
+            return cached.clone();
+        }
+
         let Some(highlighter) = self.tree_sitter.as_mut() else {
             return Vec::new();
         };
@@ -334,6 +344,17 @@ impl LstHighlighter {
                 Err(_) => return Vec::new(),
             }
         }
+
+        if self.tree_sitter_text_cache.len() >= TREE_SITTER_TEXT_CACHE_LIMIT {
+            if let Some(oldest) = self.tree_sitter_text_cache_order.pop_front() {
+                self.tree_sitter_text_cache.remove(&oldest);
+            }
+        }
+
+        let cache_key = line.to_string();
+        self.tree_sitter_text_cache_order.push_back(cache_key.clone());
+        self.tree_sitter_text_cache
+            .insert(cache_key, spans.clone());
 
         spans
     }
@@ -396,6 +417,8 @@ impl Highlighter for LstHighlighter {
             full_file_parse: None,
             full_file_hl: None,
             tree_sitter: None,
+            tree_sitter_text_cache: HashMap::new(),
+            tree_sitter_text_cache_order: VecDeque::new(),
         };
         h.init_mode();
         h
@@ -1116,6 +1139,45 @@ mod tests {
         assert!(spans
             .iter()
             .all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
+    }
+
+    #[test]
+    fn rust_tree_sitter_cache_reuses_same_text_on_a_different_line() {
+        let mut h = LstHighlighter::new(&Settings {
+            extension: Some("rs".to_string()),
+        });
+        let _first: Vec<_> = h.highlight_line("fn alpha() {}").collect();
+        let expected: Vec<_> = h.highlight_line("let beta = 1;").collect();
+
+        h.change_line(50);
+        h.tree_sitter = None;
+
+        let reused: Vec<_> = h.highlight_line("let beta = 1;").collect();
+        assert_eq!(
+            reused.iter().map(|(range, _)| range.clone()).collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|(range, _)| range.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(reused
+            .iter()
+            .all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
+    }
+
+    #[test]
+    fn rust_tree_sitter_cache_does_not_reuse_stale_line_text() {
+        let mut h = LstHighlighter::new(&Settings {
+            extension: Some("rs".to_string()),
+        });
+        let _first: Vec<_> = h.highlight_line("fn alpha() {}").collect();
+        let _second: Vec<_> = h.highlight_line("let beta = 1;").collect();
+
+        h.change_line(50);
+        h.tree_sitter = None;
+
+        let changed: Vec<_> = h.highlight_line("let gamma = 2;").collect();
+        assert!(changed.is_empty());
     }
 
     #[test]
