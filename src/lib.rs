@@ -1,3 +1,4 @@
+pub mod app;
 pub mod clipboard;
 pub mod editor_ops;
 pub mod find;
