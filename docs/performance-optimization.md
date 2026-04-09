@@ -19,7 +19,7 @@ Scenario:
 - real injected keyboard input via XTEST
 - file: `benchmarks/paste-corpus.rs`
 - wrap: on
-- highlighting: default Rust highlighting
+- highlighting: default Rust tree-sitter highlighting
 - setup: seed clipboard from the fixed corpus, focus editor, `Ctrl+End`
 - visible 5-second paste trace: `10` `Ctrl+V` pastes at `500ms` intervals
 - `1s` sleep between repetitions
@@ -74,7 +74,7 @@ In particular:
 - `final_file_bytes` and `final_file_lines` confirm that every run completed the same fixed paste workload
 
 Recent attribution notes for the paste benchmark are in [docs/highlight-attribution.md](/home/jmartin/lst/docs/highlight-attribution.md).
-Those notes include the syntax-highlighting sanity checks and the current experimental `tree-sitter` comparison.
+Those notes include the syntax-highlighting sanity checks and the current Rust backend comparison.
 
 ## Behavior-preservation gate
 
@@ -123,14 +123,14 @@ When evaluating a change:
 
 That is the current optimization contract.
 
-## Experimental highlight comparison
+## Rust Highlight Comparison
 
-To compare the default Rust highlighter with the current experimental Rust-only `tree-sitter` spike:
+To compare the current default Rust highlighter with the `syntect` fallback:
 
 ```bash
 cargo build --release --bin lst --bin bench_paste_x11
 ./target/release/bench_paste_x11
-LST_HIGHLIGHT_BACKEND=tree-sitter ./target/release/bench_paste_x11
+LST_HIGHLIGHT_BACKEND=syntect ./target/release/bench_paste_x11
 ```
 
-The experimental backend is not the default contract. Treat it as a comparison target until its visual behavior is evaluated more thoroughly.
+The default contract now uses the Rust tree-sitter backend. Use the `syntect` fallback run for comparison and regression checks.

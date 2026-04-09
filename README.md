@@ -12,7 +12,7 @@
 - Scratchpad tabs: starting `lst` without files, or pressing `Ctrl+N`, creates a timestamped Markdown note
 - Autosave every 500 ms for modified tabs
 - Find, replace, and go to line
-- Syntax highlighting for many languages via `syntect`, plus custom Markdown highlighting
+- Rust syntax highlighting via a lightweight tree-sitter path, many other languages via `syntect`, plus custom Markdown highlighting
 - Word wrap, grouped undo and redo, auto-indent, and line numbers
 - Line selection and editing helpers, including gutter click, word delete, duplicate line, move line, and delete line
 - Vim-style modal editing with Insert, Normal, Visual, and Visual Line modes
@@ -83,9 +83,9 @@ cargo build --release --bin lst --bin bench_paste_x11
 ./target/release/bench_paste_x11
 ```
 
-The benchmark prints diagnostics plus a final `score=...` line. The current paste benchmark score is median process CPU time for a fixed real-display pure-append paste trace against `benchmarks/paste-corpus.rs`, and lower is better. The separate scroll benchmark remains available via `bench_scroll_x11`.
+The benchmark prints diagnostics plus a final `score=...` line. The current paste benchmark score is median process CPU time for a fixed real-display pure-append paste trace against `benchmarks/paste-corpus.rs`, and lower is better. The current default Rust highlighting path is the tree-sitter backend; the separate scroll benchmark remains available via `bench_scroll_x11`.
 
-Recent benchmark attribution notes, including syntax-highlighting experiments and the current experimental Rust `tree-sitter` comparison, are in [docs/highlight-attribution.md](/home/jmartin/lst/docs/highlight-attribution.md).
+Recent benchmark attribution notes, including the Rust highlighter comparison and the `syntect` fallback command, are in [docs/highlight-attribution.md](/home/jmartin/lst/docs/highlight-attribution.md).
 
 ## Notes
 

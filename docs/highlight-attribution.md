@@ -36,31 +36,33 @@ Interpretation:
 - colored text drawing by itself is relatively cheap here
 - the expensive layer is the current syntax engine, especially its parse/style pipeline
 
-## Tree-sitter spike
+## Rust Backend Comparison
 
-An experimental Rust-only alternate backend was added behind:
+The current default Rust backend is the lightweight line-based tree-sitter path.
+
+To force the old Rust `syntect` path for comparison:
 
 ```bash
-LST_HIGHLIGHT_BACKEND=tree-sitter
+LST_HIGHLIGHT_BACKEND=syntect
 ```
 
-Current behavior of the spike:
+Current behavior of the default Rust backend:
 
 - only affects Rust files
 - line-based highlighting, not full-document incremental highlighting
-- intended for comparison and iteration, not yet as a final design claim
+- intended to stay lightweight and benchmark-friendly
 
 Representative benchmark comparison:
 
-- default `syntect` path: `score=3910`
-- experimental `tree-sitter` path: `score=2190`
-- repeat experimental `tree-sitter` run: `score=2180`
+- current default tree-sitter path: `score=2180`
+- repeat tree-sitter run: about `2180`
+- `syntect` fallback path: `score=3910`
 
 Interpretation:
 
 - the alternate backend is materially faster on the current paste benchmark
-- the gain is large enough to justify keeping the experiment for further evaluation
-- this does not yet prove it should become the default, because the current spike is deliberately simple and may have highlighting-quality gaps on multiline constructs
+- the gain is large enough to justify making it the current default for Rust files
+- the current implementation is deliberately simple and may still have highlighting-quality gaps on multiline constructs, so the `syntect` fallback remains useful for comparison
 
 ## Practical takeaway
 
@@ -69,5 +71,5 @@ The benchmark is good enough to guide highlighting work.
 For the current paste scenario:
 
 - optimizing highlighting is justified
-- replacing or simplifying the syntax engine is a credible direction
+- replacing or simplifying the Rust syntax engine was a credible direction and paid off on this workload
 - GUI rendering is not the main bottleneck

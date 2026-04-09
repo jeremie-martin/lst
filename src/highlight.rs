@@ -26,12 +26,6 @@ static THEME: LazyLock<SyntectTheme> = LazyLock::new(|| {
 
 static SYNTECT_HIGHLIGHTER: LazyLock<SyntectHighlighter<'static>> =
     LazyLock::new(|| SyntectHighlighter::new(&THEME));
-static USE_TREE_SITTER_RUST: LazyLock<bool> = LazyLock::new(|| {
-    matches!(
-        std::env::var("LST_HIGHLIGHT_BACKEND").ok().as_deref(),
-        Some("tree-sitter")
-    )
-});
 static TREE_SITTER_CAPTURE_NAMES: &[&str] = &[
     "attribute",
     "comment",
@@ -132,10 +126,22 @@ enum HighlightMode {
     PlainText,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RustHighlightBackend {
+    TreeSitter,
+    Syntect,
+}
+
 fn determine_mode(ext: &Option<String>) -> HighlightMode {
     match ext.as_deref() {
         Some("md") | Some("markdown") => HighlightMode::Markdown,
-        Some("rs") if *USE_TREE_SITTER_RUST => HighlightMode::TreeSitterRust,
+        Some("rs") => match rust_highlight_backend() {
+            RustHighlightBackend::TreeSitter => HighlightMode::TreeSitterRust,
+            RustHighlightBackend::Syntect => SYNTAX_SET
+                .find_syntax_by_extension("rs")
+                .map(HighlightMode::Syntect)
+                .unwrap_or(HighlightMode::PlainText),
+        },
         None => HighlightMode::PlainText,
         Some(ext) => match SYNTAX_SET.find_syntax_by_extension(ext) {
             Some(syntax) => HighlightMode::Syntect(syntax),
@@ -458,6 +464,17 @@ fn tree_sitter_color_for_capture(index: usize) -> Option<Color> {
         Some("type") => Some(YELLOW),
         Some("variable") => None,
         _ => None,
+    }
+}
+
+fn rust_highlight_backend() -> RustHighlightBackend {
+    rust_highlight_backend_from_env(std::env::var("LST_HIGHLIGHT_BACKEND").ok().as_deref())
+}
+
+fn rust_highlight_backend_from_env(value: Option<&str>) -> RustHighlightBackend {
+    match value {
+        Some("syntect") => RustHighlightBackend::Syntect,
+        _ => RustHighlightBackend::TreeSitter,
     }
 }
 
@@ -1090,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn syntect_mode_returns_colored_spans() {
+    fn rust_mode_returns_colored_spans() {
         let mut h = LstHighlighter::new(&Settings {
             extension: Some("rs".to_string()),
         });
@@ -1099,6 +1116,30 @@ mod tests {
         assert!(spans
             .iter()
             .all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
+    }
+
+    #[test]
+    fn rust_backend_defaults_to_tree_sitter() {
+        assert_eq!(
+            rust_highlight_backend_from_env(None),
+            RustHighlightBackend::TreeSitter
+        );
+        assert_eq!(
+            rust_highlight_backend_from_env(Some("tree-sitter")),
+            RustHighlightBackend::TreeSitter
+        );
+        assert_eq!(
+            rust_highlight_backend_from_env(Some("unexpected")),
+            RustHighlightBackend::TreeSitter
+        );
+    }
+
+    #[test]
+    fn rust_backend_accepts_syntect_fallback() {
+        assert_eq!(
+            rust_highlight_backend_from_env(Some("syntect")),
+            RustHighlightBackend::Syntect
+        );
     }
 
     #[test]

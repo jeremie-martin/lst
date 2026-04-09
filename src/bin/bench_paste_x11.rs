@@ -20,7 +20,7 @@ const SCENARIO: &str = "paste_growth_x11_real";
 const CORPUS_REL: &str = "benchmarks/paste-corpus.rs";
 const WINDOW_REQUESTED_LOGICAL: &str = "980x680";
 const WRAP: &str = "on";
-const HIGHLIGHT_DEFAULT: &str = "rust-syntect-default";
+const HIGHLIGHT_DEFAULT: &str = "rust-tree-sitter-line-default";
 const PRIMING_RUNS: usize = 1;
 const REPETITIONS: usize = 7;
 const TRACE_PASTE_COUNT: usize = 10;
@@ -170,7 +170,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn highlight_label() -> &'static str {
     match std::env::var("LST_HIGHLIGHT_BACKEND").ok().as_deref() {
-        Some("tree-sitter") => "rust-tree-sitter-line-experimental",
+        Some("syntect") => "rust-syntect-fallback",
         _ => HIGHLIGHT_DEFAULT,
     }
 }
