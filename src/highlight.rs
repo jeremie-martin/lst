@@ -117,7 +117,7 @@ struct MdLineState {
 #[derive(Clone)]
 struct SyntectLineState {
     parse_state: ParseState,
-    highlight_state: HighlightState,
+    highlight_path: ScopeStack,
 }
 
 #[derive(Clone)]
@@ -246,7 +246,7 @@ impl LstHighlighter {
         let spans = run_syntect_line(parse, hl_state, &mut self.line_buffer, line);
         self.states.push(LineState::Syntect(SyntectLineState {
             parse_state: parse.clone(),
-            highlight_state: hl_state.clone(),
+            highlight_path: hl_state.path.clone(),
         }));
         spans
     }
@@ -335,7 +335,10 @@ impl Highlighter for LstHighlighter {
                 }
                 LineState::Syntect(s) => {
                     self.full_file_parse = Some(s.parse_state);
-                    self.full_file_hl = Some(s.highlight_state);
+                    self.full_file_hl = Some(HighlightState::new(
+                        &SYNTECT_HIGHLIGHTER,
+                        s.highlight_path,
+                    ));
                 }
             }
         }
@@ -562,6 +565,63 @@ fn parse_link(bytes: &[u8], open: usize) -> Option<(usize, usize)> {
     }
     let close_paren = find_closing(bytes, close_bracket + 2, b')')?;
     Some((close_bracket, close_paren))
+}
+
+#[cfg(test)]
+mod replay_tests {
+    use super::*;
+    use iced::advanced::text::highlighter::Highlighter as _;
+
+    #[test]
+    fn change_line_replays_rust_highlighting_from_cached_scope_path() {
+        let mut highlighter = LstHighlighter::new(&Settings {
+            extension: Some("rs".to_string()),
+        });
+        let lines = ["fn main() {", "    let value = 1;", "}"];
+
+        let first_pass: Vec<Vec<(Range<usize>, Highlight)>> = lines
+            .iter()
+            .map(|line| highlighter.highlight_line(line).collect())
+            .collect();
+
+        highlighter.change_line(1);
+
+        let replayed: Vec<Vec<(Range<usize>, Highlight)>> = lines[1..]
+            .iter()
+            .map(|line| highlighter.highlight_line(line).collect())
+            .collect();
+
+        assert_eq!(replayed.len(), 2);
+        assert_eq!(replayed[0].len(), first_pass[1].len());
+        assert_eq!(replayed[1].len(), first_pass[2].len());
+
+        for (lhs, rhs) in replayed[0].iter().zip(first_pass[1].iter()) {
+            assert_eq!(lhs.0, rhs.0);
+            assert_same_highlight(&lhs.1, &rhs.1);
+        }
+        for (lhs, rhs) in replayed[1].iter().zip(first_pass[2].iter()) {
+            assert_eq!(lhs.0, rhs.0);
+            assert_same_highlight(&lhs.1, &rhs.1);
+        }
+    }
+
+    fn assert_same_highlight(left: &Highlight, right: &Highlight) {
+        match (left, right) {
+            (Highlight::Syntect(lhs), Highlight::Syntect(rhs)) => assert_eq!(lhs, rhs),
+            (Highlight::Heading, Highlight::Heading)
+            | (Highlight::HeadingMarker, Highlight::HeadingMarker)
+            | (Highlight::Bold, Highlight::Bold)
+            | (Highlight::Italic, Highlight::Italic)
+            | (Highlight::Code, Highlight::Code)
+            | (Highlight::CodeBlock, Highlight::CodeBlock)
+            | (Highlight::Link, Highlight::Link)
+            | (Highlight::Url, Highlight::Url)
+            | (Highlight::ListMarker, Highlight::ListMarker)
+            | (Highlight::BlockQuote, Highlight::BlockQuote)
+            | (Highlight::HorizontalRule, Highlight::HorizontalRule) => {}
+            _ => panic!("highlight mismatch"),
+        }
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
