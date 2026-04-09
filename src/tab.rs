@@ -29,6 +29,8 @@ pub struct LayoutCache {
     pub wrap_cols: usize,
     pub line_start_visual_row: Vec<usize>,
     pub total_visual_rows: usize,
+    gutter_row_offsets: Vec<usize>,
+    gutter_text: String,
 }
 
 pub struct Tab {
@@ -221,6 +223,11 @@ impl LayoutCache {
         let line_count = content.line_count().max(1);
         let mut line_start_visual_row = Vec::with_capacity(line_count + 1);
         let mut total_visual_rows = 0usize;
+        let width = viewport::line_number_digits_width(line_count);
+        let continuation_prefix = viewport::continuation_prefix(line_count);
+        let mut gutter_row_offsets = Vec::new();
+        let mut gutter_text = String::new();
+        let mut first_row = true;
 
         for line_idx in 0..line_count {
             line_start_visual_row.push(total_visual_rows);
@@ -229,64 +236,48 @@ impl LayoutCache {
                 viewport::visual_line_count(line.text.as_ref(), wrap_cols)
             });
 
-            total_visual_rows += visual_rows;
-        }
-
-        line_start_visual_row.push(total_visual_rows);
-
-        Self {
-            wrap_cols,
-            line_start_visual_row,
-            total_visual_rows: total_visual_rows.max(1),
-        }
-    }
-
-    pub fn visible_gutter_text(
-        &self,
-        line_count: usize,
-        start_row: usize,
-        end_row: usize,
-    ) -> String {
-        if start_row >= end_row || start_row >= self.total_visual_rows || line_count == 0 {
-            return String::new();
-        }
-
-        let end_row = end_row.min(self.total_visual_rows);
-        let width = viewport::line_number_digits_width(line_count);
-        let continuation_prefix = viewport::continuation_prefix(line_count);
-        let start_line = self
-            .line_start_visual_row
-            .partition_point(|&row| row <= start_row)
-            .saturating_sub(1)
-            .min(line_count.saturating_sub(1));
-        let mut gutter_text = String::with_capacity((end_row - start_row) * (width + 2));
-        let mut first_row = true;
-
-        for line_idx in start_line..line_count {
-            let line_start = self.line_start_visual_row[line_idx];
-            if line_start >= end_row {
-                break;
-            }
-
-            let line_end = self.line_start_visual_row[line_idx + 1];
-            let visible_start = start_row.max(line_start);
-            let visible_end = end_row.min(line_end);
-
-            for row in visible_start..visible_end {
+            for row_in_line in 0..visual_rows {
                 if !first_row {
                     gutter_text.push('\n');
                 }
                 first_row = false;
 
-                if row == line_start {
+                gutter_row_offsets.push(gutter_text.len());
+                if row_in_line == 0 {
                     let _ = write!(gutter_text, "{:>width$} ", line_idx + 1, width = width);
                 } else {
                     gutter_text.push_str(&continuation_prefix);
                 }
             }
+
+            total_visual_rows += visual_rows;
         }
 
-        gutter_text
+        line_start_visual_row.push(total_visual_rows);
+        gutter_row_offsets.push(gutter_text.len());
+
+        Self {
+            wrap_cols,
+            line_start_visual_row,
+            total_visual_rows: total_visual_rows.max(1),
+            gutter_row_offsets,
+            gutter_text,
+        }
+    }
+
+    pub fn visible_gutter_text(
+        &self,
+        _line_count: usize,
+        start_row: usize,
+        end_row: usize,
+    ) -> String {
+        if start_row >= end_row || start_row >= self.total_visual_rows {
+            return String::new();
+        }
+
+        let end_row = end_row.min(self.total_visual_rows);
+        self.gutter_text[self.gutter_row_offsets[start_row]..self.gutter_row_offsets[end_row]]
+            .to_string()
     }
 }
 
