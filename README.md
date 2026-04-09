@@ -76,14 +76,14 @@ In practice, it compiles the integration-style suites under `tests/` and does no
 
 The current performance optimization workflow is documented in [docs/performance-optimization.md](/home/jmartin/lst/docs/performance-optimization.md).
 
-Build both binaries, then run the X11 real-display scroll benchmark:
+Build both binaries, then run the recommended next X11 real-display paste benchmark:
 
 ```bash
-cargo build --release --bin lst --bin bench_scroll_x11
-./target/release/bench_scroll_x11
+cargo build --release --bin lst --bin bench_paste_x11
+./target/release/bench_paste_x11
 ```
 
-The benchmark prints diagnostics plus a final `score=...` line. The current score is median process CPU time for the fixed real-display scroll trace, and lower is better.
+The benchmark prints diagnostics plus a final `score=...` line. The current paste benchmark score is median process CPU time for the fixed real-display paste-growth trace, and lower is better. The separate scroll benchmark remains available via `bench_scroll_x11`.
 
 ## Notes
 

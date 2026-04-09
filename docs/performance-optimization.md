@@ -1,6 +1,6 @@
 # Performance Optimization Workflow
 
-This repository now has one concrete first performance workflow.
+This repository now has two concrete performance workflows.
 
 The goal is simple:
 
@@ -9,24 +9,28 @@ The goal is simple:
 - optimize one scalar score
 - use the other printed values as diagnostics
 
-## Current benchmark
+## Recommended next benchmark
+
+Use this benchmark when the concern is unnecessary CPU during real editing work, not just scroll smoothness.
 
 Scenario:
 
 - real-display X11 benchmark
-- real injected wheel input via XTEST
+- real injected keyboard input via XTEST
 - file: `src/app.rs`
 - wrap: on
 - highlighting: default Rust highlighting
-- visible 3-second scroll trace: `1.5s` down, `1.5s` up
+- setup: focus editor, `Ctrl+A`, `Ctrl+C`
+- visible 5-second paste trace: `10` `Ctrl+V` pastes at `500ms` intervals
 - `1s` sleep between repetitions
 - `1` priming run, `7` measured runs
+- expected final file size on every measured run: `1335020` bytes, `35930` lines
 
 Runner:
 
 ```bash
-cargo build --release --bin lst --bin bench_scroll_x11
-./target/release/bench_scroll_x11
+cargo build --release --bin lst --bin bench_paste_x11
+./target/release/bench_paste_x11
 ```
 
 ## Which value to optimize
@@ -46,7 +50,7 @@ cpu_ms = user_cpu_ms + sys_cpu_ms
 
 Lower is better. The optimization loop should minimize `score`.
 
-This is the right current score because the main concern is not that scrolling looks choppy on this machine. The main concern is that a lightweight text editor should not burn unnecessary CPU during a simple real scrolling workload.
+This is the right current score because the main concern is unnecessary CPU during real editing work on a growing buffer. The benchmark uses real display, real injected GUI input, and fixed repeated paste work.
 
 ## Other printed values
 
@@ -54,19 +58,20 @@ The runner also prints diagnostics:
 
 - `startup_ms`
 - `trace_wall_ms`
-- `scroll_overrun_ms`
 - `user_cpu_ms`
 - `sys_cpu_ms`
 - `cpu_ms`
 - `peak_rss_mb`
+- `final_file_bytes`
+- `final_file_lines`
 
 Use them for interpretation, not as the optimization target.
 
 In particular:
 
-- `scroll_overrun_ms` is the guardrail for smoothness and backlog
 - `peak_rss_mb` is the memory diagnostic
 - `startup_ms` is useful context but not part of this campaign
+- `final_file_bytes` and `final_file_lines` confirm that every run completed the same fixed paste workload
 
 ## Behavior-preservation gate
 
@@ -85,10 +90,22 @@ Production optimization work should primarily touch files under `src/`.
 It is also acceptable to edit:
 
 - `src/bin/bench_scroll_x11.rs` if the benchmark itself needs refinement
+- `src/bin/bench_paste_x11.rs` if the benchmark itself needs refinement
 - `README.md`
 - `docs/`
 
-Do not broaden the project into a multi-scenario benchmark framework yet. Keep the workflow narrow and simple.
+Do not broaden the project into a generalized benchmark framework. Keep the workflow narrow and simple.
+
+## Scroll benchmark
+
+The original scroll benchmark is still available as a separate scenario:
+
+```bash
+cargo build --release --bin lst --bin bench_scroll_x11
+./target/release/bench_scroll_x11
+```
+
+Use it when the question is scrolling cost specifically. Keep its `score=...` line separate from the paste benchmark. Do not combine both workloads into one scalar.
 
 ## Practical reading of results
 
@@ -97,7 +114,7 @@ When evaluating a change:
 1. Run the benchmark.
 2. Look at the final `score=...` line.
 3. Prefer lower `score`.
-4. Check that `scroll_overrun_ms` did not get materially worse.
+4. Check that `final_file_bytes` and `final_file_lines` still match the fixed contract.
 5. Check `peak_rss_mb` for obvious regressions.
 6. Run `cargo test`.
 
