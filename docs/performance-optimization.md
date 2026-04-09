@@ -20,7 +20,7 @@ Scenario:
 - file: `benchmarks/paste-corpus.rs`
 - wrap: on
 - highlighting: default Rust tree-sitter highlighting
-- setup: seed clipboard from the fixed corpus, focus editor, `Ctrl+End`
+- setup: focus editor, `Ctrl+A`, `Ctrl+C`, `Ctrl+End`
 - visible 5-second paste trace: `10` `Ctrl+V` pastes at `500ms` intervals
 - `1s` sleep between repetitions
 - `1` priming run, `7` measured runs

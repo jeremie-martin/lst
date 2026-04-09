@@ -36,6 +36,8 @@ const FILE_STABLE_MS: u64 = 200;
 const FILE_STABLE_TIMEOUT_MS: u64 = 5_000;
 const BUTTON_LEFT: u8 = 1;
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
+const KEYSYM_A: u32 = b'a' as u32;
+const KEYSYM_C: u32 = b'c' as u32;
 const KEYSYM_END: u32 = 0xff57;
 const KEYSYM_S: u32 = b's' as u32;
 const KEYSYM_V: u32 = b'v' as u32;
@@ -131,7 +133,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("window_client_px={}x{}", window_width, window_height);
     println!("priming_runs={PRIMING_RUNS}");
     println!("repetitions={REPETITIONS}");
-    println!("setup_clipboard_seeded=true");
+    println!("setup_select_all_copy=true");
     println!("setup_move_to_document_end=true");
     println!("trace_paste_count={TRACE_PASTE_COUNT}");
     println!("trace_paste_interval_ms={TRACE_PASTE_INTERVAL_MS}");
@@ -188,7 +190,6 @@ fn run_once(
 ) -> Result<RunMetrics, Box<dyn Error>> {
     let working_copy = working_copy_path(run_index);
     fs::write(&working_copy, &corpus.contents)?;
-    seed_clipboard(&corpus.contents, session_env)?;
 
     let title = format!("lst-bench-paste-{}-{run_index}", std::process::id());
     let mut child = spawn_editor(editor, &working_copy, session_env, &title)?;
@@ -233,6 +234,22 @@ fn run_once(
             Duration::from_millis(QUIET_MS),
             Duration::from_millis(TRACE_TIMEOUT_MS),
         )?;
+
+        debug_phase(run_index, "ctrl_a");
+        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.a)?;
+        debug_phase(run_index, "post_ctrl_a_quiet");
+        wait_for_damage_quiet(
+            conn,
+            damage.damage(),
+            window.id,
+            &mut child,
+            Duration::from_millis(QUIET_MS),
+            Duration::from_millis(TRACE_TIMEOUT_MS),
+        )?;
+
+        debug_phase(run_index, "ctrl_c");
+        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.c)?;
+        thread::sleep(Duration::from_millis(COPY_SETTLE_MS));
 
         debug_phase(run_index, "ctrl_end");
         inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.end)?;
@@ -564,37 +581,6 @@ fn inject_paste_burst(
         }
     }
 
-    Ok(())
-}
-
-fn seed_clipboard(contents: &str, session_env: &SessionEnv) -> Result<(), Box<dyn Error>> {
-    let mut command = Command::new("xclip");
-    command
-        .args(["-selection", "clipboard"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .env("DISPLAY", &session_env.display);
-
-    if let Some(xauthority) = &session_env.xauthority {
-        command.env("XAUTHORITY", xauthority);
-    }
-    if let Some(dbus) = &session_env.dbus_session_bus_address {
-        command.env("DBUS_SESSION_BUS_ADDRESS", dbus);
-    }
-
-    let mut child = command.spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write as _;
-        stdin.write_all(contents.as_bytes())?;
-    }
-
-    let status = child.wait()?;
-    if !status.success() {
-        return Err(io::Error::other("xclip failed to seed clipboard").into());
-    }
-
-    thread::sleep(Duration::from_millis(COPY_SETTLE_MS));
     Ok(())
 }
 
@@ -998,6 +984,8 @@ impl Atoms {
 
 struct Keycodes {
     control_l: xproto::Keycode,
+    a: xproto::Keycode,
+    c: xproto::Keycode,
     end: xproto::Keycode,
     s: xproto::Keycode,
     v: xproto::Keycode,
@@ -1012,6 +1000,8 @@ impl Keycodes {
 
         Ok(Self {
             control_l: find_keycode(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
+            a: find_keycode(&reply, setup.min_keycode, KEYSYM_A, active_group)?,
+            c: find_keycode(&reply, setup.min_keycode, KEYSYM_C, active_group)?,
             end: find_keycode(&reply, setup.min_keycode, KEYSYM_END, active_group)?,
             s: find_keycode(&reply, setup.min_keycode, KEYSYM_S, active_group)?,
             v: find_keycode(&reply, setup.min_keycode, KEYSYM_V, active_group)?,
