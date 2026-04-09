@@ -41,12 +41,27 @@ impl FindState {
 
     /// Recompute match positions from the full document text.
     pub fn compute_matches(&mut self, text: &str) {
-        self.compute_matches_in_lines(text.lines());
-    }
-
-    /// Recompute match positions from cached document lines without rebuilding a full document string.
-    pub fn compute_matches_lines(&mut self, lines: &[String]) {
-        self.compute_matches_in_lines(lines.iter().map(String::as_str));
+        self.matches.clear();
+        if self.query.is_empty() {
+            return;
+        }
+        for (line_idx, line) in text.lines().enumerate() {
+            let mut start = 0;
+            while let Some(byte_pos) = line[start..].find(&self.query) {
+                let abs_byte = start + byte_pos;
+                let col = line[..abs_byte].chars().count();
+                self.matches.push(MatchPos {
+                    line: line_idx,
+                    col,
+                });
+                start = abs_byte + self.query.len();
+            }
+        }
+        if self.matches.is_empty() {
+            self.current = 0;
+        } else {
+            self.current = self.current.min(self.matches.len() - 1);
+        }
     }
 
     /// Move cursor to the current match and select it.
@@ -175,45 +190,6 @@ impl FindState {
             column: m.col,
         }
     }
-
-    fn compute_matches_in_lines<'a, I>(&mut self, lines: I)
-    where
-        I: IntoIterator<Item = &'a str>,
-    {
-        self.matches.clear();
-        if self.query.is_empty() {
-            return;
-        }
-
-        let query = self.query.as_str();
-        let query_is_ascii = query.is_ascii();
-
-        for (line_idx, line) in lines.into_iter().enumerate() {
-            let mut start = 0;
-            let ascii_columns = query_is_ascii && line.is_ascii();
-
-            while let Some(byte_pos) = line[start..].find(query) {
-                let abs_byte = start + byte_pos;
-                let col = if ascii_columns {
-                    abs_byte
-                } else {
-                    line[..abs_byte].chars().count()
-                };
-
-                self.matches.push(MatchPos {
-                    line: line_idx,
-                    col,
-                });
-                start = abs_byte + query.len();
-            }
-        }
-
-        if self.matches.is_empty() {
-            self.current = 0;
-        } else {
-            self.current = self.current.min(self.matches.len() - 1);
-        }
-    }
 }
 
 #[cfg(all(test, feature = "internal-invariants"))]
@@ -257,30 +233,5 @@ mod tests {
 
         assert_eq!(find.vim_next_from_cursor(&pos(0, 0)), Some(pos(2, 0)));
         assert_eq!(find.current, 1);
-    }
-
-    #[test]
-    fn compute_matches_lines_matches_text_results() {
-        let mut from_text = FindState::new();
-        from_text.query = "foo".into();
-        from_text.compute_matches("foo\nbar foo");
-
-        let mut from_lines = FindState::new();
-        from_lines.query = "foo".into();
-        let lines = vec!["foo".to_string(), "bar foo".to_string()];
-        from_lines.compute_matches_lines(&lines);
-
-        assert_eq!(from_lines.matches, from_text.matches);
-    }
-
-    #[test]
-    fn compute_matches_lines_preserves_unicode_columns() {
-        let mut find = FindState::new();
-        find.query = "é".into();
-        let lines = vec!["aéa".to_string()];
-
-        find.compute_matches_lines(&lines);
-
-        assert_eq!(find.matches, vec![MatchPos { line: 0, col: 1 }]);
     }
 }

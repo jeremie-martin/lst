@@ -703,8 +703,8 @@ impl App {
             return;
         }
 
-        let lines = self.tabs[self.active].lines();
-        self.find.compute_matches_lines(lines.as_ref());
+        let text = self.tabs[self.active].content.text();
+        self.find.compute_matches(&text);
         self.find.finish_reindex(self.active_tab_revision());
     }
 
