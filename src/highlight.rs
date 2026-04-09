@@ -126,11 +126,17 @@ enum LineState {
     Syntect(SyntectLineState),
 }
 
+#[derive(Clone)]
+struct CachedLine {
+    state: LineState,
+    spans: Vec<(Range<usize>, Highlight)>,
+}
+
 // ── Unified highlighter ─────────────────────────────────────────────────────
 
 pub struct LstHighlighter {
     mode: HighlightMode,
-    states: Vec<LineState>,
+    states: Vec<CachedLine>,
     current_line: usize,
     line_buffer: String,
     // Markdown working state
@@ -152,6 +158,28 @@ impl LstHighlighter {
         }
     }
 
+    fn apply_line_state(&mut self, state: LineState) {
+        match state {
+            LineState::Md(md) => {
+                self.in_code_block = md.in_code_block;
+                self.fence = md.fence;
+                self.code_lang = md.code_lang;
+                self.syntect_parse = md.syntect_parse;
+                self.syntect_hl = md.syntect_hl;
+            }
+            LineState::Syntect(s) => {
+                self.full_file_parse = Some(s.parse_state);
+                self.full_file_hl = Some(s.highlight_state);
+            }
+        }
+    }
+
+    fn cached_spans(&mut self) -> Option<Vec<(Range<usize>, Highlight)>> {
+        let cached = self.states.get(self.current_line)?.clone();
+        self.apply_line_state(cached.state);
+        Some(cached.spans)
+    }
+
     fn reset(&mut self) {
         self.states.clear();
         self.current_line = 0;
@@ -168,6 +196,10 @@ impl LstHighlighter {
     // ── Markdown mode ───────────────────────────────────────────────────
 
     fn highlight_md_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
+        if let Some(spans) = self.cached_spans() {
+            return spans;
+        }
+
         let mut spans = Vec::new();
         let trimmed = line.trim_start();
 
@@ -182,7 +214,7 @@ impl LstHighlighter {
                     if !line.is_empty() {
                         spans.push((0..line.len(), Highlight::CodeBlock));
                     }
-                    self.push_md_state();
+                    self.push_md_state(&spans);
                     return spans;
                 }
             }
@@ -192,7 +224,7 @@ impl LstHighlighter {
             } else if !line.is_empty() {
                 spans.push((0..line.len(), Highlight::CodeBlock));
             }
-            self.push_md_state();
+            self.push_md_state(&spans);
             return spans;
         }
 
@@ -211,23 +243,26 @@ impl LstHighlighter {
             if !line.is_empty() {
                 spans.push((0..line.len(), Highlight::CodeBlock));
             }
-            self.push_md_state();
+            self.push_md_state(&spans);
             return spans;
         }
 
         highlight_block(line, trimmed, &mut spans);
-        self.push_md_state();
+        self.push_md_state(&spans);
         spans
     }
 
-    fn push_md_state(&mut self) {
-        self.states.push(LineState::Md(MdLineState {
-            in_code_block: self.in_code_block,
-            fence: self.fence,
-            code_lang: self.code_lang.clone(),
-            syntect_parse: self.syntect_parse.clone(),
-            syntect_hl: self.syntect_hl.clone(),
-        }));
+    fn push_md_state(&mut self, spans: &[(Range<usize>, Highlight)]) {
+        self.states.push(CachedLine {
+            state: LineState::Md(MdLineState {
+                in_code_block: self.in_code_block,
+                fence: self.fence,
+                code_lang: self.code_lang.clone(),
+                syntect_parse: self.syntect_parse.clone(),
+                syntect_hl: self.syntect_hl.clone(),
+            }),
+            spans: spans.to_vec(),
+        });
     }
 
     // ── Syntect line highlighting (shared by MD code blocks and full-file) ──
@@ -241,13 +276,20 @@ impl LstHighlighter {
     // ── Full-file syntect mode ──────────────────────────────────────────
 
     fn highlight_syntect_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
+        if let Some(spans) = self.cached_spans() {
+            return spans;
+        }
+
         let parse = self.full_file_parse.as_mut().unwrap();
         let hl_state = self.full_file_hl.as_mut().unwrap();
         let spans = run_syntect_line(parse, hl_state, &mut self.line_buffer, line);
-        self.states.push(LineState::Syntect(SyntectLineState {
-            parse_state: parse.clone(),
-            highlight_state: hl_state.clone(),
-        }));
+        self.states.push(CachedLine {
+            state: LineState::Syntect(SyntectLineState {
+                parse_state: parse.clone(),
+                highlight_state: hl_state.clone(),
+            }),
+            spans: spans.clone(),
+        });
         spans
     }
 }
@@ -324,20 +366,8 @@ impl Highlighter for LstHighlighter {
         if line == 0 {
             self.reset();
             self.init_mode();
-        } else if let Some(state) = self.states.last() {
-            match state.clone() {
-                LineState::Md(md) => {
-                    self.in_code_block = md.in_code_block;
-                    self.fence = md.fence;
-                    self.code_lang = md.code_lang;
-                    self.syntect_parse = md.syntect_parse;
-                    self.syntect_hl = md.syntect_hl;
-                }
-                LineState::Syntect(s) => {
-                    self.full_file_parse = Some(s.parse_state);
-                    self.full_file_hl = Some(s.highlight_state);
-                }
-            }
+        } else if let Some(cached) = self.states.last() {
+            self.apply_line_state(cached.state.clone());
         }
         self.current_line = line;
     }
