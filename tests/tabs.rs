@@ -52,3 +52,14 @@ fn next_prev_tab_cycles() {
     app.update_inner(Message::NextTab);
     assert_eq!(active_tab(&app), 0);
 }
+
+#[test]
+fn close_active_tab_reduces_count() {
+    let mut app = App::test("first");
+    app.update_inner(Message::New);
+    assert_eq!(tab_count(&app), 2);
+
+    app.update_inner(Message::CloseActiveTab);
+    assert_eq!(tab_count(&app), 1);
+    assert!(active_text(&app).contains("first"));
+}

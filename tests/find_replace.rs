@@ -72,3 +72,39 @@ fn replace_all_substitutes_every_match() {
     assert!(!text.contains("foo"));
     assert_eq!(text.matches("qux").count(), 3);
 }
+
+#[test]
+fn find_prev_goes_backward() {
+    let mut app = App::test("aaa bbb aaa bbb aaa");
+    app.update_inner(Message::FindOpen);
+    app.update_inner(Message::FindQueryChanged("aaa".to_string()));
+    let first = app.find.current;
+
+    app.update_inner(Message::FindNext);
+    assert_ne!(app.find.current, first);
+
+    app.update_inner(Message::FindPrev);
+    assert_eq!(app.find.current, first);
+}
+
+#[test]
+fn find_open_when_visible_closes() {
+    let mut app = App::test("hello");
+    app.update_inner(Message::FindOpen);
+    assert!(app.find.visible);
+
+    app.update_inner(Message::FindOpen);
+    assert!(!app.find.visible);
+}
+
+#[test]
+fn find_open_replace_upgrades_from_find_only() {
+    let mut app = App::test("hello");
+    app.update_inner(Message::FindOpen);
+    assert!(app.find.visible);
+    assert!(!app.find.show_replace);
+
+    app.update_inner(Message::FindOpenReplace);
+    assert!(app.find.visible);
+    assert!(app.find.show_replace);
+}

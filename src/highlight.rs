@@ -563,3 +563,440 @@ fn parse_link(bytes: &[u8], open: usize) -> Option<(usize, usize)> {
     let close_paren = find_closing(bytes, close_bracket + 2, b')')?;
     Some((close_bracket, close_paren))
 }
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::advanced::text::highlighter::Highlighter as _H;
+
+    fn block_spans(line: &str) -> Vec<(Range<usize>, Highlight)> {
+        let mut spans = Vec::new();
+        highlight_block(line, line.trim_start(), &mut spans);
+        spans
+    }
+
+    fn inline_spans(line: &str) -> Vec<(Range<usize>, Highlight)> {
+        let mut spans = Vec::new();
+        highlight_inline(line, 0, &mut spans);
+        spans
+    }
+
+    fn md_highlighter() -> LstHighlighter {
+        LstHighlighter::new(&Settings {
+            extension: Some("md".to_string()),
+        })
+    }
+
+    fn highlight_lines(h: &mut LstHighlighter, lines: &[&str]) -> Vec<Vec<(Range<usize>, Highlight)>> {
+        lines.iter().map(|line| h.highlight_line(line).collect()).collect()
+    }
+
+    // ── parse_code_fence_with_lang ─────────────────────────────────────
+
+    #[test]
+    fn fence_backtick_no_lang() {
+        let result = parse_code_fence_with_lang("```");
+        assert_eq!(result.as_ref().map(|r| r.0), Some(('`', 3)));
+        assert_eq!(result.as_ref().and_then(|r| r.1.as_deref()), None);
+    }
+
+    #[test]
+    fn fence_tilde_no_lang() {
+        let result = parse_code_fence_with_lang("~~~");
+        assert_eq!(result.as_ref().map(|r| r.0), Some(('~', 3)));
+    }
+
+    #[test]
+    fn fence_with_language() {
+        let result = parse_code_fence_with_lang("```rust");
+        assert_eq!(result.as_ref().and_then(|r| r.1.as_deref()), Some("rust"));
+    }
+
+    #[test]
+    fn fence_language_lowercased() {
+        let result = parse_code_fence_with_lang("```Rust");
+        assert_eq!(result.as_ref().and_then(|r| r.1.as_deref()), Some("rust"));
+    }
+
+    #[test]
+    fn fence_four_backticks() {
+        let result = parse_code_fence_with_lang("````");
+        assert_eq!(result.as_ref().map(|r| r.0), Some(('`', 4)));
+    }
+
+    #[test]
+    fn fence_two_backticks_rejected() {
+        assert!(parse_code_fence_with_lang("``").is_none());
+    }
+
+    #[test]
+    fn fence_non_fence_line() {
+        assert!(parse_code_fence_with_lang("hello world").is_none());
+    }
+
+    // ── is_closing_fence ──────────────────────────────────────────────
+
+    #[test]
+    fn closing_fence_exact_match() {
+        assert!(is_closing_fence("```", '`', 3));
+    }
+
+    #[test]
+    fn closing_fence_longer_is_ok() {
+        assert!(is_closing_fence("````", '`', 3));
+    }
+
+    #[test]
+    fn closing_fence_shorter_rejected() {
+        assert!(!is_closing_fence("``", '`', 3));
+    }
+
+    #[test]
+    fn closing_fence_trailing_whitespace() {
+        assert!(is_closing_fence("```  ", '`', 3));
+    }
+
+    #[test]
+    fn closing_fence_trailing_text_rejected() {
+        assert!(!is_closing_fence("``` foo", '`', 3));
+    }
+
+    // ── is_horizontal_rule ────────────────────────────────────────────
+
+    #[test]
+    fn hr_dashes() {
+        assert!(is_horizontal_rule("---"));
+    }
+
+    #[test]
+    fn hr_asterisks() {
+        assert!(is_horizontal_rule("***"));
+    }
+
+    #[test]
+    fn hr_underscores() {
+        assert!(is_horizontal_rule("___"));
+    }
+
+    #[test]
+    fn hr_with_spaces() {
+        assert!(is_horizontal_rule("- - -"));
+    }
+
+    #[test]
+    fn hr_two_chars_rejected() {
+        assert!(!is_horizontal_rule("--"));
+    }
+
+    #[test]
+    fn hr_mixed_chars_rejected() {
+        assert!(!is_horizontal_rule("-*-"));
+    }
+
+    // ── find_closing / find_double_closing ──────────────────────────────
+
+    #[test]
+    fn find_closing_found() {
+        assert_eq!(find_closing(b"hello`world", 0, b'`'), Some(5));
+    }
+
+    #[test]
+    fn find_closing_not_found() {
+        assert_eq!(find_closing(b"hello world", 0, b'`'), None);
+    }
+
+    #[test]
+    fn find_closing_escaped_skipped() {
+        // \` should not match, but the next ` should
+        assert_eq!(find_closing(b"a\\`b`", 1, b'`'), Some(4));
+    }
+
+    #[test]
+    fn find_double_closing_found() {
+        assert_eq!(find_double_closing(b"ab**cd", 0, b'*'), Some(2));
+    }
+
+    #[test]
+    fn find_double_closing_not_found() {
+        assert_eq!(find_double_closing(b"ab*cd", 0, b'*'), None);
+    }
+
+    #[test]
+    fn find_double_closing_escaped() {
+        // The \** at index 2 is escaped, so the match is the ** at index 5
+        assert_eq!(find_double_closing(b"a\\**b**", 0, b'*'), Some(5));
+    }
+
+    // ── parse_link ───────────────────────────────────────────────────
+
+    #[test]
+    fn link_valid() {
+        let bytes = b"[text](url)";
+        assert_eq!(parse_link(bytes, 0), Some((5, 10)));
+    }
+
+    #[test]
+    fn link_missing_paren() {
+        assert_eq!(parse_link(b"[text]url", 0), None);
+    }
+
+    #[test]
+    fn link_no_close_bracket() {
+        assert_eq!(parse_link(b"[text(url)", 0), None);
+    }
+
+    // ── Block highlighting ─────────────────────────────────────────────
+
+    #[test]
+    fn block_heading_h1() {
+        let spans = block_spans("# Hello");
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].0, 0..1);
+        assert!(matches!(spans[0].1, Highlight::HeadingMarker));
+        assert_eq!(spans[1].0, 1..7);
+        assert!(matches!(spans[1].1, Highlight::Heading));
+    }
+
+    #[test]
+    fn block_heading_h3() {
+        let spans = block_spans("### Title");
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].0, 0..3);
+        assert!(matches!(spans[0].1, Highlight::HeadingMarker));
+    }
+
+    #[test]
+    fn block_heading_h7_not_heading() {
+        let spans = block_spans("####### nope");
+        // Should not be a heading — falls through to inline
+        assert!(spans.iter().all(|(_, h)| !matches!(h, Highlight::Heading)));
+    }
+
+    #[test]
+    fn block_heading_no_space_not_heading() {
+        let spans = block_spans("#no_space");
+        assert!(spans.iter().all(|(_, h)| !matches!(h, Highlight::Heading)));
+    }
+
+    #[test]
+    fn block_blockquote() {
+        let spans = block_spans("> quoted text");
+        assert_eq!(spans.len(), 1);
+        assert!(matches!(spans[0].1, Highlight::BlockQuote));
+        assert_eq!(spans[0].0, 0..13);
+    }
+
+    #[test]
+    fn block_unordered_list_dash() {
+        let spans = block_spans("- item");
+        assert_eq!(spans[0].0, 0..1);
+        assert!(matches!(spans[0].1, Highlight::ListMarker));
+    }
+
+    #[test]
+    fn block_unordered_list_asterisk() {
+        let spans = block_spans("* item");
+        assert!(matches!(spans[0].1, Highlight::ListMarker));
+    }
+
+    #[test]
+    fn block_ordered_list() {
+        let spans = block_spans("1. item");
+        assert_eq!(spans[0].0, 0..2);
+        assert!(matches!(spans[0].1, Highlight::ListMarker));
+    }
+
+    #[test]
+    fn block_horizontal_rule() {
+        let spans = block_spans("---");
+        assert_eq!(spans.len(), 1);
+        assert!(matches!(spans[0].1, Highlight::HorizontalRule));
+    }
+
+    #[test]
+    fn block_empty_line() {
+        assert!(block_spans("").is_empty());
+        assert!(block_spans("   ").is_empty());
+    }
+
+    #[test]
+    fn block_indented_heading() {
+        let spans = block_spans("  ## Indented");
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].0, 2..4);
+        assert!(matches!(spans[0].1, Highlight::HeadingMarker));
+        assert_eq!(spans[1].0, 4..13);
+        assert!(matches!(spans[1].1, Highlight::Heading));
+    }
+
+    // ── Inline highlighting ───────────────────────────────────────────
+
+    #[test]
+    fn inline_code() {
+        let spans = inline_spans("hello `code` world");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].0, 6..12);
+        assert!(matches!(spans[0].1, Highlight::Code));
+    }
+
+    #[test]
+    fn inline_bold_asterisks() {
+        let spans = inline_spans("**bold**");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].0, 0..8);
+        assert!(matches!(spans[0].1, Highlight::Bold));
+    }
+
+    #[test]
+    fn inline_bold_underscores() {
+        let spans = inline_spans("__bold__");
+        assert_eq!(spans.len(), 1);
+        assert!(matches!(spans[0].1, Highlight::Bold));
+    }
+
+    #[test]
+    fn inline_italic_asterisk() {
+        let spans = inline_spans("*italic*");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].0, 0..8);
+        assert!(matches!(spans[0].1, Highlight::Italic));
+    }
+
+    #[test]
+    fn inline_italic_underscore() {
+        let spans = inline_spans("_italic_");
+        assert_eq!(spans.len(), 1);
+        assert!(matches!(spans[0].1, Highlight::Italic));
+    }
+
+    #[test]
+    fn inline_link() {
+        let spans = inline_spans("[text](url)");
+        assert_eq!(spans.len(), 2);
+        assert!(matches!(spans[0].1, Highlight::Link));
+        assert_eq!(spans[0].0, 0..6);
+        assert!(matches!(spans[1].1, Highlight::Url));
+        assert_eq!(spans[1].0, 6..11);
+    }
+
+    #[test]
+    fn inline_image() {
+        let spans = inline_spans("![alt](img.png)");
+        assert_eq!(spans.len(), 2);
+        assert!(matches!(spans[0].1, Highlight::Link));
+        assert!(matches!(spans[1].1, Highlight::Url));
+    }
+
+    #[test]
+    fn inline_escaped_closing_backtick() {
+        // Escaped closing backtick doesn't end the span — no match found
+        let spans = inline_spans("`code \\` more`");
+        assert_eq!(spans.len(), 1);
+        assert!(matches!(spans[0].1, Highlight::Code));
+        // The span runs from the first ` to the final `, skipping the escaped one
+        assert_eq!(spans[0].0, 0..14);
+    }
+
+    #[test]
+    fn inline_mid_word_underscore_suppressed() {
+        let spans = inline_spans("foo_bar_baz");
+        // Mid-word underscores should not create italic
+        assert!(spans.iter().all(|(_, h)| !matches!(h, Highlight::Italic)));
+    }
+
+    #[test]
+    fn inline_multiple_elements() {
+        let spans = inline_spans("`code` and **bold**");
+        assert_eq!(spans.len(), 2);
+        assert!(matches!(spans[0].1, Highlight::Code));
+        assert!(matches!(spans[1].1, Highlight::Bold));
+    }
+
+    // ── Multi-line state machine ──────────────────────────────────────
+
+    #[test]
+    fn md_code_block_lifecycle() {
+        let mut h = md_highlighter();
+        let results = highlight_lines(&mut h, &[
+            "# Title",
+            "```",
+            "some code",
+            "```",
+            "paragraph",
+        ]);
+
+        // Line 0: heading
+        assert!(results[0].iter().any(|(_, hl)| matches!(hl, Highlight::Heading)));
+
+        // Line 1: fence open → CodeBlock
+        assert!(results[1].iter().all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
+
+        // Line 2: inside fence → CodeBlock
+        assert!(results[2].iter().all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
+
+        // Line 3: fence close → CodeBlock
+        assert!(results[3].iter().all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
+
+        // Line 4: back to normal markdown (no CodeBlock)
+        assert!(results[4].iter().all(|(_, hl)| !matches!(hl, Highlight::CodeBlock)));
+    }
+
+    #[test]
+    fn md_change_line_restores_code_block_state() {
+        let mut h = md_highlighter();
+        // Build up state through 3 lines
+        highlight_lines(&mut h, &["```", "inside", "```"]);
+
+        // Jump back to line 1 (inside code block)
+        h.change_line(1);
+        let spans: Vec<_> = h.highlight_line("different content").collect();
+        assert!(spans.iter().all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
+    }
+
+    #[test]
+    fn md_change_line_zero_resets() {
+        let mut h = md_highlighter();
+        highlight_lines(&mut h, &["```", "code"]);
+
+        // Reset to start
+        h.change_line(0);
+        let spans: Vec<_> = h.highlight_line("# Heading").collect();
+        assert!(spans.iter().any(|(_, hl)| matches!(hl, Highlight::Heading)));
+    }
+
+    #[test]
+    fn plain_text_returns_no_spans() {
+        let mut h = LstHighlighter::new(&Settings { extension: None });
+        let spans: Vec<_> = h.highlight_line("# not highlighted").collect();
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn syntect_mode_returns_colored_spans() {
+        let mut h = LstHighlighter::new(&Settings {
+            extension: Some("rs".to_string()),
+        });
+        let spans: Vec<_> = h.highlight_line("fn main() {}").collect();
+        assert!(!spans.is_empty());
+        assert!(spans.iter().all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
+    }
+
+    #[test]
+    fn md_fenced_code_with_language_uses_syntect() {
+        let mut h = md_highlighter();
+        let results = highlight_lines(&mut h, &[
+            "```rust",
+            "fn main() {}",
+            "```",
+        ]);
+
+        // Line 0: fence → CodeBlock
+        assert!(results[0].iter().all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
+
+        // Line 1: inside rust fence → should get Syntect colors, not plain CodeBlock
+        assert!(!results[1].is_empty());
+        assert!(results[1].iter().all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
+    }
+}
