@@ -80,6 +80,19 @@ cargo test --features internal-invariants
 
 Those tests are useful for implementation work, but they are allowed to fail during benign internal refactors that preserve external behavior.
 
+## Benchmarking
+
+The current performance optimization workflow is documented in [docs/performance-optimization.md](/home/jmartin/lst/docs/performance-optimization.md).
+
+Build both binaries, then run the X11 real-display scroll benchmark:
+
+```bash
+cargo build --release --bin lst --bin bench_scroll_x11
+./target/release/bench_scroll_x11
+```
+
+The benchmark prints diagnostics plus a final `score=...` line. The current score is median process CPU time for the fixed real-display scroll trace, and lower is better.
+
 ## Notes
 
 - Launching `lst` without file arguments creates a scratchpad in `~/.local/share/lst/`

@@ -1742,9 +1742,11 @@ dependencies = [
  "chrono",
  "fontdb",
  "iced",
+ "libc",
  "rfd",
  "syntect",
  "ttf-parser",
+ "x11rb",
 ]
 
 [[package]]
