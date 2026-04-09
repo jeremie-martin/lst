@@ -20,11 +20,11 @@ Scenario:
 - file: `benchmarks/paste-corpus.rs`
 - wrap: on
 - highlighting: default Rust highlighting
-- setup: seed clipboard from the fixed corpus, focus editor, `Ctrl+A`
+- setup: seed clipboard from the fixed corpus, focus editor, `Ctrl+End`
 - visible 5-second paste trace: `10` `Ctrl+V` pastes at `500ms` intervals
 - `1s` sleep between repetitions
 - `1` priming run, `7` measured runs
-- expected final file size on every measured run: `1335020` bytes, `35930` lines
+- expected final file size on every measured run: `1468522` bytes, `39523` lines
 
 Runner:
 

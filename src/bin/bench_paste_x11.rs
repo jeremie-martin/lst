@@ -36,7 +36,7 @@ const FILE_STABLE_MS: u64 = 200;
 const FILE_STABLE_TIMEOUT_MS: u64 = 5_000;
 const BUTTON_LEFT: u8 = 1;
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
-const KEYSYM_A: u32 = b'a' as u32;
+const KEYSYM_END: u32 = 0xff57;
 const KEYSYM_S: u32 = b's' as u32;
 const KEYSYM_V: u32 = b'v' as u32;
 
@@ -132,7 +132,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("priming_runs={PRIMING_RUNS}");
     println!("repetitions={REPETITIONS}");
     println!("setup_clipboard_seeded=true");
-    println!("setup_select_all=true");
+    println!("setup_move_to_document_end=true");
     println!("trace_paste_count={TRACE_PASTE_COUNT}");
     println!("trace_paste_interval_ms={TRACE_PASTE_INTERVAL_MS}");
     println!("trace_duration_ms={TRACE_TOTAL_MS}");
@@ -227,9 +227,9 @@ fn run_once(
             Duration::from_millis(TRACE_TIMEOUT_MS),
         )?;
 
-        debug_phase(run_index, "ctrl_a");
-        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.a)?;
-        debug_phase(run_index, "post_ctrl_a_quiet");
+        debug_phase(run_index, "ctrl_end");
+        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.end)?;
+        debug_phase(run_index, "post_ctrl_end_quiet");
         wait_for_damage_quiet(
             conn,
             damage.damage(),
@@ -991,7 +991,7 @@ impl Atoms {
 
 struct Keycodes {
     control_l: xproto::Keycode,
-    a: xproto::Keycode,
+    end: xproto::Keycode,
     s: xproto::Keycode,
     v: xproto::Keycode,
 }
@@ -1005,7 +1005,7 @@ impl Keycodes {
 
         Ok(Self {
             control_l: find_keycode(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
-            a: find_keycode(&reply, setup.min_keycode, KEYSYM_A, active_group)?,
+            end: find_keycode(&reply, setup.min_keycode, KEYSYM_END, active_group)?,
             s: find_keycode(&reply, setup.min_keycode, KEYSYM_S, active_group)?,
             v: find_keycode(&reply, setup.min_keycode, KEYSYM_V, active_group)?,
         })
