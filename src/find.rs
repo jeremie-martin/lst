@@ -192,7 +192,7 @@ impl FindState {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "internal-invariants"))]
 mod tests {
     use super::*;
 

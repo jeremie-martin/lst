@@ -5,6 +5,10 @@ edition = "2021"
 description = "Lucy's Simple Text editor — a fast, minimal editor for Linux"
 license = "MIT"
 
+[features]
+default = []
+internal-invariants = []
+
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fontdb = "0.23"

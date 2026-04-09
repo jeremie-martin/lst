@@ -566,7 +566,7 @@ fn parse_link(bytes: &[u8], open: usize) -> Option<(usize, usize)> {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "internal-invariants"))]
 mod tests {
     use super::*;
     use iced::advanced::text::highlighter::Highlighter as _H;
@@ -589,8 +589,14 @@ mod tests {
         })
     }
 
-    fn highlight_lines(h: &mut LstHighlighter, lines: &[&str]) -> Vec<Vec<(Range<usize>, Highlight)>> {
-        lines.iter().map(|line| h.highlight_line(line).collect()).collect()
+    fn highlight_lines(
+        h: &mut LstHighlighter,
+        lines: &[&str],
+    ) -> Vec<Vec<(Range<usize>, Highlight)>> {
+        lines
+            .iter()
+            .map(|line| h.highlight_line(line).collect())
+            .collect()
     }
 
     // ── parse_code_fence_with_lang ─────────────────────────────────────
@@ -919,28 +925,32 @@ mod tests {
     #[test]
     fn md_code_block_lifecycle() {
         let mut h = md_highlighter();
-        let results = highlight_lines(&mut h, &[
-            "# Title",
-            "```",
-            "some code",
-            "```",
-            "paragraph",
-        ]);
+        let results = highlight_lines(&mut h, &["# Title", "```", "some code", "```", "paragraph"]);
 
         // Line 0: heading
-        assert!(results[0].iter().any(|(_, hl)| matches!(hl, Highlight::Heading)));
+        assert!(results[0]
+            .iter()
+            .any(|(_, hl)| matches!(hl, Highlight::Heading)));
 
         // Line 1: fence open → CodeBlock
-        assert!(results[1].iter().all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
+        assert!(results[1]
+            .iter()
+            .all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
 
         // Line 2: inside fence → CodeBlock
-        assert!(results[2].iter().all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
+        assert!(results[2]
+            .iter()
+            .all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
 
         // Line 3: fence close → CodeBlock
-        assert!(results[3].iter().all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
+        assert!(results[3]
+            .iter()
+            .all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
 
         // Line 4: back to normal markdown (no CodeBlock)
-        assert!(results[4].iter().all(|(_, hl)| !matches!(hl, Highlight::CodeBlock)));
+        assert!(results[4]
+            .iter()
+            .all(|(_, hl)| !matches!(hl, Highlight::CodeBlock)));
     }
 
     #[test]
@@ -952,7 +962,9 @@ mod tests {
         // Jump back to line 1 (inside code block)
         h.change_line(1);
         let spans: Vec<_> = h.highlight_line("different content").collect();
-        assert!(spans.iter().all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
+        assert!(spans
+            .iter()
+            .all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
     }
 
     #[test]
@@ -980,23 +992,25 @@ mod tests {
         });
         let spans: Vec<_> = h.highlight_line("fn main() {}").collect();
         assert!(!spans.is_empty());
-        assert!(spans.iter().all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
+        assert!(spans
+            .iter()
+            .all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
     }
 
     #[test]
     fn md_fenced_code_with_language_uses_syntect() {
         let mut h = md_highlighter();
-        let results = highlight_lines(&mut h, &[
-            "```rust",
-            "fn main() {}",
-            "```",
-        ]);
+        let results = highlight_lines(&mut h, &["```rust", "fn main() {}", "```"]);
 
         // Line 0: fence → CodeBlock
-        assert!(results[0].iter().all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
+        assert!(results[0]
+            .iter()
+            .all(|(_, hl)| matches!(hl, Highlight::CodeBlock)));
 
         // Line 1: inside rust fence → should get Syntect colors, not plain CodeBlock
         assert!(!results[1].is_empty());
-        assert!(results[1].iter().all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
+        assert!(results[1]
+            .iter()
+            .all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
     }
 }

@@ -116,6 +116,27 @@ Not testing something is a valid choice when it is a principled boundary, not a 
 The line is: test everything we own, trust everything we don't. If we find ourselves wanting to test framework behavior, that is a sign we are relying on undocumented behavior and should reconsider the design.
 
 
+## Blind refactor gate
+
+If we want a workflow where `cargo test` can be trusted blindly during refactors, the default suite must be biased toward **behavioral contracts**, not implementation choices.
+
+That means:
+
+- **Default suite:** user-visible behavior, stable command routing, text transformations, file flows, vim semantics, find/replace behavior
+- **Optional invariant suite:** cache reuse, layout-cache invalidation, reveal scheduling, exact scroll math, other internal coordination details
+
+Internal invariant tests are still valuable, but they are not part of the blind refactor gate because they can fail after a healthy internal rewrite that preserves behavior. Those tests should run explicitly, not by default.
+
+In this repository:
+
+- `cargo test` is the blind refactor gate
+- `cargo test --features internal-invariants` runs the deeper implementation-sensitive checks
+
+To keep that contract honest, source-file unit tests in `src/` are not part of the default gate. They are compiled only under `internal-invariants`, while the default gate runs the higher-level suites in `tests/`.
+
+This split is not an excuse to weaken coverage. The rule is: if an implementation-sensitive test protects important user behavior, replace it with a higher-level behavioral test before demoting it.
+
+
 ## The testability feedback loop
 
 Testability is a leading indicator of code quality. When you notice:

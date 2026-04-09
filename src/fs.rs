@@ -1,7 +1,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-pub trait Filesystem {
+pub trait Filesystem: Send + Sync {
     fn read_to_string(&self, path: &Path) -> io::Result<String>;
     fn write(&self, path: &Path, contents: &str) -> io::Result<()>;
     fn remove_file(&self, path: &Path) -> io::Result<()>;
@@ -9,6 +10,8 @@ pub trait Filesystem {
     fn create_dir_all(&self, path: &Path) -> io::Result<()>;
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
 }
+
+pub type SharedFilesystem = Arc<dyn Filesystem>;
 
 // ── Real filesystem (production) ───────────────────────────────────────────
 

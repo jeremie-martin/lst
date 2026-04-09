@@ -61,6 +61,25 @@ cargo build --release
 
 At runtime, `lst` prefers `TX-02`, then `JetBrains Mono`, then the system monospace font.
 
+## Testing
+
+Use the default suite as the blind refactor gate:
+
+```bash
+cargo test
+```
+
+That suite is intended to stay focused on user-visible behavior and refactor-stable contracts.
+In practice, it compiles the integration-style suites under `tests/` and does not compile the source-file unit tests in `src/`.
+
+There is also an opt-in internal invariant suite for cache, reveal, and scheduling details:
+
+```bash
+cargo test --features internal-invariants
+```
+
+Those tests are useful for implementation work, but they are allowed to fail during benign internal refactors that preserve external behavior.
+
 ## Notes
 
 - Launching `lst` without file arguments creates a scratchpad in `~/.local/share/lst/`

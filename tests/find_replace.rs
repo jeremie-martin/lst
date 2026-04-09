@@ -51,6 +51,19 @@ fn find_next_advances_selected_match() {
 }
 
 #[test]
+fn find_next_moves_cursor_to_the_match() {
+    let mut app = App::test("foo\nbar\nfoo");
+    app.update_inner(Message::FindOpen);
+    app.update_inner(Message::FindQueryChanged("foo".to_string()));
+
+    app.update_inner(Message::FindNext);
+
+    let snap = app.snapshot();
+    assert_eq!(snap.cursor_line, 2);
+    assert_eq!(snap.cursor_column, 3);
+}
+
+#[test]
 fn replace_one_substitutes_current_match() {
     let mut app = App::test("foo bar foo");
     app.update_inner(Message::FindOpen);

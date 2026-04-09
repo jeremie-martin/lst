@@ -1,5 +1,7 @@
 pub mod app;
 pub mod clipboard;
+pub mod clock;
+pub mod dialogs;
 pub mod editor_ops;
 pub mod find;
 pub mod fs;

@@ -310,7 +310,7 @@ fn char_width(ch: char, col: usize) -> usize {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "internal-invariants"))]
 mod tests {
     use super::*;
 

@@ -1,11 +1,14 @@
 use std::io::Write as _;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
-pub trait Clipboard {
+pub trait Clipboard: Send + Sync {
     fn copy(&self, text: &str);
     fn copy_primary(&self, text: &str);
     fn read_primary(&self) -> Option<String>;
 }
+
+pub type SharedClipboard = Arc<dyn Clipboard>;
 
 // ── Real clipboard (production) ──────────────────────────────────────────────
 

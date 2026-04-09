@@ -42,3 +42,15 @@ fn page_down_clamps_at_bottom() {
     app.update_inner(Message::PageDown(10, false));
     assert_eq!(app.snapshot().cursor_line, 19);
 }
+
+#[test]
+fn page_down_with_selection_extends_the_selection() {
+    let doc = make_multiline_doc(20);
+    let mut app = App::test(&doc);
+
+    app.update_inner(Message::PageDown(5, true));
+
+    let snap = app.snapshot();
+    assert_eq!(snap.cursor_line, 5);
+    assert!(snap.selection.is_some());
+}

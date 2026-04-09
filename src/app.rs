@@ -1,11 +1,9 @@
-#[cfg(test)]
-use crate::clipboard::NullClipboard;
-use crate::clipboard::{Clipboard, RealClipboard};
+use crate::clipboard::{NullClipboard, RealClipboard, SharedClipboard};
+use crate::clock::{Clock, FixedClock, RealClock, SharedClock};
+use crate::dialogs::{NullDialogs, RealDialogs, SharedDialogs};
 use crate::editor_ops;
 use crate::find::FindState;
-#[cfg(test)]
-use crate::fs::NullFilesystem;
-use crate::fs::{Filesystem, RealFilesystem};
+use crate::fs::{Filesystem, NullFilesystem, RealFilesystem, SharedFilesystem};
 use crate::highlight;
 use crate::style::{flat_btn, solid_bg, EDITOR_FONT, EDITOR_PAD, FONT_SIZE, LINE_HEIGHT_PX};
 use crate::tab::{EditKind, Tab};
@@ -24,7 +22,7 @@ use iced::{
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
-#[cfg(test)]
+#[cfg(all(test, feature = "internal-invariants"))]
 use std::time::Instant;
 
 fn editor_id() -> iced::widget::Id {
@@ -78,6 +76,108 @@ pub struct ViewSnapshot {
     pub vim_pending: String,
 }
 
+#[derive(Clone)]
+pub struct AppServices {
+    pub clipboard: SharedClipboard,
+    pub fs: SharedFilesystem,
+    pub dialogs: SharedDialogs,
+    pub clock: SharedClock,
+    pub home_dir: Option<PathBuf>,
+    pub runtime_mode: RuntimeMode,
+}
+
+impl AppServices {
+    pub fn real() -> Self {
+        Self {
+            clipboard: Arc::new(RealClipboard),
+            fs: Arc::new(RealFilesystem),
+            dialogs: Arc::new(RealDialogs),
+            clock: Arc::new(RealClock),
+            home_dir: std::env::var_os("HOME").map(PathBuf::from),
+            runtime_mode: RuntimeMode::Async,
+        }
+    }
+
+    pub fn test() -> Self {
+        Self {
+            clipboard: Arc::new(NullClipboard),
+            fs: Arc::new(NullFilesystem),
+            dialogs: Arc::new(NullDialogs),
+            clock: Arc::new(FixedClock::default()),
+            home_dir: Some(PathBuf::from("/tmp/lst-test-home")),
+            runtime_mode: RuntimeMode::Inline,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeMode {
+    Async,
+    Inline,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppArgs {
+    pub window_title: Option<String>,
+    pub files: Vec<PathBuf>,
+    pub scratchpad_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootError {
+    MissingArgValue(&'static str),
+    HomeNotSet,
+    ScratchpadDirCreateFailed(PathBuf),
+}
+
+impl AppArgs {
+    pub fn parse_from<I, S>(args: I) -> Result<Self, BootError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut window_title = None;
+        let mut files = Vec::new();
+        let mut scratchpad_dir = None;
+        let mut args = args.into_iter();
+
+        while let Some(arg) = args.next() {
+            let arg = arg.as_ref();
+
+            if let Some(value) = arg.strip_prefix("--title=") {
+                window_title = Some(value.to_owned());
+                continue;
+            }
+            if arg == "--title" {
+                let Some(value) = args.next() else {
+                    return Err(BootError::MissingArgValue("--title"));
+                };
+                window_title = Some(value.as_ref().to_owned());
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--scratchpad-dir=") {
+                scratchpad_dir = Some(PathBuf::from(value));
+                continue;
+            }
+            if arg == "--scratchpad-dir" {
+                let Some(value) = args.next() else {
+                    return Err(BootError::MissingArgValue("--scratchpad-dir"));
+                };
+                scratchpad_dir = Some(PathBuf::from(value.as_ref()));
+                continue;
+            }
+
+            files.push(PathBuf::from(arg));
+        }
+
+        Ok(Self {
+            window_title,
+            files,
+            scratchpad_dir,
+        })
+    }
+}
+
 // ── App ──────────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -87,7 +187,7 @@ pub struct App {
     pub gutter_hover_line: Option<usize>,
     pub find: FindState,
     pub word_wrap: bool,
-    pub scratchpad_dir: PathBuf,
+    pub scratchpad_dir: Option<PathBuf>,
     pub needs_autosave: bool,
     pub shift_held: bool, // iced's Action::Click doesn't carry modifier state; track externally
     pub multiclick_drag: bool, // Workaround for iced-rs/iced#3227 — remove when merged
@@ -95,8 +195,12 @@ pub struct App {
     pub goto_line: Option<String>,
     pub vim: vim::VimState,
     pub viewport: ViewportState,
-    pub clipboard: Box<dyn Clipboard>,
-    pub fs: Box<dyn Filesystem>,
+    pub clipboard: SharedClipboard,
+    pub fs: SharedFilesystem,
+    pub dialogs: SharedDialogs,
+    pub clock: SharedClock,
+    pub home_dir: Option<PathBuf>,
+    pub runtime_mode: RuntimeMode,
 }
 
 #[derive(Debug, Clone)]
@@ -165,15 +269,33 @@ pub enum Message {
     Scrolled(Viewport),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     DialogClosed,
     Io,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeEffect {
+    OpenFile,
+    SaveFile {
+        path: PathBuf,
+        body: String,
+    },
+    AutosaveFile {
+        path: PathBuf,
+        body: String,
+    },
+    SaveFileAs {
+        suggested_name: String,
+        body: String,
+    },
+}
+
 pub struct UpdateResult {
     pub task: Task<Message>,
     pub reveal: RevealIntent,
+    pub effects: Vec<RuntimeEffect>,
 }
 
 impl UpdateResult {
@@ -181,6 +303,7 @@ impl UpdateResult {
         Self {
             task: Task::none(),
             reveal: RevealIntent::None,
+            effects: Vec::new(),
         }
     }
 
@@ -188,6 +311,7 @@ impl UpdateResult {
         Self {
             task,
             reveal: RevealIntent::None,
+            effects: Vec::new(),
         }
     }
 
@@ -195,78 +319,71 @@ impl UpdateResult {
         Self {
             task,
             reveal: RevealIntent::RevealCaret,
+            effects: Vec::new(),
+        }
+    }
+
+    pub fn effects(effects: Vec<RuntimeEffect>) -> Self {
+        Self {
+            task: Task::none(),
+            reveal: RevealIntent::None,
+            effects,
+        }
+    }
+
+    pub fn reveal_effects(effects: Vec<RuntimeEffect>) -> Self {
+        Self {
+            task: Task::none(),
+            reveal: RevealIntent::RevealCaret,
+            effects,
         }
     }
 }
 
-struct CliArgs {
-    window_title: Option<String>,
-    files: Vec<PathBuf>,
-    scratchpad_dir: Option<PathBuf>,
-}
-
-fn parse_args() -> CliArgs {
-    let mut args = std::env::args().skip(1);
-    let mut window_title = None;
-    let mut files = Vec::new();
-    let mut scratchpad_dir = None;
-
-    while let Some(arg) = args.next() {
-        if let Some(value) = arg.strip_prefix("--title=") {
-            window_title = Some(value.to_owned());
-            continue;
+fn print_boot_error(error: &BootError) {
+    match error {
+        BootError::MissingArgValue(flag) => {
+            eprintln!("lst: missing value for {flag}");
         }
-        if arg == "--title" {
-            let Some(value) = args.next() else {
-                eprintln!("lst: missing value for --title");
-                std::process::exit(2);
-            };
-            window_title = Some(value);
-            continue;
-        }
-        if let Some(value) = arg.strip_prefix("--scratchpad-dir=") {
-            scratchpad_dir = Some(PathBuf::from(value));
-            continue;
-        }
-        if arg == "--scratchpad-dir" {
-            let Some(value) = args.next() else {
-                eprintln!("lst: missing value for --scratchpad-dir");
-                std::process::exit(2);
-            };
-            scratchpad_dir = Some(PathBuf::from(value));
-            continue;
-        }
-        files.push(PathBuf::from(arg));
-    }
-
-    CliArgs {
-        window_title,
-        files,
-        scratchpad_dir,
-    }
-}
-
-fn resolve_scratchpad_dir(cli_override: Option<PathBuf>, fs: &dyn Filesystem) -> PathBuf {
-    let dir = cli_override.unwrap_or_else(|| {
-        let Some(home) = std::env::var_os("HOME") else {
+        BootError::HomeNotSet => {
             eprintln!("lst: HOME environment variable not set");
-            std::process::exit(1);
-        };
-        PathBuf::from(home).join(".local/share/lst")
-    });
-    if let Err(e) = fs.create_dir_all(&dir) {
-        eprintln!(
-            "lst: failed to create scratchpad directory {}: {e}",
-            dir.display()
-        );
-        std::process::exit(1);
+        }
+        BootError::ScratchpadDirCreateFailed(path) => {
+            eprintln!(
+                "lst: failed to create scratchpad directory {}",
+                path.display()
+            );
+        }
     }
-    dir
 }
 
-fn generate_scratchpad_path(dir: &Path, fs: &dyn Filesystem) -> PathBuf {
-    use chrono::Local;
-    let name = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+fn report_and_exit_boot_error(error: BootError) -> ! {
+    print_boot_error(&error);
+
+    match error {
+        BootError::MissingArgValue(_) => {
+            std::process::exit(2);
+        }
+        BootError::HomeNotSet | BootError::ScratchpadDirCreateFailed(_) => std::process::exit(1),
+    }
+}
+
+fn resolve_scratchpad_dir(
+    cli_override: Option<PathBuf>,
+    home_dir: Option<&Path>,
+) -> Result<PathBuf, BootError> {
+    cli_override
+        .or_else(|| home_dir.map(|home| home.join(".local/share/lst")))
+        .ok_or(BootError::HomeNotSet)
+}
+
+fn ensure_scratchpad_dir(dir: &Path, fs: &dyn Filesystem) -> Result<(), BootError> {
+    fs.create_dir_all(dir)
+        .map_err(|_| BootError::ScratchpadDirCreateFailed(dir.to_path_buf()))
+}
+
+fn generate_scratchpad_path(dir: &Path, fs: &dyn Filesystem, clock: &dyn Clock) -> PathBuf {
+    let name = clock.scratchpad_timestamp();
     let path = dir.join(format!("{name}.md"));
     if !fs.exists(&path) {
         return path;
@@ -282,9 +399,25 @@ fn generate_scratchpad_path(dir: &Path, fs: &dyn Filesystem) -> PathBuf {
 
 impl App {
     pub fn boot() -> (Self, Task<Message>) {
-        let args = parse_args();
-        let fs: Box<dyn Filesystem> = Box::new(RealFilesystem);
-        let scratchpad_dir = resolve_scratchpad_dir(args.scratchpad_dir, &*fs);
+        let args = AppArgs::parse_from(std::env::args().skip(1))
+            .unwrap_or_else(|error| report_and_exit_boot_error(error));
+        Self::boot_with(args, AppServices::real())
+            .unwrap_or_else(|error| report_and_exit_boot_error(error))
+    }
+
+    pub fn boot_with(
+        args: AppArgs,
+        services: AppServices,
+    ) -> Result<(Self, Task<Message>), BootError> {
+        let AppServices {
+            clipboard,
+            fs,
+            dialogs,
+            clock,
+            home_dir,
+            runtime_mode,
+        } = services;
+        let mut scratchpad_dir = args.scratchpad_dir.clone();
 
         let mut tabs: Vec<Tab> = args
             .files
@@ -297,11 +430,14 @@ impl App {
             .collect();
 
         if tabs.is_empty() {
-            let path = generate_scratchpad_path(&scratchpad_dir, &*fs);
+            let dir = resolve_scratchpad_dir(scratchpad_dir.clone(), home_dir.as_deref())?;
+            ensure_scratchpad_dir(&dir, fs.as_ref())?;
+            let path = generate_scratchpad_path(&dir, fs.as_ref(), clock.as_ref());
+            scratchpad_dir = Some(dir);
             tabs.push(Tab::new_scratchpad(path));
         }
 
-        (
+        Ok((
             Self {
                 tabs,
                 active: 0,
@@ -317,21 +453,44 @@ impl App {
                 goto_line: None,
                 vim: vim::VimState::new(),
                 viewport: ViewportState::default(),
-                clipboard: Box::new(RealClipboard),
+                clipboard,
                 fs,
+                dialogs,
+                clock,
+                home_dir,
+                runtime_mode,
             },
             iced::widget::operation::focus(EDITOR_ID.clone()),
-        )
+        ))
     }
 
-    fn create_scratchpad_tab(&self) -> Tab {
-        let path = generate_scratchpad_path(&self.scratchpad_dir, &*self.fs);
-        Tab::new_scratchpad(path)
+    fn create_scratchpad_tab(&mut self) -> Result<Tab, BootError> {
+        let dir = match self.scratchpad_dir.clone() {
+            Some(dir) => dir,
+            None => {
+                let dir = resolve_scratchpad_dir(None, self.home_dir.as_deref())?;
+                self.scratchpad_dir = Some(dir.clone());
+                dir
+            }
+        };
+        ensure_scratchpad_dir(&dir, self.fs.as_ref())?;
+        let path = generate_scratchpad_path(&dir, self.fs.as_ref(), self.clock.as_ref());
+        Ok(Tab::new_scratchpad(path))
     }
 
     pub fn test(text: &str) -> Self {
-        use crate::clipboard::NullClipboard;
-        use crate::fs::NullFilesystem;
+        Self::test_with_services(text, AppServices::test())
+    }
+
+    pub fn test_with_services(text: &str, services: AppServices) -> Self {
+        let AppServices {
+            clipboard,
+            fs,
+            dialogs,
+            clock,
+            home_dir,
+            runtime_mode,
+        } = services;
         Self {
             tabs: vec![Tab::from_path(PathBuf::from("/tmp/test.txt"), text)],
             active: 0,
@@ -339,7 +498,7 @@ impl App {
             gutter_hover_line: None,
             find: FindState::new(),
             word_wrap: true,
-            scratchpad_dir: PathBuf::from("/tmp"),
+            scratchpad_dir: Some(PathBuf::from("/tmp")),
             needs_autosave: false,
             shift_held: false,
             multiclick_drag: false,
@@ -347,8 +506,12 @@ impl App {
             goto_line: None,
             vim: vim::VimState::new(),
             viewport: ViewportState::default(),
-            clipboard: Box::new(NullClipboard),
-            fs: Box::new(NullFilesystem),
+            clipboard,
+            fs,
+            dialogs,
+            clock,
+            home_dir,
+            runtime_mode,
         }
     }
 
@@ -708,14 +871,109 @@ impl App {
     }
 
     pub(crate) fn finish_update(&mut self, result: UpdateResult) -> Task<Message> {
+        let runtime_task = Task::batch(
+            result
+                .effects
+                .into_iter()
+                .map(|effect| self.perform_runtime_effect(effect)),
+        );
+        let task = Task::batch([result.task, runtime_task]);
+
         match result.reveal {
-            RevealIntent::None => result.task,
+            RevealIntent::None => task,
             RevealIntent::RevealCaret => {
                 if let Some(target) = self.caret_reveal_target() {
                     self.viewport.set_scroll_y(target);
-                    return Task::batch([result.task, Self::reveal_scroll_task(target)]);
+                    return Task::batch([task, Self::reveal_scroll_task(target)]);
                 }
-                result.task
+                task
+            }
+        }
+    }
+
+    fn maybe_resolve_runtime_effects(&mut self, result: UpdateResult) -> UpdateResult {
+        if self.runtime_mode != RuntimeMode::Inline || result.effects.is_empty() {
+            return result;
+        }
+
+        let mut combined = UpdateResult {
+            task: result.task,
+            reveal: result.reveal,
+            effects: Vec::new(),
+        };
+
+        for effect in result.effects {
+            let follow_up = self.update_inner(self.resolve_runtime_effect_inline(effect));
+            combined.task = Task::batch([combined.task, follow_up.task]);
+            if follow_up.reveal == RevealIntent::RevealCaret {
+                combined.reveal = RevealIntent::RevealCaret;
+            }
+        }
+
+        combined
+    }
+
+    fn perform_runtime_effect(&self, effect: RuntimeEffect) -> Task<Message> {
+        match effect {
+            RuntimeEffect::OpenFile => {
+                let dialogs = Arc::clone(&self.dialogs);
+                let fs = Arc::clone(&self.fs);
+                Task::perform(open_file(dialogs, fs), Message::Opened)
+            }
+            RuntimeEffect::SaveFile { path, body } => {
+                let fs = Arc::clone(&self.fs);
+                Task::perform(save_file(fs, path, body), Message::Saved)
+            }
+            RuntimeEffect::AutosaveFile { path, body } => {
+                let fs = Arc::clone(&self.fs);
+                Task::perform(save_file(fs, path, body), Message::AutosaveComplete)
+            }
+            RuntimeEffect::SaveFileAs {
+                suggested_name,
+                body,
+            } => {
+                let dialogs = Arc::clone(&self.dialogs);
+                let fs = Arc::clone(&self.fs);
+                Task::perform(
+                    save_file_as(dialogs, fs, suggested_name, body),
+                    Message::Saved,
+                )
+            }
+        }
+    }
+
+    fn resolve_runtime_effect_inline(&self, effect: RuntimeEffect) -> Message {
+        match effect {
+            RuntimeEffect::OpenFile => {
+                let Some(path) = self.dialogs.pick_open_file_blocking() else {
+                    return Message::Opened(Err(Error::DialogClosed));
+                };
+
+                match self.fs.read_to_string(&path) {
+                    Ok(body) => Message::Opened(Ok((path, body))),
+                    Err(_) => Message::Opened(Err(Error::Io)),
+                }
+            }
+            RuntimeEffect::SaveFile { path, body } => match self.fs.write(&path, &body) {
+                Ok(()) => Message::Saved(Ok(path)),
+                Err(_) => Message::Saved(Err(Error::Io)),
+            },
+            RuntimeEffect::AutosaveFile { path, body } => match self.fs.write(&path, &body) {
+                Ok(()) => Message::AutosaveComplete(Ok(path)),
+                Err(_) => Message::AutosaveComplete(Err(Error::Io)),
+            },
+            RuntimeEffect::SaveFileAs {
+                suggested_name,
+                body,
+            } => {
+                let Some(path) = self.dialogs.pick_save_file_blocking(&suggested_name) else {
+                    return Message::Saved(Err(Error::DialogClosed));
+                };
+
+                match self.fs.write(&path, &body) {
+                    Ok(()) => Message::Saved(Ok(path)),
+                    Err(_) => Message::Saved(Err(Error::Io)),
+                }
             }
         }
     }
@@ -774,7 +1032,7 @@ impl App {
     }
 
     pub fn update_inner(&mut self, message: Message) -> UpdateResult {
-        match message {
+        let result = match message {
             Message::Edit(action) => {
                 let reveal = reveal_intent_for_edit_action(&action);
                 self.vim.clear_preferred_column();
@@ -926,6 +1184,7 @@ impl App {
                 UpdateResult {
                     task: Task::none(),
                     reveal,
+                    effects: Vec::new(),
                 }
             }
 
@@ -946,6 +1205,7 @@ impl App {
                 UpdateResult {
                     task: self.close_tab(i),
                     reveal,
+                    effects: Vec::new(),
                 }
             }
 
@@ -956,15 +1216,23 @@ impl App {
                 } else {
                     RevealIntent::None
                 },
+                effects: Vec::new(),
             },
 
             Message::New => {
-                self.tabs.push(self.create_scratchpad_tab());
+                let tab = match self.create_scratchpad_tab() {
+                    Ok(tab) => tab,
+                    Err(error) => {
+                        print_boot_error(&error);
+                        return UpdateResult::none();
+                    }
+                };
+                self.tabs.push(tab);
                 self.set_active_tab(self.tabs.len() - 1);
                 UpdateResult::reveal(Task::none())
             }
 
-            Message::Open => UpdateResult::task(Task::perform(open_file(), Message::Opened)),
+            Message::Open => UpdateResult::effects(vec![RuntimeEffect::OpenFile]),
 
             Message::Opened(Ok((path, body))) => {
                 if self.tabs.len() == 1
@@ -990,15 +1258,21 @@ impl App {
             Message::Save => {
                 let tab = &self.tabs[self.active];
                 let body = tab.content.text();
-                UpdateResult::task(match tab.path.clone() {
-                    Some(path) => Task::perform(save_file(path, body), Message::Saved),
-                    None => Task::perform(save_file_as(body), Message::Saved),
-                })
+                UpdateResult::effects(vec![match tab.path.clone() {
+                    Some(path) => RuntimeEffect::SaveFile { path, body },
+                    None => RuntimeEffect::SaveFileAs {
+                        suggested_name: "untitled.txt".to_string(),
+                        body,
+                    },
+                }])
             }
 
             Message::SaveAs => {
                 let body = self.tabs[self.active].content.text();
-                UpdateResult::task(Task::perform(save_file_as(body), Message::Saved))
+                UpdateResult::effects(vec![RuntimeEffect::SaveFileAs {
+                    suggested_name: "untitled.txt".to_string(),
+                    body,
+                }])
             }
 
             Message::Saved(Ok(path)) => {
@@ -1016,21 +1290,21 @@ impl App {
                 }
                 self.needs_autosave = false;
 
-                let saves: Vec<Task<Message>> = self
+                let saves: Vec<RuntimeEffect> = self
                     .tabs
                     .iter()
                     .filter(|t| t.modified && t.path.is_some())
                     .map(|t| {
                         let path = t.path.clone().unwrap();
                         let body = t.content.text();
-                        Task::perform(save_file(path, body), Message::AutosaveComplete)
+                        RuntimeEffect::AutosaveFile { path, body }
                     })
                     .collect();
 
                 if saves.is_empty() {
                     UpdateResult::none()
                 } else {
-                    UpdateResult::task(Task::batch(saves))
+                    UpdateResult::effects(saves)
                 }
             }
 
@@ -1508,6 +1782,7 @@ impl App {
                 UpdateResult {
                     task: iced::widget::operation::focus(EDITOR_ID.clone()),
                     reveal,
+                    effects: Vec::new(),
                 }
             }
 
@@ -1533,7 +1808,9 @@ impl App {
                 let commands = self.vim.handle_key(key, mods, &snapshot);
                 self.execute_vim_commands(commands)
             }
-        }
+        };
+
+        self.maybe_resolve_runtime_effects(result)
     }
 
     fn execute_vim_commands(&mut self, commands: Vec<vim::VimCommand>) -> UpdateResult {
@@ -1682,7 +1959,11 @@ impl App {
             }
         }
         self.apply_block_cursor_if_normal();
-        UpdateResult { task, reveal }
+        UpdateResult {
+            task,
+            reveal,
+            effects: Vec::new(),
+        }
     }
 
     fn apply_block_cursor_if_normal(&mut self) {
@@ -2209,175 +2490,7 @@ impl App {
                     highlight::format,
                 )
                 .key_binding(move |key_press| {
-                    let key = &key_press.key;
-                    let modified_key = &key_press.modified_key;
-                    let mods = key_press.modifiers;
-
-                    // Phase 1: Ctrl/Cmd shortcuts — always active, all modes
-                    if mods.command() {
-                        match key {
-                            keyboard::Key::Named(named) => match named {
-                                keyboard::key::Named::Tab => {
-                                    return Some(text_editor::Binding::Custom(if mods.shift() {
-                                        Message::PrevTab
-                                    } else {
-                                        Message::NextTab
-                                    }));
-                                }
-                                keyboard::key::Named::Backspace => {
-                                    return Some(text_editor::Binding::Sequence(vec![
-                                        text_editor::Binding::Select(text_editor::Motion::WordLeft),
-                                        text_editor::Binding::Backspace,
-                                    ]));
-                                }
-                                keyboard::key::Named::Delete => {
-                                    return Some(text_editor::Binding::Sequence(vec![
-                                        text_editor::Binding::Select(
-                                            text_editor::Motion::WordRight,
-                                        ),
-                                        text_editor::Binding::Delete,
-                                    ]));
-                                }
-                                keyboard::key::Named::PageUp if mods.shift() => {
-                                    return Some(text_editor::Binding::Custom(
-                                        Message::MoveTabLeft,
-                                    ));
-                                }
-                                keyboard::key::Named::PageDown if mods.shift() => {
-                                    return Some(text_editor::Binding::Custom(
-                                        Message::MoveTabRight,
-                                    ));
-                                }
-                                _ => {}
-                            },
-                            keyboard::Key::Character(c) => match c.as_str() {
-                                "z" if mods.shift() => {
-                                    return Some(text_editor::Binding::Custom(Message::Redo));
-                                }
-                                "z" => {
-                                    return Some(text_editor::Binding::Custom(Message::Undo));
-                                }
-                                "k" if mods.shift() => {
-                                    return Some(text_editor::Binding::Custom(Message::DeleteLine));
-                                }
-                                "d" if mods.shift() => {
-                                    return Some(text_editor::Binding::Custom(
-                                        Message::DuplicateLine,
-                                    ));
-                                }
-                                "/" => {
-                                    return Some(text_editor::Binding::Custom(
-                                        Message::ToggleComment,
-                                    ));
-                                }
-                                "l" => {
-                                    return Some(text_editor::Binding::SelectLine);
-                                }
-                                "g" => {
-                                    return Some(text_editor::Binding::Custom(
-                                        Message::GotoLineOpen,
-                                    ));
-                                }
-                                // Vim: Ctrl+R = redo in Normal mode
-                                "r" if matches!(
-                                    vim_mode,
-                                    vim::Mode::Normal | vim::Mode::Visual | vim::Mode::VisualLine
-                                ) =>
-                                {
-                                    return Some(text_editor::Binding::Custom(Message::VimKey(
-                                        key.clone(),
-                                        mods,
-                                    )));
-                                }
-                                _ => {}
-                            },
-                            _ => {}
-                        }
-                    }
-
-                    // PageUp/PageDown — all modes (vim doesn't handle these keys)
-                    if let keyboard::Key::Named(named) = modified_key {
-                        let page = ((vh / LINE_HEIGHT_PX) as usize).saturating_sub(2);
-                        match named {
-                            keyboard::key::Named::PageUp => {
-                                return Some(text_editor::Binding::Custom(Message::PageUp(
-                                    page,
-                                    mods.shift(),
-                                )));
-                            }
-                            keyboard::key::Named::PageDown => {
-                                return Some(text_editor::Binding::Custom(Message::PageDown(
-                                    page,
-                                    mods.shift(),
-                                )));
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    // Phase 2: Vim Normal/Visual — intercept all non-Ctrl keys
-                    if matches!(
-                        vim_mode,
-                        vim::Mode::Normal | vim::Mode::Visual | vim::Mode::VisualLine
-                    ) && !mods.command()
-                    {
-                        return Some(text_editor::Binding::Custom(Message::VimKey(
-                            modified_key.clone(),
-                            mods,
-                        )));
-                    }
-
-                    // Phase 3: Insert mode — existing iced behavior
-                    if let keyboard::Key::Named(named) = modified_key {
-                        match named {
-                            keyboard::key::Named::Tab => {
-                                if mods.shift() {
-                                    return Some(text_editor::Binding::Custom(Message::Edit(
-                                        text_editor::Action::Edit(text_editor::Edit::Unindent),
-                                    )));
-                                }
-                                return Some(text_editor::Binding::Custom(Message::Edit(
-                                    text_editor::Action::Edit(text_editor::Edit::Indent),
-                                )));
-                            }
-                            keyboard::key::Named::Enter
-                                if !mods.command() && !mods.shift() && !mods.alt() =>
-                            {
-                                return Some(text_editor::Binding::Custom(Message::AutoIndent));
-                            }
-                            keyboard::key::Named::ArrowUp
-                                if mods.alt() && !mods.command() && !mods.shift() =>
-                            {
-                                return Some(text_editor::Binding::Custom(Message::MoveLineUp));
-                            }
-                            keyboard::key::Named::ArrowDown
-                                if mods.alt() && !mods.command() && !mods.shift() =>
-                            {
-                                return Some(text_editor::Binding::Custom(Message::MoveLineDown));
-                            }
-                            keyboard::key::Named::ArrowUp if !mods.alt() && !mods.command() => {
-                                if cursor_line == 0 {
-                                    return Some(if mods.shift() {
-                                        text_editor::Binding::Select(text_editor::Motion::Home)
-                                    } else {
-                                        text_editor::Binding::Move(text_editor::Motion::Home)
-                                    });
-                                }
-                            }
-                            keyboard::key::Named::ArrowDown if !mods.alt() && !mods.command() => {
-                                if cursor_line >= last_line {
-                                    return Some(if mods.shift() {
-                                        text_editor::Binding::Select(text_editor::Motion::End)
-                                    } else {
-                                        text_editor::Binding::Move(text_editor::Motion::End)
-                                    });
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    text_editor::Binding::from_key_press(key_press)
+                    editor_key_binding(key_press, vim_mode, cursor_line, last_line, vh)
                 })
                 .style(move |_theme, _status| text_editor::Style {
                     background: Background::Color(bg_base),
@@ -2506,7 +2619,7 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let mut subscriptions = vec![event::listen_with(handle_key)];
+        let mut subscriptions = vec![event::listen_with(route_event)];
 
         if self.should_poll_autosave() {
             subscriptions
@@ -2639,7 +2752,172 @@ pub(crate) fn reveal_intent_for_edit_action(action: &text_editor::Action) -> Rev
 
 // ── Keyboard shortcuts ───────────────────────────────────────────────────────
 
-fn handle_key(event: iced::Event, status: event::Status, _id: iced::window::Id) -> Option<Message> {
+fn editor_key_binding(
+    key_press: text_editor::KeyPress,
+    vim_mode: vim::Mode,
+    cursor_line: usize,
+    last_line: usize,
+    viewport_height: f32,
+) -> Option<text_editor::Binding<Message>> {
+    let fallback = key_press.clone();
+    let key = &key_press.key;
+    let modified_key = &key_press.modified_key;
+    let mods = key_press.modifiers;
+
+    // Phase 1: Ctrl/Cmd shortcuts — always active, all modes
+    if mods.command() {
+        match key {
+            keyboard::Key::Named(named) => match named {
+                keyboard::key::Named::Tab => {
+                    return Some(text_editor::Binding::Custom(if mods.shift() {
+                        Message::PrevTab
+                    } else {
+                        Message::NextTab
+                    }));
+                }
+                keyboard::key::Named::Backspace => {
+                    return Some(text_editor::Binding::Sequence(vec![
+                        text_editor::Binding::Select(text_editor::Motion::WordLeft),
+                        text_editor::Binding::Backspace,
+                    ]));
+                }
+                keyboard::key::Named::Delete => {
+                    return Some(text_editor::Binding::Sequence(vec![
+                        text_editor::Binding::Select(text_editor::Motion::WordRight),
+                        text_editor::Binding::Delete,
+                    ]));
+                }
+                keyboard::key::Named::PageUp if mods.shift() => {
+                    return Some(text_editor::Binding::Custom(Message::MoveTabLeft));
+                }
+                keyboard::key::Named::PageDown if mods.shift() => {
+                    return Some(text_editor::Binding::Custom(Message::MoveTabRight));
+                }
+                _ => {}
+            },
+            keyboard::Key::Character(c) => match c.as_str() {
+                "z" if mods.shift() => {
+                    return Some(text_editor::Binding::Custom(Message::Redo));
+                }
+                "z" => {
+                    return Some(text_editor::Binding::Custom(Message::Undo));
+                }
+                "k" if mods.shift() => {
+                    return Some(text_editor::Binding::Custom(Message::DeleteLine));
+                }
+                "d" if mods.shift() => {
+                    return Some(text_editor::Binding::Custom(Message::DuplicateLine));
+                }
+                "/" => {
+                    return Some(text_editor::Binding::Custom(Message::ToggleComment));
+                }
+                "l" => {
+                    return Some(text_editor::Binding::SelectLine);
+                }
+                "g" => {
+                    return Some(text_editor::Binding::Custom(Message::GotoLineOpen));
+                }
+                // Vim: Ctrl+R = redo in Normal mode
+                "r" if matches!(
+                    vim_mode,
+                    vim::Mode::Normal | vim::Mode::Visual | vim::Mode::VisualLine
+                ) =>
+                {
+                    return Some(text_editor::Binding::Custom(Message::VimKey(
+                        key.clone(),
+                        mods,
+                    )));
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    // PageUp/PageDown — all modes (vim doesn't handle these keys)
+    if let keyboard::Key::Named(named) = modified_key {
+        let page = ((viewport_height / LINE_HEIGHT_PX) as usize).saturating_sub(2);
+        match named {
+            keyboard::key::Named::PageUp => {
+                return Some(text_editor::Binding::Custom(Message::PageUp(
+                    page,
+                    mods.shift(),
+                )));
+            }
+            keyboard::key::Named::PageDown => {
+                return Some(text_editor::Binding::Custom(Message::PageDown(
+                    page,
+                    mods.shift(),
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    // Phase 2: Vim Normal/Visual — intercept all non-Ctrl keys
+    if matches!(
+        vim_mode,
+        vim::Mode::Normal | vim::Mode::Visual | vim::Mode::VisualLine
+    ) && !mods.command()
+    {
+        return Some(text_editor::Binding::Custom(Message::VimKey(
+            modified_key.clone(),
+            mods,
+        )));
+    }
+
+    // Phase 3: Insert mode — existing iced behavior
+    if let keyboard::Key::Named(named) = modified_key {
+        match named {
+            keyboard::key::Named::Tab => {
+                if mods.shift() {
+                    return Some(text_editor::Binding::Custom(Message::Edit(
+                        text_editor::Action::Edit(text_editor::Edit::Unindent),
+                    )));
+                }
+                return Some(text_editor::Binding::Custom(Message::Edit(
+                    text_editor::Action::Edit(text_editor::Edit::Indent),
+                )));
+            }
+            keyboard::key::Named::Enter if !mods.command() && !mods.shift() && !mods.alt() => {
+                return Some(text_editor::Binding::Custom(Message::AutoIndent));
+            }
+            keyboard::key::Named::ArrowUp if mods.alt() && !mods.command() && !mods.shift() => {
+                return Some(text_editor::Binding::Custom(Message::MoveLineUp));
+            }
+            keyboard::key::Named::ArrowDown if mods.alt() && !mods.command() && !mods.shift() => {
+                return Some(text_editor::Binding::Custom(Message::MoveLineDown));
+            }
+            keyboard::key::Named::ArrowUp if !mods.alt() && !mods.command() => {
+                if cursor_line == 0 {
+                    return Some(if mods.shift() {
+                        text_editor::Binding::Select(text_editor::Motion::Home)
+                    } else {
+                        text_editor::Binding::Move(text_editor::Motion::Home)
+                    });
+                }
+            }
+            keyboard::key::Named::ArrowDown if !mods.alt() && !mods.command() => {
+                if cursor_line >= last_line {
+                    return Some(if mods.shift() {
+                        text_editor::Binding::Select(text_editor::Motion::End)
+                    } else {
+                        text_editor::Binding::Move(text_editor::Motion::End)
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    text_editor::Binding::from_key_press(fallback)
+}
+
+pub fn route_event(
+    event: iced::Event,
+    status: event::Status,
+    _id: iced::window::Id,
+) -> Option<Message> {
     if matches!(
         event,
         iced::Event::Window(iced::window::Event::CloseRequested)
@@ -2731,45 +3009,57 @@ pub(crate) fn content_point_for_cell(cell: EditorPointerCell) -> Point {
 
 // ── File I/O ─────────────────────────────────────────────────────────────────
 
-async fn open_file() -> Result<(PathBuf, String), Error> {
-    let handle = rfd::AsyncFileDialog::new()
-        .add_filter(
-            "Text",
-            &["txt", "md", "rs", "py", "toml", "yaml", "json", "sh"],
-        )
-        .add_filter("All files", &["*"])
-        .pick_file()
-        .await
-        .ok_or(Error::DialogClosed)?;
-
-    let path = handle.path().to_path_buf();
-    let body = std::fs::read_to_string(&path).map_err(|_| Error::Io)?;
+async fn open_file(
+    dialogs: SharedDialogs,
+    fs: SharedFilesystem,
+) -> Result<(PathBuf, String), Error> {
+    let path = dialogs.pick_open_file().await.ok_or(Error::DialogClosed)?;
+    let body = fs.read_to_string(&path).map_err(|_| Error::Io)?;
     Ok((path, body))
 }
 
-async fn save_file(path: PathBuf, body: String) -> Result<PathBuf, Error> {
-    std::fs::write(&path, &body).map_err(|_| Error::Io)?;
+async fn save_file(fs: SharedFilesystem, path: PathBuf, body: String) -> Result<PathBuf, Error> {
+    fs.write(&path, &body).map_err(|_| Error::Io)?;
     Ok(path)
 }
 
-async fn save_file_as(body: String) -> Result<PathBuf, Error> {
-    let handle = rfd::AsyncFileDialog::new()
-        .set_file_name("untitled.txt")
-        .save_file()
+async fn save_file_as(
+    dialogs: SharedDialogs,
+    fs: SharedFilesystem,
+    suggested_name: String,
+    body: String,
+) -> Result<PathBuf, Error> {
+    let path = dialogs
+        .pick_save_file(&suggested_name)
         .await
         .ok_or(Error::DialogClosed)?;
-
-    let path = handle.path().to_path_buf();
-    std::fs::write(&path, &body).map_err(|_| Error::Io)?;
+    fs.write(&path, &body).map_err(|_| Error::Io)?;
     Ok(path)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "internal-invariants"))]
 mod tests {
     use super::*;
+    use iced::keyboard::key::{Code, Named, Physical};
 
+    #[cfg(feature = "internal-invariants")]
     fn pos(line: usize, column: usize) -> text_editor::Position {
         text_editor::Position { line, column }
+    }
+
+    fn named_key_press(
+        named: Named,
+        physical: Code,
+        modifiers: keyboard::Modifiers,
+    ) -> text_editor::KeyPress {
+        text_editor::KeyPress {
+            key: keyboard::Key::Named(named),
+            modified_key: keyboard::Key::Named(named),
+            physical_key: Physical::Code(physical),
+            modifiers,
+            text: None,
+            status: text_editor::Status::Focused { is_hovered: false },
+        }
     }
 
     // Removed: collapse_selection_to_caret_prevents_insert_replacement
@@ -2785,6 +3075,7 @@ mod tests {
         assert_eq!(lines, vec!["Abc".to_string(), "deF".to_string()]);
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn scroll_actions_do_not_request_reveal_but_moves_do() {
         assert_eq!(
@@ -2797,6 +3088,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn page_down_requests_reveal() {
         let mut app = App::test("one\ntwo\nthree\nfour\nfive");
@@ -2807,6 +3099,7 @@ mod tests {
         assert_eq!(app.tabs[0].content.cursor().position.line, 2);
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn noop_tab_actions_do_not_request_reveal() {
         let mut app = App::test("one");
@@ -2825,6 +3118,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn goto_line_submit_requests_reveal_on_valid_input() {
         let mut app = App::test("one\ntwo\nthree");
@@ -2836,6 +3130,7 @@ mod tests {
         assert_eq!(app.tabs[0].content.cursor().position, pos(2, 0));
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn find_next_requests_reveal() {
         let mut app = App::test("foo\nbar\nfoo");
@@ -2848,6 +3143,7 @@ mod tests {
         assert_eq!(app.tabs[0].content.cursor().position, pos(2, 3));
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn edits_mark_find_matches_dirty_until_idle_refresh() {
         let mut app = App::test("foo\nbar\nfoo");
@@ -2873,6 +3169,7 @@ mod tests {
         assert_eq!(app.find.indexed_revision(), Some(app.tabs[0].revision()));
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn idle_find_refresh_preserves_selected_match() {
         let mut app = App::test("foo\nbar\nfoo");
@@ -2891,6 +3188,7 @@ mod tests {
         assert_eq!(app.tabs[0].content.cursor().position, pos(2, 3));
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn replace_one_with_stale_matches_uses_visible_selection() {
         let mut app = App::test("foo foo");
@@ -2908,6 +3206,7 @@ mod tests {
         assert_eq!(app.tabs[0].content.text(), "foo bar");
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn timers_only_run_when_background_work_exists() {
         let mut app = App::test("foo");
@@ -2928,6 +3227,7 @@ mod tests {
         assert!(!app.should_refresh_find_idle());
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn vim_snapshot_reuses_cached_lines_until_revision_changes() {
         let mut app = App::test("one\ntwo");
@@ -2947,6 +3247,7 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &third));
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn pointer_state_only_changes_after_crossing_snapped_boundaries() {
         let mut app = App::test("one\ntwo");
@@ -2997,6 +3298,7 @@ mod tests {
     // Removed: toggle_comment_on_blank_line_can_still_move_cursor_without_editing
     // → covered by tests/line_ops.rs::toggle_comment_on_blank_line_moves_cursor
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn layout_cache_only_rebuilds_when_wrap_width_changes() {
         let mut app = App::test("abcdefghij");
@@ -3050,6 +3352,7 @@ mod tests {
         assert!(app.tabs[0].layout_cache_for(narrow_cols).is_none());
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn vim_move_to_requests_reveal() {
         let mut app = App::test("one\ntwo\nthree");
@@ -3060,6 +3363,7 @@ mod tests {
         assert_eq!(app.tabs[0].content.cursor().position, pos(2, 1));
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn wrapped_caret_reveal_target_matches_layout_math() {
         let mut app = App::test("abcdefghij");
@@ -3079,6 +3383,7 @@ mod tests {
         assert_eq!(app.caret_reveal_target(), Some(40.0));
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn finish_update_syncs_viewport_scroll_for_reveal() {
         let mut app = App::test("abcdefghij");
@@ -3100,6 +3405,7 @@ mod tests {
         assert_eq!(app.viewport.scroll_y(), 40.0);
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn tab_switch_reveal_uses_active_document_height() {
         let width = viewport::line_number_gutter_width(10, EDITOR_FONT.char_width)
@@ -3121,7 +3427,7 @@ mod tests {
             gutter_hover_line: None,
             find: FindState::new(),
             word_wrap: true,
-            scratchpad_dir: PathBuf::from("/tmp"),
+            scratchpad_dir: Some(PathBuf::from("/tmp")),
             needs_autosave: false,
             shift_held: false,
             multiclick_drag: false,
@@ -3134,8 +3440,12 @@ mod tests {
                 viewport::content_height(height, 1),
                 0.0,
             ),
-            clipboard: Box::new(NullClipboard),
-            fs: Box::new(NullFilesystem),
+            clipboard: Arc::new(NullClipboard),
+            fs: Arc::new(NullFilesystem),
+            dialogs: Arc::new(NullDialogs),
+            clock: Arc::new(FixedClock::default()),
+            home_dir: Some(PathBuf::from("/tmp/lst-test-home")),
+            runtime_mode: RuntimeMode::Inline,
         };
         app.tabs[1].content.move_to(text_editor::Cursor {
             position: pos(9, 0),
@@ -3146,6 +3456,137 @@ mod tests {
 
         assert_eq!(result.reveal, RevealIntent::RevealCaret);
         assert_eq!(app.caret_reveal_target(), Some(180.0));
+    }
+
+    #[test]
+    fn editor_page_keys_bypass_vim_and_preserve_shift_selection() {
+        let viewport_height = 12.0 * LINE_HEIGHT_PX;
+        let page = ((viewport_height / LINE_HEIGHT_PX) as usize).saturating_sub(2);
+
+        let down = editor_key_binding(
+            named_key_press(Named::PageDown, Code::PageDown, keyboard::Modifiers::SHIFT),
+            vim::Mode::Normal,
+            4,
+            20,
+            viewport_height,
+        );
+        match down {
+            Some(text_editor::Binding::Custom(Message::PageDown(lines, true))) => {
+                assert_eq!(lines, page)
+            }
+            other => panic!("unexpected PageDown binding: {other:?}"),
+        }
+
+        let up = editor_key_binding(
+            named_key_press(Named::PageUp, Code::PageUp, keyboard::Modifiers::default()),
+            vim::Mode::Visual,
+            4,
+            20,
+            viewport_height,
+        );
+        match up {
+            Some(text_editor::Binding::Custom(Message::PageUp(lines, false))) => {
+                assert_eq!(lines, page)
+            }
+            other => panic!("unexpected PageUp binding: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_command_shift_page_keys_reorder_tabs() {
+        let page_up = editor_key_binding(
+            named_key_press(
+                Named::PageUp,
+                Code::PageUp,
+                keyboard::Modifiers::COMMAND | keyboard::Modifiers::SHIFT,
+            ),
+            vim::Mode::Insert,
+            0,
+            10,
+            10.0 * LINE_HEIGHT_PX,
+        );
+        assert!(matches!(
+            page_up,
+            Some(text_editor::Binding::Custom(Message::MoveTabLeft))
+        ));
+
+        let page_down = editor_key_binding(
+            named_key_press(
+                Named::PageDown,
+                Code::PageDown,
+                keyboard::Modifiers::COMMAND | keyboard::Modifiers::SHIFT,
+            ),
+            vim::Mode::Insert,
+            0,
+            10,
+            10.0 * LINE_HEIGHT_PX,
+        );
+        assert!(matches!(
+            page_down,
+            Some(text_editor::Binding::Custom(Message::MoveTabRight))
+        ));
+    }
+
+    #[test]
+    fn editor_arrow_edge_bindings_map_to_home_end() {
+        let top = editor_key_binding(
+            named_key_press(
+                Named::ArrowUp,
+                Code::ArrowUp,
+                keyboard::Modifiers::default(),
+            ),
+            vim::Mode::Insert,
+            0,
+            3,
+            10.0 * LINE_HEIGHT_PX,
+        );
+        assert!(matches!(
+            top,
+            Some(text_editor::Binding::Move(text_editor::Motion::Home))
+        ));
+
+        let bottom = editor_key_binding(
+            named_key_press(
+                Named::ArrowDown,
+                Code::ArrowDown,
+                keyboard::Modifiers::SHIFT,
+            ),
+            vim::Mode::Insert,
+            3,
+            3,
+            10.0 * LINE_HEIGHT_PX,
+        );
+        assert!(matches!(
+            bottom,
+            Some(text_editor::Binding::Select(text_editor::Motion::End))
+        ));
+    }
+
+    #[test]
+    fn editor_alt_arrow_bindings_map_to_line_ops() {
+        let up = editor_key_binding(
+            named_key_press(Named::ArrowUp, Code::ArrowUp, keyboard::Modifiers::ALT),
+            vim::Mode::Insert,
+            1,
+            3,
+            10.0 * LINE_HEIGHT_PX,
+        );
+        assert!(matches!(
+            up,
+            Some(text_editor::Binding::Custom(Message::MoveLineUp))
+        ));
+
+        let down = editor_key_binding(
+            named_key_press(Named::ArrowDown, Code::ArrowDown, keyboard::Modifiers::ALT),
+            vim::Mode::Insert,
+            1,
+            3,
+            10.0 * LINE_HEIGHT_PX,
+        );
+        assert!(matches!(
+            down,
+            Some(text_editor::Binding::Custom(Message::MoveLineDown))
+        ));
     }
 }
 

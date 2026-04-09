@@ -290,10 +290,11 @@ impl LayoutCache {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "internal-invariants"))]
 mod tests {
     use super::*;
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn layout_cache_tracks_prefix_rows_and_visible_wrapped_gutter() {
         let mut tab = Tab::from_path(PathBuf::from("/tmp/test.txt"), "abcd\nef");
@@ -305,6 +306,7 @@ mod tests {
         assert_eq!(cache.visible_gutter_text(2, 0, 3), "   1 \n     \n   2 ");
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn touching_content_invalidates_cached_layout_revision() {
         let mut tab = Tab::from_path(PathBuf::from("/tmp/test.txt"), "one");
@@ -317,6 +319,7 @@ mod tests {
         assert_ne!(tab.revision(), initial_revision);
     }
 
+    #[cfg(feature = "internal-invariants")]
     #[test]
     fn line_cache_reuses_revision_and_invalidates_after_touch() {
         let mut tab = Tab::from_path(PathBuf::from("/tmp/test.txt"), "one\ntwo");

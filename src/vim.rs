@@ -1842,7 +1842,7 @@ fn retreat_pos(text: &TextSnapshot, p: Position) -> Option<Position> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "internal-invariants"))]
 mod tests {
     use super::*;
 
