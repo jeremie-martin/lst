@@ -17,10 +17,10 @@ Scenario:
 
 - real-display X11 benchmark
 - real injected keyboard input via XTEST
-- file: `src/app.rs`
+- file: `benchmarks/paste-corpus.rs`
 - wrap: on
 - highlighting: default Rust highlighting
-- setup: focus editor, `Ctrl+A`, `Ctrl+C`
+- setup: seed clipboard from the fixed corpus, focus editor, `Ctrl+A`
 - visible 5-second paste trace: `10` `Ctrl+V` pastes at `500ms` intervals
 - `1s` sleep between repetitions
 - `1` priming run, `7` measured runs
