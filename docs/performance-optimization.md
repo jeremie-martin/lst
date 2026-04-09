@@ -73,6 +73,9 @@ In particular:
 - `startup_ms` is useful context but not part of this campaign
 - `final_file_bytes` and `final_file_lines` confirm that every run completed the same fixed paste workload
 
+Recent attribution notes for the paste benchmark are in [docs/highlight-attribution.md](/home/jmartin/lst/docs/highlight-attribution.md).
+Those notes include the syntax-highlighting sanity checks and the current experimental `tree-sitter` comparison.
+
 ## Behavior-preservation gate
 
 The blind refactor gate is:
@@ -119,3 +122,15 @@ When evaluating a change:
 6. Run `cargo test`.
 
 That is the current optimization contract.
+
+## Experimental highlight comparison
+
+To compare the default Rust highlighter with the current experimental Rust-only `tree-sitter` spike:
+
+```bash
+cargo build --release --bin lst --bin bench_paste_x11
+./target/release/bench_paste_x11
+LST_HIGHLIGHT_BACKEND=tree-sitter ./target/release/bench_paste_x11
+```
+
+The experimental backend is not the default contract. Treat it as a comparison target until its visual behavior is evaluated more thoroughly.

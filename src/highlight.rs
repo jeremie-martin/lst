@@ -8,6 +8,10 @@ use syntect::highlighting::{
     Theme as SyntectTheme,
 };
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+use tree_sitter_highlight::{
+    Highlight as TreeSitterHighlight, HighlightConfiguration,
+    HighlightEvent as TreeSitterHighlightEvent, Highlighter as TreeSitterHighlighter,
+};
 
 // ── Shared syntect state (initialized once) ─────────────────────────────────
 
@@ -22,6 +26,41 @@ static THEME: LazyLock<SyntectTheme> = LazyLock::new(|| {
 
 static SYNTECT_HIGHLIGHTER: LazyLock<SyntectHighlighter<'static>> =
     LazyLock::new(|| SyntectHighlighter::new(&THEME));
+static USE_TREE_SITTER_RUST: LazyLock<bool> = LazyLock::new(|| {
+    matches!(
+        std::env::var("LST_HIGHLIGHT_BACKEND").ok().as_deref(),
+        Some("tree-sitter")
+    )
+});
+static TREE_SITTER_CAPTURE_NAMES: &[&str] = &[
+    "attribute",
+    "comment",
+    "constant",
+    "constructor",
+    "escape",
+    "function",
+    "keyword",
+    "module",
+    "number",
+    "operator",
+    "property",
+    "punctuation",
+    "string",
+    "type",
+    "variable",
+];
+static TREE_SITTER_RUST_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
+    let mut config = HighlightConfiguration::new(
+        tree_sitter_rust::LANGUAGE.into(),
+        "rust",
+        tree_sitter_rust::HIGHLIGHTS_QUERY,
+        tree_sitter_rust::INJECTIONS_QUERY,
+        "",
+    )
+    .expect("embedded tree-sitter Rust highlight query should be valid");
+    config.configure(TREE_SITTER_CAPTURE_NAMES);
+    config
+});
 
 // ── Catppuccin Mocha palette (for hand-rolled Markdown highlights) ──────────
 
@@ -89,12 +128,14 @@ pub fn format(highlight: &Highlight, _theme: &Theme) -> highlighter::Format<Font
 enum HighlightMode {
     Markdown,
     Syntect(&'static SyntaxReference),
+    TreeSitterRust,
     PlainText,
 }
 
 fn determine_mode(ext: &Option<String>) -> HighlightMode {
     match ext.as_deref() {
         Some("md") | Some("markdown") => HighlightMode::Markdown,
+        Some("rs") if *USE_TREE_SITTER_RUST => HighlightMode::TreeSitterRust,
         None => HighlightMode::PlainText,
         Some(ext) => match SYNTAX_SET.find_syntax_by_extension(ext) {
             Some(syntax) => HighlightMode::Syntect(syntax),
@@ -142,6 +183,7 @@ pub struct LstHighlighter {
     // Full-file syntect working state
     full_file_parse: Option<ParseState>,
     full_file_hl: Option<HighlightState>,
+    tree_sitter: Option<TreeSitterHighlighter>,
 }
 
 impl LstHighlighter {
@@ -149,6 +191,8 @@ impl LstHighlighter {
         if let HighlightMode::Syntect(syntax) = &self.mode {
             self.full_file_parse = Some(ParseState::new(syntax));
             self.full_file_hl = Some(HighlightState::new(&SYNTECT_HIGHLIGHTER, ScopeStack::new()));
+        } else if matches!(self.mode, HighlightMode::TreeSitterRust) {
+            self.tree_sitter = Some(TreeSitterHighlighter::new());
         }
     }
 
@@ -163,6 +207,7 @@ impl LstHighlighter {
         self.syntect_hl = None;
         self.full_file_parse = None;
         self.full_file_hl = None;
+        self.tree_sitter = None;
     }
 
     // ── Markdown mode ───────────────────────────────────────────────────
@@ -250,6 +295,42 @@ impl LstHighlighter {
         }));
         spans
     }
+
+    fn highlight_tree_sitter_rust_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
+        let Some(highlighter) = self.tree_sitter.as_mut() else {
+            return Vec::new();
+        };
+
+        let Ok(events) =
+            highlighter.highlight(&TREE_SITTER_RUST_CONFIG, line.as_bytes(), None, |_| None)
+        else {
+            return Vec::new();
+        };
+
+        let mut spans = Vec::new();
+        let mut stack: Vec<TreeSitterHighlight> = Vec::new();
+
+        for event in events {
+            match event {
+                Ok(TreeSitterHighlightEvent::HighlightStart(highlight)) => stack.push(highlight),
+                Ok(TreeSitterHighlightEvent::HighlightEnd) => {
+                    let _ = stack.pop();
+                }
+                Ok(TreeSitterHighlightEvent::Source { start, end }) if start < end => {
+                    let Some(color) = stack.last().and_then(|highlight| {
+                        tree_sitter_color_for_capture(highlight.0)
+                    }) else {
+                        continue;
+                    };
+                    spans.push((start..end, Highlight::Syntect(color)));
+                }
+                Ok(TreeSitterHighlightEvent::Source { .. }) => {}
+                Err(_) => return Vec::new(),
+            }
+        }
+
+        spans
+    }
 }
 
 fn run_syntect_line(
@@ -308,6 +389,7 @@ impl Highlighter for LstHighlighter {
             syntect_hl: None,
             full_file_parse: None,
             full_file_hl: None,
+            tree_sitter: None,
         };
         h.init_mode();
         h
@@ -346,6 +428,7 @@ impl Highlighter for LstHighlighter {
         let spans = match &self.mode {
             HighlightMode::Markdown => self.highlight_md_line(line),
             HighlightMode::Syntect(_) => self.highlight_syntect_line(line),
+            HighlightMode::TreeSitterRust => self.highlight_tree_sitter_rust_line(line),
             HighlightMode::PlainText => Vec::new(),
         };
         self.current_line += 1;
@@ -354,6 +437,27 @@ impl Highlighter for LstHighlighter {
 
     fn current_line(&self) -> usize {
         self.current_line
+    }
+}
+
+fn tree_sitter_color_for_capture(index: usize) -> Option<Color> {
+    match TREE_SITTER_CAPTURE_NAMES.get(index).copied() {
+        Some("attribute") => Some(YELLOW),
+        Some("comment") => Some(OVERLAY0),
+        Some("constant") => Some(PEACH),
+        Some("constructor") => Some(SAPPHIRE),
+        Some("escape") => Some(PINK),
+        Some("function") => Some(BLUE),
+        Some("keyword") => Some(MAUVE),
+        Some("module") => Some(LAVENDER),
+        Some("number") => Some(PEACH),
+        Some("operator") => Some(SAPPHIRE),
+        Some("property") => Some(LAVENDER),
+        Some("punctuation") => Some(SURFACE1),
+        Some("string") => Some(GREEN),
+        Some("type") => Some(YELLOW),
+        Some("variable") => None,
+        _ => None,
     }
 }
 

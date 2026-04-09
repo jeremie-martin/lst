@@ -20,7 +20,7 @@ const SCENARIO: &str = "paste_growth_x11_real";
 const CORPUS_REL: &str = "benchmarks/paste-corpus.rs";
 const WINDOW_REQUESTED_LOGICAL: &str = "980x680";
 const WRAP: &str = "on";
-const HIGHLIGHT: &str = "rust-syntect-default";
+const HIGHLIGHT_DEFAULT: &str = "rust-syntect-default";
 const PRIMING_RUNS: usize = 1;
 const REPETITIONS: usize = 7;
 const TRACE_PASTE_COUNT: usize = 10;
@@ -126,7 +126,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("file_bytes={}", corpus.bytes);
     println!("file_lines={}", corpus.lines);
     println!("wrap={WRAP}");
-    println!("highlight={HIGHLIGHT}");
+    println!("highlight={}", highlight_label());
     println!("window_requested_logical={WINDOW_REQUESTED_LOGICAL}");
     println!("window_client_px={}x{}", window_width, window_height);
     println!("priming_runs={PRIMING_RUNS}");
@@ -166,6 +166,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("score={:.3}", summary.cpu_ms);
 
     Ok(())
+}
+
+fn highlight_label() -> &'static str {
+    match std::env::var("LST_HIGHLIGHT_BACKEND").ok().as_deref() {
+        Some("tree-sitter") => "rust-tree-sitter-line-experimental",
+        _ => HIGHLIGHT_DEFAULT,
+    }
 }
 
 fn run_once(
