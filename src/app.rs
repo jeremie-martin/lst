@@ -2447,6 +2447,7 @@ impl App {
                         .wrapping(iced::widget::text::Wrapping::None),
                     Space::new().height(bottom_gap),
                 ])
+                .width(viewport::line_number_gutter_width(n_lines, EDITOR_FONT.char_width))
                 .padding(Padding {
                     top: EDITOR_PAD,
                     bottom: EDITOR_PAD + overscroll,

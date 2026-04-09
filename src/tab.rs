@@ -253,7 +253,6 @@ impl LayoutCache {
 
         let end_row = end_row.min(self.total_visual_rows);
         let width = viewport::line_number_digits_width(line_count);
-        let continuation_prefix = viewport::continuation_prefix(line_count);
         let start_line = self
             .line_start_visual_row
             .partition_point(|&row| row <= start_row)
@@ -280,8 +279,6 @@ impl LayoutCache {
 
                 if row == line_start {
                     let _ = write!(gutter_text, "{:>width$} ", line_idx + 1, width = width);
-                } else {
-                    gutter_text.push_str(&continuation_prefix);
                 }
             }
         }
@@ -303,7 +300,7 @@ mod tests {
 
         assert_eq!(cache.line_start_visual_row, vec![0, 2, 3]);
         assert_eq!(cache.total_visual_rows, 3);
-        assert_eq!(cache.visible_gutter_text(2, 0, 3), "   1 \n     \n   2 ");
+        assert_eq!(cache.visible_gutter_text(2, 0, 3), "   1 \n\n   2 ");
     }
 
     #[cfg(feature = "internal-invariants")]
@@ -356,7 +353,7 @@ mod tests {
 
         let cache = tab.ensure_layout_cache(2);
 
-        assert_eq!(cache.visible_gutter_text(2, 1, 3), "     \n   2 ");
+        assert_eq!(cache.visible_gutter_text(2, 1, 3), "\n   2 ");
     }
 
     #[test]
