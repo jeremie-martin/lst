@@ -7,11 +7,11 @@ pub trait Clipboard {
     fn read_primary(&self) -> Option<String>;
 }
 
-// ── System clipboard (real implementation) ──────────────────────────────────
+// ── Real clipboard (production) ──────────────────────────────────────────────
 
-pub struct SystemClipboard;
+pub struct RealClipboard;
 
-impl Clipboard for SystemClipboard {
+impl Clipboard for RealClipboard {
     fn copy(&self, text: &str) {
         if is_wayland() {
             pipe_to_command("wl-copy", &[], text);

@@ -1,13 +1,16 @@
-use lst::clipboard::{Clipboard, SystemClipboard};
 #[cfg(test)]
 use lst::clipboard::NullClipboard;
+use lst::clipboard::{Clipboard, RealClipboard};
 use lst::editor_ops;
 use lst::find::FindState;
+#[cfg(test)]
+use lst::fs::NullFilesystem;
+use lst::fs::{Filesystem, RealFilesystem};
 use lst::highlight;
 use lst::style::{flat_btn, solid_bg, EDITOR_FONT, EDITOR_PAD, FONT_SIZE, LINE_HEIGHT_PX};
 use lst::tab::{EditKind, Tab};
-use lst::vim;
 use lst::viewport::{self, RevealIntent, ViewportState};
+use lst::vim;
 
 use iced::event;
 use iced::keyboard;
@@ -61,6 +64,7 @@ struct App {
     vim: vim::VimState,
     viewport: ViewportState,
     clipboard: Box<dyn Clipboard>,
+    fs: Box<dyn Filesystem>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,7 +214,7 @@ fn parse_args() -> CliArgs {
     }
 }
 
-fn resolve_scratchpad_dir(cli_override: Option<PathBuf>) -> PathBuf {
+fn resolve_scratchpad_dir(cli_override: Option<PathBuf>, fs: &dyn Filesystem) -> PathBuf {
     let dir = cli_override.unwrap_or_else(|| {
         let Some(home) = std::env::var_os("HOME") else {
             eprintln!("lst: HOME environment variable not set");
@@ -218,7 +222,7 @@ fn resolve_scratchpad_dir(cli_override: Option<PathBuf>) -> PathBuf {
         };
         PathBuf::from(home).join(".local/share/lst")
     });
-    if let Err(e) = std::fs::create_dir_all(&dir) {
+    if let Err(e) = fs.create_dir_all(&dir) {
         eprintln!(
             "lst: failed to create scratchpad directory {}: {e}",
             dir.display()
@@ -228,43 +232,41 @@ fn resolve_scratchpad_dir(cli_override: Option<PathBuf>) -> PathBuf {
     dir
 }
 
-fn generate_scratchpad_path(dir: &Path) -> PathBuf {
+fn generate_scratchpad_path(dir: &Path, fs: &dyn Filesystem) -> PathBuf {
     use chrono::Local;
     let name = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let path = dir.join(format!("{name}.md"));
-    if !path.exists() {
+    if !fs.exists(&path) {
         return path;
     }
     for i in 1.. {
         let path = dir.join(format!("{name}_{i}.md"));
-        if !path.exists() {
+        if !fs.exists(&path) {
             return path;
         }
     }
     unreachable!()
 }
 
-fn create_scratchpad_tab(dir: &Path) -> Tab {
-    let path = generate_scratchpad_path(dir);
-    Tab::new_scratchpad(path)
-}
-
 impl App {
     fn boot() -> (Self, Task<Message>) {
         let args = parse_args();
-        let scratchpad_dir = resolve_scratchpad_dir(args.scratchpad_dir);
+        let fs: Box<dyn Filesystem> = Box::new(RealFilesystem);
+        let scratchpad_dir = resolve_scratchpad_dir(args.scratchpad_dir, &*fs);
 
         let mut tabs: Vec<Tab> = args
             .files
             .into_iter()
             .filter_map(|path| {
-                let body = std::fs::read_to_string(&path).ok()?;
-                Some(Tab::from_path(path.canonicalize().unwrap_or(path), &body))
+                let body = fs.read_to_string(&path).ok()?;
+                let canonical = fs.canonicalize(&path).unwrap_or(path);
+                Some(Tab::from_path(canonical, &body))
             })
             .collect();
 
         if tabs.is_empty() {
-            tabs.push(create_scratchpad_tab(&scratchpad_dir));
+            let path = generate_scratchpad_path(&scratchpad_dir, &*fs);
+            tabs.push(Tab::new_scratchpad(path));
         }
 
         (
@@ -283,10 +285,16 @@ impl App {
                 goto_line: None,
                 vim: vim::VimState::new(),
                 viewport: ViewportState::default(),
-                clipboard: Box::new(SystemClipboard),
+                clipboard: Box::new(RealClipboard),
+                fs,
             },
             iced::widget::operation::focus(EDITOR_ID.clone()),
         )
+    }
+
+    fn create_scratchpad_tab(&self) -> Tab {
+        let path = generate_scratchpad_path(&self.scratchpad_dir, &*self.fs);
+        Tab::new_scratchpad(path)
     }
 
     fn title(&self) -> String {
@@ -312,7 +320,7 @@ impl App {
         let tab = &self.tabs[i];
         if tab.is_scratchpad && tab.content.text().trim().is_empty() {
             if let Some(p) = &tab.path {
-                let _ = std::fs::remove_file(p);
+                let _ = self.fs.remove_file(p);
             }
         }
         if self.tabs.len() == 1 {
@@ -862,7 +870,7 @@ impl App {
             },
 
             Message::New => {
-                self.tabs.push(create_scratchpad_tab(&self.scratchpad_dir));
+                self.tabs.push(self.create_scratchpad_tab());
                 self.set_active_tab(self.tabs.len() - 1);
                 UpdateResult::reveal(Task::none())
             }
@@ -875,7 +883,7 @@ impl App {
                     && self.tabs[0].content.text().trim().is_empty()
                 {
                     if let Some(old_path) = &self.tabs[0].path {
-                        let _ = std::fs::remove_file(old_path);
+                        let _ = self.fs.remove_file(old_path);
                     }
                     self.tabs[0] = Tab::from_path(path, &body);
                     self.vim.clear_preferred_column();
@@ -1299,8 +1307,14 @@ impl App {
                 let cursor_line = cursor.position.line;
                 let cursor_col = cursor.position.column;
                 let _ = self.apply_line_edit(|lines| {
-                    let (line, col) =
-                        editor_ops::toggle_comment(lines, first, last, cursor_line, cursor_col, prefix);
+                    let (line, col) = editor_ops::toggle_comment(
+                        lines,
+                        first,
+                        last,
+                        cursor_line,
+                        cursor_col,
+                        prefix,
+                    );
                     Some(((), line, col))
                 });
                 self.apply_block_cursor_if_normal();
@@ -1828,7 +1842,14 @@ impl App {
         uppercase: bool,
     ) {
         let _ = self.apply_line_edit(|lines| {
-            editor_ops::transform_case_range(lines, from.line, from.column, to.line, to.column, uppercase);
+            editor_ops::transform_case_range(
+                lines,
+                from.line,
+                from.column,
+                to.line,
+                to.column,
+                uppercase,
+            );
             Some(((), from.line, from.column))
         });
     }
@@ -2681,6 +2702,7 @@ mod tests {
             vim: vim::VimState::new(),
             viewport: ViewportState::default(),
             clipboard: Box::new(NullClipboard),
+            fs: Box::new(NullFilesystem),
         }
     }
 
@@ -3100,6 +3122,7 @@ mod tests {
                 0.0,
             ),
             clipboard: Box::new(NullClipboard),
+            fs: Box::new(NullFilesystem),
         };
         app.tabs[1].content.move_to(text_editor::Cursor {
             position: pos(9, 0),
