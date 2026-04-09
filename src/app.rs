@@ -365,7 +365,11 @@ impl App {
             selection: selection_text(&tab.content, self.vim.mode),
             tab_count: self.tabs.len(),
             active_tab: self.active,
-            tab_titles: self.tabs.iter().map(|t| t.display_name().into_owned()).collect(),
+            tab_titles: self
+                .tabs
+                .iter()
+                .map(|t| t.display_name().into_owned())
+                .collect(),
             title: self.title(),
             modified: tab.modified,
             find_visible: self.find.visible,
@@ -2768,39 +2772,11 @@ mod tests {
         text_editor::Position { line, column }
     }
 
-    #[test]
-    fn collapse_selection_to_caret_prevents_insert_replacement() {
-        let mut content = text_editor::Content::with_text("abc");
-        content.move_to(text_editor::Cursor {
-            position: pos(0, 0),
-            selection: Some(pos(0, 1)),
-        });
+    // Removed: collapse_selection_to_caret_prevents_insert_replacement
+    // → covered by tests/selection.rs::insert_from_normal_does_not_replace_block_cursor
 
-        collapse_selection_to_caret(&mut content);
-        assert_eq!(selection_text(&content, vim::Mode::Insert), None);
-
-        content.perform(text_editor::Action::Edit(text_editor::Edit::Insert('x')));
-        assert_eq!(content.text(), "xabc");
-    }
-
-    #[test]
-    fn selection_text_ignores_block_cursor_but_keeps_real_selections() {
-        let mut content = text_editor::Content::with_text("abcd");
-        content.move_to(text_editor::Cursor {
-            position: pos(0, 1),
-            selection: Some(pos(0, 2)),
-        });
-        assert_eq!(selection_text(&content, vim::Mode::Normal), None);
-
-        content.move_to(text_editor::Cursor {
-            position: pos(0, 3),
-            selection: Some(pos(0, 0)),
-        });
-        assert_eq!(
-            selection_text(&content, vim::Mode::Visual),
-            Some("abc".to_string())
-        );
-    }
+    // Removed: selection_text_ignores_block_cursor_but_keeps_real_selections
+    // → covered by tests/selection.rs::normal_mode_selection_is_none + visual_mode_shows_selection
 
     #[test]
     fn transform_case_range_handles_multiline_spans() {
@@ -3015,36 +2991,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn move_line_down_with_identical_neighbors_still_moves_cursor() {
-        let mut app = App::test("same\nsame");
-        app.tabs[0].content.move_to(text_editor::Cursor {
-            position: pos(0, 2),
-            selection: None,
-        });
+    // Removed: move_line_down_with_identical_neighbors_still_moves_cursor
+    // → covered by tests/line_ops.rs::move_line_down_with_identical_lines_still_moves_cursor
 
-        let result = app.update_inner(Message::MoveLineDown);
-
-        assert_eq!(result.reveal, RevealIntent::RevealCaret);
-        assert_eq!(app.tabs[0].content.text(), "same\nsame");
-        assert_eq!(app.tabs[0].content.cursor().position, pos(1, 2));
-    }
-
-    #[test]
-    fn toggle_comment_on_blank_line_can_still_move_cursor_without_editing() {
-        let mut app = App::test("    ");
-        app.tabs[0].path = Some(PathBuf::from("/tmp/test.rs"));
-        app.tabs[0].content.move_to(text_editor::Cursor {
-            position: pos(0, 4),
-            selection: None,
-        });
-
-        let result = app.update_inner(Message::ToggleComment);
-
-        assert_eq!(result.reveal, RevealIntent::RevealCaret);
-        assert_eq!(app.tabs[0].content.text(), "    ");
-        assert_eq!(app.tabs[0].content.cursor().position, pos(0, 1));
-    }
+    // Removed: toggle_comment_on_blank_line_can_still_move_cursor_without_editing
+    // → covered by tests/line_ops.rs::toggle_comment_on_blank_line_moves_cursor
 
     #[test]
     fn layout_cache_only_rebuilds_when_wrap_width_changes() {

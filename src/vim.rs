@@ -472,10 +472,13 @@ impl VimState {
                     return vec![VimCommand::EnterInsert];
                 }
                 let end = (text.cursor.column + count - 1).min(ll.saturating_sub(1));
-                vec![VimCommand::ChangeRange {
-                    from: text.cursor,
-                    to: pos(text.cursor.line, end),
-                }]
+                vec![
+                    VimCommand::ChangeRange {
+                        from: text.cursor,
+                        to: pos(text.cursor.line, end),
+                    },
+                    VimCommand::EnterInsert,
+                ]
             }
             'D' => {
                 let ll = line_len(text, text.cursor.line);
@@ -492,10 +495,13 @@ impl VimState {
                 if ll == 0 || text.cursor.column >= ll {
                     return vec![VimCommand::EnterInsert];
                 }
-                vec![VimCommand::ChangeRange {
-                    from: text.cursor,
-                    to: pos(text.cursor.line, ll - 1),
-                }]
+                vec![
+                    VimCommand::ChangeRange {
+                        from: text.cursor,
+                        to: pos(text.cursor.line, ll - 1),
+                    },
+                    VimCommand::EnterInsert,
+                ]
             }
             'J' => {
                 // vim: J = join 2 lines (1 op), 3J = join 3 lines (2 ops)
@@ -3015,10 +3021,13 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press(&mut v, 's', &snapshot(&["hello"], 0, 2)),
-            vec![VimCommand::ChangeRange {
-                from: pos(0, 2),
-                to: pos(0, 2)
-            }],
+            vec![
+                VimCommand::ChangeRange {
+                    from: pos(0, 2),
+                    to: pos(0, 2),
+                },
+                VimCommand::EnterInsert,
+            ],
         );
     }
 
@@ -3057,10 +3066,13 @@ mod tests {
         let mut v = normal();
         assert_eq!(
             press(&mut v, 'C', &snapshot(&["hello"], 0, 1)),
-            vec![VimCommand::ChangeRange {
-                from: pos(0, 1),
-                to: pos(0, 4)
-            }],
+            vec![
+                VimCommand::ChangeRange {
+                    from: pos(0, 1),
+                    to: pos(0, 4),
+                },
+                VimCommand::EnterInsert,
+            ],
         );
     }
 
