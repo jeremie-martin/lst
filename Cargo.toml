@@ -10,6 +10,7 @@ default = []
 internal-invariants = []
 
 [dependencies]
+mimalloc = { version = "0.1", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 fontdb = "0.23"
 libc = "0.2"
