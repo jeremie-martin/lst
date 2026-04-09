@@ -217,9 +217,9 @@ impl LstHighlighter {
         self.syntect_hl = None;
         self.full_file_parse = None;
         self.full_file_hl = None;
-        self.tree_sitter = None;
-        self.tree_sitter_text_cache.clear();
-        self.tree_sitter_text_cache_order.clear();
+        // Keep tree_sitter instance and text cache alive across resets.
+        // The cache is keyed by line text (not position), so entries
+        // remain valid even when lines move or the file is re-highlighted.
     }
 
     // ── Markdown mode ───────────────────────────────────────────────────
