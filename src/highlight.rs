@@ -168,12 +168,6 @@ struct SyntectLineState {
 }
 
 #[derive(Clone)]
-struct TreeSitterCachedLine {
-    text: String,
-    spans: Vec<(Range<usize>, Highlight)>,
-}
-
-#[derive(Clone)]
 enum LineState {
     Md(MdLineState),
     Syntect(SyntectLineState),
@@ -196,7 +190,6 @@ pub struct LstHighlighter {
     full_file_parse: Option<ParseState>,
     full_file_hl: Option<HighlightState>,
     tree_sitter: Option<TreeSitterHighlighter>,
-    tree_sitter_cache: Vec<Option<TreeSitterCachedLine>>,
 }
 
 impl LstHighlighter {
@@ -221,7 +214,6 @@ impl LstHighlighter {
         self.full_file_parse = None;
         self.full_file_hl = None;
         self.tree_sitter = None;
-        self.tree_sitter_cache.clear();
     }
 
     // ── Markdown mode ───────────────────────────────────────────────────
@@ -311,12 +303,6 @@ impl LstHighlighter {
     }
 
     fn highlight_tree_sitter_rust_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
-        if let Some(Some(cached)) = self.tree_sitter_cache.get(self.current_line) {
-            if cached.text == line {
-                return cached.spans.clone();
-            }
-        }
-
         let Some(highlighter) = self.tree_sitter.as_mut() else {
             return Vec::new();
         };
@@ -348,15 +334,6 @@ impl LstHighlighter {
                 Err(_) => return Vec::new(),
             }
         }
-
-        if self.tree_sitter_cache.len() <= self.current_line {
-            self.tree_sitter_cache
-                .resize_with(self.current_line + 1, || None);
-        }
-        self.tree_sitter_cache[self.current_line] = Some(TreeSitterCachedLine {
-            text: line.to_string(),
-            spans: spans.clone(),
-        });
 
         spans
     }
@@ -419,7 +396,6 @@ impl Highlighter for LstHighlighter {
             full_file_parse: None,
             full_file_hl: None,
             tree_sitter: None,
-            tree_sitter_cache: Vec::new(),
         };
         h.init_mode();
         h
@@ -1140,36 +1116,6 @@ mod tests {
         assert!(spans
             .iter()
             .all(|(_, hl)| matches!(hl, Highlight::Syntect(_))));
-    }
-
-    #[test]
-    fn rust_tree_sitter_cache_reuses_same_line_after_change_line() {
-        let mut h = LstHighlighter::new(&Settings {
-            extension: Some("rs".to_string()),
-        });
-        let _first: Vec<_> = h.highlight_line("fn alpha() {}").collect();
-        let expected: Vec<_> = h.highlight_line("let beta = 1;").collect();
-
-        h.change_line(1);
-        h.tree_sitter = None;
-
-        let reused: Vec<_> = h.highlight_line("let beta = 1;").collect();
-        assert_eq!(reused, expected);
-    }
-
-    #[test]
-    fn rust_tree_sitter_cache_does_not_reuse_stale_line_text() {
-        let mut h = LstHighlighter::new(&Settings {
-            extension: Some("rs".to_string()),
-        });
-        let _first: Vec<_> = h.highlight_line("fn alpha() {}").collect();
-        let _second: Vec<_> = h.highlight_line("let beta = 1;").collect();
-
-        h.change_line(1);
-        h.tree_sitter = None;
-
-        let changed: Vec<_> = h.highlight_line("let gamma = 2;").collect();
-        assert!(changed.is_empty());
     }
 
     #[test]
