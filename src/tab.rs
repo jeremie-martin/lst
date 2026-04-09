@@ -12,6 +12,7 @@ const MAX_UNDO: usize = 100;
 pub enum EditKind {
     Insert,
     Delete,
+    Paste,
     Other,
 }
 
@@ -182,7 +183,7 @@ impl Tab {
     /// Groups consecutive same-kind edits; breaks on kind change, whitespace, or non-character edits.
     pub fn push_undo_snapshot(&mut self, kind: EditKind, boundary: bool) {
         let kind_changed = self.last_edit_kind != Some(kind);
-        let is_streaming = matches!(kind, EditKind::Insert | EditKind::Delete);
+        let is_streaming = matches!(kind, EditKind::Insert | EditKind::Delete | EditKind::Paste);
         let should_snapshot = kind_changed || !is_streaming || boundary;
 
         if should_snapshot {

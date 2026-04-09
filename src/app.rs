@@ -1152,6 +1152,7 @@ impl App {
                     let (kind, boundary) = match &action {
                         text_editor::Action::Edit(edit) => match edit {
                             text_editor::Edit::Insert(c) => (EditKind::Insert, c.is_whitespace()),
+                            text_editor::Edit::Paste(_) => (EditKind::Paste, false),
                             text_editor::Edit::Backspace | text_editor::Edit::Delete => {
                                 (EditKind::Delete, false)
                             }
