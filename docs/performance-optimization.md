@@ -1,6 +1,6 @@
 # Performance Optimization Workflow
 
-This repository now has two concrete performance workflows.
+This repository now has three concrete performance workflows.
 
 The goal is simple:
 
@@ -94,10 +94,41 @@ It is also acceptable to edit:
 
 - `src/bin/bench_scroll_x11.rs` if the benchmark itself needs refinement
 - `src/bin/bench_paste_x11.rs` if the benchmark itself needs refinement
+- `src/bin/bench_editing_x11.rs` if the benchmark itself needs refinement
 - `README.md`
 - `docs/`
 
 Do not broaden the project into a generalized benchmark framework. Keep the workflow narrow and simple.
+
+## Editing benchmark (comprehensive)
+
+A multi-phase benchmark that exercises paste, scroll, find, and vim in a single run.
+Better for overall optimization work because it covers more code paths and has tighter
+variance (~3% spread vs ~30% for paste-only).
+
+Scenario:
+
+- real-display X11 benchmark
+- real injected keyboard input via XTEST
+- file: `benchmarks/editing-corpus.rs` (frozen copy of app.rs, ~3593 lines)
+- wrap: on
+- highlighting: default Rust tree-sitter highlighting
+- 5 phases in one CPU-measurement window:
+  1. **Paste growth** (~5s): Ctrl+A, Ctrl+C, Ctrl+End, then 10 Ctrl+V at 500ms intervals
+  2. **Scroll** (~3s): 240 wheel-down over 1.5s, 240 wheel-up over 1.5s
+  3. **Find cycling** (~5s): Ctrl+F, type each letter a→z (with backspace), then "fn " + 30 Enter navigations
+  4. **Vim navigation** (~3s): Escape, 10 cycles of gg (top) and G (bottom)
+  5. **Vim yank+paste** (~3s): gg, 500yy, G, 10p (adds 5000 lines)
+- `1s` sleep between repetitions
+- `1` priming run, `7` measured runs
+- expected final file size on every measured run: `1468664` bytes, `39552` lines
+
+Runner:
+
+```bash
+cargo build --release --bin lst --bin bench_editing_x11
+./target/release/bench_editing_x11
+```
 
 ## Scroll benchmark
 
