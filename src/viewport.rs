@@ -136,12 +136,6 @@ pub fn visual_line_count(line: &str, max_cols: usize) -> usize {
         return 1;
     }
 
-    // Fast path: non-tab lines that fit within the wrap width always stay on one visual row.
-    // `chars().count() <= len()` for valid UTF-8, so this byte-length test is conservative.
-    if line.len() <= max_cols && !line.as_bytes().contains(&b'\t') {
-        return 1;
-    }
-
     let mut lines = 1usize;
     let mut col = 0usize;
     let mut chars = line.chars().peekable();
@@ -377,16 +371,6 @@ mod tests {
         assert_eq!(cursor_visual_row_in_line(line, 2, 4), 1);
         assert_eq!(cursor_visual_row_in_line(line, 3, 4), 3);
         assert_eq!(cursor_visual_row_in_line(line, line.chars().count(), 4), 3);
-    }
-
-    #[test]
-    fn short_no_tab_lines_use_single_row_fast_path() {
-        assert_eq!(visual_line_count("alpha beta", 16), 1);
-    }
-
-    #[test]
-    fn unicode_lines_still_wrap_when_byte_length_exceeds_width() {
-        assert_eq!(visual_line_count("éééé", 2), 2);
     }
 
     #[test]
