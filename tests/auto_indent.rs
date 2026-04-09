@@ -8,7 +8,7 @@ fn auto_indent_copies_leading_whitespace() {
     type_text(&mut app, "    hello");
     app.update_inner(Message::AutoIndent);
     type_text(&mut app, "world");
-    assert_eq!(active_text(&app), "    hello\n    world");
+    assert_eq!(app.snapshot().text, "    hello\n    world");
 }
 
 #[test]
@@ -17,7 +17,7 @@ fn auto_indent_no_indent_on_unindented_line() {
     type_text(&mut app, "hello");
     app.update_inner(Message::AutoIndent);
     type_text(&mut app, "world");
-    assert_eq!(active_text(&app), "hello\nworld");
+    assert_eq!(app.snapshot().text, "hello\nworld");
 }
 
 #[test]
@@ -26,5 +26,5 @@ fn auto_indent_preserves_tabs() {
     type_text(&mut app, "\thello");
     app.update_inner(Message::AutoIndent);
     type_text(&mut app, "world");
-    assert_eq!(active_text(&app), "\thello\n\tworld");
+    assert_eq!(app.snapshot().text, "\thello\n\tworld");
 }

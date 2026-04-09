@@ -45,6 +45,39 @@ pub struct EditorPointerCell {
     pub row: usize,
 }
 
+// ── ViewSnapshot (test-only) ─────────────────────────────────────────────────
+
+/// All user-visible state at a point in time.
+/// Tests assert against this instead of reaching into App fields.
+#[derive(Debug)]
+pub struct ViewSnapshot {
+    // Document
+    pub text: String,
+    pub cursor_line: usize,
+    pub cursor_column: usize,
+    pub selection: Option<String>,
+    // Tabs
+    pub tab_count: usize,
+    pub active_tab: usize,
+    pub tab_titles: Vec<String>,
+    pub title: String,
+    pub modified: bool,
+    // Find / replace
+    pub find_visible: bool,
+    pub find_replace_visible: bool,
+    pub find_query: String,
+    pub find_replacement: String,
+    pub find_match_count: usize,
+    pub find_current_match: usize,
+    // Go-to-line
+    pub goto_line_visible: bool,
+    pub goto_line_text: String,
+    // Editor state
+    pub word_wrap: bool,
+    pub vim_mode: String,
+    pub vim_pending: String,
+}
+
 // ── App ──────────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -316,6 +349,36 @@ impl App {
             viewport: ViewportState::default(),
             clipboard: Box::new(NullClipboard),
             fs: Box::new(NullFilesystem),
+        }
+    }
+
+    /// Returns a snapshot of all user-visible application state.
+    /// This is the single observation point for black-box tests —
+    /// assertions go through this, never through struct fields.
+    pub fn snapshot(&self) -> ViewSnapshot {
+        let tab = &self.tabs[self.active];
+        let cursor = tab.content.cursor().position;
+        ViewSnapshot {
+            text: tab.content.text(),
+            cursor_line: cursor.line,
+            cursor_column: cursor.column,
+            selection: selection_text(&tab.content, self.vim.mode),
+            tab_count: self.tabs.len(),
+            active_tab: self.active,
+            tab_titles: self.tabs.iter().map(|t| t.display_name().into_owned()).collect(),
+            title: self.title(),
+            modified: tab.modified,
+            find_visible: self.find.visible,
+            find_replace_visible: self.find.visible && self.find.show_replace,
+            find_query: self.find.query.clone(),
+            find_replacement: self.find.replacement.clone(),
+            find_match_count: self.find.matches.len(),
+            find_current_match: self.find.current,
+            goto_line_visible: self.goto_line.is_some(),
+            goto_line_text: self.goto_line.clone().unwrap_or_default(),
+            word_wrap: self.word_wrap,
+            vim_mode: self.vim.mode.label().to_string(),
+            vim_pending: self.vim.pending_display(),
         }
     }
 
@@ -2351,12 +2414,7 @@ impl App {
 
         let wrap_label = if self.word_wrap { "Wrap" } else { "NoWrap" };
 
-        let mode_label = match self.vim.mode {
-            vim::Mode::Normal => "NORMAL",
-            vim::Mode::Insert => "INSERT",
-            vim::Mode::Visual => "VISUAL",
-            vim::Mode::VisualLine => "V-LINE",
-        };
+        let mode_label = self.vim.mode.label();
         let pending = self.vim.pending_display();
 
         let mut status_row = row![].align_y(iced::Alignment::Center);

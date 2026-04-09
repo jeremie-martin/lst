@@ -2,41 +2,33 @@ mod common;
 use common::*;
 use lst::app::{App, Message};
 
-use iced::widget::text_editor;
-
 #[test]
 fn insert_character_modifies_content() {
     let mut app = App::test("hello");
-    app.tabs[0]
-        .content
-        .perform(text_editor::Action::Move(text_editor::Motion::End));
+    move_to_end(&mut app);
     type_text(&mut app, "!");
-    assert_eq!(active_text(&app), "hello!");
+    assert_eq!(app.snapshot().text, "hello!");
 }
 
 #[test]
 fn undo_restores_previous_state() {
     let mut app = App::test("hello");
-    app.tabs[0]
-        .content
-        .perform(text_editor::Action::Move(text_editor::Motion::End));
+    move_to_end(&mut app);
     type_text(&mut app, " world");
-    assert_eq!(active_text(&app), "hello world");
+    assert_eq!(app.snapshot().text, "hello world");
 
     app.update_inner(Message::Undo);
-    assert_eq!(active_text(&app), "hello");
+    assert_eq!(app.snapshot().text, "hello");
 }
 
 #[test]
 fn redo_after_undo_reapplies() {
     let mut app = App::test("abc");
-    app.tabs[0]
-        .content
-        .perform(text_editor::Action::Move(text_editor::Motion::End));
+    move_to_end(&mut app);
     type_text(&mut app, "d");
     app.update_inner(Message::Undo);
-    assert_eq!(active_text(&app), "abc");
+    assert_eq!(app.snapshot().text, "abc");
 
     app.update_inner(Message::Redo);
-    assert_eq!(active_text(&app), "abcd");
+    assert_eq!(app.snapshot().text, "abcd");
 }

@@ -23,6 +23,17 @@ pub enum Mode {
     VisualLine,
 }
 
+impl Mode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Normal => "NORMAL",
+            Mode::Insert => "INSERT",
+            Mode::Visual => "VISUAL",
+            Mode::VisualLine => "V-LINE",
+        }
+    }
+}
+
 pub struct VimState {
     pub mode: Mode,
     pub register: Register,
