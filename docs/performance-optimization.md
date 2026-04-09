@@ -11,7 +11,40 @@ The goal is simple:
 
 ## Recommended next benchmark
 
-Use this benchmark when the concern is unnecessary CPU during real editing work, not just scroll smoothness.
+Use the **editing benchmark** for general optimization work. It exercises five
+features (paste, scroll, find, vim navigation, vim yank+paste) in a single
+CPU-measurement window and has tighter variance (~3%) than the paste-only
+benchmark (~30%).
+
+```bash
+cargo build --release --bin lst --bin bench_editing_x11
+./target/release/bench_editing_x11
+```
+
+Use the paste benchmark only when the question is paste-growth cost specifically.
+
+## Which value to optimize
+
+Use the final line:
+
+```text
+score=...
+```
+
+The current contract is:
+
+```text
+score = median(cpu_ms over the 7 measured repetitions)
+cpu_ms = user_cpu_ms + sys_cpu_ms
+```
+
+Lower is better. The optimization loop should minimize `score`.
+
+## Paste benchmark (single-phase)
+
+A single-phase benchmark that exercises only paste-growth on a large buffer.
+Useful for isolating paste/rendering cost, but note that ~78% of its CPU
+is in iced/cosmic-text internals (not our code).
 
 Scenario:
 
@@ -32,25 +65,6 @@ Runner:
 cargo build --release --bin lst --bin bench_paste_x11
 ./target/release/bench_paste_x11
 ```
-
-## Which value to optimize
-
-Use the final line:
-
-```text
-score=...
-```
-
-The current contract is:
-
-```text
-score = median(cpu_ms over the 7 measured repetitions)
-cpu_ms = user_cpu_ms + sys_cpu_ms
-```
-
-Lower is better. The optimization loop should minimize `score`.
-
-This is the right current score because the main concern is unnecessary CPU during real editing work on a growing buffer. The benchmark uses real display, real injected GUI input, and fixed repeated paste work.
 
 ## Other printed values
 
