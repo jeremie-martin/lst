@@ -21,9 +21,7 @@ use iced::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
-#[cfg(all(test, feature = "internal-invariants"))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn editor_id() -> iced::widget::Id {
     iced::widget::Id::new("lst-editor")
@@ -36,6 +34,8 @@ static FIND_INPUT_ID: LazyLock<iced::widget::Id> =
     LazyLock::new(|| iced::widget::Id::new("lst-find"));
 static GOTO_LINE_ID: LazyLock<iced::widget::Id> =
     LazyLock::new(|| iced::widget::Id::new("lst-goto-line"));
+
+const SCROLL_HIGHLIGHT_DEFER_MS: u64 = 75;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EditorPointerCell {
@@ -195,6 +195,8 @@ pub struct App {
     pub goto_line: Option<String>,
     pub vim: vim::VimState,
     pub viewport: ViewportState,
+    pub scroll_highlight_defer_until: Option<Instant>,
+    pub scroll_highlight_rewind_from_line: Option<usize>,
     pub clipboard: SharedClipboard,
     pub fs: SharedFilesystem,
     pub dialogs: SharedDialogs,
@@ -267,6 +269,7 @@ pub enum Message {
     MiddleClickPaste,
     // Scroll tracking
     Scrolled(Viewport),
+    ScrollHighlightTick,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -453,6 +456,8 @@ impl App {
                 goto_line: None,
                 vim: vim::VimState::new(),
                 viewport: ViewportState::default(),
+                scroll_highlight_defer_until: None,
+                scroll_highlight_rewind_from_line: None,
                 clipboard,
                 fs,
                 dialogs,
@@ -506,6 +511,8 @@ impl App {
             goto_line: None,
             vim: vim::VimState::new(),
             viewport: ViewportState::default(),
+            scroll_highlight_defer_until: None,
+            scroll_highlight_rewind_from_line: None,
             clipboard,
             fs,
             dialogs,
@@ -743,6 +750,44 @@ impl App {
 
     fn should_poll_autosave(&self) -> bool {
         self.needs_autosave
+    }
+
+    fn should_poll_scroll_highlight_idle(&self) -> bool {
+        self.scroll_highlight_defer_until.is_some()
+    }
+
+    fn syntax_spans_enabled(&self) -> bool {
+        self.scroll_highlight_defer_until.is_none()
+    }
+
+    fn current_top_visible_line(&mut self) -> usize {
+        let line_count = self.tabs[self.active].content.line_count().max(1);
+
+        if !self.word_wrap {
+            let visible_rows = viewport::visible_row_range(
+                self.viewport.scroll_y(),
+                self.viewport.height(),
+                line_count,
+            );
+            return visible_rows.start.min(line_count.saturating_sub(1));
+        }
+
+        let Some(wrap_cols) = self.active_wrap_cols() else {
+            return 0;
+        };
+
+        let layout_cache = self.tabs[self.active].ensure_layout_cache(wrap_cols);
+        let visible_rows = viewport::visible_row_range(
+            self.viewport.scroll_y(),
+            self.viewport.height(),
+            layout_cache.total_visual_rows,
+        );
+
+        layout_cache
+            .line_start_visual_row
+            .partition_point(|&row| row <= visible_rows.start)
+            .saturating_sub(1)
+            .min(line_count.saturating_sub(1))
     }
 
     fn mark_active_document_changed(&mut self) {
@@ -1799,6 +1844,21 @@ impl App {
                 if self.active_wrap_cols() != previous_wrap_cols {
                     self.ensure_active_layout_cache();
                 }
+                self.scroll_highlight_defer_until =
+                    Some(Instant::now() + Duration::from_millis(SCROLL_HIGHLIGHT_DEFER_MS));
+                self.scroll_highlight_rewind_from_line = None;
+                UpdateResult::none()
+            }
+
+            Message::ScrollHighlightTick => {
+                if self
+                    .scroll_highlight_defer_until
+                    .is_some_and(|deadline| Instant::now() >= deadline)
+                {
+                    self.scroll_highlight_defer_until = None;
+                    self.scroll_highlight_rewind_from_line =
+                        Some(self.current_top_visible_line());
+                }
                 UpdateResult::none()
             }
 
@@ -2402,6 +2462,8 @@ impl App {
             .as_ref()
             .and_then(|p| p.extension())
             .map(|e| e.to_string_lossy().into_owned());
+        let highlight_enabled = self.syntax_spans_enabled();
+        let highlight_rewind_from_line = self.scroll_highlight_rewind_from_line;
 
         let editor_area = responsive(move |size| {
             let vh = size.height;
@@ -2486,6 +2548,8 @@ impl App {
                 .highlight_with::<highlight::LstHighlighter>(
                     highlight::Settings {
                         extension: highlight_ext.clone(),
+                        emit_spans: highlight_enabled,
+                        rewind_from_line: highlight_rewind_from_line,
                     },
                     highlight::format,
                 )
@@ -2629,6 +2693,13 @@ impl App {
         if self.should_refresh_find_idle() {
             subscriptions.push(
                 iced::time::every(Duration::from_millis(50)).map(|_| Message::FindRefreshTick),
+            );
+        }
+
+        if self.should_poll_scroll_highlight_idle() {
+            subscriptions.push(
+                iced::time::every(Duration::from_millis(25))
+                    .map(|_| Message::ScrollHighlightTick),
             );
         }
 
@@ -3440,6 +3511,8 @@ mod tests {
                 viewport::content_height(height, 1),
                 0.0,
             ),
+            scroll_highlight_defer_until: None,
+            scroll_highlight_rewind_from_line: None,
             clipboard: Arc::new(NullClipboard),
             fs: Arc::new(NullFilesystem),
             dialogs: Arc::new(NullDialogs),

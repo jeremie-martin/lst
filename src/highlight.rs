@@ -41,6 +41,8 @@ const SURFACE1: Color = Color::from_rgb(0.271, 0.278, 0.353); // #45475a
 #[derive(Clone, PartialEq)]
 pub struct Settings {
     pub extension: Option<String>,
+    pub emit_spans: bool,
+    pub rewind_from_line: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -129,6 +131,8 @@ enum LineState {
 // ── Unified highlighter ─────────────────────────────────────────────────────
 
 pub struct LstHighlighter {
+    extension: Option<String>,
+    emit_spans: bool,
     mode: HighlightMode,
     states: Vec<LineState>,
     current_line: usize,
@@ -235,7 +239,7 @@ impl LstHighlighter {
     fn highlight_code_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
         let parse = self.syntect_parse.as_mut().unwrap();
         let hl_state = self.syntect_hl.as_mut().unwrap();
-        run_syntect_line(parse, hl_state, &mut self.line_buffer, line)
+        run_syntect_line(parse, hl_state, &mut self.line_buffer, line, self.emit_spans)
     }
 
     // ── Full-file syntect mode ──────────────────────────────────────────
@@ -243,7 +247,13 @@ impl LstHighlighter {
     fn highlight_syntect_line(&mut self, line: &str) -> Vec<(Range<usize>, Highlight)> {
         let parse = self.full_file_parse.as_mut().unwrap();
         let hl_state = self.full_file_hl.as_mut().unwrap();
-        let spans = run_syntect_line(parse, hl_state, &mut self.line_buffer, line);
+        let spans = run_syntect_line(
+            parse,
+            hl_state,
+            &mut self.line_buffer,
+            line,
+            self.emit_spans,
+        );
         self.states.push(LineState::Syntect(SyntectLineState {
             parse_state: parse.clone(),
             highlight_state: hl_state.clone(),
@@ -257,6 +267,7 @@ fn run_syntect_line(
     hl_state: &mut HighlightState,
     line_buffer: &mut String,
     line: &str,
+    emit_spans: bool,
 ) -> Vec<(Range<usize>, Highlight)> {
     line_buffer.clear();
     line_buffer.push_str(line);
@@ -266,6 +277,10 @@ fn run_syntect_line(
         Ok(ops) => ops,
         Err(_) => return Vec::new(),
     };
+
+    if !emit_spans {
+        return Vec::new();
+    }
 
     let iter = RangedHighlightIterator::new(hl_state, &ops, line_buffer, &SYNTECT_HIGHLIGHTER);
 
@@ -297,6 +312,8 @@ impl Highlighter for LstHighlighter {
     fn new(settings: &Settings) -> Self {
         let mode = determine_mode(&settings.extension);
         let mut h = Self {
+            extension: settings.extension.clone(),
+            emit_spans: settings.emit_spans,
             mode,
             states: Vec::new(),
             current_line: 0,
@@ -314,9 +331,18 @@ impl Highlighter for LstHighlighter {
     }
 
     fn update(&mut self, settings: &Settings) {
-        self.mode = determine_mode(&settings.extension);
-        self.reset();
-        self.init_mode();
+        if self.extension != settings.extension {
+            self.extension = settings.extension.clone();
+            self.mode = determine_mode(&settings.extension);
+            self.reset();
+            self.init_mode();
+        }
+
+        self.emit_spans = settings.emit_spans;
+
+        if let Some(line) = settings.rewind_from_line {
+            self.change_line(line);
+        }
     }
 
     fn change_line(&mut self, line: usize) {
@@ -343,11 +369,14 @@ impl Highlighter for LstHighlighter {
     }
 
     fn highlight_line(&mut self, line: &str) -> Self::Iterator<'_> {
-        let spans = match &self.mode {
+        let mut spans = match &self.mode {
             HighlightMode::Markdown => self.highlight_md_line(line),
             HighlightMode::Syntect(_) => self.highlight_syntect_line(line),
             HighlightMode::PlainText => Vec::new(),
         };
+        if !self.emit_spans {
+            spans.clear();
+        }
         self.current_line += 1;
         spans.into_iter()
     }
@@ -586,6 +615,8 @@ mod tests {
     fn md_highlighter() -> LstHighlighter {
         LstHighlighter::new(&Settings {
             extension: Some("md".to_string()),
+            emit_spans: true,
+            rewind_from_line: None,
         })
     }
 
@@ -980,7 +1011,11 @@ mod tests {
 
     #[test]
     fn plain_text_returns_no_spans() {
-        let mut h = LstHighlighter::new(&Settings { extension: None });
+        let mut h = LstHighlighter::new(&Settings {
+            extension: None,
+            emit_spans: true,
+            rewind_from_line: None,
+        });
         let spans: Vec<_> = h.highlight_line("# not highlighted").collect();
         assert!(spans.is_empty());
     }
@@ -989,6 +1024,8 @@ mod tests {
     fn syntect_mode_returns_colored_spans() {
         let mut h = LstHighlighter::new(&Settings {
             extension: Some("rs".to_string()),
+            emit_spans: true,
+            rewind_from_line: None,
         });
         let spans: Vec<_> = h.highlight_line("fn main() {}").collect();
         assert!(!spans.is_empty());
