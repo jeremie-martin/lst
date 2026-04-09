@@ -136,6 +136,14 @@ pub fn visual_line_count(line: &str, max_cols: usize) -> usize {
         return 1;
     }
 
+    // Fast path: line fits in one row when no char is wider than 1 column.
+    // char_width() returns 1 for every non-tab character, so display width
+    // equals the char count.  For valid UTF-8, chars().count() <= len(),
+    // so checking len() is a conservative (never wrong) byte-level test.
+    if line.len() <= max_cols && !line.as_bytes().contains(&b'\t') {
+        return 1;
+    }
+
     let mut lines = 1usize;
     let mut col = 0usize;
     let mut chars = line.chars().peekable();

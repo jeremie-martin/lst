@@ -29,6 +29,7 @@ pub struct LayoutCache {
     pub wrap_cols: usize,
     pub line_start_visual_row: Vec<usize>,
     pub total_visual_rows: usize,
+    revision: u64,
 }
 
 pub struct Tab {
@@ -110,7 +111,7 @@ impl Tab {
     pub fn touch_content(&mut self) {
         self.revision = self.revision.wrapping_add(1);
         self.line_cache = None;
-        self.layout_cache = None;
+        // layout_cache is kept for incremental extension in ensure_layout_cache
     }
 
     pub fn lines(&mut self) -> Arc<[String]> {
@@ -159,14 +160,41 @@ impl Tab {
     pub fn layout_cache_for(&self, wrap_cols: usize) -> Option<&LayoutCache> {
         self.layout_cache
             .as_ref()
-            .filter(|cache| cache.wrap_cols == wrap_cols)
+            .filter(|cache| cache.wrap_cols == wrap_cols && cache.revision == self.revision)
     }
 
     pub fn ensure_layout_cache(&mut self, wrap_cols: usize) -> &LayoutCache {
-        let needs_rebuild = self.layout_cache_for(wrap_cols).is_none();
+        let up_to_date = self
+            .layout_cache
+            .as_ref()
+            .map_or(false, |c| c.wrap_cols == wrap_cols && c.revision == self.revision);
 
-        if needs_rebuild {
-            self.layout_cache = Some(LayoutCache::build(&self.content, wrap_cols));
+        if !up_to_date {
+            let new_line_count = self.content.line_count().max(1);
+            let can_extend = self.layout_cache.as_ref().map_or(false, |cache| {
+                cache.wrap_cols == wrap_cols && {
+                    let old_count = cache.line_start_visual_row.len().saturating_sub(1);
+                    new_line_count > old_count
+                }
+            });
+
+            if can_extend {
+                let mut cache = self.layout_cache.take().unwrap();
+                let old_count = cache.line_start_visual_row.len().saturating_sub(1);
+                for line_idx in old_count..new_line_count {
+                    let visual_rows = self.content.line(line_idx).map_or(1, |line| {
+                        viewport::visual_line_count(line.text.as_ref(), wrap_cols)
+                    });
+                    cache.total_visual_rows += visual_rows;
+                    cache.line_start_visual_row.push(cache.total_visual_rows);
+                }
+                cache.total_visual_rows = cache.total_visual_rows.max(1);
+                cache.revision = self.revision;
+                self.layout_cache = Some(cache);
+            } else {
+                self.layout_cache =
+                    Some(LayoutCache::build(&self.content, wrap_cols, self.revision));
+            }
         }
 
         self.layout_cache
@@ -175,7 +203,7 @@ impl Tab {
     }
 
     pub fn build_layout_cache(&self, wrap_cols: usize) -> LayoutCache {
-        LayoutCache::build(&self.content, wrap_cols)
+        LayoutCache::build(&self.content, wrap_cols, self.revision)
     }
 
     /// Push an undo snapshot if this edit starts a new logical group.
@@ -217,7 +245,7 @@ impl Tab {
 }
 
 impl LayoutCache {
-    fn build(content: &text_editor::Content, wrap_cols: usize) -> Self {
+    fn build(content: &text_editor::Content, wrap_cols: usize, revision: u64) -> Self {
         let line_count = content.line_count().max(1);
         let mut line_start_visual_row = Vec::with_capacity(line_count + 1);
         let mut total_visual_rows = 0usize;
@@ -238,6 +266,7 @@ impl LayoutCache {
             wrap_cols,
             line_start_visual_row,
             total_visual_rows: total_visual_rows.max(1),
+            revision,
         }
     }
 
