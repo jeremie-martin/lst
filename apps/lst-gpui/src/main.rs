@@ -1,9 +1,9 @@
 use gpui::{
     actions, canvas, div, fill, point, prelude::*, px, rgb, size, App, Application, Bounds,
-    ClipboardItem, Context, CursorStyle, ElementInputHandler, EntityInputHandler, FocusHandle,
-    Focusable, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, TextRun,
-    UTF16Selection, Window, WindowBounds, WindowOptions,
+    ClipboardItem, Context, CursorStyle, ElementInputHandler, Entity, EntityInputHandler,
+    FocusHandle, Focusable, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString,
+    Subscription, TextRun, UTF16Selection, Window, WindowBounds, WindowOptions,
 };
 extern crate self as iced;
 pub use iced_core::keyboard;
@@ -30,6 +30,13 @@ use lst_core::{
     find::FindState,
     position::Position,
     wrap::{cursor_visual_row_in_line, visual_line_count, wrap_columns_with_gutter, wrap_segments},
+};
+use lst_ui::{
+    input_keybindings, IconButton, IconKind, InputField, InputFieldEvent, Tab as UiTab, TabBar,
+    COLOR_ACCENT, COLOR_BG, COLOR_BORDER, COLOR_CARET, COLOR_CURRENT_LINE, COLOR_GREEN,
+    COLOR_GUTTER, COLOR_LAVENDER, COLOR_MAUVE, COLOR_MUTED, COLOR_PEACH, COLOR_PINK,
+    COLOR_SAPPHIRE, COLOR_SELECTION, COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_TEXT,
+    COLOR_YELLOW, INPUT_TEXT_SIZE, SHELL_EDGE_PAD, SHELL_GAP, STATUS_HEIGHT_PAD,
 };
 use rfd::FileDialog;
 use ropey::Rope;
@@ -68,26 +75,6 @@ const PREMADE_CORPUS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../benchmarks/paste-corpus-20k.rs"
 ));
-const COLOR_BG: u32 = 0x11111B;
-const COLOR_SURFACE0: u32 = 0x181825;
-const COLOR_SURFACE1: u32 = 0x1E1E2E;
-const COLOR_SURFACE2: u32 = 0x313244;
-const COLOR_BORDER: u32 = 0x45475A;
-const COLOR_TEXT: u32 = 0xCDD6F4;
-const COLOR_SUBTEXT: u32 = 0xA6ADC8;
-const COLOR_MUTED: u32 = 0x6C7086;
-const COLOR_ACCENT: u32 = 0x89B4FA;
-const COLOR_GREEN: u32 = 0xA6E3A1;
-const COLOR_YELLOW: u32 = 0xF9E2AF;
-const COLOR_PEACH: u32 = 0xFAB387;
-const COLOR_PINK: u32 = 0xF5C2E7;
-const COLOR_MAUVE: u32 = 0xCBA6F7;
-const COLOR_SAPPHIRE: u32 = 0x74C7EC;
-const COLOR_LAVENDER: u32 = 0xB4BEFE;
-const COLOR_SELECTION: u32 = 0x585B70;
-const COLOR_CARET: u32 = 0xF5E0DC;
-const COLOR_CURRENT_LINE: u32 = 0x181B2B;
-const COLOR_GUTTER: u32 = 0x161622;
 const TREE_SITTER_CAPTURE_NAMES: &[&str] = &[
     "attribute",
     "comment",
@@ -169,7 +156,8 @@ actions!(
 );
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OverlayFocus {
+enum PendingFocus {
+    Editor,
     FindQuery,
     FindReplace,
     GotoLine,
@@ -424,26 +412,32 @@ struct LstGpuiApp {
     tabs: Vec<EditorTab>,
     active: usize,
     next_untitled_id: usize,
+    tab_bar_scroll: ScrollHandle,
+    hovered_tab: Option<usize>,
     show_gutter: bool,
     show_wrap: bool,
     drag_selecting: Option<DragSelectionMode>,
     find: FindState,
     goto_line: Option<String>,
-    overlay_focus: Option<OverlayFocus>,
-    find_query_cursor: usize,
-    find_replace_cursor: usize,
-    goto_line_cursor: usize,
+    find_query_input: Entity<InputField>,
+    find_replace_input: Entity<InputField>,
+    goto_line_input: Entity<InputField>,
+    pending_focus: Option<PendingFocus>,
     status: String,
     last_operation: OperationStats,
     vim: vim::VimState,
     autosave_inflight: HashSet<PathBuf>,
     autosave_started: bool,
+    _shell_subscriptions: Vec<Subscription>,
 }
 
 impl LstGpuiApp {
     fn new(cx: &mut Context<Self>, launch: LaunchArgs) -> Self {
         let mut tabs = Vec::new();
         let mut status = "Ready.".to_string();
+        let find_query_input = cx.new(|cx| InputField::new(cx, "Find"));
+        let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace"));
+        let goto_line_input = cx.new(|cx| InputField::new(cx, "Line"));
 
         if launch.auto_bench.is_some() {
             tabs.push(EditorTab::from_text(
@@ -484,66 +478,158 @@ impl LstGpuiApp {
 
         eprintln!("lst_gpui {}", last_operation.summary());
 
-        Self {
+        let mut app = Self {
             focus_handle: cx.focus_handle(),
             tabs,
             active,
             next_untitled_id: 2,
+            tab_bar_scroll: ScrollHandle::new(),
+            hovered_tab: None,
             show_gutter: true,
             show_wrap: true,
             drag_selecting: None,
             find: FindState::new(),
             goto_line: None,
-            overlay_focus: None,
-            find_query_cursor: 0,
-            find_replace_cursor: 0,
-            goto_line_cursor: 0,
+            find_query_input: find_query_input.clone(),
+            find_replace_input: find_replace_input.clone(),
+            goto_line_input: goto_line_input.clone(),
+            pending_focus: None,
             status,
             last_operation,
             vim: vim::VimState::new(),
             autosave_inflight: HashSet::new(),
             autosave_started: false,
+            _shell_subscriptions: Vec::new(),
+        };
+
+        app._shell_subscriptions.push(
+            cx.subscribe(&find_query_input, |this, _, event: &InputFieldEvent, cx| {
+                this.handle_find_query_input_event(event, cx)
+            }),
+        );
+        app._shell_subscriptions.push(cx.subscribe(
+            &find_replace_input,
+            |this, _, event: &InputFieldEvent, cx| this.handle_find_replace_input_event(event, cx),
+        ));
+        app._shell_subscriptions.push(
+            cx.subscribe(&goto_line_input, |this, _, event: &InputFieldEvent, cx| {
+                this.handle_goto_line_input_event(event, cx)
+            }),
+        );
+
+        app
+    }
+
+    fn queue_focus(&mut self, target: PendingFocus) {
+        self.pending_focus = Some(target);
+    }
+
+    fn apply_pending_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.pending_focus.take() else {
+            return;
+        };
+
+        match target {
+            PendingFocus::Editor => window.focus(&self.focus_handle),
+            PendingFocus::FindQuery => {
+                let handle = self.find_query_input.read(cx).focus_handle();
+                window.focus(&handle);
+            }
+            PendingFocus::FindReplace => {
+                if self.find.show_replace {
+                    let handle = self.find_replace_input.read(cx).focus_handle();
+                    window.focus(&handle);
+                } else {
+                    self.pending_focus = Some(PendingFocus::FindQuery);
+                }
+            }
+            PendingFocus::GotoLine => {
+                if self.goto_line.is_some() {
+                    let handle = self.goto_line_input.read(cx).focus_handle();
+                    window.focus(&handle);
+                } else {
+                    self.pending_focus = Some(PendingFocus::Editor);
+                }
+            }
         }
     }
 
-    fn tab_button(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let tab = &self.tabs[ix];
-        let active = ix == self.active;
-        let label = if tab.modified {
-            format!("{} •", tab.display_name())
-        } else {
-            tab.display_name()
-        };
-
-        div()
-            .id(("tab", ix))
-            .cursor_pointer()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .border_1()
-            .border_color(if active {
-                rgb(COLOR_ACCENT)
-            } else {
-                rgb(COLOR_BORDER)
-            })
-            .bg(if active {
-                rgb(COLOR_SURFACE2)
-            } else {
-                rgb(COLOR_SURFACE0)
-            })
-            .text_color(if active {
-                rgb(COLOR_TEXT)
-            } else {
-                rgb(COLOR_SUBTEXT)
-            })
-            .child(label)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.set_active_tab(ix);
-                this.status = format!("Switched to {}.", this.active_tab().display_name());
-                this.reveal_active_cursor();
+    fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
+        match event {
+            InputFieldEvent::Changed(text) => {
+                self.find.query = text.clone();
+                self.reindex_find_matches_to_nearest();
+                self.select_current_find_match();
+                self.reveal_active_cursor();
                 cx.notify();
-            }))
+            }
+            InputFieldEvent::Submitted => {
+                if self.find_next() {
+                    self.reveal_active_cursor();
+                    cx.notify();
+                }
+            }
+            InputFieldEvent::Cancelled => {
+                self.close_find();
+                self.queue_focus(PendingFocus::Editor);
+                cx.notify();
+            }
+            InputFieldEvent::NextRequested => {
+                if self.find.show_replace {
+                    self.queue_focus(PendingFocus::FindReplace);
+                    cx.notify();
+                }
+            }
+            InputFieldEvent::PreviousRequested => {}
+        }
+    }
+
+    fn handle_find_replace_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
+        match event {
+            InputFieldEvent::Changed(text) => {
+                self.find.replacement = text.clone();
+                cx.notify();
+            }
+            InputFieldEvent::Submitted => {
+                if self.replace_one() {
+                    self.reveal_active_cursor();
+                    cx.notify();
+                }
+            }
+            InputFieldEvent::Cancelled => {
+                self.close_find();
+                self.queue_focus(PendingFocus::Editor);
+                cx.notify();
+            }
+            InputFieldEvent::NextRequested => {}
+            InputFieldEvent::PreviousRequested => {
+                self.queue_focus(PendingFocus::FindQuery);
+                cx.notify();
+            }
+        }
+    }
+
+    fn handle_goto_line_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
+        match event {
+            InputFieldEvent::Changed(text) => {
+                self.goto_line = Some(text.clone());
+                cx.notify();
+            }
+            InputFieldEvent::Submitted => {
+                let changed = self.submit_goto_line();
+                self.queue_focus(PendingFocus::Editor);
+                if changed {
+                    self.reveal_active_cursor();
+                }
+                cx.notify();
+            }
+            InputFieldEvent::Cancelled => {
+                self.close_goto_line();
+                self.queue_focus(PendingFocus::Editor);
+                cx.notify();
+            }
+            InputFieldEvent::NextRequested | InputFieldEvent::PreviousRequested => {}
+        }
     }
 
     fn ensure_active_rust_highlights(&mut self, cx: &mut Context<Self>) {
@@ -848,32 +934,93 @@ impl LstGpuiApp {
         (!text.contains('\n')).then_some(text)
     }
 
-    fn open_find(&mut self, show_replace: bool) {
+    fn open_find(&mut self, show_replace: bool, cx: &mut Context<Self>) {
         self.find.visible = true;
         self.find.show_replace = show_replace;
         if let Some(sel) = self.selected_single_line_text() {
             self.find.query = sel;
         }
-        self.find_query_cursor = self.find.query.chars().count();
-        self.find_replace_cursor = self.find.replacement.chars().count();
-        self.overlay_focus = Some(OverlayFocus::FindQuery);
+        let query = self.find.query.clone();
+        let replacement = self.find.replacement.clone();
+        self.find_query_input
+            .update(cx, |input, cx| input.set_text(&query, cx));
+        self.find_replace_input
+            .update(cx, |input, cx| input.set_text(&replacement, cx));
+        self.queue_focus(PendingFocus::FindQuery);
         self.reindex_find_matches_to_nearest();
     }
 
     fn close_find(&mut self) {
         self.find.visible = false;
-        self.overlay_focus = None;
     }
 
-    fn open_goto_line(&mut self) {
+    fn open_goto_line(&mut self, cx: &mut Context<Self>) {
         self.goto_line = Some(String::new());
-        self.goto_line_cursor = 0;
-        self.overlay_focus = Some(OverlayFocus::GotoLine);
+        self.goto_line_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.queue_focus(PendingFocus::GotoLine);
     }
 
     fn close_goto_line(&mut self) {
         self.goto_line = None;
-        self.overlay_focus = None;
+    }
+
+    fn find_next(&mut self) -> bool {
+        self.ensure_find_matches_current();
+        if self.find.matches.is_empty() {
+            return false;
+        }
+        self.find.next();
+        self.select_current_find_match()
+    }
+
+    fn find_prev(&mut self) -> bool {
+        self.ensure_find_matches_current();
+        if self.find.matches.is_empty() {
+            return false;
+        }
+        self.find.prev();
+        self.select_current_find_match()
+    }
+
+    fn replace_one(&mut self) -> bool {
+        self.ensure_find_matches_current();
+        let Some((start, end)) = self.find.current_match_range() else {
+            return false;
+        };
+        let replacement = self.find.replacement.clone();
+        let range = {
+            let tab = self.active_tab();
+            position_to_char(&tab.buffer, start)..position_to_char(&tab.buffer, end)
+        };
+        self.active_tab_mut()
+            .push_undo_snapshot(EditKind::Other, true);
+        self.active_tab_mut()
+            .replace_char_range(range, &replacement);
+        self.sync_find_after_edit();
+        self.select_current_find_match();
+        true
+    }
+
+    fn replace_all_matches(&mut self) -> bool {
+        if self.find.query.is_empty() {
+            return false;
+        }
+        let query = self.find.query.clone();
+        let replacement = self.find.replacement.clone();
+        let cursor = self.active_cursor_position();
+        self.apply_line_edit(|lines| {
+            let new_lines: Vec<String> = lines
+                .iter()
+                .map(|line| line.replace(&query, &replacement))
+                .collect();
+            if new_lines == *lines {
+                return None;
+            }
+            *lines = new_lines;
+            Some(((), cursor.line, cursor.column))
+        })
+        .is_some()
     }
 
     fn replace_active_lines(&mut self, lines: Vec<String>, cursor_line: usize, cursor_col: usize) {
@@ -1385,26 +1532,42 @@ impl LstGpuiApp {
         cx.notify();
     }
 
-    fn close_active_tab(&mut self, cx: &mut Context<Self>) {
-        if self.active_tab().modified {
-            self.status = "Unsaved changes. Save or Save As before closing this tab.".to_string();
+    fn close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() {
+            return;
+        }
+
+        if self.tabs[index].modified {
+            self.status = format!(
+                "Unsaved changes in {}. Save or Save As before closing this tab.",
+                self.tabs[index].display_name()
+            );
             cx.notify();
             return;
         }
 
+        self.hovered_tab = None;
         if self.tabs.len() == 1 {
             self.tabs[0] = self.new_empty_tab();
             self.set_active_tab(0);
-            self.status = "Closed tab.".to_string();
-            cx.notify();
-            return;
+        } else {
+            self.tabs.remove(index);
+            let next_active = if index < self.active {
+                self.active.saturating_sub(1)
+            } else {
+                self.active.min(self.tabs.len().saturating_sub(1))
+            };
+            self.set_active_tab(next_active);
         }
 
-        self.tabs.remove(self.active);
-        self.set_active_tab(self.active.min(self.tabs.len().saturating_sub(1)));
+        self.queue_focus(PendingFocus::Editor);
         self.status = "Closed tab.".to_string();
         self.reveal_active_cursor();
         cx.notify();
+    }
+
+    fn close_active_tab(&mut self, cx: &mut Context<Self>) {
+        self.close_tab_at(self.active, cx);
     }
 
     fn reveal_active_cursor(&self) {
@@ -1811,8 +1974,9 @@ impl LstGpuiApp {
     fn handle_find_open(&mut self, _: &FindOpen, _: &mut Window, cx: &mut Context<Self>) {
         if self.find.visible && !self.find.show_replace {
             self.close_find();
+            self.queue_focus(PendingFocus::Editor);
         } else {
-            self.open_find(false);
+            self.open_find(false, cx);
         }
         cx.notify();
     }
@@ -1825,73 +1989,36 @@ impl LstGpuiApp {
     ) {
         if self.find.visible && self.find.show_replace {
             self.close_find();
+            self.queue_focus(PendingFocus::Editor);
         } else {
-            self.open_find(true);
+            self.open_find(true, cx);
         }
         cx.notify();
     }
 
     fn handle_find_next(&mut self, _: &FindNext, _: &mut Window, cx: &mut Context<Self>) {
-        self.ensure_find_matches_current();
-        if self.find.matches.is_empty() {
-            return;
+        if self.find_next() {
+            self.reveal_active_cursor();
+            cx.notify();
         }
-        self.find.next();
-        self.select_current_find_match();
-        self.reveal_active_cursor();
-        cx.notify();
     }
 
     fn handle_find_prev(&mut self, _: &FindPrev, _: &mut Window, cx: &mut Context<Self>) {
-        self.ensure_find_matches_current();
-        if self.find.matches.is_empty() {
-            return;
+        if self.find_prev() {
+            self.reveal_active_cursor();
+            cx.notify();
         }
-        self.find.prev();
-        self.select_current_find_match();
-        self.reveal_active_cursor();
-        cx.notify();
     }
 
     fn handle_replace_one(&mut self, _: &ReplaceOne, _: &mut Window, cx: &mut Context<Self>) {
-        self.ensure_find_matches_current();
-        let Some((start, end)) = self.find.current_match_range() else {
-            return;
-        };
-        let replacement = self.find.replacement.clone();
-        let range = {
-            let tab = self.active_tab();
-            position_to_char(&tab.buffer, start)..position_to_char(&tab.buffer, end)
-        };
-        self.active_tab_mut()
-            .push_undo_snapshot(EditKind::Other, true);
-        self.active_tab_mut()
-            .replace_char_range(range, &replacement);
-        self.sync_find_after_edit();
-        self.select_current_find_match();
-        self.reveal_active_cursor();
-        cx.notify();
+        if self.replace_one() {
+            self.reveal_active_cursor();
+            cx.notify();
+        }
     }
 
     fn handle_replace_all(&mut self, _: &ReplaceAll, _: &mut Window, cx: &mut Context<Self>) {
-        if self.find.query.is_empty() {
-            return;
-        }
-        let query = self.find.query.clone();
-        let replacement = self.find.replacement.clone();
-        let cursor = self.active_cursor_position();
-        let changed = self.apply_line_edit(|lines| {
-            let new_lines: Vec<String> = lines
-                .iter()
-                .map(|line| line.replace(&query, &replacement))
-                .collect();
-            if new_lines == *lines {
-                return None;
-            }
-            *lines = new_lines;
-            Some(((), cursor.line, cursor.column))
-        });
-        if changed.is_some() {
+        if self.replace_all_matches() {
             self.reindex_find_matches_to_nearest();
             self.reveal_active_cursor();
             cx.notify();
@@ -1901,8 +2028,9 @@ impl LstGpuiApp {
     fn handle_goto_line_open(&mut self, _: &GotoLineOpen, _: &mut Window, cx: &mut Context<Self>) {
         if self.goto_line.is_some() {
             self.close_goto_line();
+            self.queue_focus(PendingFocus::Editor);
         } else {
-            self.open_goto_line();
+            self.open_goto_line(cx);
         }
         cx.notify();
     }
@@ -2081,7 +2209,7 @@ impl LstGpuiApp {
                         self.sync_find_after_edit();
                     }
                 }
-                vim::VimCommand::OpenFind => self.open_find(false),
+                vim::VimCommand::OpenFind => self.open_find(false, cx),
                 vim::VimCommand::FindNext => {
                     self.ensure_find_matches_current();
                     if let Some(target) = self.vim_find_next_from_cursor(self.vim_cursor_position())
@@ -2432,98 +2560,182 @@ impl LstGpuiApp {
         true
     }
 
+    fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let tab = &self.tabs[ix];
+        let active = ix == self.active;
+        let show_close = active || self.hovered_tab == Some(ix);
+        let close_button: Option<IconButton> = show_close.then(|| {
+            IconButton::new(("tab-close", ix), IconKind::Close)
+                .emphasized(active)
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    this.close_tab_at(ix, cx);
+                    cx.stop_propagation();
+                }))
+        });
+
+        UiTab::new(("tab", ix))
+            .active(active)
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.hovered_tab = Some(ix);
+                } else if this.hovered_tab == Some(ix) {
+                    this.hovered_tab = None;
+                }
+                cx.notify();
+            }))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.set_active_tab(ix);
+                this.status = format!("Switched to {}.", this.active_tab().display_name());
+                this.reveal_active_cursor();
+                window.focus(&this.focus_handle);
+                cx.notify();
+            }))
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(move |this, _: &MouseUpEvent, window, cx| {
+                    this.close_tab_at(ix, cx);
+                    window.focus(&this.focus_handle);
+                    cx.stop_propagation();
+                }),
+            )
+            .end_slot(close_button.map(IntoElement::into_any_element))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .min_w_0()
+                    .when(tab.modified, |row| {
+                        row.child(div().flex_none().text_color(rgb(COLOR_PEACH)).child("•"))
+                    })
+                    .child(div().min_w_0().truncate().child(tab.display_name())),
+            )
+    }
+
+    fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        TabBar::new("editor-tabs")
+            .track_scroll(&self.tab_bar_scroll)
+            .children((0..self.tabs.len()).map(|ix| self.render_tab(ix, cx)))
+    }
+
+    fn render_find_bar(&mut self) -> impl IntoElement {
+        let match_label = if self.find.matches.is_empty() {
+            "0/0".to_string()
+        } else {
+            format!("{}/{}", self.find.current + 1, self.find.matches.len())
+        };
+
+        div().flex_none().px(px(SHELL_EDGE_PAD)).pt_2().child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SHELL_GAP))
+                .px_3()
+                .py_2()
+                .rounded_sm()
+                .bg(rgb(COLOR_SURFACE0))
+                .border_1()
+                .border_color(rgb(COLOR_BORDER))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(INPUT_TEXT_SIZE))
+                        .text_color(rgb(COLOR_SUBTEXT))
+                        .child("Find"),
+                )
+                .child(div().w(px(280.0)).child(self.find_query_input.clone()))
+                .when(self.find.show_replace, |row| {
+                    row.child(
+                        div()
+                            .flex_none()
+                            .text_size(px(INPUT_TEXT_SIZE))
+                            .text_color(rgb(COLOR_SUBTEXT))
+                            .child("Replace"),
+                    )
+                    .child(div().w(px(280.0)).child(self.find_replace_input.clone()))
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .font_family(".ZedMono")
+                        .text_size(px(INPUT_TEXT_SIZE))
+                        .text_color(rgb(COLOR_MUTED))
+                        .child(match_label),
+                ),
+        )
+    }
+
+    fn render_goto_bar(&mut self) -> impl IntoElement {
+        div().flex_none().px(px(SHELL_EDGE_PAD)).pt_2().child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SHELL_GAP))
+                .px_3()
+                .py_2()
+                .rounded_sm()
+                .bg(rgb(COLOR_SURFACE0))
+                .border_1()
+                .border_color(rgb(COLOR_BORDER))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(INPUT_TEXT_SIZE))
+                        .text_color(rgb(COLOR_SUBTEXT))
+                        .child("Line"),
+                )
+                .child(div().w(px(180.0)).child(self.goto_line_input.clone())),
+        )
+    }
+
+    fn render_status_bar(&self) -> impl IntoElement {
+        div()
+            .flex_none()
+            .flex()
+            .justify_between()
+            .items_center()
+            .gap_3()
+            .px(px(SHELL_EDGE_PAD))
+            .py(px(STATUS_HEIGHT_PAD))
+            .bg(rgb(COLOR_SURFACE0))
+            .border_t_1()
+            .border_color(rgb(COLOR_BORDER))
+            .child(
+                div()
+                    .truncate()
+                    .text_sm()
+                    .text_color(rgb(COLOR_SUBTEXT))
+                    .child(self.status.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .font_family(".ZedMono")
+                    .text_size(px(12.0))
+                    .text_color(rgb(COLOR_MUTED))
+                    .child(self.status_details()),
+            )
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
             if self.goto_line.is_some() {
                 self.close_goto_line();
+                self.queue_focus(PendingFocus::Editor);
                 cx.stop_propagation();
                 cx.notify();
                 return;
             }
             if self.find.visible {
                 self.close_find();
+                self.queue_focus(PendingFocus::Editor);
                 cx.stop_propagation();
                 cx.notify();
                 return;
             }
         }
 
-        let Some(focus) = self.overlay_focus else {
-            let _ = self.maybe_handle_vim_key(event, cx);
-            return;
-        };
-
-        match focus {
-            OverlayFocus::FindQuery => {
-                if handle_overlay_input(
-                    &event.keystroke,
-                    &mut self.find.query,
-                    &mut self.find_query_cursor,
-                ) {
-                    self.reindex_find_matches_to_nearest();
-                    self.select_current_find_match();
-                    cx.stop_propagation();
-                    cx.notify();
-                    return;
-                }
-                match event.keystroke.key.as_str() {
-                    "tab" => {
-                        if self.find.show_replace {
-                            self.overlay_focus = Some(OverlayFocus::FindReplace);
-                        }
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
-                    "enter" => {
-                        self.handle_find_next(&FindNext, _window, cx);
-                        cx.stop_propagation();
-                    }
-                    _ => {}
-                }
-            }
-            OverlayFocus::FindReplace => {
-                if handle_overlay_input(
-                    &event.keystroke,
-                    &mut self.find.replacement,
-                    &mut self.find_replace_cursor,
-                ) {
-                    cx.stop_propagation();
-                    cx.notify();
-                    return;
-                }
-                match event.keystroke.key.as_str() {
-                    "tab" => {
-                        self.overlay_focus = Some(OverlayFocus::FindQuery);
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
-                    "enter" => {
-                        self.handle_replace_one(&ReplaceOne, _window, cx);
-                        cx.stop_propagation();
-                    }
-                    _ => {}
-                }
-            }
-            OverlayFocus::GotoLine => {
-                if let Some(text) = self.goto_line.as_mut() {
-                    if handle_overlay_input(&event.keystroke, text, &mut self.goto_line_cursor) {
-                        cx.stop_propagation();
-                        cx.notify();
-                        return;
-                    }
-                }
-                if event.keystroke.key == "enter" {
-                    let changed = self.submit_goto_line();
-                    cx.stop_propagation();
-                    if changed {
-                        self.reveal_active_cursor();
-                        cx.notify();
-                    } else {
-                        cx.notify();
-                    }
-                }
-            }
-        }
+        let _ = self.maybe_handle_vim_key(event, cx);
     }
 }
 
@@ -2689,6 +2901,7 @@ impl EntityInputHandler for LstGpuiApp {
 
 impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.apply_pending_focus(window, cx);
         self.ensure_active_rust_highlights(cx);
 
         let active = self.active;
@@ -2726,20 +2939,12 @@ impl Render for LstGpuiApp {
         let viewport_geometry = active_tab.geometry.clone();
         let focus_handle = self.focus_handle.clone();
         let entity = cx.entity();
-        let status = self.status.clone();
-        let status_details = self.status_details();
         let vim_mode = self.vim.mode;
-        let find_match_label = if self.find.matches.is_empty() {
-            "0/0".to_string()
-        } else {
-            format!("{}/{}", self.find.current + 1, self.find.matches.len())
-        };
 
         div()
             .flex()
             .flex_col()
-            .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(Self::on_key_down))
+            .key_context("Workspace")
             .on_action(cx.listener(Self::handle_new_tab))
             .on_action(cx.listener(Self::handle_open_file))
             .on_action(cx.listener(Self::handle_save_file))
@@ -2786,218 +2991,108 @@ impl Render for LstGpuiApp {
             .size_full()
             .bg(rgb(COLOR_BG))
             .text_color(rgb(COLOR_TEXT))
+            .child(self.render_tab_strip(cx))
+            .when(self.find.visible, |app| app.child(self.render_find_bar()))
+            .when(self.goto_line.is_some(), |app| {
+                app.child(self.render_goto_bar())
+            })
             .child(
                 div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .bg(rgb(COLOR_SURFACE0))
-                    .border_b_1()
-                    .border_color(rgb(COLOR_BORDER))
-                    .children((0..self.tabs.len()).map(|ix| self.tab_button(ix, cx))),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .when(self.find.visible, |container| {
-                        container.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .px_4()
-                                .py_2()
-                                .bg(rgb(COLOR_SURFACE1))
-                                .border_b_1()
-                                .border_color(rgb(COLOR_BORDER))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .font_family(".ZedMono")
-                                        .text_size(px(12.0))
-                                        .child(format!(
-                                            "{} find {}",
-                                            if self.overlay_focus == Some(OverlayFocus::FindQuery) {
-                                                ">"
-                                            } else {
-                                                " "
-                                            },
-                                            self.find.query
-                                        ))
-                                        .when(self.find.show_replace, |column| {
-                                            column.child(format!(
-                                                "{} replace {}",
-                                                if self.overlay_focus
-                                                    == Some(OverlayFocus::FindReplace)
-                                                {
-                                                    ">"
-                                                } else {
-                                                    " "
-                                                },
-                                                self.find.replacement
-                                            ))
-                                        })
-                                        .child(format!("matches {find_match_label}")),
-                                )
-                                .child(
-                                    div()
-                                        .flex_grow()
-                                        .text_right()
-                                        .font_family(".ZedMono")
-                                        .text_size(px(12.0))
-                                        .text_color(rgb(COLOR_MUTED))
-                                        .child(if self.find.show_replace {
-                                            "enter next  shift+f3 prev  tab field  esc close"
-                                        } else {
-                                            "enter next  shift+f3 prev  ctrl+h replace  esc close"
-                                        }),
-                                ),
-                        )
-                    })
-                    .when(self.goto_line.is_some(), |container| {
-                        container.child(
-                            div()
-                                .flex()
-                                .justify_between()
-                                .gap_3()
-                                .px_4()
-                                .py_2()
-                                .bg(rgb(COLOR_SURFACE1))
-                                .border_b_1()
-                                .border_color(rgb(COLOR_BORDER))
-                                .font_family(".ZedMono")
-                                .text_size(px(12.0))
-                                .child(format!(
-                                    "{} goto {}",
-                                    if self.overlay_focus == Some(OverlayFocus::GotoLine) {
-                                        ">"
-                                    } else {
-                                        " "
-                                    },
-                                    self.goto_line.clone().unwrap_or_default()
-                                ))
-                                .child(
-                                    div()
-                                        .flex_grow()
-                                        .text_right()
-                                        .text_color(rgb(COLOR_MUTED))
-                                        .child("enter jump  esc close"),
-                                ),
-                        )
-                    }),
-            )
-            .child(
-                div().flex_grow().px_3().pb_3().child(
-                    div()
-                        .id("buffer-viewport")
-                        .relative()
-                        .h_full()
-                        .w_full()
-                        .border_1()
-                        .border_color(rgb(COLOR_BORDER))
-                        .bg(rgb(COLOR_SURFACE1))
-                        .font_family(".ZedMono")
-                        .text_size(px(CODE_FONT_SIZE))
-                        .line_height(px(ROW_HEIGHT))
-                        .child(
-                            div()
-                                .id("buffer-scroll")
-                                .overflow_y_scroll()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .size_full()
-                                .track_scroll(&viewport_scroll)
-                                .child(div().h(total_content_height).w_full()),
-                        )
-                        .child(
-                            div()
-                                .id("buffer-overlay")
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .size_full()
-                                .cursor(CursorStyle::IBeam)
-                                .block_mouse_except_scroll()
-                                .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-                                .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                                .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                                .on_mouse_move(cx.listener(Self::on_mouse_move))
-                                .child(
-                                    canvas(
-                                        move |bounds, window, _cx| {
-                                            prepare_viewport_paint_state(
-                                                &buffer,
-                                                line_texts.as_ref(),
-                                                revision,
-                                                syntax_mode,
-                                                show_gutter,
-                                                show_wrap,
-                                                &viewport_scroll,
-                                                &viewport_cache,
-                                                &viewport_geometry,
-                                                bounds,
-                                                char_width,
-                                                window,
-                                            )
-                                        },
-                                        move |bounds, paint_state, window, cx| {
-                                            window.handle_input(
-                                                &focus_handle,
-                                                ElementInputHandler::new(bounds, entity.clone()),
-                                                cx,
-                                            );
-                                            paint_viewport(
-                                                bounds,
-                                                show_gutter,
-                                                selection.clone(),
-                                                cursor_char,
-                                                vim_mode,
-                                                focus_handle.is_focused(window),
-                                                paint_state,
-                                                window,
-                                                cx,
-                                            );
-                                        },
-                                    )
-                                    .size_full(),
-                                ),
-                        ),
-                ),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .justify_between()
-                    .items_center()
-                    .gap_3()
-                    .px_4()
-                    .py_2()
-                    .bg(rgb(COLOR_SURFACE0))
-                    .border_t_1()
-                    .border_color(rgb(COLOR_BORDER))
+                    .flex_grow()
+                    .px(px(SHELL_EDGE_PAD))
+                    .pb(px(SHELL_EDGE_PAD))
+                    .pt_2()
+                    .track_focus(&self.focus_handle)
+                    .key_context("Editor")
+                    .on_key_down(cx.listener(Self::on_key_down))
                     .child(
                         div()
-                            .truncate()
-                            .text_sm()
-                            .text_color(rgb(COLOR_SUBTEXT))
-                            .child(status),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
+                            .id("buffer-viewport")
+                            .relative()
+                            .h_full()
+                            .w_full()
+                            .border_1()
+                            .border_color(rgb(COLOR_BORDER))
+                            .bg(rgb(COLOR_SURFACE1))
                             .font_family(".ZedMono")
-                            .text_size(px(12.0))
-                            .text_color(rgb(COLOR_MUTED))
-                            .child(status_details),
+                            .text_size(px(CODE_FONT_SIZE))
+                            .line_height(px(ROW_HEIGHT))
+                            .child(
+                                div()
+                                    .id("buffer-scroll")
+                                    .overflow_y_scroll()
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .size_full()
+                                    .track_scroll(&viewport_scroll)
+                                    .child(div().h(total_content_height).w_full()),
+                            )
+                            .child(
+                                div()
+                                    .id("buffer-overlay")
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .size_full()
+                                    .cursor(CursorStyle::IBeam)
+                                    .block_mouse_except_scroll()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(Self::on_mouse_down),
+                                    )
+                                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                                    .on_mouse_up_out(
+                                        MouseButton::Left,
+                                        cx.listener(Self::on_mouse_up),
+                                    )
+                                    .on_mouse_move(cx.listener(Self::on_mouse_move))
+                                    .child(
+                                        canvas(
+                                            move |bounds, window, _cx| {
+                                                prepare_viewport_paint_state(
+                                                    &buffer,
+                                                    line_texts.as_ref(),
+                                                    revision,
+                                                    syntax_mode,
+                                                    show_gutter,
+                                                    show_wrap,
+                                                    &viewport_scroll,
+                                                    &viewport_cache,
+                                                    &viewport_geometry,
+                                                    bounds,
+                                                    char_width,
+                                                    window,
+                                                )
+                                            },
+                                            move |bounds, paint_state, window, cx| {
+                                                window.handle_input(
+                                                    &focus_handle,
+                                                    ElementInputHandler::new(
+                                                        bounds,
+                                                        entity.clone(),
+                                                    ),
+                                                    cx,
+                                                );
+                                                paint_viewport(
+                                                    bounds,
+                                                    show_gutter,
+                                                    selection.clone(),
+                                                    cursor_char,
+                                                    vim_mode,
+                                                    focus_handle.is_focused(window),
+                                                    paint_state,
+                                                    window,
+                                                    cx,
+                                                );
+                                            },
+                                        )
+                                        .size_full(),
+                                    ),
+                            ),
                     ),
             )
+            .child(self.render_status_bar())
     }
 }
 
@@ -4008,75 +4103,6 @@ fn remove_text_range(
     }
 }
 
-fn handle_overlay_input(
-    keystroke: &gpui::Keystroke,
-    text: &mut String,
-    cursor: &mut usize,
-) -> bool {
-    match keystroke.key.as_str() {
-        "backspace" => {
-            if *cursor == 0 {
-                return true;
-            }
-            let start_char = cursor.saturating_sub(1);
-            let start = char_to_byte(text, start_char);
-            let end = char_to_byte(text, *cursor);
-            text.replace_range(start..end, "");
-            *cursor = start_char;
-            return true;
-        }
-        "delete" => {
-            let char_count = text.chars().count();
-            if *cursor >= char_count {
-                return true;
-            }
-            let start = char_to_byte(text, *cursor);
-            let end = char_to_byte(text, *cursor + 1);
-            text.replace_range(start..end, "");
-            return true;
-        }
-        "left" => {
-            *cursor = cursor.saturating_sub(1);
-            return true;
-        }
-        "right" => {
-            *cursor = (*cursor + 1).min(text.chars().count());
-            return true;
-        }
-        "home" => {
-            *cursor = 0;
-            return true;
-        }
-        "end" => {
-            *cursor = text.chars().count();
-            return true;
-        }
-        _ => {}
-    }
-
-    if keystroke.modifiers.control || keystroke.modifiers.alt || keystroke.modifiers.platform {
-        return false;
-    }
-
-    let inserted = keystroke
-        .key_char
-        .as_deref()
-        .filter(|value| !value.is_empty() && *value != "\n" && *value != "\t")
-        .map(str::to_string)
-        .or_else(|| {
-            let value = keystroke.key.as_str();
-            (value.chars().count() == 1).then(|| value.to_string())
-        });
-
-    let Some(inserted) = inserted else {
-        return false;
-    };
-    let byte = char_to_byte(text, *cursor);
-    text.insert_str(byte, &inserted);
-    *cursor += inserted.chars().count();
-    true
-}
-
 fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
@@ -4164,69 +4190,73 @@ fn parse_launch_args() -> LaunchArgs {
 
 fn editor_keybindings() -> Vec<KeyBinding> {
     vec![
-        KeyBinding::new("ctrl-n", NewTab, None),
-        KeyBinding::new("cmd-n", NewTab, None),
-        KeyBinding::new("ctrl-o", OpenFile, None),
-        KeyBinding::new("cmd-o", OpenFile, None),
-        KeyBinding::new("ctrl-s", SaveFile, None),
-        KeyBinding::new("cmd-s", SaveFile, None),
-        KeyBinding::new("ctrl-shift-s", SaveFileAs, None),
-        KeyBinding::new("cmd-shift-s", SaveFileAs, None),
-        KeyBinding::new("ctrl-w", CloseActiveTab, None),
-        KeyBinding::new("cmd-w", CloseActiveTab, None),
-        KeyBinding::new("ctrl-tab", NextTab, None),
-        KeyBinding::new("cmd-shift-]", NextTab, None),
-        KeyBinding::new("ctrl-shift-tab", PrevTab, None),
-        KeyBinding::new("cmd-shift-[", PrevTab, None),
-        KeyBinding::new("alt-z", ToggleWrap, None),
-        KeyBinding::new("ctrl-c", CopySelection, None),
-        KeyBinding::new("cmd-c", CopySelection, None),
-        KeyBinding::new("ctrl-x", CutSelection, None),
-        KeyBinding::new("cmd-x", CutSelection, None),
-        KeyBinding::new("ctrl-v", PasteClipboard, None),
-        KeyBinding::new("cmd-v", PasteClipboard, None),
-        KeyBinding::new("ctrl-z", Undo, None),
-        KeyBinding::new("cmd-z", Undo, None),
-        KeyBinding::new("ctrl-y", Redo, None),
-        KeyBinding::new("cmd-shift-z", Redo, None),
-        KeyBinding::new("ctrl-f", FindOpen, None),
-        KeyBinding::new("cmd-f", FindOpen, None),
-        KeyBinding::new("ctrl-h", FindOpenReplace, None),
-        KeyBinding::new("cmd-h", FindOpenReplace, None),
-        KeyBinding::new("f3", FindNext, None),
-        KeyBinding::new("shift-f3", FindPrev, None),
-        KeyBinding::new("ctrl-g", GotoLineOpen, None),
-        KeyBinding::new("cmd-g", GotoLineOpen, None),
-        KeyBinding::new("alt-up", MoveLineUp, None),
-        KeyBinding::new("alt-down", MoveLineDown, None),
-        KeyBinding::new("ctrl-shift-k", DeleteLine, None),
-        KeyBinding::new("cmd-shift-k", DeleteLine, None),
-        KeyBinding::new("ctrl-shift-d", DuplicateLine, None),
-        KeyBinding::new("cmd-shift-d", DuplicateLine, None),
-        KeyBinding::new("ctrl-/", ToggleComment, None),
-        KeyBinding::new("cmd-/", ToggleComment, None),
-        KeyBinding::new("left", MoveLeft, None),
-        KeyBinding::new("right", MoveRight, None),
-        KeyBinding::new("up", MoveUp, None),
-        KeyBinding::new("down", MoveDown, None),
-        KeyBinding::new("shift-left", SelectLeft, None),
-        KeyBinding::new("shift-right", SelectRight, None),
-        KeyBinding::new("shift-up", SelectUp, None),
-        KeyBinding::new("shift-down", SelectDown, None),
-        KeyBinding::new("ctrl-up", SelectUp, None),
-        KeyBinding::new("ctrl-down", SelectDown, None),
-        KeyBinding::new("home", MoveLineStart, None),
-        KeyBinding::new("end", MoveLineEnd, None),
-        KeyBinding::new("shift-home", SelectLineStart, None),
-        KeyBinding::new("shift-end", SelectLineEnd, None),
-        KeyBinding::new("backspace", Backspace, None),
-        KeyBinding::new("delete", DeleteForward, None),
-        KeyBinding::new("enter", InsertNewline, None),
-        KeyBinding::new("tab", InsertTab, None),
-        KeyBinding::new("ctrl-a", SelectAll, None),
-        KeyBinding::new("cmd-a", SelectAll, None),
-        KeyBinding::new("ctrl-q", Quit, None),
-        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("ctrl-n", NewTab, Some("Workspace && !InlineInput")),
+        KeyBinding::new("cmd-n", NewTab, Some("Workspace && !InlineInput")),
+        KeyBinding::new("ctrl-o", OpenFile, Some("Workspace && !InlineInput")),
+        KeyBinding::new("cmd-o", OpenFile, Some("Workspace && !InlineInput")),
+        KeyBinding::new("ctrl-s", SaveFile, Some("Workspace && !InlineInput")),
+        KeyBinding::new("cmd-s", SaveFile, Some("Workspace && !InlineInput")),
+        KeyBinding::new(
+            "ctrl-shift-s",
+            SaveFileAs,
+            Some("Workspace && !InlineInput"),
+        ),
+        KeyBinding::new("cmd-shift-s", SaveFileAs, Some("Workspace && !InlineInput")),
+        KeyBinding::new("ctrl-w", CloseActiveTab, Some("Workspace && !InlineInput")),
+        KeyBinding::new("cmd-w", CloseActiveTab, Some("Workspace && !InlineInput")),
+        KeyBinding::new("ctrl-tab", NextTab, Some("Workspace && !InlineInput")),
+        KeyBinding::new("cmd-shift-]", NextTab, Some("Workspace && !InlineInput")),
+        KeyBinding::new("ctrl-shift-tab", PrevTab, Some("Workspace && !InlineInput")),
+        KeyBinding::new("cmd-shift-[", PrevTab, Some("Workspace && !InlineInput")),
+        KeyBinding::new("alt-z", ToggleWrap, Some("Workspace && !InlineInput")),
+        KeyBinding::new("ctrl-c", CopySelection, Some("Editor")),
+        KeyBinding::new("cmd-c", CopySelection, Some("Editor")),
+        KeyBinding::new("ctrl-x", CutSelection, Some("Editor")),
+        KeyBinding::new("cmd-x", CutSelection, Some("Editor")),
+        KeyBinding::new("ctrl-v", PasteClipboard, Some("Editor")),
+        KeyBinding::new("cmd-v", PasteClipboard, Some("Editor")),
+        KeyBinding::new("ctrl-z", Undo, Some("Editor")),
+        KeyBinding::new("cmd-z", Undo, Some("Editor")),
+        KeyBinding::new("ctrl-y", Redo, Some("Editor")),
+        KeyBinding::new("cmd-shift-z", Redo, Some("Editor")),
+        KeyBinding::new("ctrl-f", FindOpen, Some("Editor")),
+        KeyBinding::new("cmd-f", FindOpen, Some("Editor")),
+        KeyBinding::new("ctrl-h", FindOpenReplace, Some("Editor")),
+        KeyBinding::new("cmd-h", FindOpenReplace, Some("Editor")),
+        KeyBinding::new("f3", FindNext, Some("Editor")),
+        KeyBinding::new("shift-f3", FindPrev, Some("Editor")),
+        KeyBinding::new("ctrl-g", GotoLineOpen, Some("Editor")),
+        KeyBinding::new("cmd-g", GotoLineOpen, Some("Editor")),
+        KeyBinding::new("alt-up", MoveLineUp, Some("Editor")),
+        KeyBinding::new("alt-down", MoveLineDown, Some("Editor")),
+        KeyBinding::new("ctrl-shift-k", DeleteLine, Some("Editor")),
+        KeyBinding::new("cmd-shift-k", DeleteLine, Some("Editor")),
+        KeyBinding::new("ctrl-shift-d", DuplicateLine, Some("Editor")),
+        KeyBinding::new("cmd-shift-d", DuplicateLine, Some("Editor")),
+        KeyBinding::new("ctrl-/", ToggleComment, Some("Editor")),
+        KeyBinding::new("cmd-/", ToggleComment, Some("Editor")),
+        KeyBinding::new("left", MoveLeft, Some("Editor")),
+        KeyBinding::new("right", MoveRight, Some("Editor")),
+        KeyBinding::new("up", MoveUp, Some("Editor")),
+        KeyBinding::new("down", MoveDown, Some("Editor")),
+        KeyBinding::new("shift-left", SelectLeft, Some("Editor")),
+        KeyBinding::new("shift-right", SelectRight, Some("Editor")),
+        KeyBinding::new("shift-up", SelectUp, Some("Editor")),
+        KeyBinding::new("shift-down", SelectDown, Some("Editor")),
+        KeyBinding::new("ctrl-up", SelectUp, Some("Editor")),
+        KeyBinding::new("ctrl-down", SelectDown, Some("Editor")),
+        KeyBinding::new("home", MoveLineStart, Some("Editor")),
+        KeyBinding::new("end", MoveLineEnd, Some("Editor")),
+        KeyBinding::new("shift-home", SelectLineStart, Some("Editor")),
+        KeyBinding::new("shift-end", SelectLineEnd, Some("Editor")),
+        KeyBinding::new("backspace", Backspace, Some("Editor")),
+        KeyBinding::new("delete", DeleteForward, Some("Editor")),
+        KeyBinding::new("enter", InsertNewline, Some("Editor")),
+        KeyBinding::new("tab", InsertTab, Some("Editor")),
+        KeyBinding::new("ctrl-a", SelectAll, Some("Editor")),
+        KeyBinding::new("cmd-a", SelectAll, Some("Editor")),
+        KeyBinding::new("ctrl-q", Quit, Some("Workspace && !InlineInput")),
+        KeyBinding::new("cmd-q", Quit, Some("Workspace && !InlineInput")),
     ]
 }
 
@@ -4246,6 +4276,7 @@ fn main() {
 
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys(editor_keybindings());
+        cx.bind_keys(input_keybindings());
 
         let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
         let launch = launch.clone();

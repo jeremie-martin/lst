@@ -3,10 +3,10 @@ name = "lst"
 version = "0.1.0"
 edition = "2021"
 description = "Lucy's Simple Text editor — a fast, minimal editor for Linux"
-license = "MIT"
+license = "GPL-3.0-or-later"
 
 [workspace]
-members = ["apps/lst-gpui", "crates/lst-core"]
+members = ["apps/lst-gpui", "crates/lst-core", "crates/lst-ui"]
 resolver = "2"
 
 [features]

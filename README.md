@@ -4,6 +4,8 @@
 
 `lst` is a native Linux text editor built with [`iced`](https://iced.rs). It focuses on fast startup, low-latency typing, and a clean UI with just the editing features you actually use.
 
+The repo also contains the in-progress GPUI rewrite at [apps/lst-gpui](/home/jmartin/lst/apps/lst-gpui), which now shares document logic through [crates/lst-core](/home/jmartin/lst/crates/lst-core) and shell components through [crates/lst-ui](/home/jmartin/lst/crates/lst-ui).
+
 ## Highlights
 
 - Catppuccin Mocha theme with GPU-rendered UI
@@ -98,4 +100,4 @@ Recent benchmark attribution notes, including the Rust highlighter comparison an
 
 ## License
 
-MIT
+GPL-3.0-or-later

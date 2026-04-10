@@ -2,7 +2,7 @@
 
 This crate is the GPUI rewrite track for `lst`.
 
-It is intentionally parallel to the shipping `iced` app for now. The current implementation extracts the reusable document/search/line-edit logic into `crates/lst-core` and keeps the GPUI app focused on rendering, input plumbing, clipboard integration, and benchmarking.
+It is intentionally parallel to the shipping `iced` app for now. The current implementation extracts the reusable document/search/line-edit logic into `crates/lst-core`, keeps the custom-painted editor surface in this crate, and moves the shell layer into `crates/lst-ui` for tabs and inline command inputs.
 
 ## Run
 
@@ -23,13 +23,14 @@ DISPLAY=:1 cargo run -- --bench-append-corpus
 
 Current real-display measurements on `DISPLAY=:1` with `target/release/lst-gpui`:
 
-- `--bench-replace-corpus`: `apply_ms=1.560`, `action_to_next_frame_ms=77.599`
-- `--bench-append-corpus`: `apply_ms=1.607`, `action_to_next_frame_ms=99.910`
+- `--bench-replace-corpus`: `apply_ms=1.685`, `action_to_next_frame_ms=77.713`
+- `--bench-append-corpus`: `apply_ms=1.776`, `action_to_next_frame_ms=77.721`
 
 ## Current Features
 
 - editable `Ropey` buffer with cursor and selection
 - custom-painted dark viewport with gutter and soft wrap
+- minimal GPUI shell with real tab strip, close affordances, inline find/replace, inline goto-line, and status bar
 - mouse positioning, drag selection, double-click word selection, and triple-click line selection
 - clipboard copy/cut/paste
 - multiple tabs

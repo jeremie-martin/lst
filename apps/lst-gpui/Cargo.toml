@@ -2,6 +2,7 @@
 name = "lst-gpui"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
 
 [features]
 internal-invariants = []
@@ -10,6 +11,7 @@ internal-invariants = []
 gpui = { version = "0.2.2", default-features = false, features = ["x11"] }
 iced_core = "0.14.0"
 lst-core = { path = "../../crates/lst-core" }
+lst-ui = { path = "../../crates/lst-ui" }
 ropey = "1.6.1"
 rfd = "0.17"
 tree-sitter-highlight = "0.26.8"
