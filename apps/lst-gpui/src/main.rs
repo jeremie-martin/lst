@@ -271,7 +271,7 @@ struct ViewportCache {
     code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
     rust_highlights: Option<CachedRustHighlights>,
-    rust_highlighter: Option<TreeSitterHighlighter>,
+    rust_highlight_inflight_revision: Option<u64>,
     wrap_layout: Option<WrapLayout>,
 }
 
@@ -281,7 +281,7 @@ impl Default for ViewportCache {
             code_lines: HashMap::new(),
             gutter_lines: HashMap::new(),
             rust_highlights: None,
-            rust_highlighter: None,
+            rust_highlight_inflight_revision: None,
             wrap_layout: None,
         }
     }
@@ -537,6 +537,76 @@ impl LstGpuiApp {
                 this.reveal_active_cursor();
                 cx.notify();
             }))
+    }
+
+    fn ensure_active_rust_highlights(&mut self, cx: &mut Context<Self>) {
+        let active = self.active;
+        let Some(tab) = self.tabs.get(active) else {
+            return;
+        };
+        if syntax_mode_for_path(tab.path.as_ref()) != SyntaxMode::TreeSitterRust {
+            return;
+        }
+
+        let revision = tab.revision();
+        let cache = tab.cache.clone();
+        {
+            let cache_ref = cache.borrow();
+            if cache_ref
+                .rust_highlights
+                .as_ref()
+                .is_some_and(|highlights| highlights.revision == revision)
+            {
+                return;
+            }
+            if cache_ref.rust_highlight_inflight_revision.is_some() {
+                return;
+            }
+        }
+
+        cache.borrow_mut().rust_highlight_inflight_revision = Some(revision);
+        let source = tab.buffer_text();
+        cx.spawn(async move |this, cx| {
+            let lines = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut highlighter = TreeSitterHighlighter::new();
+                    highlight_rust_source(&mut highlighter, &source)
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.finish_rust_highlights(active, revision, cache, lines, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn finish_rust_highlights(
+        &mut self,
+        active: usize,
+        revision: u64,
+        cache: Rc<RefCell<ViewportCache>>,
+        lines: Vec<Vec<SyntaxSpan>>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut cache_ref = cache.borrow_mut();
+        if cache_ref.rust_highlight_inflight_revision != Some(revision) {
+            return;
+        }
+
+        cache_ref.rust_highlight_inflight_revision = None;
+        cache_ref.rust_highlights = Some(CachedRustHighlights { revision, lines });
+        cache_ref.code_lines.clear();
+        drop(cache_ref);
+
+        if self.active == active
+            && self
+                .tabs
+                .get(active)
+                .is_some_and(|tab| Rc::ptr_eq(&tab.cache, &cache))
+        {
+            cx.notify();
+        }
     }
 
     fn active_tab(&self) -> &EditorTab {
@@ -2592,6 +2662,8 @@ impl EntityInputHandler for LstGpuiApp {
 
 impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_active_rust_highlights(cx);
+
         let active = self.active;
         let show_gutter = self.show_gutter;
         let show_wrap = self.show_wrap;
@@ -3088,34 +3160,19 @@ fn highlight_rust_source(
 
 fn line_syntax_spans(
     cache: &mut ViewportCache,
-    buffer: &Rope,
     revision: u64,
     line_ix: usize,
     syntax_mode: SyntaxMode,
 ) -> Vec<SyntaxSpan> {
     match syntax_mode {
         SyntaxMode::Plain => Vec::new(),
-        SyntaxMode::TreeSitterRust => {
-            if cache
-                .rust_highlights
-                .as_ref()
-                .is_none_or(|highlights| highlights.revision != revision)
-            {
-                let highlighter = cache
-                    .rust_highlighter
-                    .get_or_insert_with(TreeSitterHighlighter::new);
-                cache.rust_highlights = Some(CachedRustHighlights {
-                    revision,
-                    lines: highlight_rust_source(highlighter, &buffer.to_string()),
-                });
-            }
-            cache
-                .rust_highlights
-                .as_ref()
-                .and_then(|highlights| highlights.lines.get(line_ix))
-                .cloned()
-                .unwrap_or_default()
-        }
+        SyntaxMode::TreeSitterRust => cache
+            .rust_highlights
+            .as_ref()
+            .filter(|highlights| highlights.revision == revision)
+            .and_then(|highlights| highlights.lines.get(line_ix))
+            .cloned()
+            .unwrap_or_default(),
     }
 }
 
@@ -3453,7 +3510,7 @@ fn prepare_viewport_paint_state(
     let mut rows = Vec::new();
     for line_ix in first_line..=last_visible_line {
         let display_source = trim_display_line(&lines[line_ix]);
-        let highlight_spans = line_syntax_spans(&mut cache, buffer, revision, line_ix, syntax_mode);
+        let highlight_spans = line_syntax_spans(&mut cache, revision, line_ix, syntax_mode);
         let display_len = display_source.chars().count();
         let logical_end_char = if line_ix + 1 < buffer.len_lines() {
             buffer.line_to_char(line_ix + 1)
