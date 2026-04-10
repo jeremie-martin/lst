@@ -3700,6 +3700,7 @@ name = "lst-gpui"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "iced_core",
  "lst-core",
  "rfd",
  "ropey",
