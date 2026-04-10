@@ -301,6 +301,13 @@ struct ViewportPaintState {
     rows: Vec<PaintedRow>,
 }
 
+#[derive(Clone, Debug)]
+enum DragSelectionMode {
+    Character,
+    Word(Range<usize>),
+    Line(Range<usize>),
+}
+
 #[derive(Default)]
 struct ViewportGeometry {
     bounds: Option<Bounds<Pixels>>,
@@ -419,7 +426,7 @@ struct LstGpuiApp {
     next_untitled_id: usize,
     show_gutter: bool,
     show_wrap: bool,
-    drag_selecting: bool,
+    drag_selecting: Option<DragSelectionMode>,
     find: FindState,
     goto_line: Option<String>,
     overlay_focus: Option<OverlayFocus>,
@@ -484,7 +491,7 @@ impl LstGpuiApp {
             next_untitled_id: 2,
             show_gutter: true,
             show_wrap: true,
-            drag_selecting: false,
+            drag_selecting: None,
             find: FindState::new(),
             goto_line: None,
             overlay_focus: None,
@@ -1489,21 +1496,23 @@ impl LstGpuiApp {
         window.focus(&self.focus_handle);
         let index = self.active_char_index_for_point(event.position);
         if event.click_count >= 3 {
-            self.drag_selecting = false;
-            self.select_active_range(line_range_at_char(&self.active_tab().buffer, index));
+            let line_range = line_range_at_char(&self.active_tab().buffer, index);
+            self.drag_selecting = Some(DragSelectionMode::Line(line_range.clone()));
+            self.select_active_range(line_range);
             self.sync_primary_selection(cx);
             cx.notify();
             return;
         }
         if event.click_count == 2 {
-            self.drag_selecting = false;
-            self.select_active_range(word_range_at_char(&self.active_tab().buffer, index));
+            let word_range = word_range_at_char(&self.active_tab().buffer, index);
+            self.drag_selecting = Some(DragSelectionMode::Word(word_range.clone()));
+            self.select_active_range(word_range);
             self.sync_primary_selection(cx);
             cx.notify();
             return;
         }
 
-        self.drag_selecting = true;
+        self.drag_selecting = Some(DragSelectionMode::Character);
         if event.modifiers.shift {
             self.active_tab_mut().select_to(index);
         } else {
@@ -1521,17 +1530,25 @@ impl LstGpuiApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.drag_selecting {
-            return;
-        }
         let index = self.active_char_index_for_point(event.position);
-        self.active_tab_mut().select_to(index);
+        match self.drag_selecting.clone() {
+            Some(DragSelectionMode::Character) => self.active_tab_mut().select_to(index),
+            Some(DragSelectionMode::Word(anchor)) => {
+                let current = word_range_at_char(&self.active_tab().buffer, index);
+                self.select_active_drag_range(anchor, current);
+            }
+            Some(DragSelectionMode::Line(anchor)) => {
+                let current = line_range_at_char(&self.active_tab().buffer, index);
+                self.select_active_drag_range(anchor, current);
+            }
+            None => return,
+        }
         self.reveal_active_cursor();
         cx.notify();
     }
 
     fn on_mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.drag_selecting = false;
+        self.drag_selecting = None;
         self.sync_primary_selection(cx);
         cx.notify();
     }
@@ -1541,6 +1558,16 @@ impl LstGpuiApp {
         let end = tab.len_chars();
         tab.selection = range.start.min(end)..range.end.min(end);
         tab.selection_reversed = false;
+        tab.preferred_column = None;
+        tab.marked_range = None;
+    }
+
+    fn select_active_drag_range(&mut self, anchor: Range<usize>, current: Range<usize>) {
+        let (selection, reversed) = drag_selection_range(anchor, current);
+        let tab = self.active_tab_mut();
+        let end = tab.len_chars();
+        tab.selection = selection.start.min(end)..selection.end.min(end);
+        tab.selection_reversed = reversed;
         tab.preferred_column = None;
         tab.marked_range = None;
     }
@@ -3772,6 +3799,17 @@ fn line_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     start..end
 }
 
+fn drag_selection_range(anchor: Range<usize>, current: Range<usize>) -> (Range<usize>, bool) {
+    if current.start < anchor.start {
+        (current.start..anchor.end.max(current.end), true)
+    } else {
+        (
+            anchor.start.min(current.start)..current.end.max(anchor.end),
+            false,
+        )
+    }
+}
+
 fn x_for_global_char(row: &PaintedRow, global_char: usize) -> Option<Pixels> {
     let local_char = global_char.saturating_sub(row.line_start_char);
     let code_line = row.code_line.as_ref()?;
@@ -4291,5 +4329,21 @@ mod tests {
         assert!(lines[0].iter().any(|span| span.color == COLOR_MUTED));
         assert!(lines[1].iter().any(|span| span.color == COLOR_MUTED));
         assert!(lines[2].iter().all(|span| span.color != COLOR_MUTED));
+    }
+
+    #[test]
+    fn drag_selection_range_extends_forward_from_anchor_token() {
+        let (selection, reversed) = drag_selection_range(6..11, 12..17);
+
+        assert_eq!(selection, 6..17);
+        assert!(!reversed);
+    }
+
+    #[test]
+    fn drag_selection_range_extends_backward_from_anchor_token() {
+        let (selection, reversed) = drag_selection_range(6..11, 0..5);
+
+        assert_eq!(selection, 0..11);
+        assert!(reversed);
     }
 }
