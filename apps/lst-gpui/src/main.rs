@@ -35,7 +35,7 @@ use rfd::FileDialog;
 use ropey::Rope;
 use std::{
     cell::RefCell,
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     fs,
     hash::{Hash, Hasher},
     ops::{Deref, DerefMut, Range},
@@ -262,16 +262,15 @@ struct SyntaxSpan {
 }
 
 #[derive(Clone)]
-struct CachedHighlightLine {
-    text: String,
-    syntax_mode: SyntaxMode,
-    spans: Vec<SyntaxSpan>,
+struct CachedRustHighlights {
+    revision: u64,
+    lines: Vec<Vec<SyntaxSpan>>,
 }
 
 struct ViewportCache {
     code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
-    highlight_lines: HashMap<usize, CachedHighlightLine>,
+    rust_highlights: Option<CachedRustHighlights>,
     rust_highlighter: Option<TreeSitterHighlighter>,
     wrap_layout: Option<WrapLayout>,
 }
@@ -281,7 +280,7 @@ impl Default for ViewportCache {
         Self {
             code_lines: HashMap::new(),
             gutter_lines: HashMap::new(),
-            highlight_lines: HashMap::new(),
+            rust_highlights: None,
             rust_highlighter: None,
             wrap_layout: None,
         }
@@ -430,7 +429,7 @@ struct LstGpuiApp {
     status: String,
     last_operation: OperationStats,
     vim: vim::VimState,
-    autosave_inflight: HashMap<PathBuf, u64>,
+    autosave_inflight: HashSet<PathBuf>,
     autosave_started: bool,
 }
 
@@ -495,7 +494,7 @@ impl LstGpuiApp {
             status,
             last_operation,
             vim: vim::VimState::new(),
-            autosave_inflight: HashMap::new(),
+            autosave_inflight: HashSet::new(),
             autosave_started: false,
         }
     }
@@ -607,13 +606,17 @@ impl LstGpuiApp {
     }
 
     fn autosave_tick(&mut self, cx: &mut Context<Self>) {
+        let mut seen_paths = HashSet::new();
         let jobs: Vec<AutosaveJob> = self
             .tabs
             .iter()
             .filter(|tab| tab.modified)
             .filter_map(|tab| {
                 let path = tab.path.clone()?;
-                if self.autosave_inflight.contains_key(&path) {
+                if !autosave_revision_is_current(&self.tabs, &path, tab.revision()) {
+                    return None;
+                }
+                if self.autosave_inflight.contains(&path) || !seen_paths.insert(path.clone()) {
                     return None;
                 }
                 Some(AutosaveJob {
@@ -629,16 +632,15 @@ impl LstGpuiApp {
         }
 
         for job in jobs {
-            self.autosave_inflight
-                .insert(job.path.clone(), job.revision);
+            self.autosave_inflight.insert(job.path.clone());
             cx.spawn({
                 let job = job.clone();
                 async move |this, cx| {
-                    let path = job.path.clone();
+                    let temp_path = autosave_temp_path(&job.path, job.revision);
                     let body = job.body.clone();
                     let result = cx
                         .background_executor()
-                        .spawn(async move { fs::write(&path, &body) })
+                        .spawn(async move { fs::write(&temp_path, &body).map(|_| temp_path) })
                         .await;
                     let _ = this.update(cx, |view, cx| view.finish_autosave(job, result, cx));
                 }
@@ -650,21 +652,40 @@ impl LstGpuiApp {
     fn finish_autosave(
         &mut self,
         job: AutosaveJob,
-        result: std::io::Result<()>,
+        result: std::io::Result<PathBuf>,
         cx: &mut Context<Self>,
     ) {
         self.autosave_inflight.remove(&job.path);
         match result {
-            Ok(()) => {
-                for tab in &mut self.tabs {
-                    if tab.path.as_ref() == Some(&job.path) && tab.revision() == job.revision {
-                        tab.modified = false;
-                    }
+            Ok(temp_path) => {
+                if !autosave_revision_is_current(&self.tabs, &job.path, job.revision) {
+                    let _ = fs::remove_file(&temp_path);
+                    cx.notify();
+                    return;
                 }
-                if self.active_tab().path.as_ref() == Some(&job.path)
-                    && self.active_tab().revision() == job.revision
-                {
-                    self.status = format!("Autosaved {}.", job.path.display());
+
+                match fs::rename(&temp_path, &job.path) {
+                    Ok(()) => {
+                        for tab in &mut self.tabs {
+                            if tab.path.as_ref() == Some(&job.path)
+                                && tab.revision() == job.revision
+                            {
+                                tab.modified = false;
+                            }
+                        }
+                        if self.active_tab().path.as_ref() == Some(&job.path)
+                            && self.active_tab().revision() == job.revision
+                        {
+                            self.status = format!("Autosaved {}.", job.path.display());
+                        }
+                    }
+                    Err(err) => {
+                        let _ = fs::remove_file(&temp_path);
+                        if self.active_tab().path.as_ref() == Some(&job.path) {
+                            self.status =
+                                format!("Autosave failed for {}: {err}", job.path.display());
+                        }
+                    }
                 }
             }
             Err(err) => {
@@ -2901,6 +2922,31 @@ fn line_display_char_len(buffer: &Rope, line_ix: usize) -> usize {
     line_display_text(buffer, line_ix).chars().count()
 }
 
+fn autosave_temp_path(path: &PathBuf, revision: u64) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("buffer");
+    path.with_file_name(format!(
+        ".{file_name}.lst-gpui-autosave-{}-{revision}.tmp",
+        process::id()
+    ))
+}
+
+fn autosave_revision_is_current(tabs: &[EditorTab], path: &PathBuf, revision: u64) -> bool {
+    let mut matched: Option<u64> = None;
+    for tab in tabs {
+        if tab.path.as_ref() != Some(path) {
+            continue;
+        }
+        if matched.is_some() {
+            return false;
+        }
+        matched = Some(tab.revision());
+    }
+    matched == Some(revision)
+}
+
 fn syntax_mode_for_path(path: Option<&PathBuf>) -> SyntaxMode {
     match path
         .and_then(|path| path.extension())
@@ -2943,15 +2989,73 @@ fn char_to_byte_index(text: &str, char_ix: usize) -> usize {
         .unwrap_or(text.len())
 }
 
-fn highlight_rust_line(highlighter: &mut TreeSitterHighlighter, line: &str) -> Vec<SyntaxSpan> {
-    let Ok(events) = highlighter.highlight(&TREE_SITTER_RUST_CONFIG, line.as_bytes(), None, |_| None)
+fn push_rust_highlight_span(
+    lines: &mut [Vec<SyntaxSpan>],
+    line_starts: &[usize],
+    display_ends: &[usize],
+    mut start: usize,
+    end: usize,
+    color: u32,
+) {
+    while start < end {
+        let line_ix = line_starts
+            .partition_point(|offset| *offset <= start)
+            .saturating_sub(1);
+        let line_start = line_starts[line_ix];
+        let display_end = display_ends[line_ix];
+        let next_line_start = line_starts.get(line_ix + 1).copied().unwrap_or(end);
+        let visible_end = end.min(display_end);
+
+        if start < visible_end {
+            lines[line_ix].push(SyntaxSpan {
+                start: start - line_start,
+                end: visible_end - line_start,
+                color,
+            });
+        }
+
+        if end <= next_line_start {
+            break;
+        }
+        start = next_line_start;
+    }
+}
+
+fn highlight_rust_source(
+    highlighter: &mut TreeSitterHighlighter,
+    source: &str,
+) -> Vec<Vec<SyntaxSpan>> {
+    let mut line_starts = vec![0usize];
+    let mut display_ends = Vec::new();
+    let bytes = source.as_bytes();
+    let mut ix = 0usize;
+    let mut line_start = 0usize;
+
+    while ix < bytes.len() {
+        if bytes[ix] == b'\n' {
+            let display_end = if ix > line_start && bytes[ix - 1] == b'\r' {
+                ix - 1
+            } else {
+                ix
+            };
+            display_ends.push(display_end);
+            ix += 1;
+            line_start = ix;
+            line_starts.push(line_start);
+            continue;
+        }
+        ix += 1;
+    }
+    display_ends.push(source.strip_suffix('\r').map_or(source.len(), str::len));
+
+    let mut lines = vec![Vec::new(); line_starts.len()];
+    let Ok(events) =
+        highlighter.highlight(&TREE_SITTER_RUST_CONFIG, source.as_bytes(), None, |_| None)
     else {
-        return Vec::new();
+        return lines;
     };
 
-    let mut spans = Vec::new();
     let mut stack: Vec<TreeSitterHighlight> = Vec::new();
-
     for event in events {
         match event {
             Ok(TreeSitterHighlightEvent::HighlightStart(highlight)) => stack.push(highlight),
@@ -2965,48 +3069,54 @@ fn highlight_rust_line(highlighter: &mut TreeSitterHighlighter, line: &str) -> V
                 else {
                     continue;
                 };
-                spans.push(SyntaxSpan { start, end, color });
+                push_rust_highlight_span(
+                    &mut lines,
+                    &line_starts,
+                    &display_ends,
+                    start,
+                    end,
+                    color,
+                );
             }
             Ok(TreeSitterHighlightEvent::Source { .. }) => {}
-            Err(_) => return Vec::new(),
+            Err(_) => return vec![Vec::new(); line_starts.len()],
         }
     }
 
-    spans
+    lines
 }
 
 fn line_syntax_spans(
     cache: &mut ViewportCache,
+    buffer: &Rope,
+    revision: u64,
     line_ix: usize,
-    text: &str,
     syntax_mode: SyntaxMode,
 ) -> Vec<SyntaxSpan> {
-    if let Some(cached) = cache.highlight_lines.get(&line_ix) {
-        if cached.syntax_mode == syntax_mode && cached.text == text {
-            return cached.spans.clone();
-        }
-    }
-
-    let spans = match syntax_mode {
+    match syntax_mode {
         SyntaxMode::Plain => Vec::new(),
         SyntaxMode::TreeSitterRust => {
-            let highlighter = cache
-                .rust_highlighter
-                .get_or_insert_with(TreeSitterHighlighter::new);
-            highlight_rust_line(highlighter, text)
+            if cache
+                .rust_highlights
+                .as_ref()
+                .is_none_or(|highlights| highlights.revision != revision)
+            {
+                let highlighter = cache
+                    .rust_highlighter
+                    .get_or_insert_with(TreeSitterHighlighter::new);
+                cache.rust_highlights = Some(CachedRustHighlights {
+                    revision,
+                    lines: highlight_rust_source(highlighter, &buffer.to_string()),
+                });
+            }
+            cache
+                .rust_highlights
+                .as_ref()
+                .and_then(|highlights| highlights.lines.get(line_ix))
+                .cloned()
+                .unwrap_or_default()
         }
-    };
-
-    cache.highlight_lines.insert(
-        line_ix,
-        CachedHighlightLine {
-            text: text.to_string(),
-            syntax_mode,
-            spans: spans.clone(),
-        },
-    );
-
-    spans
+    }
 }
 
 fn text_runs_for_segment(
@@ -3336,9 +3446,6 @@ fn prepare_viewport_paint_state(
     cache
         .code_lines
         .retain(|(line_ix, _, _), _| *line_ix >= first_line && *line_ix <= last_visible_line);
-    cache
-        .highlight_lines
-        .retain(|line_ix, _| *line_ix >= first_line && *line_ix <= last_visible_line);
     cache.gutter_lines.retain(|line_ix, _| {
         show_gutter && *line_ix >= first_line && *line_ix <= last_visible_line
     });
@@ -3346,7 +3453,7 @@ fn prepare_viewport_paint_state(
     let mut rows = Vec::new();
     for line_ix in first_line..=last_visible_line {
         let display_source = trim_display_line(&lines[line_ix]);
-        let highlight_spans = line_syntax_spans(&mut cache, line_ix, display_source, syntax_mode);
+        let highlight_spans = line_syntax_spans(&mut cache, buffer, revision, line_ix, syntax_mode);
         let display_len = display_source.chars().count();
         let logical_end_char = if line_ix + 1 < buffer.len_lines() {
             buffer.line_to_char(line_ix + 1)
@@ -4094,4 +4201,38 @@ fn main() {
                 .unwrap();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autosave_revision_requires_a_unique_matching_tab() {
+        let path = PathBuf::from("/tmp/example.rs");
+        let tab = EditorTab::from_path(path.clone(), "fn main() {}\n");
+
+        assert!(autosave_revision_is_current(&[tab], &path, 0));
+
+        let mut stale_tab = EditorTab::from_path(path.clone(), "fn main() {}\n");
+        stale_tab.replace_char_range(0..0, "// ");
+        assert!(!autosave_revision_is_current(&[stale_tab], &path, 0));
+
+        let first = EditorTab::from_path(path.clone(), "one\n");
+        let second = EditorTab::from_path(path.clone(), "two\n");
+        assert!(!autosave_revision_is_current(&[first, second], &path, 0));
+    }
+
+    #[test]
+    fn rust_highlighting_keeps_multiline_comment_context() {
+        let mut highlighter = TreeSitterHighlighter::new();
+        let lines = highlight_rust_source(
+            &mut highlighter,
+            "/* first line\nsecond line */\nlet x = 1;\n",
+        );
+
+        assert!(lines[0].iter().any(|span| span.color == COLOR_MUTED));
+        assert!(lines[1].iter().any(|span| span.color == COLOR_MUTED));
+        assert!(lines[2].iter().all(|span| span.color != COLOR_MUTED));
+    }
 }

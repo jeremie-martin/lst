@@ -105,7 +105,7 @@ pub fn wrap_segments(line: &str, max_cols: usize) -> Vec<WrappedSegment> {
         if current_row != row {
             segments.push(WrappedSegment {
                 start_col: start,
-                end_col: idx - 1,
+                end_col: idx,
                 text: chars[start..idx].iter().collect(),
             });
             start = idx;
@@ -250,8 +250,14 @@ mod tests {
         let segments = wrap_segments("alpha beta gamma", 6);
         assert_eq!(segments.len(), 3);
         assert_eq!(segments[0].text, "alpha ");
+        assert_eq!(segments[0].start_col, 0);
+        assert_eq!(segments[0].end_col, 6);
         assert_eq!(segments[1].text, "beta ");
+        assert_eq!(segments[1].start_col, 6);
+        assert_eq!(segments[1].end_col, 11);
         assert_eq!(segments[2].text, "gamma");
+        assert_eq!(segments[2].start_col, 11);
+        assert_eq!(segments[2].end_col, 16);
         assert_eq!(visual_line_count("alpha beta gamma", 6), 3);
     }
 }

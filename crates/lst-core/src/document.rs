@@ -226,7 +226,7 @@ impl Tab {
             .buffer
             .to_string()
             .split('\n')
-            .map(String::from)
+            .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
             .collect::<Vec<_>>()
             .into();
 
@@ -345,13 +345,27 @@ mod tests {
     #[test]
     fn position_conversion_clamps_to_line_width() {
         let tab = Tab::from_text("untitled".into(), None, "abc\ndef", false);
-        assert_eq!(position_to_char(&tab.buffer, Position { line: 0, column: 99 }), 3);
+        assert_eq!(
+            position_to_char(
+                &tab.buffer,
+                Position {
+                    line: 0,
+                    column: 99
+                }
+            ),
+            3
+        );
         assert_eq!(
             char_to_position(&tab.buffer, 5),
-            Position {
-                line: 1,
-                column: 1,
-            }
+            Position { line: 1, column: 1 }
         );
+    }
+
+    #[test]
+    fn lines_strip_cr_from_crlf_content() {
+        let mut tab = Tab::from_text("untitled".into(), None, "alpha\r\nbeta\r\n", false);
+        let lines = tab.lines();
+
+        assert_eq!(lines.as_ref(), ["alpha", "beta", ""]);
     }
 }
