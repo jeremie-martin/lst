@@ -1546,6 +1546,7 @@ impl LstGpuiApp {
             return;
         }
 
+        let closed_active_tab = should_refocus_editor_after_tab_close(self.active, index);
         self.hovered_tab = None;
         if self.tabs.len() == 1 {
             self.tabs[0] = self.new_empty_tab();
@@ -1560,7 +1561,9 @@ impl LstGpuiApp {
             self.set_active_tab(next_active);
         }
 
-        self.queue_focus(PendingFocus::Editor);
+        if closed_active_tab {
+            self.queue_focus(PendingFocus::Editor);
+        }
         self.status = "Closed tab.".to_string();
         self.reveal_active_cursor();
         cx.notify();
@@ -3905,6 +3908,10 @@ fn drag_selection_range(anchor: Range<usize>, current: Range<usize>) -> (Range<u
     }
 }
 
+fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: usize) -> bool {
+    active_index == closed_index
+}
+
 fn x_for_global_char(row: &PaintedRow, global_char: usize) -> Option<Pixels> {
     let local_char = global_char.saturating_sub(row.line_start_char);
     let code_line = row.code_line.as_ref()?;
@@ -4219,14 +4226,14 @@ fn editor_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-z", Undo, Some("Editor")),
         KeyBinding::new("ctrl-y", Redo, Some("Editor")),
         KeyBinding::new("cmd-shift-z", Redo, Some("Editor")),
-        KeyBinding::new("ctrl-f", FindOpen, Some("Editor")),
-        KeyBinding::new("cmd-f", FindOpen, Some("Editor")),
-        KeyBinding::new("ctrl-h", FindOpenReplace, Some("Editor")),
-        KeyBinding::new("cmd-h", FindOpenReplace, Some("Editor")),
-        KeyBinding::new("f3", FindNext, Some("Editor")),
-        KeyBinding::new("shift-f3", FindPrev, Some("Editor")),
-        KeyBinding::new("ctrl-g", GotoLineOpen, Some("Editor")),
-        KeyBinding::new("cmd-g", GotoLineOpen, Some("Editor")),
+        KeyBinding::new("ctrl-f", FindOpen, Some("Workspace")),
+        KeyBinding::new("cmd-f", FindOpen, Some("Workspace")),
+        KeyBinding::new("ctrl-h", FindOpenReplace, Some("Workspace")),
+        KeyBinding::new("cmd-h", FindOpenReplace, Some("Workspace")),
+        KeyBinding::new("f3", FindNext, Some("Workspace")),
+        KeyBinding::new("shift-f3", FindPrev, Some("Workspace")),
+        KeyBinding::new("ctrl-g", GotoLineOpen, Some("Workspace")),
+        KeyBinding::new("cmd-g", GotoLineOpen, Some("Workspace")),
         KeyBinding::new("alt-up", MoveLineUp, Some("Editor")),
         KeyBinding::new("alt-down", MoveLineDown, Some("Editor")),
         KeyBinding::new("ctrl-shift-k", DeleteLine, Some("Editor")),
@@ -4347,6 +4354,20 @@ mod tests {
         })
     }
 
+    fn has_binding_in_context<A: gpui::Action + 'static>(keystroke: &str, context: &str) -> bool {
+        let typed = [Keystroke::parse(keystroke).expect("valid test keystroke")];
+        editor_keybindings().iter().any(|binding| {
+            binding.match_keystrokes(&typed) == Some(false)
+                && binding.action().as_any().is::<A>()
+                && binding
+                    .predicate()
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .as_deref()
+                    == Some(context)
+        })
+    }
+
     #[test]
     fn autosave_revision_requires_a_unique_matching_tab() {
         let path = PathBuf::from("/tmp/example.rs");
@@ -4396,5 +4417,27 @@ mod tests {
     fn ctrl_arrow_aliases_expand_vertical_selection() {
         assert!(has_binding::<SelectUp>("ctrl-up"));
         assert!(has_binding::<SelectDown>("ctrl-down"));
+    }
+
+    #[test]
+    fn find_shortcuts_stay_available_from_workspace_context() {
+        assert!(has_binding_in_context::<FindOpen>("ctrl-f", "Workspace"));
+        assert!(has_binding_in_context::<FindOpenReplace>(
+            "ctrl-h",
+            "Workspace"
+        ));
+        assert!(has_binding_in_context::<FindNext>("f3", "Workspace"));
+        assert!(has_binding_in_context::<FindPrev>("shift-f3", "Workspace"));
+        assert!(has_binding_in_context::<GotoLineOpen>(
+            "ctrl-g",
+            "Workspace"
+        ));
+    }
+
+    #[test]
+    fn closing_other_tab_does_not_force_editor_focus() {
+        assert!(!should_refocus_editor_after_tab_close(2, 1));
+        assert!(!should_refocus_editor_after_tab_close(2, 3));
+        assert!(should_refocus_editor_after_tab_close(2, 2));
     }
 }
