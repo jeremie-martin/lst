@@ -5,6 +5,10 @@ edition = "2021"
 description = "Lucy's Simple Text editor — a fast, minimal editor for Linux"
 license = "MIT"
 
+[workspace]
+members = ["apps/lst-gpui", "crates/lst-core"]
+resolver = "2"
+
 [features]
 default = []
 internal-invariants = []

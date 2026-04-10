@@ -1,14 +1,27 @@
 use gpui::{
     actions, canvas, div, fill, point, prelude::*, px, rgb, size, App, Application, Bounds,
     ClipboardItem, Context, CursorStyle, ElementInputHandler, EntityInputHandler, FocusHandle,
-    Focusable, IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, TextRun, UTF16Selection, Window,
-    WindowBounds, WindowOptions,
+    Focusable, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, TextRun,
+    UTF16Selection, Window, WindowBounds, WindowOptions,
+};
+use lst_core::{
+    document::{char_to_position, position_to_char, EditKind, Tab},
+    editor_ops,
+    find::FindState,
+    position::Position,
+    wrap::{cursor_visual_row_in_line, visual_line_count, wrap_columns_with_gutter, wrap_segments},
 };
 use rfd::FileDialog;
 use ropey::Rope;
 use std::{
-    cell::RefCell, collections::HashMap, fs, ops::Range, path::PathBuf, process, rc::Rc,
+    cell::RefCell,
+    collections::HashMap,
+    fs,
+    ops::{Deref, DerefMut, Range},
+    path::PathBuf,
+    process,
+    rc::Rc,
     time::Instant,
 };
 
@@ -18,13 +31,31 @@ const ROW_HEIGHT: f32 = 22.0;
 const GUTTER_WIDTH: f32 = 76.0;
 const CODE_FONT_SIZE: f32 = 13.0;
 const CURSOR_WIDTH: f32 = 2.0;
-const VIEWPORT_OVERSCAN_LINES: usize = 4;
+const VIEWPORT_OVERSCAN_LINES: usize = 6;
+const EDITOR_LEFT_PAD: f32 = 18.0;
+const EDITOR_RIGHT_PAD: f32 = 28.0;
+const GUTTER_LEFT_PAD: f32 = 12.0;
+const GUTTER_SEPARATOR_WIDTH: f32 = 14.0;
+const WRAP_CHAR_WIDTH_FALLBACK: f32 = 7.8;
 const UNTITLED_PREFIX: &str = "untitled";
 const CORPUS_PATH: &str = "benchmarks/paste-corpus-20k.rs";
 const PREMADE_CORPUS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../benchmarks/paste-corpus-20k.rs"
 ));
+const COLOR_BG: u32 = 0x11111B;
+const COLOR_SURFACE0: u32 = 0x181825;
+const COLOR_SURFACE1: u32 = 0x1E1E2E;
+const COLOR_SURFACE2: u32 = 0x313244;
+const COLOR_BORDER: u32 = 0x45475A;
+const COLOR_TEXT: u32 = 0xCDD6F4;
+const COLOR_SUBTEXT: u32 = 0xA6ADC8;
+const COLOR_MUTED: u32 = 0x6C7086;
+const COLOR_ACCENT: u32 = 0x89B4FA;
+const COLOR_SELECTION: u32 = 0x585B70;
+const COLOR_CARET: u32 = 0xF5E0DC;
+const COLOR_CURRENT_LINE: u32 = 0x181B2B;
+const COLOR_GUTTER: u32 = 0x161622;
 
 actions!(
     lst_gpui,
@@ -36,8 +67,7 @@ actions!(
         CloseActiveTab,
         NextTab,
         PrevTab,
-        ToggleGutter,
-        ReloadCorpus,
+        ToggleWrap,
         CopySelection,
         CutSelection,
         PasteClipboard,
@@ -58,9 +88,30 @@ actions!(
         InsertNewline,
         InsertTab,
         SelectAll,
+        Undo,
+        Redo,
+        FindOpen,
+        FindOpenReplace,
+        FindNext,
+        FindPrev,
+        ReplaceOne,
+        ReplaceAll,
+        GotoLineOpen,
+        DeleteLine,
+        MoveLineUp,
+        MoveLineDown,
+        DuplicateLine,
+        ToggleComment,
         Quit,
     ]
 );
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverlayFocus {
+    FindQuery,
+    FindReplace,
+    GotoLine,
+}
 
 #[derive(Clone, Debug)]
 struct OperationStats {
@@ -129,13 +180,13 @@ struct CachedShapedLine {
 
 #[derive(Default)]
 struct ViewportCache {
-    code_lines: HashMap<usize, CachedShapedLine>,
+    code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
+    wrap_layout: Option<WrapLayout>,
 }
 
 #[derive(Clone)]
 struct PaintedRow {
-    line_ix: usize,
     row_top: Pixels,
     line_start_char: usize,
     display_end_char: usize,
@@ -154,109 +205,44 @@ struct ViewportGeometry {
     rows: Vec<PaintedRow>,
 }
 
+#[derive(Clone)]
+struct WrapLayout {
+    revision: u64,
+    show_wrap: bool,
+    wrap_columns: usize,
+    line_row_starts: Vec<usize>,
+    total_rows: usize,
+}
+
 struct EditorTab {
-    name_hint: String,
-    path: Option<PathBuf>,
-    buffer: Rope,
-    modified: bool,
+    doc: Tab,
     scroll: ScrollHandle,
     cache: Rc<RefCell<ViewportCache>>,
     geometry: Rc<RefCell<ViewportGeometry>>,
-    selection: Range<usize>,
-    selection_reversed: bool,
     marked_range: Option<Range<usize>>,
-    preferred_column: Option<usize>,
 }
 
 impl EditorTab {
     fn empty(name_hint: String) -> Self {
-        Self::from_text(name_hint, None, "")
+        Self::from_doc(Tab::empty(name_hint))
     }
 
     fn from_path(path: PathBuf, text: &str) -> Self {
-        let name_hint = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(UNTITLED_PREFIX)
-            .to_string();
-        Self::from_text(name_hint, Some(path), text)
+        Self::from_doc(Tab::from_path(path, text))
     }
 
     fn from_text(name_hint: String, path: Option<PathBuf>, text: &str) -> Self {
+        Self::from_doc(Tab::from_text(name_hint, path, text, false))
+    }
+
+    fn from_doc(doc: Tab) -> Self {
         Self {
-            name_hint,
-            path,
-            buffer: Rope::from_str(text),
-            modified: false,
+            doc,
             scroll: ScrollHandle::new(),
             cache: Rc::new(RefCell::new(ViewportCache::default())),
             geometry: Rc::new(RefCell::new(ViewportGeometry::default())),
-            selection: 0..0,
-            selection_reversed: false,
             marked_range: None,
-            preferred_column: None,
         }
-    }
-
-    fn display_name(&self) -> String {
-        self.path
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| self.name_hint.clone())
-    }
-
-    fn len_chars(&self) -> usize {
-        self.buffer.len_chars()
-    }
-
-    fn line_count(&self) -> usize {
-        self.buffer.len_lines().max(1)
-    }
-
-    fn cursor_char(&self) -> usize {
-        if self.selection_reversed {
-            self.selection.start
-        } else {
-            self.selection.end
-        }
-    }
-
-    fn selected_range(&self) -> Range<usize> {
-        self.selection.clone()
-    }
-
-    fn has_selection(&self) -> bool {
-        self.selection.start != self.selection.end
-    }
-
-    fn move_to(&mut self, offset: usize) {
-        let offset = offset.min(self.len_chars());
-        self.selection = offset..offset;
-        self.selection_reversed = false;
-        self.marked_range = None;
-    }
-
-    fn select_to(&mut self, offset: usize) {
-        let offset = offset.min(self.len_chars());
-        if self.selection_reversed {
-            self.selection.start = offset;
-        } else {
-            self.selection.end = offset;
-        }
-        if self.selection.end < self.selection.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selection = self.selection.end..self.selection.start;
-        }
-        self.marked_range = None;
-    }
-
-    fn select_all(&mut self) {
-        let end = self.len_chars();
-        self.selection = 0..end;
-        self.selection_reversed = false;
-        self.marked_range = None;
     }
 
     fn invalidate_visual_state(&mut self) {
@@ -264,44 +250,63 @@ impl EditorTab {
         *self.geometry.borrow_mut() = ViewportGeometry::default();
     }
 
-    fn buffer_text(&self) -> String {
-        self.buffer.to_string()
+    fn move_to(&mut self, offset: usize) {
+        self.doc.move_to(offset);
+        self.marked_range = None;
     }
 
-    fn selected_text(&self) -> Option<String> {
-        if self.has_selection() {
-            Some(self.buffer.slice(self.selection.clone()).to_string())
-        } else {
-            None
-        }
+    fn select_to(&mut self, offset: usize) {
+        self.doc.select_to(offset);
+        self.marked_range = None;
+    }
+
+    fn replace_char_range(&mut self, range: Range<usize>, new_text: &str) -> usize {
+        let new_cursor = self.doc.replace_char_range(range, new_text);
+        self.marked_range = None;
+        self.invalidate_visual_state();
+        new_cursor
+    }
+
+    fn set_text(&mut self, text: &str) {
+        self.doc.set_text(text);
+        self.marked_range = None;
+        self.invalidate_visual_state();
     }
 
     fn display_line_char_len(&self, line_ix: usize) -> usize {
         line_display_char_len(&self.buffer, line_ix)
     }
 
-    fn replace_char_range(&mut self, mut range: Range<usize>, new_text: &str) -> usize {
-        range.start = range.start.min(self.len_chars());
-        range.end = range.end.min(self.len_chars());
-        if range.start > range.end {
-            range = range.end..range.start;
+    fn undo(&mut self) -> bool {
+        let changed = self.doc.undo();
+        if changed {
+            self.marked_range = None;
+            self.invalidate_visual_state();
         }
+        changed
+    }
 
-        if range.start != range.end {
-            self.buffer.remove(range.clone());
+    fn redo(&mut self) -> bool {
+        let changed = self.doc.redo();
+        if changed {
+            self.marked_range = None;
+            self.invalidate_visual_state();
         }
-        if !new_text.is_empty() {
-            self.buffer.insert(range.start, new_text);
-        }
+        changed
+    }
+}
 
-        let new_cursor = range.start + new_text.chars().count();
-        self.selection = new_cursor..new_cursor;
-        self.selection_reversed = false;
-        self.marked_range = None;
-        self.modified = true;
-        self.preferred_column = None;
-        self.invalidate_visual_state();
-        new_cursor
+impl Deref for EditorTab {
+    type Target = Tab;
+
+    fn deref(&self) -> &Self::Target {
+        &self.doc
+    }
+}
+
+impl DerefMut for EditorTab {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.doc
     }
 }
 
@@ -311,7 +316,14 @@ struct LstGpuiApp {
     active: usize,
     next_untitled_id: usize,
     show_gutter: bool,
+    show_wrap: bool,
     drag_selecting: bool,
+    find: FindState,
+    goto_line: Option<String>,
+    overlay_focus: Option<OverlayFocus>,
+    find_query_cursor: usize,
+    find_replace_cursor: usize,
+    goto_line_cursor: usize,
     status: String,
     last_operation: OperationStats,
 }
@@ -366,35 +378,24 @@ impl LstGpuiApp {
             active,
             next_untitled_id: 2,
             show_gutter: true,
+            show_wrap: true,
             drag_selecting: false,
+            find: FindState::new(),
+            goto_line: None,
+            overlay_focus: None,
+            find_query_cursor: 0,
+            find_replace_cursor: 0,
+            goto_line_cursor: 0,
             status,
             last_operation,
         }
-    }
-
-    fn button(
-        label: &'static str,
-        cx: &mut Context<Self>,
-        on_click: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-    ) -> impl IntoElement {
-        div()
-            .id(label)
-            .flex_none()
-            .cursor_pointer()
-            .px_3()
-            .py_1()
-            .bg(rgb(0x1F6F78))
-            .text_color(rgb(0xFFF9F0))
-            .active(|style| style.opacity(0.85))
-            .child(label.to_string())
-            .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
     }
 
     fn tab_button(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[ix];
         let active = ix == self.active;
         let label = if tab.modified {
-            format!("{}*", tab.display_name())
+            format!("{} •", tab.display_name())
         } else {
             tab.display_name()
         };
@@ -404,12 +405,26 @@ impl LstGpuiApp {
             .cursor_pointer()
             .px_3()
             .py_2()
-            .bg(if active { rgb(0x1C6B74) } else { rgb(0xD9D0C3) })
-            .text_color(if active { rgb(0xFFF9F0) } else { rgb(0x2B211A) })
+            .rounded_md()
+            .border_1()
+            .border_color(if active {
+                rgb(COLOR_ACCENT)
+            } else {
+                rgb(COLOR_BORDER)
+            })
+            .bg(if active {
+                rgb(COLOR_SURFACE2)
+            } else {
+                rgb(COLOR_SURFACE0)
+            })
+            .text_color(if active {
+                rgb(COLOR_TEXT)
+            } else {
+                rgb(COLOR_SUBTEXT)
+            })
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.active = ix;
-                this.active_tab_mut().preferred_column = None;
+                this.set_active_tab(ix);
                 this.status = format!("Switched to {}.", this.active_tab().display_name());
                 this.reveal_active_cursor();
                 cx.notify();
@@ -430,32 +445,217 @@ impl LstGpuiApp {
         EditorTab::empty(name)
     }
 
+    fn set_active_tab(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        self.active = index;
+        self.active_tab_mut().preferred_column = None;
+        self.reindex_find_matches_to_nearest();
+    }
+
+    fn active_cursor_position(&self) -> Position {
+        char_to_position(&self.active_tab().buffer, self.active_tab().cursor_char())
+    }
+
+    fn active_tab_revision(&self) -> u64 {
+        self.active_tab().revision()
+    }
+
+    fn selected_find_match_start(&self) -> Option<Position> {
+        if self.find.query.is_empty() {
+            return None;
+        }
+        let tab = self.active_tab();
+        if !tab.has_selection() {
+            return None;
+        }
+        let selected = tab.selected_range();
+        if selected.end.saturating_sub(selected.start) != self.find.query.chars().count() {
+            return None;
+        }
+        Some(char_to_position(&tab.buffer, selected.start))
+    }
+
+    fn align_find_current_to_visible_match(&mut self) {
+        if self.find.matches.is_empty() {
+            return;
+        }
+
+        if let Some(start) = self.selected_find_match_start() {
+            if self.find.select_exact(&start) {
+                return;
+            }
+        }
+
+        let pos = self.active_cursor_position();
+        self.find.find_nearest(&pos);
+    }
+
+    fn reindex_find_matches(&mut self) {
+        if self.find.query.is_empty() {
+            self.find.clear_results();
+            return;
+        }
+        let text = self.active_tab().buffer.to_string();
+        self.find.compute_matches_in_text(&text);
+        self.find.finish_reindex(self.active_tab_revision());
+    }
+
+    fn reindex_find_matches_to_nearest(&mut self) {
+        self.reindex_find_matches();
+        if !self.find.matches.is_empty() {
+            self.align_find_current_to_visible_match();
+        }
+    }
+
+    fn ensure_find_matches_current(&mut self) {
+        if self.find.is_stale(self.active_tab_revision()) {
+            self.reindex_find_matches();
+        }
+    }
+
+    fn select_current_find_match(&mut self) -> bool {
+        let Some((start, end)) = self.find.current_match_range() else {
+            return false;
+        };
+        self.active_tab_mut().set_cursor_position(end, Some(start));
+        true
+    }
+
+    fn sync_find_after_edit(&mut self) {
+        if self.find.visible && !self.find.query.is_empty() {
+            self.reindex_find_matches_to_nearest();
+        } else if !self.find.query.is_empty() {
+            self.find.mark_dirty();
+        }
+    }
+
+    fn selected_single_line_text(&self) -> Option<String> {
+        let text = self.active_tab().selected_text()?;
+        (!text.contains('\n')).then_some(text)
+    }
+
+    fn open_find(&mut self, show_replace: bool) {
+        self.find.visible = true;
+        self.find.show_replace = show_replace;
+        if let Some(sel) = self.selected_single_line_text() {
+            self.find.query = sel;
+        }
+        self.find_query_cursor = self.find.query.chars().count();
+        self.find_replace_cursor = self.find.replacement.chars().count();
+        self.overlay_focus = Some(OverlayFocus::FindQuery);
+        self.reindex_find_matches_to_nearest();
+    }
+
+    fn close_find(&mut self) {
+        self.find.visible = false;
+        self.overlay_focus = None;
+    }
+
+    fn open_goto_line(&mut self) {
+        self.goto_line = Some(String::new());
+        self.goto_line_cursor = 0;
+        self.overlay_focus = Some(OverlayFocus::GotoLine);
+    }
+
+    fn close_goto_line(&mut self) {
+        self.goto_line = None;
+        self.overlay_focus = None;
+    }
+
+    fn replace_active_lines(&mut self, lines: Vec<String>, cursor_line: usize, cursor_col: usize) {
+        let active = self.active;
+        {
+            let tab = &mut self.tabs[active];
+            tab.set_text(&lines.join("\n"));
+            tab.modified = true;
+            let cursor = position_to_char(
+                &tab.buffer,
+                Position {
+                    line: cursor_line,
+                    column: cursor_col,
+                },
+            );
+            tab.move_to(cursor);
+        }
+        self.sync_find_after_edit();
+    }
+
+    fn move_active_cursor(&mut self, cursor_line: usize, cursor_col: usize, select: bool) {
+        let position = Position {
+            line: cursor_line,
+            column: cursor_col,
+        };
+        let active = self.active;
+        let anchor = if select {
+            Some(char_to_position(
+                &self.tabs[active].buffer,
+                self.tabs[active].cursor_char(),
+            ))
+        } else {
+            None
+        };
+        self.tabs[active].set_cursor_position(position, anchor);
+    }
+
+    fn apply_line_edit<R, F>(&mut self, edit: F) -> Option<R>
+    where
+        F: FnOnce(&mut Vec<String>) -> Option<(R, usize, usize)>,
+    {
+        let cached_lines = self.tabs[self.active].lines();
+        let mut lines: Vec<String> = cached_lines.iter().cloned().collect();
+        let (result, cursor_line, cursor_col) = edit(&mut lines)?;
+        if lines.as_slice() == cached_lines.as_ref() {
+            let cursor = self.active_cursor_position();
+            if cursor.line == cursor_line && cursor.column == cursor_col {
+                return None;
+            }
+            self.move_active_cursor(cursor_line, cursor_col, false);
+            return Some(result);
+        }
+
+        self.tabs[self.active].push_undo_snapshot(EditKind::Other, true);
+        self.replace_active_lines(lines, cursor_line, cursor_col);
+        Some(result)
+    }
+
     fn active_cursor_line_col(&self) -> (usize, usize) {
         char_to_line_col(&self.active_tab().buffer, self.active_tab().cursor_char())
     }
 
-    fn metrics_line(&self) -> String {
-        let tab = self.active_tab();
-        let (line, column) = self.active_cursor_line_col();
-        let path = tab
-            .path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| tab.display_name());
-        format!(
-            "{} | {} bytes | {} lines | line {} col {} | gutter={} | last={}",
-            path,
-            tab.buffer.len_bytes(),
-            tab.buffer.len_lines(),
-            line + 1,
-            column + 1,
-            if self.show_gutter { "on" } else { "off" },
-            self.last_operation.summary()
-        )
+    fn selection_summary(&self) -> Option<String> {
+        let selected = self.active_tab().selected_range();
+        (selected.start != selected.end).then(|| {
+            format!("Sel {}", selected.end.saturating_sub(selected.start))
+        })
     }
 
-    fn shortcut_line(&self) -> &'static str {
-        "Ctrl-N new | Ctrl-O open | Ctrl-S save | Ctrl-Shift-S save as | Ctrl-W close | Ctrl-C/X/V clipboard | Ctrl-G gutter | Ctrl-Q quit"
+    fn status_details(&self) -> String {
+        let tab = self.active_tab();
+        let (line, column) = self.active_cursor_line_col();
+        let mut parts = vec![
+            format!("Ln {}", line + 1),
+            format!("Col {}", column + 1),
+            if self.show_wrap {
+                "Wrap".to_string()
+            } else {
+                "No Wrap".to_string()
+            },
+            format!("{} lines", tab.line_count()),
+        ];
+        if let Some(selection) = self.selection_summary() {
+            parts.push(selection);
+        }
+        if self.find.visible {
+            let current = if self.find.matches.is_empty() {
+                0
+            } else {
+                self.find.current + 1
+            };
+            parts.push(format!("Match {current}/{}", self.find.matches.len()));
+        }
+        parts.join("  ")
     }
 
     fn record_operation(
@@ -472,7 +672,6 @@ impl LstGpuiApp {
             clipboard_read_ms,
             apply_ms,
         };
-        self.status = self.last_operation.summary();
         eprintln!("lst_gpui {}", self.last_operation.summary());
     }
 
@@ -486,11 +685,12 @@ impl LstGpuiApp {
         let apply_started = Instant::now();
         {
             let tab = self.active_tab_mut();
-            let path = tab.path.clone();
             let name_hint = tab.display_name();
-            *tab = EditorTab::from_text(name_hint, path, text);
+            *tab = EditorTab::from_text(name_hint, None, text);
         }
+        self.sync_find_after_edit();
         self.record_operation(label, clipboard_read_ms, elapsed_ms(apply_started));
+        self.status = format!("Loaded {} lines.", self.active_tab().line_count());
         self.reveal_active_cursor();
         cx.notify();
     }
@@ -509,7 +709,9 @@ impl LstGpuiApp {
             tab.replace_char_range(end..end, text);
             tab.modified = false;
         }
+        self.sync_find_after_edit();
         self.record_operation(label, clipboard_read_ms, elapsed_ms(apply_started));
+        self.status = format!("Appended {} lines.", text.lines().count());
         self.reveal_active_cursor();
         cx.notify();
     }
@@ -523,12 +725,19 @@ impl LstGpuiApp {
         let apply_started = Instant::now();
         {
             let tab = self.active_tab_mut();
+            let kind = if text.is_empty() {
+                EditKind::Delete
+            } else {
+                EditKind::Insert
+            };
+            tab.push_undo_snapshot(kind, text.chars().any(char::is_whitespace));
             let range = tab
                 .marked_range
                 .clone()
                 .unwrap_or_else(|| tab.selected_range());
             tab.replace_char_range(range, text);
         }
+        self.sync_find_after_edit();
         self.record_operation(label, None, elapsed_ms(apply_started));
         self.reveal_active_cursor();
         cx.notify();
@@ -547,8 +756,10 @@ impl LstGpuiApp {
                 }
                 cursor - 1..cursor
             };
+            tab.push_undo_snapshot(EditKind::Delete, false);
             tab.replace_char_range(range, "");
         }
+        self.sync_find_after_edit();
         self.record_operation("backspace", None, elapsed_ms(apply_started));
         self.reveal_active_cursor();
         cx.notify();
@@ -567,20 +778,25 @@ impl LstGpuiApp {
                 }
                 cursor..cursor + 1
             };
+            tab.push_undo_snapshot(EditKind::Delete, false);
             tab.replace_char_range(range, "");
         }
+        self.sync_find_after_edit();
         self.record_operation("delete", None, elapsed_ms(apply_started));
         self.reveal_active_cursor();
         cx.notify();
     }
 
     fn insert_newline(&mut self, cx: &mut Context<Self>) {
-        let indent = {
+        let (newline, indent) = {
             let tab = self.active_tab();
             let (line, _) = char_to_line_col(&tab.buffer, tab.cursor_char());
-            line_indent_prefix(&tab.buffer, line)
+            (
+                preferred_newline_for_buffer(&tab.buffer),
+                line_indent_prefix(&tab.buffer, line),
+            )
         };
-        self.insert_text_at_selection("newline", &format!("\n{indent}"), cx);
+        self.insert_text_at_selection("newline", &format!("{newline}{indent}"), cx);
     }
 
     fn insert_tab(&mut self, cx: &mut Context<Self>) {
@@ -604,7 +820,19 @@ impl LstGpuiApp {
         cx.notify();
     }
 
-    fn move_vertical(&mut self, delta: isize, select: bool, cx: &mut Context<Self>) {
+    fn move_vertical(
+        &mut self,
+        delta: isize,
+        select: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.move_visual_row(delta, select, window) {
+            self.reveal_active_cursor();
+            cx.notify();
+            return;
+        }
+
         let tab = self.active_tab_mut();
         let cursor = tab.cursor_char();
         let (line, column) = char_to_line_col(&tab.buffer, cursor);
@@ -624,6 +852,78 @@ impl LstGpuiApp {
         }
         self.reveal_active_cursor();
         cx.notify();
+    }
+
+    fn move_visual_row(&mut self, delta: isize, select: bool, window: &mut Window) -> bool {
+        if !self.show_wrap {
+            return false;
+        }
+
+        let active = self.active;
+        let viewport_width = self.tabs[active]
+            .geometry
+            .borrow()
+            .bounds
+            .map(|bounds| bounds.size.width)
+            .unwrap_or_else(|| px(WINDOW_WIDTH - 48.0));
+        let char_width = code_char_width(window);
+        let revision = self.tabs[active].revision();
+        let lines = self.tabs[active].lines();
+        let layout = {
+            let mut cache = self.tabs[active].cache.borrow_mut();
+            ensure_wrap_layout(
+                &mut cache,
+                lines.as_ref(),
+                revision,
+                viewport_width,
+                char_width,
+                self.show_gutter,
+                self.show_wrap,
+            )
+        };
+
+        let tab = &mut self.tabs[active];
+        let cursor = tab.cursor_char();
+        let line = tab.buffer.char_to_line(cursor.min(tab.buffer.len_chars()));
+        let line_start = tab.buffer.line_to_char(line);
+        let display_text = trim_display_line(lines[line].as_str());
+        let column = cursor.saturating_sub(line_start).min(display_text.chars().count());
+        let segment_row = cursor_visual_row_in_line(display_text, column, layout.wrap_columns);
+        let visual_row = layout.line_row_starts[line] + segment_row;
+        let target_visual_row = if delta.is_negative() {
+            visual_row.saturating_sub(delta.unsigned_abs())
+        } else {
+            (visual_row + delta as usize).min(layout.total_rows.saturating_sub(1))
+        };
+
+        if target_visual_row == visual_row {
+            return false;
+        }
+
+        let segments = wrap_segments(display_text, layout.wrap_columns);
+        let current_segment = segments
+            .get(segment_row)
+            .unwrap_or_else(|| segments.last().expect("wrap returns at least one segment"));
+        let preferred = tab
+            .preferred_column
+            .unwrap_or(column.saturating_sub(current_segment.start_col));
+        let target_line = line_for_visual_row(&layout, target_visual_row);
+        let target_text = trim_display_line(lines[target_line].as_str());
+        let target_segments = wrap_segments(target_text, layout.wrap_columns);
+        let target_row_in_line = target_visual_row - layout.line_row_starts[target_line];
+        let target_segment = target_segments
+            .get(target_row_in_line)
+            .unwrap_or_else(|| target_segments.last().expect("wrap returns at least one segment"));
+        let target_col =
+            target_segment.start_col + preferred.min(target_segment.text.chars().count());
+        let target = tab.buffer.line_to_char(target_line) + target_col;
+        tab.preferred_column = Some(preferred);
+        if select {
+            tab.select_to(target);
+        } else {
+            tab.move_to(target);
+        }
+        true
     }
 
     fn move_line_boundary(&mut self, to_end: bool, select: bool, cx: &mut Context<Self>) {
@@ -663,7 +963,10 @@ impl LstGpuiApp {
         cx.write_to_primary(ClipboardItem::new_string(text));
         let apply_started = Instant::now();
         let range = self.active_tab().selected_range();
+        self.active_tab_mut()
+            .push_undo_snapshot(EditKind::Delete, true);
         self.active_tab_mut().replace_char_range(range, "");
+        self.sync_find_after_edit();
         self.record_operation("cut", None, elapsed_ms(apply_started));
         self.reveal_active_cursor();
         cx.notify();
@@ -680,24 +983,22 @@ impl LstGpuiApp {
         let apply_started = Instant::now();
         {
             let tab = self.active_tab_mut();
+            tab.push_undo_snapshot(EditKind::Insert, text.chars().any(char::is_whitespace));
             let range = tab
                 .marked_range
                 .clone()
                 .unwrap_or_else(|| tab.selected_range());
             tab.replace_char_range(range, &text);
         }
+        self.sync_find_after_edit();
         self.record_operation(
             "paste_clipboard",
             Some(elapsed_ms(read_started)),
             elapsed_ms(apply_started),
         );
+        self.status = format!("Pasted {} line(s).", text.lines().count());
         self.reveal_active_cursor();
         cx.notify();
-    }
-
-    fn load_corpus(&mut self, cx: &mut Context<Self>) {
-        self.replace_active_text("load_corpus", PREMADE_CORPUS, None, cx);
-        self.active_tab_mut().modified = false;
     }
 
     fn open_files(&mut self, cx: &mut Context<Self>) {
@@ -716,7 +1017,7 @@ impl LstGpuiApp {
         }
 
         if self.tabs.len() > start_len {
-            self.active = self.tabs.len() - 1;
+            self.set_active_tab(self.tabs.len() - 1);
             self.status = format!("Opened {} tab(s).", self.tabs.len() - start_len);
         }
         self.reveal_active_cursor();
@@ -764,16 +1065,22 @@ impl LstGpuiApp {
     }
 
     fn close_active_tab(&mut self, cx: &mut Context<Self>) {
+        if self.active_tab().modified {
+            self.status = "Unsaved changes. Save or Save As before closing this tab.".to_string();
+            cx.notify();
+            return;
+        }
+
         if self.tabs.len() == 1 {
             self.tabs[0] = self.new_empty_tab();
-            self.active = 0;
+            self.set_active_tab(0);
             self.status = "Closed tab.".to_string();
             cx.notify();
             return;
         }
 
         self.tabs.remove(self.active);
-        self.active = self.active.min(self.tabs.len().saturating_sub(1));
+        self.set_active_tab(self.active.min(self.tabs.len().saturating_sub(1)));
         self.status = "Closed tab.".to_string();
         self.reveal_active_cursor();
         cx.notify();
@@ -786,8 +1093,14 @@ impl LstGpuiApp {
             return;
         }
 
-        let cursor_line = tab.buffer.char_to_line(tab.cursor_char());
-        let caret_top = px((cursor_line as f32) * ROW_HEIGHT);
+        let visual_row = tab
+            .cache
+            .borrow()
+            .wrap_layout
+            .as_ref()
+            .and_then(|layout| visual_row_for_char(tab, layout))
+            .unwrap_or_else(|| tab.buffer.char_to_line(tab.cursor_char()));
+        let caret_top = px((visual_row as f32) * ROW_HEIGHT);
         let caret_bottom = caret_top + px(ROW_HEIGHT);
         let scroll_top = {
             let offset_y = -tab.scroll.offset().y;
@@ -824,12 +1137,7 @@ impl LstGpuiApp {
         let Some(bounds) = geometry.bounds else {
             return self.active_tab().cursor_char();
         };
-        let code_origin_x = bounds.left()
-            + if self.show_gutter {
-                px(GUTTER_WIDTH)
-            } else {
-                px(12.0)
-            };
+        let code_origin_x = bounds.left() + code_origin_pad(self.show_gutter);
 
         let row = if geometry.rows.is_empty() {
             return 0;
@@ -865,8 +1173,23 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus_handle);
-        self.drag_selecting = true;
         let index = self.active_char_index_for_point(event.position);
+        if event.click_count >= 3 {
+            self.drag_selecting = false;
+            self.select_active_range(line_range_at_char(&self.active_tab().buffer, index));
+            self.sync_primary_selection(cx);
+            cx.notify();
+            return;
+        }
+        if event.click_count == 2 {
+            self.drag_selecting = false;
+            self.select_active_range(word_range_at_char(&self.active_tab().buffer, index));
+            self.sync_primary_selection(cx);
+            cx.notify();
+            return;
+        }
+
+        self.drag_selecting = true;
         if event.modifiers.shift {
             self.active_tab_mut().select_to(index);
         } else {
@@ -897,6 +1220,15 @@ impl LstGpuiApp {
         self.drag_selecting = false;
         self.sync_primary_selection(cx);
         cx.notify();
+    }
+
+    fn select_active_range(&mut self, range: Range<usize>) {
+        let tab = self.active_tab_mut();
+        let end = tab.len_chars();
+        tab.selection = range.start.min(end)..range.end.min(end);
+        tab.selection_reversed = false;
+        tab.preferred_column = None;
+        tab.marked_range = None;
     }
 
     fn run_auto_bench(
@@ -944,7 +1276,7 @@ impl LstGpuiApp {
     fn handle_new_tab(&mut self, _: &NewTab, _: &mut Window, cx: &mut Context<Self>) {
         let tab = self.new_empty_tab();
         self.tabs.push(tab);
-        self.active = self.tabs.len() - 1;
+        self.set_active_tab(self.tabs.len() - 1);
         self.status = "Created a new tab.".to_string();
         cx.notify();
     }
@@ -972,7 +1304,7 @@ impl LstGpuiApp {
 
     fn handle_next_tab(&mut self, _: &NextTab, _: &mut Window, cx: &mut Context<Self>) {
         if self.tabs.len() > 1 {
-            self.active = (self.active + 1) % self.tabs.len();
+            self.set_active_tab((self.active + 1) % self.tabs.len());
             self.reveal_active_cursor();
             cx.notify();
         }
@@ -980,28 +1312,27 @@ impl LstGpuiApp {
 
     fn handle_prev_tab(&mut self, _: &PrevTab, _: &mut Window, cx: &mut Context<Self>) {
         if self.tabs.len() > 1 {
-            self.active = if self.active == 0 {
+            let prev = if self.active == 0 {
                 self.tabs.len() - 1
             } else {
                 self.active - 1
             };
+            self.set_active_tab(prev);
             self.reveal_active_cursor();
             cx.notify();
         }
     }
 
-    fn handle_toggle_gutter(&mut self, _: &ToggleGutter, _: &mut Window, cx: &mut Context<Self>) {
-        self.show_gutter = !self.show_gutter;
-        self.status = if self.show_gutter {
-            "Line gutter enabled.".to_string()
+    fn handle_toggle_wrap(&mut self, _: &ToggleWrap, _: &mut Window, cx: &mut Context<Self>) {
+        self.show_wrap = !self.show_wrap;
+        self.active_tab_mut().invalidate_visual_state();
+        self.status = if self.show_wrap {
+            "Soft wrap enabled.".to_string()
         } else {
-            "Line gutter disabled.".to_string()
+            "Soft wrap disabled.".to_string()
         };
+        self.reveal_active_cursor();
         cx.notify();
-    }
-
-    fn handle_reload_corpus(&mut self, _: &ReloadCorpus, _: &mut Window, cx: &mut Context<Self>) {
-        self.load_corpus(cx);
     }
 
     fn handle_copy_selection(&mut self, _: &CopySelection, _: &mut Window, cx: &mut Context<Self>) {
@@ -1043,12 +1374,12 @@ impl LstGpuiApp {
         }
     }
 
-    fn handle_move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_vertical(-1, false, cx);
+    fn handle_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_vertical(-1, false, window, cx);
     }
 
-    fn handle_move_down(&mut self, _: &MoveDown, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_vertical(1, false, cx);
+    fn handle_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_vertical(1, false, window, cx);
     }
 
     fn handle_select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -1059,12 +1390,17 @@ impl LstGpuiApp {
         self.move_horizontal(1, true, cx);
     }
 
-    fn handle_select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_vertical(-1, true, cx);
+    fn handle_select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_vertical(-1, true, window, cx);
     }
 
-    fn handle_select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_vertical(1, true, cx);
+    fn handle_select_down(
+        &mut self,
+        _: &SelectDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_vertical(1, true, window, cx);
     }
 
     fn handle_move_line_start(
@@ -1118,6 +1454,322 @@ impl LstGpuiApp {
         self.active_tab_mut().select_all();
         self.sync_primary_selection(cx);
         cx.notify();
+    }
+
+    fn handle_undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.active_tab_mut().undo() {
+            self.sync_find_after_edit();
+            self.reveal_active_cursor();
+            cx.notify();
+        }
+    }
+
+    fn handle_redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.active_tab_mut().redo() {
+            self.sync_find_after_edit();
+            self.reveal_active_cursor();
+            cx.notify();
+        }
+    }
+
+    fn handle_find_open(&mut self, _: &FindOpen, _: &mut Window, cx: &mut Context<Self>) {
+        if self.find.visible && !self.find.show_replace {
+            self.close_find();
+        } else {
+            self.open_find(false);
+        }
+        cx.notify();
+    }
+
+    fn handle_find_open_replace(
+        &mut self,
+        _: &FindOpenReplace,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.find.visible && self.find.show_replace {
+            self.close_find();
+        } else {
+            self.open_find(true);
+        }
+        cx.notify();
+    }
+
+    fn handle_find_next(&mut self, _: &FindNext, _: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_find_matches_current();
+        if self.find.matches.is_empty() {
+            return;
+        }
+        self.find.next();
+        self.select_current_find_match();
+        self.reveal_active_cursor();
+        cx.notify();
+    }
+
+    fn handle_find_prev(&mut self, _: &FindPrev, _: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_find_matches_current();
+        if self.find.matches.is_empty() {
+            return;
+        }
+        self.find.prev();
+        self.select_current_find_match();
+        self.reveal_active_cursor();
+        cx.notify();
+    }
+
+    fn handle_replace_one(&mut self, _: &ReplaceOne, _: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_find_matches_current();
+        let Some((start, end)) = self.find.current_match_range() else {
+            return;
+        };
+        let replacement = self.find.replacement.clone();
+        let range = {
+            let tab = self.active_tab();
+            position_to_char(&tab.buffer, start)..position_to_char(&tab.buffer, end)
+        };
+        self.active_tab_mut().push_undo_snapshot(EditKind::Other, true);
+        self.active_tab_mut().replace_char_range(range, &replacement);
+        self.sync_find_after_edit();
+        self.select_current_find_match();
+        self.reveal_active_cursor();
+        cx.notify();
+    }
+
+    fn handle_replace_all(&mut self, _: &ReplaceAll, _: &mut Window, cx: &mut Context<Self>) {
+        if self.find.query.is_empty() {
+            return;
+        }
+        let query = self.find.query.clone();
+        let replacement = self.find.replacement.clone();
+        let cursor = self.active_cursor_position();
+        let changed = self.apply_line_edit(|lines| {
+            let new_lines: Vec<String> = lines
+                .iter()
+                .map(|line| line.replace(&query, &replacement))
+                .collect();
+            if new_lines == *lines {
+                return None;
+            }
+            *lines = new_lines;
+            Some(((), cursor.line, cursor.column))
+        });
+        if changed.is_some() {
+            self.reindex_find_matches_to_nearest();
+            self.reveal_active_cursor();
+            cx.notify();
+        }
+    }
+
+    fn handle_goto_line_open(&mut self, _: &GotoLineOpen, _: &mut Window, cx: &mut Context<Self>) {
+        if self.goto_line.is_some() {
+            self.close_goto_line();
+        } else {
+            self.open_goto_line();
+        }
+        cx.notify();
+    }
+
+    fn handle_delete_line(&mut self, _: &DeleteLine, _: &mut Window, cx: &mut Context<Self>) {
+        let pos = self.active_cursor_position();
+        let changed = self.apply_line_edit(|lines| {
+            let line = editor_ops::delete_line(lines, pos.line);
+            Some(((), line, pos.column))
+        });
+        if changed.is_some() {
+            self.reveal_active_cursor();
+            cx.notify();
+        }
+    }
+
+    fn handle_move_line_up(&mut self, _: &MoveLineUp, _: &mut Window, cx: &mut Context<Self>) {
+        let pos = self.active_cursor_position();
+        let changed = self.apply_line_edit(|lines| {
+            let line = editor_ops::move_line_up(lines, pos.line)?;
+            Some(((), line, pos.column))
+        });
+        if changed.is_some() {
+            self.reveal_active_cursor();
+            cx.notify();
+        }
+    }
+
+    fn handle_move_line_down(
+        &mut self,
+        _: &MoveLineDown,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pos = self.active_cursor_position();
+        let changed = self.apply_line_edit(|lines| {
+            let line = editor_ops::move_line_down(lines, pos.line)?;
+            Some(((), line, pos.column))
+        });
+        if changed.is_some() {
+            self.reveal_active_cursor();
+            cx.notify();
+        }
+    }
+
+    fn handle_duplicate_line(
+        &mut self,
+        _: &DuplicateLine,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pos = self.active_cursor_position();
+        let changed = self.apply_line_edit(|lines| {
+            let line = editor_ops::duplicate_line(lines, pos.line);
+            Some(((), line, pos.column))
+        });
+        if changed.is_some() {
+            self.reveal_active_cursor();
+            cx.notify();
+        }
+    }
+
+    fn handle_toggle_comment(
+        &mut self,
+        _: &ToggleComment,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prefix = self
+            .active_tab()
+            .path
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| editor_ops::comment_prefix(e.to_string_lossy().as_ref()))
+            .unwrap_or("//");
+        let selected = self.active_tab().selected_range();
+        let cursor = self.active_cursor_position();
+        let start = char_to_position(&self.active_tab().buffer, selected.start);
+        let end = char_to_position(&self.active_tab().buffer, selected.end);
+        let first = start.line.min(end.line);
+        let last = start.line.max(end.line);
+        let changed = self.apply_line_edit(|lines| {
+            let (line, col) =
+                editor_ops::toggle_comment(lines, first, last, cursor.line, cursor.column, prefix);
+            Some(((), line, col))
+        });
+        if changed.is_some() {
+            self.reveal_active_cursor();
+            cx.notify();
+        }
+    }
+
+    fn submit_goto_line(&mut self) -> bool {
+        let Some(text) = self.goto_line.as_ref() else {
+            return false;
+        };
+        let Ok(line_num) = text.trim().parse::<usize>() else {
+            self.close_goto_line();
+            return false;
+        };
+        let target = line_num
+            .saturating_sub(1)
+            .min(self.active_tab().line_count().saturating_sub(1));
+        self.active_tab_mut().set_cursor_position(
+            Position {
+                line: target,
+                column: 0,
+            },
+            None,
+        );
+        self.close_goto_line();
+        true
+    }
+
+    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if event.keystroke.key == "escape" {
+            if self.goto_line.is_some() {
+                self.close_goto_line();
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+            if self.find.visible {
+                self.close_find();
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+        }
+
+        let Some(focus) = self.overlay_focus else {
+            return;
+        };
+
+        match focus {
+            OverlayFocus::FindQuery => {
+                if handle_overlay_input(
+                    &event.keystroke,
+                    &mut self.find.query,
+                    &mut self.find_query_cursor,
+                ) {
+                    self.reindex_find_matches_to_nearest();
+                    self.select_current_find_match();
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "tab" => {
+                        if self.find.show_replace {
+                            self.overlay_focus = Some(OverlayFocus::FindReplace);
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                    "enter" => {
+                        self.handle_find_next(&FindNext, _window, cx);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }
+            OverlayFocus::FindReplace => {
+                if handle_overlay_input(
+                    &event.keystroke,
+                    &mut self.find.replacement,
+                    &mut self.find_replace_cursor,
+                ) {
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "tab" => {
+                        self.overlay_focus = Some(OverlayFocus::FindQuery);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                    "enter" => {
+                        self.handle_replace_one(&ReplaceOne, _window, cx);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }
+            OverlayFocus::GotoLine => {
+                if let Some(text) = self.goto_line.as_mut() {
+                    if handle_overlay_input(&event.keystroke, text, &mut self.goto_line_cursor) {
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
+                }
+                if event.keystroke.key == "enter" {
+                    let changed = self.submit_goto_line();
+                    cx.stop_propagation();
+                    if changed {
+                        self.reveal_active_cursor();
+                        cx.notify();
+                    } else {
+                        cx.notify();
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1185,8 +1837,15 @@ impl EntityInputHandler for LstGpuiApp {
                 .map(|range| utf16_range_to_char_range(&tab.buffer, range))
                 .or_else(|| tab.marked_range.clone())
                 .unwrap_or_else(|| tab.selected_range());
+            let kind = if text.is_empty() {
+                EditKind::Delete
+            } else {
+                EditKind::Insert
+            };
+            tab.push_undo_snapshot(kind, text.chars().any(char::is_whitespace));
             tab.replace_char_range(range, text);
         }
+        self.sync_find_after_edit();
         self.record_operation("text_input", None, elapsed_ms(apply_started));
         self.reveal_active_cursor();
         cx.notify();
@@ -1210,6 +1869,7 @@ impl EntityInputHandler for LstGpuiApp {
                 .unwrap_or_else(|| tab.selected_range());
 
             let inserted_start = range.start;
+            tab.push_undo_snapshot(EditKind::Other, true);
             tab.replace_char_range(range, new_text);
             if !new_text.is_empty() {
                 let marked_end = inserted_start + new_text.chars().count();
@@ -1225,9 +1885,10 @@ impl EntityInputHandler for LstGpuiApp {
                 .unwrap_or_else(|| {
                     let cursor = inserted_start + new_text.chars().count();
                     cursor..cursor
-                });
+            });
             tab.selection_reversed = false;
         }
+        self.sync_find_after_edit();
         self.record_operation("ime_text_input", None, elapsed_ms(apply_started));
         self.reveal_active_cursor();
         cx.notify();
@@ -1243,15 +1904,10 @@ impl EntityInputHandler for LstGpuiApp {
         let tab = self.active_tab();
         let geometry = tab.geometry.borrow();
         let range = utf16_range_to_char_range(&tab.buffer, &range_utf16);
-        let row = geometry.rows.iter().find(|row| {
+        let row = geometry.rows.iter().rfind(|row| {
             range.start >= row.line_start_char && range.start <= row.logical_end_char
         })?;
-        let code_origin_x = element_bounds.left()
-            + if self.show_gutter {
-                px(GUTTER_WIDTH)
-            } else {
-                px(12.0)
-            };
+        let code_origin_x = element_bounds.left() + code_origin_pad(self.show_gutter);
         let start_x =
             code_origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| px(0.0));
         let end_x = code_origin_x
@@ -1278,23 +1934,54 @@ impl EntityInputHandler for LstGpuiApp {
 }
 
 impl Render for LstGpuiApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_tab = self.active_tab();
-        let total_content_height = buffer_content_height(active_tab.line_count());
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.active;
+        let show_gutter = self.show_gutter;
+        let show_wrap = self.show_wrap;
+        let viewport_width = self.tabs[active]
+            .geometry
+            .borrow()
+            .bounds
+            .map(|bounds| bounds.size.width)
+            .unwrap_or_else(|| px(WINDOW_WIDTH - 48.0));
+        let char_width = code_char_width(window);
+        let revision = self.tabs[active].revision();
+        let line_texts = self.tabs[active].lines();
+        let total_content_height = {
+            let mut cache = self.tabs[active].cache.borrow_mut();
+            let layout = ensure_wrap_layout(
+                &mut cache,
+                line_texts.as_ref(),
+                revision,
+                viewport_width,
+                char_width,
+                show_gutter,
+                show_wrap,
+            );
+            buffer_content_height(layout.total_rows)
+        };
+        let active_tab = &self.tabs[active];
         let buffer = active_tab.buffer.clone();
         let selection = active_tab.selection.clone();
         let cursor_char = active_tab.cursor_char();
-        let show_gutter = self.show_gutter;
         let viewport_scroll = active_tab.scroll.clone();
         let viewport_cache = active_tab.cache.clone();
         let viewport_geometry = active_tab.geometry.clone();
         let focus_handle = self.focus_handle.clone();
         let entity = cx.entity();
+        let status = self.status.clone();
+        let status_details = self.status_details();
+        let find_match_label = if self.find.matches.is_empty() {
+            "0/0".to_string()
+        } else {
+            format!("{}/{}", self.find.current + 1, self.find.matches.len())
+        };
 
         div()
             .flex()
             .flex_col()
             .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::handle_new_tab))
             .on_action(cx.listener(Self::handle_open_file))
             .on_action(cx.listener(Self::handle_save_file))
@@ -1302,8 +1989,7 @@ impl Render for LstGpuiApp {
             .on_action(cx.listener(Self::handle_close_active_tab))
             .on_action(cx.listener(Self::handle_next_tab))
             .on_action(cx.listener(Self::handle_prev_tab))
-            .on_action(cx.listener(Self::handle_toggle_gutter))
-            .on_action(cx.listener(Self::handle_reload_corpus))
+            .on_action(cx.listener(Self::handle_toggle_wrap))
             .on_action(cx.listener(Self::handle_copy_selection))
             .on_action(cx.listener(Self::handle_cut_selection))
             .on_action(cx.listener(Self::handle_paste_clipboard))
@@ -1324,111 +2010,139 @@ impl Render for LstGpuiApp {
             .on_action(cx.listener(Self::handle_insert_newline))
             .on_action(cx.listener(Self::handle_insert_tab))
             .on_action(cx.listener(Self::handle_select_all))
+            .on_action(cx.listener(Self::handle_undo))
+            .on_action(cx.listener(Self::handle_redo))
+            .on_action(cx.listener(Self::handle_find_open))
+            .on_action(cx.listener(Self::handle_find_open_replace))
+            .on_action(cx.listener(Self::handle_find_next))
+            .on_action(cx.listener(Self::handle_find_prev))
+            .on_action(cx.listener(Self::handle_replace_one))
+            .on_action(cx.listener(Self::handle_replace_all))
+            .on_action(cx.listener(Self::handle_goto_line_open))
+            .on_action(cx.listener(Self::handle_delete_line))
+            .on_action(cx.listener(Self::handle_move_line_up))
+            .on_action(cx.listener(Self::handle_move_line_down))
+            .on_action(cx.listener(Self::handle_duplicate_line))
+            .on_action(cx.listener(Self::handle_toggle_comment))
             .on_action(cx.listener(Self::handle_quit))
             .size_full()
-            .bg(rgb(0xEFE6D7))
-            .text_color(rgb(0x231A12))
+            .bg(rgb(COLOR_BG))
+            .text_color(rgb(COLOR_TEXT))
             .child(
                 div()
                     .flex_none()
                     .flex()
-                    .justify_between()
-                    .items_start()
-                    .gap_4()
-                    .px_4()
-                    .py_3()
-                    .bg(rgb(0xF7F1E6))
-                    .border_b_1()
-                    .border_color(rgb(0xC8BBA7))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_grow()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .child("lst GPUI Rewrite"),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(0x685C50))
-                                    .child(
-                                        "Custom Ropey editor core, fast custom-painted viewport, tabs, clipboard, and file I/O.",
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(0x8A3B12))
-                                    .child(self.metrics_line()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(0x685C50))
-                                    .child(self.shortcut_line()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(0x685C50))
-                                    .child(self.status.clone()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .gap_2()
-                            .child(Self::button("New", cx, |this, cx| {
-                                let tab = this.new_empty_tab();
-                                this.tabs.push(tab);
-                                this.active = this.tabs.len() - 1;
-                                this.status = "Created a new tab.".to_string();
-                                cx.notify();
-                            }))
-                            .child(Self::button("Open", cx, |this, cx| {
-                                this.open_files(cx)
-                            }))
-                            .child(Self::button("Save", cx, |this, cx| {
-                                this.save_active(cx)
-                            }))
-                            .child(Self::button("Save As", cx, |this, cx| {
-                                this.save_active_as(cx)
-                            }))
-                            .child(Self::button("Load 20k corpus", cx, |this, cx| {
-                                this.load_corpus(cx)
-                            }))
-                            .child(Self::button("Toggle gutter", cx, |this, cx| {
-                                this.show_gutter = !this.show_gutter;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .gap_1()
+                    .items_center()
+                    .gap_2()
                     .px_3()
                     .py_2()
-                    .bg(rgb(0xE4D8C7))
+                    .bg(rgb(COLOR_SURFACE0))
+                    .border_b_1()
+                    .border_color(rgb(COLOR_BORDER))
                     .children((0..self.tabs.len()).map(|ix| self.tab_button(ix, cx))),
             )
             .child(
-                div().flex_grow().p_3().child(
+                div()
+                    .flex_none()
+                    .when(self.find.visible, |container| {
+                        container.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .px_4()
+                                .py_2()
+                                .bg(rgb(COLOR_SURFACE1))
+                                .border_b_1()
+                                .border_color(rgb(COLOR_BORDER))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .font_family(".ZedMono")
+                                        .text_size(px(12.0))
+                                        .child(format!(
+                                            "{} find {}",
+                                            if self.overlay_focus == Some(OverlayFocus::FindQuery) {
+                                                ">"
+                                            } else {
+                                                " "
+                                            },
+                                            self.find.query
+                                        ))
+                                        .when(self.find.show_replace, |column| {
+                                            column.child(format!(
+                                                "{} replace {}",
+                                                if self.overlay_focus
+                                                    == Some(OverlayFocus::FindReplace)
+                                                {
+                                                    ">"
+                                                } else {
+                                                    " "
+                                                },
+                                                self.find.replacement
+                                            ))
+                                        })
+                                        .child(format!("matches {find_match_label}")),
+                                )
+                                .child(
+                                    div()
+                                        .flex_grow()
+                                        .text_right()
+                                        .font_family(".ZedMono")
+                                        .text_size(px(12.0))
+                                        .text_color(rgb(COLOR_MUTED))
+                                        .child(if self.find.show_replace {
+                                            "enter next  shift+f3 prev  tab field  esc close"
+                                        } else {
+                                            "enter next  shift+f3 prev  ctrl+h replace  esc close"
+                                        }),
+                                ),
+                        )
+                    })
+                    .when(self.goto_line.is_some(), |container| {
+                        container.child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .gap_3()
+                                .px_4()
+                                .py_2()
+                                .bg(rgb(COLOR_SURFACE1))
+                                .border_b_1()
+                                .border_color(rgb(COLOR_BORDER))
+                                .font_family(".ZedMono")
+                                .text_size(px(12.0))
+                                .child(format!(
+                                    "{} goto {}",
+                                    if self.overlay_focus == Some(OverlayFocus::GotoLine) {
+                                        ">"
+                                    } else {
+                                        " "
+                                    },
+                                    self.goto_line.clone().unwrap_or_default()
+                                ))
+                                .child(
+                                    div()
+                                        .flex_grow()
+                                        .text_right()
+                                        .text_color(rgb(COLOR_MUTED))
+                                        .child("enter jump  esc close"),
+                                ),
+                        )
+                    }),
+            )
+            .child(
+                div().flex_grow().px_3().pb_3().child(
                     div()
                         .id("buffer-viewport")
                         .relative()
                         .h_full()
                         .w_full()
                         .border_1()
-                        .border_color(rgb(0xC8BBA7))
-                        .bg(rgb(0xFFFDF8))
+                        .border_color(rgb(COLOR_BORDER))
+                        .bg(rgb(COLOR_SURFACE1))
                         .font_family(".ZedMono")
                         .text_size(px(CODE_FONT_SIZE))
                         .line_height(px(ROW_HEIGHT))
@@ -1464,11 +2178,15 @@ impl Render for LstGpuiApp {
                                         move |bounds, window, _cx| {
                                             prepare_viewport_paint_state(
                                                 &buffer,
+                                                line_texts.as_ref(),
+                                                revision,
                                                 show_gutter,
+                                                show_wrap,
                                                 &viewport_scroll,
                                                 &viewport_cache,
                                                 &viewport_geometry,
                                                 bounds,
+                                                char_width,
                                                 window,
                                             )
                                         },
@@ -1495,11 +2213,43 @@ impl Render for LstGpuiApp {
                         ),
                 ),
             )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .gap_3()
+                    .px_4()
+                    .py_2()
+                    .bg(rgb(COLOR_SURFACE0))
+                    .border_t_1()
+                    .border_color(rgb(COLOR_BORDER))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_sm()
+                            .text_color(rgb(COLOR_SUBTEXT))
+                            .child(status),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_family(".ZedMono")
+                            .text_size(px(12.0))
+                            .text_color(rgb(COLOR_MUTED))
+                            .child(status_details),
+                    ),
+            )
     }
 }
 
-fn buffer_content_height(line_count: usize) -> Pixels {
-    px((line_count.max(1) as f32) * ROW_HEIGHT)
+fn buffer_content_height(visual_rows: usize) -> Pixels {
+    px((visual_rows.max(1) as f32) * ROW_HEIGHT)
+}
+
+fn trim_display_line(line: &str) -> &str {
+    line.strip_suffix('\r').unwrap_or(line)
 }
 
 fn line_display_text(buffer: &Rope, line_ix: usize) -> SharedString {
@@ -1514,17 +2264,128 @@ fn line_display_char_len(buffer: &Rope, line_ix: usize) -> usize {
     line_display_text(buffer, line_ix).chars().count()
 }
 
-fn visible_line_range(
+fn code_origin_pad(show_gutter: bool) -> Pixels {
+    if show_gutter {
+        px(GUTTER_WIDTH)
+    } else {
+        px(EDITOR_LEFT_PAD)
+    }
+}
+
+fn code_char_width(window: &mut Window) -> Pixels {
+    let style = window.text_style();
+    let font_size = style.font_size.to_pixels(window.rem_size());
+    let probe = SharedString::from("00000000");
+    let shaped = window.text_system().shape_line(
+        probe.clone(),
+        font_size,
+        &[TextRun {
+            len: probe.len(),
+            font: style.font(),
+            color: rgb(COLOR_TEXT).into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        None,
+    );
+
+    if shaped.width > px(0.0) {
+        shaped.width / probe.chars().count() as f32
+    } else {
+        px(WRAP_CHAR_WIDTH_FALLBACK)
+    }
+}
+
+fn wrap_columns_for_viewport(
+    viewport_width: Pixels,
+    line_count: usize,
+    char_width: Pixels,
+    show_gutter: bool,
+    show_wrap: bool,
+) -> usize {
+    if !show_wrap {
+        return usize::MAX;
+    }
+
+    wrap_columns_with_gutter(
+        viewport_width / px(1.0),
+        (char_width / px(1.0)).max(WRAP_CHAR_WIDTH_FALLBACK),
+        line_count,
+        show_gutter,
+        EDITOR_LEFT_PAD,
+        EDITOR_RIGHT_PAD,
+        GUTTER_LEFT_PAD,
+        GUTTER_SEPARATOR_WIDTH,
+    )
+}
+
+fn ensure_wrap_layout(
+    cache: &mut ViewportCache,
+    lines: &[String],
+    revision: u64,
+    viewport_width: Pixels,
+    char_width: Pixels,
+    show_gutter: bool,
+    show_wrap: bool,
+) -> WrapLayout {
+    let wrap_columns =
+        wrap_columns_for_viewport(viewport_width, lines.len(), char_width, show_gutter, show_wrap);
+    if let Some(layout) = cache.wrap_layout.as_ref() {
+        if layout.revision == revision
+            && layout.wrap_columns == wrap_columns
+            && layout.show_wrap == show_wrap
+            && layout.line_row_starts.len() == lines.len() + 1
+        {
+            return layout.clone();
+        }
+    }
+
+    cache.code_lines.clear();
+
+    let mut line_row_starts = Vec::with_capacity(lines.len() + 1);
+    let mut total_rows = 0usize;
+    line_row_starts.push(0);
+    for line in lines {
+        let display = trim_display_line(line);
+        total_rows += if show_wrap {
+            visual_line_count(display, wrap_columns)
+        } else {
+            1
+        };
+        line_row_starts.push(total_rows);
+    }
+
+    let layout = WrapLayout {
+        revision,
+        show_wrap,
+        wrap_columns,
+        line_row_starts,
+        total_rows: total_rows.max(1),
+    };
+    cache.wrap_layout = Some(layout.clone());
+    layout
+}
+
+fn visible_visual_row_range(
     scroll_top: Pixels,
     viewport_height: Pixels,
-    total_lines: usize,
+    total_rows: usize,
 ) -> Range<usize> {
     let start =
         ((scroll_top / px(ROW_HEIGHT)).floor() as usize).saturating_sub(VIEWPORT_OVERSCAN_LINES);
     let end = (((scroll_top + viewport_height) / px(ROW_HEIGHT)).ceil() as usize)
         .saturating_add(VIEWPORT_OVERSCAN_LINES)
-        .min(total_lines.max(1));
+        .min(total_rows.max(1));
     start..end.max(start.saturating_add(1))
+}
+
+fn line_for_visual_row(layout: &WrapLayout, visual_row: usize) -> usize {
+    layout
+        .line_row_starts
+        .partition_point(|start| *start <= visual_row)
+        .saturating_sub(1)
+        .min(layout.line_row_starts.len().saturating_sub(2))
 }
 
 fn shape_cached_line(
@@ -1565,13 +2426,55 @@ fn shape_cached_line(
     Some(shaped)
 }
 
+fn shape_cached_segment(
+    cache: &mut HashMap<(usize, usize, usize), CachedShapedLine>,
+    key: (usize, usize, usize),
+    text: SharedString,
+    base_run: &TextRun,
+    font_size: Pixels,
+    window: &mut Window,
+) -> Option<ShapedLine> {
+    if text.is_empty() {
+        return None;
+    }
+
+    if let Some(cached) = cache.get(&key) {
+        if cached.text == text {
+            return Some(cached.shaped.clone());
+        }
+    }
+
+    let shaped = window.text_system().shape_line(
+        text.clone(),
+        font_size,
+        &[TextRun {
+            len: text.len(),
+            ..base_run.clone()
+        }],
+        None,
+    );
+
+    cache.insert(
+        key,
+        CachedShapedLine {
+            text,
+            shaped: shaped.clone(),
+        },
+    );
+    Some(shaped)
+}
+
 fn prepare_viewport_paint_state(
     buffer: &Rope,
+    lines: &[String],
+    revision: u64,
     show_gutter: bool,
+    show_wrap: bool,
     viewport_scroll: &ScrollHandle,
     viewport_cache: &Rc<RefCell<ViewportCache>>,
     viewport_geometry: &Rc<RefCell<ViewportGeometry>>,
     bounds: Bounds<Pixels>,
+    char_width: Pixels,
     window: &mut Window,
 ) -> ViewportPaintState {
     let viewport_height = if bounds.size.height > px(0.0) {
@@ -1587,13 +2490,12 @@ fn prepare_viewport_paint_state(
             px(0.0)
         }
     };
-    let visible = visible_line_range(scroll_top, viewport_height, buffer.len_lines());
     let style = window.text_style();
     let font_size = style.font_size.to_pixels(window.rem_size());
     let code_run = TextRun {
         len: 0,
         font: style.font(),
-        color: rgb(0x201A16).into(),
+        color: rgb(COLOR_TEXT).into(),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -1601,61 +2503,96 @@ fn prepare_viewport_paint_state(
     let gutter_run = TextRun {
         len: 0,
         font: style.font(),
-        color: rgb(0x8D7F70).into(),
+        color: rgb(COLOR_MUTED).into(),
         background_color: None,
         underline: None,
         strikethrough: None,
     };
 
-    let mut rows = Vec::with_capacity(visible.len());
     let mut cache = viewport_cache.borrow_mut();
+    let layout = ensure_wrap_layout(
+        &mut cache,
+        lines,
+        revision,
+        bounds.size.width,
+        char_width,
+        show_gutter,
+        show_wrap,
+    );
+    let visible_rows = visible_visual_row_range(scroll_top, viewport_height, layout.total_rows);
+    let first_line = line_for_visual_row(&layout, visible_rows.start);
+    let last_visible_line = line_for_visual_row(&layout, visible_rows.end.saturating_sub(1));
     cache
         .code_lines
-        .retain(|line_ix, _| visible.contains(line_ix));
+        .retain(|(line_ix, _, _), _| *line_ix >= first_line && *line_ix <= last_visible_line);
     cache
         .gutter_lines
-        .retain(|line_ix, _| show_gutter && visible.contains(line_ix));
+        .retain(|line_ix, _| show_gutter && *line_ix >= first_line && *line_ix <= last_visible_line);
 
-    for line_ix in visible {
-        let row_top = bounds.top() + px((line_ix as f32) * ROW_HEIGHT) - scroll_top;
-        let line_start_char = buffer.line_to_char(line_ix);
-        let display_text = line_display_text(buffer, line_ix);
-        let display_end_char = line_start_char + display_text.chars().count();
+    let mut rows = Vec::new();
+    for line_ix in first_line..=last_visible_line {
+        let display_source = trim_display_line(&lines[line_ix]);
+        let display_len = display_source.chars().count();
         let logical_end_char = if line_ix + 1 < buffer.len_lines() {
             buffer.line_to_char(line_ix + 1)
         } else {
             buffer.len_chars()
         };
-        let code_line = shape_cached_line(
-            &mut cache.code_lines,
-            line_ix,
-            display_text,
-            &code_run,
-            font_size,
-            window,
-        );
-        let gutter_line = if show_gutter {
-            shape_cached_line(
-                &mut cache.gutter_lines,
-                line_ix,
-                SharedString::from(format!("{:>6}", line_ix + 1)),
-                &gutter_run,
+        let line_start_char = buffer.line_to_char(line_ix);
+        let segments = if show_wrap {
+            wrap_segments(display_source, layout.wrap_columns)
+        } else {
+            vec![lst_core::wrap::WrappedSegment {
+                start_col: 0,
+                end_col: display_len,
+                text: display_source.to_string(),
+            }]
+        };
+        let segment_count = segments.len();
+
+        for (segment_ix, segment) in segments.into_iter().enumerate() {
+            let visual_row = layout.line_row_starts[line_ix] + segment_ix;
+            if !visible_rows.contains(&visual_row) {
+                continue;
+            }
+
+            let row_top = bounds.top() + px((visual_row as f32) * ROW_HEIGHT) - scroll_top;
+            let segment_start_char = line_start_char + segment.start_col;
+            let segment_end_char = line_start_char + segment.end_col;
+            let code_line = shape_cached_segment(
+                &mut cache.code_lines,
+                (line_ix, segment.start_col, segment.end_col),
+                SharedString::from(segment.text),
+                &code_run,
                 font_size,
                 window,
-            )
-        } else {
-            None
-        };
+            );
+            let gutter_line = if show_gutter && segment_ix == 0 {
+                shape_cached_line(
+                    &mut cache.gutter_lines,
+                    line_ix,
+                    SharedString::from(format!("{:>6}", line_ix + 1)),
+                    &gutter_run,
+                    font_size,
+                    window,
+                )
+            } else {
+                None
+            };
 
-        rows.push(PaintedRow {
-            line_ix,
-            row_top,
-            line_start_char,
-            display_end_char,
-            logical_end_char,
-            code_line,
-            gutter_line,
-        });
+            rows.push(PaintedRow {
+                row_top,
+                line_start_char: segment_start_char,
+                display_end_char: segment_end_char,
+                logical_end_char: if segment_ix + 1 == segment_count {
+                    logical_end_char
+                } else {
+                    segment_end_char
+                },
+                code_line,
+                gutter_line,
+            });
+        }
     }
 
     *viewport_geometry.borrow_mut() = ViewportGeometry {
@@ -1677,26 +2614,24 @@ fn paint_viewport(
     cx: &mut App,
 ) {
     let line_height = window.line_height();
-    let gutter_origin_x = bounds.left() + px(8.0);
-    let gutter_width = px(GUTTER_WIDTH - 16.0);
-    let code_origin_x = bounds.left()
-        + if show_gutter {
-            px(GUTTER_WIDTH)
-        } else {
-            px(12.0)
-        };
+    let gutter_origin_x = bounds.left() + px(GUTTER_LEFT_PAD);
+    let gutter_width = px(GUTTER_WIDTH - GUTTER_LEFT_PAD - 8.0);
+    let code_origin_x = bounds.left() + code_origin_pad(show_gutter);
 
     for row in paint_state.rows {
+        let cursor_in_row = cursor_char >= row.line_start_char && cursor_char <= row.logical_end_char;
         let row_bounds = Bounds::new(
             point(bounds.left(), row.row_top),
             size(bounds.size.width, px(ROW_HEIGHT)),
         );
-        let row_background = if row.line_ix % 2 == 0 {
-            rgb(0xFFFDF8)
-        } else {
-            rgb(0xF6EFE4)
-        };
-        window.paint_quad(fill(row_bounds, row_background));
+        window.paint_quad(fill(
+            row_bounds,
+            if cursor_in_row {
+                rgb(COLOR_CURRENT_LINE)
+            } else {
+                rgb(COLOR_SURFACE1)
+            },
+        ));
 
         if show_gutter {
             window.paint_quad(fill(
@@ -1704,7 +2639,7 @@ fn paint_viewport(
                     point(bounds.left(), row.row_top),
                     size(px(GUTTER_WIDTH), px(ROW_HEIGHT)),
                 ),
-                rgb(0xF1E7D8),
+                rgb(COLOR_GUTTER),
             ));
         }
 
@@ -1729,7 +2664,7 @@ fn paint_viewport(
                             row.row_top + px(ROW_HEIGHT),
                         ),
                     ),
-                    rgb(0xBFD7EA),
+                    rgb(COLOR_SELECTION),
                 ));
             }
         }
@@ -1743,11 +2678,7 @@ fn paint_viewport(
             let _ = code_line.paint(point(code_origin_x, row.row_top), line_height, window, cx);
         }
 
-        if focused
-            && selection.start == selection.end
-            && cursor_char >= row.line_start_char
-            && cursor_char <= row.logical_end_char
-        {
+        if focused && selection.start == selection.end && cursor_in_row {
             let cursor_x = code_origin_x
                 + x_for_global_char(&row, cursor_char.min(row.display_end_char))
                     .unwrap_or_else(|| px(0.0));
@@ -1756,10 +2687,80 @@ fn paint_viewport(
                     point(cursor_x, row.row_top),
                     size(px(CURSOR_WIDTH), px(ROW_HEIGHT)),
                 ),
-                rgb(0x1C6B74),
+                rgb(COLOR_CARET),
             ));
         }
     }
+}
+
+fn visual_row_for_char(tab: &EditorTab, layout: &WrapLayout) -> Option<usize> {
+    let cursor = tab.cursor_char().min(tab.buffer.len_chars());
+    let line = tab.buffer.char_to_line(cursor);
+    let line_start = tab.buffer.line_to_char(line);
+    let display_text = line_display_text(&tab.buffer, line);
+    let column = cursor
+        .saturating_sub(line_start)
+        .min(display_text.chars().count());
+    let row_in_line = if layout.show_wrap {
+        cursor_visual_row_in_line(display_text.as_ref(), column, layout.wrap_columns)
+    } else {
+        0
+    };
+    layout.line_row_starts.get(line).copied().map(|row| row + row_in_line)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TokenClass {
+    Whitespace,
+    Word,
+    Symbol,
+}
+
+fn token_class(ch: char) -> TokenClass {
+    if ch.is_whitespace() {
+        TokenClass::Whitespace
+    } else if ch.is_alphanumeric() || ch == '_' {
+        TokenClass::Word
+    } else {
+        TokenClass::Symbol
+    }
+}
+
+fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
+    let clamped = char_index.min(buffer.len_chars());
+    let line = buffer.char_to_line(clamped);
+    let line_start = buffer.line_to_char(line);
+    let display_text = line_display_text(buffer, line);
+    let chars: Vec<char> = display_text.chars().collect();
+    if chars.is_empty() {
+        return clamped..clamped;
+    }
+
+    let local = clamped
+        .saturating_sub(line_start)
+        .min(chars.len().saturating_sub(1));
+    let class = token_class(chars[local]);
+    let mut start = local;
+    while start > 0 && token_class(chars[start - 1]) == class {
+        start -= 1;
+    }
+    let mut end = local + 1;
+    while end < chars.len() && token_class(chars[end]) == class {
+        end += 1;
+    }
+    (line_start + start)..(line_start + end)
+}
+
+fn line_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
+    let clamped = char_index.min(buffer.len_chars());
+    let line = buffer.char_to_line(clamped);
+    let start = buffer.line_to_char(line);
+    let end = if line + 1 < buffer.len_lines() {
+        buffer.line_to_char(line + 1)
+    } else {
+        buffer.len_chars()
+    };
+    start..end
 }
 
 fn x_for_global_char(row: &PaintedRow, global_char: usize) -> Option<Pixels> {
@@ -1794,6 +2795,22 @@ fn line_indent_prefix(buffer: &Rope, line_ix: usize) -> String {
         .collect()
 }
 
+fn preferred_newline_for_buffer(buffer: &Rope) -> &'static str {
+    let mut chars = buffer.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                return "\r\n";
+            }
+            return "\n";
+        }
+        if ch == '\n' {
+            return "\n";
+        }
+    }
+    "\n"
+}
+
 fn char_to_utf16(buffer: &Rope, char_offset: usize) -> usize {
     buffer
         .chars()
@@ -1821,6 +2838,71 @@ fn char_range_to_utf16_range(buffer: &Rope, range: &Range<usize>) -> Range<usize
 
 fn utf16_range_to_char_range(buffer: &Rope, range: &Range<usize>) -> Range<usize> {
     utf16_to_char(buffer, range.start)..utf16_to_char(buffer, range.end)
+}
+
+fn handle_overlay_input(keystroke: &gpui::Keystroke, text: &mut String, cursor: &mut usize) -> bool {
+    match keystroke.key.as_str() {
+        "backspace" => {
+            if *cursor == 0 {
+                return true;
+            }
+            let start_char = cursor.saturating_sub(1);
+            let start = char_to_byte(text, start_char);
+            let end = char_to_byte(text, *cursor);
+            text.replace_range(start..end, "");
+            *cursor = start_char;
+            return true;
+        }
+        "delete" => {
+            let char_count = text.chars().count();
+            if *cursor >= char_count {
+                return true;
+            }
+            let start = char_to_byte(text, *cursor);
+            let end = char_to_byte(text, *cursor + 1);
+            text.replace_range(start..end, "");
+            return true;
+        }
+        "left" => {
+            *cursor = cursor.saturating_sub(1);
+            return true;
+        }
+        "right" => {
+            *cursor = (*cursor + 1).min(text.chars().count());
+            return true;
+        }
+        "home" => {
+            *cursor = 0;
+            return true;
+        }
+        "end" => {
+            *cursor = text.chars().count();
+            return true;
+        }
+        _ => {}
+    }
+
+    if keystroke.modifiers.control || keystroke.modifiers.alt || keystroke.modifiers.platform {
+        return false;
+    }
+
+    let inserted = keystroke
+        .key_char
+        .as_deref()
+        .filter(|value| !value.is_empty() && *value != "\n" && *value != "\t")
+        .map(str::to_string)
+        .or_else(|| {
+            let value = keystroke.key.as_str();
+            (value.chars().count() == 1).then(|| value.to_string())
+        });
+
+    let Some(inserted) = inserted else {
+        return false;
+    };
+    let byte = char_to_byte(text, *cursor);
+    text.insert_str(byte, &inserted);
+    *cursor += inserted.chars().count();
+    true
 }
 
 fn elapsed_ms(started: Instant) -> f64 {
@@ -1938,16 +3020,33 @@ fn main() {
             KeyBinding::new("cmd-shift-]", NextTab, None),
             KeyBinding::new("ctrl-shift-tab", PrevTab, None),
             KeyBinding::new("cmd-shift-[", PrevTab, None),
-            KeyBinding::new("ctrl-g", ToggleGutter, None),
-            KeyBinding::new("cmd-g", ToggleGutter, None),
-            KeyBinding::new("ctrl-r", ReloadCorpus, None),
-            KeyBinding::new("cmd-r", ReloadCorpus, None),
+            KeyBinding::new("alt-z", ToggleWrap, None),
             KeyBinding::new("ctrl-c", CopySelection, None),
             KeyBinding::new("cmd-c", CopySelection, None),
             KeyBinding::new("ctrl-x", CutSelection, None),
             KeyBinding::new("cmd-x", CutSelection, None),
             KeyBinding::new("ctrl-v", PasteClipboard, None),
             KeyBinding::new("cmd-v", PasteClipboard, None),
+            KeyBinding::new("ctrl-z", Undo, None),
+            KeyBinding::new("cmd-z", Undo, None),
+            KeyBinding::new("ctrl-y", Redo, None),
+            KeyBinding::new("cmd-shift-z", Redo, None),
+            KeyBinding::new("ctrl-f", FindOpen, None),
+            KeyBinding::new("cmd-f", FindOpen, None),
+            KeyBinding::new("ctrl-h", FindOpenReplace, None),
+            KeyBinding::new("cmd-h", FindOpenReplace, None),
+            KeyBinding::new("f3", FindNext, None),
+            KeyBinding::new("shift-f3", FindPrev, None),
+            KeyBinding::new("ctrl-g", GotoLineOpen, None),
+            KeyBinding::new("cmd-g", GotoLineOpen, None),
+            KeyBinding::new("alt-up", MoveLineUp, None),
+            KeyBinding::new("alt-down", MoveLineDown, None),
+            KeyBinding::new("ctrl-shift-k", DeleteLine, None),
+            KeyBinding::new("cmd-shift-k", DeleteLine, None),
+            KeyBinding::new("ctrl-shift-d", DuplicateLine, None),
+            KeyBinding::new("cmd-shift-d", DuplicateLine, None),
+            KeyBinding::new("ctrl-/", ToggleComment, None),
+            KeyBinding::new("cmd-/", ToggleComment, None),
             KeyBinding::new("left", MoveLeft, None),
             KeyBinding::new("right", MoveRight, None),
             KeyBinding::new("up", MoveUp, None),

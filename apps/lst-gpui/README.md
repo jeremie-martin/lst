@@ -2,7 +2,7 @@
 
 This crate is the GPUI rewrite track for `lst`.
 
-It is intentionally parallel to the shipping `iced` app for now. The goal is to move the editor core onto a custom `Ropey` + GPUI stack without breaking the current release build while feature parity is still incomplete.
+It is intentionally parallel to the shipping `iced` app for now. The current implementation extracts the reusable document/search/line-edit logic into `crates/lst-core` and keeps the GPUI app focused on rendering, input plumbing, clipboard integration, and benchmarking.
 
 ## Run
 
@@ -23,24 +23,27 @@ DISPLAY=:1 cargo run -- --bench-append-corpus
 
 Current real-display measurements on `DISPLAY=:1` with `target/release/lst-gpui`:
 
-- `--bench-replace-corpus`: `apply_ms=0.734`, `action_to_next_frame_ms=44.454`
-- `--bench-append-corpus`: `apply_ms=0.658`, `action_to_next_frame_ms=55.505`
+- `--bench-replace-corpus`: `apply_ms=1.493`, `action_to_next_frame_ms=44.450`
+- `--bench-append-corpus`: `apply_ms=1.304`, `action_to_next_frame_ms=55.640`
 
 ## Current Features
 
 - editable `Ropey` buffer with cursor and selection
-- custom-painted viewport with gutter
-- mouse positioning and drag selection
+- custom-painted dark viewport with gutter and soft wrap
+- mouse positioning, drag selection, double-click word selection, and triple-click line selection
 - clipboard copy/cut/paste
 - multiple tabs
 - open files from CLI or file dialog
 - save and save-as
+- undo / redo
+- find / replace overlay
+- goto-line overlay
+- line operations: delete, duplicate, move up/down, toggle comment
+- visual up/down movement across wrapped rows
 - retained large-paste auto-bench mode
 
 ## Missing Parity
 
 - syntax highlighting
-- search / replace
-- word wrap
 - Vim mode
 - autosave and the rest of the current `iced` app behavior
