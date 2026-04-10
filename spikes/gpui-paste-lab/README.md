@@ -11,6 +11,8 @@ It also lives in its own nested Cargo project on purpose. Putting GPUI in the ro
 ```sh
 cd spikes/gpui-paste-lab
 cargo run
+DISPLAY=:1 cargo run -- --bench-replace-corpus
+DISPLAY=:1 cargo run -- --bench-append-corpus
 ```
 
 ## Status
@@ -31,6 +33,8 @@ cargo run
 
 Every bulk operation logs timing to stderr in the form `lst_gpui_spike ... apply_ms=...`.
 
+Auto-bench mode runs one bulk replace or append after the first rendered frame, waits for the next frame, prints a `lst_gpui_spike bench ...` line, and exits.
+
 ## Scope
 
 The spike currently includes:
@@ -39,6 +43,7 @@ The spike currently includes:
 - lazy line rendering via `gpui::uniform_list`
 - a simple action bar
 - clipboard-driven replace/append operations
+- an auto-bench mode for bulk replace and append from the 20k corpus or any file
 
 It does not include:
 
@@ -46,4 +51,3 @@ It does not include:
 - syntax highlighting
 - search
 - file saving/loading
-- a benchmark harness

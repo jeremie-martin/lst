@@ -3,7 +3,7 @@ use gpui::{
     Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size, uniform_list,
 };
 use ropey::Rope;
-use std::{ops::Range, time::Instant};
+use std::{fs, ops::Range, process, time::Instant};
 
 const WINDOW_WIDTH: f32 = 1360.0;
 const WINDOW_HEIGHT: f32 = 860.0;
@@ -50,6 +50,35 @@ impl OperationStats {
             ),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BenchAction {
+    Replace,
+    Append,
+}
+
+impl BenchAction {
+    fn action_name(self) -> &'static str {
+        match self {
+            Self::Replace => "replace",
+            Self::Append => "append",
+        }
+    }
+
+    fn operation_label(self) -> &'static str {
+        match self {
+            Self::Replace => "bench_replace",
+            Self::Append => "bench_append",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AutoBench {
+    action: BenchAction,
+    source: String,
+    text: String,
 }
 
 struct GpuiPasteLab {
@@ -220,6 +249,44 @@ impl GpuiPasteLab {
             if self.show_gutter { "on" } else { "off" }
         );
         cx.notify();
+    }
+
+    fn run_auto_bench(
+        &mut self,
+        bench: AutoBench,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        startup_to_action_ms: f64,
+        process_started: Instant,
+    ) {
+        let action_started = Instant::now();
+
+        match bench.action {
+            BenchAction::Replace => {
+                self.replace_all_text(bench.action.operation_label(), &bench.text, None, cx)
+            }
+            BenchAction::Append => {
+                self.append_text(bench.action.operation_label(), &bench.text, None, cx)
+            }
+        }
+
+        let operation = self.last_operation.clone();
+        let action = bench.action;
+        let source = bench.source;
+
+        window.on_next_frame(move |_window, cx| {
+            eprintln!(
+                "lst_gpui_spike bench action={} source={} startup_to_action_ms={startup_to_action_ms:.3} action_to_next_frame_ms={:.3} total_wall_ms={:.3} final_bytes={} final_lines={} apply_ms={:.3}",
+                action.action_name(),
+                source,
+                elapsed_ms(action_started),
+                elapsed_ms(process_started),
+                operation.bytes,
+                operation.lines,
+                operation.apply_ms,
+            );
+            cx.quit();
+        });
     }
 
     fn load_corpus(&mut self, _: &LoadCorpus, _: &mut Window, cx: &mut Context<Self>) {
@@ -423,7 +490,96 @@ fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
+fn usage() -> &'static str {
+    "Usage:
+  cargo run
+  cargo run -- --bench-replace-corpus
+  cargo run -- --bench-append-corpus
+  cargo run -- --bench-replace-file /path/to/file.rs
+  cargo run -- --bench-append-file /path/to/file.rs"
+}
+
+fn parse_auto_bench() -> Option<AutoBench> {
+    let mut args = std::env::args().skip(1);
+    let Some(flag) = args.next() else {
+        return None;
+    };
+
+    if flag == "--help" || flag == "-h" {
+        println!("{}", usage());
+        process::exit(0);
+    }
+
+    let finish_file_arg = |action: BenchAction, path: String, trailing: Option<String>| {
+        if let Some(extra) = trailing {
+            eprintln!("unexpected extra argument: {extra}\n\n{}", usage());
+            process::exit(2);
+        }
+
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) => {
+                eprintln!("failed to read benchmark file {path}: {err}");
+                process::exit(2);
+            }
+        };
+
+        AutoBench {
+            action,
+            source: path,
+            text,
+        }
+    };
+
+    match flag.as_str() {
+        "--bench-replace-corpus" => {
+            if let Some(extra) = args.next() {
+                eprintln!("unexpected extra argument: {extra}\n\n{}", usage());
+                process::exit(2);
+            }
+
+            Some(AutoBench {
+                action: BenchAction::Replace,
+                source: CORPUS_PATH.to_string(),
+                text: PREMADE_CORPUS.to_string(),
+            })
+        }
+        "--bench-append-corpus" => {
+            if let Some(extra) = args.next() {
+                eprintln!("unexpected extra argument: {extra}\n\n{}", usage());
+                process::exit(2);
+            }
+
+            Some(AutoBench {
+                action: BenchAction::Append,
+                source: CORPUS_PATH.to_string(),
+                text: PREMADE_CORPUS.to_string(),
+            })
+        }
+        "--bench-replace-file" => {
+            let Some(path) = args.next() else {
+                eprintln!("missing file path for --bench-replace-file\n\n{}", usage());
+                process::exit(2);
+            };
+            Some(finish_file_arg(BenchAction::Replace, path, args.next()))
+        }
+        "--bench-append-file" => {
+            let Some(path) = args.next() else {
+                eprintln!("missing file path for --bench-append-file\n\n{}", usage());
+                process::exit(2);
+            };
+            Some(finish_file_arg(BenchAction::Append, path, args.next()))
+        }
+        _ => {
+            eprintln!("unknown argument: {flag}\n\n{}", usage());
+            process::exit(2);
+        }
+    }
+}
+
 fn main() {
+    let auto_bench = parse_auto_bench();
+    let process_started = Instant::now();
     let has_graphical_env =
         std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
 
@@ -431,10 +587,10 @@ fn main() {
         eprintln!(
             "lst_gpui_spike requires a graphical session. Run it from a real X11 or Wayland desktop."
         );
-        std::process::exit(1);
+        process::exit(1);
     }
 
-    Application::new().run(|cx: &mut App| {
+    Application::new().run(move |cx: &mut App| {
         cx.bind_keys([
             KeyBinding::new("ctrl-r", LoadCorpus, None),
             KeyBinding::new("cmd-r", LoadCorpus, None),
@@ -464,15 +620,37 @@ fn main() {
                 eprintln!(
                     "lst_gpui_spike failed to open a GPUI window: {err}. On this host, Xvfb is not sufficient because GPUI surface creation requires a real presentation backend."
                 );
-                std::process::exit(1);
+                process::exit(1);
             }
         };
 
-        window
+        let view = window
             .update(cx, |view, window, cx| {
                 window.focus(&view.focus_handle(cx));
                 cx.activate(true);
+                cx.entity()
             })
             .unwrap();
+
+        if let Some(bench) = auto_bench.clone() {
+            window
+                .update(cx, move |_view, window, _cx| {
+                    let view = view.clone();
+                    let bench = bench.clone();
+                    window.on_next_frame(move |window, cx| {
+                        let startup_to_action_ms = elapsed_ms(process_started);
+                        let _ = view.update(cx, |view, cx| {
+                            view.run_auto_bench(
+                                bench,
+                                window,
+                                cx,
+                                startup_to_action_ms,
+                                process_started,
+                            );
+                        });
+                    });
+                })
+                .unwrap();
+        }
     });
 }
