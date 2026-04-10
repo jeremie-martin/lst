@@ -4,8 +4,7 @@ use gpui::{
 };
 
 use crate::theme::{
-    COLOR_ACCENT, COLOR_BORDER, COLOR_SUBTEXT, COLOR_SURFACE1, COLOR_SURFACE2, ICON_BUTTON_SIZE,
-    TAB_TEXT_SIZE,
+    COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_SURFACE2, ICON_BUTTON_SIZE, TAB_TEXT_SIZE,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,24 +57,23 @@ impl ParentElement for IconButton {
 impl RenderOnce for IconButton {
     fn render(self, _window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
         let background = if self.emphasized {
+            rgb(COLOR_SURFACE1)
+        } else {
+            rgb(COLOR_SURFACE0)
+        };
+        let hover = if self.emphasized {
             rgb(COLOR_SURFACE2)
         } else {
             rgb(COLOR_SURFACE1)
-        };
-        let hover = if self.emphasized {
-            rgb(COLOR_ACCENT)
-        } else {
-            rgb(COLOR_SURFACE2)
         };
 
         self.div
             .w(px(ICON_BUTTON_SIZE))
             .h(px(ICON_BUTTON_SIZE))
             .rounded_sm()
-            .border_1()
-            .border_color(rgb(COLOR_BORDER))
             .bg(background)
             .hover(|style| style.bg(hover))
+            .active(|style| style.bg(rgb(COLOR_SURFACE2)))
             .cursor(CursorStyle::PointingHand)
             .items_center()
             .justify_center()

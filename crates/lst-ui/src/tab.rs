@@ -62,11 +62,6 @@ impl ParentElement for Tab {
 
 impl RenderOnce for Tab {
     fn render(self, _window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
-        let border = if self.active {
-            rgb(COLOR_ACCENT)
-        } else {
-            rgb(COLOR_BORDER)
-        };
         let background = if self.active {
             rgb(COLOR_SURFACE1)
         } else {
@@ -80,21 +75,23 @@ impl RenderOnce for Tab {
 
         self.div
             .group(self.group_name)
+            .relative()
             .h(px(TAB_HEIGHT))
-            .min_w(px(132.0))
-            .max_w(px(260.0))
+            .min_w(px(116.0))
+            .max_w(px(220.0))
             .px_3()
             .gap_2()
             .items_center()
-            .rounded_sm()
-            .border_1()
-            .border_color(border)
+            .border_r_1()
+            .border_color(rgb(COLOR_BORDER))
             .bg(background)
             .hover(|style| style.bg(rgb(COLOR_SURFACE1)))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
+                    .h_full()
+                    .items_center()
                     .gap(px(SHELL_GAP))
                     .text_size(px(TAB_TEXT_SIZE))
                     .text_color(text)
@@ -105,6 +102,18 @@ impl RenderOnce for Tab {
                 self.end_slot
                     .into_iter()
                     .map(|end_slot| div().flex_none().child(end_slot).into_any_element()),
+            )
+            .children(
+                self.active.then_some(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .h(px(2.0))
+                        .bg(rgb(COLOR_ACCENT))
+                        .into_any_element(),
+                ),
             )
     }
 }
