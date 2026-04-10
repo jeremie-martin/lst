@@ -1,12 +1,13 @@
 use gpui::{
-    div, px, rgb, AnyElement, App, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    SharedString, Stateful, StatefulInteractiveElement, Styled,
+    div, px, rgb, AnyElement, App, CursorStyle, InteractiveElement, IntoElement, ParentElement,
+    RenderOnce, SharedString, Stateful, StatefulInteractiveElement, Styled,
 };
 use smallvec::SmallVec;
 
 use crate::theme::{
     COLOR_ACCENT, COLOR_BORDER, COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_TEXT,
-    SHELL_GAP, TAB_HEIGHT, TAB_TEXT_SIZE,
+    SHELL_GAP, TAB_HEIGHT, TAB_HORIZONTAL_PAD, TAB_MAX_WIDTH, TAB_MIN_WIDTH, TAB_SLOT_WIDTH,
+    TAB_TEXT_SIZE,
 };
 
 #[derive(IntoElement)]
@@ -15,6 +16,7 @@ pub struct Tab {
     active: bool,
     group_name: SharedString,
     children: SmallVec<[AnyElement; 2]>,
+    start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
 }
 
@@ -26,6 +28,7 @@ impl Tab {
             active: false,
             group_name: format!("tab-{id:?}").into(),
             children: SmallVec::new(),
+            start_slot: None,
             end_slot: None,
         }
     }
@@ -37,6 +40,11 @@ impl Tab {
 
     pub fn group_name(mut self, group_name: impl Into<SharedString>) -> Self {
         self.group_name = group_name.into();
+        self
+    }
+
+    pub fn start_slot(mut self, element: Option<AnyElement>) -> Self {
+        self.start_slot = element;
         self
     }
 
@@ -76,32 +84,48 @@ impl RenderOnce for Tab {
         self.div
             .group(self.group_name)
             .relative()
+            .flex()
+            .flex_none()
             .h(px(TAB_HEIGHT))
-            .min_w(px(116.0))
-            .max_w(px(220.0))
-            .px_3()
-            .gap_2()
+            .min_w(px(TAB_MIN_WIDTH))
+            .max_w(px(TAB_MAX_WIDTH))
+            .px(px(TAB_HORIZONTAL_PAD))
+            .gap(px(SHELL_GAP))
             .items_center()
             .border_r_1()
             .border_color(rgb(COLOR_BORDER))
             .bg(background)
+            .cursor(CursorStyle::PointingHand)
             .hover(|style| style.bg(rgb(COLOR_SURFACE1)))
+            .child(
+                div()
+                    .h_full()
+                    .w(px(TAB_SLOT_WIDTH))
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .children(self.start_slot),
+            )
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
+                    .overflow_hidden()
                     .h_full()
                     .items_center()
-                    .gap(px(SHELL_GAP))
                     .text_size(px(TAB_TEXT_SIZE))
                     .text_color(text)
                     .truncate()
                     .children(self.children),
             )
-            .children(
-                self.end_slot
-                    .into_iter()
-                    .map(|end_slot| div().flex_none().child(end_slot).into_any_element()),
+            .child(
+                div()
+                    .h_full()
+                    .w(px(TAB_SLOT_WIDTH))
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .children(self.end_slot),
             )
             .children(
                 self.active.then_some(

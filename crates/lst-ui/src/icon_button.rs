@@ -10,12 +10,14 @@ use crate::theme::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconKind {
     Close,
+    Plus,
 }
 
 impl IconKind {
     fn label(self) -> &'static str {
         match self {
-            Self::Close => "x",
+            Self::Close => "×",
+            Self::Plus => "+",
         }
     }
 }

@@ -2567,6 +2567,13 @@ impl LstGpuiApp {
         let tab = &self.tabs[ix];
         let active = ix == self.active;
         let show_close = active || self.hovered_tab == Some(ix);
+        let dirty_marker = tab.modified.then_some(
+            div()
+                .flex_none()
+                .text_color(rgb(COLOR_PEACH))
+                .child("•")
+                .into_any_element(),
+        );
         let close_button: Option<IconButton> = show_close.then(|| {
             IconButton::new(("tab-close", ix), IconKind::Close)
                 .emphasized(active)
@@ -2601,23 +2608,22 @@ impl LstGpuiApp {
                     cx.stop_propagation();
                 }),
             )
+            .start_slot(dirty_marker)
             .end_slot(close_button.map(IntoElement::into_any_element))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .min_w_0()
-                    .when(tab.modified, |row| {
-                        row.child(div().flex_none().text_color(rgb(COLOR_PEACH)).child("•"))
-                    })
-                    .child(div().min_w_0().truncate().child(tab.display_name())),
-            )
+            .child(div().min_w_0().truncate().child(tab.display_name()))
     }
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         TabBar::new("editor-tabs")
             .track_scroll(&self.tab_bar_scroll)
+            .end_child(
+                IconButton::new("new-tab-button", IconKind::Plus).on_click(cx.listener(
+                    |this, _, _window, cx| {
+                        this.handle_new_tab(&NewTab, _window, cx);
+                        cx.stop_propagation();
+                    },
+                )),
+            )
             .children((0..self.tabs.len()).map(|ix| self.render_tab(ix, cx)))
     }
 

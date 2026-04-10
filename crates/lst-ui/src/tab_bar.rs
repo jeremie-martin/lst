@@ -50,31 +50,33 @@ impl ParentElement for TabBar {
 
 impl RenderOnce for TabBar {
     fn render(self, _window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
-        let tabs_row = if let Some(scroll_handle) = self.scroll_handle {
+        let tabs_row = div().id("tabs-row").flex().h_full().children(self.children);
+
+        let tabs_scroll = if let Some(scroll_handle) = self.scroll_handle {
             div()
-                .id("tabs-row")
-                .flex()
+                .id("tabs-scroll")
                 .h_full()
                 .overflow_x_scroll()
+                .overflow_y_hidden()
                 .track_scroll(&scroll_handle)
-                .children(self.children)
+                .child(tabs_row)
                 .into_any_element()
         } else {
             div()
-                .id("tabs-row")
-                .flex()
+                .id("tabs-scroll")
                 .h_full()
                 .overflow_x_scroll()
-                .children(self.children)
+                .overflow_y_hidden()
+                .child(tabs_row)
                 .into_any_element()
         };
 
         div()
             .id(self.id)
             .flex()
-            .items_center()
             .w_full()
             .h(px(TAB_HEIGHT + 1.0))
+            .overflow_hidden()
             .bg(rgb(COLOR_SURFACE0))
             .border_b_1()
             .border_color(rgb(COLOR_BORDER))
@@ -98,8 +100,8 @@ impl RenderOnce for TabBar {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .overflow_x_hidden()
-                    .child(tabs_row),
+                    .overflow_hidden()
+                    .child(tabs_scroll),
             )
             .children(
                 (!self.end_children.is_empty()).then_some(
