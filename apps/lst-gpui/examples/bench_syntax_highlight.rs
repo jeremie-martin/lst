@@ -11,91 +11,15 @@ use syntect::{
     easy::HighlightLines, highlighting::Theme, parsing::SyntaxSet, util::LinesWithEndings,
 };
 use tree_sitter::{Language, Parser};
-use tree_sitter_highlight::{
-    HighlightConfiguration, HighlightEvent, Highlighter as TreeSitterHighlighter,
-};
+
+#[allow(dead_code)]
+#[path = "../src/syntax.rs"]
+mod syntax;
+
+use syntax::{compute_syntax_highlights, SyntaxLanguage};
 
 const RUST_CORPUS: &str = include_str!("../../../benchmarks/paste-corpus-20k.rs");
 const TARGET_LINES: usize = 20_000;
-
-const CAPTURE_NAMES: &[&str] = &[
-    "_name",
-    "attribute",
-    "boolean",
-    "character",
-    "charset",
-    "comment",
-    "comment.documentation",
-    "conditional",
-    "constant",
-    "constant.builtin",
-    "constructor",
-    "definition.class",
-    "definition.constant",
-    "definition.function",
-    "definition.interface",
-    "definition.macro",
-    "definition.method",
-    "definition.module",
-    "doc",
-    "embedded",
-    "escape",
-    "function",
-    "function.builtin",
-    "function.call",
-    "function.macro",
-    "function.method",
-    "function.method.call",
-    "glimmer",
-    "import",
-    "injection.content",
-    "injection.language",
-    "keyframes",
-    "keyword",
-    "keyword.directive",
-    "label",
-    "local.definition",
-    "local.reference",
-    "local.scope",
-    "media",
-    "module",
-    "name",
-    "namespace",
-    "none",
-    "number",
-    "operator",
-    "property",
-    "property.builtin",
-    "punctuation",
-    "punctuation.bracket",
-    "punctuation.delimiter",
-    "punctuation.special",
-    "reference.call",
-    "reference.class",
-    "reference.implementation",
-    "reference.type",
-    "string",
-    "string.documentation",
-    "string.escape",
-    "string.regex",
-    "string.special",
-    "string.special.key",
-    "supports",
-    "tag",
-    "tag.error",
-    "text.emphasis",
-    "text.literal",
-    "text.reference",
-    "text.strong",
-    "text.title",
-    "text.uri",
-    "type",
-    "type.builtin",
-    "variable",
-    "variable.builtin",
-    "variable.member",
-    "variable.parameter",
-];
 
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEME: LazyLock<Theme> = LazyLock::new(|| {
@@ -184,99 +108,18 @@ impl LanguageKind {
         }
     }
 
-    fn tree_sitter_config(self) -> HighlightConfiguration {
-        let (language, name, highlights, injections, locals) = match self {
-            Self::Rust => (
-                tree_sitter_rust::LANGUAGE.into(),
-                "rust",
-                tree_sitter_rust::HIGHLIGHTS_QUERY,
-                tree_sitter_rust::INJECTIONS_QUERY,
-                "",
-            ),
-            Self::Python => (
-                tree_sitter_python::LANGUAGE.into(),
-                "python",
-                tree_sitter_python::HIGHLIGHTS_QUERY,
-                "",
-                "",
-            ),
-            Self::JavaScript => (
-                tree_sitter_javascript::LANGUAGE.into(),
-                "javascript",
-                tree_sitter_javascript::HIGHLIGHT_QUERY,
-                tree_sitter_javascript::INJECTIONS_QUERY,
-                tree_sitter_javascript::LOCALS_QUERY,
-            ),
-            Self::TypeScript => (
-                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-                "typescript",
-                tree_sitter_typescript::HIGHLIGHTS_QUERY,
-                "",
-                tree_sitter_typescript::LOCALS_QUERY,
-            ),
-            Self::Json => (
-                tree_sitter_json::LANGUAGE.into(),
-                "json",
-                tree_sitter_json::HIGHLIGHTS_QUERY,
-                "",
-                "",
-            ),
-            Self::Toml => (
-                tree_sitter_toml_ng::LANGUAGE.into(),
-                "toml",
-                tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
-                "",
-                "",
-            ),
-            Self::Yaml => (
-                tree_sitter_yaml::LANGUAGE.into(),
-                "yaml",
-                tree_sitter_yaml::HIGHLIGHTS_QUERY,
-                "",
-                "",
-            ),
-            Self::Markdown => (
-                tree_sitter_md::LANGUAGE.into(),
-                "markdown",
-                tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
-                tree_sitter_md::INJECTION_QUERY_BLOCK,
-                "",
-            ),
-            Self::Html => (
-                tree_sitter_html::LANGUAGE.into(),
-                "html",
-                tree_sitter_html::HIGHLIGHTS_QUERY,
-                tree_sitter_html::INJECTIONS_QUERY,
-                "",
-            ),
-            Self::Css => (
-                tree_sitter_css::LANGUAGE.into(),
-                "css",
-                tree_sitter_css::HIGHLIGHTS_QUERY,
-                "",
-                "",
-            ),
-        };
-        let mut config =
-            HighlightConfiguration::new(language, name, highlights, injections, locals)
-                .expect("embedded tree-sitter highlight query should be valid");
-        config.configure(CAPTURE_NAMES);
-        config
-    }
-
-    fn from_injection(language: &str) -> Option<Self> {
-        match language.to_ascii_lowercase().as_str() {
-            "rust" | "rs" => Some(Self::Rust),
-            "python" | "py" => Some(Self::Python),
-            "javascript" | "js" | "jsx" => Some(Self::JavaScript),
-            "typescript" | "ts" | "tsx" => Some(Self::TypeScript),
-            "json" => Some(Self::Json),
-            "toml" => Some(Self::Toml),
-            "yaml" | "yml" => Some(Self::Yaml),
-            "markdown" | "md" => Some(Self::Markdown),
-            "html" => Some(Self::Html),
-            "css" => Some(Self::Css),
-            _ => None,
+    fn syntax_language(self) -> SyntaxLanguage {
+        match self {
+            Self::Rust => SyntaxLanguage::Rust,
+            Self::Python => SyntaxLanguage::Python,
+            Self::JavaScript => SyntaxLanguage::JavaScript,
+            Self::TypeScript => SyntaxLanguage::TypeScript,
+            Self::Json => SyntaxLanguage::Json,
+            Self::Toml => SyntaxLanguage::Toml,
+            Self::Yaml => SyntaxLanguage::Yaml,
+            Self::Markdown => SyntaxLanguage::Markdown,
+            Self::Html => SyntaxLanguage::Html,
+            Self::Css => SyntaxLanguage::Css,
         }
     }
 }
@@ -519,19 +362,7 @@ fn backend_supports_corpus(backend: Backend, corpus: &Corpus) -> bool {
         Backend::Syntect => SYNTAX_SET
             .find_syntax_by_extension(&corpus.extension)
             .is_some(),
-        Backend::TreeSitterParse | Backend::TreeSitterHighlight => matches!(
-            corpus.language,
-            LanguageKind::Rust
-                | LanguageKind::Python
-                | LanguageKind::JavaScript
-                | LanguageKind::TypeScript
-                | LanguageKind::Json
-                | LanguageKind::Toml
-                | LanguageKind::Yaml
-                | LanguageKind::Markdown
-                | LanguageKind::Html
-                | LanguageKind::Css
-        ),
+        Backend::TreeSitterParse | Backend::TreeSitterHighlight => true,
     }
 }
 
@@ -598,32 +429,19 @@ fn measure_tree_sitter_highlight(
     language: LanguageKind,
     source: &str,
 ) -> Result<Measurement, String> {
-    let config = language.tree_sitter_config();
-    let injection_configs = injection_configs();
-    let mut highlighter = TreeSitterHighlighter::new();
     let start = Instant::now();
-    let events = highlighter
-        .highlight(&config, source.as_bytes(), None, |name| {
-            let language = LanguageKind::from_injection(name)?;
-            injection_configs
-                .iter()
-                .find(|(candidate, _)| *candidate == language)
-                .map(|(_, config)| config)
-        })
-        .map_err(|error| format!("tree-sitter highlight failed: {error}"))?;
-
+    let lines = compute_syntax_highlights(language.syntax_language(), source);
     let mut checksum = 0usize;
     let mut spans = 0usize;
-    for event in events {
-        match event.map_err(|error| format!("tree-sitter highlight event failed: {error}"))? {
-            HighlightEvent::Source { start, end } if start < end => {
+    for line in lines {
+        for span in line {
+            if span.start < span.end {
                 spans += 1;
-                checksum = checksum.wrapping_add(start).wrapping_add(end);
+                checksum = checksum
+                    .wrapping_add(span.start)
+                    .wrapping_add(span.end)
+                    .wrapping_add(span.color as usize);
             }
-            HighlightEvent::HighlightStart(highlight) => {
-                checksum = checksum.wrapping_add(highlight.0);
-            }
-            HighlightEvent::HighlightEnd | HighlightEvent::Source { .. } => {}
         }
     }
 
@@ -632,24 +450,6 @@ fn measure_tree_sitter_highlight(
         spans,
         checksum,
     })
-}
-
-fn injection_configs() -> Vec<(LanguageKind, HighlightConfiguration)> {
-    [
-        LanguageKind::Rust,
-        LanguageKind::Python,
-        LanguageKind::JavaScript,
-        LanguageKind::TypeScript,
-        LanguageKind::Json,
-        LanguageKind::Toml,
-        LanguageKind::Yaml,
-        LanguageKind::Markdown,
-        LanguageKind::Html,
-        LanguageKind::Css,
-    ]
-    .into_iter()
-    .map(|language| (language, language.tree_sitter_config()))
-    .collect()
 }
 
 fn measure_syntect(extension: &str, source: &str) -> Result<Measurement, String> {
@@ -830,7 +630,7 @@ fn generated_json() -> String {
     }}
   }},
 ",
-            i % 2 == 0,
+            i.is_multiple_of(2),
             i * 17,
             i as f64 / 7.0
         ));
@@ -853,7 +653,7 @@ enabled = {}
 tags = [\"editor\", \"highlight\", \"benchmark\"]
 
 ",
-            i % 2 == 0
+            i.is_multiple_of(2)
         ));
         i += 1;
     }
@@ -875,7 +675,7 @@ fn generated_yaml() -> String {
     - benchmark
 
 ",
-            i % 2 == 0
+            i.is_multiple_of(2)
         ));
         i += 1;
     }
@@ -925,7 +725,7 @@ fn generated_html() -> String {
             i % 255,
             (i * 2) % 255,
             (i * 3) % 255,
-            i % 2 == 0
+            i.is_multiple_of(2)
         ));
         i += 1;
     }

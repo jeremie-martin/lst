@@ -90,32 +90,33 @@ cargo run --release -p lst-gpui --example bench_syntax_highlight -- --iterations
 ```
 
 This benchmark highlights whole documents of roughly 20k lines and reports
-`median_ms`. It is intentionally colder and broader than the editor's visible
-viewport path, so it should guide backend selection rather than represent a
-per-keystroke UI budget.
+`median_ms`. The `tree-sitter-highlight` rows use the production tree-sitter
+pipeline, including conversion to per-line `SyntaxSpan`s. It is intentionally
+colder and broader than the editor's visible viewport path, so it should guide
+backend selection rather than represent a per-keystroke UI budget.
 
 Representative results on this machine:
 
 ```text
 backend                 language    lines  median_ms
-tree-sitter-highlight   rust        21558  154.914
-syntect                 rust        21558  1572.387
-tree-sitter-highlight   python      20016  79.530
-syntect                 python      20016  1305.285
-tree-sitter-highlight   javascript  20007  130.552
-syntect                 javascript  20007  1470.141
-tree-sitter-highlight   typescript  20010  80.059
-tree-sitter-highlight   json        20003  41.990
-syntect                 json        20003  327.823
-tree-sitter-highlight   toml        20004  56.029
-tree-sitter-highlight   yaml        20000  47.867
-syntect                 yaml        20000  228.728
-tree-sitter-highlight   markdown    20000  154.659
-syntect                 markdown    20000  2166.187
-tree-sitter-highlight   html        20000  88.170
-syntect                 html        20000  973.288
-tree-sitter-highlight   css         20006  50.459
-syntect                 css         20006  708.044
+tree-sitter-highlight   rust        21558  166.618
+syntect                 rust        21558  1497.704
+tree-sitter-highlight   python      20016  82.786
+syntect                 python      20016  1249.067
+tree-sitter-highlight   javascript  20007  135.911
+syntect                 javascript  20007  1395.146
+tree-sitter-highlight   typescript  20010  79.840
+tree-sitter-highlight   json        20003  43.216
+syntect                 json        20003  306.965
+tree-sitter-highlight   toml        20004  61.075
+tree-sitter-highlight   yaml        20000  51.022
+syntect                 yaml        20000  217.756
+tree-sitter-highlight   markdown    20000  164.546
+syntect                 markdown    20000  2077.389
+tree-sitter-highlight   html        20000  91.831
+syntect                 html        20000  954.472
+tree-sitter-highlight   css         20006  55.049
+syntect                 css         20006  687.104
 ```
 
 Interpretation:

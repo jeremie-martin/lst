@@ -203,31 +203,32 @@ Backends:
 
 - `plain`: line-iteration floor; not a syntax-highlighting backend
 - `tree-sitter-parse`: parse-only lower bound for grammar-based highlighting
-- `tree-sitter-highlight`: full tree-sitter highlight query execution
+- `tree-sitter-highlight`: production tree-sitter highlighting plus per-line
+  `SyntaxSpan` conversion
 - `syntect`: broad TextMate/sublime-syntax highlighting baseline
 
 Representative results collected on `2026-04-10` on this machine:
 
 ```text
 backend                 language    lines  median_ms
-tree-sitter-highlight   rust        21558  154.914
-syntect                 rust        21558  1572.387
-tree-sitter-highlight   python      20016  79.530
-syntect                 python      20016  1305.285
-tree-sitter-highlight   javascript  20007  130.552
-syntect                 javascript  20007  1470.141
-tree-sitter-highlight   typescript  20010  80.059
-tree-sitter-highlight   json        20003  41.990
-syntect                 json        20003  327.823
-tree-sitter-highlight   toml        20004  56.029
-tree-sitter-highlight   yaml        20000  47.867
-syntect                 yaml        20000  228.728
-tree-sitter-highlight   markdown    20000  154.659
-syntect                 markdown    20000  2166.187
-tree-sitter-highlight   html        20000  88.170
-syntect                 html        20000  973.288
-tree-sitter-highlight   css         20006  50.459
-syntect                 css         20006  708.044
+tree-sitter-highlight   rust        21558  166.618
+syntect                 rust        21558  1497.704
+tree-sitter-highlight   python      20016  82.786
+syntect                 python      20016  1249.067
+tree-sitter-highlight   javascript  20007  135.911
+syntect                 javascript  20007  1395.146
+tree-sitter-highlight   typescript  20010  79.840
+tree-sitter-highlight   json        20003  43.216
+syntect                 json        20003  306.965
+tree-sitter-highlight   toml        20004  61.075
+tree-sitter-highlight   yaml        20000  51.022
+syntect                 yaml        20000  217.756
+tree-sitter-highlight   markdown    20000  164.546
+syntect                 markdown    20000  2077.389
+tree-sitter-highlight   html        20000  91.831
+syntect                 html        20000  954.472
+tree-sitter-highlight   css         20006  55.049
+syntect                 css         20006  687.104
 ```
 
 Interpretation:

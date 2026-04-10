@@ -32,24 +32,13 @@ struct CachedShapedLine {
     shaped: ShapedLine,
 }
 
+#[derive(Default)]
 pub(crate) struct ViewportCache {
     code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
     pub(crate) syntax_highlights: Option<CachedSyntaxHighlights>,
     pub(crate) syntax_highlight_inflight: Option<crate::syntax::SyntaxHighlightJobKey>,
     pub(crate) wrap_layout: Option<WrapLayout>,
-}
-
-impl Default for ViewportCache {
-    fn default() -> Self {
-        Self {
-            code_lines: HashMap::new(),
-            gutter_lines: HashMap::new(),
-            syntax_highlights: None,
-            syntax_highlight_inflight: None,
-            wrap_layout: None,
-        }
-    }
 }
 
 impl ViewportCache {
@@ -469,8 +458,13 @@ pub(crate) fn prepare_viewport_paint_state(
     });
 
     let mut rows = Vec::new();
-    for line_ix in first_line..=last_visible_line {
-        let display_source = trim_display_line(&lines[line_ix]);
+    for (line_ix, line) in lines
+        .iter()
+        .enumerate()
+        .take(last_visible_line.saturating_add(1))
+        .skip(first_line)
+    {
+        let display_source = trim_display_line(line);
         let highlight_spans = line_syntax_spans(&mut cache, revision, line_ix, syntax_mode);
         let display_len = display_source.chars().count();
         let logical_end_char = if line_ix + 1 < buffer.len_lines() {

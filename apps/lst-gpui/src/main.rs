@@ -47,7 +47,7 @@ use std::{
     collections::HashSet,
     fs,
     ops::{Deref, DerefMut, Range},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process,
     rc::Rc,
     time::{Duration, Instant},
@@ -2597,7 +2597,7 @@ fn trim_display_line(line: &str) -> &str {
     line.strip_suffix('\r').unwrap_or(line)
 }
 
-fn autosave_temp_path(path: &PathBuf, revision: u64) -> PathBuf {
+fn autosave_temp_path(path: &Path, revision: u64) -> PathBuf {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -2947,7 +2947,7 @@ fn main() {
                     let bench = bench.clone();
                     window.on_next_frame(move |window, cx| {
                         let startup_to_action_ms = elapsed_ms(process_started);
-                        let _ = view.update(cx, |view, cx| {
+                        view.update(cx, |view, cx| {
                             view.run_auto_bench(
                                 bench,
                                 window,
