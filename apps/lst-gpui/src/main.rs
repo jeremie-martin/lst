@@ -281,6 +281,7 @@ struct PaintedRow {
     line_start_char: usize,
     display_end_char: usize,
     logical_end_char: usize,
+    cursor_end_inclusive: bool,
     code_line: Option<ShapedLine>,
     gutter_line: Option<ShapedLine>,
 }
@@ -2892,9 +2893,10 @@ impl EntityInputHandler for LstGpuiApp {
         let tab = self.active_tab();
         let geometry = tab.geometry.borrow();
         let range = utf16_range_to_char_range(&tab.buffer, &range_utf16);
-        let row = geometry.rows.iter().rfind(|row| {
-            range.start >= row.line_start_char && range.start <= row.logical_end_char
-        })?;
+        let row = geometry
+            .rows
+            .iter()
+            .rfind(|row| row_contains_cursor(row, range.start))?;
         let code_origin_x = element_bounds.left() + code_origin_pad(self.show_gutter);
         let start_x =
             code_origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| px(0.0));
@@ -3733,6 +3735,8 @@ fn prepare_viewport_paint_state(
                 } else {
                     segment_end_char
                 },
+                cursor_end_inclusive: segment_ix + 1 == segment_count
+                    && logical_end_char == segment_end_char,
                 code_line,
                 gutter_line,
             });
@@ -3764,8 +3768,7 @@ fn paint_viewport(
     let code_origin_x = bounds.left() + code_origin_pad(show_gutter);
 
     for row in paint_state.rows {
-        let cursor_in_row =
-            cursor_char >= row.line_start_char && cursor_char <= row.logical_end_char;
+        let cursor_in_row = row_contains_cursor(&row, cursor_char);
         let row_bounds = Bounds::new(
             point(bounds.left(), row.row_top),
             size(bounds.size.width, px(ROW_HEIGHT)),
@@ -3941,6 +3944,15 @@ fn drag_selection_range(anchor: Range<usize>, current: Range<usize>) -> (Range<u
 
 fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: usize) -> bool {
     active_index == closed_index
+}
+
+fn row_contains_cursor(row: &PaintedRow, cursor_char: usize) -> bool {
+    if cursor_char < row.line_start_char {
+        return false;
+    }
+
+    cursor_char < row.logical_end_char
+        || (row.cursor_end_inclusive && cursor_char == row.logical_end_char)
 }
 
 fn x_for_global_char(row: &PaintedRow, global_char: usize) -> Option<Pixels> {
@@ -4470,5 +4482,45 @@ mod tests {
         assert!(!should_refocus_editor_after_tab_close(2, 1));
         assert!(!should_refocus_editor_after_tab_close(2, 3));
         assert!(should_refocus_editor_after_tab_close(2, 2));
+    }
+
+    #[test]
+    fn wrapped_row_boundaries_assign_cursor_to_one_row() {
+        let first = PaintedRow {
+            row_top: px(0.0),
+            line_start_char: 0,
+            display_end_char: 5,
+            logical_end_char: 5,
+            cursor_end_inclusive: false,
+            code_line: None,
+            gutter_line: None,
+        };
+        let second = PaintedRow {
+            row_top: px(0.0),
+            line_start_char: 5,
+            display_end_char: 10,
+            logical_end_char: 10,
+            cursor_end_inclusive: true,
+            code_line: None,
+            gutter_line: None,
+        };
+
+        assert!(!row_contains_cursor(&first, 5));
+        assert!(row_contains_cursor(&second, 5));
+    }
+
+    #[test]
+    fn eof_cursor_is_allowed_on_last_empty_row() {
+        let row = PaintedRow {
+            row_top: px(0.0),
+            line_start_char: 0,
+            display_end_char: 0,
+            logical_end_char: 0,
+            cursor_end_inclusive: true,
+            code_line: None,
+            gutter_line: None,
+        };
+
+        assert!(row_contains_cursor(&row, 0));
     }
 }
