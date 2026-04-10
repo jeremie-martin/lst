@@ -23,8 +23,8 @@ DISPLAY=:1 cargo run -- --bench-append-corpus
 
 Current real-display measurements on `DISPLAY=:1` with `target/release/lst-gpui`:
 
-- `--bench-replace-corpus`: `apply_ms=1.262`, `action_to_next_frame_ms=55.391`
-- `--bench-append-corpus`: `apply_ms=1.342`, `action_to_next_frame_ms=66.637`
+- `--bench-replace-corpus`: `apply_ms=1.560`, `action_to_next_frame_ms=77.599`
+- `--bench-append-corpus`: `apply_ms=1.607`, `action_to_next_frame_ms=99.910`
 
 ## Current Features
 
@@ -40,11 +40,12 @@ Current real-display measurements on `DISPLAY=:1` with `target/release/lst-gpui`
 - find / replace overlay
 - goto-line overlay
 - line operations: delete, duplicate, move up/down, toggle comment
+- Rust syntax highlighting via tree-sitter in the custom viewport
 - Vim normal / insert / visual / visual-line modes
 - visual up/down movement across wrapped rows
 - retained large-paste auto-bench mode
 
 ## Missing Parity
 
-- syntax highlighting
+- non-Rust syntax highlighting
 - full parity with the current `iced` app behavior surface

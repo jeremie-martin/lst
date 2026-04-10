@@ -35,13 +35,19 @@ use rfd::FileDialog;
 use ropey::Rope;
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{hash_map::DefaultHasher, HashMap},
     fs,
+    hash::{Hash, Hasher},
     ops::{Deref, DerefMut, Range},
     path::PathBuf,
     process,
     rc::Rc,
+    sync::LazyLock,
     time::{Duration, Instant},
+};
+use tree_sitter_highlight::{
+    Highlight as TreeSitterHighlight, HighlightConfiguration,
+    HighlightEvent as TreeSitterHighlightEvent, Highlighter as TreeSitterHighlighter,
 };
 
 const WINDOW_WIDTH: f32 = 1360.0;
@@ -71,10 +77,47 @@ const COLOR_TEXT: u32 = 0xCDD6F4;
 const COLOR_SUBTEXT: u32 = 0xA6ADC8;
 const COLOR_MUTED: u32 = 0x6C7086;
 const COLOR_ACCENT: u32 = 0x89B4FA;
+const COLOR_GREEN: u32 = 0xA6E3A1;
+const COLOR_YELLOW: u32 = 0xF9E2AF;
+const COLOR_PEACH: u32 = 0xFAB387;
+const COLOR_PINK: u32 = 0xF5C2E7;
+const COLOR_MAUVE: u32 = 0xCBA6F7;
+const COLOR_SAPPHIRE: u32 = 0x74C7EC;
+const COLOR_LAVENDER: u32 = 0xB4BEFE;
 const COLOR_SELECTION: u32 = 0x585B70;
 const COLOR_CARET: u32 = 0xF5E0DC;
 const COLOR_CURRENT_LINE: u32 = 0x181B2B;
 const COLOR_GUTTER: u32 = 0x161622;
+const TREE_SITTER_CAPTURE_NAMES: &[&str] = &[
+    "attribute",
+    "comment",
+    "constant",
+    "constructor",
+    "escape",
+    "function",
+    "keyword",
+    "module",
+    "number",
+    "operator",
+    "property",
+    "punctuation",
+    "string",
+    "type",
+    "variable",
+];
+
+static TREE_SITTER_RUST_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
+    let mut config = HighlightConfiguration::new(
+        tree_sitter_rust::LANGUAGE.into(),
+        "rust",
+        tree_sitter_rust::HIGHLIGHTS_QUERY,
+        tree_sitter_rust::INJECTIONS_QUERY,
+        "",
+    )
+    .expect("embedded tree-sitter Rust highlight query should be valid");
+    config.configure(TREE_SITTER_CAPTURE_NAMES);
+    config
+});
 
 actions!(
     lst_gpui,
@@ -201,14 +244,48 @@ struct AutosaveJob {
 #[derive(Clone)]
 struct CachedShapedLine {
     text: SharedString,
+    style_key: u64,
     shaped: ShapedLine,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SyntaxMode {
+    Plain,
+    TreeSitterRust,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SyntaxSpan {
+    start: usize,
+    end: usize,
+    color: u32,
+}
+
+#[derive(Clone)]
+struct CachedHighlightLine {
+    text: String,
+    syntax_mode: SyntaxMode,
+    spans: Vec<SyntaxSpan>,
+}
+
 struct ViewportCache {
     code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
+    highlight_lines: HashMap<usize, CachedHighlightLine>,
+    rust_highlighter: Option<TreeSitterHighlighter>,
     wrap_layout: Option<WrapLayout>,
+}
+
+impl Default for ViewportCache {
+    fn default() -> Self {
+        Self {
+            code_lines: HashMap::new(),
+            gutter_lines: HashMap::new(),
+            highlight_lines: HashMap::new(),
+            rust_highlighter: None,
+            wrap_layout: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2520,6 +2597,7 @@ impl Render for LstGpuiApp {
             buffer_content_height(layout.total_rows)
         };
         let active_tab = &self.tabs[active];
+        let syntax_mode = syntax_mode_for_path(active_tab.path.as_ref());
         let buffer = active_tab.buffer.clone();
         let selection = active_tab.selection.clone();
         let cursor_char = active_tab.cursor_char();
@@ -2737,6 +2815,7 @@ impl Render for LstGpuiApp {
                                                 &buffer,
                                                 line_texts.as_ref(),
                                                 revision,
+                                                syntax_mode,
                                                 show_gutter,
                                                 show_wrap,
                                                 &viewport_scroll,
@@ -2820,6 +2899,176 @@ fn line_display_text(buffer: &Rope, line_ix: usize) -> SharedString {
 
 fn line_display_char_len(buffer: &Rope, line_ix: usize) -> usize {
     line_display_text(buffer, line_ix).chars().count()
+}
+
+fn syntax_mode_for_path(path: Option<&PathBuf>) -> SyntaxMode {
+    match path
+        .and_then(|path| path.extension())
+        .and_then(|ext| ext.to_str())
+    {
+        Some("rs") => SyntaxMode::TreeSitterRust,
+        _ => SyntaxMode::Plain,
+    }
+}
+
+fn tree_sitter_color_for_capture(index: usize) -> Option<u32> {
+    match TREE_SITTER_CAPTURE_NAMES.get(index).copied() {
+        Some("attribute") => Some(COLOR_YELLOW),
+        Some("comment") => Some(COLOR_MUTED),
+        Some("constant") => Some(COLOR_PEACH),
+        Some("constructor") => Some(COLOR_SAPPHIRE),
+        Some("escape") => Some(COLOR_PINK),
+        Some("function") => Some(COLOR_ACCENT),
+        Some("keyword") => Some(COLOR_MAUVE),
+        Some("module") => Some(COLOR_LAVENDER),
+        Some("number") => Some(COLOR_PEACH),
+        Some("operator") => Some(COLOR_SAPPHIRE),
+        Some("property") => Some(COLOR_LAVENDER),
+        Some("punctuation") => Some(COLOR_BORDER),
+        Some("string") => Some(COLOR_GREEN),
+        Some("type") => Some(COLOR_YELLOW),
+        Some("variable") => None,
+        _ => None,
+    }
+}
+
+fn char_to_byte_index(text: &str, char_ix: usize) -> usize {
+    if char_ix == 0 {
+        return 0;
+    }
+
+    text.char_indices()
+        .nth(char_ix)
+        .map(|(byte_ix, _)| byte_ix)
+        .unwrap_or(text.len())
+}
+
+fn highlight_rust_line(highlighter: &mut TreeSitterHighlighter, line: &str) -> Vec<SyntaxSpan> {
+    let Ok(events) = highlighter.highlight(&TREE_SITTER_RUST_CONFIG, line.as_bytes(), None, |_| None)
+    else {
+        return Vec::new();
+    };
+
+    let mut spans = Vec::new();
+    let mut stack: Vec<TreeSitterHighlight> = Vec::new();
+
+    for event in events {
+        match event {
+            Ok(TreeSitterHighlightEvent::HighlightStart(highlight)) => stack.push(highlight),
+            Ok(TreeSitterHighlightEvent::HighlightEnd) => {
+                let _ = stack.pop();
+            }
+            Ok(TreeSitterHighlightEvent::Source { start, end }) if start < end => {
+                let Some(color) = stack
+                    .last()
+                    .and_then(|highlight| tree_sitter_color_for_capture(highlight.0))
+                else {
+                    continue;
+                };
+                spans.push(SyntaxSpan { start, end, color });
+            }
+            Ok(TreeSitterHighlightEvent::Source { .. }) => {}
+            Err(_) => return Vec::new(),
+        }
+    }
+
+    spans
+}
+
+fn line_syntax_spans(
+    cache: &mut ViewportCache,
+    line_ix: usize,
+    text: &str,
+    syntax_mode: SyntaxMode,
+) -> Vec<SyntaxSpan> {
+    if let Some(cached) = cache.highlight_lines.get(&line_ix) {
+        if cached.syntax_mode == syntax_mode && cached.text == text {
+            return cached.spans.clone();
+        }
+    }
+
+    let spans = match syntax_mode {
+        SyntaxMode::Plain => Vec::new(),
+        SyntaxMode::TreeSitterRust => {
+            let highlighter = cache
+                .rust_highlighter
+                .get_or_insert_with(TreeSitterHighlighter::new);
+            highlight_rust_line(highlighter, text)
+        }
+    };
+
+    cache.highlight_lines.insert(
+        line_ix,
+        CachedHighlightLine {
+            text: text.to_string(),
+            syntax_mode,
+            spans: spans.clone(),
+        },
+    );
+
+    spans
+}
+
+fn text_runs_for_segment(
+    line_text: &str,
+    segment_start_col: usize,
+    segment_end_col: usize,
+    spans: &[SyntaxSpan],
+    base_run: &TextRun,
+) -> (Vec<TextRun>, u64) {
+    let segment_start = char_to_byte_index(line_text, segment_start_col);
+    let segment_end = char_to_byte_index(line_text, segment_end_col);
+    let segment_len = segment_end.saturating_sub(segment_start);
+
+    let mut local_spans = Vec::new();
+    for span in spans {
+        let start = span.start.max(segment_start);
+        let end = span.end.min(segment_end);
+        if start < end {
+            local_spans.push(SyntaxSpan {
+                start: start - segment_start,
+                end: end - segment_start,
+                color: span.color,
+            });
+        }
+    }
+
+    let mut hasher = DefaultHasher::new();
+    local_spans.hash(&mut hasher);
+    let style_key = hasher.finish();
+
+    let mut runs = Vec::new();
+    let mut cursor = 0;
+    for span in local_spans {
+        if cursor < span.start {
+            runs.push(TextRun {
+                len: span.start - cursor,
+                ..base_run.clone()
+            });
+        }
+        runs.push(TextRun {
+            len: span.end - span.start,
+            color: rgb(span.color).into(),
+            ..base_run.clone()
+        });
+        cursor = span.end;
+    }
+
+    if cursor < segment_len {
+        runs.push(TextRun {
+            len: segment_len - cursor,
+            ..base_run.clone()
+        });
+    }
+
+    if runs.is_empty() {
+        runs.push(TextRun {
+            len: segment_len,
+            ..base_run.clone()
+        });
+    }
+
+    (runs, style_key)
 }
 
 fn code_origin_pad(show_gutter: bool) -> Pixels {
@@ -2955,6 +3204,7 @@ fn shape_cached_line(
     cache: &mut HashMap<usize, CachedShapedLine>,
     line_ix: usize,
     text: SharedString,
+    style_key: u64,
     base_run: &TextRun,
     font_size: Pixels,
     window: &mut Window,
@@ -2964,7 +3214,7 @@ fn shape_cached_line(
     }
 
     if let Some(cached) = cache.get(&line_ix) {
-        if cached.text == text {
+        if cached.text == text && cached.style_key == style_key {
             return Some(cached.shaped.clone());
         }
     }
@@ -2983,6 +3233,7 @@ fn shape_cached_line(
         line_ix,
         CachedShapedLine {
             text,
+            style_key,
             shaped: shaped.clone(),
         },
     );
@@ -2993,7 +3244,8 @@ fn shape_cached_segment(
     cache: &mut HashMap<(usize, usize, usize), CachedShapedLine>,
     key: (usize, usize, usize),
     text: SharedString,
-    base_run: &TextRun,
+    runs: &[TextRun],
+    style_key: u64,
     font_size: Pixels,
     window: &mut Window,
 ) -> Option<ShapedLine> {
@@ -3002,25 +3254,20 @@ fn shape_cached_segment(
     }
 
     if let Some(cached) = cache.get(&key) {
-        if cached.text == text {
+        if cached.text == text && cached.style_key == style_key {
             return Some(cached.shaped.clone());
         }
     }
 
-    let shaped = window.text_system().shape_line(
-        text.clone(),
-        font_size,
-        &[TextRun {
-            len: text.len(),
-            ..base_run.clone()
-        }],
-        None,
-    );
+    let shaped = window
+        .text_system()
+        .shape_line(text.clone(), font_size, runs, None);
 
     cache.insert(
         key,
         CachedShapedLine {
             text,
+            style_key,
             shaped: shaped.clone(),
         },
     );
@@ -3031,6 +3278,7 @@ fn prepare_viewport_paint_state(
     buffer: &Rope,
     lines: &[String],
     revision: u64,
+    syntax_mode: SyntaxMode,
     show_gutter: bool,
     show_wrap: bool,
     viewport_scroll: &ScrollHandle,
@@ -3088,6 +3336,9 @@ fn prepare_viewport_paint_state(
     cache
         .code_lines
         .retain(|(line_ix, _, _), _| *line_ix >= first_line && *line_ix <= last_visible_line);
+    cache
+        .highlight_lines
+        .retain(|line_ix, _| *line_ix >= first_line && *line_ix <= last_visible_line);
     cache.gutter_lines.retain(|line_ix, _| {
         show_gutter && *line_ix >= first_line && *line_ix <= last_visible_line
     });
@@ -3095,6 +3346,7 @@ fn prepare_viewport_paint_state(
     let mut rows = Vec::new();
     for line_ix in first_line..=last_visible_line {
         let display_source = trim_display_line(&lines[line_ix]);
+        let highlight_spans = line_syntax_spans(&mut cache, line_ix, display_source, syntax_mode);
         let display_len = display_source.chars().count();
         let logical_end_char = if line_ix + 1 < buffer.len_lines() {
             buffer.line_to_char(line_ix + 1)
@@ -3122,11 +3374,19 @@ fn prepare_viewport_paint_state(
             let row_top = bounds.top() + px((visual_row as f32) * ROW_HEIGHT) - scroll_top;
             let segment_start_char = line_start_char + segment.start_col;
             let segment_end_char = line_start_char + segment.end_col;
+            let (code_runs, style_key) = text_runs_for_segment(
+                display_source,
+                segment.start_col,
+                segment.end_col,
+                &highlight_spans,
+                &code_run,
+            );
             let code_line = shape_cached_segment(
                 &mut cache.code_lines,
                 (line_ix, segment.start_col, segment.end_col),
                 SharedString::from(segment.text),
-                &code_run,
+                &code_runs,
+                style_key,
                 font_size,
                 window,
             );
@@ -3135,6 +3395,7 @@ fn prepare_viewport_paint_state(
                     &mut cache.gutter_lines,
                     line_ix,
                     SharedString::from(format!("{:>6}", line_ix + 1)),
+                    0,
                     &gutter_run,
                     font_size,
                     window,

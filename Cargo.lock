@@ -3704,6 +3704,8 @@ dependencies = [
  "lst-core",
  "rfd",
  "ropey",
+ "tree-sitter-highlight",
+ "tree-sitter-rust",
 ]
 
 [[package]]
