@@ -99,6 +99,7 @@ impl RenderOnce for Tab {
             .hover(|style| style.bg(rgb(COLOR_SURFACE1)))
             .child(
                 div()
+                    .flex()
                     .h_full()
                     .w(px(TAB_SLOT_WIDTH))
                     .flex_none()
@@ -108,6 +109,7 @@ impl RenderOnce for Tab {
             )
             .child(
                 div()
+                    .flex()
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
@@ -120,6 +122,7 @@ impl RenderOnce for Tab {
             )
             .child(
                 div()
+                    .flex()
                     .h_full()
                     .w(px(TAB_SLOT_WIDTH))
                     .flex_none()

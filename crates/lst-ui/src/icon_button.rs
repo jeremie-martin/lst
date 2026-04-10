@@ -70,6 +70,7 @@ impl RenderOnce for IconButton {
         };
 
         self.div
+            .flex()
             .w(px(ICON_BUTTON_SIZE))
             .h(px(ICON_BUTTON_SIZE))
             .rounded_sm()

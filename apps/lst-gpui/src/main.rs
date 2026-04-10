@@ -36,7 +36,7 @@ use lst_ui::{
     COLOR_ACCENT, COLOR_BG, COLOR_BORDER, COLOR_CARET, COLOR_CURRENT_LINE, COLOR_GREEN,
     COLOR_GUTTER, COLOR_LAVENDER, COLOR_MAUVE, COLOR_MUTED, COLOR_PEACH, COLOR_PINK,
     COLOR_SAPPHIRE, COLOR_SELECTION, COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_TEXT,
-    COLOR_YELLOW, INPUT_TEXT_SIZE, SHELL_EDGE_PAD, SHELL_GAP, STATUS_HEIGHT_PAD,
+    COLOR_YELLOW, INPUT_TEXT_SIZE, SHELL_EDGE_PAD, SHELL_GAP, STATUS_HEIGHT_PAD, TAB_HEIGHT,
 };
 use rfd::FileDialog;
 use ropey::Rope;
@@ -2614,17 +2614,32 @@ impl LstGpuiApp {
     }
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut items = (0..self.tabs.len())
+            .map(|ix| self.render_tab(ix, cx).into_any_element())
+            .collect::<Vec<_>>();
+        items.push(
+            div()
+                .flex()
+                .flex_none()
+                .h(px(TAB_HEIGHT))
+                .px_2()
+                .items_center()
+                .border_r_1()
+                .border_color(rgb(COLOR_BORDER))
+                .child(
+                    IconButton::new("new-tab-button", IconKind::Plus).on_click(cx.listener(
+                        |this, _, _window, cx| {
+                            this.handle_new_tab(&NewTab, _window, cx);
+                            cx.stop_propagation();
+                        },
+                    )),
+                )
+                .into_any_element(),
+        );
+
         TabBar::new("editor-tabs")
             .track_scroll(&self.tab_bar_scroll)
-            .end_child(
-                IconButton::new("new-tab-button", IconKind::Plus).on_click(cx.listener(
-                    |this, _, _window, cx| {
-                        this.handle_new_tab(&NewTab, _window, cx);
-                        cx.stop_propagation();
-                    },
-                )),
-            )
-            .children((0..self.tabs.len()).map(|ix| self.render_tab(ix, cx)))
+            .children(items)
     }
 
     fn render_find_bar(&mut self) -> impl IntoElement {
@@ -2634,67 +2649,65 @@ impl LstGpuiApp {
             format!("{}/{}", self.find.current + 1, self.find.matches.len())
         };
 
-        div().flex_none().px(px(SHELL_EDGE_PAD)).pt_2().child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(SHELL_GAP))
-                .px_3()
-                .py_2()
-                .rounded_sm()
-                .bg(rgb(COLOR_SURFACE0))
-                .border_1()
-                .border_color(rgb(COLOR_BORDER))
-                .child(
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(SHELL_GAP))
+            .px_3()
+            .py_2()
+            .rounded_sm()
+            .bg(rgb(COLOR_SURFACE0))
+            .border_1()
+            .border_color(rgb(COLOR_BORDER))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(INPUT_TEXT_SIZE))
+                    .text_color(rgb(COLOR_SUBTEXT))
+                    .child("Find"),
+            )
+            .child(div().w(px(280.0)).child(self.find_query_input.clone()))
+            .when(self.find.show_replace, |row| {
+                row.child(
                     div()
                         .flex_none()
                         .text_size(px(INPUT_TEXT_SIZE))
                         .text_color(rgb(COLOR_SUBTEXT))
-                        .child("Find"),
+                        .child("Replace"),
                 )
-                .child(div().w(px(280.0)).child(self.find_query_input.clone()))
-                .when(self.find.show_replace, |row| {
-                    row.child(
-                        div()
-                            .flex_none()
-                            .text_size(px(INPUT_TEXT_SIZE))
-                            .text_color(rgb(COLOR_SUBTEXT))
-                            .child("Replace"),
-                    )
-                    .child(div().w(px(280.0)).child(self.find_replace_input.clone()))
-                })
-                .child(
-                    div()
-                        .flex_none()
-                        .font_family(".ZedMono")
-                        .text_size(px(INPUT_TEXT_SIZE))
-                        .text_color(rgb(COLOR_MUTED))
-                        .child(match_label),
-                ),
-        )
+                .child(div().w(px(280.0)).child(self.find_replace_input.clone()))
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .font_family(".ZedMono")
+                    .text_size(px(INPUT_TEXT_SIZE))
+                    .text_color(rgb(COLOR_MUTED))
+                    .child(match_label),
+            )
     }
 
     fn render_goto_bar(&mut self) -> impl IntoElement {
-        div().flex_none().px(px(SHELL_EDGE_PAD)).pt_2().child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(SHELL_GAP))
-                .px_3()
-                .py_2()
-                .rounded_sm()
-                .bg(rgb(COLOR_SURFACE0))
-                .border_1()
-                .border_color(rgb(COLOR_BORDER))
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(px(INPUT_TEXT_SIZE))
-                        .text_color(rgb(COLOR_SUBTEXT))
-                        .child("Line"),
-                )
-                .child(div().w(px(180.0)).child(self.goto_line_input.clone())),
-        )
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(SHELL_GAP))
+            .px_3()
+            .py_2()
+            .rounded_sm()
+            .bg(rgb(COLOR_SURFACE0))
+            .border_1()
+            .border_color(rgb(COLOR_BORDER))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(INPUT_TEXT_SIZE))
+                    .text_color(rgb(COLOR_SUBTEXT))
+                    .child("Line"),
+            )
+            .child(div().w(px(180.0)).child(self.goto_line_input.clone()))
     }
 
     fn render_status_bar(&self) -> impl IntoElement {
@@ -2704,7 +2717,7 @@ impl LstGpuiApp {
             .justify_between()
             .items_center()
             .gap_3()
-            .px(px(SHELL_EDGE_PAD))
+            .px_3()
             .py(px(STATUS_HEIGHT_PAD))
             .bg(rgb(COLOR_SURFACE0))
             .border_t_1()
@@ -3000,108 +3013,120 @@ impl Render for LstGpuiApp {
             .size_full()
             .bg(rgb(COLOR_BG))
             .text_color(rgb(COLOR_TEXT))
-            .child(self.render_tab_strip(cx))
-            .when(self.find.visible, |app| app.child(self.render_find_bar()))
-            .when(self.goto_line.is_some(), |app| {
-                app.child(self.render_goto_bar())
-            })
             .child(
                 div()
                     .flex_grow()
+                    .flex()
+                    .flex_col()
                     .px(px(SHELL_EDGE_PAD))
-                    .pb(px(SHELL_EDGE_PAD))
-                    .pt_2()
-                    .track_focus(&self.focus_handle)
-                    .key_context("Editor")
-                    .on_key_down(cx.listener(Self::on_key_down))
+                    .py(px(SHELL_EDGE_PAD))
+                    .gap_2()
+                    .child(self.render_tab_strip(cx))
+                    .when(self.find.visible, |shell| {
+                        shell.child(self.render_find_bar())
+                    })
+                    .when(self.goto_line.is_some(), |shell| {
+                        shell.child(self.render_goto_bar())
+                    })
                     .child(
                         div()
-                            .id("buffer-viewport")
-                            .relative()
-                            .h_full()
-                            .w_full()
-                            .border_1()
-                            .border_color(rgb(COLOR_BORDER))
-                            .bg(rgb(COLOR_SURFACE1))
-                            .font_family(".ZedMono")
-                            .text_size(px(CODE_FONT_SIZE))
-                            .line_height(px(ROW_HEIGHT))
+                            .flex_grow()
+                            .track_focus(&self.focus_handle)
+                            .key_context("Editor")
+                            .on_key_down(cx.listener(Self::on_key_down))
                             .child(
                                 div()
-                                    .id("buffer-scroll")
-                                    .overflow_y_scroll()
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .size_full()
-                                    .track_scroll(&viewport_scroll)
-                                    .child(div().h(total_content_height).w_full()),
-                            )
-                            .child(
-                                div()
-                                    .id("buffer-overlay")
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .size_full()
-                                    .cursor(CursorStyle::IBeam)
-                                    .block_mouse_except_scroll()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(Self::on_mouse_down),
-                                    )
-                                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                                    .on_mouse_up_out(
-                                        MouseButton::Left,
-                                        cx.listener(Self::on_mouse_up),
-                                    )
-                                    .on_mouse_move(cx.listener(Self::on_mouse_move))
+                                    .id("buffer-viewport")
+                                    .relative()
+                                    .h_full()
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .border_1()
+                                    .border_color(rgb(COLOR_BORDER))
+                                    .bg(rgb(COLOR_SURFACE1))
+                                    .font_family(".ZedMono")
+                                    .text_size(px(CODE_FONT_SIZE))
+                                    .line_height(px(ROW_HEIGHT))
                                     .child(
-                                        canvas(
-                                            move |bounds, window, _cx| {
-                                                prepare_viewport_paint_state(
-                                                    &buffer,
-                                                    line_texts.as_ref(),
-                                                    revision,
-                                                    syntax_mode,
-                                                    show_gutter,
-                                                    show_wrap,
-                                                    &viewport_scroll,
-                                                    &viewport_cache,
-                                                    &viewport_geometry,
-                                                    bounds,
-                                                    char_width,
-                                                    window,
+                                        div()
+                                            .id("buffer-scroll")
+                                            .overflow_y_scroll()
+                                            .absolute()
+                                            .left_0()
+                                            .top_0()
+                                            .size_full()
+                                            .track_scroll(&viewport_scroll)
+                                            .child(div().h(total_content_height).w_full()),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("buffer-overlay")
+                                            .absolute()
+                                            .left_0()
+                                            .top_0()
+                                            .size_full()
+                                            .cursor(CursorStyle::IBeam)
+                                            .block_mouse_except_scroll()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(Self::on_mouse_down),
+                                            )
+                                            .on_mouse_up(
+                                                MouseButton::Left,
+                                                cx.listener(Self::on_mouse_up),
+                                            )
+                                            .on_mouse_up_out(
+                                                MouseButton::Left,
+                                                cx.listener(Self::on_mouse_up),
+                                            )
+                                            .on_mouse_move(cx.listener(Self::on_mouse_move))
+                                            .child(
+                                                canvas(
+                                                    move |bounds, window, _cx| {
+                                                        prepare_viewport_paint_state(
+                                                            &buffer,
+                                                            line_texts.as_ref(),
+                                                            revision,
+                                                            syntax_mode,
+                                                            show_gutter,
+                                                            show_wrap,
+                                                            &viewport_scroll,
+                                                            &viewport_cache,
+                                                            &viewport_geometry,
+                                                            bounds,
+                                                            char_width,
+                                                            window,
+                                                        )
+                                                    },
+                                                    move |bounds, paint_state, window, cx| {
+                                                        window.handle_input(
+                                                            &focus_handle,
+                                                            ElementInputHandler::new(
+                                                                bounds,
+                                                                entity.clone(),
+                                                            ),
+                                                            cx,
+                                                        );
+                                                        paint_viewport(
+                                                            bounds,
+                                                            show_gutter,
+                                                            selection.clone(),
+                                                            cursor_char,
+                                                            vim_mode,
+                                                            focus_handle.is_focused(window),
+                                                            paint_state,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
                                                 )
-                                            },
-                                            move |bounds, paint_state, window, cx| {
-                                                window.handle_input(
-                                                    &focus_handle,
-                                                    ElementInputHandler::new(
-                                                        bounds,
-                                                        entity.clone(),
-                                                    ),
-                                                    cx,
-                                                );
-                                                paint_viewport(
-                                                    bounds,
-                                                    show_gutter,
-                                                    selection.clone(),
-                                                    cursor_char,
-                                                    vim_mode,
-                                                    focus_handle.is_focused(window),
-                                                    paint_state,
-                                                    window,
-                                                    cx,
-                                                );
-                                            },
-                                        )
-                                        .size_full(),
+                                                .size_full(),
+                                            ),
                                     ),
                             ),
-                    ),
+                    )
+                    .child(self.render_status_bar()),
             )
-            .child(self.render_status_bar())
     }
 }
 

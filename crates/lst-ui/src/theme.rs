@@ -20,10 +20,10 @@ pub const COLOR_CARET: u32 = 0xF5E0DC;
 pub const COLOR_CURRENT_LINE: u32 = 0x181B2B;
 pub const COLOR_GUTTER: u32 = 0x161622;
 
-pub const SHELL_EDGE_PAD: f32 = 14.0;
+pub const SHELL_EDGE_PAD: f32 = 12.0;
 pub const SHELL_SECTION_PAD: f32 = 10.0;
 pub const SHELL_GAP: f32 = 8.0;
-pub const TAB_HEIGHT: f32 = 32.0;
+pub const TAB_HEIGHT: f32 = 30.0;
 pub const TAB_MIN_WIDTH: f32 = 128.0;
 pub const TAB_MAX_WIDTH: f32 = 220.0;
 pub const TAB_HORIZONTAL_PAD: f32 = 10.0;
