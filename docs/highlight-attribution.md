@@ -2,6 +2,11 @@
 
 Date of these measurements: `2026-04-09`
 
+Note: the paste benchmark now uses `benchmarks/paste-corpus-20k.rs` (~21.5k lines).
+The current contract copies from one tab into a second empty tab and waits until the saved target file exactly matches the corpus before finishing.
+The concrete scores below were collected on the older smaller paste corpus and should
+be treated as historical comparison notes, not current benchmark targets.
+
 Workload:
 
 - benchmark: `bench_paste_x11`

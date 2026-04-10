@@ -6,58 +6,65 @@ The goal is simple:
 
 - preserve behavior
 - run one fixed benchmark scenario
-- optimize one scalar score
+- optimize one scalar metric that matches the user-visible problem
 - use the other printed values as diagnostics
 
 ## Recommended next benchmark
 
-Use the **editing benchmark** for general optimization work. It exercises five
-features (paste, scroll, find, vim navigation, vim yank+paste) in a single
-CPU-measurement window and has tighter variance (~3%) than the paste-only
-benchmark (~30%).
+Use the **paste benchmark** when the problem is large copy/paste latency.
+That is the current recommendation for this repo's paste-lag investigation,
+because it measures one real large copy plus one real large paste into an empty
+target tab and does not finish until the pasted file is actually complete.
 
 ```bash
-cargo build --release --bin lst --bin bench_editing_x11
-./target/release/bench_editing_x11
+cargo build --release --bin lst --bin bench_paste_x11
+./target/release/bench_paste_x11
 ```
 
-Use the paste benchmark only when the question is paste-growth cost specifically.
+Use the editing benchmark only when the question is broader overall editor
+throughput rather than the single large-paste freeze.
 
 ## Which value to optimize
 
-Use the final line:
+For `bench_paste_x11`, optimize:
 
 ```text
-score=...
+trace_wall_ms
 ```
 
 The current contract is:
 
 ```text
-score = median(cpu_ms over the 7 measured repetitions)
+trace_wall_ms = median(end-to-end elapsed time over the 7 measured repetitions)
+score = median(cpu_ms over the same 7 measured repetitions)
 cpu_ms = user_cpu_ms + sys_cpu_ms
 ```
 
-Lower is better. The optimization loop should minimize `score`.
+Lower is better. For this paste benchmark, the optimization loop should minimize
+`trace_wall_ms`, because that is the closest scalar to the user's visible wait:
+the time from starting the copy/paste trace until the target file has the full
+pasted contents and is stable on disk.
+
+`score` is still useful, but as a secondary diagnostic. It tells you how much
+CPU time the editor process consumed while the paste was happening.
 
 ## Paste benchmark (single-phase)
 
-A single-phase benchmark that exercises only paste-growth on a large buffer.
-Useful for isolating paste/rendering cost, but note that ~78% of its CPU
-is in iced/cosmic-text internals (not our code).
+A single-phase benchmark that exercises a real large copy and a completed large paste on a prebuilt Rust corpus.
+Useful when the question is "how bad is large copy/paste latency?" rather than general editing throughput.
 
 Scenario:
 
 - real-display X11 benchmark
 - real injected keyboard input via XTEST
-- file: `benchmarks/paste-corpus.rs`
+- file: `benchmarks/paste-corpus-20k.rs` (frozen Rust corpus, ~21558 lines)
 - wrap: on
 - highlighting: default Rust tree-sitter highlighting
-- setup: focus editor, `Ctrl+A`, `Ctrl+C`, `Ctrl+End`
-- visible 5-second paste trace: `10` `Ctrl+V` pastes at `500ms` intervals
+- measured trace: focus editor, `Ctrl+A`, `Ctrl+C`, wait until the X11 clipboard matches the corpus size, `Ctrl+Tab` into a second empty tab, `Ctrl+V` once, then keep retrying `Ctrl+S` until the target file exactly matches the corpus size and stays stable
 - `1s` sleep between repetitions
 - `1` priming run, `7` measured runs
-- expected final file size on every measured run: `1468522` bytes, `39523` lines
+- initial file size: `801012` bytes, `21558` lines
+- expected final target file size on every measured run: `801012` bytes, `21558` lines
 
 Runner:
 
@@ -71,10 +78,22 @@ cargo build --release --bin lst --bin bench_paste_x11
 The runner also prints diagnostics:
 
 - `startup_ms`
+- `select_all_ms`
+- `copy_clipboard_ms`
+- `tab_switch_ms`
+- `paste_complete_ms`
+- `paste_push_undo_ms`
+- `paste_perform_ms`
+- `paste_mark_changed_ms`
+- `paste_update_total_ms`
 - `trace_wall_ms`
 - `user_cpu_ms`
 - `sys_cpu_ms`
 - `cpu_ms`
+- `trace_damage_events`
+- `paste_damage_events`
+- `save_retry_count`
+- `damage_hz_proxy`
 - `peak_rss_mb`
 - `final_file_bytes`
 - `final_file_lines`
@@ -83,12 +102,50 @@ Use them for interpretation, not as the optimization target.
 
 In particular:
 
+- `copy_clipboard_ms` is the clipboard propagation diagnostic
+- `paste_complete_ms` is the paste-only portion of the trace after `Ctrl+V`
+- `paste_perform_ms` is the internal editor-model insertion time recorded around `iced::text_editor::Content::perform(Edit::Paste)`
+- `paste_mark_changed_ms` is the app-owned post-paste bookkeeping time after the insertion
+- `paste_update_total_ms` is the total duration of the app's paste update handler
+- `save_retry_count` tells you how many `Ctrl+S` retries were needed before the target file matched
+- `damage_hz_proxy` is an XDamage redraw-cadence proxy for responsiveness, not literal display FPS
 - `peak_rss_mb` is the memory diagnostic
 - `startup_ms` is useful context but not part of this campaign
-- `final_file_bytes` and `final_file_lines` confirm that every run completed the same fixed paste workload
+- `final_file_bytes` and `final_file_lines` should match the benchmark's printed `expected_final_file_bytes` and `expected_final_file_lines`
+- `trace_wall_ms` is the primary optimization target for this benchmark
+- `score` remains median editor CPU time and is a useful secondary signal
+- `damage_hz_proxy` is often directionally useful, but it is not the optimization target
 
 Recent attribution notes for the paste benchmark are in [docs/highlight-attribution.md](/home/jmartin/lst/docs/highlight-attribution.md).
 Those notes include the syntax-highlighting sanity checks and the current Rust backend comparison.
+The framework-level assessment of `iced 0.14` and its large-paste path is in [docs/iced-text-editor-assessment.md](/home/jmartin/lst/docs/iced-text-editor-assessment.md).
+
+## Characterization Mode
+
+When the goal is attribution rather than optimization, the paste benchmark now
+supports a few runtime-only ablations. These do not change the default
+benchmark contract; they exist to answer "where is the time going?"
+
+Use:
+
+```bash
+LST_BENCH_DISABLE_HIGHLIGHT=1 ./target/release/bench_paste_x11
+LST_BENCH_DISABLE_GUTTER=1 ./target/release/bench_paste_x11
+LST_BENCH_FORCE_NOWRAP=1 ./target/release/bench_paste_x11
+```
+
+You can combine them when you want a stripped-down floor estimate:
+
+```bash
+LST_BENCH_DISABLE_HIGHLIGHT=1 \
+LST_BENCH_DISABLE_GUTTER=1 \
+LST_BENCH_FORCE_NOWRAP=1 \
+./target/release/bench_paste_x11
+```
+
+Read these as attribution experiments, not as the default optimization target.
+The production optimization loop should still run the default benchmark and
+optimize `trace_wall_ms`.
 
 ## Behavior-preservation gate
 
@@ -119,6 +176,9 @@ Do not broaden the project into a generalized benchmark framework. Keep the work
 A multi-phase benchmark that exercises paste, scroll, find, and vim in a single run.
 Better for overall optimization work because it covers more code paths and has tighter
 variance (~3% spread vs ~30% for paste-only).
+
+When using the editing benchmark instead of the paste benchmark, optimize its
+final `score=...` line as before.
 
 Scenario:
 
@@ -160,13 +220,15 @@ Use it when the question is scrolling cost specifically. Keep its `score=...` li
 When evaluating a change:
 
 1. Run the benchmark.
-2. Look at the final `score=...` line.
-3. Prefer lower `score`.
-4. Check that `final_file_bytes` and `final_file_lines` still match the fixed contract.
-5. Check `peak_rss_mb` for obvious regressions.
-6. Run `cargo test`.
+2. For `bench_paste_x11`, look at `trace_wall_ms` first.
+3. Prefer lower `trace_wall_ms`.
+4. Check that `final_file_bytes` and `final_file_lines` still match `expected_final_file_bytes` and `expected_final_file_lines`.
+5. Check `score`, `cpu_ms`, and `peak_rss_mb` for obvious regressions.
+6. Optionally inspect `damage_hz_proxy` as a redraw-responsiveness hint.
+7. Run `cargo test`.
 
-That is the current optimization contract.
+If you are using `bench_editing_x11` instead, use its final `score=...` line as
+the primary scalar.
 
 ## Rust Highlight Comparison
 

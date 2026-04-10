@@ -83,7 +83,7 @@ cargo build --release --bin lst --bin bench_paste_x11
 ./target/release/bench_paste_x11
 ```
 
-The benchmark prints diagnostics plus a final `score=...` line. The current paste benchmark score is median process CPU time for a fixed real-display pure-append paste trace against `benchmarks/paste-corpus.rs`, and lower is better. The current default Rust highlighting path is the tree-sitter backend; the paste benchmark setup uses real `Ctrl+A`, `Ctrl+C`, `Ctrl+End`, and the separate scroll benchmark remains available via `bench_scroll_x11`.
+The benchmark prints diagnostics plus a final `score=...` line. The current paste benchmark runs a fixed real-display trace that copies `benchmarks/paste-corpus-20k.rs` (~21.5k lines) from one tab, pastes it into a second empty tab, and does not finish until the saved target file exactly matches the corpus. For this benchmark, optimize `trace_wall_ms`: it is the end-to-end large-paste latency metric. `score` remains the median editor CPU-time diagnostic, and `damage_hz_proxy` is a redraw-cadence hint rather than literal FPS.
 
 Recent benchmark attribution notes, including the Rust highlighter comparison and the `syntect` fallback command, are in [docs/highlight-attribution.md](/home/jmartin/lst/docs/highlight-attribution.md).
 

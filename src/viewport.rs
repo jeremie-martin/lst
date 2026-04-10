@@ -127,7 +127,16 @@ pub fn line_number_gutter_width(line_count: usize, char_width: f32) -> f32 {
 }
 
 pub fn wrap_columns(viewport_width: f32, char_width: f32, line_count: usize) -> usize {
-    let editor_width = editor_text_width(viewport_width, char_width, line_count);
+    wrap_columns_with_gutter(viewport_width, char_width, line_count, true)
+}
+
+pub fn wrap_columns_with_gutter(
+    viewport_width: f32,
+    char_width: f32,
+    line_count: usize,
+    show_gutter: bool,
+) -> usize {
+    let editor_width = editor_text_width(viewport_width, char_width, line_count, show_gutter);
     (editor_width / char_width).floor().max(1.0) as usize
 }
 
@@ -181,9 +190,23 @@ pub fn content_height(viewport_height: f32, visual_lines: usize) -> f32 {
     text_height.max(viewport_height)
 }
 
-fn editor_text_width(viewport_width: f32, char_width: f32, line_count: usize) -> f32 {
-    let gutter_width = line_number_gutter_width(line_count, char_width);
-    (viewport_width - gutter_width - GUTTER_SEPARATOR_WIDTH - EDITOR_PAD - EDITOR_RIGHT_PAD)
+fn editor_text_width(
+    viewport_width: f32,
+    char_width: f32,
+    line_count: usize,
+    show_gutter: bool,
+) -> f32 {
+    let gutter_width = if show_gutter {
+        line_number_gutter_width(line_count, char_width)
+    } else {
+        0.0
+    };
+    let separator_width = if show_gutter {
+        GUTTER_SEPARATOR_WIDTH
+    } else {
+        0.0
+    };
+    (viewport_width - gutter_width - separator_width - EDITOR_PAD - EDITOR_RIGHT_PAD)
         .max(char_width)
 }
 

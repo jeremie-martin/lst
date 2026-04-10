@@ -16,30 +16,28 @@ use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
 use x11rb::NONE;
 
-const SCENARIO: &str = "paste_growth_x11_real";
-const CORPUS_REL: &str = "benchmarks/paste-corpus.rs";
+const SCENARIO: &str = "copy_paste_large_clipboard_x11_real";
+const DEFAULT_CORPUS_REL: &str = "benchmarks/paste-corpus-20k.rs";
 const WINDOW_REQUESTED_LOGICAL: &str = "980x680";
-const WRAP: &str = "on";
+const WRAP_DEFAULT: &str = "on";
 const HIGHLIGHT_DEFAULT: &str = "rust-tree-sitter-line-default";
 const PRIMING_RUNS: usize = 1;
 const REPETITIONS: usize = 7;
-const TRACE_PASTE_COUNT: usize = 10;
-const TRACE_TOTAL_MS: u64 = 5_000;
-const TRACE_PASTE_INTERVAL_MS: u64 = TRACE_TOTAL_MS / TRACE_PASTE_COUNT as u64;
 const INTER_RUN_SLEEP_MS: u64 = 1_000;
 const QUIET_MS: u64 = 75;
 const WINDOW_DISCOVERY_TIMEOUT_MS: u64 = 10_000;
-const TRACE_TIMEOUT_MS: u64 = 10_000;
+const TRACE_TIMEOUT_MS: u64 = 30_000;
 const POINTER_SETTLE_MS: u64 = 50;
-const COPY_SETTLE_MS: u64 = 100;
+const CLIPBOARD_STABLE_TIMEOUT_MS: u64 = 20_000;
 const FILE_STABLE_MS: u64 = 200;
-const FILE_STABLE_TIMEOUT_MS: u64 = 5_000;
+const FILE_STABLE_TIMEOUT_MS: u64 = 20_000;
+const SAVE_RETRY_MS: u64 = 100;
 const BUTTON_LEFT: u8 = 1;
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
 const KEYSYM_A: u32 = b'a' as u32;
 const KEYSYM_C: u32 = b'c' as u32;
-const KEYSYM_END: u32 = 0xff57;
 const KEYSYM_S: u32 = b's' as u32;
+const KEYSYM_TAB: u32 = 0xff09;
 const KEYSYM_V: u32 = b'v' as u32;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -60,7 +58,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut runs = Vec::with_capacity(REPETITIONS);
     let mut expected_window = None;
-    let mut expected_final = None;
+    let expected_final_bytes = corpus.bytes;
+    let expected_final_lines = corpus.lines;
 
     let total_runs = PRIMING_RUNS + REPETITIONS;
     for run_index in 0..total_runs {
@@ -89,24 +88,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             expected_window = Some((metrics.window_width, metrics.window_height));
         }
 
-        if metrics.final_file_bytes <= corpus.bytes || metrics.final_file_lines <= corpus.lines {
+        if metrics.final_file_bytes != expected_final_bytes
+            || metrics.final_file_lines != expected_final_lines
+        {
             return Err(io::Error::other(format!(
-                "paste-growth benchmark did not grow the document as expected: initial {} bytes/{} lines, final {} bytes/{} lines",
-                corpus.bytes, corpus.lines, metrics.final_file_bytes, metrics.final_file_lines
+                "paste benchmark produced unexpected final size: expected {expected_final_bytes} bytes/{expected_final_lines} lines, got {} bytes/{} lines",
+                metrics.final_file_bytes, metrics.final_file_lines
             ))
             .into());
-        }
-
-        if let Some((bytes, lines)) = expected_final {
-            if (metrics.final_file_bytes, metrics.final_file_lines) != (bytes, lines) {
-                return Err(io::Error::other(format!(
-                    "final file size changed across runs: expected {bytes} bytes/{lines} lines, got {} bytes/{} lines",
-                    metrics.final_file_bytes, metrics.final_file_lines
-                ))
-                .into());
-            }
-        } else {
-            expected_final = Some((metrics.final_file_bytes, metrics.final_file_lines));
         }
 
         if measured {
@@ -124,23 +113,71 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("scenario={SCENARIO}");
     println!("display={}", session_env.display);
-    println!("file={CORPUS_REL}");
+    println!("file={}", corpus.label);
     println!("file_bytes={}", corpus.bytes);
     println!("file_lines={}", corpus.lines);
-    println!("wrap={WRAP}");
+    println!("wrap={}", wrap_label());
     println!("highlight={}", highlight_label());
+    println!("gutter={}", gutter_label());
+    println!(
+        "editor_force_nowrap={}",
+        env_flag("LST_BENCH_FORCE_NOWRAP")
+    );
+    println!(
+        "editor_disable_highlight={}",
+        env_flag("LST_BENCH_DISABLE_HIGHLIGHT")
+    );
+    println!(
+        "editor_disable_gutter={}",
+        env_flag("LST_BENCH_DISABLE_GUTTER")
+    );
     println!("window_requested_logical={WINDOW_REQUESTED_LOGICAL}");
     println!("window_client_px={}x{}", window_width, window_height);
     println!("priming_runs={PRIMING_RUNS}");
     println!("repetitions={REPETITIONS}");
-    println!("setup_select_all_copy=true");
-    println!("setup_move_to_document_end=true");
-    println!("trace_paste_count={TRACE_PASTE_COUNT}");
-    println!("trace_paste_interval_ms={TRACE_PASTE_INTERVAL_MS}");
-    println!("trace_duration_ms={TRACE_TOTAL_MS}");
+    println!("trace_includes_select_all_copy=true");
+    println!("trace_switches_to_empty_target_tab=true");
+    println!("trace_paste_count=1");
+    println!("trace_paste_wait_mode=target_file_match_with_save_retry");
+    println!("trace_redraw_quiet_ms={QUIET_MS}");
+    println!("trace_save_retry_ms={SAVE_RETRY_MS}");
+    println!("expected_final_file_bytes={expected_final_bytes}");
+    println!("expected_final_file_lines={expected_final_lines}");
     println!("inter_run_sleep_ms={INTER_RUN_SLEEP_MS}");
     println!("quiet_ms={QUIET_MS}");
     println!("startup_ms_runs={}", join_csv_f64(&runs, |run| run.startup_ms));
+    println!(
+        "select_all_ms_runs={}",
+        join_csv_f64(&runs, |run| run.select_all_ms)
+    );
+    println!(
+        "copy_clipboard_ms_runs={}",
+        join_csv_f64(&runs, |run| run.copy_clipboard_ms)
+    );
+    println!(
+        "tab_switch_ms_runs={}",
+        join_csv_f64(&runs, |run| run.tab_switch_ms)
+    );
+    println!(
+        "paste_complete_ms_runs={}",
+        join_csv_f64(&runs, |run| run.paste_complete_ms)
+    );
+    println!(
+        "paste_push_undo_ms_runs={}",
+        join_csv_f64(&runs, |run| run.paste_push_undo_ms)
+    );
+    println!(
+        "paste_perform_ms_runs={}",
+        join_csv_f64(&runs, |run| run.paste_perform_ms)
+    );
+    println!(
+        "paste_mark_changed_ms_runs={}",
+        join_csv_f64(&runs, |run| run.paste_mark_changed_ms)
+    );
+    println!(
+        "paste_update_total_ms_runs={}",
+        join_csv_f64(&runs, |run| run.paste_update_total_ms)
+    );
     println!(
         "trace_wall_ms_runs={}",
         join_csv_f64(&runs, |run| run.trace_wall_ms)
@@ -148,6 +185,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("user_cpu_ms_runs={}", join_csv_f64(&runs, |run| run.user_cpu_ms));
     println!("sys_cpu_ms_runs={}", join_csv_f64(&runs, |run| run.sys_cpu_ms));
     println!("cpu_ms_runs={}", join_csv_f64(&runs, |run| run.cpu_ms()));
+    println!(
+        "trace_damage_events_runs={}",
+        join_csv_u64(&runs, |run| run.trace_damage_events)
+    );
+    println!(
+        "paste_damage_events_runs={}",
+        join_csv_u64(&runs, |run| run.paste_damage_events)
+    );
+    println!(
+        "save_retry_count_runs={}",
+        join_csv_u64(&runs, |run| run.save_retry_count)
+    );
+    println!(
+        "damage_hz_proxy_runs={}",
+        join_csv_f64(&runs, |run| run.damage_hz_proxy())
+    );
     println!("peak_rss_mb_runs={}", join_csv_f64(&runs, |run| run.peak_rss_mb));
     println!(
         "final_file_bytes_runs={}",
@@ -158,10 +211,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         join_csv_usize(&runs, |run| run.final_file_lines)
     );
     println!("startup_ms={:.3}", summary.startup_ms);
+    println!("select_all_ms={:.3}", summary.select_all_ms);
+    println!("copy_clipboard_ms={:.3}", summary.copy_clipboard_ms);
+    println!("tab_switch_ms={:.3}", summary.tab_switch_ms);
+    println!("paste_complete_ms={:.3}", summary.paste_complete_ms);
+    println!("paste_push_undo_ms={:.3}", summary.paste_push_undo_ms);
+    println!("paste_perform_ms={:.3}", summary.paste_perform_ms);
+    println!("paste_mark_changed_ms={:.3}", summary.paste_mark_changed_ms);
+    println!("paste_update_total_ms={:.3}", summary.paste_update_total_ms);
     println!("trace_wall_ms={:.3}", summary.trace_wall_ms);
     println!("user_cpu_ms={:.3}", summary.user_cpu_ms);
     println!("sys_cpu_ms={:.3}", summary.sys_cpu_ms);
     println!("cpu_ms={:.3}", summary.cpu_ms);
+    println!("trace_damage_events={}", summary.trace_damage_events);
+    println!("paste_damage_events={}", summary.paste_damage_events);
+    println!("save_retry_count={}", summary.save_retry_count);
+    println!("damage_hz_proxy={:.3}", summary.damage_hz_proxy);
     println!("peak_rss_mb={:.3}", summary.peak_rss_mb);
     println!("final_file_bytes={}", summary.final_file_bytes);
     println!("final_file_lines={}", summary.final_file_lines);
@@ -171,9 +236,35 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn highlight_label() -> &'static str {
+    if env_flag("LST_BENCH_DISABLE_HIGHLIGHT") {
+        return "disabled";
+    }
     match std::env::var("LST_HIGHLIGHT_BACKEND").ok().as_deref() {
         Some("syntect") => "rust-syntect-fallback",
         _ => HIGHLIGHT_DEFAULT,
+    }
+}
+
+fn wrap_label() -> &'static str {
+    if env_flag("LST_BENCH_FORCE_NOWRAP") {
+        "off"
+    } else {
+        WRAP_DEFAULT
+    }
+}
+
+fn gutter_label() -> &'static str {
+    if env_flag("LST_BENCH_DISABLE_GUTTER") {
+        "off"
+    } else {
+        "on"
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => !value.is_empty() && value != "0",
+        Err(_) => false,
     }
 }
 
@@ -188,11 +279,15 @@ fn run_once(
     ticks_per_second: u64,
     run_index: usize,
 ) -> Result<RunMetrics, Box<dyn Error>> {
-    let working_copy = working_copy_path(run_index);
-    fs::write(&working_copy, &corpus.contents)?;
+    let source_copy = source_copy_path(run_index);
+    let target_copy = target_copy_path(run_index);
+    let trace_copy = trace_copy_path(run_index);
+    fs::write(&source_copy, &corpus.contents)?;
+    fs::write(&target_copy, "")?;
 
     let title = format!("lst-bench-paste-{}-{run_index}", std::process::id());
-    let mut child = spawn_editor(editor, &working_copy, session_env, &title)?;
+    let files = [source_copy.as_path(), target_copy.as_path()];
+    let mut child = spawn_editor(editor, &files, session_env, &title, &trace_copy)?;
     let pid = child.id();
 
     let result = (|| {
@@ -211,7 +306,7 @@ fn run_once(
             damage::DamageWrapper::create(conn, window.id, damage::ReportLevel::NON_EMPTY)?;
         conn.flush()?;
         debug_phase(run_index, "startup_quiet");
-        wait_for_damage_quiet(
+        let _ = wait_for_damage_quiet(
             conn,
             damage.damage(),
             window.id,
@@ -226,35 +321,7 @@ fn run_once(
         thread::sleep(Duration::from_millis(POINTER_SETTLE_MS));
         inject_button_click(conn, root, BUTTON_LEFT)?;
         debug_phase(run_index, "post_click_quiet");
-        wait_for_damage_quiet(
-            conn,
-            damage.damage(),
-            window.id,
-            &mut child,
-            Duration::from_millis(QUIET_MS),
-            Duration::from_millis(TRACE_TIMEOUT_MS),
-        )?;
-
-        debug_phase(run_index, "ctrl_a");
-        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.a)?;
-        debug_phase(run_index, "post_ctrl_a_quiet");
-        wait_for_damage_quiet(
-            conn,
-            damage.damage(),
-            window.id,
-            &mut child,
-            Duration::from_millis(QUIET_MS),
-            Duration::from_millis(TRACE_TIMEOUT_MS),
-        )?;
-
-        debug_phase(run_index, "ctrl_c");
-        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.c)?;
-        thread::sleep(Duration::from_millis(COPY_SETTLE_MS));
-
-        debug_phase(run_index, "ctrl_end");
-        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.end)?;
-        debug_phase(run_index, "post_ctrl_end_quiet");
-        wait_for_damage_quiet(
+        let _ = wait_for_damage_quiet(
             conn,
             damage.damage(),
             window.id,
@@ -266,15 +333,13 @@ fn run_once(
         debug_phase(run_index, "trace_start");
         let before = proc_sample(pid)?;
         let trace_started = Instant::now();
-        inject_paste_burst(
-            conn,
-            root,
-            keycodes,
-            TRACE_PASTE_COUNT,
-            Duration::from_millis(TRACE_TOTAL_MS),
-        )?;
-        debug_phase(run_index, "post_trace_quiet");
-        wait_for_damage_quiet(
+        let mut trace_damage_events = 0u64;
+
+        debug_phase(run_index, "ctrl_a");
+        let select_all_started = Instant::now();
+        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.a)?;
+        debug_phase(run_index, "post_ctrl_a_quiet");
+        trace_damage_events += wait_for_damage_quiet(
             conn,
             damage.damage(),
             window.id,
@@ -282,20 +347,65 @@ fn run_once(
             Duration::from_millis(QUIET_MS),
             Duration::from_millis(TRACE_TIMEOUT_MS),
         )?;
-        let trace_wall_ms = trace_started.elapsed().as_secs_f64() * 1000.0;
-        let after = proc_sample(pid)?;
+        let select_all_ms = select_all_started.elapsed().as_secs_f64() * 1000.0;
 
-        debug_phase(run_index, "ctrl_s");
-        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.s)?;
-        debug_phase(run_index, "wait_file_stable");
-        let final_stats = wait_for_file_stable(
-            &working_copy,
+        debug_phase(run_index, "ctrl_c");
+        let copy_clipboard_started = Instant::now();
+        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.c)?;
+        debug_phase(run_index, "wait_clipboard");
+        wait_for_clipboard_bytes(corpus.bytes, Duration::from_millis(CLIPBOARD_STABLE_TIMEOUT_MS))?;
+        let copy_clipboard_ms = copy_clipboard_started.elapsed().as_secs_f64() * 1000.0;
+
+        debug_phase(run_index, "ctrl_tab");
+        let tab_switch_started = Instant::now();
+        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.tab)?;
+        debug_phase(run_index, "post_ctrl_tab_quiet");
+        trace_damage_events += wait_for_damage_quiet(
+            conn,
+            damage.damage(),
+            window.id,
+            &mut child,
+            Duration::from_millis(QUIET_MS),
+            Duration::from_millis(TRACE_TIMEOUT_MS),
+        )?;
+        let tab_switch_ms = tab_switch_started.elapsed().as_secs_f64() * 1000.0;
+
+        debug_phase(run_index, "paste_into_empty_tab");
+        let paste_started = Instant::now();
+        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.v)?;
+        debug_phase(run_index, "wait_target_match");
+        let (paste_damage_events, save_retry_count, final_stats) = wait_for_file_match_with_save_retry(
+            conn,
+            damage.damage(),
+            window.id,
+            &mut child,
+            root,
+            keycodes,
+            &target_copy,
+            FileStats {
+                bytes: corpus.bytes,
+                lines: corpus.lines,
+            },
             Duration::from_millis(FILE_STABLE_MS),
+            Duration::from_millis(SAVE_RETRY_MS),
             Duration::from_millis(FILE_STABLE_TIMEOUT_MS),
         )?;
+        let paste_complete_ms = paste_started.elapsed().as_secs_f64() * 1000.0;
+        trace_damage_events += paste_damage_events;
+        let trace_wall_ms = trace_started.elapsed().as_secs_f64() * 1000.0;
+        let after = proc_sample(pid)?;
+        let editor_trace = read_editor_trace(&trace_copy)?;
 
         Ok(RunMetrics {
             startup_ms,
+            select_all_ms,
+            copy_clipboard_ms,
+            tab_switch_ms,
+            paste_complete_ms,
+            paste_push_undo_ms: editor_trace.paste_push_undo_ms,
+            paste_perform_ms: editor_trace.paste_perform_ms,
+            paste_mark_changed_ms: editor_trace.paste_mark_changed_ms,
+            paste_update_total_ms: editor_trace.paste_update_total_ms,
             trace_wall_ms,
             user_cpu_ms: ticks_to_ms(
                 after.utime_ticks.saturating_sub(before.utime_ticks),
@@ -305,6 +415,9 @@ fn run_once(
                 after.stime_ticks.saturating_sub(before.stime_ticks),
                 ticks_per_second,
             ),
+            trace_damage_events,
+            paste_damage_events,
+            save_retry_count,
             peak_rss_mb: after.vmhwm_kb as f64 / 1024.0,
             final_file_bytes: final_stats.bytes,
             final_file_lines: final_stats.lines,
@@ -314,36 +427,58 @@ fn run_once(
     })();
 
     let terminate_result = terminate_child(&mut child);
-    let cleanup_result = fs::remove_file(&working_copy);
+    let cleanup_source_result = fs::remove_file(&source_copy);
+    let cleanup_target_result = fs::remove_file(&target_copy);
+    let cleanup_trace_result = fs::remove_file(&trace_copy);
 
     if let Err(error) = terminate_result {
         return Err(error);
     }
-    if let Err(error) = cleanup_result {
+    if let Err(error) = cleanup_source_result {
+        return Err(error.into());
+    }
+    if let Err(error) = cleanup_target_result {
+        return Err(error.into());
+    }
+    if let Err(error) = cleanup_trace_result {
         return Err(error.into());
     }
 
     result
 }
 
-fn working_copy_path(run_index: usize) -> PathBuf {
+fn source_copy_path(run_index: usize) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "lst-bench-paste-{}-{run_index}.rs",
+        "lst-bench-paste-source-{}-{run_index}.rs",
+        std::process::id()
+    ))
+}
+
+fn target_copy_path(run_index: usize) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "lst-bench-paste-target-{}-{run_index}.rs",
+        std::process::id()
+    ))
+}
+
+fn trace_copy_path(run_index: usize) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "lst-bench-paste-trace-{}-{run_index}.log",
         std::process::id()
     ))
 }
 
 fn spawn_editor(
     editor: &Path,
-    file: &Path,
+    files: &[&Path],
     session_env: &SessionEnv,
     title: &str,
+    trace_path: &Path,
 ) -> Result<Child, Box<dyn Error>> {
     let mut command = Command::new(editor);
     command
         .arg("--title")
         .arg(title)
-        .arg(file)
         .stdin(Stdio::null())
         .stdout(if debug_enabled() {
             Stdio::inherit()
@@ -356,6 +491,11 @@ fn spawn_editor(
             Stdio::null()
         })
         .env("DISPLAY", &session_env.display);
+    command.env("LST_BENCH_TRACE_FILE", trace_path);
+
+    for file in files {
+        command.arg(file);
+    }
 
     if let Some(xauthority) = &session_env.xauthority {
         command.env("XAUTHORITY", xauthority);
@@ -378,11 +518,18 @@ fn debug_phase(run_index: usize, phase: &str) {
 }
 
 fn corpus_info() -> Result<CorpusInfo, Box<dyn Error>> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(CORPUS_REL);
+    let (path, label) = match std::env::var("LST_BENCH_PASTE_CORPUS") {
+        Ok(path) => (PathBuf::from(&path), path),
+        Err(_) => {
+            let rel = DEFAULT_CORPUS_REL.to_string();
+            (Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel), rel)
+        }
+    };
     let contents = fs::read_to_string(&path)?;
     let bytes = fs::metadata(&path)?.len();
     let lines = contents.lines().count();
     Ok(CorpusInfo {
+        label,
         contents,
         bytes,
         lines,
@@ -557,33 +704,6 @@ fn inject_key_release(
     Ok(())
 }
 
-fn inject_paste_burst(
-    conn: &RustConnection,
-    root: xproto::Window,
-    keycodes: &Keycodes,
-    count: usize,
-    total_duration: Duration,
-) -> Result<(), Box<dyn Error>> {
-    let start = Instant::now();
-
-    for index in 0..count {
-        if debug_enabled() {
-            eprintln!("bench_paste_x11 paste={}/{}", index + 1, count);
-        }
-        inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.v)?;
-
-        if !total_duration.is_zero() && count > 0 {
-            let target_time = start + total_duration.mul_f64((index + 1) as f64 / count as f64);
-            let now = Instant::now();
-            if target_time > now {
-                thread::sleep(target_time - now);
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn wait_for_damage_quiet(
     conn: &RustConnection,
     damage_id: damage::Damage,
@@ -591,9 +711,10 @@ fn wait_for_damage_quiet(
     child: &mut Child,
     quiet_for: Duration,
     timeout: Duration,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<u64, Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
     let mut last_damage = Instant::now();
+    let mut damage_events = 0u64;
 
     loop {
         if let Some(status) = child.try_wait()? {
@@ -607,6 +728,7 @@ fn wait_for_damage_quiet(
             if let Event::DamageNotify(notify) = event {
                 if notify.damage == damage_id && notify.drawable == window {
                     last_damage = Instant::now();
+                    damage_events += 1;
                     conn.damage_subtract(damage_id, NONE, NONE)?;
                 }
             }
@@ -615,7 +737,7 @@ fn wait_for_damage_quiet(
         conn.flush()?;
 
         if last_damage.elapsed() >= quiet_for {
-            return Ok(());
+            return Ok(damage_events);
         }
 
         if Instant::now() >= deadline {
@@ -689,31 +811,110 @@ fn ticks_to_ms(ticks: u64, ticks_per_second: u64) -> f64 {
     ticks as f64 * 1000.0 / ticks_per_second as f64
 }
 
-fn wait_for_file_stable(
+fn wait_for_file_match_with_save_retry(
+    conn: &RustConnection,
+    damage_id: damage::Damage,
+    window: xproto::Window,
+    child: &mut Child,
+    root: xproto::Window,
+    keycodes: &Keycodes,
     path: &Path,
+    expected: FileStats,
     stable_for: Duration,
+    save_retry_every: Duration,
     timeout: Duration,
-) -> Result<FileStats, Box<dyn Error>> {
+) -> Result<(u64, u64, FileStats), Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
     let mut last_stats = read_file_stats(path)?;
     let mut last_change = Instant::now();
+    let mut last_save: Option<Instant> = None;
+    let mut damage_events = 0u64;
+    let mut save_retry_count = 0u64;
 
     loop {
+        if let Some(status) = child.try_wait()? {
+            return Err(io::Error::other(format!(
+                "editor exited while benchmark was waiting for pasted file contents: {status}"
+            ))
+            .into());
+        }
+
+        while let Some(event) = conn.poll_for_event()? {
+            if let Event::DamageNotify(notify) = event {
+                if notify.damage == damage_id && notify.drawable == window {
+                    damage_events += 1;
+                    conn.damage_subtract(damage_id, NONE, NONE)?;
+                }
+            }
+        }
+
+        conn.flush()?;
+
         let stats = read_file_stats(path)?;
         if stats != last_stats {
             last_stats = stats;
             last_change = Instant::now();
         }
 
-        if last_change.elapsed() >= stable_for {
-            return Ok(last_stats);
+        if last_stats == expected && last_change.elapsed() >= stable_for {
+            return Ok((damage_events, save_retry_count, last_stats));
+        }
+
+        let should_retry_save = match last_save {
+            Some(saved_at) => saved_at.elapsed() >= save_retry_every,
+            None => true,
+        };
+        if should_retry_save {
+            inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.s)?;
+            last_save = Some(Instant::now());
+            save_retry_count += 1;
         }
 
         if Instant::now() >= deadline {
-            return Err(io::Error::other("timed out waiting for file to stabilize").into());
+            return Err(io::Error::other(format!(
+                "timed out waiting for target file to reach {}/{}; last observed {} bytes/{} lines",
+                expected.bytes, expected.lines, last_stats.bytes, last_stats.lines
+            ))
+            .into());
         }
 
         thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_clipboard_bytes(expected_bytes: u64, timeout: Duration) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if let Some(actual_bytes) = read_clipboard_bytes()? {
+            if actual_bytes == expected_bytes {
+                return Ok(());
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(format!(
+                "timed out waiting for clipboard to reach expected size {expected_bytes} bytes"
+            ))
+            .into());
+        }
+
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn read_clipboard_bytes() -> Result<Option<u64>, Box<dyn Error>> {
+    let output = Command::new("xclip")
+        .args(["-selection", "clipboard", "-o"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()?;
+
+    if output.status.success() {
+        Ok(Some(output.stdout.len() as u64))
+    } else {
+        Ok(None)
     }
 }
 
@@ -722,6 +923,32 @@ fn read_file_stats(path: &Path) -> Result<FileStats, Box<dyn Error>> {
     let bytes = fs::metadata(path)?.len();
     let lines = contents.lines().count();
     Ok(FileStats { bytes, lines })
+}
+
+fn read_editor_trace(path: &Path) -> Result<EditorTrace, Box<dyn Error>> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(EditorTrace::default()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut values = HashMap::new();
+
+    for line in contents.lines() {
+        let Some((label, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Ok(value) = value.parse::<f64>() else {
+            continue;
+        };
+        values.insert(label, value);
+    }
+
+    Ok(EditorTrace {
+        paste_push_undo_ms: *values.get("paste_push_undo_ms").unwrap_or(&0.0),
+        paste_perform_ms: *values.get("paste_perform_ms").unwrap_or(&0.0),
+        paste_mark_changed_ms: *values.get("paste_mark_changed_ms").unwrap_or(&0.0),
+        paste_update_total_ms: *values.get("paste_update_total_ms").unwrap_or(&0.0),
+    })
 }
 
 fn editor_path() -> Result<PathBuf, Box<dyn Error>> {
@@ -889,6 +1116,7 @@ struct SessionEnv {
 }
 
 struct CorpusInfo {
+    label: String,
     contents: String,
     bytes: u64,
     lines: usize,
@@ -898,6 +1126,14 @@ struct ProcSample {
     utime_ticks: u64,
     stime_ticks: u64,
     vmhwm_kb: u64,
+}
+
+#[derive(Default)]
+struct EditorTrace {
+    paste_push_undo_ms: f64,
+    paste_perform_ms: f64,
+    paste_mark_changed_ms: f64,
+    paste_update_total_ms: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -916,9 +1152,20 @@ struct WindowInfo {
 
 struct RunMetrics {
     startup_ms: f64,
+    select_all_ms: f64,
+    copy_clipboard_ms: f64,
+    tab_switch_ms: f64,
+    paste_complete_ms: f64,
+    paste_push_undo_ms: f64,
+    paste_perform_ms: f64,
+    paste_mark_changed_ms: f64,
+    paste_update_total_ms: f64,
     trace_wall_ms: f64,
     user_cpu_ms: f64,
     sys_cpu_ms: f64,
+    trace_damage_events: u64,
+    paste_damage_events: u64,
+    save_retry_count: u64,
     peak_rss_mb: f64,
     final_file_bytes: u64,
     final_file_lines: usize,
@@ -930,14 +1177,34 @@ impl RunMetrics {
     fn cpu_ms(&self) -> f64 {
         self.user_cpu_ms + self.sys_cpu_ms
     }
+
+    fn damage_hz_proxy(&self) -> f64 {
+        if self.trace_wall_ms <= 0.0 {
+            0.0
+        } else {
+            self.trace_damage_events as f64 * 1000.0 / self.trace_wall_ms
+        }
+    }
 }
 
 struct Summary {
     startup_ms: f64,
+    select_all_ms: f64,
+    copy_clipboard_ms: f64,
+    tab_switch_ms: f64,
+    paste_complete_ms: f64,
+    paste_push_undo_ms: f64,
+    paste_perform_ms: f64,
+    paste_mark_changed_ms: f64,
+    paste_update_total_ms: f64,
     trace_wall_ms: f64,
     user_cpu_ms: f64,
     sys_cpu_ms: f64,
     cpu_ms: f64,
+    trace_damage_events: u64,
+    paste_damage_events: u64,
+    save_retry_count: u64,
+    damage_hz_proxy: f64,
     peak_rss_mb: f64,
     final_file_bytes: u64,
     final_file_lines: usize,
@@ -947,12 +1214,75 @@ impl Summary {
     fn from_runs(runs: &[RunMetrics]) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             startup_ms: median_f64(&runs.iter().map(|run| run.startup_ms).collect::<Vec<_>>())?,
+            select_all_ms: median_f64(
+                &runs.iter().map(|run| run.select_all_ms).collect::<Vec<_>>(),
+            )?,
+            copy_clipboard_ms: median_f64(
+                &runs
+                    .iter()
+                    .map(|run| run.copy_clipboard_ms)
+                    .collect::<Vec<_>>(),
+            )?,
+            tab_switch_ms: median_f64(
+                &runs.iter().map(|run| run.tab_switch_ms).collect::<Vec<_>>(),
+            )?,
+            paste_complete_ms: median_f64(
+                &runs
+                    .iter()
+                    .map(|run| run.paste_complete_ms)
+                    .collect::<Vec<_>>(),
+            )?,
+            paste_push_undo_ms: median_f64(
+                &runs
+                    .iter()
+                    .map(|run| run.paste_push_undo_ms)
+                    .collect::<Vec<_>>(),
+            )?,
+            paste_perform_ms: median_f64(
+                &runs
+                    .iter()
+                    .map(|run| run.paste_perform_ms)
+                    .collect::<Vec<_>>(),
+            )?,
+            paste_mark_changed_ms: median_f64(
+                &runs
+                    .iter()
+                    .map(|run| run.paste_mark_changed_ms)
+                    .collect::<Vec<_>>(),
+            )?,
+            paste_update_total_ms: median_f64(
+                &runs
+                    .iter()
+                    .map(|run| run.paste_update_total_ms)
+                    .collect::<Vec<_>>(),
+            )?,
             trace_wall_ms: median_f64(
                 &runs.iter().map(|run| run.trace_wall_ms).collect::<Vec<_>>(),
             )?,
             user_cpu_ms: median_f64(&runs.iter().map(|run| run.user_cpu_ms).collect::<Vec<_>>())?,
             sys_cpu_ms: median_f64(&runs.iter().map(|run| run.sys_cpu_ms).collect::<Vec<_>>())?,
             cpu_ms: median_f64(&runs.iter().map(|run| run.cpu_ms()).collect::<Vec<_>>())?,
+            trace_damage_events: median_u64(
+                &runs
+                    .iter()
+                    .map(|run| run.trace_damage_events)
+                    .collect::<Vec<_>>(),
+            )?,
+            paste_damage_events: median_u64(
+                &runs
+                    .iter()
+                    .map(|run| run.paste_damage_events)
+                    .collect::<Vec<_>>(),
+            )?,
+            save_retry_count: median_u64(
+                &runs.iter().map(|run| run.save_retry_count).collect::<Vec<_>>(),
+            )?,
+            damage_hz_proxy: median_f64(
+                &runs
+                    .iter()
+                    .map(|run| run.damage_hz_proxy())
+                    .collect::<Vec<_>>(),
+            )?,
             peak_rss_mb: median_f64(
                 &runs.iter().map(|run| run.peak_rss_mb).collect::<Vec<_>>(),
             )?,
@@ -986,8 +1316,8 @@ struct Keycodes {
     control_l: xproto::Keycode,
     a: xproto::Keycode,
     c: xproto::Keycode,
-    end: xproto::Keycode,
     s: xproto::Keycode,
+    tab: xproto::Keycode,
     v: xproto::Keycode,
 }
 
@@ -1002,8 +1332,8 @@ impl Keycodes {
             control_l: find_keycode(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
             a: find_keycode(&reply, setup.min_keycode, KEYSYM_A, active_group)?,
             c: find_keycode(&reply, setup.min_keycode, KEYSYM_C, active_group)?,
-            end: find_keycode(&reply, setup.min_keycode, KEYSYM_END, active_group)?,
             s: find_keycode(&reply, setup.min_keycode, KEYSYM_S, active_group)?,
+            tab: find_keycode(&reply, setup.min_keycode, KEYSYM_TAB, active_group)?,
             v: find_keycode(&reply, setup.min_keycode, KEYSYM_V, active_group)?,
         })
     }

@@ -36,6 +36,47 @@ static FIND_INPUT_ID: LazyLock<iced::widget::Id> =
     LazyLock::new(|| iced::widget::Id::new("lst-find"));
 static GOTO_LINE_ID: LazyLock<iced::widget::Id> =
     LazyLock::new(|| iced::widget::Id::new("lst-goto-line"));
+static BENCH_TRACE_FILE: LazyLock<Option<PathBuf>> =
+    LazyLock::new(|| std::env::var_os("LST_BENCH_TRACE_FILE").map(PathBuf::from));
+static BENCH_RENDER_CONFIG: LazyLock<BenchRenderConfig> = LazyLock::new(|| BenchRenderConfig {
+    disable_highlight: env_flag("LST_BENCH_DISABLE_HIGHLIGHT"),
+    disable_gutter: env_flag("LST_BENCH_DISABLE_GUTTER"),
+    force_nowrap: env_flag("LST_BENCH_FORCE_NOWRAP"),
+});
+
+#[derive(Clone, Copy)]
+struct BenchRenderConfig {
+    disable_highlight: bool,
+    disable_gutter: bool,
+    force_nowrap: bool,
+}
+
+fn bench_render_config() -> BenchRenderConfig {
+    *BENCH_RENDER_CONFIG
+}
+
+fn env_flag(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => !value.is_empty() && value != "0",
+        Err(_) => false,
+    }
+}
+
+fn bench_trace_ms(label: &str, ms: f64) {
+    let Some(path) = BENCH_TRACE_FILE.as_ref() else {
+        return;
+    };
+
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+
+    let _ = std::io::Write::write_all(&mut file, format!("{label}={ms:.3}\n").as_bytes());
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EditorPointerCell {
@@ -444,7 +485,7 @@ impl App {
                 window_title: args.window_title,
                 gutter_hover_line: None,
                 find: FindState::new(),
-                word_wrap: true,
+                word_wrap: !bench_render_config().force_nowrap,
                 scratchpad_dir,
                 needs_autosave: false,
                 shift_held: false,
@@ -497,7 +538,7 @@ impl App {
             window_title: None,
             gutter_hover_line: None,
             find: FindState::new(),
-            word_wrap: true,
+            word_wrap: !bench_render_config().force_nowrap,
             scratchpad_dir: Some(PathBuf::from("/tmp")),
             needs_autosave: false,
             shift_held: false,
@@ -1034,6 +1075,11 @@ impl App {
     pub fn update_inner(&mut self, message: Message) -> UpdateResult {
         let result = match message {
             Message::Edit(action) => {
+                let trace_paste = matches!(
+                    &action,
+                    text_editor::Action::Edit(text_editor::Edit::Paste(_))
+                );
+                let paste_total_started = trace_paste.then(std::time::Instant::now);
                 let reveal = reveal_intent_for_edit_action(&action);
                 self.vim.clear_preferred_column();
                 // Workaround for iced-rs/iced#3227 — remove when merged
@@ -1159,9 +1205,17 @@ impl App {
                         },
                         _ => unreachable!(),
                     };
+                    let undo_started = trace_paste.then(std::time::Instant::now);
                     self.tabs[self.active].push_undo_snapshot(kind, boundary);
+                    if let Some(started) = undo_started {
+                        bench_trace_ms("paste_push_undo_ms", started.elapsed().as_secs_f64() * 1000.0);
+                    }
                 }
+                let perform_started = trace_paste.then(std::time::Instant::now);
                 self.tabs[self.active].content.perform(action);
+                if let Some(started) = perform_started {
+                    bench_trace_ms("paste_perform_ms", started.elapsed().as_secs_f64() * 1000.0);
+                }
 
                 if let Some(closer) = auto_close_char {
                     self.tabs[self.active]
@@ -1178,9 +1232,22 @@ impl App {
                 }
 
                 if is_edit {
+                    let mark_changed_started = trace_paste.then(std::time::Instant::now);
                     self.mark_active_content_changed();
+                    if let Some(started) = mark_changed_started {
+                        bench_trace_ms(
+                            "paste_mark_changed_ms",
+                            started.elapsed().as_secs_f64() * 1000.0,
+                        );
+                    }
                 }
                 self.apply_block_cursor_if_normal();
+                if let Some(started) = paste_total_started {
+                    bench_trace_ms(
+                        "paste_update_total_ms",
+                        started.elapsed().as_secs_f64() * 1000.0,
+                    );
+                }
                 UpdateResult {
                     task: Task::none(),
                     reveal,
@@ -2245,6 +2312,7 @@ impl App {
 
     pub fn view(&self) -> Element<'_, Message> {
         let tab = &self.tabs[self.active];
+        let render_config = bench_render_config();
 
         let theme = self.theme();
         let p = theme.extended_palette();
@@ -2406,114 +2474,154 @@ impl App {
         let editor_area = responsive(move |size| {
             let vh = size.height;
             let overscroll = vh * 0.4;
-            let (line_num_text, top_gap, bottom_gap) = if word_wrap {
-                let wrap_cols = wrapped_cols(size.width, n_lines).unwrap_or(1);
-                let temporary_layout_cache;
-                let layout_cache = if let Some(cache) = tab.layout_cache_for(wrap_cols) {
-                    cache
-                } else {
-                    temporary_layout_cache = tab.build_layout_cache(wrap_cols);
-                    &temporary_layout_cache
-                };
-                let visible_rows =
-                    viewport::visible_row_range(scroll_y, vh, layout_cache.total_visual_rows);
-
-                (
-                    layout_cache.visible_gutter_text(n_lines, visible_rows.start, visible_rows.end),
-                    visible_rows.start as f32 * LINE_HEIGHT_PX,
-                    layout_cache
-                        .total_visual_rows
-                        .saturating_sub(visible_rows.end) as f32
-                        * LINE_HEIGHT_PX,
-                )
-            } else {
-                let visible_rows = viewport::visible_row_range(scroll_y, vh, n_lines);
-
-                (
-                    tab.visible_unwrapped_gutter_text(visible_rows.start, visible_rows.end),
-                    visible_rows.start as f32 * LINE_HEIGHT_PX,
-                    n_lines.saturating_sub(visible_rows.end) as f32 * LINE_HEIGHT_PX,
-                )
-            };
-
-            let line_numbers = mouse_area(
-                container(column![
-                    Space::new().height(top_gap),
-                    text(line_num_text)
-                        .size(FONT_SIZE)
-                        .font(editor_font)
-                        .color(text_muted)
-                        .line_height(Pixels(LINE_HEIGHT_PX))
-                        .wrapping(iced::widget::text::Wrapping::None),
-                    Space::new().height(bottom_gap),
-                ])
-                .padding(Padding {
-                    top: EDITOR_PAD,
-                    bottom: EDITOR_PAD + overscroll,
-                    left: viewport::LINE_NUMBER_LEFT_PAD,
-                    right: 0.0,
-                }),
-            )
-            .on_move(Message::GutterMove)
-            .on_press(Message::GutterClick);
-
-            let gutter_line = container(Space::new())
-                .width(viewport::GUTTER_SEPARATOR_WIDTH)
-                .height(Length::Fill)
-                .style(solid_bg(bg_strong));
-
             let wrapping = if word_wrap {
                 iced::widget::text::Wrapping::Word
             } else {
                 iced::widget::text::Wrapping::None
             };
 
-            let editor = text_editor(content_ref)
-                .id(EDITOR_ID.clone())
-                .on_action(Message::Edit)
-                .font(editor_font)
-                .size(FONT_SIZE)
-                .line_height(Pixels(LINE_HEIGHT_PX))
-                .wrapping(wrapping)
-                .padding(Padding {
-                    top: EDITOR_PAD,
-                    bottom: EDITOR_PAD + overscroll,
-                    left: EDITOR_PAD,
-                    right: viewport::EDITOR_RIGHT_PAD,
-                })
-                .height(Length::Shrink)
-                .min_height(vh)
-                .highlight_with::<highlight::LstHighlighter>(
-                    highlight::Settings {
-                        extension: highlight_ext.clone(),
-                    },
-                    highlight::format,
+            let editor: Element<'_, Message> = if render_config.disable_highlight {
+                mouse_area(
+                    text_editor(content_ref)
+                        .id(EDITOR_ID.clone())
+                        .on_action(Message::Edit)
+                        .font(editor_font)
+                        .size(FONT_SIZE)
+                        .line_height(Pixels(LINE_HEIGHT_PX))
+                        .wrapping(wrapping)
+                        .padding(Padding {
+                            top: EDITOR_PAD,
+                            bottom: EDITOR_PAD + overscroll,
+                            left: EDITOR_PAD,
+                            right: viewport::EDITOR_RIGHT_PAD,
+                        })
+                        .height(Length::Shrink)
+                        .min_height(vh)
+                        .key_binding(move |key_press| {
+                            editor_key_binding(key_press, vim_mode, cursor_line, last_line, vh)
+                        })
+                        .style(move |_theme, _status| text_editor::Style {
+                            background: Background::Color(bg_base),
+                            border: Border::default().width(0),
+                            placeholder: text_muted,
+                            value: text_main,
+                            selection: Color {
+                                a: if vim_mode == vim::Mode::Normal { 0.5 } else { 0.3 },
+                                ..primary
+                            },
+                        }),
                 )
-                .key_binding(move |key_press| {
-                    editor_key_binding(key_press, vim_mode, cursor_line, last_line, vh)
-                })
-                .style(move |_theme, _status| text_editor::Style {
-                    background: Background::Color(bg_base),
-                    border: Border::default().width(0),
-                    placeholder: text_muted,
-                    value: text_main,
-                    selection: Color {
-                        a: if vim_mode == vim::Mode::Normal {
-                            0.5
-                        } else {
-                            0.3
-                        },
-                        ..primary
-                    },
-                });
-
-            // Workaround for iced-rs/iced#3227 — remove when merged
-            let editor = mouse_area(editor)
                 .on_move(Message::EditorMouseMove)
                 .on_release(Message::MulticlickReleased)
-                .on_middle_press(Message::MiddleClickPaste);
+                .on_middle_press(Message::MiddleClickPaste)
+                .into()
+            } else {
+                mouse_area(
+                    text_editor(content_ref)
+                        .id(EDITOR_ID.clone())
+                        .on_action(Message::Edit)
+                        .font(editor_font)
+                        .size(FONT_SIZE)
+                        .line_height(Pixels(LINE_HEIGHT_PX))
+                        .wrapping(wrapping)
+                        .padding(Padding {
+                            top: EDITOR_PAD,
+                            bottom: EDITOR_PAD + overscroll,
+                            left: EDITOR_PAD,
+                            right: viewport::EDITOR_RIGHT_PAD,
+                        })
+                        .height(Length::Shrink)
+                        .min_height(vh)
+                        .highlight_with::<highlight::LstHighlighter>(
+                            highlight::Settings {
+                                extension: highlight_ext.clone(),
+                            },
+                            highlight::format,
+                        )
+                        .key_binding(move |key_press| {
+                            editor_key_binding(key_press, vim_mode, cursor_line, last_line, vh)
+                        })
+                        .style(move |_theme, _status| text_editor::Style {
+                            background: Background::Color(bg_base),
+                            border: Border::default().width(0),
+                            placeholder: text_muted,
+                            value: text_main,
+                            selection: Color {
+                                a: if vim_mode == vim::Mode::Normal { 0.5 } else { 0.3 },
+                                ..primary
+                            },
+                        }),
+                )
+                .on_move(Message::EditorMouseMove)
+                .on_release(Message::MulticlickReleased)
+                .on_middle_press(Message::MiddleClickPaste)
+                .into()
+            };
 
-            scrollable(row![line_numbers, gutter_line, editor].width(Length::Fill))
+            let editor_row: Element<'_, Message> = if render_config.disable_gutter {
+                row![editor].width(Length::Fill).into()
+            } else {
+                let (line_num_text, top_gap, bottom_gap) = if word_wrap {
+                    let wrap_cols = wrapped_cols(size.width, n_lines).unwrap_or(1);
+                    let temporary_layout_cache;
+                    let layout_cache = if let Some(cache) = tab.layout_cache_for(wrap_cols) {
+                        cache
+                    } else {
+                        temporary_layout_cache = tab.build_layout_cache(wrap_cols);
+                        &temporary_layout_cache
+                    };
+                    let visible_rows =
+                        viewport::visible_row_range(scroll_y, vh, layout_cache.total_visual_rows);
+
+                    (
+                        layout_cache
+                            .visible_gutter_text(n_lines, visible_rows.start, visible_rows.end),
+                        visible_rows.start as f32 * LINE_HEIGHT_PX,
+                        layout_cache
+                            .total_visual_rows
+                            .saturating_sub(visible_rows.end) as f32
+                            * LINE_HEIGHT_PX,
+                    )
+                } else {
+                    let visible_rows = viewport::visible_row_range(scroll_y, vh, n_lines);
+
+                    (
+                        tab.visible_unwrapped_gutter_text(visible_rows.start, visible_rows.end),
+                        visible_rows.start as f32 * LINE_HEIGHT_PX,
+                        n_lines.saturating_sub(visible_rows.end) as f32 * LINE_HEIGHT_PX,
+                    )
+                };
+
+                let line_numbers = mouse_area(
+                    container(column![
+                        Space::new().height(top_gap),
+                        text(line_num_text)
+                            .size(FONT_SIZE)
+                            .font(editor_font)
+                            .color(text_muted)
+                            .line_height(Pixels(LINE_HEIGHT_PX))
+                            .wrapping(iced::widget::text::Wrapping::None),
+                        Space::new().height(bottom_gap),
+                    ])
+                    .padding(Padding {
+                        top: EDITOR_PAD,
+                        bottom: EDITOR_PAD + overscroll,
+                        left: viewport::LINE_NUMBER_LEFT_PAD,
+                        right: 0.0,
+                    }),
+                )
+                .on_move(Message::GutterMove)
+                .on_press(Message::GutterClick);
+
+                let gutter_line = container(Space::new())
+                    .width(viewport::GUTTER_SEPARATOR_WIDTH)
+                    .height(Length::Fill)
+                    .style(solid_bg(bg_strong));
+
+                row![line_numbers, gutter_line, editor].width(Length::Fill).into()
+            };
+
+            scrollable(editor_row)
                 .id(SCROLLABLE_ID.clone())
                 .on_scroll(Message::Scrolled)
                 .height(Length::Fill)
@@ -2641,10 +2749,11 @@ pub(crate) fn wrapped_cols(viewport_width: f32, line_count: usize) -> Option<usi
         return None;
     }
 
-    Some(viewport::wrap_columns(
+    Some(viewport::wrap_columns_with_gutter(
         viewport_width,
         EDITOR_FONT.char_width,
         line_count,
+        !bench_render_config().disable_gutter,
     ))
 }
 
