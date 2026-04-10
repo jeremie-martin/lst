@@ -4162,6 +4162,74 @@ fn parse_launch_args() -> LaunchArgs {
     args
 }
 
+fn editor_keybindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("ctrl-n", NewTab, None),
+        KeyBinding::new("cmd-n", NewTab, None),
+        KeyBinding::new("ctrl-o", OpenFile, None),
+        KeyBinding::new("cmd-o", OpenFile, None),
+        KeyBinding::new("ctrl-s", SaveFile, None),
+        KeyBinding::new("cmd-s", SaveFile, None),
+        KeyBinding::new("ctrl-shift-s", SaveFileAs, None),
+        KeyBinding::new("cmd-shift-s", SaveFileAs, None),
+        KeyBinding::new("ctrl-w", CloseActiveTab, None),
+        KeyBinding::new("cmd-w", CloseActiveTab, None),
+        KeyBinding::new("ctrl-tab", NextTab, None),
+        KeyBinding::new("cmd-shift-]", NextTab, None),
+        KeyBinding::new("ctrl-shift-tab", PrevTab, None),
+        KeyBinding::new("cmd-shift-[", PrevTab, None),
+        KeyBinding::new("alt-z", ToggleWrap, None),
+        KeyBinding::new("ctrl-c", CopySelection, None),
+        KeyBinding::new("cmd-c", CopySelection, None),
+        KeyBinding::new("ctrl-x", CutSelection, None),
+        KeyBinding::new("cmd-x", CutSelection, None),
+        KeyBinding::new("ctrl-v", PasteClipboard, None),
+        KeyBinding::new("cmd-v", PasteClipboard, None),
+        KeyBinding::new("ctrl-z", Undo, None),
+        KeyBinding::new("cmd-z", Undo, None),
+        KeyBinding::new("ctrl-y", Redo, None),
+        KeyBinding::new("cmd-shift-z", Redo, None),
+        KeyBinding::new("ctrl-f", FindOpen, None),
+        KeyBinding::new("cmd-f", FindOpen, None),
+        KeyBinding::new("ctrl-h", FindOpenReplace, None),
+        KeyBinding::new("cmd-h", FindOpenReplace, None),
+        KeyBinding::new("f3", FindNext, None),
+        KeyBinding::new("shift-f3", FindPrev, None),
+        KeyBinding::new("ctrl-g", GotoLineOpen, None),
+        KeyBinding::new("cmd-g", GotoLineOpen, None),
+        KeyBinding::new("alt-up", MoveLineUp, None),
+        KeyBinding::new("alt-down", MoveLineDown, None),
+        KeyBinding::new("ctrl-shift-k", DeleteLine, None),
+        KeyBinding::new("cmd-shift-k", DeleteLine, None),
+        KeyBinding::new("ctrl-shift-d", DuplicateLine, None),
+        KeyBinding::new("cmd-shift-d", DuplicateLine, None),
+        KeyBinding::new("ctrl-/", ToggleComment, None),
+        KeyBinding::new("cmd-/", ToggleComment, None),
+        KeyBinding::new("left", MoveLeft, None),
+        KeyBinding::new("right", MoveRight, None),
+        KeyBinding::new("up", MoveUp, None),
+        KeyBinding::new("down", MoveDown, None),
+        KeyBinding::new("shift-left", SelectLeft, None),
+        KeyBinding::new("shift-right", SelectRight, None),
+        KeyBinding::new("shift-up", SelectUp, None),
+        KeyBinding::new("shift-down", SelectDown, None),
+        KeyBinding::new("ctrl-up", SelectUp, None),
+        KeyBinding::new("ctrl-down", SelectDown, None),
+        KeyBinding::new("home", MoveLineStart, None),
+        KeyBinding::new("end", MoveLineEnd, None),
+        KeyBinding::new("shift-home", SelectLineStart, None),
+        KeyBinding::new("shift-end", SelectLineEnd, None),
+        KeyBinding::new("backspace", Backspace, None),
+        KeyBinding::new("delete", DeleteForward, None),
+        KeyBinding::new("enter", InsertNewline, None),
+        KeyBinding::new("tab", InsertTab, None),
+        KeyBinding::new("ctrl-a", SelectAll, None),
+        KeyBinding::new("cmd-a", SelectAll, None),
+        KeyBinding::new("ctrl-q", Quit, None),
+        KeyBinding::new("cmd-q", Quit, None),
+    ]
+}
+
 fn main() {
     let launch = parse_launch_args();
     let auto_bench = launch.auto_bench.clone();
@@ -4177,69 +4245,7 @@ fn main() {
     }
 
     Application::new().run(move |cx: &mut App| {
-        cx.bind_keys([
-            KeyBinding::new("ctrl-n", NewTab, None),
-            KeyBinding::new("cmd-n", NewTab, None),
-            KeyBinding::new("ctrl-o", OpenFile, None),
-            KeyBinding::new("cmd-o", OpenFile, None),
-            KeyBinding::new("ctrl-s", SaveFile, None),
-            KeyBinding::new("cmd-s", SaveFile, None),
-            KeyBinding::new("ctrl-shift-s", SaveFileAs, None),
-            KeyBinding::new("cmd-shift-s", SaveFileAs, None),
-            KeyBinding::new("ctrl-w", CloseActiveTab, None),
-            KeyBinding::new("cmd-w", CloseActiveTab, None),
-            KeyBinding::new("ctrl-tab", NextTab, None),
-            KeyBinding::new("cmd-shift-]", NextTab, None),
-            KeyBinding::new("ctrl-shift-tab", PrevTab, None),
-            KeyBinding::new("cmd-shift-[", PrevTab, None),
-            KeyBinding::new("alt-z", ToggleWrap, None),
-            KeyBinding::new("ctrl-c", CopySelection, None),
-            KeyBinding::new("cmd-c", CopySelection, None),
-            KeyBinding::new("ctrl-x", CutSelection, None),
-            KeyBinding::new("cmd-x", CutSelection, None),
-            KeyBinding::new("ctrl-v", PasteClipboard, None),
-            KeyBinding::new("cmd-v", PasteClipboard, None),
-            KeyBinding::new("ctrl-z", Undo, None),
-            KeyBinding::new("cmd-z", Undo, None),
-            KeyBinding::new("ctrl-y", Redo, None),
-            KeyBinding::new("cmd-shift-z", Redo, None),
-            KeyBinding::new("ctrl-f", FindOpen, None),
-            KeyBinding::new("cmd-f", FindOpen, None),
-            KeyBinding::new("ctrl-h", FindOpenReplace, None),
-            KeyBinding::new("cmd-h", FindOpenReplace, None),
-            KeyBinding::new("f3", FindNext, None),
-            KeyBinding::new("shift-f3", FindPrev, None),
-            KeyBinding::new("ctrl-g", GotoLineOpen, None),
-            KeyBinding::new("cmd-g", GotoLineOpen, None),
-            KeyBinding::new("alt-up", MoveLineUp, None),
-            KeyBinding::new("alt-down", MoveLineDown, None),
-            KeyBinding::new("ctrl-shift-k", DeleteLine, None),
-            KeyBinding::new("cmd-shift-k", DeleteLine, None),
-            KeyBinding::new("ctrl-shift-d", DuplicateLine, None),
-            KeyBinding::new("cmd-shift-d", DuplicateLine, None),
-            KeyBinding::new("ctrl-/", ToggleComment, None),
-            KeyBinding::new("cmd-/", ToggleComment, None),
-            KeyBinding::new("left", MoveLeft, None),
-            KeyBinding::new("right", MoveRight, None),
-            KeyBinding::new("up", MoveUp, None),
-            KeyBinding::new("down", MoveDown, None),
-            KeyBinding::new("shift-left", SelectLeft, None),
-            KeyBinding::new("shift-right", SelectRight, None),
-            KeyBinding::new("shift-up", SelectUp, None),
-            KeyBinding::new("shift-down", SelectDown, None),
-            KeyBinding::new("home", MoveLineStart, None),
-            KeyBinding::new("end", MoveLineEnd, None),
-            KeyBinding::new("shift-home", SelectLineStart, None),
-            KeyBinding::new("shift-end", SelectLineEnd, None),
-            KeyBinding::new("backspace", Backspace, None),
-            KeyBinding::new("delete", DeleteForward, None),
-            KeyBinding::new("enter", InsertNewline, None),
-            KeyBinding::new("tab", InsertTab, None),
-            KeyBinding::new("ctrl-a", SelectAll, None),
-            KeyBinding::new("cmd-a", SelectAll, None),
-            KeyBinding::new("ctrl-q", Quit, None),
-            KeyBinding::new("cmd-q", Quit, None),
-        ]);
+        cx.bind_keys(editor_keybindings());
 
         let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
         let launch = launch.clone();
@@ -4301,6 +4307,14 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::Keystroke;
+
+    fn has_binding<A: gpui::Action + 'static>(keystroke: &str) -> bool {
+        let typed = [Keystroke::parse(keystroke).expect("valid test keystroke")];
+        editor_keybindings().iter().any(|binding| {
+            binding.match_keystrokes(&typed) == Some(false) && binding.action().as_any().is::<A>()
+        })
+    }
 
     #[test]
     fn autosave_revision_requires_a_unique_matching_tab() {
@@ -4345,5 +4359,11 @@ mod tests {
 
         assert_eq!(selection, 0..11);
         assert!(reversed);
+    }
+
+    #[test]
+    fn ctrl_arrow_aliases_expand_vertical_selection() {
+        assert!(has_binding::<SelectUp>("ctrl-up"));
+        assert!(has_binding::<SelectDown>("ctrl-down"));
     }
 }
