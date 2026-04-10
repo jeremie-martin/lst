@@ -18,9 +18,15 @@ DISPLAY=:1 cargo run -- --bench-append-corpus
 ## Status
 
 - `cargo check` passes for this spike crate.
-- `cargo build` passes on this host after installing `libxkbcommon-x11-dev`.
+- `cargo build` and `cargo build --release` pass on this host after installing `libxkbcommon-x11-dev`.
 - Running under `Xvfb` still does not work here because GPUI surface creation wants a real presentation backend with DRI3 support.
 - This spike now exits with a clear error instead of panicking when launched from a headless or fake-display environment.
+- The viewport no longer uses `uniform_list`; it now uses a scroll spacer plus a viewport-sized custom-painted canvas with a small shaped-line cache.
+
+Current real-display measurements on `DISPLAY=:1` with `target/release/lst-gpui-paste-lab`:
+
+- `--bench-replace-corpus`: `apply_ms=0.993`, `action_to_next_frame_ms=55.532`
+- `--bench-append-corpus`: `apply_ms=0.867`, `action_to_next_frame_ms=44.353`
 
 ## Shortcuts
 
@@ -40,7 +46,7 @@ Auto-bench mode runs one bulk replace or append after the first rendered frame, 
 The spike currently includes:
 
 - a `Ropey` text buffer
-- lazy line rendering via `gpui::uniform_list`
+- a custom-painted viewport driven by a scroll spacer and shaped-line cache
 - a simple action bar
 - clipboard-driven replace/append operations
 - an auto-bench mode for bulk replace and append from the 20k corpus or any file

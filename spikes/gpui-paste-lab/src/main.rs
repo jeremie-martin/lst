@@ -1,15 +1,25 @@
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, Focusable, IntoElement, KeyBinding, Render,
-    Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size, uniform_list,
+    ScrollHandle, ShapedLine, SharedString, TextRun, Window, WindowBounds, WindowOptions,
+    actions, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 use ropey::Rope;
-use std::{fs, ops::Range, process, time::Instant};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    fs,
+    ops::Range,
+    process,
+    rc::Rc,
+    time::Instant,
+};
 
 const WINDOW_WIDTH: f32 = 1360.0;
 const WINDOW_HEIGHT: f32 = 860.0;
 const ROW_HEIGHT: f32 = 22.0;
 const GUTTER_WIDTH: f32 = 76.0;
 const CODE_FONT_SIZE: f32 = 13.0;
+const VIEWPORT_OVERSCAN_LINES: usize = 4;
 const CORPUS_PATH: &str = "benchmarks/paste-corpus-20k.rs";
 const PREMADE_CORPUS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -81,12 +91,38 @@ struct AutoBench {
     text: String,
 }
 
+#[derive(Clone)]
+struct CachedShapedLine {
+    text: SharedString,
+    shaped: ShapedLine,
+}
+
+#[derive(Default)]
+struct ViewportCache {
+    code_lines: HashMap<usize, CachedShapedLine>,
+    gutter_lines: HashMap<usize, CachedShapedLine>,
+}
+
+#[derive(Clone)]
+struct PaintedRow {
+    line_ix: usize,
+    row_top: gpui::Pixels,
+    code_line: Option<ShapedLine>,
+    gutter_line: Option<ShapedLine>,
+}
+
+struct ViewportPaintState {
+    rows: Vec<PaintedRow>,
+}
+
 struct GpuiPasteLab {
     focus_handle: FocusHandle,
     buffer: Rope,
     show_gutter: bool,
     status: String,
     last_operation: OperationStats,
+    viewport_scroll: ScrollHandle,
+    viewport_cache: Rc<RefCell<ViewportCache>>,
 }
 
 impl GpuiPasteLab {
@@ -109,6 +145,8 @@ impl GpuiPasteLab {
             show_gutter: true,
             status: format!("Ready. Loaded {CORPUS_PATH} at startup."),
             last_operation,
+            viewport_scroll: ScrollHandle::new(),
+            viewport_cache: Rc::new(RefCell::new(ViewportCache::default())),
         }
     }
 
@@ -180,19 +218,6 @@ impl GpuiPasteLab {
         self.buffer.insert(insert_at, text);
         self.record_operation(label, clipboard_read_ms, elapsed_ms(apply_started));
         cx.notify();
-    }
-
-    fn line_text(&self, line_ix: usize) -> String {
-        let mut line = self.buffer.line(line_ix).to_string();
-        while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
-            line.pop();
-        }
-
-        if line.is_empty() {
-            " ".to_string()
-        } else {
-            line
-        }
     }
 
     fn load_corpus_inner(&mut self, cx: &mut Context<Self>) {
@@ -343,6 +368,12 @@ impl Focusable for GpuiPasteLab {
 
 impl Render for GpuiPasteLab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let total_content_height = buffer_content_height(self.buffer_lines());
+        let buffer = self.buffer.clone();
+        let show_gutter = self.show_gutter;
+        let viewport_scroll = self.viewport_scroll.clone();
+        let viewport_cache = self.viewport_cache.clone();
+
         div()
             .flex()
             .flex_col()
@@ -384,7 +415,7 @@ impl Render for GpuiPasteLab {
                                     .text_sm()
                                     .text_color(rgb(0x685C50))
                                     .child(
-                                        "Custom Ropey buffer + GPUI uniform_list. This is a spike for large-file and large-paste behavior, not a full editor.",
+                                        "Custom Ropey buffer + custom-painted GPUI viewport. This is a spike for large-file and large-paste behavior, not a full editor.",
                                     ),
                             )
                             .child(
@@ -430,59 +461,260 @@ impl Render for GpuiPasteLab {
             )
             .child(
                 div().flex_grow().p_3().child(
-                    uniform_list(
-                        "buffer-lines",
-                        self.buffer_lines(),
-                        cx.processor(|this, range: Range<usize>, _window, _cx| {
-                            range
-                                .map(|line_ix| {
-                                    let mut row = div()
-                                        .id(line_ix)
-                                        .h(px(ROW_HEIGHT))
-                                        .w_full()
-                                        .flex()
-                                        .items_center()
-                                        .px_2()
-                                        .bg(if line_ix % 2 == 0 {
-                                            rgb(0xFFFDF8)
-                                        } else {
-                                            rgb(0xF6EFE4)
-                                        });
-
-                                    if this.show_gutter {
-                                        row = row.child(
-                                            div()
-                                                .w(px(GUTTER_WIDTH))
-                                                .flex_none()
-                                                .pr_3()
-                                                .font_family(".ZedMono")
-                                                .text_size(px(CODE_FONT_SIZE))
-                                                .text_color(rgb(0x8D7F70))
-                                                .text_right()
-                                                .child(format!("{:>6}", line_ix + 1)),
-                                        );
-                                    }
-
-                                    row.child(
-                                        div()
-                                            .flex_grow()
-                                            .overflow_hidden()
-                                            .whitespace_nowrap()
-                                            .font_family(".ZedMono")
-                                            .text_size(px(CODE_FONT_SIZE))
-                                            .text_color(rgb(0x201A16))
-                                            .child(this.line_text(line_ix)),
+                    div()
+                        .id("buffer-viewport")
+                        .relative()
+                        .h_full()
+                        .w_full()
+                        .border_1()
+                        .border_color(rgb(0xC8BBA7))
+                        .bg(rgb(0xFFFDF8))
+                        .font_family(".ZedMono")
+                        .text_size(px(CODE_FONT_SIZE))
+                        .line_height(px(ROW_HEIGHT))
+                        .child(
+                            div()
+                                .id("buffer-scroll")
+                                .overflow_y_scroll()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .size_full()
+                                .track_scroll(&self.viewport_scroll)
+                                .child(div().h(total_content_height).w_full()),
+                        )
+                        .child(
+                            div()
+                                .id("buffer-overlay")
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .size_full()
+                                .block_mouse_except_scroll()
+                                .child(
+                                    canvas(
+                                        move |bounds, window, _cx| {
+                                            prepare_viewport_paint_state(
+                                                &buffer,
+                                                show_gutter,
+                                                &viewport_scroll,
+                                                &viewport_cache,
+                                                bounds,
+                                                window,
+                                            )
+                                        },
+                                        move |bounds, paint_state, window, cx| {
+                                            paint_viewport(
+                                                bounds,
+                                                show_gutter,
+                                                paint_state,
+                                                window,
+                                                cx,
+                                            );
+                                        },
                                     )
-                                })
-                                .collect()
-                        }),
-                    )
-                    .h_full()
-                    .w_full()
-                    .border_1()
-                    .border_color(rgb(0xC8BBA7)),
+                                    .size_full(),
+                                ),
+                        ),
                 ),
             )
+    }
+}
+
+fn buffer_content_height(line_count: usize) -> gpui::Pixels {
+    px((line_count.max(1) as f32) * ROW_HEIGHT)
+}
+
+fn line_display_text(buffer: &Rope, line_ix: usize) -> SharedString {
+    let mut line = buffer.line(line_ix).to_string();
+    while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
+        line.pop();
+    }
+
+    SharedString::from(line)
+}
+
+fn visible_line_range(
+    scroll_top: gpui::Pixels,
+    viewport_height: gpui::Pixels,
+    total_lines: usize,
+) -> Range<usize> {
+    let start = ((scroll_top / px(ROW_HEIGHT)).floor() as usize)
+        .saturating_sub(VIEWPORT_OVERSCAN_LINES);
+    let end = (((scroll_top + viewport_height) / px(ROW_HEIGHT)).ceil() as usize)
+        .saturating_add(VIEWPORT_OVERSCAN_LINES)
+        .min(total_lines.max(1));
+    start..end.max(start.saturating_add(1))
+}
+
+fn shape_cached_line(
+    cache: &mut HashMap<usize, CachedShapedLine>,
+    line_ix: usize,
+    text: SharedString,
+    base_run: &TextRun,
+    font_size: gpui::Pixels,
+    window: &mut Window,
+) -> Option<ShapedLine> {
+    if text.is_empty() {
+        return None;
+    }
+
+    if let Some(cached) = cache.get(&line_ix) {
+        if cached.text == text {
+            return Some(cached.shaped.clone());
+        }
+    }
+
+    let shaped = window.text_system().shape_line(
+        text.clone(),
+        font_size,
+        &[TextRun {
+            len: text.len(),
+            ..base_run.clone()
+        }],
+        None,
+    );
+
+    cache.insert(
+        line_ix,
+        CachedShapedLine {
+            text,
+            shaped: shaped.clone(),
+        },
+    );
+    Some(shaped)
+}
+
+fn prepare_viewport_paint_state(
+    buffer: &Rope,
+    show_gutter: bool,
+    viewport_scroll: &ScrollHandle,
+    viewport_cache: &Rc<RefCell<ViewportCache>>,
+    bounds: Bounds<gpui::Pixels>,
+    window: &mut Window,
+) -> ViewportPaintState {
+    let viewport_height = if bounds.size.height > px(0.) {
+        bounds.size.height
+    } else {
+        px(WINDOW_HEIGHT)
+    };
+    let scroll_top = {
+        let offset_y = -viewport_scroll.offset().y;
+        if offset_y > px(0.) { offset_y } else { px(0.) }
+    };
+    let visible = visible_line_range(scroll_top, viewport_height, buffer.len_lines());
+    let style = window.text_style();
+    let font_size = style.font_size.to_pixels(window.rem_size());
+    let code_run = TextRun {
+        len: 0,
+        font: style.font(),
+        color: rgb(0x201A16).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let gutter_run = TextRun {
+        len: 0,
+        font: style.font(),
+        color: rgb(0x8D7F70).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let mut rows = Vec::with_capacity(visible.len());
+    let mut cache = viewport_cache.borrow_mut();
+
+    cache.code_lines.retain(|line_ix, _| visible.contains(line_ix));
+    cache
+        .gutter_lines
+        .retain(|line_ix, _| show_gutter && visible.contains(line_ix));
+
+    for line_ix in visible {
+        let row_top = bounds.top() + px((line_ix as f32) * ROW_HEIGHT) - scroll_top;
+        let code_line = shape_cached_line(
+            &mut cache.code_lines,
+            line_ix,
+            line_display_text(buffer, line_ix),
+            &code_run,
+            font_size,
+            window,
+        );
+        let gutter_line = if show_gutter {
+            shape_cached_line(
+                &mut cache.gutter_lines,
+                line_ix,
+                SharedString::from(format!("{:>6}", line_ix + 1)),
+                &gutter_run,
+                font_size,
+                window,
+            )
+        } else {
+            None
+        };
+
+        rows.push(PaintedRow {
+            line_ix,
+            row_top,
+            code_line,
+            gutter_line,
+        });
+    }
+
+    ViewportPaintState { rows }
+}
+
+fn paint_viewport(
+    bounds: Bounds<gpui::Pixels>,
+    show_gutter: bool,
+    paint_state: ViewportPaintState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let line_height = window.line_height();
+    let gutter_origin_x = bounds.left() + px(8.);
+    let gutter_width = px(GUTTER_WIDTH - 16.0);
+    let code_origin_x = bounds.left() + if show_gutter { px(GUTTER_WIDTH) } else { px(12.) };
+
+    for row in paint_state.rows {
+        let row_bounds = Bounds::new(
+            point(bounds.left(), row.row_top),
+            size(bounds.size.width, px(ROW_HEIGHT)),
+        );
+        let row_background = if row.line_ix % 2 == 0 {
+            rgb(0xFFFDF8)
+        } else {
+            rgb(0xF6EFE4)
+        };
+        window.paint_quad(fill(row_bounds, row_background));
+
+        if show_gutter {
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(bounds.left(), row.row_top),
+                    size(px(GUTTER_WIDTH), px(ROW_HEIGHT)),
+                ),
+                rgb(0xF1E7D8),
+            ));
+        }
+
+        if let Some(gutter_line) = row.gutter_line.as_ref() {
+            let gutter_x = gutter_origin_x + (gutter_width - gutter_line.width);
+            let _ = gutter_line.paint(
+                point(gutter_x, row.row_top),
+                line_height,
+                window,
+                cx,
+            );
+        }
+
+        if let Some(code_line) = row.code_line.as_ref() {
+            let _ = code_line.paint(
+                point(code_origin_x, row.row_top),
+                line_height,
+                window,
+                cx,
+            );
+        }
     }
 }
 
