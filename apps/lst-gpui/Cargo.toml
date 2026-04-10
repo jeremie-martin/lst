@@ -1,8 +1,9 @@
 [package]
-name = "lst-gpui-paste-lab"
+name = "lst-gpui"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["x11"] }
 ropey = "1.6.1"
+rfd = "0.17"
