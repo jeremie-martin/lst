@@ -9,10 +9,11 @@ use lst_ui::{
     SHELL_GAP, STATUS_HEIGHT_PAD, TAB_HEIGHT,
 };
 
+use crate::syntax::syntax_mode_for_path;
 use crate::viewport::{buffer_content_height, paint_viewport, prepare_viewport_paint_state};
 use crate::{
-    code_char_width, ensure_wrap_layout, syntax_mode_for_path, LstGpuiApp, NewTab, PendingFocus,
-    CODE_FONT_SIZE, ROW_HEIGHT, WINDOW_WIDTH,
+    code_char_width, ensure_wrap_layout, LstGpuiApp, NewTab, PendingFocus, CODE_FONT_SIZE,
+    ROW_HEIGHT, WINDOW_WIDTH,
 };
 
 impl LstGpuiApp {
@@ -217,7 +218,7 @@ impl LstGpuiApp {
 impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.apply_pending_focus(window, cx);
-        self.ensure_active_rust_highlights(cx);
+        self.ensure_active_syntax_highlights(cx);
 
         let active = self.active;
         let show_gutter = self.show_gutter;

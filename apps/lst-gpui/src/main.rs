@@ -19,6 +19,7 @@ pub mod widget {
 mod keymap;
 mod launch;
 mod shell;
+mod syntax;
 #[cfg(test)]
 mod tests;
 mod viewport;
@@ -51,11 +52,14 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
+use syntax::{
+    compute_syntax_highlights, syntax_mode_for_path, CachedSyntaxHighlights, SyntaxHighlightJobKey,
+    SyntaxMode, SyntaxSpan,
+};
 use viewport::{
-    byte_index_to_char, code_char_width, code_origin_pad, compute_rust_highlights,
-    ensure_wrap_layout, line_display_char_len, line_display_text, line_for_visual_row,
-    row_contains_cursor, syntax_mode_for_path, visual_row_for_char, x_for_global_char,
-    CachedRustHighlights, SyntaxMode, SyntaxSpan, ViewportCache, ViewportGeometry,
+    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout,
+    line_display_char_len, line_display_text, line_for_visual_row, row_contains_cursor,
+    visual_row_for_char, x_for_global_char, ViewportCache, ViewportGeometry,
 };
 
 const WINDOW_WIDTH: f32 = 1360.0;
@@ -493,69 +497,75 @@ impl LstGpuiApp {
         }
     }
 
-    fn ensure_active_rust_highlights(&mut self, cx: &mut Context<Self>) {
+    fn ensure_active_syntax_highlights(&mut self, cx: &mut Context<Self>) {
         let active = self.active;
         let Some(tab) = self.tabs.get(active) else {
             return;
         };
-        if syntax_mode_for_path(tab.path.as_ref()) != SyntaxMode::TreeSitterRust {
+        let SyntaxMode::TreeSitter(language) = syntax_mode_for_path(tab.path.as_ref()) else {
             return;
-        }
+        };
 
         let revision = tab.revision();
+        let key = SyntaxHighlightJobKey { language, revision };
         let cache = tab.cache.clone();
         {
             let cache_ref = cache.borrow();
             if cache_ref
-                .rust_highlights
+                .syntax_highlights
                 .as_ref()
-                .is_some_and(|highlights| highlights.revision == revision)
+                .is_some_and(|highlights| {
+                    highlights.revision == revision && highlights.language == language
+                })
             {
                 return;
             }
-            if cache_ref.rust_highlight_inflight_revision.is_some() {
+            if cache_ref.syntax_highlight_inflight == Some(key) {
                 return;
             }
         }
 
-        cache.borrow_mut().rust_highlight_inflight_revision = Some(revision);
+        cache.borrow_mut().syntax_highlight_inflight = Some(key);
         let source = tab.buffer_text();
         cx.spawn(async move |this, cx| {
             let lines = cx
                 .background_executor()
-                .spawn(async move { compute_rust_highlights(&source) })
+                .spawn(async move { compute_syntax_highlights(language, &source) })
                 .await;
             let _ = this.update(cx, |view, cx| {
-                view.finish_rust_highlights(active, revision, cache, lines, cx);
+                view.finish_syntax_highlights(active, key, cache, lines, cx);
             });
         })
         .detach();
     }
 
-    fn finish_rust_highlights(
+    fn finish_syntax_highlights(
         &mut self,
         active: usize,
-        revision: u64,
+        key: SyntaxHighlightJobKey,
         cache: Rc<RefCell<ViewportCache>>,
         lines: Vec<Vec<SyntaxSpan>>,
         cx: &mut Context<Self>,
     ) {
         let mut cache_ref = cache.borrow_mut();
-        if cache_ref.rust_highlight_inflight_revision != Some(revision) {
+        if cache_ref.syntax_highlight_inflight != Some(key) {
             return;
         }
 
-        cache_ref.rust_highlight_inflight_revision = None;
-        cache_ref.rust_highlights = Some(CachedRustHighlights { revision, lines });
+        cache_ref.syntax_highlight_inflight = None;
+        if !syntax_highlight_result_is_current(&self.tabs, active, &cache, key) {
+            return;
+        }
+
+        cache_ref.syntax_highlights = Some(CachedSyntaxHighlights {
+            language: key.language,
+            revision: key.revision,
+            lines,
+        });
         cache_ref.clear_code_lines();
         drop(cache_ref);
 
-        if self.active == active
-            && self
-                .tabs
-                .get(active)
-                .is_some_and(|tab| Rc::ptr_eq(&tab.cache, &cache))
-        {
+        if self.active == active {
             cx.notify();
         }
     }
@@ -2610,6 +2620,19 @@ fn autosave_revision_is_current(tabs: &[EditorTab], path: &PathBuf, revision: u6
         matched = Some(tab.revision());
     }
     matched == Some(revision)
+}
+
+fn syntax_highlight_result_is_current(
+    tabs: &[EditorTab],
+    active: usize,
+    cache: &Rc<RefCell<ViewportCache>>,
+    key: SyntaxHighlightJobKey,
+) -> bool {
+    tabs.get(active).is_some_and(|tab| {
+        Rc::ptr_eq(&tab.cache, cache)
+            && tab.revision() == key.revision
+            && syntax_mode_for_path(tab.path.as_ref()) == SyntaxMode::TreeSitter(key.language)
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

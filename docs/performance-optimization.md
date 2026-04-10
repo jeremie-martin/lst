@@ -1,6 +1,6 @@
 # Performance Optimization Workflow
 
-This repository now has three concrete performance workflows.
+This repository now has four concrete performance workflows.
 
 The goal is simple:
 
@@ -170,6 +170,78 @@ It is also acceptable to edit:
 - `docs/`
 
 Do not broaden the project into a generalized benchmark framework. Keep the workflow narrow and simple.
+
+## Syntax highlighting characterization
+
+Use the GPUI syntax-highlighting benchmark when evaluating broad-language
+highlighting backends. This is a full-document cold workload, not an editor
+interaction benchmark. It exists to compare candidate highlighter engines under
+the same input size before wiring them into the editor.
+
+Runner:
+
+```bash
+cargo run --release -p lst-gpui --example bench_syntax_highlight -- --iterations 5
+```
+
+Primary value:
+
+```text
+median_ms
+```
+
+Lower is better. Compare rows with the same `language` and `lines`; do not
+compare `median_ms` across different corpus sizes as a product-level score.
+
+The benchmark currently prints TSV columns:
+
+```text
+backend language lines bytes iterations median_ms min_ms spans checksum
+```
+
+Backends:
+
+- `plain`: line-iteration floor; not a syntax-highlighting backend
+- `tree-sitter-parse`: parse-only lower bound for grammar-based highlighting
+- `tree-sitter-highlight`: full tree-sitter highlight query execution
+- `syntect`: broad TextMate/sublime-syntax highlighting baseline
+
+Representative results collected on `2026-04-10` on this machine:
+
+```text
+backend                 language    lines  median_ms
+tree-sitter-highlight   rust        21558  154.914
+syntect                 rust        21558  1572.387
+tree-sitter-highlight   python      20016  79.530
+syntect                 python      20016  1305.285
+tree-sitter-highlight   javascript  20007  130.552
+syntect                 javascript  20007  1470.141
+tree-sitter-highlight   typescript  20010  80.059
+tree-sitter-highlight   json        20003  41.990
+syntect                 json        20003  327.823
+tree-sitter-highlight   toml        20004  56.029
+tree-sitter-highlight   yaml        20000  47.867
+syntect                 yaml        20000  228.728
+tree-sitter-highlight   markdown    20000  154.659
+syntect                 markdown    20000  2166.187
+tree-sitter-highlight   html        20000  88.170
+syntect                 html        20000  973.288
+tree-sitter-highlight   css         20006  50.459
+syntect                 css         20006  708.044
+```
+
+Interpretation:
+
+- `syntect` remains useful as a broad-coverage baseline, but it is too slow to
+  be the default synchronous path for large documents.
+- `syntect` rows are omitted when the default syntax set has no syntax for that
+  extension, because plain-text fallback timings are not valid highlighting
+  measurements.
+- Tree-sitter highlighting is the current preferred direction for broad
+  language support because it is consistently much faster on this workload.
+- Production editor integration should not run full-document highlighting on
+  the UI path for every edit. Use background work, cache by document revision,
+  and move toward incremental or visible-range updates where possible.
 
 ## Editing benchmark (comprehensive)
 

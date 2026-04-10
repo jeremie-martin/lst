@@ -1,6 +1,10 @@
 use gpui::Keystroke;
-use lst_ui::COLOR_MUTED;
+use lst_ui::{COLOR_GREEN, COLOR_MUTED};
 
+use crate::syntax::{
+    compute_syntax_highlights, syntax_mode_for_path, SyntaxHighlightJobKey, SyntaxLanguage,
+    SyntaxMode,
+};
 use crate::viewport::PaintedRow;
 use crate::*;
 
@@ -43,11 +47,156 @@ fn autosave_revision_requires_a_unique_matching_tab() {
 
 #[test]
 fn rust_highlighting_keeps_multiline_comment_context() {
-    let lines = compute_rust_highlights("/* first line\nsecond line */\nlet x = 1;\n");
+    let lines = compute_syntax_highlights(
+        SyntaxLanguage::Rust,
+        "/* first line\nsecond line */\nlet x = 1;\n",
+    );
 
     assert!(lines[0].iter().any(|span| span.color == COLOR_MUTED));
     assert!(lines[1].iter().any(|span| span.color == COLOR_MUTED));
     assert!(lines[2].iter().all(|span| span.color != COLOR_MUTED));
+}
+
+#[test]
+fn syntax_mode_maps_core_extensions() {
+    let cases = [
+        ("example.rs", SyntaxLanguage::Rust),
+        ("example.py", SyntaxLanguage::Python),
+        ("example.pyw", SyntaxLanguage::Python),
+        ("example.js", SyntaxLanguage::JavaScript),
+        ("example.mjs", SyntaxLanguage::JavaScript),
+        ("example.cjs", SyntaxLanguage::JavaScript),
+        ("example.jsx", SyntaxLanguage::Jsx),
+        ("example.ts", SyntaxLanguage::TypeScript),
+        ("example.tsx", SyntaxLanguage::Tsx),
+        ("example.json", SyntaxLanguage::Json),
+        ("example.toml", SyntaxLanguage::Toml),
+        ("example.yaml", SyntaxLanguage::Yaml),
+        ("example.yml", SyntaxLanguage::Yaml),
+        ("example.md", SyntaxLanguage::Markdown),
+        ("example.markdown", SyntaxLanguage::Markdown),
+        ("example.html", SyntaxLanguage::Html),
+        ("example.htm", SyntaxLanguage::Html),
+        ("example.css", SyntaxLanguage::Css),
+    ];
+
+    for (path, language) in cases {
+        assert_eq!(
+            syntax_mode_for_path(Some(&PathBuf::from(path))),
+            SyntaxMode::TreeSitter(language)
+        );
+    }
+    assert_eq!(
+        syntax_mode_for_path(Some(&PathBuf::from("example.txt"))),
+        SyntaxMode::Plain
+    );
+}
+
+#[test]
+fn broad_highlighting_produces_spans_for_representative_languages() {
+    let cases = [
+        (
+            SyntaxLanguage::Python,
+            "value = \"\"\"first\nsecond\"\"\"\nprint(value)\n",
+        ),
+        (
+            SyntaxLanguage::JavaScript,
+            "/* first\nsecond */\nconst value = `template ${1}`;\n",
+        ),
+        (
+            SyntaxLanguage::Jsx,
+            "const element = <div className=\"editor\">{value}</div>;\n",
+        ),
+        (
+            SyntaxLanguage::TypeScript,
+            "interface Item { name: string }\nconst item: Item = { name: \"lst\" };\n",
+        ),
+        (
+            SyntaxLanguage::Tsx,
+            "const element: JSX.Element = <div className=\"editor\">{value}</div>;\n",
+        ),
+        (
+            SyntaxLanguage::Json,
+            "{\n  \"name\": \"lst\",\n  \"enabled\": true\n}\n",
+        ),
+        (SyntaxLanguage::Toml, "[package]\nname = \"lst\"\n"),
+        (SyntaxLanguage::Yaml, "name: lst\nenabled: true\n"),
+        (
+            SyntaxLanguage::Markdown,
+            "# Title\n\n```rust\nfn main() {}\n```\n",
+        ),
+        (
+            SyntaxLanguage::Html,
+            "<style>.editor { color: red; }</style>\n",
+        ),
+        (SyntaxLanguage::Css, ".editor { color: red; }\n"),
+    ];
+
+    for (language, source) in cases {
+        let lines = compute_syntax_highlights(language, source);
+        assert!(
+            lines.iter().flatten().next().is_some(),
+            "{language:?} should produce at least one syntax span"
+        );
+    }
+}
+
+#[test]
+fn python_highlighting_keeps_multiline_string_context() {
+    let lines = compute_syntax_highlights(
+        SyntaxLanguage::Python,
+        "value = \"\"\"first\nsecond\"\"\"\nprint(value)\n",
+    );
+
+    assert!(lines[0].iter().any(|span| span.color == COLOR_GREEN));
+    assert!(lines[1].iter().any(|span| span.color == COLOR_GREEN));
+}
+
+#[test]
+fn javascript_highlighting_keeps_multiline_comment_context() {
+    let lines = compute_syntax_highlights(
+        SyntaxLanguage::JavaScript,
+        "/* first\nsecond */\nconst value = 1;\n",
+    );
+
+    assert!(lines[0].iter().any(|span| span.color == COLOR_MUTED));
+    assert!(lines[1].iter().any(|span| span.color == COLOR_MUTED));
+    assert!(lines[2].iter().all(|span| span.color != COLOR_MUTED));
+}
+
+#[test]
+fn syntax_highlight_result_requires_matching_active_revision_and_language() {
+    let rust_tab = EditorTab::from_path(PathBuf::from("/tmp/example.rs"), "fn main() {}\n");
+    let rust_cache = rust_tab.cache.clone();
+    let rust_key = SyntaxHighlightJobKey {
+        language: SyntaxLanguage::Rust,
+        revision: 0,
+    };
+    assert!(syntax_highlight_result_is_current(
+        &[rust_tab],
+        0,
+        &rust_cache,
+        rust_key
+    ));
+
+    let mut stale_tab = EditorTab::from_path(PathBuf::from("/tmp/example.rs"), "fn main() {}\n");
+    let stale_cache = stale_tab.cache.clone();
+    stale_tab.replace_char_range(0..0, "// ");
+    assert!(!syntax_highlight_result_is_current(
+        &[stale_tab],
+        0,
+        &stale_cache,
+        rust_key
+    ));
+
+    let python_tab = EditorTab::from_path(PathBuf::from("/tmp/example.py"), "print('lst')\n");
+    let python_cache = python_tab.cache.clone();
+    assert!(!syntax_highlight_result_is_current(
+        &[python_tab],
+        0,
+        &python_cache,
+        rust_key
+    ));
 }
 
 #[test]

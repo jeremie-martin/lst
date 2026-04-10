@@ -78,3 +78,54 @@ For the current paste scenario:
 - optimizing highlighting is justified
 - replacing or simplifying the Rust syntax engine was a credible direction and paid off on this workload
 - GUI rendering is not the main bottleneck
+
+## Broad-language Backend Characterization
+
+Date of these measurements: `2026-04-10`
+
+Use the GPUI highlighter benchmark for broad-language backend comparisons:
+
+```bash
+cargo run --release -p lst-gpui --example bench_syntax_highlight -- --iterations 5
+```
+
+This benchmark highlights whole documents of roughly 20k lines and reports
+`median_ms`. It is intentionally colder and broader than the editor's visible
+viewport path, so it should guide backend selection rather than represent a
+per-keystroke UI budget.
+
+Representative results on this machine:
+
+```text
+backend                 language    lines  median_ms
+tree-sitter-highlight   rust        21558  154.914
+syntect                 rust        21558  1572.387
+tree-sitter-highlight   python      20016  79.530
+syntect                 python      20016  1305.285
+tree-sitter-highlight   javascript  20007  130.552
+syntect                 javascript  20007  1470.141
+tree-sitter-highlight   typescript  20010  80.059
+tree-sitter-highlight   json        20003  41.990
+syntect                 json        20003  327.823
+tree-sitter-highlight   toml        20004  56.029
+tree-sitter-highlight   yaml        20000  47.867
+syntect                 yaml        20000  228.728
+tree-sitter-highlight   markdown    20000  154.659
+syntect                 markdown    20000  2166.187
+tree-sitter-highlight   html        20000  88.170
+syntect                 html        20000  973.288
+tree-sitter-highlight   css         20006  50.459
+syntect                 css         20006  708.044
+```
+
+Interpretation:
+
+- `syntect` is broad, but the measured cost is too high for the editor's
+  default synchronous highlighting path on large files.
+- `syntect` rows are omitted when the default syntax set has no syntax for that
+  extension, because plain-text fallback timings are not valid highlighting
+  measurements.
+- `tree-sitter-highlight` is consistently faster here and should be the first
+  production path for broad language support.
+- The remaining performance work is architectural: background computation,
+  revision-keyed caches, and eventually incremental or visible-range updates.

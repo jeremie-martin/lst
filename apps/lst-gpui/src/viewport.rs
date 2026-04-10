@@ -7,60 +7,23 @@ use lst_core::wrap::{
     WrappedSegment,
 };
 use lst_ui::{
-    COLOR_ACCENT, COLOR_BORDER, COLOR_CARET, COLOR_CURRENT_LINE, COLOR_GREEN, COLOR_GUTTER,
-    COLOR_LAVENDER, COLOR_MAUVE, COLOR_MUTED, COLOR_PEACH, COLOR_PINK, COLOR_SAPPHIRE,
-    COLOR_SELECTION, COLOR_SURFACE1, COLOR_TEXT, COLOR_YELLOW,
+    COLOR_CARET, COLOR_CURRENT_LINE, COLOR_GUTTER, COLOR_MUTED, COLOR_SELECTION, COLOR_SURFACE1,
+    COLOR_TEXT,
 };
 use ropey::Rope;
 use std::{
     cell::RefCell,
     collections::{hash_map::DefaultHasher, HashMap},
     hash::{Hash, Hasher},
-    path::PathBuf,
     rc::Rc,
-    sync::LazyLock,
-};
-use tree_sitter_highlight::{
-    Highlight as TreeSitterHighlight, HighlightConfiguration,
-    HighlightEvent as TreeSitterHighlightEvent, Highlighter as TreeSitterHighlighter,
 };
 
+use crate::syntax::{CachedSyntaxHighlights, SyntaxMode, SyntaxSpan};
 use crate::{
     vim, EditorTab, CODE_FONT_SIZE, CURSOR_WIDTH, EDITOR_LEFT_PAD, EDITOR_RIGHT_PAD,
     GUTTER_LEFT_PAD, GUTTER_SEPARATOR_WIDTH, GUTTER_WIDTH, ROW_HEIGHT, VIEWPORT_OVERSCAN_LINES,
     WINDOW_HEIGHT, WRAP_CHAR_WIDTH_FALLBACK,
 };
-
-const TREE_SITTER_CAPTURE_NAMES: &[&str] = &[
-    "attribute",
-    "comment",
-    "constant",
-    "constructor",
-    "escape",
-    "function",
-    "keyword",
-    "module",
-    "number",
-    "operator",
-    "property",
-    "punctuation",
-    "string",
-    "type",
-    "variable",
-];
-
-static TREE_SITTER_RUST_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    let mut config = HighlightConfiguration::new(
-        tree_sitter_rust::LANGUAGE.into(),
-        "rust",
-        tree_sitter_rust::HIGHLIGHTS_QUERY,
-        tree_sitter_rust::INJECTIONS_QUERY,
-        "",
-    )
-    .expect("embedded tree-sitter Rust highlight query should be valid");
-    config.configure(TREE_SITTER_CAPTURE_NAMES);
-    config
-});
 
 #[derive(Clone)]
 struct CachedShapedLine {
@@ -69,30 +32,11 @@ struct CachedShapedLine {
     shaped: ShapedLine,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum SyntaxMode {
-    Plain,
-    TreeSitterRust,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct SyntaxSpan {
-    pub(crate) start: usize,
-    pub(crate) end: usize,
-    pub(crate) color: u32,
-}
-
-#[derive(Clone)]
-pub(crate) struct CachedRustHighlights {
-    pub(crate) revision: u64,
-    pub(crate) lines: Vec<Vec<SyntaxSpan>>,
-}
-
 pub(crate) struct ViewportCache {
     code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
-    pub(crate) rust_highlights: Option<CachedRustHighlights>,
-    pub(crate) rust_highlight_inflight_revision: Option<u64>,
+    pub(crate) syntax_highlights: Option<CachedSyntaxHighlights>,
+    pub(crate) syntax_highlight_inflight: Option<crate::syntax::SyntaxHighlightJobKey>,
     pub(crate) wrap_layout: Option<WrapLayout>,
 }
 
@@ -101,8 +45,8 @@ impl Default for ViewportCache {
         Self {
             code_lines: HashMap::new(),
             gutter_lines: HashMap::new(),
-            rust_highlights: None,
-            rust_highlight_inflight_revision: None,
+            syntax_highlights: None,
+            syntax_highlight_inflight: None,
             wrap_layout: None,
         }
     }
@@ -164,37 +108,6 @@ pub(crate) fn line_display_char_len(buffer: &Rope, line_ix: usize) -> usize {
     line_display_text(buffer, line_ix).chars().count()
 }
 
-pub(crate) fn syntax_mode_for_path(path: Option<&PathBuf>) -> SyntaxMode {
-    match path
-        .and_then(|path| path.extension())
-        .and_then(|ext| ext.to_str())
-    {
-        Some("rs") => SyntaxMode::TreeSitterRust,
-        _ => SyntaxMode::Plain,
-    }
-}
-
-fn tree_sitter_color_for_capture(index: usize) -> Option<u32> {
-    match TREE_SITTER_CAPTURE_NAMES.get(index).copied() {
-        Some("attribute") => Some(COLOR_YELLOW),
-        Some("comment") => Some(COLOR_MUTED),
-        Some("constant") => Some(COLOR_PEACH),
-        Some("constructor") => Some(COLOR_SAPPHIRE),
-        Some("escape") => Some(COLOR_PINK),
-        Some("function") => Some(COLOR_ACCENT),
-        Some("keyword") => Some(COLOR_MAUVE),
-        Some("module") => Some(COLOR_LAVENDER),
-        Some("number") => Some(COLOR_PEACH),
-        Some("operator") => Some(COLOR_SAPPHIRE),
-        Some("property") => Some(COLOR_LAVENDER),
-        Some("punctuation") => Some(COLOR_BORDER),
-        Some("string") => Some(COLOR_GREEN),
-        Some("type") => Some(COLOR_YELLOW),
-        Some("variable") => None,
-        _ => None,
-    }
-}
-
 fn char_to_byte_index(text: &str, char_ix: usize) -> usize {
     if char_ix == 0 {
         return 0;
@@ -206,105 +119,6 @@ fn char_to_byte_index(text: &str, char_ix: usize) -> usize {
         .unwrap_or(text.len())
 }
 
-fn push_rust_highlight_span(
-    lines: &mut [Vec<SyntaxSpan>],
-    line_starts: &[usize],
-    display_ends: &[usize],
-    mut start: usize,
-    end: usize,
-    color: u32,
-) {
-    while start < end {
-        let line_ix = line_starts
-            .partition_point(|offset| *offset <= start)
-            .saturating_sub(1);
-        let line_start = line_starts[line_ix];
-        let display_end = display_ends[line_ix];
-        let next_line_start = line_starts.get(line_ix + 1).copied().unwrap_or(end);
-        let visible_end = end.min(display_end);
-
-        if start < visible_end {
-            lines[line_ix].push(SyntaxSpan {
-                start: start - line_start,
-                end: visible_end - line_start,
-                color,
-            });
-        }
-
-        if end <= next_line_start {
-            break;
-        }
-        start = next_line_start;
-    }
-}
-
-fn highlight_rust_source(source: &str) -> Vec<Vec<SyntaxSpan>> {
-    let mut line_starts = vec![0usize];
-    let mut display_ends = Vec::new();
-    let bytes = source.as_bytes();
-    let mut ix = 0usize;
-    let mut line_start = 0usize;
-
-    while ix < bytes.len() {
-        if bytes[ix] == b'\n' {
-            let display_end = if ix > line_start && bytes[ix - 1] == b'\r' {
-                ix - 1
-            } else {
-                ix
-            };
-            display_ends.push(display_end);
-            ix += 1;
-            line_start = ix;
-            line_starts.push(line_start);
-            continue;
-        }
-        ix += 1;
-    }
-    display_ends.push(source.strip_suffix('\r').map_or(source.len(), str::len));
-
-    let mut lines = vec![Vec::new(); line_starts.len()];
-    let mut highlighter = TreeSitterHighlighter::new();
-    let Ok(events) =
-        highlighter.highlight(&TREE_SITTER_RUST_CONFIG, source.as_bytes(), None, |_| None)
-    else {
-        return lines;
-    };
-
-    let mut stack: Vec<TreeSitterHighlight> = Vec::new();
-    for event in events {
-        match event {
-            Ok(TreeSitterHighlightEvent::HighlightStart(highlight)) => stack.push(highlight),
-            Ok(TreeSitterHighlightEvent::HighlightEnd) => {
-                let _ = stack.pop();
-            }
-            Ok(TreeSitterHighlightEvent::Source { start, end }) if start < end => {
-                let Some(color) = stack
-                    .last()
-                    .and_then(|highlight| tree_sitter_color_for_capture(highlight.0))
-                else {
-                    continue;
-                };
-                push_rust_highlight_span(
-                    &mut lines,
-                    &line_starts,
-                    &display_ends,
-                    start,
-                    end,
-                    color,
-                );
-            }
-            Ok(TreeSitterHighlightEvent::Source { .. }) => {}
-            Err(_) => return vec![Vec::new(); line_starts.len()],
-        }
-    }
-
-    lines
-}
-
-pub(crate) fn compute_rust_highlights(source: &str) -> Vec<Vec<SyntaxSpan>> {
-    highlight_rust_source(source)
-}
-
 fn line_syntax_spans(
     cache: &mut ViewportCache,
     revision: u64,
@@ -313,10 +127,10 @@ fn line_syntax_spans(
 ) -> Vec<SyntaxSpan> {
     match syntax_mode {
         SyntaxMode::Plain => Vec::new(),
-        SyntaxMode::TreeSitterRust => cache
-            .rust_highlights
+        SyntaxMode::TreeSitter(language) => cache
+            .syntax_highlights
             .as_ref()
-            .filter(|highlights| highlights.revision == revision)
+            .filter(|highlights| highlights.revision == revision && highlights.language == language)
             .and_then(|highlights| highlights.lines.get(line_ix))
             .cloned()
             .unwrap_or_default(),

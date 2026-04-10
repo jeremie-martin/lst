@@ -14,5 +14,18 @@ lst-core = { path = "../../crates/lst-core" }
 lst-ui = { path = "../../crates/lst-ui" }
 ropey = "1.6.1"
 rfd = "0.17"
+tree-sitter = "0.26.8"
 tree-sitter-highlight = "0.26.8"
 tree-sitter-rust = "0.24.2"
+tree-sitter-python = "0.25.0"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-json = "0.24.8"
+tree-sitter-toml-ng = "0.7.0"
+tree-sitter-yaml = "0.7.2"
+tree-sitter-md = "0.5.3"
+tree-sitter-html = "0.23.2"
+tree-sitter-css = "0.25.0"
+
+[dev-dependencies]
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "plist-load"] }
