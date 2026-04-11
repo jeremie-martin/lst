@@ -1,10 +1,10 @@
+use crate::ui::{input_keybindings, COLOR_GREEN, COLOR_MUTED};
 use gpui::{
     ClipboardItem, Entity, EntityInputHandler, Keystroke, TestAppContext, VisualContext as _,
     VisualTestContext,
 };
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorTab, TabId};
-use lst_ui::{input_keybindings, COLOR_GREEN, COLOR_MUTED};
 use std::{
     process,
     sync::atomic::{AtomicUsize, Ordering},
@@ -79,12 +79,11 @@ fn tab_from_path(path: PathBuf, text: &str) -> EditorTab {
 }
 
 #[test]
-fn launch_args_accept_benchmark_window_title() {
-    let args =
-        crate::launch::parse_launch_args_from(["--title", "lst-bench-window", "/tmp/example.rs"])
-            .expect("args should parse");
+fn launch_args_accept_window_title() {
+    let args = crate::launch::parse_launch_args_from(["--title", "lst-window", "/tmp/example.rs"])
+        .expect("args should parse");
 
-    assert_eq!(args.window_title.as_deref(), Some("lst-bench-window"));
+    assert_eq!(args.window_title.as_deref(), Some("lst-window"));
     assert_eq!(args.files, [PathBuf::from("/tmp/example.rs")]);
 }
 

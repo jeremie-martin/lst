@@ -2,20 +2,16 @@
 
 `lst` is being rebuilt around the GPUI implementation in `apps/lst-gpui`.
 The active editor behavior lives in framework-neutral crates under `crates/`,
-and GPUI owns the rendering and desktop integration boundary.
+and GPUI owns rendering, widgets, and desktop integration.
 
-The old iced implementation has been archived under `legacy/iced-lst`. It is
-not part of the active workspace and should not be used as a source of shared
-modules for new editor work.
+The old iced implementation has been removed from this repository. Historical
+code should not be used as a source of shared modules for new editor work.
 
 ## Active Layout
 
 - `apps/lst-gpui`: active GPUI desktop editor.
 - `crates/lst-core`: document, selection, find, wrap, and low-level editor operations.
 - `crates/lst-editor`: framework-neutral editor model, commands, effects, and Vim state machine.
-- `crates/lst-ui`: reusable GPUI shell widgets.
-- `benchmarks`: shared benchmark corpora for active performance tests.
-- `legacy/iced-lst`: archived iced editor, kept for historical reference only.
 
 ## Build And Run
 
@@ -51,21 +47,11 @@ For deeper Vim state-machine coverage in the editor crate:
 cargo test -p lst-editor --features internal-invariants
 ```
 
-## Benchmarks
+## Performance
 
-Build the GPUI benchmark tools from the workspace root:
-
-```bash
-cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11 --example bench_syntax_highlight
-```
-
-Run the real-display X11 benchmark suite:
-
-```bash
-./target/release/examples/bench_editor_x11 --scenario all
-```
-
-The current performance workflow is documented in `docs/performance-optimization.md`.
+There is no maintained benchmark contract in this repository right now.
+Performance work should start from a focused behavioral scenario and add a
+narrow measurement only when it is needed.
 
 ## License
 

@@ -1,3 +1,7 @@
+use crate::ui::{
+    COLOR_CARET, COLOR_CURRENT_LINE, COLOR_GUTTER, COLOR_MUTED, COLOR_SELECTION, COLOR_SURFACE1,
+    COLOR_TEXT,
+};
 use gpui::{
     fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString,
     TextRun, Window,
@@ -7,10 +11,6 @@ use lst_core::wrap::{
     wrap_segments, WrapLayout, WrappedSegment,
 };
 use lst_editor::{vim, EditorTab};
-use lst_ui::{
-    COLOR_CARET, COLOR_CURRENT_LINE, COLOR_GUTTER, COLOR_MUTED, COLOR_SELECTION, COLOR_SURFACE1,
-    COLOR_TEXT,
-};
 use ropey::Rope;
 use std::{
     cell::RefCell,
@@ -625,10 +625,10 @@ pub(crate) fn paint_viewport(
 }
 
 pub(crate) fn visual_row_for_char(tab: &EditorTab, layout: &WrapLayout) -> Option<usize> {
-    let cursor = tab.cursor_char().min(tab.buffer.len_chars());
-    let line = tab.buffer.char_to_line(cursor);
-    let line_start = tab.buffer.line_to_char(line);
-    let display_text = line_display_text(&tab.buffer, line);
+    let cursor = tab.cursor_char().min(tab.buffer().len_chars());
+    let line = tab.buffer().char_to_line(cursor);
+    let line_start = tab.buffer().line_to_char(line);
+    let display_text = line_display_text(tab.buffer(), line);
     let column = cursor
         .saturating_sub(line_start)
         .min(display_text.chars().count());

@@ -3,15 +3,12 @@ members = [
     "apps/lst-gpui",
     "crates/lst-core",
     "crates/lst-editor",
-    "crates/lst-ui",
 ]
 default-members = [
     "apps/lst-gpui",
     "crates/lst-core",
     "crates/lst-editor",
-    "crates/lst-ui",
 ]
-exclude = ["legacy/iced-lst"]
 resolver = "2"
 
 [profile.release]

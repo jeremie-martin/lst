@@ -13,13 +13,13 @@ use lst_core::selection::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::theme::{
+use crate::ui::theme::{
     COLOR_ACCENT, COLOR_BORDER, COLOR_MUTED, COLOR_SELECTION, COLOR_SURFACE1, COLOR_SURFACE2,
     COLOR_TEXT, INPUT_HEIGHT, INPUT_TEXT_SIZE,
 };
 
 actions!(
-    lst_ui_input,
+    lst_gpui_input,
     [
         FieldBackspace,
         FieldDelete,
@@ -142,6 +142,7 @@ impl InputField {
         cx.notify();
     }
 
+    #[cfg(test)]
     pub fn text(&self) -> String {
         self.content.to_string()
     }
@@ -149,22 +150,6 @@ impl InputField {
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();
         self.selection_reversed = false;
-        cx.notify();
-    }
-
-    pub fn move_cursor_to_end(&mut self, cx: &mut Context<Self>) {
-        let end = self.content.len();
-        self.selected_range = end..end;
-        self.selection_reversed = false;
-        cx.notify();
-    }
-
-    pub fn clear(&mut self, cx: &mut Context<Self>) {
-        self.content = SharedString::new_static("");
-        self.selected_range = 0..0;
-        self.selection_reversed = false;
-        self.marked_range = None;
-        self.last_layout = None;
         cx.notify();
     }
 

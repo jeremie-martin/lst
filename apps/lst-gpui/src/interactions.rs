@@ -25,7 +25,7 @@ impl LstGpuiApp {
         self.drag_last_point = Some(event.position);
         let index = self.active_char_index_for_point(event.position);
         if event.click_count >= 3 {
-            let line_range = line_range_at_char(&self.active_tab().buffer, index);
+            let line_range = line_range_at_char(self.active_tab().buffer(), index);
             self.drag_selecting = Some(DragSelectionMode::Line(line_range.clone()));
             self.select_active_range(line_range, cx);
             self.sync_primary_selection(cx);
@@ -34,7 +34,7 @@ impl LstGpuiApp {
             return;
         }
         if event.click_count == 2 {
-            let word_range = word_range_at_char(&self.active_tab().buffer, index);
+            let word_range = word_range_at_char(self.active_tab().buffer(), index);
             self.drag_selecting = Some(DragSelectionMode::Word(word_range.clone()));
             self.select_active_range(word_range, cx);
             self.sync_primary_selection(cx);
@@ -99,11 +99,11 @@ impl LstGpuiApp {
                 cx,
             ),
             Some(DragSelectionMode::Word(anchor)) => {
-                let current = word_range_at_char(&self.active_tab().buffer, index);
+                let current = word_range_at_char(self.active_tab().buffer(), index);
                 self.select_active_drag_range(anchor, current, cx);
             }
             Some(DragSelectionMode::Line(anchor)) => {
-                let current = line_range_at_char(&self.active_tab().buffer, index);
+                let current = line_range_at_char(self.active_tab().buffer(), index);
                 self.select_active_drag_range(anchor, current, cx);
             }
             None => return false,

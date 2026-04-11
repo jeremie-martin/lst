@@ -2,7 +2,7 @@
 
 This crate is the active desktop editor for `lst`.
 
-The current implementation extracts reusable document/search/line-edit logic into `crates/lst-core`, keeps framework-neutral editor behavior in `crates/lst-editor`, keeps the custom-painted editor surface in this crate, and moves shell widgets into `crates/lst-ui`.
+The current implementation extracts reusable document/search/line-edit logic into `crates/lst-core`, keeps framework-neutral editor behavior in `crates/lst-editor`, and keeps GPUI rendering, shell widgets, and desktop integration in this crate.
 The headless editor behavior contract is starting in `crates/lst-editor`; GPUI should keep moving product behavior there and remain focused on rendering and framework boundary work.
 
 ## Run
@@ -12,37 +12,7 @@ cd apps/lst-gpui
 cargo run
 DISPLAY=:1 cargo run -- path/to/file.rs
 DISPLAY=:1 cargo run -- --title "lst GPUI"
-DISPLAY=:1 cargo run -- --bench-replace-corpus
-DISPLAY=:1 cargo run -- --bench-append-corpus
 ```
-
-## Benchmarks
-
-Build the GPUI editor benchmarks from the workspace root:
-
-```sh
-cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11 --example bench_syntax_highlight
-```
-
-Run the real-display X11 editor benchmark suite:
-
-```sh
-./target/release/examples/bench_editor_x11 --scenario all
-```
-
-The editor runner supports `large-paste`, `typing-medium`, `typing-large`,
-`scroll-highlighted`, `scroll-plain`, `open-large`, and `search-large`.
-Each scenario prints one `primary_metric` and waits for completed work before
-reporting measured runs.
-
-Run the production tree-sitter highlighting benchmark separately:
-
-```sh
-cargo run --release -p lst-gpui --example bench_syntax_highlight -- --backend tree-sitter-highlight --language rust --iterations 7
-```
-
-See [docs/performance-optimization.md](/home/jmartin/lst/docs/performance-optimization.md)
-for the metric contract and completion conditions.
 
 ## Status
 
@@ -50,11 +20,6 @@ for the metric contract and completion conditions.
 - `cargo build --release` passes on this host after installing `libxkbcommon-x11-dev`.
 - Running under `Xvfb` still does not work here because GPUI surface creation wants a real presentation backend with DRI3 support.
 - The editor uses a scroll spacer plus a viewport-sized custom-painted canvas with a small shaped-line cache.
-
-Current real-display measurements on `DISPLAY=:1` with `target/release/lst-gpui`:
-
-- `--bench-replace-corpus`: `apply_ms=1.685`, `action_to_next_frame_ms=77.713`
-- `--bench-append-corpus`: `apply_ms=1.776`, `action_to_next_frame_ms=77.721`
 
 ## Current Features
 
@@ -74,9 +39,7 @@ Current real-display measurements on `DISPLAY=:1` with `target/release/lst-gpui`
 - Rust syntax highlighting via tree-sitter in the custom viewport
 - Vim normal / insert / visual / visual-line modes
 - visual up/down movement across wrapped rows
-- retained large-paste auto-bench mode
 
 ## Missing Parity
 
-- non-Rust syntax highlighting
 - remaining editor behaviors that have not yet moved behind `lst-editor`

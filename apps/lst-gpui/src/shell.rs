@@ -1,28 +1,28 @@
+use crate::ui::{
+    IconButton, IconKind, Tab as UiTab, TabBar, COLOR_BG, COLOR_BORDER, COLOR_MUTED, COLOR_PEACH,
+    COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_TEXT, INPUT_TEXT_SIZE, SHELL_EDGE_PAD,
+    SHELL_GAP, STATUS_HEIGHT_PAD, TAB_HEIGHT,
+};
 use gpui::{
     canvas, div, prelude::*, px, rgb, Context, CursorStyle, ElementInputHandler,
     InteractiveElement, KeyDownEvent, MouseButton, MouseUpEvent, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window,
 };
 use lst_editor::EditorCommand;
-use lst_ui::{
-    IconButton, IconKind, Tab as UiTab, TabBar, COLOR_BG, COLOR_BORDER, COLOR_MUTED, COLOR_PEACH,
-    COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_TEXT, INPUT_TEXT_SIZE, SHELL_EDGE_PAD,
-    SHELL_GAP, STATUS_HEIGHT_PAD, TAB_HEIGHT,
-};
 
+use crate::actions::attach_workspace_actions;
 use crate::syntax::syntax_mode_for_path;
 use crate::viewport::{buffer_content_height, paint_viewport, prepare_viewport_paint_state};
 use crate::{
-    code_char_width, ensure_wrap_layout, LstGpuiApp, NewTab, CODE_FONT_SIZE, ROW_HEIGHT,
-    WINDOW_WIDTH,
+    code_char_width, ensure_wrap_layout, LstGpuiApp, CODE_FONT_SIZE, ROW_HEIGHT, WINDOW_WIDTH,
 };
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let tab = &self.model.tabs[ix];
-        let active = ix == self.model.active;
+        let tab = self.model.tab(ix).expect("rendered tab index must exist");
+        let active = ix == self.model.active_index();
         let show_close = active || self.hovered_tab == Some(ix);
-        let dirty_marker = tab.modified.then_some(
+        let dirty_marker = tab.modified().then_some(
             div()
                 .flex_none()
                 .text_color(rgb(COLOR_PEACH))
@@ -50,7 +50,6 @@ impl LstGpuiApp {
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.apply_model_command(EditorCommand::SetActiveTab(ix), cx);
-                this.model.status = format!("Switched to {}.", this.active_tab().display_name());
                 window.focus(&this.focus_handle);
                 cx.notify();
             }))
@@ -68,7 +67,7 @@ impl LstGpuiApp {
     }
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut items = (0..self.model.tabs.len())
+        let mut items = (0..self.model.tab_count())
             .map(|ix| self.render_tab(ix, cx).into_any_element())
             .collect::<Vec<_>>();
         items.push(
@@ -83,7 +82,7 @@ impl LstGpuiApp {
                 .child(
                     IconButton::new("new-tab-button", IconKind::Plus).on_click(cx.listener(
                         |this, _, _window, cx| {
-                            this.handle_new_tab(&NewTab, _window, cx);
+                            this.apply_model_command(EditorCommand::NewTab, cx);
                             cx.stop_propagation();
                         },
                     )),
@@ -97,14 +96,11 @@ impl LstGpuiApp {
     }
 
     fn render_find_bar(&mut self) -> impl IntoElement {
-        let match_label = if self.model.find.matches.is_empty() {
+        let find = self.model.find();
+        let match_label = if find.matches.is_empty() {
             "0/0".to_string()
         } else {
-            format!(
-                "{}/{}",
-                self.model.find.current + 1,
-                self.model.find.matches.len()
-            )
+            format!("{}/{}", find.current + 1, find.matches.len())
         };
 
         div()
@@ -126,7 +122,7 @@ impl LstGpuiApp {
                     .child("Find"),
             )
             .child(div().w(px(280.0)).child(self.find_query_input.clone()))
-            .when(self.model.find.show_replace, |row| {
+            .when(find.show_replace, |row| {
                 row.child(
                     div()
                         .flex_none()
@@ -185,7 +181,7 @@ impl LstGpuiApp {
                     .truncate()
                     .text_sm()
                     .text_color(rgb(COLOR_SUBTEXT))
-                    .child(self.model.status.clone()),
+                    .child(self.model.status().to_string()),
             )
             .child(
                 div()
@@ -199,12 +195,12 @@ impl LstGpuiApp {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
-            if self.model.goto_line.is_some() {
+            if self.model.goto_line().is_some() {
                 self.apply_model_command(EditorCommand::CloseGotoLine, cx);
                 cx.stop_propagation();
                 return;
             }
-            if self.model.find.visible {
+            if self.model.find().visible {
                 self.apply_model_command(EditorCommand::CloseFind, cx);
                 cx.stop_propagation();
                 return;
@@ -219,9 +215,9 @@ impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_active_syntax_highlights(cx);
 
-        let active = self.model.active;
-        let show_gutter = self.model.show_gutter;
-        let show_wrap = self.model.show_wrap;
+        let active = self.model.active_index();
+        let show_gutter = self.model.show_gutter();
+        let show_wrap = self.model.show_wrap();
         let viewport_width = self.tab_views[active]
             .geometry
             .borrow()
@@ -229,8 +225,17 @@ impl Render for LstGpuiApp {
             .map(|bounds| bounds.size.width)
             .unwrap_or_else(|| px(WINDOW_WIDTH - 48.0));
         let char_width = code_char_width(window);
-        let revision = self.model.tabs[active].revision();
-        let line_texts = self.model.tabs[active].lines();
+        let (revision, syntax_mode, buffer, selection, cursor_char) = {
+            let active_tab = self.model.active_tab();
+            (
+                active_tab.revision(),
+                syntax_mode_for_path(active_tab.path()),
+                active_tab.buffer_clone(),
+                active_tab.selection(),
+                active_tab.cursor_char(),
+            )
+        };
+        let line_texts = self.model.active_tab_lines();
         let total_content_height = {
             let mut cache = self.tab_views[active].cache.borrow_mut();
             let layout = ensure_wrap_layout(
@@ -244,80 +249,15 @@ impl Render for LstGpuiApp {
             );
             buffer_content_height(layout.total_rows)
         };
-        let active_tab = &self.model.tabs[active];
         let active_view = &self.tab_views[active];
-        let syntax_mode = syntax_mode_for_path(active_tab.path.as_ref());
-        let buffer = active_tab.buffer.clone();
-        let selection = active_tab.selection.clone();
-        let cursor_char = active_tab.cursor_char();
         let viewport_scroll = active_view.scroll.clone();
         let viewport_cache = active_view.cache.clone();
         let viewport_geometry = active_view.geometry.clone();
         let focus_handle = self.focus_handle.clone();
         let entity = cx.entity();
-        let vim_mode = self.model.vim.mode;
+        let vim_mode = self.model.vim_mode();
 
-        let root = div()
-            .flex()
-            .flex_col()
-            .key_context("Workspace")
-            .on_action(cx.listener(Self::handle_new_tab))
-            .on_action(cx.listener(Self::handle_open_file))
-            .on_action(cx.listener(Self::handle_save_file))
-            .on_action(cx.listener(Self::handle_save_file_as))
-            .on_action(cx.listener(Self::handle_close_active_tab))
-            .on_action(cx.listener(Self::handle_next_tab))
-            .on_action(cx.listener(Self::handle_prev_tab))
-            .on_action(cx.listener(Self::handle_toggle_wrap))
-            .on_action(cx.listener(Self::handle_copy_selection))
-            .on_action(cx.listener(Self::handle_cut_selection))
-            .on_action(cx.listener(Self::handle_paste_clipboard))
-            .on_action(cx.listener(Self::handle_move_left))
-            .on_action(cx.listener(Self::handle_move_right))
-            .on_action(cx.listener(Self::handle_move_word_left))
-            .on_action(cx.listener(Self::handle_move_word_right))
-            .on_action(cx.listener(Self::handle_move_up))
-            .on_action(cx.listener(Self::handle_move_down))
-            .on_action(cx.listener(Self::handle_move_page_up))
-            .on_action(cx.listener(Self::handle_move_page_down))
-            .on_action(cx.listener(Self::handle_move_document_start))
-            .on_action(cx.listener(Self::handle_move_document_end))
-            .on_action(cx.listener(Self::handle_select_left))
-            .on_action(cx.listener(Self::handle_select_right))
-            .on_action(cx.listener(Self::handle_select_word_left))
-            .on_action(cx.listener(Self::handle_select_word_right))
-            .on_action(cx.listener(Self::handle_select_up))
-            .on_action(cx.listener(Self::handle_select_down))
-            .on_action(cx.listener(Self::handle_select_page_up))
-            .on_action(cx.listener(Self::handle_select_page_down))
-            .on_action(cx.listener(Self::handle_select_document_start))
-            .on_action(cx.listener(Self::handle_select_document_end))
-            .on_action(cx.listener(Self::handle_move_line_start))
-            .on_action(cx.listener(Self::handle_move_line_end))
-            .on_action(cx.listener(Self::handle_select_line_start))
-            .on_action(cx.listener(Self::handle_select_line_end))
-            .on_action(cx.listener(Self::handle_backspace))
-            .on_action(cx.listener(Self::handle_delete_forward))
-            .on_action(cx.listener(Self::handle_delete_word_backward))
-            .on_action(cx.listener(Self::handle_delete_word_forward))
-            .on_action(cx.listener(Self::handle_insert_newline))
-            .on_action(cx.listener(Self::handle_insert_tab))
-            .on_action(cx.listener(Self::handle_select_all))
-            .on_action(cx.listener(Self::handle_undo))
-            .on_action(cx.listener(Self::handle_redo))
-            .on_action(cx.listener(Self::handle_find_open))
-            .on_action(cx.listener(Self::handle_find_open_replace))
-            .on_action(cx.listener(Self::handle_find_next))
-            .on_action(cx.listener(Self::handle_find_prev))
-            .on_action(cx.listener(Self::handle_replace_one))
-            .on_action(cx.listener(Self::handle_replace_all))
-            .on_action(cx.listener(Self::handle_goto_line_open))
-            .on_action(cx.listener(Self::handle_delete_line))
-            .on_action(cx.listener(Self::handle_move_line_up))
-            .on_action(cx.listener(Self::handle_move_line_down))
-            .on_action(cx.listener(Self::handle_duplicate_line))
-            .on_action(cx.listener(Self::handle_toggle_comment))
-            .on_action(cx.listener(Self::handle_quit))
+        let root = attach_workspace_actions(div().flex().flex_col().key_context("Workspace"), cx)
             .size_full()
             .bg(rgb(COLOR_BG))
             .text_color(rgb(COLOR_TEXT))
@@ -330,10 +270,10 @@ impl Render for LstGpuiApp {
                     .py(px(SHELL_EDGE_PAD))
                     .gap_2()
                     .child(self.render_tab_strip(cx))
-                    .when(self.model.find.visible, |shell| {
+                    .when(self.model.find().visible, |shell| {
                         shell.child(self.render_find_bar())
                     })
-                    .when(self.model.goto_line.is_some(), |shell| {
+                    .when(self.model.goto_line().is_some(), |shell| {
                         shell.child(self.render_goto_bar())
                     })
                     .child(

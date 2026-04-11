@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Archived the legacy iced editor under `legacy/iced-lst`
+- Removed the legacy iced implementation, benchmark harnesses, and retained auto-benchmark entry points
+- Moved GPUI widget code into `apps/lst-gpui/src/ui` instead of keeping a separate app-only crate
+- Split editor commands, tabs, and snapshots into focused `lst-editor` modules
 - Made the repository root an active GPUI workspace only
 
 ## 0.1.0 - 2026-04-10

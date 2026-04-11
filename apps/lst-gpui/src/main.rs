@@ -5,7 +5,6 @@ use gpui::{
 };
 
 mod actions;
-mod bench_trace;
 mod input_adapter;
 mod interactions;
 mod keymap;
@@ -15,8 +14,10 @@ mod shell;
 mod syntax;
 #[cfg(test)]
 mod tests;
+mod ui;
 mod viewport;
 
+use crate::ui::{input_keybindings, InputField, InputFieldEvent};
 #[cfg(test)]
 pub(crate) use input_adapter::{char_range_to_utf16_range, utf16_range_to_char_range_in_text};
 #[cfg(all(test, feature = "internal-invariants"))]
@@ -27,11 +28,10 @@ use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
     EditorCommand, EditorModel, EditorTab as ModelEditorTab, FocusTarget, TabId, UNTITLED_PREFIX,
 };
-use lst_ui::{input_keybindings, InputField, InputFieldEvent};
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
-use std::{cell::RefCell, collections::HashSet, fs, path::PathBuf, process, rc::Rc, time::Instant};
+use std::{cell::RefCell, collections::HashSet, fs, path::PathBuf, process, rc::Rc};
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_path, CachedSyntaxHighlights, SyntaxHighlightJobKey,
     SyntaxMode, SyntaxSpan,
@@ -55,11 +55,6 @@ const EDITOR_RIGHT_PAD: f32 = 28.0;
 const GUTTER_LEFT_PAD: f32 = 12.0;
 const GUTTER_SEPARATOR_WIDTH: f32 = 14.0;
 const WRAP_CHAR_WIDTH_FALLBACK: f32 = 7.8;
-const CORPUS_PATH: &str = "benchmarks/paste-corpus-20k.rs";
-const PREMADE_CORPUS: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../benchmarks/paste-corpus-20k.rs"
-));
 
 actions!(
     lst_gpui,
@@ -124,30 +119,6 @@ actions!(
     ]
 );
 
-#[derive(Clone, Debug)]
-struct OperationStats {
-    label: &'static str,
-    bytes: usize,
-    lines: usize,
-    clipboard_read_ms: Option<f64>,
-    apply_ms: f64,
-}
-
-impl OperationStats {
-    fn summary(&self) -> String {
-        match self.clipboard_read_ms {
-            Some(read_ms) => format!(
-                "{} | {} bytes | {} lines | clipboard_read_ms={read_ms:.3} | apply_ms={:.3}",
-                self.label, self.bytes, self.lines, self.apply_ms
-            ),
-            None => format!(
-                "{} | {} bytes | {} lines | apply_ms={:.3}",
-                self.label, self.bytes, self.lines, self.apply_ms
-            ),
-        }
-    }
-}
-
 struct EditorTabView {
     id: TabId,
     revision: u64,
@@ -186,7 +157,6 @@ struct LstGpuiApp {
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
     pending_focus: Option<FocusTarget>,
-    last_operation: OperationStats,
     autosave_inflight: HashSet<PathBuf>,
     autosave_started: bool,
     _shell_subscriptions: Vec<Subscription>,
@@ -199,19 +169,10 @@ impl LstGpuiApp {
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line"));
         let model = initial_model_from_launch(launch);
         let tab_views = model
-            .tabs
+            .tabs()
             .iter()
             .map(EditorTabView::new)
             .collect::<Vec<_>>();
-        let last_operation = OperationStats {
-            label: "startup",
-            bytes: model.active_tab().buffer.len_bytes(),
-            lines: model.active_tab().buffer.len_lines(),
-            clipboard_read_ms: None,
-            apply_ms: 0.0,
-        };
-
-        eprintln!("lst_gpui {}", last_operation.summary());
 
         let mut app = Self {
             focus_handle: cx.focus_handle(),
@@ -226,7 +187,6 @@ impl LstGpuiApp {
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
             pending_focus: None,
-            last_operation,
             autosave_inflight: HashSet::new(),
             autosave_started: false,
             _shell_subscriptions: Vec::new(),
@@ -263,7 +223,6 @@ impl LstGpuiApp {
     }
 
     fn queue_focus(&mut self, target: FocusTarget) {
-        bench_trace::record_label("focus_queued", focus_trace_label(target));
         self.pending_focus = Some(target);
     }
 
@@ -279,7 +238,7 @@ impl LstGpuiApp {
                 window.focus(&handle);
             }
             FocusTarget::FindReplace => {
-                if self.model.find.show_replace {
+                if self.model.find().show_replace {
                     let handle = self.find_replace_input.read(cx).focus_handle();
                     window.focus(&handle);
                 } else {
@@ -287,7 +246,7 @@ impl LstGpuiApp {
                 }
             }
             FocusTarget::GotoLine => {
-                if self.model.goto_line.is_some() {
+                if self.model.goto_line().is_some() {
                     let handle = self.goto_line_input.read(cx).focus_handle();
                     window.focus(&handle);
                 } else {
@@ -295,14 +254,13 @@ impl LstGpuiApp {
                 }
             }
         }
-        bench_trace::record_label("focus_applied", focus_trace_label(target));
     }
 
     fn sync_tab_views(&mut self, old_show_wrap: bool) {
         let mut old_views = std::mem::take(&mut self.tab_views);
         self.tab_views = self
             .model
-            .tabs
+            .tabs()
             .iter()
             .map(|tab| {
                 let mut view = old_views
@@ -310,7 +268,7 @@ impl LstGpuiApp {
                     .position(|view| view.id == tab.id())
                     .map(|ix| old_views.swap_remove(ix))
                     .unwrap_or_else(|| EditorTabView::new(tab));
-                if view.revision != tab.revision() || old_show_wrap != self.model.show_wrap {
+                if view.revision != tab.revision() || old_show_wrap != self.model.show_wrap() {
                     view.revision = tab.revision();
                     view.invalidate_visual_state();
                 }
@@ -319,14 +277,14 @@ impl LstGpuiApp {
             .collect();
         if self
             .hovered_tab
-            .is_some_and(|ix| ix >= self.model.tabs.len())
+            .is_some_and(|ix| ix >= self.model.tab_count())
         {
             self.hovered_tab = None;
         }
     }
 
     fn apply_model_command(&mut self, command: EditorCommand, cx: &mut Context<Self>) {
-        let old_show_wrap = self.model.show_wrap;
+        let old_show_wrap = self.model.show_wrap();
         let notify_after_command = !matches!(&command, EditorCommand::AutosaveTick);
         let sync_find_inputs = matches!(
             &command,
@@ -352,8 +310,8 @@ impl LstGpuiApp {
     }
 
     fn sync_find_inputs(&mut self, cx: &mut Context<Self>) {
-        let query = self.model.find.query.clone();
-        let replacement = self.model.find.replacement.clone();
+        let query = self.model.find().query.clone();
+        let replacement = self.model.find().replacement.clone();
         self.find_query_input
             .update(cx, |input, cx| input.set_text(&query, cx));
         self.find_replace_input
@@ -362,10 +320,10 @@ impl LstGpuiApp {
 
     fn find_input_state(&self) -> (bool, bool, String, String) {
         (
-            self.model.find.visible,
-            self.model.find.show_replace,
-            self.model.find.query.clone(),
-            self.model.find.replacement.clone(),
+            self.model.find().visible,
+            self.model.find().show_replace,
+            self.model.find().query.clone(),
+            self.model.find().replacement.clone(),
         )
     }
 
@@ -380,7 +338,7 @@ impl LstGpuiApp {
     }
 
     fn sync_goto_input(&mut self, cx: &mut Context<Self>) {
-        let text = self.model.goto_line.clone().unwrap_or_default();
+        let text = self.model.goto_line().unwrap_or_default().to_string();
         self.goto_line_input
             .update(cx, |input, cx| input.set_text(&text, cx));
     }
@@ -388,9 +346,7 @@ impl LstGpuiApp {
     fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
         match event {
             InputFieldEvent::Changed(text) => {
-                let reindex_started = Instant::now();
                 self.apply_model_command(EditorCommand::SetFindQueryAndSelect(text.clone()), cx);
-                self.record_find_metrics(elapsed_ms(reindex_started));
             }
             InputFieldEvent::Submitted => {
                 self.apply_model_command(EditorCommand::FindNext, cx);
@@ -399,19 +355,13 @@ impl LstGpuiApp {
                 self.apply_model_command(EditorCommand::CloseFind, cx);
             }
             InputFieldEvent::NextRequested => {
-                if self.model.find.show_replace {
+                if self.model.find().show_replace {
                     self.queue_focus(FocusTarget::FindReplace);
                     cx.notify();
                 }
             }
             InputFieldEvent::PreviousRequested => {}
         }
-    }
-
-    fn record_find_metrics(&self, reindex_ms: f64) {
-        bench_trace::record_ms("find_reindex_ms", reindex_ms);
-        bench_trace::record_usize("find_match_count", self.model.find.matches.len());
-        bench_trace::record_usize("find_query_len", self.model.find.query.chars().count());
     }
 
     fn handle_find_replace_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
@@ -449,11 +399,11 @@ impl LstGpuiApp {
     }
 
     fn ensure_active_syntax_highlights(&mut self, cx: &mut Context<Self>) {
-        let active = self.model.active;
-        let Some(tab) = self.model.tabs.get(active) else {
+        let active = self.model.active_index();
+        let Some(tab) = self.model.tab(active) else {
             return;
         };
-        let SyntaxMode::TreeSitter(language) = syntax_mode_for_path(tab.path.as_ref()) else {
+        let SyntaxMode::TreeSitter(language) = syntax_mode_for_path(tab.path()) else {
             return;
         };
 
@@ -505,7 +455,7 @@ impl LstGpuiApp {
 
         cache_ref.syntax_highlight_inflight = None;
         if !syntax_highlight_result_is_current(
-            &self.model.tabs,
+            self.model.tabs(),
             &self.tab_views,
             active,
             &cache,
@@ -522,7 +472,7 @@ impl LstGpuiApp {
         cache_ref.clear_code_lines();
         drop(cache_ref);
 
-        if self.model.active == active {
+        if self.model.active_index() == active {
             cx.notify();
         }
     }
@@ -532,11 +482,11 @@ impl LstGpuiApp {
     }
 
     fn active_view(&self) -> &EditorTabView {
-        &self.tab_views[self.model.active]
+        &self.tab_views[self.model.active_index()]
     }
 
     fn active_cursor_line_col(&self) -> (usize, usize) {
-        char_to_line_col(&self.active_tab().buffer, self.active_tab().cursor_char())
+        char_to_line_col(self.active_tab().buffer(), self.active_tab().cursor_char())
     }
 
     fn selection_summary(&self) -> Option<String> {
@@ -549,30 +499,33 @@ impl LstGpuiApp {
         let tab = self.active_tab();
         let (line, column) = self.active_cursor_line_col();
         let mut parts = vec![
-            self.model.vim.mode.label().to_string(),
+            self.model.vim_mode().label().to_string(),
             format!("Ln {}", line + 1),
             format!("Col {}", column + 1),
-            if self.model.show_wrap {
+            if self.model.show_wrap() {
                 "Wrap".to_string()
             } else {
                 "No Wrap".to_string()
             },
             format!("{} lines", tab.line_count()),
         ];
-        let pending = self.model.vim.pending_display();
+        let pending = self.model.vim_pending_display();
         if !pending.is_empty() {
             parts.push(pending);
         }
         if let Some(selection) = self.selection_summary() {
             parts.push(selection);
         }
-        if self.model.find.visible {
-            let current = if self.model.find.matches.is_empty() {
+        if self.model.find().visible {
+            let current = if self.model.find().matches.is_empty() {
                 0
             } else {
-                self.model.find.current + 1
+                self.model.find().current + 1
             };
-            parts.push(format!("Match {current}/{}", self.model.find.matches.len()));
+            parts.push(format!(
+                "Match {current}/{}",
+                self.model.find().matches.len()
+            ));
         }
         parts.join("  ")
     }
@@ -596,11 +549,11 @@ impl LstGpuiApp {
     }
 
     fn active_wrap_columns(&mut self, window: &mut Window) -> usize {
-        if !self.model.show_wrap {
+        if !self.model.show_wrap() {
             return usize::MAX;
         }
 
-        let active = self.model.active;
+        let active = self.model.active_index();
         let viewport_width = self.tab_views[active]
             .geometry
             .borrow()
@@ -608,8 +561,8 @@ impl LstGpuiApp {
             .map(|bounds| bounds.size.width)
             .unwrap_or_else(|| px(WINDOW_WIDTH - 48.0));
         let char_width = code_char_width(window);
-        let revision = self.model.tabs[active].revision();
-        let lines = self.model.tabs[active].lines();
+        let revision = self.model.active_tab().revision();
+        let lines = self.model.active_tab_lines();
         let layout = {
             let mut cache = self.tab_views[active].cache.borrow_mut();
             ensure_wrap_layout(
@@ -618,8 +571,8 @@ impl LstGpuiApp {
                 revision,
                 viewport_width,
                 char_width,
-                self.model.show_gutter,
-                self.model.show_wrap,
+                self.model.show_gutter(),
+                self.model.show_wrap(),
             )
         };
         layout.wrap_columns
@@ -646,7 +599,7 @@ impl LstGpuiApp {
     }
 
     fn close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.model.tabs.len() {
+        if index >= self.model.tab_count() {
             return;
         }
 
@@ -668,7 +621,7 @@ impl LstGpuiApp {
             .wrap_layout
             .as_ref()
             .and_then(|cached| visual_row_for_char(tab, &cached.layout))
-            .unwrap_or_else(|| tab.buffer.char_to_line(tab.cursor_char()));
+            .unwrap_or_else(|| tab.buffer().char_to_line(tab.cursor_char()));
         let caret_top = px((visual_row as f32) * ROW_HEIGHT);
         let caret_bottom = caret_top + px(ROW_HEIGHT);
         let scroll_top = {
@@ -706,7 +659,7 @@ impl LstGpuiApp {
         let Some(bounds) = geometry.bounds else {
             return self.active_tab().cursor_char();
         };
-        let code_origin_x = bounds.left() + code_origin_pad(self.model.show_gutter);
+        let code_origin_x = bounds.left() + code_origin_pad(self.model.show_gutter());
 
         let row = if geometry.rows.is_empty() {
             return 0;
@@ -752,19 +705,7 @@ fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
     let mut next_tab_id = 1u64;
     let mut status = "Ready.".to_string();
 
-    if launch.auto_bench.is_some() {
-        tabs.push(ModelEditorTab::from_text(
-            TabId::from_raw(next_tab_id),
-            PathBuf::from(CORPUS_PATH)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("paste-corpus-20k.rs")
-                .to_string(),
-            Some(PathBuf::from(CORPUS_PATH)),
-            PREMADE_CORPUS,
-        ));
-        status = format!("Benchmark mode. Loaded {CORPUS_PATH} at startup.");
-    } else if launch.files.is_empty() {
+    if launch.files.is_empty() {
         tabs.push(ModelEditorTab::empty(
             TabId::from_raw(next_tab_id),
             format!("{UNTITLED_PREFIX}-1"),
@@ -814,7 +755,7 @@ fn syntax_highlight_result_is_current(
         tab_views.get(active).is_some_and(|view| {
             Rc::ptr_eq(&view.cache, cache)
                 && tab.revision() == key.revision
-                && syntax_mode_for_path(tab.path.as_ref()) == SyntaxMode::TreeSitter(key.language)
+                && syntax_mode_for_path(tab.path()) == SyntaxMode::TreeSitter(key.language)
         })
     })
 }
@@ -826,23 +767,8 @@ fn char_to_line_col(buffer: &Rope, char_offset: usize) -> (usize, usize) {
     (line, char_offset - line_start)
 }
 
-fn elapsed_ms(started: Instant) -> f64 {
-    started.elapsed().as_secs_f64() * 1000.0
-}
-
-fn focus_trace_label(target: FocusTarget) -> &'static str {
-    match target {
-        FocusTarget::Editor => "editor",
-        FocusTarget::FindQuery => "find_query",
-        FocusTarget::FindReplace => "find_replace",
-        FocusTarget::GotoLine => "goto_line",
-    }
-}
-
 fn main() {
     let launch = parse_launch_args();
-    let auto_bench = launch.auto_bench.clone();
-    let process_started = Instant::now();
     let has_graphical_env =
         std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
 
@@ -886,34 +812,12 @@ fn main() {
             }
         };
 
-        let view = window
+        window
             .update(cx, |view, window, cx| {
                 window.focus(&view.focus_handle(cx));
                 cx.activate(true);
                 view.start_background_tasks(window, cx);
-                cx.entity()
             })
             .unwrap();
-
-        if let Some(bench) = auto_bench.clone() {
-            window
-                .update(cx, move |_view, window, _cx| {
-                    let view = view.clone();
-                    let bench = bench.clone();
-                    window.on_next_frame(move |window, cx| {
-                        let startup_to_action_ms = elapsed_ms(process_started);
-                        view.update(cx, |view, cx| {
-                            view.run_auto_bench(
-                                bench,
-                                window,
-                                cx,
-                                startup_to_action_ms,
-                                process_started,
-                            );
-                        });
-                    });
-                })
-                .unwrap();
-        }
     });
 }

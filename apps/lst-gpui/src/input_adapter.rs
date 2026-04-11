@@ -6,10 +6,10 @@ use lst_editor::{
     EditorCommand,
 };
 use ropey::Rope;
-use std::{ops::Range, time::Instant};
+use std::ops::Range;
 
 use crate::viewport::{code_origin_pad, row_contains_cursor, x_for_global_char};
-use crate::{elapsed_ms, LstGpuiApp, CURSOR_WIDTH, ROW_HEIGHT};
+use crate::{LstGpuiApp, CURSOR_WIDTH, ROW_HEIGHT};
 
 impl LstGpuiApp {
     pub(crate) fn maybe_handle_vim_key(
@@ -27,7 +27,7 @@ impl LstGpuiApp {
         });
 
         if event.keystroke.key == "escape" {
-            let old_show_wrap = self.model.show_wrap;
+            let old_show_wrap = self.model.show_wrap();
             let old_find_state = self.find_input_state();
             self.model.handle_vim_escape();
             self.sync_tab_views(old_show_wrap);
@@ -39,7 +39,7 @@ impl LstGpuiApp {
             return true;
         }
 
-        if self.model.vim.mode == vim::Mode::Insert {
+        if self.model.vim_mode() == vim::Mode::Insert {
             return false;
         }
 
@@ -55,7 +55,7 @@ impl LstGpuiApp {
             return false;
         };
 
-        let old_show_wrap = self.model.show_wrap;
+        let old_show_wrap = self.model.show_wrap();
         let old_find_state = self.find_input_state();
         self.model.handle_vim_key(key, mods);
         self.sync_tab_views(old_show_wrap);
@@ -77,9 +77,9 @@ impl EntityInputHandler for LstGpuiApp {
         _cx: &mut Context<Self>,
     ) -> Option<String> {
         let tab = self.active_tab();
-        let range = utf16_range_to_char_range(&tab.buffer, &range_utf16);
-        *actual_range = Some(char_range_to_utf16_range(&tab.buffer, &range));
-        Some(tab.buffer.slice(range).to_string())
+        let range = utf16_range_to_char_range(tab.buffer(), &range_utf16);
+        *actual_range = Some(char_range_to_utf16_range(tab.buffer(), &range));
+        Some(tab.buffer().slice(range).to_string())
     }
 
     fn selected_text_range(
@@ -90,8 +90,8 @@ impl EntityInputHandler for LstGpuiApp {
     ) -> Option<UTF16Selection> {
         let tab = self.active_tab();
         Some(UTF16Selection {
-            range: char_range_to_utf16_range(&tab.buffer, &tab.selection),
-            reversed: tab.selection_reversed,
+            range: char_range_to_utf16_range(tab.buffer(), &tab.selection()),
+            reversed: tab.selection_reversed(),
         })
     }
 
@@ -101,9 +101,8 @@ impl EntityInputHandler for LstGpuiApp {
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
         let tab = self.active_tab();
-        tab.marked_range
-            .as_ref()
-            .map(|range| char_range_to_utf16_range(&tab.buffer, range))
+        tab.marked_range()
+            .map(|range| char_range_to_utf16_range(tab.buffer(), range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -117,12 +116,11 @@ impl EntityInputHandler for LstGpuiApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let apply_started = Instant::now();
         let range = {
             let tab = self.active_tab();
             range_utf16
                 .as_ref()
-                .map(|range| utf16_range_to_char_range(&tab.buffer, range))
+                .map(|range| utf16_range_to_char_range(tab.buffer(), range))
         };
         self.apply_model_command(
             EditorCommand::ReplaceTextFromInput {
@@ -131,7 +129,6 @@ impl EntityInputHandler for LstGpuiApp {
             },
             cx,
         );
-        self.record_operation("text_input", None, elapsed_ms(apply_started));
     }
 
     fn replace_and_mark_text_in_range(
@@ -142,12 +139,11 @@ impl EntityInputHandler for LstGpuiApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let apply_started = Instant::now();
         let range = {
             let tab = self.active_tab();
             range_utf16
                 .as_ref()
-                .map(|range| utf16_range_to_char_range(&tab.buffer, range))
+                .map(|range| utf16_range_to_char_range(tab.buffer(), range))
         };
         let selected_range = new_selected_range_utf16
             .as_ref()
@@ -160,7 +156,6 @@ impl EntityInputHandler for LstGpuiApp {
             },
             cx,
         );
-        self.record_operation("ime_text_input", None, elapsed_ms(apply_started));
     }
 
     fn bounds_for_range(
@@ -172,12 +167,12 @@ impl EntityInputHandler for LstGpuiApp {
     ) -> Option<Bounds<Pixels>> {
         let tab = self.active_tab();
         let geometry = self.active_view().geometry.borrow();
-        let range = utf16_range_to_char_range(&tab.buffer, &range_utf16);
+        let range = utf16_range_to_char_range(tab.buffer(), &range_utf16);
         let row = geometry
             .rows
             .iter()
             .rfind(|row| row_contains_cursor(row, range.start))?;
-        let code_origin_x = element_bounds.left() + code_origin_pad(self.model.show_gutter);
+        let code_origin_x = element_bounds.left() + code_origin_pad(self.model.show_gutter());
         let start_x =
             code_origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| gpui::px(0.0));
         let end_x = code_origin_x
@@ -199,7 +194,7 @@ impl EntityInputHandler for LstGpuiApp {
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
         let char_index = self.active_char_index_for_point(point);
-        Some(char_to_utf16(&self.active_tab().buffer, char_index))
+        Some(char_to_utf16(self.active_tab().buffer(), char_index))
     }
 }
 

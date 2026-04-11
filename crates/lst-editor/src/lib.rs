@@ -1,302 +1,34 @@
+pub mod command;
+mod snapshot;
+mod tab;
 pub mod vim;
 
+pub use command::{EditorCommand, EditorEffect, FocusTarget};
+pub use snapshot::EditorSnapshot;
+pub use tab::{EditorTab, TabId};
+
 use lst_core::{
-    document::{
-        char_to_position, line_indent_prefix, position_to_char, EditKind, Tab, UndoBoundary,
-    },
+    document::{char_to_position, line_indent_prefix, position_to_char, EditKind, UndoBoundary},
     editor_ops,
     find::FindState,
     position::Position,
     selection::{next_word_boundary, previous_word_boundary},
     wrap,
 };
-use std::{
-    ops::{Deref, DerefMut, Range},
-    path::PathBuf,
-};
+use std::{ops::Range, sync::Arc};
 
 pub const UNTITLED_PREFIX: &str = "untitled";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TabId(u64);
-
-impl TabId {
-    pub fn from_raw(id: u64) -> Self {
-        Self(id)
-    }
-
-    pub fn get(self) -> u64 {
-        self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FocusTarget {
-    Editor,
-    FindQuery,
-    FindReplace,
-    GotoLine,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum EditorEffect {
-    Focus(FocusTarget),
-    RevealCursor,
-    WriteClipboard(String),
-    WritePrimary(String),
-    ReadClipboard,
-    OpenFiles,
-    SaveFile {
-        path: PathBuf,
-        body: String,
-    },
-    SaveFileAs {
-        suggested_name: String,
-        body: String,
-    },
-    AutosaveFile {
-        path: PathBuf,
-        body: String,
-        revision: u64,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum EditorCommand {
-    InsertText(String),
-    ReplaceText {
-        range: Option<Range<usize>>,
-        text: String,
-        boundary: UndoBoundary,
-    },
-    ReplaceTextFromInput {
-        range: Option<Range<usize>>,
-        text: String,
-    },
-    ReplaceAndMarkText {
-        range: Option<Range<usize>>,
-        text: String,
-        selected_range: Option<Range<usize>>,
-    },
-    ClearMarkedText,
-    NewTab,
-    CloseTab(usize),
-    SetActiveTab(usize),
-    NextTab,
-    PrevTab,
-    ToggleWrap,
-    SelectAll,
-    MoveHorizontal {
-        delta: isize,
-        select: bool,
-    },
-    MoveHorizontalCollapse {
-        backward: bool,
-    },
-    MoveVertical {
-        delta: isize,
-        select: bool,
-    },
-    MoveDisplayRows {
-        delta: isize,
-        select: bool,
-        wrap_columns: usize,
-    },
-    MovePage {
-        rows: usize,
-        down: bool,
-        select: bool,
-    },
-    MoveWord {
-        backward: bool,
-        select: bool,
-    },
-    MoveLineBoundary {
-        to_end: bool,
-        select: bool,
-    },
-    MoveDocumentBoundary {
-        to_end: bool,
-        select: bool,
-    },
-    MoveToChar {
-        offset: usize,
-        select: bool,
-        preferred_column: Option<usize>,
-    },
-    SetSelection {
-        range: Range<usize>,
-        reversed: bool,
-    },
-    Backspace,
-    DeleteForward,
-    DeleteWord {
-        backward: bool,
-    },
-    InsertNewline,
-    InsertTab,
-    DeleteLine,
-    MoveLineUp,
-    MoveLineDown,
-    DuplicateLine,
-    ToggleComment,
-    CopySelection,
-    CutSelection,
-    RequestPaste,
-    PasteText(String),
-    OpenFind {
-        show_replace: bool,
-    },
-    ToggleFind {
-        show_replace: bool,
-    },
-    CloseFind,
-    SetFindQuery(String),
-    SetFindQueryAndSelect(String),
-    SetFindReplacement(String),
-    FindNext,
-    FindPrev,
-    ReplaceOne,
-    ReplaceAll,
-    OpenGotoLine,
-    ToggleGotoLine,
-    CloseGotoLine,
-    SetGotoLine(String),
-    SubmitGotoLine,
-    RequestOpenFiles,
-    OpenFiles(Vec<(PathBuf, String)>),
-    OpenFileFailed {
-        path: PathBuf,
-        message: String,
-    },
-    RequestSave,
-    RequestSaveAs,
-    SaveFinished {
-        path: PathBuf,
-    },
-    SaveFailed {
-        path: PathBuf,
-        message: String,
-    },
-    AutosaveTick,
-    AutosaveFinished {
-        path: PathBuf,
-        revision: u64,
-    },
-    AutosaveFailed {
-        path: PathBuf,
-        message: String,
-    },
-    Undo,
-    Redo,
-}
-
-#[derive(Clone)]
-pub struct EditorTab {
-    id: TabId,
-    doc: Tab,
-    pub marked_range: Option<Range<usize>>,
-}
-
-impl EditorTab {
-    pub fn empty(id: TabId, name_hint: String) -> Self {
-        Self::from_doc(id, Tab::empty(name_hint))
-    }
-
-    pub fn from_path(id: TabId, path: PathBuf, text: &str) -> Self {
-        Self::from_doc(id, Tab::from_path(path, text))
-    }
-
-    pub fn from_text(id: TabId, name_hint: String, path: Option<PathBuf>, text: &str) -> Self {
-        Self::from_doc(id, Tab::from_text(name_hint, path, text, false))
-    }
-
-    pub fn from_doc(id: TabId, doc: Tab) -> Self {
-        Self {
-            id,
-            doc,
-            marked_range: None,
-        }
-    }
-
-    pub fn id(&self) -> TabId {
-        self.id
-    }
-
-    pub fn move_to(&mut self, offset: usize) {
-        self.doc.move_to(offset);
-        self.marked_range = None;
-    }
-
-    pub fn select_to(&mut self, offset: usize) {
-        self.doc.select_to(offset);
-        self.marked_range = None;
-    }
-
-    pub fn replace_char_range(&mut self, range: Range<usize>, new_text: &str) -> usize {
-        let new_cursor = self.doc.replace_char_range(range, new_text);
-        self.marked_range = None;
-        new_cursor
-    }
-
-    pub fn edit(
-        &mut self,
-        kind: EditKind,
-        boundary: UndoBoundary,
-        range: Range<usize>,
-        new_text: &str,
-    ) -> usize {
-        let new_cursor = self.doc.edit(kind, boundary, range, new_text);
-        self.marked_range = None;
-        new_cursor
-    }
-
-    pub fn set_text(&mut self, text: &str) {
-        self.doc.set_text(text);
-        self.marked_range = None;
-    }
-
-    pub fn undo(&mut self) -> bool {
-        let changed = self.doc.undo();
-        if changed {
-            self.marked_range = None;
-        }
-        changed
-    }
-
-    pub fn redo(&mut self) -> bool {
-        let changed = self.doc.redo();
-        if changed {
-            self.marked_range = None;
-        }
-        changed
-    }
-}
-
-impl Deref for EditorTab {
-    type Target = Tab;
-
-    fn deref(&self) -> &Self::Target {
-        &self.doc
-    }
-}
-
-impl DerefMut for EditorTab {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.doc
-    }
-}
-
 pub struct EditorModel {
-    pub tabs: Vec<EditorTab>,
-    pub active: usize,
-    pub next_untitled_id: usize,
-    pub show_gutter: bool,
-    pub show_wrap: bool,
-    pub find: FindState,
-    pub goto_line: Option<String>,
-    pub status: String,
-    pub vim: vim::VimState,
+    tabs: Vec<EditorTab>,
+    active: usize,
+    next_untitled_id: usize,
+    show_gutter: bool,
+    show_wrap: bool,
+    find: FindState,
+    goto_line: Option<String>,
+    status: String,
+    vim: vim::VimState,
     next_tab_id: u64,
     effects: Vec<EditorEffect>,
 }
@@ -325,12 +57,12 @@ impl EditorModel {
     }
 
     pub fn empty() -> Self {
-        let tab = EditorTab::empty(TabId(1), format!("{UNTITLED_PREFIX}-1"));
+        let tab = EditorTab::empty(TabId::from_raw(1), format!("{UNTITLED_PREFIX}-1"));
         Self::new(vec![tab], "Ready.".to_string())
     }
 
-    pub fn alloc_tab_id(&mut self) -> TabId {
-        let id = TabId(self.next_tab_id);
+    fn alloc_tab_id(&mut self) -> TabId {
+        let id = TabId::from_raw(self.next_tab_id);
         self.next_tab_id = self.next_tab_id.saturating_add(1);
         id
     }
@@ -339,29 +71,78 @@ impl EditorModel {
         &self.tabs[self.active]
     }
 
-    pub fn active_tab_mut(&mut self) -> &mut EditorTab {
+    fn active_tab_mut(&mut self) -> &mut EditorTab {
         &mut self.tabs[self.active]
     }
 
-    pub fn new_empty_tab(&mut self) -> EditorTab {
+    pub fn active_tab_lines(&mut self) -> Arc<[String]> {
+        self.active_tab_mut().lines()
+    }
+
+    pub fn tabs(&self) -> &[EditorTab] {
+        &self.tabs
+    }
+
+    pub fn tab(&self, index: usize) -> Option<&EditorTab> {
+        self.tabs.get(index)
+    }
+
+    pub fn tab_count(&self) -> usize {
+        self.tabs.len()
+    }
+
+    pub fn active_index(&self) -> usize {
+        self.active
+    }
+
+    pub fn show_gutter(&self) -> bool {
+        self.show_gutter
+    }
+
+    pub fn show_wrap(&self) -> bool {
+        self.show_wrap
+    }
+
+    pub fn find(&self) -> &FindState {
+        &self.find
+    }
+
+    pub fn goto_line(&self) -> Option<&str> {
+        self.goto_line.as_deref()
+    }
+
+    pub fn status(&self) -> &str {
+        &self.status
+    }
+
+    pub fn vim_mode(&self) -> vim::Mode {
+        self.vim.mode
+    }
+
+    pub fn vim_pending_display(&self) -> String {
+        self.vim.pending_display()
+    }
+
+    fn new_empty_tab(&mut self) -> EditorTab {
         let name = format!("{UNTITLED_PREFIX}-{}", self.next_untitled_id);
         self.next_untitled_id += 1;
         let id = self.alloc_tab_id();
         EditorTab::empty(id, name)
     }
 
-    pub fn push_tab(&mut self, tab: EditorTab) {
+    fn push_tab(&mut self, tab: EditorTab) {
         self.tabs.push(tab);
     }
 
-    pub fn set_active_tab(&mut self, index: usize) -> bool {
+    fn set_active_tab(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
             return false;
         }
         self.active = index;
         self.vim.on_tab_switch();
-        self.active_tab_mut().preferred_column = None;
+        self.active_tab_mut().doc.preferred_column = None;
         self.sync_find_with_active_document();
+        self.status = format!("Switched to {}.", self.active_tab().display_name());
         true
     }
 
@@ -376,7 +157,7 @@ impl EditorModel {
         let cursor = self.active_tab().cursor_char();
         {
             let tab = self.active_tab_mut();
-            tab.preferred_column = preferred_column;
+            tab.doc.preferred_column = preferred_column;
             if select {
                 tab.select_to(target);
             } else {
@@ -392,13 +173,13 @@ impl EditorModel {
         let start = range.start.min(end);
         let finish = range.end.min(end);
         let tab = self.active_tab_mut();
-        tab.selection = start.min(finish)..start.max(finish);
-        tab.selection_reversed = reversed;
-        tab.preferred_column = None;
+        tab.doc.selection = start.min(finish)..start.max(finish);
+        tab.doc.selection_reversed = reversed;
+        tab.doc.preferred_column = None;
         tab.marked_range = None;
     }
 
-    pub fn queue_focus(&mut self, target: FocusTarget) {
+    fn queue_focus(&mut self, target: FocusTarget) {
         self.effects.push(EditorEffect::Focus(target));
     }
 
@@ -414,7 +195,7 @@ impl EditorModel {
         self.effects.drain(..).collect()
     }
 
-    pub fn open_find(&mut self, show_replace: bool, selected_text: Option<String>) {
+    fn open_find(&mut self, show_replace: bool, selected_text: Option<String>) {
         self.find.visible = true;
         self.find.show_replace = show_replace;
         if let Some(text) = selected_text {
@@ -426,51 +207,51 @@ impl EditorModel {
         self.queue_focus(FocusTarget::FindQuery);
     }
 
-    pub fn close_find(&mut self) {
+    fn close_find(&mut self) {
         self.find.visible = false;
         self.find.show_replace = false;
         self.queue_focus(FocusTarget::Editor);
     }
 
-    pub fn open_goto_line(&mut self) {
+    fn open_goto_line(&mut self) {
         self.goto_line = Some(String::new());
         self.queue_focus(FocusTarget::GotoLine);
     }
 
-    pub fn close_goto_line(&mut self) {
+    fn close_goto_line(&mut self) {
         self.goto_line = None;
         self.queue_focus(FocusTarget::Editor);
     }
 
-    pub fn set_find_query(&mut self, text: String) {
+    fn set_find_query(&mut self, text: String) {
         self.find.query = text;
         self.reindex_find_matches_to_nearest();
     }
 
-    pub fn set_find_query_and_select(&mut self, text: String) {
+    fn set_find_query_and_select(&mut self, text: String) {
         self.set_find_query(text);
         if self.select_current_find_match() {
             self.queue_reveal_cursor();
         }
     }
 
-    pub fn set_find_replacement(&mut self, text: String) {
+    fn set_find_replacement(&mut self, text: String) {
         self.find.replacement = text;
     }
 
-    pub fn set_goto_line(&mut self, text: String) {
+    fn set_goto_line(&mut self, text: String) {
         self.goto_line = Some(text);
     }
 
-    pub fn active_cursor_position(&self) -> Position {
+    fn active_cursor_position(&self) -> Position {
         self.active_tab().cursor_position()
     }
 
-    pub fn active_tab_revision(&self) -> u64 {
+    fn active_tab_revision(&self) -> u64 {
         self.active_tab().revision()
     }
 
-    pub fn reindex_find_matches(&mut self) {
+    fn reindex_find_matches(&mut self) {
         if self.find.query.is_empty() {
             self.find.clear_results();
             return;
@@ -492,7 +273,7 @@ impl EditorModel {
         if selected.end.saturating_sub(selected.start) != self.find.query.chars().count() {
             return None;
         }
-        Some(char_to_position(&tab.buffer, selected.start))
+        Some(char_to_position(tab.buffer(), selected.start))
     }
 
     fn align_find_current_to_visible_match(&mut self) {
@@ -508,7 +289,7 @@ impl EditorModel {
         self.find.find_nearest(&pos);
     }
 
-    pub fn reindex_find_matches_to_nearest(&mut self) {
+    fn reindex_find_matches_to_nearest(&mut self) {
         self.reindex_find_matches();
         if !self.find.matches.is_empty() {
             self.align_find_current_to_visible_match();
@@ -535,7 +316,7 @@ impl EditorModel {
         }
     }
 
-    pub fn find_next(&mut self) -> bool {
+    fn find_next(&mut self) -> bool {
         self.ensure_find_matches_current();
         if self.find.matches.is_empty() {
             return false;
@@ -544,7 +325,7 @@ impl EditorModel {
         self.select_current_find_match()
     }
 
-    pub fn find_prev(&mut self) -> bool {
+    fn find_prev(&mut self) -> bool {
         self.ensure_find_matches_current();
         if self.find.matches.is_empty() {
             return false;
@@ -553,7 +334,7 @@ impl EditorModel {
         self.select_current_find_match()
     }
 
-    pub fn replace_one(&mut self) -> bool {
+    fn replace_one(&mut self) -> bool {
         self.ensure_find_matches_current();
         let Some((start, end)) = self.find.current_match_range() else {
             return false;
@@ -561,7 +342,7 @@ impl EditorModel {
         let replacement = self.find.replacement.clone();
         let range = {
             let tab = self.active_tab();
-            position_to_char(&tab.buffer, start)..position_to_char(&tab.buffer, end)
+            position_to_char(tab.buffer(), start)..position_to_char(tab.buffer(), end)
         };
         self.active_tab_mut()
             .edit(EditKind::Other, UndoBoundary::Break, range, &replacement);
@@ -570,7 +351,7 @@ impl EditorModel {
         true
     }
 
-    pub fn replace_all_matches(&mut self) -> bool {
+    fn replace_all_matches(&mut self) -> bool {
         self.reindex_find_matches();
         if self.find.query.is_empty() {
             return false;
@@ -596,7 +377,7 @@ impl EditorModel {
         true
     }
 
-    pub fn submit_goto_line(&mut self) -> bool {
+    fn submit_goto_line(&mut self) -> bool {
         let Some(text) = self.goto_line.clone() else {
             return false;
         };
@@ -618,11 +399,11 @@ impl EditorModel {
         true
     }
 
-    pub fn close_tab_at(&mut self, index: usize) -> bool {
+    fn close_tab_at(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
             return false;
         }
-        if self.tabs[index].modified {
+        if self.tabs[index].modified() {
             self.status = format!(
                 "Unsaved changes in {}. Save or Save As before closing this tab.",
                 self.tabs[index].display_name()
@@ -710,13 +491,13 @@ impl EditorModel {
             } else {
                 tab.marked_range = Some(inserted_start..inserted_start + text.chars().count());
             }
-            tab.selection = selected_range
+            tab.doc.selection = selected_range
                 .map(|range| inserted_start + range.start..inserted_start + range.end)
                 .unwrap_or_else(|| {
                     let cursor = inserted_start + text.chars().count();
                     cursor..cursor
                 });
-            tab.selection_reversed = false;
+            tab.doc.selection_reversed = false;
         }
         self.sync_find_after_edit();
         self.queue_reveal_cursor();
@@ -728,9 +509,9 @@ impl EditorModel {
         }
         let cursor = tab.cursor_char();
         let target = if backward {
-            previous_word_boundary(&tab.buffer, cursor)
+            previous_word_boundary(tab.buffer(), cursor)
         } else {
-            next_word_boundary(&tab.buffer, cursor)
+            next_word_boundary(tab.buffer(), cursor)
         };
         (target != cursor).then_some(target.min(cursor)..target.max(cursor))
     }
@@ -742,7 +523,7 @@ impl EditorModel {
         } else {
             (tab.cursor_char() + delta as usize).min(tab.len_chars())
         };
-        tab.preferred_column = None;
+        tab.doc.preferred_column = None;
         if select {
             tab.select_to(target);
         } else {
@@ -760,7 +541,7 @@ impl EditorModel {
                 selection.end
             };
             let tab = self.active_tab_mut();
-            tab.preferred_column = None;
+            tab.doc.preferred_column = None;
             tab.move_to(target);
             return true;
         }
@@ -774,19 +555,19 @@ impl EditorModel {
             let tab = self.active_tab();
             if !select && tab.has_selection() {
                 if backward {
-                    tab.selection.start
+                    tab.selection().start
                 } else {
-                    tab.selection.end
+                    tab.selection().end
                 }
             } else if backward {
-                previous_word_boundary(&tab.buffer, tab.cursor_char())
+                previous_word_boundary(tab.buffer(), tab.cursor_char())
             } else {
-                next_word_boundary(&tab.buffer, tab.cursor_char())
+                next_word_boundary(tab.buffer(), tab.cursor_char())
             }
         };
 
         let tab = self.active_tab_mut();
-        tab.preferred_column = None;
+        tab.doc.preferred_column = None;
         if select {
             tab.select_to(target);
         } else {
@@ -799,15 +580,15 @@ impl EditorModel {
         let tab = self.active_tab_mut();
         let cursor = tab.cursor_char();
         let position = tab.cursor_position();
-        let preferred = tab.preferred_column.unwrap_or(position.column);
+        let preferred = tab.doc.preferred_column.unwrap_or(position.column);
         let target_line = if delta.is_negative() {
             position.line.saturating_sub(delta.unsigned_abs())
         } else {
             (position.line + delta as usize).min(tab.line_count().saturating_sub(1))
         };
         let target_column = preferred.min(display_line_char_len(tab, target_line));
-        let target = tab.buffer.line_to_char(target_line) + target_column;
-        tab.preferred_column = Some(preferred);
+        let target = tab.doc.buffer.line_to_char(target_line) + target_column;
+        tab.doc.preferred_column = Some(preferred);
         if select {
             tab.select_to(target);
         } else {
@@ -830,7 +611,7 @@ impl EditorModel {
                 lines.as_ref(),
                 position.line,
                 position.column,
-                tab.preferred_column,
+                tab.doc.preferred_column,
                 delta,
                 &layout,
             )
@@ -843,7 +624,7 @@ impl EditorModel {
         let target_char = {
             let tab = self.active_tab();
             position_to_char(
-                &tab.buffer,
+                tab.buffer(),
                 Position {
                     line: target.line,
                     column: target.column,
@@ -857,20 +638,20 @@ impl EditorModel {
         } else {
             tab.move_to(target_char);
         }
-        tab.preferred_column = Some(target.preferred_column);
+        tab.doc.preferred_column = Some(target.preferred_column);
         target_char != cursor || select
     }
 
     fn move_line_boundary(&mut self, to_end: bool, select: bool) -> bool {
         let tab = self.active_tab_mut();
         let cursor = tab.cursor_char();
-        let line = tab.buffer.char_to_line(cursor.min(tab.len_chars()));
+        let line = tab.doc.buffer.char_to_line(cursor.min(tab.len_chars()));
         let target = if to_end {
-            tab.buffer.line_to_char(line) + display_line_char_len(tab, line)
+            tab.doc.buffer.line_to_char(line) + display_line_char_len(tab, line)
         } else {
-            tab.buffer.line_to_char(line)
+            tab.doc.buffer.line_to_char(line)
         };
-        tab.preferred_column = None;
+        tab.doc.preferred_column = None;
         if select {
             tab.select_to(target);
         } else {
@@ -887,7 +668,7 @@ impl EditorModel {
         };
         let cursor = self.active_tab().cursor_char();
         let tab = self.active_tab_mut();
-        tab.preferred_column = None;
+        tab.doc.preferred_column = None;
         if select {
             tab.select_to(target);
         } else {
@@ -901,9 +682,9 @@ impl EditorModel {
         {
             let tab = self.active_tab_mut();
             tab.set_text(&lines.join(newline));
-            tab.modified = true;
+            tab.doc.modified = true;
             let cursor = position_to_char(
-                &tab.buffer,
+                tab.buffer(),
                 Position {
                     line: cursor_line,
                     column: cursor_col,
@@ -997,11 +778,11 @@ impl EditorModel {
         let (newline, indent) = {
             let tab = self.active_tab();
             let line = tab
-                .buffer
+                .buffer()
                 .char_to_line(tab.cursor_char().min(tab.len_chars()));
             (
                 preferred_newline_for_active_tab(tab),
-                line_indent_prefix(&tab.buffer, line),
+                line_indent_prefix(tab.buffer(), line),
             )
         };
         self.replace_text_in_range(None, format!("{newline}{indent}"), UndoBoundary::Break);
@@ -1243,19 +1024,19 @@ impl EditorModel {
 
     fn apply_vim_select(&mut self, anchor: Position, head: Position) {
         let tab = self.active_tab_mut();
-        let anchor_char = position_to_char(&tab.buffer, anchor);
-        let head_char = position_to_char(&tab.buffer, head);
+        let anchor_char = position_to_char(tab.buffer(), anchor);
+        let head_char = position_to_char(tab.buffer(), head);
         let anchor_end = inclusive_position_to_exclusive_char(tab, anchor);
         let head_end = inclusive_position_to_exclusive_char(tab, head);
         if vim_position_lt(head, anchor) {
-            tab.selection = head_char..anchor_end.max(head_char);
-            tab.selection_reversed = true;
+            tab.doc.selection = head_char..anchor_end.max(head_char);
+            tab.doc.selection_reversed = true;
         } else {
-            tab.selection = anchor_char..head_end.max(anchor_char);
-            tab.selection_reversed = false;
+            tab.doc.selection = anchor_char..head_end.max(anchor_char);
+            tab.doc.selection_reversed = false;
         }
         tab.marked_range = None;
-        tab.preferred_column = None;
+        tab.doc.preferred_column = None;
     }
 
     fn move_to_vim_search_target(&mut self, target: Position) {
@@ -1522,6 +1303,9 @@ impl EditorModel {
                 self.status = "Created a new tab.".to_string();
                 self.queue_focus(FocusTarget::Editor);
             }
+            EditorCommand::CloseActiveTab => {
+                self.close_tab_at(self.active);
+            }
             EditorCommand::CloseTab(index) => {
                 self.close_tab_at(index);
             }
@@ -1549,6 +1333,9 @@ impl EditorModel {
             }
             EditorCommand::SelectAll => {
                 self.active_tab_mut().select_all();
+                if let Some(text) = self.active_tab().selected_text() {
+                    self.queue_effect(EditorEffect::WritePrimary(text));
+                }
             }
             EditorCommand::MoveHorizontal { delta, select } => {
                 self.move_horizontal(delta, select);
@@ -1653,15 +1440,14 @@ impl EditorModel {
             EditorCommand::ToggleComment => {
                 let prefix = self
                     .active_tab()
-                    .path
-                    .as_ref()
+                    .path()
                     .and_then(|path| path.extension())
                     .and_then(|ext| editor_ops::comment_prefix(ext.to_string_lossy().as_ref()))
                     .unwrap_or("//");
                 let selected = self.active_tab().selected_range();
                 let cursor = self.active_cursor_position();
-                let start = char_to_position(&self.active_tab().buffer, selected.start);
-                let end = char_to_position(&self.active_tab().buffer, selected.end);
+                let start = char_to_position(self.active_tab().buffer(), selected.start);
+                let end = char_to_position(self.active_tab().buffer(), selected.end);
                 let first = start.line.min(end.line);
                 let last = start.line.max(end.line);
                 let _ = self.apply_line_edit(|lines| {
@@ -1683,6 +1469,9 @@ impl EditorModel {
                 self.cut_selection();
             }
             EditorCommand::RequestPaste => self.queue_effect(EditorEffect::ReadClipboard),
+            EditorCommand::ClipboardUnavailable => {
+                self.status = "Clipboard does not currently contain plain text.".to_string();
+            }
             EditorCommand::PasteText(text) => {
                 self.replace_text_in_range(None, text.clone(), UndoBoundary::Break);
                 self.status = format!("Pasted {} line(s).", text.lines().count());
@@ -1756,7 +1545,7 @@ impl EditorModel {
             }
             EditorCommand::RequestSave => {
                 let body = self.active_tab().buffer_text();
-                if let Some(path) = self.active_tab().path.clone() {
+                if let Some(path) = self.active_tab().path().cloned() {
                     self.queue_effect(EditorEffect::SaveFile { path, body });
                 } else {
                     self.queue_effect(EditorEffect::SaveFileAs {
@@ -1773,8 +1562,8 @@ impl EditorModel {
             }
             EditorCommand::SaveFinished { path } => {
                 let tab = self.active_tab_mut();
-                tab.path = Some(path.clone());
-                tab.modified = false;
+                tab.doc.path = Some(path.clone());
+                tab.doc.modified = false;
                 self.status = format!("Saved {}.", path.display());
             }
             EditorCommand::SaveFailed { path, message } => {
@@ -1784,13 +1573,13 @@ impl EditorModel {
                 let jobs = self
                     .tabs
                     .iter()
-                    .filter(|tab| tab.modified)
+                    .filter(|tab| tab.modified())
                     .filter_map(|tab| {
-                        let path = tab.path.clone()?;
+                        let path = tab.path().cloned()?;
                         let open_tabs_for_path = self
                             .tabs
                             .iter()
-                            .filter(|candidate| candidate.path.as_ref() == Some(&path))
+                            .filter(|candidate| candidate.path() == Some(&path))
                             .take(2)
                             .count();
                         if open_tabs_for_path != 1 {
@@ -1809,18 +1598,18 @@ impl EditorModel {
             }
             EditorCommand::AutosaveFinished { path, revision } => {
                 for tab in &mut self.tabs {
-                    if tab.path.as_ref() == Some(&path) && tab.revision() == revision {
-                        tab.modified = false;
+                    if tab.path() == Some(&path) && tab.revision() == revision {
+                        tab.doc.modified = false;
                     }
                 }
-                if self.active_tab().path.as_ref() == Some(&path)
+                if self.active_tab().path() == Some(&path)
                     && self.active_tab().revision() == revision
                 {
                     self.status = format!("Autosaved {}.", path.display());
                 }
             }
             EditorCommand::AutosaveFailed { path, message } => {
-                if self.active_tab().path.as_ref() == Some(&path) {
+                if self.active_tab().path() == Some(&path) {
                     self.status = format!("Autosave failed for {}: {message}", path.display());
                 }
             }
@@ -1862,15 +1651,15 @@ pub fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: 
 }
 
 fn display_line_char_len(tab: &EditorTab, line_ix: usize) -> usize {
-    tab.buffer
-        .line(line_ix.min(tab.buffer.len_lines().saturating_sub(1)))
+    tab.buffer()
+        .line(line_ix.min(tab.buffer().len_lines().saturating_sub(1)))
         .chars()
         .take_while(|ch| *ch != '\n' && *ch != '\r')
         .count()
 }
 
 fn preferred_newline_for_active_tab(tab: &EditorTab) -> &'static str {
-    let mut chars = tab.buffer.chars().peekable();
+    let mut chars = tab.buffer().chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\r' {
             if chars.peek() == Some(&'\n') {
@@ -1890,8 +1679,10 @@ fn vim_position_lt(a: Position, b: Position) -> bool {
 }
 
 fn inclusive_position_to_exclusive_char(tab: &EditorTab, position: Position) -> usize {
-    let line = position.line.min(tab.buffer.len_lines().saturating_sub(1));
-    let line_start = tab.buffer.line_to_char(line);
+    let line = position
+        .line
+        .min(tab.buffer().len_lines().saturating_sub(1));
+    let line_start = tab.buffer().line_to_char(line);
     let display_len = display_line_char_len(tab, line);
     if display_len == 0 {
         return line_start;
@@ -1948,62 +1739,57 @@ fn remove_text_range(lines: &mut Vec<String>, from: &Position, to: &Position) {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EditorSnapshot {
-    pub active: usize,
-    pub tab_count: usize,
-    pub active_tab_id: TabId,
-    pub tab_ids: Vec<TabId>,
-    pub tab_titles: Vec<String>,
-    pub tab_modified: Vec<bool>,
-    pub text: String,
-    pub cursor: usize,
-    pub cursor_position: Position,
-    pub selection: Range<usize>,
-    pub active_path: Option<PathBuf>,
-    pub active_revision: u64,
-    pub show_wrap: bool,
-    pub show_gutter: bool,
-    pub find_visible: bool,
-    pub find_show_replace: bool,
-    pub find_query: String,
-    pub find_replacement: String,
-    pub find_matches: usize,
-    pub find_current: usize,
-    pub goto_line: Option<String>,
-    pub vim_mode: vim::Mode,
-    pub vim_pending: String,
-    pub status: String,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl EditorModel {
-    pub fn snapshot(&self) -> EditorSnapshot {
-        let active = self.active_tab();
-        EditorSnapshot {
-            active: self.active,
-            tab_count: self.tabs.len(),
-            active_tab_id: active.id(),
-            tab_ids: self.tabs.iter().map(EditorTab::id).collect(),
-            tab_titles: self.tabs.iter().map(|tab| tab.display_name()).collect(),
-            tab_modified: self.tabs.iter().map(|tab| tab.modified).collect(),
-            text: active.buffer_text(),
-            cursor: active.cursor_char(),
-            cursor_position: active.cursor_position(),
-            selection: active.selected_range(),
-            active_path: active.path.clone(),
-            active_revision: active.revision(),
-            show_wrap: self.show_wrap,
-            show_gutter: self.show_gutter,
-            find_visible: self.find.visible,
-            find_show_replace: self.find.show_replace,
-            find_query: self.find.query.clone(),
-            find_replacement: self.find.replacement.clone(),
-            find_matches: self.find.matches.len(),
-            find_current: self.find.current,
-            goto_line: self.goto_line.clone(),
-            vim_mode: self.vim.mode,
-            vim_pending: self.vim.pending_display(),
-            status: self.status.clone(),
-        }
+    fn tab(id: u64, title: &str, text: &str) -> EditorTab {
+        EditorTab::from_text(TabId::from_raw(id), title.to_string(), None, text)
+    }
+
+    #[test]
+    fn tab_switch_commands_own_switch_status() {
+        let mut model = EditorModel::new(
+            vec![tab(1, "one.txt", "one"), tab(2, "two.txt", "two")],
+            "Ready.".to_string(),
+        );
+
+        model.apply(EditorCommand::SetActiveTab(1));
+        assert_eq!(model.snapshot().status, "Switched to two.txt.");
+
+        model.apply(EditorCommand::PrevTab);
+        assert_eq!(model.snapshot().status, "Switched to one.txt.");
+
+        model.apply(EditorCommand::NextTab);
+        assert_eq!(model.snapshot().status, "Switched to two.txt.");
+    }
+
+    #[test]
+    fn close_active_tab_command_closes_current_tab() {
+        let mut model = EditorModel::new(
+            vec![tab(1, "one.txt", "one"), tab(2, "two.txt", "two")],
+            "Ready.".to_string(),
+        );
+        model.apply(EditorCommand::SetActiveTab(1));
+
+        model.apply(EditorCommand::CloseActiveTab);
+
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.tab_titles, ["one.txt"]);
+        assert_eq!(snapshot.active, 0);
+        assert_eq!(snapshot.status, "Closed tab.");
+    }
+
+    #[test]
+    fn select_all_queues_primary_selection() {
+        let mut model = EditorModel::new(vec![tab(1, "one.txt", "hello")], "Ready.".to_string());
+
+        model.apply(EditorCommand::SelectAll);
+
+        assert_eq!(model.snapshot().selection, 0..5);
+        assert_eq!(
+            model.drain_effects(),
+            vec![EditorEffect::WritePrimary("hello".to_string())]
+        );
     }
 }

@@ -4,7 +4,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::theme::{COLOR_BORDER, COLOR_SURFACE0, SHELL_EDGE_PAD, SHELL_GAP, TAB_HEIGHT};
+use crate::ui::theme::{COLOR_BORDER, COLOR_SURFACE0, SHELL_EDGE_PAD, SHELL_GAP, TAB_HEIGHT};
 
 #[derive(IntoElement)]
 pub struct TabBar {
@@ -28,16 +28,6 @@ impl TabBar {
 
     pub fn track_scroll(mut self, scroll_handle: &ScrollHandle) -> Self {
         self.scroll_handle = Some(scroll_handle.clone());
-        self
-    }
-
-    pub fn start_child(mut self, child: impl IntoElement) -> Self {
-        self.start_children.push(child.into_any_element());
-        self
-    }
-
-    pub fn end_child(mut self, child: impl IntoElement) -> Self {
-        self.end_children.push(child.into_any_element());
         self
     }
 }

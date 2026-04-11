@@ -4,7 +4,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::theme::{
+use crate::ui::theme::{
     COLOR_ACCENT, COLOR_BORDER, COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_TEXT,
     SHELL_GAP, TAB_HEIGHT, TAB_HORIZONTAL_PAD, TAB_MAX_WIDTH, TAB_MIN_WIDTH, TAB_SLOT_WIDTH,
     TAB_TEXT_SIZE,
@@ -35,11 +35,6 @@ impl Tab {
 
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
-        self
-    }
-
-    pub fn group_name(mut self, group_name: impl Into<SharedString>) -> Self {
-        self.group_name = group_name.into();
         self
     }
 

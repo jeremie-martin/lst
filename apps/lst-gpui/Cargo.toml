@@ -11,9 +11,9 @@ internal-invariants = []
 gpui = { version = "0.2.2", default-features = false, features = ["x11"] }
 lst-core = { path = "../../crates/lst-core" }
 lst-editor = { path = "../../crates/lst-editor" }
-lst-ui = { path = "../../crates/lst-ui" }
 ropey = "1.6.1"
 rfd = "0.17"
+smallvec = "1.13"
 tree-sitter = "0.26.8"
 tree-sitter-highlight = "0.26.8"
 tree-sitter-rust = "0.24.2"
@@ -26,9 +26,7 @@ tree-sitter-yaml = "0.7.2"
 tree-sitter-md = "0.5.3"
 tree-sitter-html = "0.23.2"
 tree-sitter-css = "0.25.0"
+unicode-segmentation = "1.12"
 
 [dev-dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["test-support", "x11"] }
-libc = "0.2"
-syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "plist-load"] }
-x11rb = { version = "0.13.2", features = ["damage", "xtest"] }

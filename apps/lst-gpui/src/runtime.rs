@@ -6,11 +6,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use crate::launch::{AutoBench, BenchAction};
-use crate::{bench_trace, elapsed_ms, LstGpuiApp};
+use crate::LstGpuiApp;
 
 #[derive(Clone, Debug)]
 struct AutosaveJob {
@@ -36,19 +35,10 @@ impl LstGpuiApp {
                     cx.write_to_primary(ClipboardItem::new_string(text));
                 }
                 EditorEffect::ReadClipboard => {
-                    let read_started = Instant::now();
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        let clipboard_read_ms = elapsed_ms(read_started);
-                        let apply_started = Instant::now();
                         self.apply_model_command(EditorCommand::PasteText(text), cx);
-                        self.record_operation(
-                            "paste_clipboard",
-                            Some(clipboard_read_ms),
-                            elapsed_ms(apply_started),
-                        );
                     } else {
-                        self.model.status =
-                            "Clipboard does not currently contain plain text.".to_string();
+                        self.apply_model_command(EditorCommand::ClipboardUnavailable, cx);
                     }
                 }
                 EditorEffect::OpenFiles => self.open_files_from_dialog(cx),
@@ -113,7 +103,7 @@ impl LstGpuiApp {
         revision: u64,
         cx: &mut Context<Self>,
     ) {
-        if !can_start_autosave_job(&self.model.tabs, &self.autosave_inflight, &path, revision) {
+        if !can_start_autosave_job(self.model.tabs(), &self.autosave_inflight, &path, revision) {
             return;
         }
 
@@ -144,126 +134,11 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         self.autosave_inflight.remove(&job.path);
-        if let Some(command) = autosave_completion_command(&self.model.tabs, job, result) {
+        if let Some(command) = autosave_completion_command(self.model.tabs(), job, result) {
             self.apply_model_command(command, cx);
         } else {
             cx.notify();
         }
-    }
-
-    pub(crate) fn record_operation(
-        &mut self,
-        label: &'static str,
-        clipboard_read_ms: Option<f64>,
-        apply_ms: f64,
-    ) {
-        let tab = self.active_tab();
-        self.last_operation = crate::OperationStats {
-            label,
-            bytes: tab.buffer.len_bytes(),
-            lines: tab.buffer.len_lines(),
-            clipboard_read_ms,
-            apply_ms,
-        };
-        bench_trace::record_operation(
-            label,
-            self.last_operation.bytes,
-            self.last_operation.lines,
-            clipboard_read_ms,
-            apply_ms,
-        );
-        eprintln!("lst_gpui {}", self.last_operation.summary());
-    }
-
-    fn replace_active_text(
-        &mut self,
-        label: &'static str,
-        text: &str,
-        clipboard_read_ms: Option<f64>,
-        cx: &mut Context<Self>,
-    ) {
-        let apply_started = Instant::now();
-        let old_show_wrap = self.model.show_wrap;
-        {
-            let tab = self.model.active_tab_mut();
-            let id = tab.id();
-            let name_hint = tab.display_name();
-            *tab = ModelEditorTab::from_text(id, name_hint, None, text);
-        }
-        if !self.model.find.query.is_empty() {
-            self.model.reindex_find_matches_to_nearest();
-        }
-        self.sync_tab_views(old_show_wrap);
-        if let Some(view) = self.tab_views.get_mut(self.model.active) {
-            view.invalidate_visual_state();
-        }
-        self.record_operation(label, clipboard_read_ms, elapsed_ms(apply_started));
-        self.model.status = format!("Loaded {} lines.", self.active_tab().line_count());
-        self.reveal_active_cursor();
-        cx.notify();
-    }
-
-    fn append_active_text(
-        &mut self,
-        label: &'static str,
-        text: &str,
-        clipboard_read_ms: Option<f64>,
-        cx: &mut Context<Self>,
-    ) {
-        let apply_started = Instant::now();
-        let old_show_wrap = self.model.show_wrap;
-        {
-            let tab = self.model.active_tab_mut();
-            let end = tab.len_chars();
-            tab.replace_char_range(end..end, text);
-            tab.modified = false;
-        }
-        if !self.model.find.query.is_empty() {
-            self.model.reindex_find_matches_to_nearest();
-        }
-        self.sync_tab_views(old_show_wrap);
-        self.record_operation(label, clipboard_read_ms, elapsed_ms(apply_started));
-        self.model.status = format!("Appended {} lines.", text.lines().count());
-        self.reveal_active_cursor();
-        cx.notify();
-    }
-
-    pub(crate) fn run_auto_bench(
-        &mut self,
-        bench: AutoBench,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        startup_to_action_ms: f64,
-        process_started: Instant,
-    ) {
-        let action_started = Instant::now();
-
-        match bench.action {
-            BenchAction::Replace => {
-                self.replace_active_text(bench.action.operation_label(), &bench.text, None, cx)
-            }
-            BenchAction::Append => {
-                self.append_active_text(bench.action.operation_label(), &bench.text, None, cx)
-            }
-        }
-
-        let operation = self.last_operation.clone();
-        let action = bench.action;
-        let source = bench.source;
-
-        window.on_next_frame(move |_window, cx| {
-            eprintln!(
-                "lst_gpui bench action={} source={} startup_to_action_ms={startup_to_action_ms:.3} action_to_next_frame_ms={:.3} total_wall_ms={:.3} final_bytes={} final_lines={} apply_ms={:.3}",
-                action.action_name(),
-                source,
-                elapsed_ms(action_started),
-                elapsed_ms(process_started),
-                operation.bytes,
-                operation.lines,
-                operation.apply_ms,
-            );
-            cx.quit();
-        });
     }
 }
 
@@ -362,7 +237,7 @@ pub(crate) fn autosave_revision_is_current(
 ) -> bool {
     let mut matched: Option<u64> = None;
     for tab in tabs {
-        if tab.path.as_deref() != Some(path) {
+        if tab.path().map(PathBuf::as_path) != Some(path) {
             continue;
         }
         if matched.is_some() {

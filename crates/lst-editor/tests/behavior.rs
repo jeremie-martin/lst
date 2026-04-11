@@ -1,4 +1,4 @@
-use lst_core::document::{EditKind, UndoBoundary};
+use lst_core::document::UndoBoundary;
 use lst_core::position::Position;
 use lst_editor::{
     vim::{
@@ -7,6 +7,11 @@ use lst_editor::{
     },
     EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, TabId,
 };
+
+fn enter_vim_normal(model: &mut EditorModel) {
+    model.handle_vim_escape();
+    let _ = model.drain_effects();
+}
 
 #[test]
 fn new_tab_switches_active_with_stable_tab_identity() {
@@ -32,7 +37,10 @@ fn find_open_uses_selected_single_line_text_and_emits_focus() {
         "Ready.".into(),
     );
 
-    model.active_tab_mut().selection = 0..3;
+    model.apply(EditorCommand::SetSelection {
+        range: 0..3,
+        reversed: false,
+    });
     model.apply(EditorCommand::OpenFind {
         show_replace: false,
     });
@@ -53,9 +61,11 @@ fn text_edit_is_real_document_behavior() {
     let mut model = EditorModel::empty();
 
     model.apply(EditorCommand::InsertText("abc".into()));
-    model
-        .active_tab_mut()
-        .edit(EditKind::Insert, UndoBoundary::Merge, 3..3, "def");
+    model.apply(EditorCommand::ReplaceText {
+        range: Some(3..3),
+        text: "def".into(),
+        boundary: UndoBoundary::Merge,
+    });
 
     assert_eq!(model.snapshot().text, "abcdef");
     model.apply(EditorCommand::Undo);
@@ -300,11 +310,17 @@ fn horizontal_collapse_commands_collapse_active_selection() {
         "Ready.".into(),
     );
 
-    model.active_tab_mut().selection = 2..5;
+    model.apply(EditorCommand::SetSelection {
+        range: 2..5,
+        reversed: false,
+    });
     model.apply(EditorCommand::MoveHorizontalCollapse { backward: true });
     assert_eq!(model.snapshot().selection, 2..2);
 
-    model.active_tab_mut().selection = 2..5;
+    model.apply(EditorCommand::SetSelection {
+        range: 2..5,
+        reversed: false,
+    });
     model.apply(EditorCommand::MoveHorizontalCollapse { backward: false });
     assert_eq!(model.snapshot().selection, 5..5);
 }
@@ -421,7 +437,7 @@ fn display_row_movement_clamps_and_falls_back_when_wrap_is_disabled() {
     });
     assert_eq!(model.snapshot().cursor, 0);
 
-    model.show_wrap = false;
+    model.apply(EditorCommand::ToggleWrap);
     model.apply(EditorCommand::MoveToChar {
         offset: 1,
         select: false,
@@ -509,12 +525,26 @@ fn delete_word_commands_delete_active_selection_before_word_boundaries() {
         "Ready.".into(),
     );
 
-    model.active_tab_mut().selection = 0..5;
+    model.apply(EditorCommand::SetSelection {
+        range: 0..5,
+        reversed: false,
+    });
     model.apply(EditorCommand::DeleteWord { backward: true });
     assert_eq!(model.snapshot().text, " world");
 
-    model.active_tab_mut().set_text("hello world");
-    model.active_tab_mut().selection = 6..11;
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "hello world",
+        )],
+        "Ready.".into(),
+    );
+    model.apply(EditorCommand::SetSelection {
+        range: 6..11,
+        reversed: false,
+    });
     model.apply(EditorCommand::DeleteWord { backward: false });
     assert_eq!(model.snapshot().text, "hello ");
 }
@@ -530,7 +560,10 @@ fn clipboard_commands_emit_boundary_effects_without_fakes() {
         )],
         "Ready.".into(),
     );
-    model.active_tab_mut().selection = 0..5;
+    model.apply(EditorCommand::SetSelection {
+        range: 0..5,
+        reversed: false,
+    });
 
     model.apply(EditorCommand::CopySelection);
     assert_eq!(
@@ -742,7 +775,7 @@ fn vim_delete_and_paste_execute_against_real_document() {
         )],
         "Ready.".into(),
     );
-    model.vim.mode = VimMode::Normal;
+    enter_vim_normal(&mut model);
 
     model.handle_vim_key(VimKey::Character("d".into()), VimModifiers::default());
     model.handle_vim_key(VimKey::Character("d".into()), VimModifiers::default());
@@ -763,7 +796,7 @@ fn vim_search_word_under_cursor_updates_find_behaviorally() {
         )],
         "Ready.".into(),
     );
-    model.vim.mode = VimMode::Normal;
+    enter_vim_normal(&mut model);
 
     model.handle_vim_key(VimKey::Character("*".into()), VimModifiers::default());
 
@@ -776,7 +809,7 @@ fn vim_search_word_under_cursor_updates_find_behaviorally() {
 #[test]
 fn vim_mode_and_pending_are_visible_in_snapshot() {
     let mut model = EditorModel::empty();
-    model.vim.mode = VimMode::Normal;
+    enter_vim_normal(&mut model);
 
     model.handle_vim_key(VimKey::Character("d".into()), VimModifiers::default());
 

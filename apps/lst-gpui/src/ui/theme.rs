@@ -2,7 +2,6 @@ pub const COLOR_BG: u32 = 0x11111B;
 pub const COLOR_SURFACE0: u32 = 0x181825;
 pub const COLOR_SURFACE1: u32 = 0x1E1E2E;
 pub const COLOR_SURFACE2: u32 = 0x313244;
-pub const COLOR_SURFACE3: u32 = 0x45475A;
 pub const COLOR_BORDER: u32 = 0x45475A;
 pub const COLOR_TEXT: u32 = 0xCDD6F4;
 pub const COLOR_SUBTEXT: u32 = 0xA6ADC8;
@@ -21,7 +20,6 @@ pub const COLOR_CURRENT_LINE: u32 = 0x181B2B;
 pub const COLOR_GUTTER: u32 = 0x161622;
 
 pub const SHELL_EDGE_PAD: f32 = 12.0;
-pub const SHELL_SECTION_PAD: f32 = 10.0;
 pub const SHELL_GAP: f32 = 8.0;
 pub const TAB_HEIGHT: f32 = 30.0;
 pub const TAB_MIN_WIDTH: f32 = 128.0;

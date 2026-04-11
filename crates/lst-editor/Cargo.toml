@@ -9,3 +9,4 @@ internal-invariants = []
 
 [dependencies]
 lst-core = { path = "../lst-core" }
+ropey = "1.6.1"

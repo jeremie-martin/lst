@@ -3,7 +3,7 @@ use gpui::{
     Stateful, StatefulInteractiveElement, Styled,
 };
 
-use crate::theme::{
+use crate::ui::theme::{
     COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_SURFACE2, ICON_BUTTON_SIZE, TAB_TEXT_SIZE,
 };
 
