@@ -31,7 +31,6 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         OpenFile => |model| model.request_open_files();
         SaveFile => |model| model.request_save();
         SaveFileAs => |model| model.request_save_as();
-        CloseActiveTab => |model| model.close_active_tab();
         NextTab => |model| model.next_tab();
         PrevTab => |model| model.prev_tab();
         ToggleWrap => |model| model.toggle_wrap();
@@ -102,5 +101,11 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         this.move_page(true, true, window, cx);
     }));
 
-    root.on_action(cx.listener(|_, _: &Quit, _: &mut Window, cx| cx.quit()))
+    let root = root.on_action(cx.listener(|this, _: &CloseActiveTab, _window, cx| {
+        this.request_close_active_tab(cx);
+    }));
+
+    root.on_action(cx.listener(|this, _: &Quit, _window, cx| {
+        this.request_quit(cx);
+    }))
 }

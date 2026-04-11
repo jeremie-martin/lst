@@ -4,7 +4,7 @@ use crate::ui::{
     SHELL_GAP, STATUS_HEIGHT_PAD, TAB_HEIGHT,
 };
 use gpui::{
-    canvas, div, prelude::*, px, rgb, Context, CursorStyle, ElementInputHandler,
+    canvas, div, prelude::*, px, rgb, AnyElement, Context, CursorStyle, ElementInputHandler,
     InteractiveElement, KeyDownEvent, MouseButton, MouseUpEvent, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window,
 };
@@ -32,7 +32,7 @@ impl LstGpuiApp {
             IconButton::new(("tab-close", ix), IconKind::Close)
                 .emphasized(active)
                 .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.close_tab_at(ix, cx);
+                    this.request_close_tab_at(ix, cx);
                     cx.stop_propagation();
                 }))
         });
@@ -57,7 +57,7 @@ impl LstGpuiApp {
             .on_mouse_up(
                 MouseButton::Middle,
                 cx.listener(move |this, _: &MouseUpEvent, window, cx| {
-                    this.close_tab_at(ix, cx);
+                    this.request_close_tab_at(ix, cx);
                     window.focus(&this.focus_handle);
                     cx.stop_propagation();
                 }),
@@ -167,6 +167,26 @@ impl LstGpuiApp {
             .child(div().w(px(180.0)).child(self.goto_line_input.clone()))
     }
 
+    fn render_editor_overlays(&mut self) -> impl IntoElement {
+        let mut overlays: Vec<AnyElement> = Vec::new();
+        if self.model.find().visible {
+            overlays.push(self.render_find_bar().into_any_element());
+        }
+        if self.model.goto_line().is_some() {
+            overlays.push(self.render_goto_bar().into_any_element());
+        }
+
+        div()
+            .id("editor-overlays")
+            .absolute()
+            .top(px(SHELL_GAP))
+            .right(px(SHELL_GAP))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(overlays)
+    }
+
     fn render_status_bar(&self) -> impl IntoElement {
         div()
             .flex_none()
@@ -177,7 +197,7 @@ impl LstGpuiApp {
             .px_3()
             .py(px(STATUS_HEIGHT_PAD))
             .bg(rgb(COLOR_SURFACE0))
-            .border_t_1()
+            .border_1()
             .border_color(rgb(COLOR_BORDER))
             .child(
                 div()
@@ -277,12 +297,6 @@ impl Render for LstGpuiApp {
                     .py(px(SHELL_EDGE_PAD))
                     .gap_2()
                     .child(self.render_tab_strip(cx))
-                    .when(self.model.find().visible, |shell| {
-                        shell.child(self.render_find_bar())
-                    })
-                    .when(self.model.goto_line().is_some(), |shell| {
-                        shell.child(self.render_goto_bar())
-                    })
                     .child(
                         div()
                             .flex_grow()
@@ -377,6 +391,11 @@ impl Render for LstGpuiApp {
                                                 )
                                                 .size_full(),
                                             ),
+                                    )
+                                    .when(
+                                        self.model.find().visible
+                                            || self.model.goto_line().is_some(),
+                                        |viewport| viewport.child(self.render_editor_overlays()),
                                     ),
                             ),
                     )

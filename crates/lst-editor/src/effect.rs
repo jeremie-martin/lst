@@ -1,3 +1,4 @@
+use crate::{FileStamp, TabId};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,16 +18,21 @@ pub enum EditorEffect {
     ReadClipboard,
     OpenFiles,
     SaveFile {
+        tab_id: TabId,
         path: PathBuf,
         body: String,
+        expected_stamp: Option<FileStamp>,
     },
     SaveFileAs {
+        tab_id: TabId,
         suggested_name: String,
         body: String,
     },
     AutosaveFile {
+        tab_id: TabId,
         path: PathBuf,
         body: String,
         revision: u64,
+        expected_stamp: Option<FileStamp>,
     },
 }

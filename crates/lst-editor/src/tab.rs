@@ -3,9 +3,44 @@ use crate::{
     position::Position,
 };
 use ropey::Rope;
-use std::{ops::Range, path::PathBuf, sync::Arc};
+use std::{
+    fs::Metadata,
+    ops::Range,
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 const MAX_UNDO: usize = 100;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FileStamp {
+    len: u64,
+    modified_unix_nanos: Option<i128>,
+}
+
+impl FileStamp {
+    pub const fn from_raw(len: u64, modified_unix_nanos: Option<i128>) -> Self {
+        Self {
+            len,
+            modified_unix_nanos,
+        }
+    }
+
+    pub fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            len: metadata.len(),
+            modified_unix_nanos: metadata.modified().ok().map(system_time_to_unix_nanos),
+        }
+    }
+}
+
+fn system_time_to_unix_nanos(time: SystemTime) -> i128 {
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos().min(i128::MAX as u128) as i128,
+        Err(err) => -(err.duration().as_nanos().min(i128::MAX as u128) as i128),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TabId(u64);
@@ -38,6 +73,8 @@ pub struct EditorTab {
     id: TabId,
     pub(crate) name_hint: String,
     pub(crate) path: Option<PathBuf>,
+    pub(crate) file_stamp: Option<FileStamp>,
+    pub(crate) suppressed_conflict_stamp: Option<FileStamp>,
     pub(crate) buffer: Rope,
     pub(crate) modified: bool,
     pub(crate) selection: Range<usize>,
@@ -57,19 +94,40 @@ impl EditorTab {
     }
 
     pub fn from_path(id: TabId, path: PathBuf, text: &str) -> Self {
+        Self::from_path_with_stamp(id, path, text, None)
+    }
+
+    pub fn from_path_with_stamp(
+        id: TabId,
+        path: PathBuf,
+        text: &str,
+        file_stamp: Option<FileStamp>,
+    ) -> Self {
         let name_hint = path
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("untitled")
             .to_string();
-        Self::from_text(id, name_hint, Some(path), text)
+        Self::from_text_with_stamp(id, name_hint, Some(path), text, file_stamp)
     }
 
     pub fn from_text(id: TabId, name_hint: String, path: Option<PathBuf>, text: &str) -> Self {
+        Self::from_text_with_stamp(id, name_hint, path, text, None)
+    }
+
+    pub fn from_text_with_stamp(
+        id: TabId,
+        name_hint: String,
+        path: Option<PathBuf>,
+        text: &str,
+        file_stamp: Option<FileStamp>,
+    ) -> Self {
         Self {
             id,
             name_hint,
             path,
+            file_stamp,
+            suppressed_conflict_stamp: None,
             buffer: Rope::from_str(text),
             modified: false,
             selection: 0..0,
@@ -90,6 +148,14 @@ impl EditorTab {
 
     pub fn path(&self) -> Option<&PathBuf> {
         self.path.as_ref()
+    }
+
+    pub fn file_stamp(&self) -> Option<FileStamp> {
+        self.file_stamp
+    }
+
+    pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
+        self.suppressed_conflict_stamp == Some(stamp)
     }
 
     pub fn buffer(&self) -> &Rope {
@@ -301,6 +367,31 @@ impl EditorTab {
         self.marked_range = None;
         self.touch_content();
         self.last_edit_kind = None;
+    }
+
+    pub(crate) fn reset_from_disk(&mut self, text: &str, file_stamp: FileStamp) {
+        self.buffer = Rope::from_str(text);
+        self.move_to(0);
+        self.modified = false;
+        self.file_stamp = Some(file_stamp);
+        self.suppressed_conflict_stamp = None;
+        self.preferred_column = None;
+        self.marked_range = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.touch_content();
+        self.last_edit_kind = None;
+    }
+
+    pub(crate) fn mark_saved(&mut self, path: PathBuf, file_stamp: FileStamp) {
+        self.path = Some(path);
+        self.file_stamp = Some(file_stamp);
+        self.suppressed_conflict_stamp = None;
+        self.modified = false;
+    }
+
+    pub(crate) fn suppress_file_conflict(&mut self, stamp: FileStamp) {
+        self.suppressed_conflict_stamp = Some(stamp);
     }
 
     pub fn undo(&mut self) -> bool {

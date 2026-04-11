@@ -73,6 +73,21 @@ fn assert_tab_views_match_model(snapshot: &AppSnapshot) {
     assert_eq!(snapshot.tab_view_ids, snapshot.model.tab_ids);
 }
 
+fn active_viewport_size(view: &Entity<LstGpuiApp>, cx: &mut VisualTestContext) -> (i32, i32) {
+    view.update(cx, |app, _cx| {
+        let bounds = app
+            .active_view()
+            .geometry
+            .borrow()
+            .bounds
+            .expect("viewport should have rendered bounds");
+        (
+            (bounds.size.width / px(1.0)).round() as i32,
+            (bounds.size.height / px(1.0)).round() as i32,
+        )
+    })
+}
+
 #[cfg(feature = "internal-invariants")]
 fn tab_from_path(path: PathBuf, text: &str) -> EditorTab {
     EditorTab::from_path(TabId::from_raw(1), path, text)
@@ -252,6 +267,112 @@ fn app_goto_input_syncs_open_submit_and_close(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn find_and_goto_overlays_do_not_resize_viewport(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+    cx.refresh().expect("initial render");
+    cx.run_until_parked();
+    let before = active_viewport_size(&view, cx);
+
+    cx.dispatch_action(GotoLineOpen);
+    cx.refresh().expect("render goto overlay");
+    cx.run_until_parked();
+    assert_eq!(active_viewport_size(&view, cx), before);
+
+    cx.dispatch_action(FindOpen);
+    cx.refresh().expect("render stacked overlays");
+    cx.run_until_parked();
+    assert_eq!(active_viewport_size(&view, cx), before);
+}
+
+#[gpui::test]
+fn dirty_close_decision_can_cancel_or_discard_without_dialog(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "unsaved", window, cx);
+    });
+    let tab_id = app_snapshot(&view, cx).model.active_tab_id;
+
+    view.update(cx, |app, cx| {
+        app.apply_unsaved_close_decision(tab_id, crate::runtime::UnsavedCloseDecision::Cancel, cx);
+    });
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.text, "unsaved");
+    assert!(snapshot.model.tab_modified[0]);
+    assert_eq!(snapshot.model.status, "Close cancelled.");
+
+    view.update(cx, |app, cx| {
+        app.apply_unsaved_close_decision(tab_id, crate::runtime::UnsavedCloseDecision::Discard, cx);
+    });
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.tab_count, 1);
+    assert_eq!(snapshot.model.text, "");
+    assert!(!snapshot.model.tab_modified[0]);
+}
+
+#[gpui::test]
+fn dirty_close_save_writes_exact_tab_then_closes(cx: &mut TestAppContext) {
+    let dir = temp_dir("close-save");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "old").expect("write close-save fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path.clone()],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "new ", window, cx);
+    });
+    let tab_id = app_snapshot(&view, cx).model.active_tab_id;
+
+    view.update(cx, |app, cx| {
+        app.apply_unsaved_close_decision(tab_id, crate::runtime::UnsavedCloseDecision::Save, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read saved close file"),
+        "new old"
+    );
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.tab_count, 1);
+    assert_eq!(snapshot.model.active_path, None);
+    assert_eq!(snapshot.model.text, "");
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn clean_external_file_change_reloads_without_prompt(cx: &mut TestAppContext) {
+    let dir = temp_dir("clean-reload");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "old").expect("write clean reload fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path.clone()],
+            ..LaunchArgs::default()
+        },
+    );
+    std::fs::write(&path, "new content").expect("write external clean reload");
+
+    view.update(cx, |app, cx| {
+        app.check_external_file_changes(cx);
+    });
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.text, "new content");
+    assert!(!snapshot.model.tab_modified[0]);
+    assert_eq!(
+        snapshot.model.status,
+        format!("Reloaded {}.", path.display())
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
 fn app_tab_actions_keep_model_and_tab_views_aligned(cx: &mut TestAppContext) {
     let (view, cx) = new_test_app(cx, LaunchArgs::default());
 
@@ -280,15 +401,30 @@ fn autosave_revision_requires_a_unique_matching_tab() {
     let path = PathBuf::from("/tmp/example.rs");
     let tab = tab_from_path(path.clone(), "fn main() {}\n");
 
-    assert!(autosave_revision_is_current(&[tab], &path, 0));
+    assert!(autosave_revision_is_current(
+        &[tab],
+        TabId::from_raw(1),
+        &path,
+        0
+    ));
 
     let mut stale_tab = tab_from_path(path.clone(), "fn main() {}\n");
     stale_tab.replace_char_range(0..0, "// ");
-    assert!(!autosave_revision_is_current(&[stale_tab], &path, 0));
+    assert!(!autosave_revision_is_current(
+        &[stale_tab],
+        TabId::from_raw(1),
+        &path,
+        0
+    ));
 
     let first = tab_from_path(path.clone(), "one\n");
     let second = tab_from_path(path.clone(), "two\n");
-    assert!(!autosave_revision_is_current(&[first, second], &path, 0));
+    assert!(!autosave_revision_is_current(
+        &[first, second],
+        TabId::from_raw(1),
+        &path,
+        0
+    ));
 }
 
 #[test]

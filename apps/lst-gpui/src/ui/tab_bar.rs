@@ -68,7 +68,7 @@ impl RenderOnce for TabBar {
             .h(px(TAB_HEIGHT + 1.0))
             .overflow_hidden()
             .bg(rgb(COLOR_SURFACE0))
-            .border_b_1()
+            .border_1()
             .border_color(rgb(COLOR_BORDER))
             .children(
                 (!self.start_children.is_empty()).then_some(

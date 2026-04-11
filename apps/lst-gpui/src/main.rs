@@ -29,7 +29,7 @@ use lst_editor::{EditorModel, EditorTab as ModelEditorTab, FocusTarget, TabId, U
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
-use std::{cell::RefCell, collections::HashSet, fs, path::PathBuf, process, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, path::PathBuf, process, rc::Rc};
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_path, CachedSyntaxHighlights, SyntaxHighlightJobKey,
     SyntaxMode, SyntaxSpan,
@@ -117,6 +117,12 @@ actions!(
     ]
 );
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingAfterSave {
+    CloseTab(TabId),
+    Quit,
+}
+
 struct EditorTabView {
     id: TabId,
     revision: u64,
@@ -155,6 +161,7 @@ struct LstGpuiApp {
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
     pending_focus: Option<FocusTarget>,
+    pending_after_save: Option<PendingAfterSave>,
     autosave_inflight: HashSet<PathBuf>,
     autosave_started: bool,
     _shell_subscriptions: Vec<Subscription>,
@@ -185,6 +192,7 @@ impl LstGpuiApp {
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
             pending_focus: None,
+            pending_after_save: None,
             autosave_inflight: HashSet::new(),
             autosave_started: false,
             _shell_subscriptions: Vec::new(),
@@ -593,17 +601,6 @@ impl LstGpuiApp {
         self.move_vertical(delta, select, window, cx);
     }
 
-    fn close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.model.tab_count() {
-            return;
-        }
-
-        self.hovered_tab = None;
-        self.update_model(cx, true, |model| {
-            model.close_tab(index);
-        });
-    }
-
     fn reveal_active_cursor(&self) {
         let tab = self.active_tab();
         let view = self.active_view();
@@ -709,12 +706,13 @@ fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
         ));
     } else {
         for path in launch.files {
-            match fs::read_to_string(&path) {
-                Ok(text) => {
-                    tabs.push(ModelEditorTab::from_path(
+            match runtime::read_file_with_stamp(&path) {
+                Ok((text, file_stamp)) => {
+                    tabs.push(ModelEditorTab::from_path_with_stamp(
                         TabId::from_raw(next_tab_id),
                         path,
                         &text,
+                        Some(file_stamp),
                     ));
                     next_tab_id += 1;
                 }
@@ -811,6 +809,17 @@ fn main() {
 
         window
             .update(cx, |view, window, cx| {
+                let entity = cx.entity();
+                window.on_window_should_close(cx, move |_window, cx| {
+                    entity.update(cx, |view, cx| {
+                        if view.model.first_dirty_tab_index().is_none() {
+                            true
+                        } else {
+                            view.request_quit(cx);
+                            false
+                        }
+                    })
+                });
                 window.focus(&view.focus_handle(cx));
                 cx.activate(true);
                 view.start_background_tasks(window, cx);

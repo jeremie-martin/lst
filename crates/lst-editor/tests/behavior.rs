@@ -512,8 +512,10 @@ fn file_commands_emit_runtime_effects_and_apply_results() {
     assert_eq!(
         model.drain_effects(),
         vec![EditorEffect::SaveFile {
+            tab_id: TabId::from_raw(1),
             path: path.clone(),
-            body: " worldhello".into()
+            body: " worldhello".into(),
+            expected_stamp: None,
         }]
     );
 
@@ -521,6 +523,91 @@ fn file_commands_emit_runtime_effects_and_apply_results() {
     let snapshot = model.snapshot();
     assert!(!snapshot.tab_modified[0]);
     assert_eq!(snapshot.status, format!("Saved {}.", path.display()));
+}
+
+#[test]
+fn save_effects_can_target_inactive_tabs_by_id() {
+    let first_path = std::path::PathBuf::from("/tmp/first.txt");
+    let second_path = std::path::PathBuf::from("/tmp/second.txt");
+    let second_id = TabId::from_raw(2);
+    let mut second = EditorTab::from_text(
+        second_id,
+        "second.txt".into(),
+        Some(second_path.clone()),
+        "second",
+    );
+    second.replace_char_range(0..0, "edited ");
+    let mut model = EditorModel::new(
+        vec![
+            EditorTab::from_text(
+                TabId::from_raw(1),
+                "first.txt".into(),
+                Some(first_path),
+                "first",
+            ),
+            second,
+        ],
+        "Ready.".into(),
+    );
+
+    model.request_save_tab(second_id);
+
+    assert_eq!(
+        model.drain_effects(),
+        vec![EditorEffect::SaveFile {
+            tab_id: second_id,
+            path: second_path,
+            body: "edited second".into(),
+            expected_stamp: None,
+        }]
+    );
+}
+
+#[test]
+fn save_finished_for_tab_does_not_clear_the_active_tab_by_accident() {
+    let first_path = std::path::PathBuf::from("/tmp/first.txt");
+    let second_path = std::path::PathBuf::from("/tmp/second.txt");
+    let mut first = EditorTab::from_text(
+        TabId::from_raw(1),
+        "first.txt".into(),
+        Some(first_path),
+        "first",
+    );
+    let mut second = EditorTab::from_text(
+        TabId::from_raw(2),
+        "second.txt".into(),
+        Some(second_path.clone()),
+        "second",
+    );
+    first.replace_char_range(0..0, "edited ");
+    second.replace_char_range(0..0, "saved ");
+    let mut model = EditorModel::new(vec![first, second], "Ready.".into());
+
+    model.save_finished_for_tab(
+        TabId::from_raw(2),
+        second_path,
+        Some(lst_editor::FileStamp::from_raw(10, Some(20))),
+    );
+
+    assert_eq!(model.snapshot().tab_modified, [true, false]);
+}
+
+#[test]
+fn dirty_tab_close_requires_confirmation_and_discard_can_close_it() {
+    let mut model = EditorModel::empty();
+    let tab_id = model.active_tab().id();
+    model.insert_text("unsaved".into());
+
+    assert!(matches!(
+        model.close_request_for_tab(0),
+        Some(lst_editor::TabCloseRequest::Unsaved(tab)) if tab.tab_id == tab_id
+    ));
+
+    assert!(model.discard_close_tab_by_id(tab_id));
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.tab_count, 1);
+    assert_eq!(snapshot.text, "");
+    assert!(!snapshot.tab_modified[0]);
 }
 
 #[test]
@@ -544,9 +631,11 @@ fn autosave_tick_emits_modified_file_backed_tabs() {
     assert_eq!(
         model.drain_effects(),
         vec![EditorEffect::AutosaveFile {
+            tab_id: TabId::from_raw(1),
             path: path.clone(),
             body: "!hello".into(),
             revision,
+            expected_stamp: None,
         }]
     );
 
