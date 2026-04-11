@@ -194,56 +194,10 @@ struct LstGpuiApp {
 
 impl LstGpuiApp {
     fn new(cx: &mut Context<Self>, launch: LaunchArgs) -> Self {
-        let mut tabs = Vec::new();
-        let mut next_tab_id = 1u64;
-        let mut status = "Ready.".to_string();
         let find_query_input = cx.new(|cx| InputField::new(cx, "Find"));
         let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace"));
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line"));
-
-        if launch.auto_bench.is_some() {
-            tabs.push(ModelEditorTab::from_text(
-                TabId::from_raw(next_tab_id),
-                PathBuf::from(CORPUS_PATH)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("paste-corpus-20k.rs")
-                    .to_string(),
-                Some(PathBuf::from(CORPUS_PATH)),
-                PREMADE_CORPUS,
-            ));
-            status = format!("Benchmark mode. Loaded {CORPUS_PATH} at startup.");
-        } else if launch.files.is_empty() {
-            tabs.push(ModelEditorTab::empty(
-                TabId::from_raw(next_tab_id),
-                format!("{UNTITLED_PREFIX}-1"),
-            ));
-        } else {
-            for path in launch.files {
-                match fs::read_to_string(&path) {
-                    Ok(text) => {
-                        tabs.push(ModelEditorTab::from_path(
-                            TabId::from_raw(next_tab_id),
-                            path,
-                            &text,
-                        ));
-                        next_tab_id += 1;
-                    }
-                    Err(err) => {
-                        status = format!("Failed to open {}: {err}", path.display());
-                    }
-                }
-            }
-
-            if tabs.is_empty() {
-                tabs.push(ModelEditorTab::empty(
-                    TabId::from_raw(next_tab_id),
-                    format!("{UNTITLED_PREFIX}-1"),
-                ));
-            }
-        }
-
-        let model = EditorModel::new(tabs, status);
+        let model = initial_model_from_launch(launch);
         let tab_views = model
             .tabs
             .iter()
@@ -294,6 +248,18 @@ impl LstGpuiApp {
         );
 
         app
+    }
+
+    #[cfg(test)]
+    fn snapshot(&self, cx: &mut Context<Self>) -> AppSnapshot {
+        AppSnapshot {
+            model: self.model.snapshot(),
+            find_query_input: self.find_query_input.read(cx).text(),
+            find_replace_input: self.find_replace_input.read(cx).text(),
+            goto_line_input: self.goto_line_input.read(cx).text(),
+            pending_focus: self.pending_focus,
+            tab_view_ids: self.tab_views.iter().map(|view| view.id).collect(),
+        }
     }
 
     fn queue_focus(&mut self, target: FocusTarget) {
@@ -768,6 +734,67 @@ impl LstGpuiApp {
             row.line_start_char
         }
     }
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AppSnapshot {
+    pub(crate) model: lst_editor::EditorSnapshot,
+    pub(crate) find_query_input: String,
+    pub(crate) find_replace_input: String,
+    pub(crate) goto_line_input: String,
+    pub(crate) pending_focus: Option<FocusTarget>,
+    pub(crate) tab_view_ids: Vec<TabId>,
+}
+
+fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
+    let mut tabs = Vec::new();
+    let mut next_tab_id = 1u64;
+    let mut status = "Ready.".to_string();
+
+    if launch.auto_bench.is_some() {
+        tabs.push(ModelEditorTab::from_text(
+            TabId::from_raw(next_tab_id),
+            PathBuf::from(CORPUS_PATH)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("paste-corpus-20k.rs")
+                .to_string(),
+            Some(PathBuf::from(CORPUS_PATH)),
+            PREMADE_CORPUS,
+        ));
+        status = format!("Benchmark mode. Loaded {CORPUS_PATH} at startup.");
+    } else if launch.files.is_empty() {
+        tabs.push(ModelEditorTab::empty(
+            TabId::from_raw(next_tab_id),
+            format!("{UNTITLED_PREFIX}-1"),
+        ));
+    } else {
+        for path in launch.files {
+            match fs::read_to_string(&path) {
+                Ok(text) => {
+                    tabs.push(ModelEditorTab::from_path(
+                        TabId::from_raw(next_tab_id),
+                        path,
+                        &text,
+                    ));
+                    next_tab_id += 1;
+                }
+                Err(err) => {
+                    status = format!("Failed to open {}: {err}", path.display());
+                }
+            }
+        }
+
+        if tabs.is_empty() {
+            tabs.push(ModelEditorTab::empty(
+                TabId::from_raw(next_tab_id),
+                format!("{UNTITLED_PREFIX}-1"),
+            ));
+        }
+    }
+
+    EditorModel::new(tabs, status)
 }
 
 impl Focusable for LstGpuiApp {

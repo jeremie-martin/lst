@@ -1,7 +1,14 @@
-use gpui::Keystroke;
+use gpui::{
+    ClipboardItem, Entity, EntityInputHandler, Keystroke, TestAppContext, VisualContext as _,
+    VisualTestContext,
+};
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorTab, TabId};
-use lst_ui::{COLOR_GREEN, COLOR_MUTED};
+use lst_ui::{input_keybindings, COLOR_GREEN, COLOR_MUTED};
+use std::{
+    process,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 #[cfg(feature = "internal-invariants")]
 use crate::syntax::SyntaxHighlightJobKey;
@@ -9,6 +16,8 @@ use crate::syntax::{compute_syntax_highlights, syntax_mode_for_path, SyntaxLangu
 #[cfg(feature = "internal-invariants")]
 use crate::viewport::PaintedRow;
 use crate::*;
+
+static NEXT_TEST_DIR: AtomicUsize = AtomicUsize::new(0);
 
 fn has_binding<A: gpui::Action + 'static>(keystroke: &str) -> bool {
     let typed = [Keystroke::parse(keystroke).expect("valid test keystroke")];
@@ -29,6 +38,39 @@ fn has_binding_in_context<A: gpui::Action + 'static>(keystroke: &str, context: &
                 .as_deref()
                 == Some(context)
     })
+}
+
+fn temp_dir(label: &str) -> PathBuf {
+    let id = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("lst-gpui-app-tests-{label}-{}-{id}", process::id()));
+    std::fs::create_dir(&dir).expect("create test temp dir");
+    dir
+}
+
+fn new_test_app(
+    cx: &mut TestAppContext,
+    launch: LaunchArgs,
+) -> (Entity<LstGpuiApp>, &mut VisualTestContext) {
+    cx.update(|cx| {
+        cx.bind_keys(editor_keybindings());
+        cx.bind_keys(input_keybindings());
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| LstGpuiApp::new(cx, launch));
+    cx.update(|window, cx| {
+        window.focus(&view.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    (view, cx)
+}
+
+fn app_snapshot(view: &Entity<LstGpuiApp>, cx: &mut VisualTestContext) -> AppSnapshot {
+    view.update(cx, |app, cx| app.snapshot(cx))
+}
+
+fn assert_tab_views_match_model(snapshot: &AppSnapshot) {
+    assert_eq!(snapshot.tab_view_ids, snapshot.model.tab_ids);
 }
 
 #[cfg(feature = "internal-invariants")]
@@ -54,6 +96,124 @@ fn launch_args_require_title_value() {
         error,
         crate::launch::LaunchArgError::Message(message) if message == "missing value for --title"
     ));
+}
+
+#[test]
+fn launch_model_loads_real_files_before_gpui_wiring() {
+    let dir = temp_dir("launch-model");
+    let ok = dir.join("ok.txt");
+    let missing = dir.join("missing.txt");
+    std::fs::write(&ok, "loaded").expect("write launch fixture");
+
+    let model = initial_model_from_launch(LaunchArgs {
+        files: vec![ok.clone(), missing.clone()],
+        ..LaunchArgs::default()
+    });
+    let snapshot = model.snapshot();
+
+    assert_eq!(snapshot.text, "loaded");
+    assert_eq!(snapshot.active_path, Some(ok));
+    assert!(snapshot
+        .status
+        .contains(&format!("Failed to open {}", missing.display())));
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn app_input_handler_updates_real_editor_model(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "hello", window, cx);
+    });
+    cx.run_until_parked();
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.text, "hello");
+    assert_eq!(snapshot.model.status, "Ready.");
+    assert_tab_views_match_model(&snapshot);
+}
+
+#[gpui::test]
+fn app_actions_copy_and_paste_through_gpui_clipboard(cx: &mut TestAppContext) {
+    let dir = temp_dir("clipboard");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "hello world").expect("write clipboard fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(SelectAll);
+    cx.dispatch_action(CopySelection);
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .expect("clipboard should contain copied text");
+    assert_eq!(copied, "hello world");
+
+    cx.write_to_clipboard(ClipboardItem::new_string("replacement".to_string()));
+    cx.dispatch_action(PasteClipboard);
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.text, "replacement");
+    assert_eq!(snapshot.model.status, "Pasted 1 line(s).");
+    assert_tab_views_match_model(&snapshot);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn app_find_input_flow_is_observable_at_app_boundary(cx: &mut TestAppContext) {
+    let dir = temp_dir("find");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "one two one").expect("write find fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(FindOpen);
+    cx.refresh().expect("refresh after focus request");
+    cx.run_until_parked();
+    cx.simulate_input("one");
+
+    let snapshot = app_snapshot(&view, cx);
+    assert!(snapshot.model.find_visible);
+    assert_eq!(snapshot.model.find_query, "one");
+    assert_eq!(snapshot.find_query_input, "one");
+    assert_eq!(snapshot.model.find_matches, 2);
+    assert_eq!(snapshot.model.selection, 0..3);
+    assert_tab_views_match_model(&snapshot);
+
+    cx.simulate_keystrokes("escape");
+    let snapshot = app_snapshot(&view, cx);
+    assert!(!snapshot.model.find_visible);
+    assert_eq!(snapshot.pending_focus, None);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn app_tab_actions_keep_model_and_tab_views_aligned(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.dispatch_action(NewTab);
+    cx.dispatch_action(NewTab);
+    cx.dispatch_action(CloseActiveTab);
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.tab_count, 2);
+    assert_eq!(snapshot.model.active, 1);
+    assert_eq!(snapshot.model.tab_titles, ["untitled-1", "untitled-2"]);
+    assert_tab_views_match_model(&snapshot);
 }
 
 #[test]
