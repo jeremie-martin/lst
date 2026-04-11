@@ -3775,6 +3775,7 @@ name = "lst-ui"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "lst-core",
  "smallvec",
  "unicode-segmentation",
 ]

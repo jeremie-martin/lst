@@ -13,6 +13,12 @@ pub enum EditKind {
     Other,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UndoBoundary {
+    Merge,
+    Break,
+}
+
 #[derive(Clone)]
 struct Snapshot {
     text: String,
@@ -203,6 +209,17 @@ impl Tab {
         new_cursor
     }
 
+    pub fn edit(
+        &mut self,
+        kind: EditKind,
+        boundary: UndoBoundary,
+        range: Range<usize>,
+        new_text: &str,
+    ) -> usize {
+        self.push_undo_snapshot(kind, boundary);
+        self.replace_char_range(range, new_text)
+    }
+
     pub fn set_cursor_position(&mut self, position: Position, select_from: Option<Position>) {
         let head = position_to_char(&self.buffer, position);
         match select_from {
@@ -238,10 +255,11 @@ impl Tab {
         lines
     }
 
-    pub fn push_undo_snapshot(&mut self, kind: EditKind, boundary: bool) {
+    pub fn push_undo_snapshot(&mut self, kind: EditKind, boundary: UndoBoundary) {
         let kind_changed = self.last_edit_kind != Some(kind);
         let is_streaming = matches!(kind, EditKind::Insert | EditKind::Delete);
-        let should_snapshot = kind_changed || !is_streaming || boundary;
+        let should_snapshot =
+            kind_changed || !is_streaming || matches!(boundary, UndoBoundary::Break);
 
         if should_snapshot {
             self.undo_stack.push(self.current_snapshot());
@@ -331,8 +349,7 @@ mod tests {
     fn undo_and_redo_restore_text_and_selection() {
         let mut tab = Tab::from_text("untitled".into(), None, "hello", false);
         tab.move_to(5);
-        tab.push_undo_snapshot(EditKind::Insert, false);
-        tab.replace_char_range(5..5, " world");
+        tab.edit(EditKind::Insert, UndoBoundary::Merge, 5..5, " world");
 
         assert_eq!(tab.buffer_text(), "hello world");
         assert!(tab.undo());
@@ -367,5 +384,17 @@ mod tests {
         let lines = tab.lines();
 
         assert_eq!(lines.as_ref(), ["alpha", "beta", ""]);
+    }
+
+    #[test]
+    fn undo_boundaries_split_streaming_edits() {
+        let mut tab = Tab::from_text("untitled".into(), None, "", false);
+
+        tab.edit(EditKind::Insert, UndoBoundary::Merge, 0..0, "a");
+        tab.edit(EditKind::Insert, UndoBoundary::Break, 1..1, " paste");
+
+        assert_eq!(tab.buffer_text(), "a paste");
+        assert!(tab.undo());
+        assert_eq!(tab.buffer_text(), "a");
     }
 }

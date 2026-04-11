@@ -6,6 +6,7 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["x11"] }
+lst-core = { path = "../lst-core" }
 smallvec = "1.13"
 unicode-segmentation = "1.12"
 

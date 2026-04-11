@@ -298,6 +298,8 @@ impl Render for LstGpuiApp {
             .on_action(cx.listener(Self::handle_select_line_end))
             .on_action(cx.listener(Self::handle_backspace))
             .on_action(cx.listener(Self::handle_delete_forward))
+            .on_action(cx.listener(Self::handle_delete_word_backward))
+            .on_action(cx.listener(Self::handle_delete_word_forward))
             .on_action(cx.listener(Self::handle_insert_newline))
             .on_action(cx.listener(Self::handle_insert_tab))
             .on_action(cx.listener(Self::handle_select_all))

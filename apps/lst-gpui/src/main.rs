@@ -1,8 +1,7 @@
 use gpui::{
     actions, point, prelude::*, px, size, App, Application, Bounds, ClipboardItem, Context, Entity,
-    EntityInputHandler, FocusHandle, Focusable, KeyDownEvent, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, ScrollHandle, Subscription, UTF16Selection, Window, WindowBounds,
-    WindowOptions,
+    EntityInputHandler, FocusHandle, Focusable, KeyDownEvent, Pixels, Point, ScrollHandle,
+    Subscription, UTF16Selection, Window, WindowBounds, WindowOptions,
 };
 extern crate self as iced;
 pub use iced_core::keyboard;
@@ -16,6 +15,7 @@ pub mod widget {
     }
 }
 
+mod interactions;
 mod keymap;
 mod launch;
 mod shell;
@@ -30,10 +30,18 @@ use iced::{
     keyboard::{self as iced_keyboard, key::Named as IcedNamed, Modifiers as IcedModifiers},
     widget::text_editor,
 };
+#[cfg(test)]
+pub(crate) use interactions::drag_autoscroll_delta;
+use interactions::DragSelectionMode;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, AutoBench, BenchAction, LaunchArgs};
+#[cfg(test)]
+pub(crate) use lst_core::selection::{
+    drag_selection_range, line_range_at_char, word_range_at_char,
+};
+pub(crate) use lst_core::selection::{next_word_boundary, previous_word_boundary};
 use lst_core::{
-    document::{char_to_position, position_to_char, EditKind, Tab},
+    document::{char_to_position, position_to_char, EditKind, Tab, UndoBoundary},
     editor_ops,
     find::FindState,
     position::Position,
@@ -121,6 +129,8 @@ actions!(
         SelectLineEnd,
         Backspace,
         DeleteForward,
+        DeleteWordBackward,
+        DeleteWordForward,
         InsertNewline,
         InsertTab,
         SelectAll,
@@ -181,13 +191,6 @@ struct AutosaveJob {
     revision: u64,
 }
 
-#[derive(Clone, Debug)]
-enum DragSelectionMode {
-    Character,
-    Word(Range<usize>),
-    Line(Range<usize>),
-}
-
 struct EditorTab {
     doc: Tab,
     scroll: ScrollHandle,
@@ -236,6 +239,19 @@ impl EditorTab {
 
     fn replace_char_range(&mut self, range: Range<usize>, new_text: &str) -> usize {
         let new_cursor = self.doc.replace_char_range(range, new_text);
+        self.marked_range = None;
+        self.invalidate_visual_state();
+        new_cursor
+    }
+
+    fn edit(
+        &mut self,
+        kind: EditKind,
+        boundary: UndoBoundary,
+        range: Range<usize>,
+        new_text: &str,
+    ) -> usize {
+        let new_cursor = self.doc.edit(kind, boundary, range, new_text);
         self.marked_range = None;
         self.invalidate_visual_state();
         new_cursor
@@ -878,9 +894,7 @@ impl LstGpuiApp {
             position_to_char(&tab.buffer, start)..position_to_char(&tab.buffer, end)
         };
         self.active_tab_mut()
-            .push_undo_snapshot(EditKind::Other, true);
-        self.active_tab_mut()
-            .replace_char_range(range, &replacement);
+            .edit(EditKind::Other, UndoBoundary::Break, range, &replacement);
         self.sync_find_after_edit();
         self.select_current_find_match();
         true
@@ -959,7 +973,7 @@ impl LstGpuiApp {
             return Some(result);
         }
 
-        self.tabs[self.active].push_undo_snapshot(EditKind::Other, true);
+        self.tabs[self.active].push_undo_snapshot(EditKind::Other, UndoBoundary::Break);
         self.replace_active_lines(lines, cursor_line, cursor_col);
         Some(result)
     }
@@ -1078,12 +1092,16 @@ impl LstGpuiApp {
             } else {
                 EditKind::Insert
             };
-            tab.push_undo_snapshot(kind, text.chars().any(char::is_whitespace));
+            let boundary = if text.chars().any(char::is_whitespace) {
+                UndoBoundary::Break
+            } else {
+                UndoBoundary::Merge
+            };
             let range = tab
                 .marked_range
                 .clone()
                 .unwrap_or_else(|| tab.selected_range());
-            tab.replace_char_range(range, text);
+            tab.edit(kind, boundary, range, text);
         }
         self.sync_find_after_edit();
         self.record_operation(label, None, elapsed_ms(apply_started));
@@ -1104,8 +1122,7 @@ impl LstGpuiApp {
                 }
                 cursor - 1..cursor
             };
-            tab.push_undo_snapshot(EditKind::Delete, false);
-            tab.replace_char_range(range, "");
+            tab.edit(EditKind::Delete, UndoBoundary::Merge, range, "");
         }
         self.sync_find_after_edit();
         self.record_operation("backspace", None, elapsed_ms(apply_started));
@@ -1126,11 +1143,30 @@ impl LstGpuiApp {
                 }
                 cursor..cursor + 1
             };
-            tab.push_undo_snapshot(EditKind::Delete, false);
-            tab.replace_char_range(range, "");
+            tab.edit(EditKind::Delete, UndoBoundary::Merge, range, "");
         }
         self.sync_find_after_edit();
         self.record_operation("delete", None, elapsed_ms(apply_started));
+        self.reveal_active_cursor();
+        cx.notify();
+    }
+
+    fn delete_selected_or_word(&mut self, backward: bool, cx: &mut Context<Self>) {
+        let apply_started = Instant::now();
+        {
+            let tab = self.active_tab_mut();
+            let Some(range) = delete_selection_or_word_range(tab, backward) else {
+                return;
+            };
+            tab.edit(EditKind::Delete, UndoBoundary::Break, range, "");
+        }
+        self.sync_find_after_edit();
+        let label = if backward {
+            "delete_word_backward"
+        } else {
+            "delete_word_forward"
+        };
+        self.record_operation(label, None, elapsed_ms(apply_started));
         self.reveal_active_cursor();
         cx.notify();
     }
@@ -1380,8 +1416,7 @@ impl LstGpuiApp {
         let apply_started = Instant::now();
         let range = self.active_tab().selected_range();
         self.active_tab_mut()
-            .push_undo_snapshot(EditKind::Delete, true);
-        self.active_tab_mut().replace_char_range(range, "");
+            .edit(EditKind::Delete, UndoBoundary::Break, range, "");
         self.sync_find_after_edit();
         self.record_operation("cut", None, elapsed_ms(apply_started));
         self.reveal_active_cursor();
@@ -1399,12 +1434,11 @@ impl LstGpuiApp {
         let apply_started = Instant::now();
         {
             let tab = self.active_tab_mut();
-            tab.push_undo_snapshot(EditKind::Insert, true);
             let range = tab
                 .marked_range
                 .clone()
                 .unwrap_or_else(|| tab.selected_range());
-            tab.replace_char_range(range, &text);
+            tab.edit(EditKind::Insert, UndoBoundary::Break, range, &text);
         }
         self.sync_find_after_edit();
         self.record_operation(
@@ -1500,12 +1534,8 @@ impl LstGpuiApp {
             self.tabs[0] = self.new_empty_tab();
             self.set_active_tab(0);
         } else {
+            let next_active = next_active_after_tab_close(self.tabs.len(), self.active, index);
             self.tabs.remove(index);
-            let next_active = if index < self.active {
-                self.active.saturating_sub(1)
-            } else {
-                self.active.min(self.tabs.len().saturating_sub(1))
-            };
             self.set_active_tab(next_active);
         }
 
@@ -1599,145 +1629,6 @@ impl LstGpuiApp {
         } else {
             row.line_start_char
         }
-    }
-
-    fn on_mouse_down(
-        &mut self,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        window.focus(&self.focus_handle);
-        self.drag_last_point = Some(event.position);
-        let index = self.active_char_index_for_point(event.position);
-        if event.click_count >= 3 {
-            let line_range = line_range_at_char(&self.active_tab().buffer, index);
-            self.drag_selecting = Some(DragSelectionMode::Line(line_range.clone()));
-            self.select_active_range(line_range);
-            self.sync_primary_selection(cx);
-            self.schedule_drag_autoscroll(window, cx);
-            cx.notify();
-            return;
-        }
-        if event.click_count == 2 {
-            let word_range = word_range_at_char(&self.active_tab().buffer, index);
-            self.drag_selecting = Some(DragSelectionMode::Word(word_range.clone()));
-            self.select_active_range(word_range);
-            self.sync_primary_selection(cx);
-            self.schedule_drag_autoscroll(window, cx);
-            cx.notify();
-            return;
-        }
-
-        self.drag_selecting = Some(DragSelectionMode::Character);
-        if event.modifiers.shift {
-            self.active_tab_mut().select_to(index);
-        } else {
-            let tab = self.active_tab_mut();
-            tab.move_to(index);
-            tab.preferred_column = None;
-        }
-        self.reveal_active_cursor();
-        self.schedule_drag_autoscroll(window, cx);
-        cx.notify();
-    }
-
-    fn on_mouse_move(
-        &mut self,
-        event: &MouseMoveEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.drag_last_point = Some(event.position);
-        if !self.apply_drag_selection_at_point(event.position) {
-            return;
-        }
-        self.schedule_drag_autoscroll(window, cx);
-        cx.notify();
-    }
-
-    fn apply_drag_selection_at_point(&mut self, position: Point<Pixels>) -> bool {
-        let index = self.active_char_index_for_point(position);
-        match self.drag_selecting.clone() {
-            Some(DragSelectionMode::Character) => self.active_tab_mut().select_to(index),
-            Some(DragSelectionMode::Word(anchor)) => {
-                let current = word_range_at_char(&self.active_tab().buffer, index);
-                self.select_active_drag_range(anchor, current);
-            }
-            Some(DragSelectionMode::Line(anchor)) => {
-                let current = line_range_at_char(&self.active_tab().buffer, index);
-                self.select_active_drag_range(anchor, current);
-            }
-            None => return false,
-        }
-        self.reveal_active_cursor();
-        true
-    }
-
-    fn on_mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.drag_selecting = None;
-        self.drag_last_point = None;
-        self.drag_autoscroll_active = false;
-        self.sync_primary_selection(cx);
-        cx.notify();
-    }
-
-    fn schedule_drag_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.drag_autoscroll_active || self.drag_autoscroll_target().is_none() {
-            return;
-        }
-        self.drag_autoscroll_active = true;
-        cx.on_next_frame(window, |this, window, cx| {
-            this.run_drag_autoscroll(window, cx);
-        });
-    }
-
-    fn run_drag_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.drag_autoscroll_active = false;
-        if self.drag_selecting.is_none() {
-            self.drag_last_point = None;
-            return;
-        }
-
-        if let Some(target) = self.drag_autoscroll_target() {
-            self.active_tab().scroll.set_offset(point(px(0.0), -target));
-            if let Some(position) = self.drag_last_point {
-                self.apply_drag_selection_at_point(position);
-            }
-            cx.notify();
-        }
-        self.schedule_drag_autoscroll(window, cx);
-    }
-
-    fn drag_autoscroll_target(&self) -> Option<Pixels> {
-        let position = self.drag_last_point?;
-        let geometry = self.active_tab().geometry.borrow();
-        let bounds = geometry.bounds?;
-        let delta = drag_autoscroll_delta(position, bounds)?;
-        let tab = self.active_tab();
-        let current = (-tab.scroll.offset().y).max(px(0.0));
-        let max = tab.scroll.max_offset().height.max(px(0.0));
-        let target = (current + delta).max(px(0.0)).min(max);
-        (target != current).then_some(target)
-    }
-
-    fn select_active_range(&mut self, range: Range<usize>) {
-        let tab = self.active_tab_mut();
-        let end = tab.len_chars();
-        tab.selection = range.start.min(end)..range.end.min(end);
-        tab.selection_reversed = false;
-        tab.preferred_column = None;
-        tab.marked_range = None;
-    }
-
-    fn select_active_drag_range(&mut self, anchor: Range<usize>, current: Range<usize>) {
-        let (selection, reversed) = drag_selection_range(anchor, current);
-        let tab = self.active_tab_mut();
-        let end = tab.len_chars();
-        tab.selection = selection.start.min(end)..selection.end.min(end);
-        tab.selection_reversed = reversed;
-        tab.preferred_column = None;
-        tab.marked_range = None;
     }
 
     fn run_auto_bench(
@@ -2042,6 +1933,24 @@ impl LstGpuiApp {
 
     fn handle_delete_forward(&mut self, _: &DeleteForward, _: &mut Window, cx: &mut Context<Self>) {
         self.delete_selected_or_next(cx);
+    }
+
+    fn handle_delete_word_backward(
+        &mut self,
+        _: &DeleteWordBackward,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.delete_selected_or_word(true, cx);
+    }
+
+    fn handle_delete_word_forward(
+        &mut self,
+        _: &DeleteWordForward,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.delete_selected_or_word(false, cx);
     }
 
     fn handle_insert_newline(&mut self, _: &InsertNewline, _: &mut Window, cx: &mut Context<Self>) {
@@ -2733,8 +2642,12 @@ impl EntityInputHandler for LstGpuiApp {
             } else {
                 EditKind::Insert
             };
-            tab.push_undo_snapshot(kind, text.chars().any(char::is_whitespace));
-            tab.replace_char_range(range, text);
+            let boundary = if text.chars().any(char::is_whitespace) {
+                UndoBoundary::Break
+            } else {
+                UndoBoundary::Merge
+            };
+            tab.edit(kind, boundary, range, text);
         }
         self.sync_find_after_edit();
         self.record_operation("text_input", None, elapsed_ms(apply_started));
@@ -2760,8 +2673,7 @@ impl EntityInputHandler for LstGpuiApp {
                 .unwrap_or_else(|| tab.selected_range());
 
             let inserted_start = range.start;
-            tab.push_undo_snapshot(EditKind::Other, true);
-            tab.replace_char_range(range, new_text);
+            tab.edit(EditKind::Other, UndoBoundary::Break, range, new_text);
             if !new_text.is_empty() {
                 let marked_end = inserted_start + new_text.chars().count();
                 tab.marked_range = Some(inserted_start..marked_end);
@@ -2867,126 +2779,39 @@ fn syntax_highlight_result_is_current(
     })
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TokenClass {
-    Whitespace,
-    Word,
-    Symbol,
+fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: usize) -> bool {
+    active_index == closed_index
 }
 
-fn token_class(ch: char) -> TokenClass {
-    if ch.is_whitespace() {
-        TokenClass::Whitespace
-    } else if ch.is_alphanumeric() || ch == '_' {
-        TokenClass::Word
-    } else {
-        TokenClass::Symbol
-    }
-}
-
-fn previous_word_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let chars: Vec<char> = buffer.chars().collect();
-    let mut index = char_index.min(chars.len());
-    while index > 0 && token_class(chars[index - 1]) == TokenClass::Whitespace {
-        index -= 1;
-    }
-    if index == 0 {
+fn next_active_after_tab_close(
+    tab_count: usize,
+    active_index: usize,
+    closed_index: usize,
+) -> usize {
+    if tab_count <= 1 {
         return 0;
     }
 
-    let class = token_class(chars[index - 1]);
-    while index > 0 && token_class(chars[index - 1]) == class {
-        index -= 1;
-    }
-    index
-}
-
-fn next_word_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let chars: Vec<char> = buffer.chars().collect();
-    let mut index = char_index.min(chars.len());
-    while index < chars.len() && token_class(chars[index]) == TokenClass::Whitespace {
-        index += 1;
-    }
-    if index == chars.len() {
-        return chars.len();
-    }
-
-    let class = token_class(chars[index]);
-    while index < chars.len() && token_class(chars[index]) == class {
-        index += 1;
-    }
-    index
-}
-
-fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
-    let clamped = char_index.min(buffer.len_chars());
-    let line = buffer.char_to_line(clamped);
-    let line_start = buffer.line_to_char(line);
-    let display_text = line_display_text(buffer, line);
-    let chars: Vec<char> = display_text.chars().collect();
-    if chars.is_empty() {
-        return clamped..clamped;
-    }
-
-    let local = clamped
-        .saturating_sub(line_start)
-        .min(chars.len().saturating_sub(1));
-    let class = token_class(chars[local]);
-    let mut start = local;
-    while start > 0 && token_class(chars[start - 1]) == class {
-        start -= 1;
-    }
-    let mut end = local + 1;
-    while end < chars.len() && token_class(chars[end]) == class {
-        end += 1;
-    }
-    (line_start + start)..(line_start + end)
-}
-
-fn line_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
-    let clamped = char_index.min(buffer.len_chars());
-    let line = buffer.char_to_line(clamped);
-    let start = buffer.line_to_char(line);
-    let end = if line + 1 < buffer.len_lines() {
-        buffer.line_to_char(line + 1)
+    let last_after_close = tab_count.saturating_sub(2);
+    if closed_index < active_index {
+        active_index.saturating_sub(1).min(last_after_close)
     } else {
-        buffer.len_chars()
+        active_index.min(last_after_close)
+    }
+}
+
+fn delete_selection_or_word_range(tab: &Tab, backward: bool) -> Option<Range<usize>> {
+    if tab.has_selection() {
+        return Some(tab.selected_range());
+    }
+
+    let cursor = tab.cursor_char();
+    let target = if backward {
+        previous_word_boundary(&tab.buffer, cursor)
+    } else {
+        next_word_boundary(&tab.buffer, cursor)
     };
-    start..end
-}
-
-fn drag_selection_range(anchor: Range<usize>, current: Range<usize>) -> (Range<usize>, bool) {
-    if current.start < anchor.start {
-        (current.start..anchor.end.max(current.end), true)
-    } else {
-        (
-            anchor.start.min(current.start)..current.end.max(anchor.end),
-            false,
-        )
-    }
-}
-
-fn drag_autoscroll_delta(position: Point<Pixels>, bounds: Bounds<Pixels>) -> Option<Pixels> {
-    const EDGE_PX: f32 = 36.0;
-    let edge = px(EDGE_PX);
-    let top_edge = bounds.top() + edge;
-    let bottom_edge = bounds.bottom() - edge;
-
-    if position.y < top_edge {
-        let distance = ((top_edge - position.y) / px(1.0)).min(EDGE_PX * 2.0);
-        let rows = 0.5 + distance / EDGE_PX;
-        Some(-px((ROW_HEIGHT * rows).min(ROW_HEIGHT * 3.0)))
-    } else if position.y > bottom_edge {
-        let distance = ((position.y - bottom_edge) / px(1.0)).min(EDGE_PX * 2.0);
-        let rows = 0.5 + distance / EDGE_PX;
-        Some(px((ROW_HEIGHT * rows).min(ROW_HEIGHT * 3.0)))
-    } else {
-        None
-    }
-}
-
-fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: usize) -> bool {
-    active_index == closed_index
+    (target != cursor).then_some(target.min(cursor)..target.max(cursor))
 }
 
 fn char_to_line_col(buffer: &Rope, char_offset: usize) -> (usize, usize) {

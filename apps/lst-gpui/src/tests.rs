@@ -272,15 +272,21 @@ fn standard_movement_keybindings_are_registered() {
     assert!(has_binding::<MoveDocumentEnd>("ctrl-end"));
     assert!(has_binding::<SelectDocumentStart>("ctrl-shift-home"));
     assert!(has_binding::<SelectDocumentEnd>("ctrl-shift-end"));
+    assert!(has_binding::<MoveLineStart>("cmd-left"));
+    assert!(has_binding::<MoveLineEnd>("cmd-right"));
+    assert!(has_binding::<SelectLineStart>("cmd-shift-left"));
+    assert!(has_binding::<SelectLineEnd>("cmd-shift-right"));
+    assert!(has_binding::<DeleteWordBackward>("ctrl-backspace"));
+    assert!(has_binding::<DeleteWordBackward>("alt-backspace"));
+    assert!(has_binding::<DeleteWordForward>("ctrl-delete"));
+    assert!(has_binding::<DeleteWordForward>("alt-delete"));
 }
 
 #[test]
 fn explicit_undo_boundary_keeps_paste_separate_from_typing() {
     let mut tab = Tab::from_text("untitled".into(), None, "", false);
-    tab.push_undo_snapshot(EditKind::Insert, false);
-    tab.replace_char_range(0..0, "a");
-    tab.push_undo_snapshot(EditKind::Insert, true);
-    tab.replace_char_range(1..1, "paste");
+    tab.edit(EditKind::Insert, UndoBoundary::Merge, 0..0, "a");
+    tab.edit(EditKind::Insert, UndoBoundary::Break, 1..1, "paste");
 
     assert_eq!(tab.buffer_text(), "apaste");
     assert!(tab.undo());
@@ -307,6 +313,27 @@ fn closing_other_tab_does_not_force_editor_focus() {
     assert!(!should_refocus_editor_after_tab_close(2, 1));
     assert!(!should_refocus_editor_after_tab_close(2, 3));
     assert!(should_refocus_editor_after_tab_close(2, 2));
+}
+
+#[test]
+fn closing_tab_preserves_expected_active_index() {
+    assert_eq!(next_active_after_tab_close(3, 2, 0), 1);
+    assert_eq!(next_active_after_tab_close(3, 1, 2), 1);
+    assert_eq!(next_active_after_tab_close(3, 2, 2), 1);
+    assert_eq!(next_active_after_tab_close(1, 0, 0), 0);
+}
+
+#[test]
+fn word_delete_range_uses_selection_or_word_boundary() {
+    let mut tab = Tab::from_text("untitled".into(), None, "alpha beta.gamma", false);
+    tab.move_to(11);
+    assert_eq!(delete_selection_or_word_range(&tab, true), Some(10..11));
+    assert_eq!(delete_selection_or_word_range(&tab, false), Some(11..16));
+
+    tab.selection = 2..8;
+    tab.selection_reversed = false;
+    assert_eq!(delete_selection_or_word_range(&tab, true), Some(2..8));
+    assert_eq!(delete_selection_or_word_range(&tab, false), Some(2..8));
 }
 
 #[test]

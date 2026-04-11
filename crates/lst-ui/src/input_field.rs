@@ -7,6 +7,10 @@ use gpui::{
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
     SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
 };
+use lst_core::selection::{
+    drag_selection_range, next_word_boundary_in_text, previous_word_boundary_in_text,
+    word_range_in_text,
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::{
@@ -465,106 +469,6 @@ impl InputField {
             Some(InputDragSelectionMode::All) => self.select_all(cx),
             None => {}
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InputTokenClass {
-    Whitespace,
-    Word,
-    Symbol,
-}
-
-fn input_token_class(ch: char) -> InputTokenClass {
-    if ch.is_whitespace() {
-        InputTokenClass::Whitespace
-    } else if ch.is_alphanumeric() || ch == '_' {
-        InputTokenClass::Word
-    } else {
-        InputTokenClass::Symbol
-    }
-}
-
-fn previous_word_boundary_in_text(text: &str, offset: usize) -> usize {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let mut index = chars.partition_point(|(byte, _)| *byte < offset.min(text.len()));
-    while index > 0 && input_token_class(chars[index - 1].1) == InputTokenClass::Whitespace {
-        index -= 1;
-    }
-    if index == 0 {
-        return 0;
-    }
-
-    let class = input_token_class(chars[index - 1].1);
-    while index > 0 && input_token_class(chars[index - 1].1) == class {
-        index -= 1;
-    }
-    chars.get(index).map_or(0, |(byte, _)| *byte)
-}
-
-fn next_word_boundary_in_text(text: &str, offset: usize) -> usize {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let mut index = chars.partition_point(|(byte, _)| *byte < offset.min(text.len()));
-    while index < chars.len() && input_token_class(chars[index].1) == InputTokenClass::Whitespace {
-        index += 1;
-    }
-    if index == chars.len() {
-        return text.len();
-    }
-
-    let class = input_token_class(chars[index].1);
-    while index < chars.len() && input_token_class(chars[index].1) == class {
-        index += 1;
-    }
-    chars.get(index).map_or(text.len(), |(byte, _)| *byte)
-}
-
-fn char_index_containing_offset(text: &str, offset: usize) -> Option<usize> {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    if chars.is_empty() {
-        return None;
-    }
-
-    let offset = offset.min(text.len());
-    if offset == text.len() {
-        return Some(chars.len() - 1);
-    }
-
-    chars.iter().enumerate().find_map(|(index, (start, _))| {
-        let end = chars.get(index + 1).map_or(text.len(), |(byte, _)| *byte);
-        (offset >= *start && offset < end).then_some(index)
-    })
-}
-
-fn word_range_in_text(text: &str, offset: usize) -> Range<usize> {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let Some(local) = char_index_containing_offset(text, offset) else {
-        return 0..0;
-    };
-
-    let class = input_token_class(chars[local].1);
-    let mut start = local;
-    while start > 0 && input_token_class(chars[start - 1].1) == class {
-        start -= 1;
-    }
-    let mut end = local + 1;
-    while end < chars.len() && input_token_class(chars[end].1) == class {
-        end += 1;
-    }
-
-    let start_byte = chars[start].0;
-    let end_byte = chars.get(end).map_or(text.len(), |(byte, _)| *byte);
-    start_byte..end_byte
-}
-
-fn drag_selection_range(anchor: Range<usize>, current: Range<usize>) -> (Range<usize>, bool) {
-    if current.start < anchor.start {
-        (current.start..anchor.end.max(current.end), true)
-    } else {
-        (
-            anchor.start.min(current.start)..current.end.max(anchor.end),
-            false,
-        )
     }
 }
 
