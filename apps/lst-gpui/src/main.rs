@@ -446,8 +446,16 @@ impl LstGpuiApp {
                     cx.write_to_primary(ClipboardItem::new_string(text));
                 }
                 EditorEffect::ReadClipboard => {
+                    let read_started = Instant::now();
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                        let clipboard_read_ms = elapsed_ms(read_started);
+                        let apply_started = Instant::now();
                         self.apply_model_command(EditorCommand::PasteText(text), cx);
+                        self.record_operation(
+                            "paste_clipboard",
+                            Some(clipboard_read_ms),
+                            elapsed_ms(apply_started),
+                        );
                     } else {
                         self.model.status =
                             "Clipboard does not currently contain plain text.".to_string();
@@ -511,7 +519,9 @@ impl LstGpuiApp {
     fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
         match event {
             InputFieldEvent::Changed(text) => {
+                let reindex_started = Instant::now();
                 self.apply_model_command(EditorCommand::SetFindQueryAndSelect(text.clone()), cx);
+                self.record_find_metrics(elapsed_ms(reindex_started));
             }
             InputFieldEvent::Submitted => {
                 self.apply_model_command(EditorCommand::FindNext, cx);
@@ -527,6 +537,12 @@ impl LstGpuiApp {
             }
             InputFieldEvent::PreviousRequested => {}
         }
+    }
+
+    fn record_find_metrics(&self, reindex_ms: f64) {
+        bench_trace::record_ms("find_reindex_ms", reindex_ms);
+        bench_trace::record_usize("find_match_count", self.model.find.matches.len());
+        bench_trace::record_usize("find_query_len", self.model.find.query.chars().count());
     }
 
     fn handle_find_replace_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {

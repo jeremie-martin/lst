@@ -37,6 +37,8 @@ const SCROLL_WHEEL_COUNT: usize = 240;
 const SCROLL_HALF_MS: u64 = 1_500;
 const TYPING_CHARS: usize = 320;
 const SEARCH_QUERY: &str = "fn ";
+const FIND_QUERY_CLICK_X_FRACTION: f32 = 0.08;
+const FIND_QUERY_CLICK_Y_FRACTION: f32 = 0.08;
 const BUTTON_LEFT: u8 = 1;
 const BUTTON_WHEEL_UP: u8 = 4;
 const BUTTON_WHEEL_DOWN: u8 = 5;
@@ -859,6 +861,23 @@ impl Bench {
                 "find_query",
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
+            let _ = wait_for_damage_quiet(
+                &self.conn,
+                damage.damage(),
+                window.id,
+                &mut child,
+                Duration::from_millis(QUIET_MS),
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            click_find_query_field(&self.conn, self.root, &window)?;
+            let _ = wait_for_damage_quiet(
+                &self.conn,
+                damage.damage(),
+                window.id,
+                &mut child,
+                Duration::from_millis(QUIET_MS),
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
             let search_input_started = Instant::now();
             inject_text(&self.conn, self.root, &self.keycodes, SEARCH_QUERY)?;
             let damage_events = wait_for_damage_quiet(
@@ -1445,6 +1464,22 @@ fn focus_window(
     inject_button_click(conn, root, BUTTON_LEFT)
 }
 
+fn click_find_query_field(
+    conn: &RustConnection,
+    root: xproto::Window,
+    window: &WindowInfo,
+) -> Result<(), Box<dyn Error>> {
+    move_pointer_to_window_point(
+        conn,
+        root,
+        window,
+        (f32::from(window.width) * FIND_QUERY_CLICK_X_FRACTION).round() as i32,
+        (f32::from(window.height) * FIND_QUERY_CLICK_Y_FRACTION).round() as i32,
+    )?;
+    thread::sleep(Duration::from_millis(POINTER_SETTLE_MS));
+    inject_button_click(conn, root, BUTTON_LEFT)
+}
+
 fn focus_window_for_keyboard(
     conn: &RustConnection,
     window: &WindowInfo,
@@ -1460,8 +1495,24 @@ fn move_pointer_to_window_center(
     root: xproto::Window,
     window: &WindowInfo,
 ) -> Result<(), Box<dyn Error>> {
-    let x = clamp_i16(i32::from(window.root_x) + i32::from(window.width) / 2);
-    let y = clamp_i16(i32::from(window.root_y) + i32::from(window.height) / 2);
+    move_pointer_to_window_point(
+        conn,
+        root,
+        window,
+        i32::from(window.width) / 2,
+        i32::from(window.height) / 2,
+    )
+}
+
+fn move_pointer_to_window_point(
+    conn: &RustConnection,
+    root: xproto::Window,
+    window: &WindowInfo,
+    local_x: i32,
+    local_y: i32,
+) -> Result<(), Box<dyn Error>> {
+    let x = clamp_i16(i32::from(window.root_x) + local_x);
+    let y = clamp_i16(i32::from(window.root_y) + local_y);
     conn.xtest_fake_input(xproto::MOTION_NOTIFY_EVENT, 0, 0, root, x, y, 0)?;
     conn.flush()?;
     Ok(())

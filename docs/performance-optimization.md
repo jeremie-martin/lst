@@ -76,24 +76,24 @@ trace files.
 
 ## Current Baseline
 
-Current baseline collected on 2026-04-11 on `DISPLAY=:1`:
+Current baseline collected on 2026-04-11 on `DISPLAY=:1` after the GPUI
+model-command refactor and benchmark-gap fixes:
 
 | Scenario | Primary metric | Median |
 | --- | --- | ---: |
-| `large-paste` | `paste_complete_ms` | `226.909 ms` |
-| `typing-medium` smoke | `typing_ms_per_char` | `0.276 ms` |
-| `scroll-highlighted` | `scroll_overrun_ms` | `1087.519 ms` |
-| `scroll-plain` | `scroll_overrun_ms` | `1085.850 ms` |
-| `open-large` | `open_to_quiet_ms` | `1153.185 ms` |
-| syntax highlight rust | `median_ms` | `176.425 ms` |
+| `large-paste` | `paste_complete_ms` | `226.138 ms` |
+| `typing-medium` | `typing_ms_per_char` | `0.283 ms` |
+| `typing-large` | `typing_ms_per_char` | `0.274 ms` |
+| `scroll-highlighted` | `scroll_overrun_ms` | `1086.699 ms` |
+| `scroll-plain` | `scroll_overrun_ms` | `1088.269 ms` |
+| `open-large` | `open_to_quiet_ms` | `1142.251 ms` |
+| `search-large` | `search_reindex_ms` | `1.357 ms` |
+| syntax highlight rust | `median_ms` | `162.491 ms` |
 
-Known benchmark gaps:
-
-- `search-large` is currently invalid: the runner opens find and focus is
-  requested, but injected text still reaches the editor instead of the find
-  input.
-- `typing-large` still needs a full default run after the input-positioning
-  fix; `typing-medium` currently has a one-repetition smoke result.
+Known benchmark gaps: none for the listed scenarios. The `search-large` runner
+opens find through `Ctrl+F`, waits for the focus transition, then clicks the
+visible find query field before injecting text so the test follows a stable
+black-box interaction path across GPUI's frame-delayed platform input handler.
 
 ## Behavior Gate
 
