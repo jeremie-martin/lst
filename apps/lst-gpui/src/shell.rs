@@ -48,6 +48,7 @@ impl LstGpuiApp {
                 cx.notify();
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
+                this.persistent_overlay_focus = None;
                 this.update_model(cx, true, |model| {
                     model.set_active_tab(ix);
                 });
@@ -57,6 +58,7 @@ impl LstGpuiApp {
             .on_mouse_up(
                 MouseButton::Middle,
                 cx.listener(move |this, _: &MouseUpEvent, window, cx| {
+                    this.persistent_overlay_focus = None;
                     this.request_close_tab_at(ix, cx);
                     window.focus(&this.focus_handle);
                     cx.stop_propagation();
@@ -402,6 +404,7 @@ impl Render for LstGpuiApp {
                     .child(self.render_status_bar()),
             );
         self.apply_pending_focus(window, cx);
+        self.maintain_overlay_focus(window, cx);
         root
     }
 }

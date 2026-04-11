@@ -3,10 +3,10 @@ use gpui::{
 };
 use lst_editor::vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey};
 use ropey::Rope;
-use std::ops::Range;
+use std::{ops::Range, time::Instant};
 
 use crate::viewport::{code_origin_pad, row_contains_cursor, x_for_global_char};
-use crate::{LstGpuiApp, CURSOR_WIDTH, ROW_HEIGHT};
+use crate::{elapsed_ms, LstGpuiApp, CURSOR_WIDTH, ROW_HEIGHT};
 
 impl LstGpuiApp {
     pub(crate) fn maybe_handle_vim_key(
@@ -105,6 +105,7 @@ impl EntityInputHandler for LstGpuiApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let apply_started = Instant::now();
         let range = {
             let tab = self.active_tab();
             range_utf16
@@ -114,6 +115,7 @@ impl EntityInputHandler for LstGpuiApp {
         self.update_model(cx, true, |model| {
             model.replace_text_from_input(range, text.to_string());
         });
+        self.record_operation("text_input", None, elapsed_ms(apply_started));
     }
 
     fn replace_and_mark_text_in_range(
@@ -124,6 +126,7 @@ impl EntityInputHandler for LstGpuiApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let apply_started = Instant::now();
         let range = {
             let tab = self.active_tab();
             range_utf16
@@ -136,6 +139,7 @@ impl EntityInputHandler for LstGpuiApp {
         self.update_model(cx, true, |model| {
             model.replace_and_mark_text(range, new_text.to_string(), selected_range);
         });
+        self.record_operation("ime_text_input", None, elapsed_ms(apply_started));
     }
 
     fn bounds_for_range(

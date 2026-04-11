@@ -48,9 +48,22 @@ cargo test -p lst-editor --features internal-invariants
 
 ## Performance
 
-There is no maintained benchmark contract in this repository right now.
-Performance work should start from a focused behavioral scenario and add a
-narrow measurement only when it is needed.
+The active GPUI editor has a real-display X11 interaction benchmark. Build the
+release app and runner together:
+
+```bash
+cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11
+```
+
+Run the full smoke suite from a real X11 session:
+
+```bash
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario all --repetitions 1 --priming 0
+```
+
+For stable baseline work, use the runner default of one priming run and seven
+measured repetitions. The benchmark contract is documented in
+`docs/performance-optimization.md`.
 
 ## License
 

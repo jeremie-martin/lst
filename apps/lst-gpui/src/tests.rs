@@ -1,7 +1,7 @@
 use crate::ui::{input_keybindings, COLOR_GREEN, COLOR_MUTED};
 use gpui::{
-    ClipboardItem, Entity, EntityInputHandler, Keystroke, TestAppContext, VisualContext as _,
-    VisualTestContext,
+    point, px, ClipboardItem, Entity, EntityInputHandler, Keystroke, Modifiers, TestAppContext,
+    VisualContext as _, VisualTestContext,
 };
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorTab, TabId};
@@ -238,6 +238,29 @@ fn app_find_open_syncs_selected_text_into_input(cx: &mut TestAppContext) {
     assert_eq!(snapshot.find_query_input, "one");
     assert_eq!(snapshot.model.find_matches, 2);
     assert_tab_views_match_model(&snapshot);
+}
+
+#[gpui::test]
+fn find_overlay_click_keeps_text_input_out_of_editor(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "alpha beta alpha", window, cx);
+    });
+    cx.dispatch_action(FindOpen);
+    cx.refresh().expect("render find overlay");
+    cx.run_until_parked();
+
+    cx.simulate_click(point(px(2230.0), px(169.0)), Modifiers::default());
+    cx.refresh().expect("refresh after overlay click");
+    cx.run_until_parked();
+    cx.simulate_input("alpha");
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.text, "alpha beta alpha");
+    assert_eq!(snapshot.model.find_query, "alpha");
+    assert_eq!(snapshot.find_query_input, "alpha");
+    assert_eq!(snapshot.model.find_matches, 2);
 }
 
 #[gpui::test]

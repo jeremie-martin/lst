@@ -6,10 +6,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use crate::{LstGpuiApp, PendingAfterSave};
+use crate::{elapsed_ms, LstGpuiApp, PendingAfterSave};
 
 #[derive(Clone, Debug)]
 struct AutosaveJob {
@@ -105,10 +105,18 @@ impl LstGpuiApp {
                     cx.write_to_primary(ClipboardItem::new_string(text));
                 }
                 EditorEffect::ReadClipboard => {
+                    let read_started = Instant::now();
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                        let clipboard_read_ms = elapsed_ms(read_started);
+                        let apply_started = Instant::now();
                         self.update_model(cx, true, |model| {
                             model.paste_text(text);
                         });
+                        self.record_operation(
+                            "paste_clipboard",
+                            Some(clipboard_read_ms),
+                            elapsed_ms(apply_started),
+                        );
                     } else {
                         self.update_model(cx, true, |model| {
                             model.clipboard_unavailable();

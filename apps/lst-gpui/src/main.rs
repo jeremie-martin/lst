@@ -5,6 +5,7 @@ use gpui::{
 };
 
 mod actions;
+mod bench_trace;
 mod input_adapter;
 mod interactions;
 mod keymap;
@@ -29,7 +30,7 @@ use lst_editor::{EditorModel, EditorTab as ModelEditorTab, FocusTarget, TabId, U
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
-use std::{cell::RefCell, collections::HashSet, path::PathBuf, process, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, path::PathBuf, process, rc::Rc, time::Instant};
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_path, CachedSyntaxHighlights, SyntaxHighlightJobKey,
     SyntaxMode, SyntaxSpan,
@@ -161,6 +162,7 @@ struct LstGpuiApp {
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
     pending_focus: Option<FocusTarget>,
+    persistent_overlay_focus: Option<FocusTarget>,
     pending_after_save: Option<PendingAfterSave>,
     autosave_inflight: HashSet<PathBuf>,
     autosave_started: bool,
@@ -192,6 +194,7 @@ impl LstGpuiApp {
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
             pending_focus: None,
+            persistent_overlay_focus: None,
             pending_after_save: None,
             autosave_inflight: HashSet::new(),
             autosave_started: false,
@@ -229,6 +232,13 @@ impl LstGpuiApp {
     }
 
     fn queue_focus(&mut self, target: FocusTarget) {
+        bench_trace::record_label("focus_queued", focus_trace_label(target));
+        self.persistent_overlay_focus = match target {
+            FocusTarget::FindQuery | FocusTarget::FindReplace | FocusTarget::GotoLine => {
+                Some(target)
+            }
+            FocusTarget::Editor => None,
+        };
         self.pending_focus = Some(target);
     }
 
@@ -259,6 +269,43 @@ impl LstGpuiApp {
                     self.pending_focus = Some(FocusTarget::Editor);
                 }
             }
+        }
+        bench_trace::record_label("focus_applied", focus_trace_label(target));
+    }
+
+    fn maintain_overlay_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.persistent_overlay_focus else {
+            return;
+        };
+        let Some(handle) = self.focus_handle_for_target(target, cx) else {
+            return;
+        };
+        if !handle.is_focused(window) {
+            window.focus(&handle);
+            bench_trace::record_label("focus_maintained", focus_trace_label(target));
+        }
+    }
+
+    fn focus_handle_for_target(
+        &self,
+        target: FocusTarget,
+        cx: &mut Context<Self>,
+    ) -> Option<FocusHandle> {
+        match target {
+            FocusTarget::Editor => Some(self.focus_handle.clone()),
+            FocusTarget::FindQuery => self
+                .model
+                .find()
+                .visible
+                .then(|| self.find_query_input.read(cx).focus_handle()),
+            FocusTarget::FindReplace => (self.model.find().visible
+                && self.model.find().show_replace)
+                .then(|| self.find_replace_input.read(cx).focus_handle()),
+            FocusTarget::GotoLine => self
+                .model
+                .goto_line()
+                .is_some()
+                .then(|| self.goto_line_input.read(cx).focus_handle()),
         }
     }
 
@@ -348,9 +395,11 @@ impl LstGpuiApp {
     fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
         match event {
             InputFieldEvent::Changed(text) => {
+                let reindex_started = Instant::now();
                 self.update_model(cx, true, |model| {
                     model.update_find_query_and_select(text.clone());
                 });
+                self.record_find_metrics(elapsed_ms(reindex_started));
             }
             InputFieldEvent::Submitted => {
                 self.update_model(cx, true, EditorModel::find_next_match);
@@ -487,6 +536,28 @@ impl LstGpuiApp {
 
     fn active_tab(&self) -> &ModelEditorTab {
         self.model.active_tab()
+    }
+
+    fn record_find_metrics(&self, reindex_ms: f64) {
+        bench_trace::record_ms("find_reindex_ms", reindex_ms);
+        bench_trace::record_usize("find_match_count", self.model.find().matches.len());
+        bench_trace::record_usize("find_query_len", self.model.find().query.chars().count());
+    }
+
+    pub(crate) fn record_operation(
+        &self,
+        label: &'static str,
+        clipboard_read_ms: Option<f64>,
+        apply_ms: f64,
+    ) {
+        let tab = self.active_tab();
+        bench_trace::record_operation(
+            label,
+            tab.buffer().len_bytes(),
+            tab.line_count(),
+            clipboard_read_ms,
+            apply_ms,
+        );
     }
 
     fn active_view(&self) -> &EditorTabView {
@@ -760,6 +831,19 @@ fn char_to_line_col(buffer: &Rope, char_offset: usize) -> (usize, usize) {
     let line = buffer.char_to_line(char_offset);
     let line_start = buffer.line_to_char(line);
     (line, char_offset - line_start)
+}
+
+fn focus_trace_label(target: FocusTarget) -> &'static str {
+    match target {
+        FocusTarget::Editor => "editor",
+        FocusTarget::FindQuery => "find_query",
+        FocusTarget::FindReplace => "find_replace",
+        FocusTarget::GotoLine => "goto_line",
+    }
+}
+
+pub(crate) fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 fn main() {

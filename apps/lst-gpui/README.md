@@ -18,8 +18,18 @@ DISPLAY=:1 cargo run -- --title "lst GPUI"
 
 - `cargo check` passes for this crate.
 - `cargo build --release` passes on this host after installing `libxkbcommon-x11-dev`.
+- The real-display X11 benchmark runner is available as `bench_editor_x11`.
 - Running under `Xvfb` still does not work here because GPUI surface creation wants a real presentation backend with DRI3 support.
 - The editor uses a scroll spacer plus a viewport-sized custom-painted canvas with a small shaped-line cache.
+
+## Benchmark
+
+```sh
+cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11
+DISPLAY=:1 ../../target/release/examples/bench_editor_x11 --scenario all --repetitions 1 --priming 0
+```
+
+Use the runner defaults for real baseline work.
 
 ## Current Features
 

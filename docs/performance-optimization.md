@@ -1,22 +1,107 @@
-# Performance Notes
+# Performance Optimization Workflow
 
-This repository does not currently maintain a benchmark harness or checked-in
-benchmark corpus.
+This document is for the active GPUI editor in `apps/lst-gpui`.
 
-Performance work should stay narrow:
+The goal is narrow:
 
-- start from a user-visible problem
-- keep `cargo test` green
-- add the smallest measurement that proves the change
-- remove one-off measurement code after the decision is made
+- preserve behavior
+- run one fixed benchmark scenario
+- optimize one scalar metric that matches the user-visible problem
+- use the other printed values as diagnostics
 
-The active behavior gates remain:
+## GPUI Interaction Benchmark
+
+The GPUI editor has a real-display X11 benchmark runner for editor interaction
+latency. It launches the real `lst-gpui` binary, drives it through XTEST, watches
+XDamage redraws, and verifies file contents for editing workflows.
+
+Build the release app and runner:
+
+```bash
+cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11
+```
+
+Run every scenario:
+
+```bash
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario all
+```
+
+Run a short smoke pass:
+
+```bash
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario all --repetitions 1 --priming 0
+```
+
+Run one scenario while optimizing a specific path:
+
+```bash
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario large-paste
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario typing-large
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario scroll-highlighted
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario search-large
+```
+
+The runner requires a real X11 desktop session with XTEST and XDamage. `Xvfb` is
+not representative for this GPUI path on this host because GPUI surface creation
+needs a real presentation backend.
+
+The `large-paste` scenario also uses `xclip` to observe the X11 clipboard.
+
+## Scenarios
+
+Each scenario prints `primary_metric`, `primary_value`, per-run values, and
+secondary diagnostics such as CPU time, damage events, peak RSS, and final file
+size where relevant.
+
+| Scenario | Primary metric | Completion condition |
+| --- | --- | --- |
+| `large-paste` | `paste_complete_ms` | Copies the large Rust corpus, pastes into a second file tab, then retries `Ctrl+S` until the target file exactly matches the corpus and stays stable. |
+| `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload into `benchmarks/editing-corpus.rs`, waits for redraw quiet, then verifies the saved file exactly matches the expected text. |
+| `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using `benchmarks/paste-corpus-20k.rs`. |
+| `scroll-highlighted` | `scroll_overrun_ms` | Scrolls down and back through the large Rust file on a fixed input schedule, then waits for redraw quiet. |
+| `scroll-plain` | `scroll_overrun_ms` | Same scroll trace using the large corpus as `.txt`, so syntax highlighting is out of the path. |
+| `open-large` | `open_to_quiet_ms` | Measures process spawn through benchmark window discovery and redraw quiet on the large Rust file. |
+| `search-large` | `search_reindex_ms` | Opens find through `Ctrl+F`, clicks the visible find query input, types `fn `, waits for redraw quiet, and reads the completed in-app find reindex trace. |
+
+The default runner contract is one priming run and seven measured repetitions.
+Use `--repetitions <n>` and `--priming <n>` only when characterizing variance or
+shortening a local smoke test.
+
+The GPUI app writes internal benchmark trace values only when
+`LST_BENCH_TRACE_FILE` is set by the runner. Normal editor runs do not create
+trace files.
+
+## Smoke Baseline
+
+One-repetition smoke baseline collected on 2026-04-11 on `DISPLAY=:1` after
+reviving the benchmark harness:
+
+| Scenario | Primary metric | Value |
+| --- | --- | ---: |
+| `large-paste` | `paste_complete_ms` | `229.239 ms` |
+| `typing-medium` | `typing_ms_per_char` | `0.275 ms` |
+| `typing-large` | `typing_ms_per_char` | `0.263 ms` |
+| `scroll-highlighted` | `scroll_overrun_ms` | `1075.156 ms` |
+| `scroll-plain` | `scroll_overrun_ms` | `1088.000 ms` |
+| `open-large` | `open_to_quiet_ms` | `1152.084 ms` |
+| `search-large` | `search_reindex_ms` | `1.449 ms` |
+
+Treat this table as a smoke sample, not a variance-controlled baseline. Use the
+default seven measured repetitions before making optimization decisions.
+
+## Behavior Gate
+
+The active refactor gate is:
 
 ```bash
 cargo test
+```
+
+For deeper Vim state-machine coverage:
+
+```bash
 cargo test -p lst-editor --features internal-invariants
 ```
 
-The old iced implementation and historical benchmark harness were removed from
-the repository. Do not reintroduce a generalized benchmark framework unless a
-specific performance problem needs a repeatable contract.
+Do not trust a performance change unless the active test gate stays green.

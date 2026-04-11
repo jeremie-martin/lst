@@ -20,6 +20,7 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.persistent_overlay_focus = None;
         window.focus(&self.focus_handle);
         self.drag_last_point = Some(event.position);
         let index = self.active_char_index_for_point(event.position);

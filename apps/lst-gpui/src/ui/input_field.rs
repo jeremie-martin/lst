@@ -516,6 +516,7 @@ impl InputField {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        cx.stop_propagation();
         window.focus(&self.focus_handle);
         let offset = self.index_for_mouse_position(event.position);
         if event.click_count >= 3 {
@@ -540,11 +541,13 @@ impl InputField {
         cx.notify();
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         self.drag_selecting = None;
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         let offset = self.index_for_mouse_position(event.position);
         match self.drag_selecting.clone() {
             Some(InputDragSelectionMode::Character) => {
