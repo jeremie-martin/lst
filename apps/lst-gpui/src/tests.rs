@@ -1,6 +1,4 @@
 use gpui::Keystroke;
-use lst_core::document::Tab;
-use lst_editor::{next_active_after_tab_close, should_refocus_editor_after_tab_close};
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorTab, TabId};
 use lst_ui::{COLOR_GREEN, COLOR_MUTED};
@@ -244,50 +242,6 @@ fn syntax_highlight_result_requires_matching_active_revision_and_language() {
     ));
 }
 
-#[test]
-fn drag_selection_range_extends_forward_from_anchor_token() {
-    let (selection, reversed) = drag_selection_range(6..11, 12..17);
-
-    assert_eq!(selection, 6..17);
-    assert!(!reversed);
-}
-
-#[test]
-fn drag_selection_range_extends_backward_from_anchor_token() {
-    let (selection, reversed) = drag_selection_range(6..11, 0..5);
-
-    assert_eq!(selection, 0..11);
-    assert!(reversed);
-}
-
-#[test]
-fn word_range_groups_words_symbols_and_whitespace() {
-    let buffer = Rope::from_str("alpha beta::gamma");
-
-    assert_eq!(word_range_at_char(&buffer, 7), 6..10);
-    assert_eq!(word_range_at_char(&buffer, 10), 10..12);
-    assert_eq!(word_range_at_char(&buffer, 5), 5..6);
-}
-
-#[test]
-fn line_range_includes_trailing_newline_when_present() {
-    let buffer = Rope::from_str("one\ntwo\nthree");
-
-    assert_eq!(line_range_at_char(&buffer, 1), 0..4);
-    assert_eq!(line_range_at_char(&buffer, 5), 4..8);
-    assert_eq!(line_range_at_char(&buffer, 10), 8..13);
-}
-
-#[test]
-fn word_boundaries_skip_whitespace_before_moving() {
-    let buffer = Rope::from_str("alpha beta.gamma");
-
-    assert_eq!(next_word_boundary(&buffer, 0), 5);
-    assert_eq!(next_word_boundary(&buffer, 5), 10);
-    assert_eq!(previous_word_boundary(&buffer, 11), 10);
-    assert_eq!(previous_word_boundary(&buffer, 10), 6);
-}
-
 #[cfg(feature = "internal-invariants")]
 #[test]
 fn drag_autoscroll_delta_only_activates_at_viewport_edges() {
@@ -341,34 +295,6 @@ fn find_shortcuts_stay_available_from_workspace_context() {
         "ctrl-g",
         "Workspace"
     ));
-}
-
-#[test]
-fn closing_other_tab_does_not_force_editor_focus() {
-    assert!(!should_refocus_editor_after_tab_close(2, 1));
-    assert!(!should_refocus_editor_after_tab_close(2, 3));
-    assert!(should_refocus_editor_after_tab_close(2, 2));
-}
-
-#[test]
-fn closing_tab_preserves_expected_active_index() {
-    assert_eq!(next_active_after_tab_close(3, 2, 0), 1);
-    assert_eq!(next_active_after_tab_close(3, 1, 2), 1);
-    assert_eq!(next_active_after_tab_close(3, 2, 2), 1);
-    assert_eq!(next_active_after_tab_close(1, 0, 0), 0);
-}
-
-#[test]
-fn word_delete_range_uses_selection_or_word_boundary() {
-    let mut tab = Tab::from_text("untitled".into(), None, "alpha beta.gamma", false);
-    tab.move_to(11);
-    assert_eq!(delete_selection_or_word_range(&tab, true), Some(10..11));
-    assert_eq!(delete_selection_or_word_range(&tab, false), Some(11..16));
-
-    tab.selection = 2..8;
-    tab.selection_reversed = false;
-    assert_eq!(delete_selection_or_word_range(&tab, true), Some(2..8));
-    assert_eq!(delete_selection_or_word_range(&tab, false), Some(2..8));
 }
 
 #[cfg(feature = "internal-invariants")]

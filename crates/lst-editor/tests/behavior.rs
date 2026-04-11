@@ -498,6 +498,28 @@ fn delete_word_and_line_ops_are_undoable_document_behavior() {
 }
 
 #[test]
+fn delete_word_commands_delete_active_selection_before_word_boundaries() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "hello world",
+        )],
+        "Ready.".into(),
+    );
+
+    model.active_tab_mut().selection = 0..5;
+    model.apply(EditorCommand::DeleteWord { backward: true });
+    assert_eq!(model.snapshot().text, " world");
+
+    model.active_tab_mut().set_text("hello world");
+    model.active_tab_mut().selection = 6..11;
+    model.apply(EditorCommand::DeleteWord { backward: false });
+    assert_eq!(model.snapshot().text, "hello ");
+}
+
+#[test]
 fn clipboard_commands_emit_boundary_effects_without_fakes() {
     let mut model = EditorModel::new(
         vec![EditorTab::from_text(

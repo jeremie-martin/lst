@@ -24,14 +24,6 @@ pub(crate) use interactions::drag_autoscroll_delta;
 use interactions::DragSelectionMode;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
-#[cfg(test)]
-use lst_core::document::Tab;
-#[cfg(test)]
-pub(crate) use lst_core::selection::{
-    drag_selection_range, line_range_at_char, word_range_at_char,
-};
-#[cfg(test)]
-pub(crate) use lst_core::selection::{next_word_boundary, previous_word_boundary};
 use lst_editor::{
     EditorCommand, EditorModel, EditorTab as ModelEditorTab, FocusTarget, TabId, UNTITLED_PREFIX,
 };
@@ -39,8 +31,6 @@ use lst_ui::{input_keybindings, InputField, InputFieldEvent};
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
-#[cfg(test)]
-use std::ops::Range;
 use std::{cell::RefCell, collections::HashSet, fs, path::PathBuf, process, rc::Rc, time::Instant};
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_path, CachedSyntaxHighlights, SyntaxHighlightJobKey,
@@ -800,21 +790,6 @@ fn syntax_highlight_result_is_current(
                 && syntax_mode_for_path(tab.path.as_ref()) == SyntaxMode::TreeSitter(key.language)
         })
     })
-}
-
-#[cfg(test)]
-fn delete_selection_or_word_range(tab: &Tab, backward: bool) -> Option<Range<usize>> {
-    if tab.has_selection() {
-        return Some(tab.selected_range());
-    }
-
-    let cursor = tab.cursor_char();
-    let target = if backward {
-        previous_word_boundary(&tab.buffer, cursor)
-    } else {
-        next_word_boundary(&tab.buffer, cursor)
-    };
-    (target != cursor).then_some(target.min(cursor)..target.max(cursor))
 }
 
 fn char_to_line_col(buffer: &Rope, char_offset: usize) -> (usize, usize) {
