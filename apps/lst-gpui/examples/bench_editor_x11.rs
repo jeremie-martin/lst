@@ -10,10 +10,12 @@ use std::{
 };
 
 use x11rb::connection::Connection as _;
+use x11rb::errors::ReplyError;
 use x11rb::protocol::damage::{self, ConnectionExt as _};
 use x11rb::protocol::xkb::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{self, AtomEnum, ConnectionExt as _, MapState};
 use x11rb::protocol::xtest::ConnectionExt as _;
+use x11rb::protocol::ErrorKind;
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
 use x11rb::NONE;
@@ -39,7 +41,6 @@ const BUTTON_LEFT: u8 = 1;
 const BUTTON_WHEEL_UP: u8 = 4;
 const BUTTON_WHEEL_DOWN: u8 = 5;
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
-const KEYSYM_END: u32 = 0xff57;
 const KEYSYM_TAB: u32 = 0xff09;
 const KEYSYM_SPACE: u32 = 0x20;
 
@@ -97,7 +98,9 @@ Options:
                         scroll-highlighted, scroll-plain, open-large, search-large
                         (default: all)
   --repetitions <n>     measured repetitions after priming (default: 7)
-  --priming <n>         unreported warm-up runs (default: 1)"
+  --priming <n>         unreported warm-up runs (default: 1)
+  --keep-temp-on-failure
+                        leave benchmark temp files in /tmp when a scenario fails"
     );
 }
 
@@ -216,6 +219,7 @@ struct Args {
     scenario: Scenario,
     repetitions: usize,
     priming_runs: usize,
+    keep_temp_on_failure: bool,
 }
 
 fn parse_args_from<I, S>(raw_args: I) -> Result<Args, String>
@@ -227,6 +231,7 @@ where
         scenario: Scenario::All,
         repetitions: DEFAULT_REPETITIONS,
         priming_runs: DEFAULT_PRIMING_RUNS,
+        keep_temp_on_failure: false,
     };
     let mut raw_args = raw_args.into_iter().map(Into::into);
 
@@ -252,6 +257,7 @@ where
                     .parse::<usize>()
                     .map_err(|_| format!("invalid --priming value: {value}"))?;
             }
+            "--keep-temp-on-failure" => args.keep_temp_on_failure = true,
             unknown => return Err(format!("unknown argument: {unknown}")),
         }
     }
@@ -290,15 +296,21 @@ impl Bench {
             let measured = run_index >= args.priming_runs;
             let metrics = match scenario {
                 Scenario::All => unreachable!("all is expanded before execution"),
-                Scenario::LargePaste => self.run_large_paste(scenario, &corpus, run_index)?,
+                Scenario::LargePaste => {
+                    self.run_large_paste(scenario, &corpus, run_index, args.keep_temp_on_failure)?
+                }
                 Scenario::TypingMedium | Scenario::TypingLarge => {
-                    self.run_typing(scenario, &corpus, run_index)?
+                    self.run_typing(scenario, &corpus, run_index, args.keep_temp_on_failure)?
                 }
                 Scenario::ScrollHighlighted | Scenario::ScrollPlain => {
-                    self.run_scroll(scenario, &corpus, run_index)?
+                    self.run_scroll(scenario, &corpus, run_index, args.keep_temp_on_failure)?
                 }
-                Scenario::OpenLarge => self.run_open_large(scenario, &corpus, run_index)?,
-                Scenario::SearchLarge => self.run_search(scenario, &corpus, run_index)?,
+                Scenario::OpenLarge => {
+                    self.run_open_large(scenario, &corpus, run_index, args.keep_temp_on_failure)?
+                }
+                Scenario::SearchLarge => {
+                    self.run_search(scenario, &corpus, run_index, args.keep_temp_on_failure)?
+                }
             };
 
             if let Some((width, height)) = expected_window {
@@ -339,6 +351,7 @@ impl Bench {
         scenario: Scenario,
         corpus: &Corpus,
         run_index: usize,
+        keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let source_path = temp_path(scenario, run_index, "source", "rs");
         let target_path = temp_path(scenario, run_index, "target", "rs");
@@ -493,7 +506,10 @@ impl Bench {
         })();
 
         let terminate_result = terminate_child(&mut child);
-        cleanup_paths([source_path, target_path, trace_path]);
+        cleanup_paths_if(
+            [source_path, target_path, trace_path],
+            result.is_ok() || !keep_temp_on_failure,
+        );
         terminate_result?;
         result
     }
@@ -503,13 +519,14 @@ impl Bench {
         scenario: Scenario,
         corpus: &Corpus,
         run_index: usize,
+        keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let file_path = temp_path(scenario, run_index, "file", corpus.extension);
         let trace_path = temp_path(scenario, run_index, "trace", "log");
         fs::write(&file_path, &corpus.text)?;
 
         let payload = typing_payload(TYPING_CHARS);
-        let expected_text = format!("{}{}", corpus.text, payload);
+        let expected_text = format!("{payload}{}", corpus.text);
         let title = bench_title(scenario, run_index);
         let files = [file_path.as_path()];
         let mut child = self.spawn_editor(&files, &title, Some(&trace_path))?;
@@ -542,21 +559,7 @@ impl Bench {
             )?;
             let startup_ms = elapsed_ms(startup_started);
 
-            focus_window(&self.conn, self.root, &window)?;
-            inject_ctrl_chord(
-                &self.conn,
-                self.root,
-                self.keycodes.control_l,
-                self.keycodes.end,
-            )?;
-            let _ = wait_for_damage_quiet(
-                &self.conn,
-                damage.damage(),
-                window.id,
-                &mut child,
-                Duration::from_millis(QUIET_MS),
-                Duration::from_millis(TRACE_TIMEOUT_MS),
-            )?;
+            focus_window_for_keyboard(&self.conn, &window)?;
 
             let before = proc_sample(pid)?;
             let trace_started = Instant::now();
@@ -616,7 +619,10 @@ impl Bench {
         })();
 
         let terminate_result = terminate_child(&mut child);
-        cleanup_paths([file_path, trace_path]);
+        cleanup_paths_if(
+            [file_path, trace_path],
+            result.is_ok() || !keep_temp_on_failure,
+        );
         terminate_result?;
         result
     }
@@ -626,6 +632,7 @@ impl Bench {
         scenario: Scenario,
         corpus: &Corpus,
         run_index: usize,
+        keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let file_path = temp_path(scenario, run_index, "file", corpus.extension);
         fs::write(&file_path, &corpus.text)?;
@@ -722,7 +729,7 @@ impl Bench {
         })();
 
         let terminate_result = terminate_child(&mut child);
-        cleanup_paths([file_path]);
+        cleanup_paths_if([file_path], result.is_ok() || !keep_temp_on_failure);
         terminate_result?;
         result
     }
@@ -732,6 +739,7 @@ impl Bench {
         scenario: Scenario,
         corpus: &Corpus,
         run_index: usize,
+        keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let file_path = temp_path(scenario, run_index, "file", corpus.extension);
         fs::write(&file_path, &corpus.text)?;
@@ -780,7 +788,7 @@ impl Bench {
         })();
 
         let terminate_result = terminate_child(&mut child);
-        cleanup_paths([file_path]);
+        cleanup_paths_if([file_path], result.is_ok() || !keep_temp_on_failure);
         terminate_result?;
         result
     }
@@ -790,6 +798,7 @@ impl Bench {
         scenario: Scenario,
         corpus: &Corpus,
         run_index: usize,
+        keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let file_path = temp_path(scenario, run_index, "file", corpus.extension);
         let trace_path = temp_path(scenario, run_index, "trace", "log");
@@ -844,6 +853,12 @@ impl Bench {
                 Duration::from_millis(QUIET_MS),
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
+            wait_for_trace_label(
+                &trace_path,
+                "focus_applied",
+                "find_query",
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
             let search_input_started = Instant::now();
             inject_text(&self.conn, self.root, &self.keycodes, SEARCH_QUERY)?;
             let damage_events = wait_for_damage_quiet(
@@ -883,7 +898,10 @@ impl Bench {
         })();
 
         let terminate_result = terminate_child(&mut child);
-        cleanup_paths([file_path, trace_path]);
+        cleanup_paths_if(
+            [file_path, trace_path],
+            result.is_ok() || !keep_temp_on_failure,
+        );
         terminate_result?;
         result
     }
@@ -1181,6 +1199,7 @@ fn add_trace_aggregate(
 #[derive(Default, Debug)]
 struct EditorTrace {
     last_values: HashMap<String, f64>,
+    last_labels: HashMap<String, String>,
     sum_values: HashMap<String, f64>,
     max_values: HashMap<String, f64>,
     counts: HashMap<String, usize>,
@@ -1194,6 +1213,9 @@ impl EditorTrace {
                 continue;
             };
             let Ok(value) = value.parse::<f64>() else {
+                trace
+                    .last_labels
+                    .insert(label.to_string(), value.to_string());
                 continue;
             };
             trace.last_values.insert(label.to_string(), value);
@@ -1210,6 +1232,10 @@ impl EditorTrace {
 
     fn last(&self, label: &str) -> Option<f64> {
         self.last_values.get(label).copied()
+    }
+
+    fn last_label(&self, label: &str) -> Option<&str> {
+        self.last_labels.get(label).map(String::as_str)
     }
 
     fn sum(&self, label: &str) -> Option<f64> {
@@ -1232,6 +1258,29 @@ fn read_editor_trace(path: &Path) -> Result<EditorTrace, Box<dyn Error>> {
         Err(error) => return Err(error.into()),
     };
     Ok(EditorTrace::parse(&contents))
+}
+
+fn wait_for_trace_label(
+    path: &Path,
+    label: &str,
+    expected: &str,
+    timeout: Duration,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        let trace = read_editor_trace(path)?;
+        if trace.last_label(label) == Some(expected) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(format!(
+                "timed out waiting for trace {label}={expected}"
+            ))
+            .into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn find_window(
@@ -1274,10 +1323,22 @@ fn find_window_recursive(
     title: &str,
 ) -> Result<Option<WindowInfo>, Box<dyn Error>> {
     if window_matches(conn, window, atoms, pid, title)? {
-        let attrs = conn.get_window_attributes(window)?.reply()?;
+        let attrs = match conn.get_window_attributes(window)?.reply() {
+            Ok(attrs) => attrs,
+            Err(error) if is_stale_window_error(&error) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
         if attrs.map_state == MapState::VIEWABLE {
-            let geometry = conn.get_geometry(window)?.reply()?;
-            let translated = conn.translate_coordinates(window, root, 0, 0)?.reply()?;
+            let geometry = match conn.get_geometry(window)?.reply() {
+                Ok(geometry) => geometry,
+                Err(error) if is_stale_window_error(&error) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            let translated = match conn.translate_coordinates(window, root, 0, 0)?.reply() {
+                Ok(translated) => translated,
+                Err(error) if is_stale_window_error(&error) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
             return Ok(Some(WindowInfo {
                 id: window,
                 root_x: translated.dst_x,
@@ -1288,7 +1349,12 @@ fn find_window_recursive(
         }
     }
 
-    for child in conn.query_tree(window)?.reply()?.children {
+    let tree = match conn.query_tree(window)?.reply() {
+        Ok(tree) => tree,
+        Err(error) if is_stale_window_error(&error) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    for child in tree.children {
         if let Some(info) = find_window_recursive(conn, root, child, atoms, pid, title)? {
             return Ok(Some(info));
         }
@@ -1319,9 +1385,14 @@ fn window_pid(
     window: xproto::Window,
     atoms: &Atoms,
 ) -> Result<Option<u32>, Box<dyn Error>> {
-    let reply = conn
+    let reply = match conn
         .get_property(false, window, atoms.net_wm_pid, AtomEnum::CARDINAL, 0, 1)?
-        .reply()?;
+        .reply()
+    {
+        Ok(reply) => reply,
+        Err(error) if is_stale_window_error(&error) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     Ok(reply.value32().and_then(|mut values| values.next()))
 }
 
@@ -1330,21 +1401,38 @@ fn window_title(
     window: xproto::Window,
     atoms: &Atoms,
 ) -> Result<Option<String>, Box<dyn Error>> {
-    let utf8 = conn
+    let utf8 = match conn
         .get_property(false, window, atoms.net_wm_name, atoms.utf8_string, 0, 1024)?
-        .reply()?;
+        .reply()
+    {
+        Ok(reply) => reply,
+        Err(error) if is_stale_window_error(&error) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     if !utf8.value.is_empty() {
         return Ok(Some(String::from_utf8_lossy(&utf8.value).into_owned()));
     }
 
-    let legacy = conn
+    let legacy = match conn
         .get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 1024)?
-        .reply()?;
+        .reply()
+    {
+        Ok(reply) => reply,
+        Err(error) if is_stale_window_error(&error) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     if legacy.value.is_empty() {
         return Ok(None);
     }
 
     Ok(Some(String::from_utf8_lossy(&legacy.value).into_owned()))
+}
+
+fn is_stale_window_error(error: &ReplyError) -> bool {
+    matches!(
+        error,
+        ReplyError::X11Error(error) if error.error_kind == ErrorKind::Window
+    )
 }
 
 fn focus_window(
@@ -1355,6 +1443,16 @@ fn focus_window(
     move_pointer_to_window_center(conn, root, window)?;
     thread::sleep(Duration::from_millis(POINTER_SETTLE_MS));
     inject_button_click(conn, root, BUTTON_LEFT)
+}
+
+fn focus_window_for_keyboard(
+    conn: &RustConnection,
+    window: &WindowInfo,
+) -> Result<(), Box<dyn Error>> {
+    conn.set_input_focus(xproto::InputFocus::PARENT, window.id, x11rb::CURRENT_TIME)?;
+    conn.flush()?;
+    thread::sleep(Duration::from_millis(POINTER_SETTLE_MS));
+    Ok(())
 }
 
 fn move_pointer_to_window_center(
@@ -1823,7 +1921,11 @@ fn bench_title(scenario: Scenario, run_index: usize) -> String {
     )
 }
 
-fn cleanup_paths(paths: impl IntoIterator<Item = PathBuf>) {
+fn cleanup_paths_if(paths: impl IntoIterator<Item = PathBuf>, should_cleanup: bool) {
+    if !should_cleanup {
+        return;
+    }
+
     for path in paths {
         match fs::remove_file(&path) {
             Ok(()) => {}
@@ -1890,7 +1992,6 @@ struct Keycodes {
     control_l: xproto::Keycode,
     a: xproto::Keycode,
     c: xproto::Keycode,
-    end: xproto::Keycode,
     f: xproto::Keycode,
     s: xproto::Keycode,
     tab: xproto::Keycode,
@@ -1920,7 +2021,6 @@ impl Keycodes {
             control_l: find_keycode(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
             a: *lower.get(&'a').expect("resolved lowercase a"),
             c: *lower.get(&'c').expect("resolved lowercase c"),
-            end: find_keycode(&reply, setup.min_keycode, KEYSYM_END, active_group)?,
             f: *lower.get(&'f').expect("resolved lowercase f"),
             s: *lower.get(&'s').expect("resolved lowercase s"),
             tab: find_keycode(&reply, setup.min_keycode, KEYSYM_TAB, active_group)?,

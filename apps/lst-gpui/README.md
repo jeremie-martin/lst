@@ -3,6 +3,7 @@
 This crate is the GPUI rewrite track for `lst`.
 
 It is intentionally parallel to the shipping `iced` app for now. The current implementation extracts the reusable document/search/line-edit logic into `crates/lst-core`, keeps the custom-painted editor surface in this crate, and moves the shell layer into `crates/lst-ui` for tabs and inline command inputs.
+The headless editor behavior contract is starting in `crates/lst-editor`; GPUI should keep moving product behavior there and remain focused on rendering and framework boundary work.
 
 ## Run
 

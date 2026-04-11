@@ -6,7 +6,7 @@ description = "Lucy's Simple Text editor — a fast, minimal editor for Linux"
 license = "GPL-3.0-or-later"
 
 [workspace]
-members = ["apps/lst-gpui", "crates/lst-core", "crates/lst-ui"]
+members = ["apps/lst-gpui", "crates/lst-core", "crates/lst-editor", "crates/lst-ui"]
 resolver = "2"
 
 [features]

@@ -3746,6 +3746,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lst-editor"
+version = "0.1.0"
+dependencies = [
+ "lst-core",
+]
+
+[[package]]
 name = "lst-gpui"
 version = "0.1.0"
 dependencies = [
@@ -3753,6 +3760,7 @@ dependencies = [
  "iced_core",
  "libc",
  "lst-core",
+ "lst-editor",
  "lst-ui",
  "rfd",
  "ropey",

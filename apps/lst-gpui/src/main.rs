@@ -48,6 +48,10 @@ use lst_core::{
     position::Position,
     wrap::{cursor_visual_row_in_line, wrap_segments},
 };
+use lst_editor::{
+    next_active_after_tab_close, should_refocus_editor_after_tab_close, FocusTarget,
+    UNTITLED_PREFIX,
+};
 use lst_ui::{input_keybindings, InputField, InputFieldEvent};
 use rfd::FileDialog;
 use ropey::Rope;
@@ -83,7 +87,6 @@ const EDITOR_RIGHT_PAD: f32 = 28.0;
 const GUTTER_LEFT_PAD: f32 = 12.0;
 const GUTTER_SEPARATOR_WIDTH: f32 = 14.0;
 const WRAP_CHAR_WIDTH_FALLBACK: f32 = 7.8;
-const UNTITLED_PREFIX: &str = "untitled";
 const CORPUS_PATH: &str = "benchmarks/paste-corpus-20k.rs";
 const PREMADE_CORPUS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -152,14 +155,6 @@ actions!(
         Quit,
     ]
 );
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PendingFocus {
-    Editor,
-    FindQuery,
-    FindReplace,
-    GotoLine,
-}
 
 #[derive(Clone, Debug)]
 struct OperationStats {
@@ -318,7 +313,7 @@ struct LstGpuiApp {
     find_query_input: Entity<InputField>,
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
-    pending_focus: Option<PendingFocus>,
+    pending_focus: Option<FocusTarget>,
     status: String,
     last_operation: OperationStats,
     vim: vim::VimState,
@@ -418,7 +413,8 @@ impl LstGpuiApp {
         app
     }
 
-    fn queue_focus(&mut self, target: PendingFocus) {
+    fn queue_focus(&mut self, target: FocusTarget) {
+        bench_trace::record_label("focus_queued", focus_trace_label(target));
         self.pending_focus = Some(target);
     }
 
@@ -428,28 +424,29 @@ impl LstGpuiApp {
         };
 
         match target {
-            PendingFocus::Editor => window.focus(&self.focus_handle),
-            PendingFocus::FindQuery => {
+            FocusTarget::Editor => window.focus(&self.focus_handle),
+            FocusTarget::FindQuery => {
                 let handle = self.find_query_input.read(cx).focus_handle();
                 window.focus(&handle);
             }
-            PendingFocus::FindReplace => {
+            FocusTarget::FindReplace => {
                 if self.find.show_replace {
                     let handle = self.find_replace_input.read(cx).focus_handle();
                     window.focus(&handle);
                 } else {
-                    self.pending_focus = Some(PendingFocus::FindQuery);
+                    self.pending_focus = Some(FocusTarget::FindQuery);
                 }
             }
-            PendingFocus::GotoLine => {
+            FocusTarget::GotoLine => {
                 if self.goto_line.is_some() {
                     let handle = self.goto_line_input.read(cx).focus_handle();
                     window.focus(&handle);
                 } else {
-                    self.pending_focus = Some(PendingFocus::Editor);
+                    self.pending_focus = Some(FocusTarget::Editor);
                 }
             }
         }
+        bench_trace::record_label("focus_applied", focus_trace_label(target));
     }
 
     fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
@@ -469,12 +466,12 @@ impl LstGpuiApp {
             }
             InputFieldEvent::Cancelled => {
                 self.close_find();
-                self.queue_focus(PendingFocus::Editor);
+                self.queue_focus(FocusTarget::Editor);
                 cx.notify();
             }
             InputFieldEvent::NextRequested => {
                 if self.find.show_replace {
-                    self.queue_focus(PendingFocus::FindReplace);
+                    self.queue_focus(FocusTarget::FindReplace);
                     cx.notify();
                 }
             }
@@ -496,12 +493,12 @@ impl LstGpuiApp {
             }
             InputFieldEvent::Cancelled => {
                 self.close_find();
-                self.queue_focus(PendingFocus::Editor);
+                self.queue_focus(FocusTarget::Editor);
                 cx.notify();
             }
             InputFieldEvent::NextRequested => {}
             InputFieldEvent::PreviousRequested => {
-                self.queue_focus(PendingFocus::FindQuery);
+                self.queue_focus(FocusTarget::FindQuery);
                 cx.notify();
             }
         }
@@ -515,7 +512,7 @@ impl LstGpuiApp {
             }
             InputFieldEvent::Submitted => {
                 let changed = self.submit_goto_line();
-                self.queue_focus(PendingFocus::Editor);
+                self.queue_focus(FocusTarget::Editor);
                 if changed {
                     self.reveal_active_cursor();
                 }
@@ -523,7 +520,7 @@ impl LstGpuiApp {
             }
             InputFieldEvent::Cancelled => {
                 self.close_goto_line();
-                self.queue_focus(PendingFocus::Editor);
+                self.queue_focus(FocusTarget::Editor);
                 cx.notify();
             }
             InputFieldEvent::NextRequested | InputFieldEvent::PreviousRequested => {}
@@ -854,7 +851,7 @@ impl LstGpuiApp {
             .update(cx, |input, cx| input.set_text(&query, cx));
         self.find_replace_input
             .update(cx, |input, cx| input.set_text(&replacement, cx));
-        self.queue_focus(PendingFocus::FindQuery);
+        self.queue_focus(FocusTarget::FindQuery);
         self.reindex_find_matches_to_nearest();
     }
 
@@ -866,7 +863,7 @@ impl LstGpuiApp {
         self.goto_line = Some(String::new());
         self.goto_line_input
             .update(cx, |input, cx| input.set_text("", cx));
-        self.queue_focus(PendingFocus::GotoLine);
+        self.queue_focus(FocusTarget::GotoLine);
     }
 
     fn close_goto_line(&mut self) {
@@ -1215,6 +1212,8 @@ impl LstGpuiApp {
         } else {
             tab.move_to(target);
         }
+        bench_trace::record_usize("active_cursor_char", self.active_tab().cursor_char());
+        bench_trace::record_usize("active_len_chars", self.active_tab().len_chars());
         self.reveal_active_cursor();
         cx.notify();
     }
@@ -1242,6 +1241,8 @@ impl LstGpuiApp {
         } else {
             tab.move_to(target);
         }
+        bench_trace::record_usize("active_cursor_char", self.active_tab().cursor_char());
+        bench_trace::record_usize("active_len_chars", self.active_tab().len_chars());
         self.reveal_active_cursor();
         cx.notify();
     }
@@ -1555,7 +1556,7 @@ impl LstGpuiApp {
         }
 
         if closed_active_tab {
-            self.queue_focus(PendingFocus::Editor);
+            self.queue_focus(FocusTarget::Editor);
         }
         self.status = "Closed tab.".to_string();
         self.reveal_active_cursor();
@@ -2001,7 +2002,7 @@ impl LstGpuiApp {
     fn handle_find_open(&mut self, _: &FindOpen, _: &mut Window, cx: &mut Context<Self>) {
         if self.find.visible && !self.find.show_replace {
             self.close_find();
-            self.queue_focus(PendingFocus::Editor);
+            self.queue_focus(FocusTarget::Editor);
         } else {
             self.open_find(false, cx);
         }
@@ -2016,7 +2017,7 @@ impl LstGpuiApp {
     ) {
         if self.find.visible && self.find.show_replace {
             self.close_find();
-            self.queue_focus(PendingFocus::Editor);
+            self.queue_focus(FocusTarget::Editor);
         } else {
             self.open_find(true, cx);
         }
@@ -2055,7 +2056,7 @@ impl LstGpuiApp {
     fn handle_goto_line_open(&mut self, _: &GotoLineOpen, _: &mut Window, cx: &mut Context<Self>) {
         if self.goto_line.is_some() {
             self.close_goto_line();
-            self.queue_focus(PendingFocus::Editor);
+            self.queue_focus(FocusTarget::Editor);
         } else {
             self.open_goto_line(cx);
         }
@@ -2794,27 +2795,6 @@ fn syntax_highlight_result_is_current(
     })
 }
 
-fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: usize) -> bool {
-    active_index == closed_index
-}
-
-fn next_active_after_tab_close(
-    tab_count: usize,
-    active_index: usize,
-    closed_index: usize,
-) -> usize {
-    if tab_count <= 1 {
-        return 0;
-    }
-
-    let last_after_close = tab_count.saturating_sub(2);
-    if closed_index < active_index {
-        active_index.saturating_sub(1).min(last_after_close)
-    } else {
-        active_index.min(last_after_close)
-    }
-}
-
 fn delete_selection_or_word_range(tab: &Tab, backward: bool) -> Option<Range<usize>> {
     if tab.has_selection() {
         return Some(tab.selected_range());
@@ -3011,6 +2991,15 @@ fn remove_text_range(
 
 fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
+}
+
+fn focus_trace_label(target: FocusTarget) -> &'static str {
+    match target {
+        FocusTarget::Editor => "editor",
+        FocusTarget::FindQuery => "find_query",
+        FocusTarget::FindReplace => "find_replace",
+        FocusTarget::GotoLine => "goto_line",
+    }
 }
 
 fn main() {

@@ -58,7 +58,7 @@ size where relevant.
 | Scenario | Primary metric | Completion condition |
 | --- | --- | --- |
 | `large-paste` | `paste_complete_ms` | Copies the large Rust corpus, pastes into a second file tab, then retries `Ctrl+S` until the target file exactly matches the corpus and stays stable. |
-| `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload at the end of `benchmarks/editing-corpus.rs`, waits for redraw quiet, then verifies the saved file exactly matches the expected text. |
+| `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload into `benchmarks/editing-corpus.rs`, waits for redraw quiet, then verifies the saved file exactly matches the expected text. |
 | `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using `benchmarks/paste-corpus-20k.rs`. |
 | `scroll-highlighted` | `scroll_overrun_ms` | Scrolls down and back through the large Rust file on a fixed input schedule, then waits for redraw quiet. |
 | `scroll-plain` | `scroll_overrun_ms` | Same scroll trace using the large corpus as `.txt`, so syntax highlighting is out of the path. |
@@ -73,10 +73,24 @@ The GPUI app writes internal benchmark trace values only when
 `LST_BENCH_TRACE_FILE` is set by the runner. Normal editor runs do not create
 trace files.
 
-Current status as of 2026-04-11: the GPUI runner builds and its pure contract
-tests pass in this shell. Representative editor-interaction numbers still need
-to be collected from a real X11 desktop session because the current non-display
-shell cannot safely drive GPUI windows with XTEST.
+Current baseline collected on 2026-04-11 on `DISPLAY=:1`:
+
+| Scenario | Primary metric | Median |
+| --- | --- | ---: |
+| `large-paste` | `paste_complete_ms` | `226.909 ms` |
+| `typing-medium` smoke | `typing_ms_per_char` | `0.276 ms` |
+| `scroll-highlighted` | `scroll_overrun_ms` | `1087.519 ms` |
+| `scroll-plain` | `scroll_overrun_ms` | `1085.850 ms` |
+| `open-large` | `open_to_quiet_ms` | `1153.185 ms` |
+| syntax highlight rust | `median_ms` | `176.425 ms` |
+
+Known benchmark gaps:
+
+- `search-large` is currently invalid: the runner opens find and focus is
+  requested, but injected text still reaches the editor instead of the find
+  input.
+- `typing-large` still needs a full default run after the input-positioning
+  fix; `typing-medium` currently has a one-repetition smoke result.
 
 ## Recommended next benchmark
 

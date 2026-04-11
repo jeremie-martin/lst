@@ -13,6 +13,10 @@ pub(crate) fn record_usize(label: &str, value: usize) {
     record_line(label, format_args!("{value}"));
 }
 
+pub(crate) fn record_label(label: &str, value: &str) {
+    record_line(label, format_args!("{value}"));
+}
+
 pub(crate) fn record_operation(
     label: &str,
     bytes: usize,

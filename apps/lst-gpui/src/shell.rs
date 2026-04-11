@@ -3,6 +3,7 @@ use gpui::{
     InteractiveElement, KeyDownEvent, MouseButton, MouseUpEvent, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window,
 };
+use lst_editor::FocusTarget;
 use lst_ui::{
     IconButton, IconKind, Tab as UiTab, TabBar, COLOR_BG, COLOR_BORDER, COLOR_MUTED, COLOR_PEACH,
     COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_TEXT, INPUT_TEXT_SIZE, SHELL_EDGE_PAD,
@@ -12,8 +13,8 @@ use lst_ui::{
 use crate::syntax::syntax_mode_for_path;
 use crate::viewport::{buffer_content_height, paint_viewport, prepare_viewport_paint_state};
 use crate::{
-    code_char_width, ensure_wrap_layout, LstGpuiApp, NewTab, PendingFocus, CODE_FONT_SIZE,
-    ROW_HEIGHT, WINDOW_WIDTH,
+    code_char_width, ensure_wrap_layout, LstGpuiApp, NewTab, CODE_FONT_SIZE, ROW_HEIGHT,
+    WINDOW_WIDTH,
 };
 
 impl LstGpuiApp {
@@ -197,14 +198,14 @@ impl LstGpuiApp {
         if event.keystroke.key == "escape" {
             if self.goto_line.is_some() {
                 self.close_goto_line();
-                self.queue_focus(PendingFocus::Editor);
+                self.queue_focus(FocusTarget::Editor);
                 cx.stop_propagation();
                 cx.notify();
                 return;
             }
             if self.find.visible {
                 self.close_find();
-                self.queue_focus(PendingFocus::Editor);
+                self.queue_focus(FocusTarget::Editor);
                 cx.stop_propagation();
                 cx.notify();
                 return;
@@ -217,7 +218,6 @@ impl LstGpuiApp {
 
 impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.apply_pending_focus(window, cx);
         self.ensure_active_syntax_highlights(cx);
 
         let active = self.active;
@@ -257,7 +257,7 @@ impl Render for LstGpuiApp {
         let entity = cx.entity();
         let vim_mode = self.vim.mode;
 
-        div()
+        let root = div()
             .flex()
             .flex_col()
             .key_context("Workspace")
@@ -434,6 +434,8 @@ impl Render for LstGpuiApp {
                             ),
                     )
                     .child(self.render_status_bar()),
-            )
+            );
+        self.apply_pending_focus(window, cx);
+        root
     }
 }
