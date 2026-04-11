@@ -8,13 +8,13 @@ use gpui::{
     InteractiveElement, KeyDownEvent, MouseButton, MouseUpEvent, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window,
 };
-use lst_editor::EditorCommand;
 
 use crate::actions::attach_workspace_actions;
 use crate::syntax::syntax_mode_for_path;
 use crate::viewport::{buffer_content_height, paint_viewport, prepare_viewport_paint_state};
 use crate::{
-    code_char_width, ensure_wrap_layout, LstGpuiApp, CODE_FONT_SIZE, ROW_HEIGHT, WINDOW_WIDTH,
+    code_char_width, ensure_wrap_layout, LstGpuiApp, ModelInputSync, CODE_FONT_SIZE, ROW_HEIGHT,
+    WINDOW_WIDTH,
 };
 
 impl LstGpuiApp {
@@ -49,7 +49,9 @@ impl LstGpuiApp {
                 cx.notify();
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.apply_model_command(EditorCommand::SetActiveTab(ix), cx);
+                this.update_model(cx, ModelInputSync::None, true, |model| {
+                    model.set_active_tab(ix);
+                });
                 window.focus(&this.focus_handle);
                 cx.notify();
             }))
@@ -82,7 +84,9 @@ impl LstGpuiApp {
                 .child(
                     IconButton::new("new-tab-button", IconKind::Plus).on_click(cx.listener(
                         |this, _, _window, cx| {
-                            this.apply_model_command(EditorCommand::NewTab, cx);
+                            this.update_model(cx, ModelInputSync::None, true, |model| {
+                                model.new_tab();
+                            });
                             cx.stop_propagation();
                         },
                     )),
@@ -196,12 +200,16 @@ impl LstGpuiApp {
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
             if self.model.goto_line().is_some() {
-                self.apply_model_command(EditorCommand::CloseGotoLine, cx);
+                self.update_model(cx, ModelInputSync::None, true, |model| {
+                    model.close_goto_line_panel();
+                });
                 cx.stop_propagation();
                 return;
             }
             if self.model.find().visible {
-                self.apply_model_command(EditorCommand::CloseFind, cx);
+                self.update_model(cx, ModelInputSync::None, true, |model| {
+                    model.close_find_panel();
+                });
                 cx.stop_propagation();
                 return;
             }

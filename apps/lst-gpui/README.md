@@ -2,8 +2,8 @@
 
 This crate is the active desktop editor for `lst`.
 
-The current implementation extracts reusable document/search/line-edit logic into `crates/lst-core`, keeps framework-neutral editor behavior in `crates/lst-editor`, and keeps GPUI rendering, shell widgets, and desktop integration in this crate.
-The headless editor behavior contract is starting in `crates/lst-editor`; GPUI should keep moving product behavior there and remain focused on rendering and framework boundary work.
+The current implementation keeps reusable document/search/line-edit logic and framework-neutral editor behavior in `crates/lst-editor`, while GPUI rendering, shell widgets, and desktop integration stay in this crate.
+GPUI should keep moving product behavior into `lst-editor` and remain focused on rendering and framework boundary work.
 
 ## Run
 

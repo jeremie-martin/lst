@@ -24,20 +24,19 @@ Success criteria:
 
 The active split is:
 
-- `lst-core`: pure document, selection, find, wrap, and low-level edit logic
-- `lst-editor`: framework-neutral editor model, commands, effects, and Vim state
+- `lst-editor`: framework-neutral editor model, document primitives, effects, and Vim state
 - `lst-gpui`: GPUI rendering, widgets, input adaptation, runtime effects, and desktop integration
 
 Focus areas:
 
-- keep model mutation behind `EditorModel::apply`
+- keep model mutation behind direct `EditorModel` APIs
 - keep clipboard, files, dialogs, focus, and rendering at the GPUI boundary
 - split large files only by real behavior responsibility
 - avoid new traits or packages unless they remove production complexity
 
 Success criteria:
 
-- tests exercise real production paths through commands and snapshots
+- tests exercise real production paths through model APIs, effects, and snapshots
 - modules map to behavior boundaries
 - app code cannot mutate editor state through hidden side doors
 

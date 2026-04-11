@@ -1,10 +1,9 @@
 use gpui::{Context, Div, InteractiveElement, Window};
-use lst_editor::EditorCommand;
 
 use crate::{
     Backspace, CloseActiveTab, CopySelection, CutSelection, DeleteForward, DeleteLine,
     DeleteWordBackward, DeleteWordForward, DuplicateLine, FindNext, FindOpen, FindOpenReplace,
-    FindPrev, GotoLineOpen, InsertNewline, InsertTab, LstGpuiApp, MoveDocumentEnd,
+    FindPrev, GotoLineOpen, InsertNewline, InsertTab, LstGpuiApp, ModelInputSync, MoveDocumentEnd,
     MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd, MoveLineStart, MoveLineUp,
     MovePageDown, MovePageUp, MoveRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab, NextTab,
     OpenFile, PasteClipboard, PrevTab, Quit, Redo, ReplaceAll, ReplaceOne, SaveFile, SaveFileAs,
@@ -15,11 +14,11 @@ use crate::{
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
     macro_rules! bind_commands {
-        ($root:ident, $($action:ty => $command:expr;)*) => {
+        ($root:ident, $($action:ty => $sync:expr, $update:expr;)*) => {
             $(
                 let $root = $root.on_action(cx.listener(
                     |this, _: &$action, _: &mut Window, cx| {
-                        this.apply_model_command($command, cx);
+                        this.update_model(cx, $sync, true, $update);
                     },
                 ));
             )*
@@ -28,54 +27,54 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
 
     bind_commands! {
         root,
-        NewTab => EditorCommand::NewTab;
-        OpenFile => EditorCommand::RequestOpenFiles;
-        SaveFile => EditorCommand::RequestSave;
-        SaveFileAs => EditorCommand::RequestSaveAs;
-        CloseActiveTab => EditorCommand::CloseActiveTab;
-        NextTab => EditorCommand::NextTab;
-        PrevTab => EditorCommand::PrevTab;
-        ToggleWrap => EditorCommand::ToggleWrap;
-        CopySelection => EditorCommand::CopySelection;
-        CutSelection => EditorCommand::CutSelection;
-        PasteClipboard => EditorCommand::RequestPaste;
-        MoveLeft => EditorCommand::MoveHorizontalCollapse { backward: true };
-        MoveRight => EditorCommand::MoveHorizontalCollapse { backward: false };
-        MoveWordLeft => EditorCommand::MoveWord { backward: true, select: false };
-        MoveWordRight => EditorCommand::MoveWord { backward: false, select: false };
-        MoveDocumentStart => EditorCommand::MoveDocumentBoundary { to_end: false, select: false };
-        MoveDocumentEnd => EditorCommand::MoveDocumentBoundary { to_end: true, select: false };
-        SelectLeft => EditorCommand::MoveHorizontal { delta: -1, select: true };
-        SelectRight => EditorCommand::MoveHorizontal { delta: 1, select: true };
-        SelectWordLeft => EditorCommand::MoveWord { backward: true, select: true };
-        SelectWordRight => EditorCommand::MoveWord { backward: false, select: true };
-        SelectDocumentStart => EditorCommand::MoveDocumentBoundary { to_end: false, select: true };
-        SelectDocumentEnd => EditorCommand::MoveDocumentBoundary { to_end: true, select: true };
-        MoveLineStart => EditorCommand::MoveLineBoundary { to_end: false, select: false };
-        MoveLineEnd => EditorCommand::MoveLineBoundary { to_end: true, select: false };
-        SelectLineStart => EditorCommand::MoveLineBoundary { to_end: false, select: true };
-        SelectLineEnd => EditorCommand::MoveLineBoundary { to_end: true, select: true };
-        Backspace => EditorCommand::Backspace;
-        DeleteForward => EditorCommand::DeleteForward;
-        DeleteWordBackward => EditorCommand::DeleteWord { backward: true };
-        DeleteWordForward => EditorCommand::DeleteWord { backward: false };
-        InsertNewline => EditorCommand::InsertNewline;
-        InsertTab => EditorCommand::InsertTab;
-        SelectAll => EditorCommand::SelectAll;
-        Undo => EditorCommand::Undo;
-        Redo => EditorCommand::Redo;
-        FindOpen => EditorCommand::ToggleFind { show_replace: false };
-        FindOpenReplace => EditorCommand::ToggleFind { show_replace: true };
-        FindNext => EditorCommand::FindNext;
-        FindPrev => EditorCommand::FindPrev;
-        ReplaceOne => EditorCommand::ReplaceOne;
-        ReplaceAll => EditorCommand::ReplaceAll;
-        GotoLineOpen => EditorCommand::ToggleGotoLine;
-        DeleteLine => EditorCommand::DeleteLine;
-        MoveLineUp => EditorCommand::MoveLineUp;
-        MoveLineDown => EditorCommand::MoveLineDown;
-        DuplicateLine => EditorCommand::DuplicateLine;
-        ToggleComment => EditorCommand::ToggleComment;
+        NewTab => ModelInputSync::None, |model| model.new_tab();
+        OpenFile => ModelInputSync::None, |model| model.request_open_files();
+        SaveFile => ModelInputSync::None, |model| model.request_save();
+        SaveFileAs => ModelInputSync::None, |model| model.request_save_as();
+        CloseActiveTab => ModelInputSync::None, |model| model.close_active_tab();
+        NextTab => ModelInputSync::None, |model| model.next_tab();
+        PrevTab => ModelInputSync::None, |model| model.prev_tab();
+        ToggleWrap => ModelInputSync::None, |model| model.toggle_wrap();
+        CopySelection => ModelInputSync::None, |model| model.copy_selection();
+        CutSelection => ModelInputSync::None, |model| model.cut_selection();
+        PasteClipboard => ModelInputSync::None, |model| model.request_paste();
+        MoveLeft => ModelInputSync::None, |model| model.move_horizontal_collapsed(true);
+        MoveRight => ModelInputSync::None, |model| model.move_horizontal_collapsed(false);
+        MoveWordLeft => ModelInputSync::None, |model| model.move_word(true, false);
+        MoveWordRight => ModelInputSync::None, |model| model.move_word(false, false);
+        MoveDocumentStart => ModelInputSync::None, |model| model.move_document_boundary(false, false);
+        MoveDocumentEnd => ModelInputSync::None, |model| model.move_document_boundary(true, false);
+        SelectLeft => ModelInputSync::None, |model| model.move_horizontal_by(-1, true);
+        SelectRight => ModelInputSync::None, |model| model.move_horizontal_by(1, true);
+        SelectWordLeft => ModelInputSync::None, |model| model.move_word(true, true);
+        SelectWordRight => ModelInputSync::None, |model| model.move_word(false, true);
+        SelectDocumentStart => ModelInputSync::None, |model| model.move_document_boundary(false, true);
+        SelectDocumentEnd => ModelInputSync::None, |model| model.move_document_boundary(true, true);
+        MoveLineStart => ModelInputSync::None, |model| model.move_line_boundary(false, false);
+        MoveLineEnd => ModelInputSync::None, |model| model.move_line_boundary(true, false);
+        SelectLineStart => ModelInputSync::None, |model| model.move_line_boundary(false, true);
+        SelectLineEnd => ModelInputSync::None, |model| model.move_line_boundary(true, true);
+        Backspace => ModelInputSync::None, |model| model.backspace();
+        DeleteForward => ModelInputSync::None, |model| model.delete_forward();
+        DeleteWordBackward => ModelInputSync::None, |model| model.delete_word(true);
+        DeleteWordForward => ModelInputSync::None, |model| model.delete_word(false);
+        InsertNewline => ModelInputSync::None, |model| model.insert_newline_at_cursor();
+        InsertTab => ModelInputSync::None, |model| model.insert_tab_at_cursor();
+        SelectAll => ModelInputSync::None, |model| model.select_all();
+        Undo => ModelInputSync::None, |model| model.undo();
+        Redo => ModelInputSync::None, |model| model.redo();
+        FindOpen => ModelInputSync::Find, |model| model.toggle_find_panel(false);
+        FindOpenReplace => ModelInputSync::Find, |model| model.toggle_find_panel(true);
+        FindNext => ModelInputSync::None, |model| model.find_next_match();
+        FindPrev => ModelInputSync::None, |model| model.find_prev_match();
+        ReplaceOne => ModelInputSync::None, |model| model.replace_current_match();
+        ReplaceAll => ModelInputSync::None, |model| model.replace_all_matches_in_document();
+        GotoLineOpen => ModelInputSync::Goto, |model| model.toggle_goto_line_panel();
+        DeleteLine => ModelInputSync::None, |model| model.delete_line();
+        MoveLineUp => ModelInputSync::None, |model| model.move_line_up();
+        MoveLineDown => ModelInputSync::None, |model| model.move_line_down();
+        DuplicateLine => ModelInputSync::None, |model| model.duplicate_line();
+        ToggleComment => ModelInputSync::None, |model| model.toggle_comment();
     }
 
     let root = root.on_action(cx.listener(|this, _: &MoveUp, window, cx| {

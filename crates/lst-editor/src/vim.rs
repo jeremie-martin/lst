@@ -3,7 +3,7 @@
 //! Pure keystroke to command translation. The caller executes commands against
 //! whatever editor surface owns the document state.
 
-use lst_core::position::Position;
+use crate::position::Position;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

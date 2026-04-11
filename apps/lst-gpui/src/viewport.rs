@@ -6,7 +6,7 @@ use gpui::{
     fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString,
     TextRun, Window,
 };
-use lst_core::wrap::{
+use lst_editor::wrap::{
     build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, wrap_columns_with_gutter,
     wrap_segments, WrapLayout, WrappedSegment,
 };

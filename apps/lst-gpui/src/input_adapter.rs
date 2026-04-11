@@ -1,15 +1,12 @@
 use gpui::{
     point, Bounds, Context, EntityInputHandler, KeyDownEvent, Pixels, Point, UTF16Selection, Window,
 };
-use lst_editor::{
-    vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
-    EditorCommand,
-};
+use lst_editor::vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey};
 use ropey::Rope;
 use std::ops::Range;
 
 use crate::viewport::{code_origin_pad, row_contains_cursor, x_for_global_char};
-use crate::{LstGpuiApp, CURSOR_WIDTH, ROW_HEIGHT};
+use crate::{LstGpuiApp, ModelInputSync, CURSOR_WIDTH, ROW_HEIGHT};
 
 impl LstGpuiApp {
     pub(crate) fn maybe_handle_vim_key(
@@ -27,15 +24,10 @@ impl LstGpuiApp {
         });
 
         if event.keystroke.key == "escape" {
-            let old_show_wrap = self.model.show_wrap();
-            let old_find_state = self.find_input_state();
-            self.model.handle_vim_escape();
-            self.sync_tab_views(old_show_wrap);
-            self.sync_find_inputs_if_changed(old_find_state, cx);
-            let effects = self.model.drain_effects();
-            self.handle_model_effects(effects, cx);
+            self.update_model(cx, ModelInputSync::Changed, true, |model| {
+                model.handle_vim_escape();
+            });
             cx.stop_propagation();
-            cx.notify();
             return true;
         }
 
@@ -55,15 +47,10 @@ impl LstGpuiApp {
             return false;
         };
 
-        let old_show_wrap = self.model.show_wrap();
-        let old_find_state = self.find_input_state();
-        self.model.handle_vim_key(key, mods);
-        self.sync_tab_views(old_show_wrap);
-        self.sync_find_inputs_if_changed(old_find_state, cx);
-        let effects = self.model.drain_effects();
-        self.handle_model_effects(effects, cx);
+        self.update_model(cx, ModelInputSync::Changed, true, |model| {
+            model.handle_vim_key(key, mods);
+        });
         cx.stop_propagation();
-        cx.notify();
         true
     }
 }
@@ -106,7 +93,9 @@ impl EntityInputHandler for LstGpuiApp {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_model_command(EditorCommand::ClearMarkedText, cx);
+        self.update_model(cx, ModelInputSync::None, true, |model| {
+            model.clear_marked_text();
+        });
     }
 
     fn replace_text_in_range(
@@ -122,13 +111,9 @@ impl EntityInputHandler for LstGpuiApp {
                 .as_ref()
                 .map(|range| utf16_range_to_char_range(tab.buffer(), range))
         };
-        self.apply_model_command(
-            EditorCommand::ReplaceTextFromInput {
-                range,
-                text: text.to_string(),
-            },
-            cx,
-        );
+        self.update_model(cx, ModelInputSync::None, true, |model| {
+            model.replace_text_from_input(range, text.to_string());
+        });
     }
 
     fn replace_and_mark_text_in_range(
@@ -148,14 +133,9 @@ impl EntityInputHandler for LstGpuiApp {
         let selected_range = new_selected_range_utf16
             .as_ref()
             .map(|range| utf16_range_to_char_range_in_text(new_text, range));
-        self.apply_model_command(
-            EditorCommand::ReplaceAndMarkText {
-                range,
-                text: new_text.to_string(),
-                selected_range,
-            },
-            cx,
-        );
+        self.update_model(cx, ModelInputSync::None, true, |model| {
+            model.replace_and_mark_text(range, new_text.to_string(), selected_range);
+        });
     }
 
     fn bounds_for_range(

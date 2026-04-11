@@ -1,5 +1,5 @@
 use gpui::{ClipboardItem, Context, Window};
-use lst_editor::{EditorCommand, EditorEffect, EditorTab as ModelEditorTab};
+use lst_editor::{EditorEffect, EditorTab as ModelEditorTab};
 use rfd::FileDialog;
 use std::{
     collections::HashSet,
@@ -9,13 +9,31 @@ use std::{
     time::Duration,
 };
 
-use crate::LstGpuiApp;
+use crate::{LstGpuiApp, ModelInputSync};
 
 #[derive(Clone, Debug)]
 struct AutosaveJob {
     path: PathBuf,
     body: String,
     revision: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct OpenFileResults {
+    opened: Vec<(PathBuf, String)>,
+    failed: Vec<(PathBuf, String)>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SaveFileResult {
+    Saved(PathBuf),
+    Failed { path: PathBuf, message: String },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AutosaveCompletion {
+    Finished { path: PathBuf, revision: u64 },
+    Failed { path: PathBuf, message: String },
 }
 
 impl LstGpuiApp {
@@ -36,14 +54,18 @@ impl LstGpuiApp {
                 }
                 EditorEffect::ReadClipboard => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        self.apply_model_command(EditorCommand::PasteText(text), cx);
+                        self.update_model(cx, ModelInputSync::None, true, |model| {
+                            model.paste_text(text);
+                        });
                     } else {
-                        self.apply_model_command(EditorCommand::ClipboardUnavailable, cx);
+                        self.update_model(cx, ModelInputSync::None, true, |model| {
+                            model.clipboard_unavailable();
+                        });
                     }
                 }
                 EditorEffect::OpenFiles => self.open_files_from_dialog(cx),
                 EditorEffect::SaveFile { path, body } => {
-                    self.apply_model_command(save_file_command(path, body), cx);
+                    self.apply_save_file_result(save_file_result(path, body), cx);
                 }
                 EditorEffect::SaveFileAs {
                     suggested_name,
@@ -53,7 +75,7 @@ impl LstGpuiApp {
                     else {
                         continue;
                     };
-                    self.apply_model_command(save_file_command(path, body), cx);
+                    self.apply_save_file_result(save_file_result(path, body), cx);
                 }
                 EditorEffect::AutosaveFile {
                     path,
@@ -68,9 +90,7 @@ impl LstGpuiApp {
         let Some(paths) = FileDialog::new().pick_files() else {
             return;
         };
-        for command in open_file_commands(paths) {
-            self.apply_model_command(command, cx);
-        }
+        self.apply_open_file_results(open_file_results(paths), cx);
     }
 
     pub(crate) fn start_background_tasks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -86,7 +106,9 @@ impl LstGpuiApp {
                     .await;
                 if view
                     .update(cx, |view, cx| {
-                        view.apply_model_command(EditorCommand::AutosaveTick, cx);
+                        view.update_model(cx, ModelInputSync::None, false, |model| {
+                            model.autosave_tick();
+                        });
                     })
                     .is_err()
                 {
@@ -134,11 +156,46 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         self.autosave_inflight.remove(&job.path);
-        if let Some(command) = autosave_completion_command(self.model.tabs(), job, result) {
-            self.apply_model_command(command, cx);
+        if let Some(completion) = autosave_completion(self.model.tabs(), job, result) {
+            self.apply_autosave_completion(completion, cx);
         } else {
             cx.notify();
         }
+    }
+
+    fn apply_open_file_results(&mut self, results: OpenFileResults, cx: &mut Context<Self>) {
+        for (path, message) in results.failed {
+            self.update_model(cx, ModelInputSync::None, true, |model| {
+                model.open_file_failed(path, message);
+            });
+        }
+        if !results.opened.is_empty() {
+            self.update_model(cx, ModelInputSync::None, true, |model| {
+                model.open_files(results.opened);
+            });
+        }
+    }
+
+    fn apply_save_file_result(&mut self, result: SaveFileResult, cx: &mut Context<Self>) {
+        self.update_model(cx, ModelInputSync::None, true, |model| match result {
+            SaveFileResult::Saved(path) => model.save_finished(path),
+            SaveFileResult::Failed { path, message } => model.save_failed(path, message),
+        });
+    }
+
+    fn apply_autosave_completion(
+        &mut self,
+        completion: AutosaveCompletion,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_model(cx, ModelInputSync::None, true, |model| match completion {
+            AutosaveCompletion::Finished { path, revision } => {
+                model.autosave_finished(path, revision);
+            }
+            AutosaveCompletion::Failed { path, message } => {
+                model.autosave_failed(path, message);
+            }
+        });
     }
 }
 
@@ -153,28 +210,22 @@ fn autosave_temp_path(path: &Path, revision: u64) -> PathBuf {
     ))
 }
 
-fn open_file_commands(paths: impl IntoIterator<Item = PathBuf>) -> Vec<EditorCommand> {
-    let mut commands = Vec::new();
+fn open_file_results(paths: impl IntoIterator<Item = PathBuf>) -> OpenFileResults {
     let mut opened = Vec::new();
+    let mut failed = Vec::new();
     for path in paths {
         match fs::read_to_string(&path) {
             Ok(text) => opened.push((path, text)),
-            Err(err) => commands.push(EditorCommand::OpenFileFailed {
-                path,
-                message: err.to_string(),
-            }),
+            Err(err) => failed.push((path, err.to_string())),
         }
     }
-    if !opened.is_empty() {
-        commands.push(EditorCommand::OpenFiles(opened));
-    }
-    commands
+    OpenFileResults { opened, failed }
 }
 
-fn save_file_command(path: PathBuf, body: String) -> EditorCommand {
+fn save_file_result(path: PathBuf, body: String) -> SaveFileResult {
     match fs::write(&path, body) {
-        Ok(()) => EditorCommand::SaveFinished { path },
-        Err(err) => EditorCommand::SaveFailed {
+        Ok(()) => SaveFileResult::Saved(path),
+        Err(err) => SaveFileResult::Failed {
             path,
             message: err.to_string(),
         },
@@ -195,15 +246,15 @@ fn write_autosave_temp_file(job: &AutosaveJob) -> std::io::Result<PathBuf> {
     fs::write(&temp_path, &job.body).map(|_| temp_path)
 }
 
-fn autosave_completion_command(
+fn autosave_completion(
     tabs: &[ModelEditorTab],
     job: AutosaveJob,
     result: std::io::Result<PathBuf>,
-) -> Option<EditorCommand> {
+) -> Option<AutosaveCompletion> {
     let temp_path = match result {
         Ok(temp_path) => temp_path,
         Err(err) => {
-            return Some(EditorCommand::AutosaveFailed {
+            return Some(AutosaveCompletion::Failed {
                 path: job.path,
                 message: err.to_string(),
             });
@@ -216,13 +267,13 @@ fn autosave_completion_command(
     }
 
     match fs::rename(&temp_path, &job.path) {
-        Ok(()) => Some(EditorCommand::AutosaveFinished {
+        Ok(()) => Some(AutosaveCompletion::Finished {
             path: job.path,
             revision: job.revision,
         }),
         Err(err) => {
             let _ = fs::remove_file(&temp_path);
-            Some(EditorCommand::AutosaveFailed {
+            Some(AutosaveCompletion::Failed {
                 path: job.path,
                 message: err.to_string(),
             })
@@ -272,38 +323,30 @@ mod tests {
     }
 
     #[test]
-    fn open_file_commands_read_existing_files_and_report_failures() {
+    fn open_file_results_read_existing_files_and_report_failures() {
         let dir = temp_dir("open");
         let ok = dir.join("ok.txt");
         let missing = dir.join("missing.txt");
         fs::write(&ok, "hello").expect("write open fixture");
 
-        let commands = open_file_commands([ok.clone(), missing.clone()]);
+        let results = open_file_results([ok.clone(), missing.clone()]);
 
-        assert_eq!(commands.len(), 2);
-        match &commands[0] {
-            EditorCommand::OpenFileFailed { path, message } => {
-                assert_eq!(path, &missing);
-                assert!(!message.is_empty());
-            }
-            other => panic!("expected open failure command, got {other:?}"),
-        }
-        assert_eq!(
-            commands[1],
-            EditorCommand::OpenFiles(vec![(ok, "hello".to_string())])
-        );
+        assert_eq!(results.opened, vec![(ok, "hello".to_string())]);
+        assert_eq!(results.failed.len(), 1);
+        assert_eq!(results.failed[0].0, missing);
+        assert!(!results.failed[0].1.is_empty());
 
         fs::remove_dir_all(dir).expect("remove test temp dir");
     }
 
     #[test]
-    fn save_file_command_writes_body_and_reports_result() {
+    fn save_file_result_writes_body_and_reports_result() {
         let dir = temp_dir("save");
         let path = dir.join("saved.txt");
 
-        let command = save_file_command(path.clone(), "saved body".to_string());
+        let result = save_file_result(path.clone(), "saved body".to_string());
 
-        assert_eq!(command, EditorCommand::SaveFinished { path: path.clone() });
+        assert_eq!(result, SaveFileResult::Saved(path.clone()));
         assert_eq!(
             fs::read_to_string(&path).expect("read saved file"),
             "saved body"
@@ -313,17 +356,17 @@ mod tests {
     }
 
     #[test]
-    fn save_file_command_reports_write_failures() {
+    fn save_file_result_reports_write_failures() {
         let dir = temp_dir("save-failure");
 
-        let command = save_file_command(dir.clone(), "cannot replace directory".to_string());
+        let result = save_file_result(dir.clone(), "cannot replace directory".to_string());
 
-        match command {
-            EditorCommand::SaveFailed { path, message } => {
+        match result {
+            SaveFileResult::Failed { path, message } => {
                 assert_eq!(path, dir.clone());
                 assert!(!message.is_empty());
             }
-            other => panic!("expected save failure command, got {other:?}"),
+            other => panic!("expected save failure result, got {other:?}"),
         }
 
         fs::remove_dir_all(dir).expect("remove test temp dir");
@@ -361,11 +404,11 @@ mod tests {
         };
 
         let temp_path = write_autosave_temp_file(&job).expect("write autosave temp file");
-        let command = autosave_completion_command(&[tab], job, Ok(temp_path));
+        let completion = autosave_completion(&[tab], job, Ok(temp_path));
 
         assert_eq!(
-            command,
-            Some(EditorCommand::AutosaveFinished {
+            completion,
+            Some(AutosaveCompletion::Finished {
                 path: path.clone(),
                 revision: 0
             })
@@ -392,9 +435,9 @@ mod tests {
         };
 
         let temp_path = write_autosave_temp_file(&job).expect("write autosave temp file");
-        let command = autosave_completion_command(&[tab], job, Ok(temp_path.clone()));
+        let completion = autosave_completion(&[tab], job, Ok(temp_path.clone()));
 
-        assert_eq!(command, None);
+        assert_eq!(completion, None);
         assert!(!temp_path.exists());
         assert_eq!(
             fs::read_to_string(&path).expect("read destination file"),

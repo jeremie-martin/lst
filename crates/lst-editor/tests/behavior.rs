@@ -1,11 +1,11 @@
-use lst_core::document::UndoBoundary;
-use lst_core::position::Position;
+use lst_editor::document::UndoBoundary;
+use lst_editor::position::Position;
 use lst_editor::{
     vim::{
         Key as VimKey, Mode as VimMode, Modifiers as VimModifiers, NamedKey as VimNamedKey,
         TextSnapshot as VimTextSnapshot, VimCommand, VimState,
     },
-    EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, TabId,
+    EditorEffect, EditorModel, EditorTab, FocusTarget, TabId,
 };
 
 fn enter_vim_normal(model: &mut EditorModel) {
@@ -17,7 +17,7 @@ fn enter_vim_normal(model: &mut EditorModel) {
 fn new_tab_switches_active_with_stable_tab_identity() {
     let mut model = EditorModel::empty();
     let first = model.active_tab().id();
-    model.apply(EditorCommand::NewTab);
+    model.new_tab();
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.active, 1);
@@ -37,13 +37,8 @@ fn find_open_uses_selected_single_line_text_and_emits_focus() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::SetSelection {
-        range: 0..3,
-        reversed: false,
-    });
-    model.apply(EditorCommand::OpenFind {
-        show_replace: false,
-    });
+    model.set_selection(0..3, false);
+    model.open_find_panel(false);
 
     let snapshot = model.snapshot();
     assert!(snapshot.find_visible);
@@ -60,17 +55,13 @@ fn find_open_uses_selected_single_line_text_and_emits_focus() {
 fn text_edit_is_real_document_behavior() {
     let mut model = EditorModel::empty();
 
-    model.apply(EditorCommand::InsertText("abc".into()));
-    model.apply(EditorCommand::ReplaceText {
-        range: Some(3..3),
-        text: "def".into(),
-        boundary: UndoBoundary::Merge,
-    });
+    model.insert_text("abc".into());
+    model.replace_text(Some(3..3), "def".into(), UndoBoundary::Merge);
 
     assert_eq!(model.snapshot().text, "abcdef");
-    model.apply(EditorCommand::Undo);
+    model.undo();
     assert_eq!(model.snapshot().text, "");
-    model.apply(EditorCommand::Redo);
+    model.redo();
     assert_eq!(model.snapshot().text, "abcdef");
 }
 
@@ -86,10 +77,8 @@ fn find_query_reindexes_real_active_document() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::OpenFind {
-        show_replace: false,
-    });
-    model.apply(EditorCommand::SetFindQuery("one".into()));
+    model.open_find_panel(false);
+    model.update_find_query("one".into());
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.find_query, "one");
@@ -106,10 +95,10 @@ fn active_tab_switch_reindexes_find_against_the_new_document() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::SetFindQuery("one".into()));
+    model.update_find_query("one".into());
     assert_eq!(model.snapshot().find_matches, 2);
 
-    model.apply(EditorCommand::SetActiveTab(1));
+    model.set_active_tab(1);
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.active, 1);
@@ -120,12 +109,10 @@ fn active_tab_switch_reindexes_find_against_the_new_document() {
 fn opening_find_only_after_replace_clears_replace_mode() {
     let mut model = EditorModel::empty();
 
-    model.apply(EditorCommand::OpenFind { show_replace: true });
+    model.open_find_panel(true);
     assert!(model.snapshot().find_show_replace);
 
-    model.apply(EditorCommand::OpenFind {
-        show_replace: false,
-    });
+    model.open_find_panel(false);
 
     let snapshot = model.snapshot();
     assert!(snapshot.find_visible);
@@ -144,8 +131,8 @@ fn find_next_selects_the_next_observable_match() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::SetFindQuery("one".into()));
-    model.apply(EditorCommand::FindNext);
+    model.update_find_query("one".into());
+    model.find_next_match();
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.find_matches, 2);
@@ -164,9 +151,9 @@ fn replace_all_changes_real_document_text() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::SetFindQuery("one".into()));
-    model.apply(EditorCommand::SetFindReplacement("three".into()));
-    model.apply(EditorCommand::ReplaceAll);
+    model.update_find_query("one".into());
+    model.update_find_replacement("three".into());
+    model.replace_all_matches_in_document();
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "three two three");
@@ -185,12 +172,12 @@ fn replace_all_is_undoable_document_behavior() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::SetFindQuery("one".into()));
-    model.apply(EditorCommand::SetFindReplacement("three".into()));
-    model.apply(EditorCommand::ReplaceAll);
+    model.update_find_query("one".into());
+    model.update_find_replacement("three".into());
+    model.replace_all_matches_in_document();
     assert_eq!(model.snapshot().text, "three two three");
 
-    model.apply(EditorCommand::Undo);
+    model.undo();
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "one two one");
@@ -209,10 +196,10 @@ fn inserting_text_refreshes_active_find_results() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::SetFindQuery("a".into()));
+    model.update_find_query("a".into());
     assert_eq!(model.snapshot().find_matches, 1);
 
-    model.apply(EditorCommand::InsertText("a".into()));
+    model.insert_text("a".into());
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "aa");
@@ -231,9 +218,9 @@ fn goto_line_submit_clamps_to_existing_lines() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::OpenGotoLine);
-    model.apply(EditorCommand::SetGotoLine("99".into()));
-    model.apply(EditorCommand::SubmitGotoLine);
+    model.open_goto_line_panel();
+    model.update_goto_line("99".into());
+    model.submit_goto_line_input();
 
     assert_eq!(model.snapshot().cursor, "alpha\nbeta\n".chars().count());
 }
@@ -241,11 +228,11 @@ fn goto_line_submit_clamps_to_existing_lines() {
 #[test]
 fn closing_active_tab_preserves_neighbor_as_active() {
     let mut model = EditorModel::empty();
-    model.apply(EditorCommand::NewTab);
-    model.apply(EditorCommand::NewTab);
+    model.new_tab();
+    model.new_tab();
     assert_eq!(model.snapshot().active, 2);
 
-    model.apply(EditorCommand::CloseTab(2));
+    model.close_tab(2);
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.active, 1);
@@ -259,12 +246,12 @@ fn closing_active_tab_preserves_neighbor_as_active() {
 #[test]
 fn closing_inactive_tab_does_not_request_editor_focus() {
     let mut model = EditorModel::empty();
-    model.apply(EditorCommand::NewTab);
-    model.apply(EditorCommand::NewTab);
-    model.apply(EditorCommand::SetActiveTab(0));
+    model.new_tab();
+    model.new_tab();
+    model.set_active_tab(0);
     model.drain_effects();
 
-    model.apply(EditorCommand::CloseTab(1));
+    model.close_tab(1);
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.active, 0);
@@ -284,16 +271,10 @@ fn movement_and_selection_are_behavioral_commands() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::MoveDocumentBoundary {
-        to_end: true,
-        select: false,
-    });
+    model.move_document_boundary(true, false);
     assert_eq!(model.snapshot().cursor, "alpha beta\ngamma".chars().count());
 
-    model.apply(EditorCommand::MoveWord {
-        backward: true,
-        select: true,
-    });
+    model.move_word(true, true);
     assert_eq!(model.snapshot().selection, 11..16);
     assert!(model.drain_effects().contains(&EditorEffect::RevealCursor));
 }
@@ -310,18 +291,12 @@ fn horizontal_collapse_commands_collapse_active_selection() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::SetSelection {
-        range: 2..5,
-        reversed: false,
-    });
-    model.apply(EditorCommand::MoveHorizontalCollapse { backward: true });
+    model.set_selection(2..5, false);
+    model.move_horizontal_collapsed(true);
     assert_eq!(model.snapshot().selection, 2..2);
 
-    model.apply(EditorCommand::SetSelection {
-        range: 2..5,
-        reversed: false,
-    });
-    model.apply(EditorCommand::MoveHorizontalCollapse { backward: false });
+    model.set_selection(2..5, false);
+    model.move_horizontal_collapsed(false);
     assert_eq!(model.snapshot().selection, 5..5);
 }
 
@@ -337,15 +312,8 @@ fn selecting_horizontal_movement_still_extends_selection() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::MoveToChar {
-        offset: 2,
-        select: false,
-        preferred_column: None,
-    });
-    model.apply(EditorCommand::MoveHorizontal {
-        delta: 1,
-        select: true,
-    });
+    model.move_to_char(2, false, None);
+    model.move_horizontal_by(1, true);
 
     assert_eq!(model.snapshot().selection, 2..3);
 }
@@ -362,30 +330,14 @@ fn display_row_movement_uses_wrapped_rows_behaviorally() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::MoveToChar {
-        offset: 1,
-        select: false,
-        preferred_column: None,
-    });
-    model.apply(EditorCommand::MoveDisplayRows {
-        delta: 1,
-        select: false,
-        wrap_columns: 6,
-    });
+    model.move_to_char(1, false, None);
+    model.move_display_rows_by(1, false, 6);
     assert_eq!(model.snapshot().cursor, 7);
 
-    model.apply(EditorCommand::MoveDisplayRows {
-        delta: 1,
-        select: false,
-        wrap_columns: 6,
-    });
+    model.move_display_rows_by(1, false, 6);
     assert_eq!(model.snapshot().cursor, 12);
 
-    model.apply(EditorCommand::MoveDisplayRows {
-        delta: 1,
-        select: false,
-        wrap_columns: 6,
-    });
+    model.move_display_rows_by(1, false, 6);
     assert_eq!(
         model.snapshot().cursor_position,
         Position { line: 1, column: 1 }
@@ -404,16 +356,8 @@ fn display_row_selection_extends_from_anchor() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::MoveToChar {
-        offset: 1,
-        select: false,
-        preferred_column: None,
-    });
-    model.apply(EditorCommand::MoveDisplayRows {
-        delta: 1,
-        select: true,
-        wrap_columns: 6,
-    });
+    model.move_to_char(1, false, None);
+    model.move_display_rows_by(1, true, 6);
 
     assert_eq!(model.snapshot().selection, 1..7);
 }
@@ -430,24 +374,12 @@ fn display_row_movement_clamps_and_falls_back_when_wrap_is_disabled() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::MoveDisplayRows {
-        delta: -1,
-        select: false,
-        wrap_columns: 6,
-    });
+    model.move_display_rows_by(-1, false, 6);
     assert_eq!(model.snapshot().cursor, 0);
 
-    model.apply(EditorCommand::ToggleWrap);
-    model.apply(EditorCommand::MoveToChar {
-        offset: 1,
-        select: false,
-        preferred_column: None,
-    });
-    model.apply(EditorCommand::MoveDisplayRows {
-        delta: 1,
-        select: false,
-        wrap_columns: 6,
-    });
+    model.toggle_wrap();
+    model.move_to_char(1, false, None);
+    model.move_display_rows_by(1, false, 6);
 
     assert_eq!(
         model.snapshot().cursor_position,
@@ -459,30 +391,18 @@ fn display_row_movement_clamps_and_falls_back_when_wrap_is_disabled() {
 fn input_text_replacement_owns_undo_grouping_policy() {
     let mut model = EditorModel::empty();
 
-    model.apply(EditorCommand::ReplaceTextFromInput {
-        range: None,
-        text: "a".into(),
-    });
-    model.apply(EditorCommand::ReplaceTextFromInput {
-        range: None,
-        text: "b".into(),
-    });
+    model.replace_text_from_input(None, "a".into());
+    model.replace_text_from_input(None, "b".into());
     assert_eq!(model.snapshot().text, "ab");
 
-    model.apply(EditorCommand::Undo);
+    model.undo();
     assert_eq!(model.snapshot().text, "");
 
-    model.apply(EditorCommand::ReplaceTextFromInput {
-        range: None,
-        text: "a".into(),
-    });
-    model.apply(EditorCommand::ReplaceTextFromInput {
-        range: None,
-        text: " ".into(),
-    });
+    model.replace_text_from_input(None, "a".into());
+    model.replace_text_from_input(None, " ".into());
     assert_eq!(model.snapshot().text, "a ");
 
-    model.apply(EditorCommand::Undo);
+    model.undo();
     assert_eq!(model.snapshot().text, "a");
 }
 
@@ -498,18 +418,15 @@ fn delete_word_and_line_ops_are_undoable_document_behavior() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::MoveWord {
-        backward: false,
-        select: false,
-    });
-    model.apply(EditorCommand::DeleteWord { backward: false });
+    model.move_word(false, false);
+    model.delete_word(false);
     assert_eq!(model.snapshot().text, "alpha\ngamma");
 
-    model.apply(EditorCommand::DuplicateLine);
+    model.duplicate_line();
     assert_eq!(model.snapshot().text, "alpha\nalpha\ngamma");
 
-    model.apply(EditorCommand::Undo);
-    model.apply(EditorCommand::Undo);
+    model.undo();
+    model.undo();
     assert_eq!(model.snapshot().text, "alpha beta\ngamma");
 }
 
@@ -525,11 +442,8 @@ fn delete_word_commands_delete_active_selection_before_word_boundaries() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::SetSelection {
-        range: 0..5,
-        reversed: false,
-    });
-    model.apply(EditorCommand::DeleteWord { backward: true });
+    model.set_selection(0..5, false);
+    model.delete_word(true);
     assert_eq!(model.snapshot().text, " world");
 
     let mut model = EditorModel::new(
@@ -541,11 +455,8 @@ fn delete_word_commands_delete_active_selection_before_word_boundaries() {
         )],
         "Ready.".into(),
     );
-    model.apply(EditorCommand::SetSelection {
-        range: 6..11,
-        reversed: false,
-    });
-    model.apply(EditorCommand::DeleteWord { backward: false });
+    model.set_selection(6..11, false);
+    model.delete_word(false);
     assert_eq!(model.snapshot().text, "hello ");
 }
 
@@ -560,12 +471,9 @@ fn clipboard_commands_emit_boundary_effects_without_fakes() {
         )],
         "Ready.".into(),
     );
-    model.apply(EditorCommand::SetSelection {
-        range: 0..5,
-        reversed: false,
-    });
+    model.set_selection(0..5, false);
 
-    model.apply(EditorCommand::CopySelection);
+    model.copy_selection();
     assert_eq!(
         model.drain_effects(),
         vec![
@@ -574,7 +482,7 @@ fn clipboard_commands_emit_boundary_effects_without_fakes() {
         ]
     );
 
-    model.apply(EditorCommand::CutSelection);
+    model.cut_selection();
     assert_eq!(model.snapshot().text, " world");
     assert_eq!(
         model.drain_effects(),
@@ -598,10 +506,10 @@ fn file_commands_emit_runtime_effects_and_apply_results() {
         )],
         "Ready.".into(),
     );
-    model.apply(EditorCommand::InsertText(" world".into()));
+    model.insert_text(" world".into());
     model.drain_effects();
 
-    model.apply(EditorCommand::RequestSave);
+    model.request_save();
     assert_eq!(
         model.drain_effects(),
         vec![EditorEffect::SaveFile {
@@ -610,7 +518,7 @@ fn file_commands_emit_runtime_effects_and_apply_results() {
         }]
     );
 
-    model.apply(EditorCommand::SaveFinished { path: path.clone() });
+    model.save_finished(path.clone());
     let snapshot = model.snapshot();
     assert!(!snapshot.tab_modified[0]);
     assert_eq!(snapshot.status, format!("Saved {}.", path.display()));
@@ -628,11 +536,11 @@ fn autosave_tick_emits_modified_file_backed_tabs() {
         )],
         "Ready.".into(),
     );
-    model.apply(EditorCommand::InsertText("!".into()));
+    model.insert_text("!".into());
     let revision = model.snapshot().active_revision;
     model.drain_effects();
 
-    model.apply(EditorCommand::AutosaveTick);
+    model.autosave_tick();
 
     assert_eq!(
         model.drain_effects(),
@@ -643,7 +551,7 @@ fn autosave_tick_emits_modified_file_backed_tabs() {
         }]
     );
 
-    model.apply(EditorCommand::AutosaveFinished { path, revision });
+    model.autosave_finished(path, revision);
     assert!(!model.snapshot().tab_modified[0]);
 }
 
@@ -667,10 +575,10 @@ fn autosave_tick_skips_paths_open_in_multiple_tabs() {
         ],
         "Ready.".into(),
     );
-    model.apply(EditorCommand::InsertText("!".into()));
+    model.insert_text("!".into());
     model.drain_effects();
 
-    model.apply(EditorCommand::AutosaveTick);
+    model.autosave_tick();
 
     assert_eq!(model.drain_effects(), Vec::<EditorEffect>::new());
 }
@@ -687,22 +595,16 @@ fn autosave_finished_only_clears_matching_revision() {
         )],
         "Ready.".into(),
     );
-    model.apply(EditorCommand::InsertText("!".into()));
+    model.insert_text("!".into());
     let stale_revision = model.snapshot().active_revision;
-    model.apply(EditorCommand::InsertText("?".into()));
+    model.insert_text("?".into());
     let current_revision = model.snapshot().active_revision;
     model.drain_effects();
 
-    model.apply(EditorCommand::AutosaveFinished {
-        path: path.clone(),
-        revision: stale_revision,
-    });
+    model.autosave_finished(path.clone(), stale_revision);
     assert!(model.snapshot().tab_modified[0]);
 
-    model.apply(EditorCommand::AutosaveFinished {
-        path,
-        revision: current_revision,
-    });
+    model.autosave_finished(path, current_revision);
     assert!(!model.snapshot().tab_modified[0]);
 }
 
@@ -718,24 +620,13 @@ fn direct_cursor_and_selection_commands_are_model_behavior() {
         "Ready.".into(),
     );
 
-    model.apply(EditorCommand::MoveToChar {
-        offset: 6,
-        select: false,
-        preferred_column: Some(4),
-    });
+    model.move_to_char(6, false, Some(4));
     assert_eq!(model.snapshot().cursor, 6);
 
-    model.apply(EditorCommand::MoveToChar {
-        offset: 10,
-        select: true,
-        preferred_column: None,
-    });
+    model.move_to_char(10, true, None);
     assert_eq!(model.snapshot().selection, 6..10);
 
-    model.apply(EditorCommand::SetSelection {
-        range: 0..5,
-        reversed: true,
-    });
+    model.set_selection(0..5, true);
     let snapshot = model.snapshot();
     assert_eq!(snapshot.selection, 0..5);
     assert_eq!(snapshot.cursor, 0);
@@ -745,21 +636,13 @@ fn direct_cursor_and_selection_commands_are_model_behavior() {
 fn ime_marked_text_replacement_remains_model_behavior() {
     let mut model = EditorModel::empty();
 
-    model.apply(EditorCommand::ReplaceAndMarkText {
-        range: None,
-        text: "a🙂b".into(),
-        selected_range: Some(1..2),
-    });
+    model.replace_and_mark_text(None, "a🙂b".into(), Some(1..2));
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "a🙂b");
     assert_eq!(snapshot.selection, 1..2);
 
-    model.apply(EditorCommand::ClearMarkedText);
-    model.apply(EditorCommand::ReplaceText {
-        range: None,
-        text: "Z".into(),
-        boundary: UndoBoundary::Break,
-    });
+    model.clear_marked_text();
+    model.replace_text(None, "Z".into(), UndoBoundary::Break);
 
     assert_eq!(model.snapshot().text, "aZb");
 }

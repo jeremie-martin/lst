@@ -1,8 +1,11 @@
-use lst_core::{
-    document::{EditKind, Tab, UndoBoundary},
+use crate::{
+    document::{char_to_position, position_to_char, EditKind, UndoBoundary},
     position::Position,
 };
+use ropey::Rope;
 use std::{ops::Range, path::PathBuf, sync::Arc};
+
+const MAX_UNDO: usize = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TabId(u64);
@@ -18,29 +21,65 @@ impl TabId {
 }
 
 #[derive(Clone)]
+struct Snapshot {
+    text: String,
+    selection: Range<usize>,
+    selection_reversed: bool,
+}
+
+#[derive(Clone)]
+struct CachedLines {
+    revision: u64,
+    lines: Arc<[String]>,
+}
+
+#[derive(Clone)]
 pub struct EditorTab {
     id: TabId,
-    pub(crate) doc: Tab,
+    pub(crate) name_hint: String,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) buffer: Rope,
+    pub(crate) modified: bool,
+    pub(crate) selection: Range<usize>,
+    pub(crate) selection_reversed: bool,
+    pub(crate) preferred_column: Option<usize>,
+    revision: u64,
+    line_cache: Option<CachedLines>,
+    undo_stack: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
+    last_edit_kind: Option<EditKind>,
     pub marked_range: Option<Range<usize>>,
 }
 
 impl EditorTab {
     pub fn empty(id: TabId, name_hint: String) -> Self {
-        Self::from_doc(id, Tab::empty(name_hint))
+        Self::from_text(id, name_hint, None, "")
     }
 
     pub fn from_path(id: TabId, path: PathBuf, text: &str) -> Self {
-        Self::from_doc(id, Tab::from_path(path, text))
+        let name_hint = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("untitled")
+            .to_string();
+        Self::from_text(id, name_hint, Some(path), text)
     }
 
     pub fn from_text(id: TabId, name_hint: String, path: Option<PathBuf>, text: &str) -> Self {
-        Self::from_doc(id, Tab::from_text(name_hint, path, text, false))
-    }
-
-    pub fn from_doc(id: TabId, doc: Tab) -> Self {
         Self {
             id,
-            doc,
+            name_hint,
+            path,
+            buffer: Rope::from_str(text),
+            modified: false,
+            selection: 0..0,
+            selection_reversed: false,
+            preferred_column: None,
+            revision: 0,
+            line_cache: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            last_edit_kind: None,
             marked_range: None,
         }
     }
@@ -50,23 +89,23 @@ impl EditorTab {
     }
 
     pub fn path(&self) -> Option<&PathBuf> {
-        self.doc.path.as_ref()
+        self.path.as_ref()
     }
 
-    pub fn buffer(&self) -> &ropey::Rope {
-        &self.doc.buffer
+    pub fn buffer(&self) -> &Rope {
+        &self.buffer
     }
 
-    pub fn buffer_clone(&self) -> ropey::Rope {
-        self.doc.buffer.clone()
+    pub fn buffer_clone(&self) -> Rope {
+        self.buffer.clone()
     }
 
     pub fn selection(&self) -> Range<usize> {
-        self.doc.selection.clone()
+        self.selection.clone()
     }
 
     pub fn selection_reversed(&self) -> bool {
-        self.doc.selection_reversed
+        self.selection_reversed
     }
 
     pub fn marked_range(&self) -> Option<&Range<usize>> {
@@ -74,55 +113,94 @@ impl EditorTab {
     }
 
     pub fn modified(&self) -> bool {
-        self.doc.modified
+        self.modified
     }
 
     pub fn display_name(&self) -> String {
-        self.doc.display_name()
+        self.path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| self.name_hint.clone())
     }
 
     pub fn revision(&self) -> u64 {
-        self.doc.revision()
+        self.revision
+    }
+
+    fn touch_content(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+        self.line_cache = None;
     }
 
     pub fn len_chars(&self) -> usize {
-        self.doc.len_chars()
+        self.buffer.len_chars()
     }
 
     pub fn line_count(&self) -> usize {
-        self.doc.line_count()
+        self.buffer.len_lines().max(1)
     }
 
     pub fn buffer_text(&self) -> String {
-        self.doc.buffer_text()
+        self.buffer.to_string()
     }
 
     pub fn cursor_char(&self) -> usize {
-        self.doc.cursor_char()
+        if self.selection_reversed {
+            self.selection.start
+        } else {
+            self.selection.end
+        }
     }
 
     pub fn cursor_position(&self) -> Position {
-        self.doc.cursor_position()
+        char_to_position(&self.buffer, self.cursor_char())
     }
 
     pub fn selected_range(&self) -> Range<usize> {
-        self.doc.selected_range()
+        self.selection.clone()
     }
 
     pub fn has_selection(&self) -> bool {
-        self.doc.has_selection()
+        self.selection.start != self.selection.end
     }
 
     pub fn selected_text(&self) -> Option<String> {
-        self.doc.selected_text()
+        if self.has_selection() {
+            Some(self.buffer.slice(self.selection.clone()).to_string())
+        } else {
+            None
+        }
     }
 
     pub fn lines(&mut self) -> Arc<[String]> {
-        self.doc.lines()
+        if let Some(cache) = &self.line_cache {
+            if cache.revision == self.revision {
+                return Arc::clone(&cache.lines);
+            }
+        }
+
+        let lines: Arc<[String]> = self
+            .buffer
+            .to_string()
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+            .collect::<Vec<_>>()
+            .into();
+
+        self.line_cache = Some(CachedLines {
+            revision: self.revision,
+            lines: Arc::clone(&lines),
+        });
+
+        lines
     }
 
     pub fn select_all(&mut self) {
-        self.doc.select_all();
+        let end = self.len_chars();
+        self.selection = 0..end;
+        self.selection_reversed = false;
         self.marked_range = None;
     }
 
@@ -131,27 +209,76 @@ impl EditorTab {
         position: Position,
         select_from: Option<Position>,
     ) {
-        self.doc.set_cursor_position(position, select_from);
+        let head = position_to_char(&self.buffer, position);
+        match select_from {
+            Some(anchor) => {
+                let anchor = position_to_char(&self.buffer, anchor);
+                self.selection = anchor.min(head)..anchor.max(head);
+                self.selection_reversed = head < anchor;
+            }
+            None => self.move_to(head),
+        }
         self.marked_range = None;
     }
 
     pub(crate) fn push_undo_snapshot(&mut self, kind: EditKind, boundary: UndoBoundary) {
-        self.doc.push_undo_snapshot(kind, boundary);
+        let kind_changed = self.last_edit_kind != Some(kind);
+        let is_streaming = matches!(kind, EditKind::Insert | EditKind::Delete);
+        let should_snapshot =
+            kind_changed || !is_streaming || matches!(boundary, UndoBoundary::Break);
+
+        if should_snapshot {
+            self.undo_stack.push(self.current_snapshot());
+            if self.undo_stack.len() > MAX_UNDO {
+                self.undo_stack.remove(0);
+            }
+            self.redo_stack.clear();
+        }
+        self.last_edit_kind = Some(kind);
     }
 
     pub fn move_to(&mut self, offset: usize) {
-        self.doc.move_to(offset);
+        let offset = offset.min(self.len_chars());
+        self.selection = offset..offset;
+        self.selection_reversed = false;
         self.marked_range = None;
     }
 
     pub fn select_to(&mut self, offset: usize) {
-        self.doc.select_to(offset);
+        let offset = offset.min(self.len_chars());
+        if self.selection_reversed {
+            self.selection.start = offset;
+        } else {
+            self.selection.end = offset;
+        }
+        if self.selection.end < self.selection.start {
+            self.selection_reversed = !self.selection_reversed;
+            self.selection = self.selection.end..self.selection.start;
+        }
         self.marked_range = None;
     }
 
-    pub fn replace_char_range(&mut self, range: Range<usize>, new_text: &str) -> usize {
-        let new_cursor = self.doc.replace_char_range(range, new_text);
+    pub fn replace_char_range(&mut self, mut range: Range<usize>, new_text: &str) -> usize {
+        range.start = range.start.min(self.len_chars());
+        range.end = range.end.min(self.len_chars());
+        if range.start > range.end {
+            range = range.end..range.start;
+        }
+
+        if range.start != range.end {
+            self.buffer.remove(range.clone());
+        }
+        if !new_text.is_empty() {
+            self.buffer.insert(range.start, new_text);
+        }
+
+        let new_cursor = range.start + new_text.chars().count();
+        self.selection = new_cursor..new_cursor;
+        self.selection_reversed = false;
+        self.modified = true;
+        self.preferred_column = None;
         self.marked_range = None;
+        self.touch_content();
         new_cursor
     }
 
@@ -162,29 +289,102 @@ impl EditorTab {
         range: Range<usize>,
         new_text: &str,
     ) -> usize {
-        let new_cursor = self.doc.edit(kind, boundary, range, new_text);
-        self.marked_range = None;
-        new_cursor
+        self.push_undo_snapshot(kind, boundary);
+        self.replace_char_range(range, new_text)
     }
 
     pub fn set_text(&mut self, text: &str) {
-        self.doc.set_text(text);
+        self.buffer = Rope::from_str(text);
+        self.move_to(0);
+        self.modified = false;
+        self.preferred_column = None;
         self.marked_range = None;
+        self.touch_content();
+        self.last_edit_kind = None;
     }
 
     pub fn undo(&mut self) -> bool {
-        let changed = self.doc.undo();
-        if changed {
-            self.marked_range = None;
+        if let Some(snapshot) = self.undo_stack.pop() {
+            self.redo_stack.push(self.current_snapshot());
+            self.restore_snapshot(snapshot);
+            self.modified = true;
+            true
+        } else {
+            false
         }
-        changed
     }
 
     pub fn redo(&mut self) -> bool {
-        let changed = self.doc.redo();
-        if changed {
-            self.marked_range = None;
+        if let Some(snapshot) = self.redo_stack.pop() {
+            self.undo_stack.push(self.current_snapshot());
+            self.restore_snapshot(snapshot);
+            self.modified = true;
+            true
+        } else {
+            false
         }
-        changed
+    }
+
+    fn current_snapshot(&self) -> Snapshot {
+        Snapshot {
+            text: self.buffer_text(),
+            selection: self.selection.clone(),
+            selection_reversed: self.selection_reversed,
+        }
+    }
+
+    fn restore_snapshot(&mut self, snapshot: Snapshot) {
+        self.buffer = Rope::from_str(&snapshot.text);
+        self.selection = snapshot.selection;
+        self.selection_reversed = snapshot.selection_reversed;
+        self.preferred_column = None;
+        self.marked_range = None;
+        self.touch_content();
+        self.last_edit_kind = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn undo_and_redo_restore_text_and_selection() {
+        let mut tab = EditorTab::from_text(TabId::from_raw(1), "untitled".into(), None, "hello");
+        tab.move_to(5);
+        tab.edit(EditKind::Insert, UndoBoundary::Merge, 5..5, " world");
+
+        assert_eq!(tab.buffer_text(), "hello world");
+        assert!(tab.undo());
+        assert_eq!(tab.buffer_text(), "hello");
+        assert_eq!(tab.cursor_char(), 5);
+        assert!(tab.redo());
+        assert_eq!(tab.buffer_text(), "hello world");
+    }
+
+    #[test]
+    fn undo_boundaries_split_streaming_edits() {
+        let mut tab = EditorTab::from_text(TabId::from_raw(1), "untitled".into(), None, "");
+        tab.edit(EditKind::Insert, UndoBoundary::Break, 0..0, "a");
+        tab.edit(EditKind::Insert, UndoBoundary::Merge, 1..1, "b");
+        tab.undo();
+        assert_eq!(tab.buffer_text(), "");
+
+        tab.edit(EditKind::Insert, UndoBoundary::Break, 0..0, "a");
+        tab.edit(EditKind::Insert, UndoBoundary::Break, 1..1, " ");
+        tab.undo();
+        assert_eq!(tab.buffer_text(), "a");
+    }
+
+    #[test]
+    fn lines_strip_cr_from_crlf_content() {
+        let mut tab = EditorTab::from_text(
+            TabId::from_raw(1),
+            "untitled".into(),
+            None,
+            "alpha\r\nbeta\r\n",
+        );
+
+        assert_eq!(tab.lines().as_ref(), ["alpha", "beta", ""]);
     }
 }

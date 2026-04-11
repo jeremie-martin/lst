@@ -1,7 +1,7 @@
 # lst
 
 `lst` is being rebuilt around the GPUI implementation in `apps/lst-gpui`.
-The active editor behavior lives in framework-neutral crates under `crates/`,
+The active editor behavior lives in the framework-neutral `lst-editor` crate,
 and GPUI owns rendering, widgets, and desktop integration.
 
 The old iced implementation has been removed from this repository. Historical
@@ -10,8 +10,7 @@ code should not be used as a source of shared modules for new editor work.
 ## Active Layout
 
 - `apps/lst-gpui`: active GPUI desktop editor.
-- `crates/lst-core`: document, selection, find, wrap, and low-level editor operations.
-- `crates/lst-editor`: framework-neutral editor model, commands, effects, and Vim state machine.
+- `crates/lst-editor`: framework-neutral editor model, document primitives, effects, and Vim state machine.
 
 ## Build And Run
 

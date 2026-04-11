@@ -1,5 +1,5 @@
+use crate::position::Position;
 use crate::{vim, EditorModel, EditorTab, TabId};
-use lst_core::position::Position;
 use std::{ops::Range, path::PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

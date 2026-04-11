@@ -1,12 +1,10 @@
 [workspace]
 members = [
     "apps/lst-gpui",
-    "crates/lst-core",
     "crates/lst-editor",
 ]
 default-members = [
     "apps/lst-gpui",
-    "crates/lst-core",
     "crates/lst-editor",
 ]
 resolver = "2"

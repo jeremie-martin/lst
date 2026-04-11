@@ -1,11 +1,10 @@
 use gpui::{
     point, px, Bounds, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Window,
 };
-use lst_core::selection::{drag_selection_range, line_range_at_char, word_range_at_char};
-use lst_editor::EditorCommand;
+use lst_editor::selection::{drag_selection_range, line_range_at_char, word_range_at_char};
 use std::ops::Range;
 
-use crate::{LstGpuiApp, ROW_HEIGHT};
+use crate::{LstGpuiApp, ModelInputSync, ROW_HEIGHT};
 
 #[derive(Clone, Debug)]
 pub(crate) enum DragSelectionMode {
@@ -44,14 +43,9 @@ impl LstGpuiApp {
         }
 
         self.drag_selecting = Some(DragSelectionMode::Character);
-        self.apply_model_command(
-            EditorCommand::MoveToChar {
-                offset: index,
-                select: event.modifiers.shift,
-                preferred_column: None,
-            },
-            cx,
-        );
+        self.update_model(cx, ModelInputSync::None, true, |model| {
+            model.move_to_char(index, event.modifiers.shift, None);
+        });
         self.schedule_drag_autoscroll(window, cx);
         cx.notify();
     }
@@ -90,14 +84,11 @@ impl LstGpuiApp {
     ) -> bool {
         let index = self.active_char_index_for_point(position);
         match self.drag_selecting.clone() {
-            Some(DragSelectionMode::Character) => self.apply_model_command(
-                EditorCommand::MoveToChar {
-                    offset: index,
-                    select: true,
-                    preferred_column: None,
-                },
-                cx,
-            ),
+            Some(DragSelectionMode::Character) => {
+                self.update_model(cx, ModelInputSync::None, true, |model| {
+                    model.move_to_char(index, true, None);
+                });
+            }
             Some(DragSelectionMode::Word(anchor)) => {
                 let current = word_range_at_char(self.active_tab().buffer(), index);
                 self.select_active_drag_range(anchor, current, cx);
@@ -154,13 +145,9 @@ impl LstGpuiApp {
     }
 
     fn select_active_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
-        self.apply_model_command(
-            EditorCommand::SetSelection {
-                range,
-                reversed: false,
-            },
-            cx,
-        );
+        self.update_model(cx, ModelInputSync::None, true, |model| {
+            model.set_selection(range, false);
+        });
     }
 
     fn select_active_drag_range(
@@ -170,13 +157,9 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         let (selection, reversed) = drag_selection_range(anchor, current);
-        self.apply_model_command(
-            EditorCommand::SetSelection {
-                range: selection,
-                reversed,
-            },
-            cx,
-        );
+        self.update_model(cx, ModelInputSync::None, true, |model| {
+            model.set_selection(selection, reversed);
+        });
     }
 }
 
