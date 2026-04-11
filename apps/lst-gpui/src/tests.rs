@@ -216,9 +216,75 @@ fn drag_selection_range_extends_backward_from_anchor_token() {
 }
 
 #[test]
+fn word_range_groups_words_symbols_and_whitespace() {
+    let buffer = Rope::from_str("alpha beta::gamma");
+
+    assert_eq!(word_range_at_char(&buffer, 7), 6..10);
+    assert_eq!(word_range_at_char(&buffer, 10), 10..12);
+    assert_eq!(word_range_at_char(&buffer, 5), 5..6);
+}
+
+#[test]
+fn line_range_includes_trailing_newline_when_present() {
+    let buffer = Rope::from_str("one\ntwo\nthree");
+
+    assert_eq!(line_range_at_char(&buffer, 1), 0..4);
+    assert_eq!(line_range_at_char(&buffer, 5), 4..8);
+    assert_eq!(line_range_at_char(&buffer, 10), 8..13);
+}
+
+#[test]
+fn word_boundaries_skip_whitespace_before_moving() {
+    let buffer = Rope::from_str("alpha beta.gamma");
+
+    assert_eq!(next_word_boundary(&buffer, 0), 5);
+    assert_eq!(next_word_boundary(&buffer, 5), 10);
+    assert_eq!(previous_word_boundary(&buffer, 11), 10);
+    assert_eq!(previous_word_boundary(&buffer, 10), 6);
+}
+
+#[test]
+fn drag_autoscroll_delta_only_activates_at_viewport_edges() {
+    let bounds = Bounds::new(point(px(0.0), px(100.0)), gpui::size(px(100.0), px(200.0)));
+
+    assert!(drag_autoscroll_delta(point(px(50.0), px(90.0)), bounds).is_some());
+    assert!(drag_autoscroll_delta(point(px(50.0), px(310.0)), bounds).is_some());
+    assert!(drag_autoscroll_delta(point(px(50.0), px(200.0)), bounds).is_none());
+}
+
+#[test]
 fn ctrl_arrow_aliases_expand_vertical_selection() {
     assert!(has_binding::<SelectUp>("ctrl-up"));
     assert!(has_binding::<SelectDown>("ctrl-down"));
+}
+
+#[test]
+fn standard_movement_keybindings_are_registered() {
+    assert!(has_binding::<MoveWordLeft>("ctrl-left"));
+    assert!(has_binding::<MoveWordRight>("ctrl-right"));
+    assert!(has_binding::<SelectWordLeft>("ctrl-shift-left"));
+    assert!(has_binding::<SelectWordRight>("ctrl-shift-right"));
+    assert!(has_binding::<MovePageUp>("pageup"));
+    assert!(has_binding::<MovePageDown>("pagedown"));
+    assert!(has_binding::<SelectPageUp>("shift-pageup"));
+    assert!(has_binding::<SelectPageDown>("shift-pagedown"));
+    assert!(has_binding::<MoveDocumentStart>("ctrl-home"));
+    assert!(has_binding::<MoveDocumentEnd>("ctrl-end"));
+    assert!(has_binding::<SelectDocumentStart>("ctrl-shift-home"));
+    assert!(has_binding::<SelectDocumentEnd>("ctrl-shift-end"));
+}
+
+#[test]
+fn explicit_undo_boundary_keeps_paste_separate_from_typing() {
+    let mut tab = Tab::from_text("untitled".into(), None, "", false);
+    tab.push_undo_snapshot(EditKind::Insert, false);
+    tab.replace_char_range(0..0, "a");
+    tab.push_undo_snapshot(EditKind::Insert, true);
+    tab.replace_char_range(1..1, "paste");
+
+    assert_eq!(tab.buffer_text(), "apaste");
+    assert!(tab.undo());
+    assert_eq!(tab.buffer_text(), "a");
 }
 
 #[test]

@@ -99,10 +99,22 @@ actions!(
         MoveRight,
         MoveUp,
         MoveDown,
+        MoveWordLeft,
+        MoveWordRight,
+        MovePageUp,
+        MovePageDown,
+        MoveDocumentStart,
+        MoveDocumentEnd,
         SelectLeft,
         SelectRight,
         SelectUp,
         SelectDown,
+        SelectWordLeft,
+        SelectWordRight,
+        SelectPageUp,
+        SelectPageDown,
+        SelectDocumentStart,
+        SelectDocumentEnd,
         MoveLineStart,
         MoveLineEnd,
         SelectLineStart,
@@ -282,6 +294,8 @@ struct LstGpuiApp {
     show_gutter: bool,
     show_wrap: bool,
     drag_selecting: Option<DragSelectionMode>,
+    drag_last_point: Option<Point<Pixels>>,
+    drag_autoscroll_active: bool,
     find: FindState,
     goto_line: Option<String>,
     find_query_input: Entity<InputField>,
@@ -353,6 +367,8 @@ impl LstGpuiApp {
             show_gutter: true,
             show_wrap: true,
             drag_selecting: None,
+            drag_last_point: None,
+            drag_autoscroll_active: false,
             find: FindState::new(),
             goto_line: None,
             find_query_input: find_query_input.clone(),
@@ -1152,6 +1168,33 @@ impl LstGpuiApp {
         cx.notify();
     }
 
+    fn move_word_boundary(&mut self, backward: bool, select: bool, cx: &mut Context<Self>) {
+        let target = {
+            let tab = self.active_tab();
+            if !select && tab.has_selection() {
+                if backward {
+                    tab.selection.start
+                } else {
+                    tab.selection.end
+                }
+            } else if backward {
+                previous_word_boundary(&tab.buffer, tab.cursor_char())
+            } else {
+                next_word_boundary(&tab.buffer, tab.cursor_char())
+            }
+        };
+
+        let tab = self.active_tab_mut();
+        tab.preferred_column = None;
+        if select {
+            tab.select_to(target);
+        } else {
+            tab.move_to(target);
+        }
+        self.reveal_active_cursor();
+        cx.notify();
+    }
+
     fn move_vertical(
         &mut self,
         delta: isize,
@@ -1184,6 +1227,26 @@ impl LstGpuiApp {
         }
         self.reveal_active_cursor();
         cx.notify();
+    }
+
+    fn active_page_rows(&self) -> usize {
+        let height = self
+            .active_tab()
+            .geometry
+            .borrow()
+            .bounds
+            .map(|bounds| bounds.size.height)
+            .filter(|height| *height > px(0.0))
+            .unwrap_or_else(|| px(WINDOW_HEIGHT));
+        ((height / px(ROW_HEIGHT)) as usize)
+            .saturating_sub(2)
+            .max(1)
+    }
+
+    fn move_page(&mut self, down: bool, select: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let rows = self.active_page_rows() as isize;
+        let delta = if down { rows } else { -rows };
+        self.move_vertical(delta, select, window, cx);
     }
 
     fn move_visual_row(&mut self, delta: isize, select: bool, window: &mut Window) -> bool {
@@ -1281,6 +1344,23 @@ impl LstGpuiApp {
         cx.notify();
     }
 
+    fn move_document_boundary(&mut self, to_end: bool, select: bool, cx: &mut Context<Self>) {
+        let target = if to_end {
+            self.active_tab().len_chars()
+        } else {
+            0
+        };
+        let tab = self.active_tab_mut();
+        tab.preferred_column = None;
+        if select {
+            tab.select_to(target);
+        } else {
+            tab.move_to(target);
+        }
+        self.reveal_active_cursor();
+        cx.notify();
+    }
+
     fn copy_selection_to_clipboard(&mut self, cx: &mut Context<Self>) {
         let Some(text) = self.active_tab().selected_text() else {
             return;
@@ -1319,7 +1399,7 @@ impl LstGpuiApp {
         let apply_started = Instant::now();
         {
             let tab = self.active_tab_mut();
-            tab.push_undo_snapshot(EditKind::Insert, text.chars().any(char::is_whitespace));
+            tab.push_undo_snapshot(EditKind::Insert, true);
             let range = tab
                 .marked_range
                 .clone()
@@ -1528,12 +1608,14 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus_handle);
+        self.drag_last_point = Some(event.position);
         let index = self.active_char_index_for_point(event.position);
         if event.click_count >= 3 {
             let line_range = line_range_at_char(&self.active_tab().buffer, index);
             self.drag_selecting = Some(DragSelectionMode::Line(line_range.clone()));
             self.select_active_range(line_range);
             self.sync_primary_selection(cx);
+            self.schedule_drag_autoscroll(window, cx);
             cx.notify();
             return;
         }
@@ -1542,6 +1624,7 @@ impl LstGpuiApp {
             self.drag_selecting = Some(DragSelectionMode::Word(word_range.clone()));
             self.select_active_range(word_range);
             self.sync_primary_selection(cx);
+            self.schedule_drag_autoscroll(window, cx);
             cx.notify();
             return;
         }
@@ -1555,16 +1638,26 @@ impl LstGpuiApp {
             tab.preferred_column = None;
         }
         self.reveal_active_cursor();
+        self.schedule_drag_autoscroll(window, cx);
         cx.notify();
     }
 
     fn on_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let index = self.active_char_index_for_point(event.position);
+        self.drag_last_point = Some(event.position);
+        if !self.apply_drag_selection_at_point(event.position) {
+            return;
+        }
+        self.schedule_drag_autoscroll(window, cx);
+        cx.notify();
+    }
+
+    fn apply_drag_selection_at_point(&mut self, position: Point<Pixels>) -> bool {
+        let index = self.active_char_index_for_point(position);
         match self.drag_selecting.clone() {
             Some(DragSelectionMode::Character) => self.active_tab_mut().select_to(index),
             Some(DragSelectionMode::Word(anchor)) => {
@@ -1575,16 +1668,57 @@ impl LstGpuiApp {
                 let current = line_range_at_char(&self.active_tab().buffer, index);
                 self.select_active_drag_range(anchor, current);
             }
-            None => return,
+            None => return false,
         }
         self.reveal_active_cursor();
-        cx.notify();
+        true
     }
 
     fn on_mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         self.drag_selecting = None;
+        self.drag_last_point = None;
+        self.drag_autoscroll_active = false;
         self.sync_primary_selection(cx);
         cx.notify();
+    }
+
+    fn schedule_drag_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drag_autoscroll_active || self.drag_autoscroll_target().is_none() {
+            return;
+        }
+        self.drag_autoscroll_active = true;
+        cx.on_next_frame(window, |this, window, cx| {
+            this.run_drag_autoscroll(window, cx);
+        });
+    }
+
+    fn run_drag_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.drag_autoscroll_active = false;
+        if self.drag_selecting.is_none() {
+            self.drag_last_point = None;
+            return;
+        }
+
+        if let Some(target) = self.drag_autoscroll_target() {
+            self.active_tab().scroll.set_offset(point(px(0.0), -target));
+            if let Some(position) = self.drag_last_point {
+                self.apply_drag_selection_at_point(position);
+            }
+            cx.notify();
+        }
+        self.schedule_drag_autoscroll(window, cx);
+    }
+
+    fn drag_autoscroll_target(&self) -> Option<Pixels> {
+        let position = self.drag_last_point?;
+        let geometry = self.active_tab().geometry.borrow();
+        let bounds = geometry.bounds?;
+        let delta = drag_autoscroll_delta(position, bounds)?;
+        let tab = self.active_tab();
+        let current = (-tab.scroll.offset().y).max(px(0.0));
+        let max = tab.scroll.max_offset().height.max(px(0.0));
+        let target = (current + delta).max(px(0.0)).min(max);
+        (target != current).then_some(target)
     }
 
     fn select_active_range(&mut self, range: Range<usize>) {
@@ -1749,12 +1883,56 @@ impl LstGpuiApp {
         }
     }
 
+    fn handle_move_word_left(&mut self, _: &MoveWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_word_boundary(true, false, cx);
+    }
+
+    fn handle_move_word_right(
+        &mut self,
+        _: &MoveWordRight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_word_boundary(false, false, cx);
+    }
+
     fn handle_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
         self.move_vertical(-1, false, window, cx);
     }
 
     fn handle_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
         self.move_vertical(1, false, window, cx);
+    }
+
+    fn handle_move_page_up(&mut self, _: &MovePageUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_page(false, false, window, cx);
+    }
+
+    fn handle_move_page_down(
+        &mut self,
+        _: &MovePageDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_page(true, false, window, cx);
+    }
+
+    fn handle_move_document_start(
+        &mut self,
+        _: &MoveDocumentStart,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_document_boundary(false, false, cx);
+    }
+
+    fn handle_move_document_end(
+        &mut self,
+        _: &MoveDocumentEnd,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_document_boundary(true, false, cx);
     }
 
     fn handle_select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -1765,12 +1943,66 @@ impl LstGpuiApp {
         self.move_horizontal(1, true, cx);
     }
 
+    fn handle_select_word_left(
+        &mut self,
+        _: &SelectWordLeft,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_word_boundary(true, true, cx);
+    }
+
+    fn handle_select_word_right(
+        &mut self,
+        _: &SelectWordRight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_word_boundary(false, true, cx);
+    }
+
     fn handle_select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
         self.move_vertical(-1, true, window, cx);
     }
 
     fn handle_select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
         self.move_vertical(1, true, window, cx);
+    }
+
+    fn handle_select_page_up(
+        &mut self,
+        _: &SelectPageUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_page(false, true, window, cx);
+    }
+
+    fn handle_select_page_down(
+        &mut self,
+        _: &SelectPageDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_page(true, true, window, cx);
+    }
+
+    fn handle_select_document_start(
+        &mut self,
+        _: &SelectDocumentStart,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_document_boundary(false, true, cx);
+    }
+
+    fn handle_select_document_end(
+        &mut self,
+        _: &SelectDocumentEnd,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_document_boundary(true, true, cx);
     }
 
     fn handle_move_line_start(
@@ -2652,6 +2884,40 @@ fn token_class(ch: char) -> TokenClass {
     }
 }
 
+fn previous_word_boundary(buffer: &Rope, char_index: usize) -> usize {
+    let chars: Vec<char> = buffer.chars().collect();
+    let mut index = char_index.min(chars.len());
+    while index > 0 && token_class(chars[index - 1]) == TokenClass::Whitespace {
+        index -= 1;
+    }
+    if index == 0 {
+        return 0;
+    }
+
+    let class = token_class(chars[index - 1]);
+    while index > 0 && token_class(chars[index - 1]) == class {
+        index -= 1;
+    }
+    index
+}
+
+fn next_word_boundary(buffer: &Rope, char_index: usize) -> usize {
+    let chars: Vec<char> = buffer.chars().collect();
+    let mut index = char_index.min(chars.len());
+    while index < chars.len() && token_class(chars[index]) == TokenClass::Whitespace {
+        index += 1;
+    }
+    if index == chars.len() {
+        return chars.len();
+    }
+
+    let class = token_class(chars[index]);
+    while index < chars.len() && token_class(chars[index]) == class {
+        index += 1;
+    }
+    index
+}
+
 fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     let clamped = char_index.min(buffer.len_chars());
     let line = buffer.char_to_line(clamped);
@@ -2697,6 +2963,25 @@ fn drag_selection_range(anchor: Range<usize>, current: Range<usize>) -> (Range<u
             anchor.start.min(current.start)..current.end.max(anchor.end),
             false,
         )
+    }
+}
+
+fn drag_autoscroll_delta(position: Point<Pixels>, bounds: Bounds<Pixels>) -> Option<Pixels> {
+    const EDGE_PX: f32 = 36.0;
+    let edge = px(EDGE_PX);
+    let top_edge = bounds.top() + edge;
+    let bottom_edge = bounds.bottom() - edge;
+
+    if position.y < top_edge {
+        let distance = ((top_edge - position.y) / px(1.0)).min(EDGE_PX * 2.0);
+        let rows = 0.5 + distance / EDGE_PX;
+        Some(-px((ROW_HEIGHT * rows).min(ROW_HEIGHT * 3.0)))
+    } else if position.y > bottom_edge {
+        let distance = ((position.y - bottom_edge) / px(1.0)).min(EDGE_PX * 2.0);
+        let rows = 0.5 + distance / EDGE_PX;
+        Some(px((ROW_HEIGHT * rows).min(ROW_HEIGHT * 3.0)))
+    } else {
+        None
     }
 }
 

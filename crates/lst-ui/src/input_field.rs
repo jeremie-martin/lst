@@ -21,11 +21,17 @@ actions!(
         FieldDelete,
         FieldLeft,
         FieldRight,
+        FieldWordLeft,
+        FieldWordRight,
         FieldSelectLeft,
         FieldSelectRight,
+        FieldSelectWordLeft,
+        FieldSelectWordRight,
         FieldSelectAll,
         FieldHome,
         FieldEnd,
+        FieldSelectHome,
+        FieldSelectEnd,
         FieldPaste,
         FieldCopy,
         FieldCut,
@@ -51,8 +57,26 @@ pub fn input_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("delete", FieldDelete, Some("InlineInput")),
         KeyBinding::new("left", FieldLeft, Some("InlineInput")),
         KeyBinding::new("right", FieldRight, Some("InlineInput")),
+        KeyBinding::new("ctrl-left", FieldWordLeft, Some("InlineInput")),
+        KeyBinding::new("ctrl-right", FieldWordRight, Some("InlineInput")),
+        KeyBinding::new("alt-left", FieldWordLeft, Some("InlineInput")),
+        KeyBinding::new("alt-right", FieldWordRight, Some("InlineInput")),
+        KeyBinding::new("cmd-left", FieldHome, Some("InlineInput")),
+        KeyBinding::new("cmd-right", FieldEnd, Some("InlineInput")),
         KeyBinding::new("shift-left", FieldSelectLeft, Some("InlineInput")),
         KeyBinding::new("shift-right", FieldSelectRight, Some("InlineInput")),
+        KeyBinding::new("ctrl-shift-left", FieldSelectWordLeft, Some("InlineInput")),
+        KeyBinding::new(
+            "ctrl-shift-right",
+            FieldSelectWordRight,
+            Some("InlineInput"),
+        ),
+        KeyBinding::new("alt-shift-left", FieldSelectWordLeft, Some("InlineInput")),
+        KeyBinding::new("alt-shift-right", FieldSelectWordRight, Some("InlineInput")),
+        KeyBinding::new("shift-home", FieldSelectHome, Some("InlineInput")),
+        KeyBinding::new("shift-end", FieldSelectEnd, Some("InlineInput")),
+        KeyBinding::new("cmd-shift-left", FieldSelectHome, Some("InlineInput")),
+        KeyBinding::new("cmd-shift-right", FieldSelectEnd, Some("InlineInput")),
         KeyBinding::new("ctrl-a", FieldSelectAll, Some("InlineInput")),
         KeyBinding::new("cmd-a", FieldSelectAll, Some("InlineInput")),
         KeyBinding::new("ctrl-c", FieldCopy, Some("InlineInput")),
@@ -79,7 +103,14 @@ pub struct InputField {
     marked_range: Option<Range<usize>>,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
-    is_selecting: bool,
+    drag_selecting: Option<InputDragSelectionMode>,
+}
+
+#[derive(Clone, Debug)]
+enum InputDragSelectionMode {
+    Character,
+    Word(Range<usize>),
+    All,
 }
 
 impl InputField {
@@ -93,7 +124,7 @@ impl InputField {
             marked_range: None,
             last_layout: None,
             last_bounds: None,
-            is_selecting: false,
+            drag_selecting: None,
         }
     }
 
@@ -168,6 +199,14 @@ impl InputField {
         cx.notify();
     }
 
+    fn select_range(&mut self, range: Range<usize>, reversed: bool, cx: &mut Context<Self>) {
+        self.selected_range =
+            range.start.min(self.content.len())..range.end.min(self.content.len());
+        self.selection_reversed = reversed;
+        self.marked_range = None;
+        cx.notify();
+    }
+
     fn previous_boundary(&self, offset: usize) -> usize {
         self.content
             .grapheme_indices(true)
@@ -181,6 +220,18 @@ impl InputField {
             .grapheme_indices(true)
             .find_map(|(idx, _)| (idx > offset).then_some(idx))
             .unwrap_or(self.content.len())
+    }
+
+    fn previous_word_boundary(&self, offset: usize) -> usize {
+        previous_word_boundary_in_text(self.content.as_ref(), offset)
+    }
+
+    fn next_word_boundary(&self, offset: usize) -> usize {
+        next_word_boundary_in_text(self.content.as_ref(), offset)
+    }
+
+    fn word_range_at_offset(&self, offset: usize) -> Range<usize> {
+        word_range_in_text(self.content.as_ref(), offset)
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
@@ -255,12 +306,46 @@ impl InputField {
         }
     }
 
+    fn word_left(&mut self, _: &FieldWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.move_to(self.previous_word_boundary(self.cursor_offset()), cx);
+        } else {
+            self.move_to(self.selected_range.start, cx);
+        }
+    }
+
+    fn word_right(&mut self, _: &FieldWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.move_to(self.next_word_boundary(self.cursor_offset()), cx);
+        } else {
+            self.move_to(self.selected_range.end, cx);
+        }
+    }
+
     fn select_left(&mut self, _: &FieldSelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.select_to(self.previous_boundary(self.cursor_offset()), cx);
     }
 
     fn select_right(&mut self, _: &FieldSelectRight, _: &mut Window, cx: &mut Context<Self>) {
         self.select_to(self.next_boundary(self.cursor_offset()), cx);
+    }
+
+    fn select_word_left(
+        &mut self,
+        _: &FieldSelectWordLeft,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.previous_word_boundary(self.cursor_offset()), cx);
+    }
+
+    fn select_word_right(
+        &mut self,
+        _: &FieldSelectWordRight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.next_word_boundary(self.cursor_offset()), cx);
     }
 
     fn select_all_action(&mut self, _: &FieldSelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -273,6 +358,14 @@ impl InputField {
 
     fn end(&mut self, _: &FieldEnd, _: &mut Window, cx: &mut Context<Self>) {
         self.move_to(self.content.len(), cx);
+    }
+
+    fn select_home(&mut self, _: &FieldSelectHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(0, cx);
+    }
+
+    fn select_end(&mut self, _: &FieldSelectEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.content.len(), cx);
     }
 
     fn backspace(&mut self, _: &FieldBackspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -331,25 +424,147 @@ impl InputField {
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.is_selecting = true;
+        window.focus(&self.focus_handle);
+        let offset = self.index_for_mouse_position(event.position);
+        if event.click_count >= 3 {
+            self.drag_selecting = Some(InputDragSelectionMode::All);
+            self.select_all(cx);
+            return;
+        }
+        if event.click_count == 2 {
+            let range = self.word_range_at_offset(offset);
+            self.drag_selecting = Some(InputDragSelectionMode::Word(range.clone()));
+            self.select_range(range, false, cx);
+            return;
+        }
+
+        self.drag_selecting = Some(InputDragSelectionMode::Character);
         if event.modifiers.shift {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+            self.select_to(offset, cx);
         } else {
-            self.move_to(self.index_for_mouse_position(event.position), cx);
+            self.move_to(offset, cx);
         }
     }
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
-        self.is_selecting = false;
+        self.drag_selecting = None;
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_selecting {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+        let offset = self.index_for_mouse_position(event.position);
+        match self.drag_selecting.clone() {
+            Some(InputDragSelectionMode::Character) => self.select_to(offset, cx),
+            Some(InputDragSelectionMode::Word(anchor)) => {
+                let current = self.word_range_at_offset(offset);
+                let (range, reversed) = drag_selection_range(anchor, current);
+                self.select_range(range, reversed, cx);
+            }
+            Some(InputDragSelectionMode::All) => self.select_all(cx),
+            None => {}
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputTokenClass {
+    Whitespace,
+    Word,
+    Symbol,
+}
+
+fn input_token_class(ch: char) -> InputTokenClass {
+    if ch.is_whitespace() {
+        InputTokenClass::Whitespace
+    } else if ch.is_alphanumeric() || ch == '_' {
+        InputTokenClass::Word
+    } else {
+        InputTokenClass::Symbol
+    }
+}
+
+fn previous_word_boundary_in_text(text: &str, offset: usize) -> usize {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut index = chars.partition_point(|(byte, _)| *byte < offset.min(text.len()));
+    while index > 0 && input_token_class(chars[index - 1].1) == InputTokenClass::Whitespace {
+        index -= 1;
+    }
+    if index == 0 {
+        return 0;
+    }
+
+    let class = input_token_class(chars[index - 1].1);
+    while index > 0 && input_token_class(chars[index - 1].1) == class {
+        index -= 1;
+    }
+    chars.get(index).map_or(0, |(byte, _)| *byte)
+}
+
+fn next_word_boundary_in_text(text: &str, offset: usize) -> usize {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut index = chars.partition_point(|(byte, _)| *byte < offset.min(text.len()));
+    while index < chars.len() && input_token_class(chars[index].1) == InputTokenClass::Whitespace {
+        index += 1;
+    }
+    if index == chars.len() {
+        return text.len();
+    }
+
+    let class = input_token_class(chars[index].1);
+    while index < chars.len() && input_token_class(chars[index].1) == class {
+        index += 1;
+    }
+    chars.get(index).map_or(text.len(), |(byte, _)| *byte)
+}
+
+fn char_index_containing_offset(text: &str, offset: usize) -> Option<usize> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    if chars.is_empty() {
+        return None;
+    }
+
+    let offset = offset.min(text.len());
+    if offset == text.len() {
+        return Some(chars.len() - 1);
+    }
+
+    chars.iter().enumerate().find_map(|(index, (start, _))| {
+        let end = chars.get(index + 1).map_or(text.len(), |(byte, _)| *byte);
+        (offset >= *start && offset < end).then_some(index)
+    })
+}
+
+fn word_range_in_text(text: &str, offset: usize) -> Range<usize> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let Some(local) = char_index_containing_offset(text, offset) else {
+        return 0..0;
+    };
+
+    let class = input_token_class(chars[local].1);
+    let mut start = local;
+    while start > 0 && input_token_class(chars[start - 1].1) == class {
+        start -= 1;
+    }
+    let mut end = local + 1;
+    while end < chars.len() && input_token_class(chars[end].1) == class {
+        end += 1;
+    }
+
+    let start_byte = chars[start].0;
+    let end_byte = chars.get(end).map_or(text.len(), |(byte, _)| *byte);
+    start_byte..end_byte
+}
+
+fn drag_selection_range(anchor: Range<usize>, current: Range<usize>) -> (Range<usize>, bool) {
+    if current.start < anchor.start {
+        (current.start..anchor.end.max(current.end), true)
+    } else {
+        (
+            anchor.start.min(current.start)..current.end.max(anchor.end),
+            false,
+        )
     }
 }
 
@@ -678,11 +893,17 @@ impl Render for InputField {
             .key_context("InlineInput")
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
             .on_action(cx.listener(Self::select_left))
             .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
             .on_action(cx.listener(Self::select_all_action))
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::select_home))
+            .on_action(cx.listener(Self::select_end))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::copy))
@@ -718,6 +939,14 @@ impl Render for InputField {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::Keystroke;
+
+    fn has_binding<A: gpui::Action + 'static>(keystroke: &str) -> bool {
+        let typed = [Keystroke::parse(keystroke).expect("valid test keystroke")];
+        input_keybindings().iter().any(|binding| {
+            binding.match_keystrokes(&typed) == Some(false) && binding.action().as_any().is::<A>()
+        })
+    }
 
     #[test]
     fn input_keybindings_include_overlay_navigation_actions() {
@@ -730,5 +959,48 @@ mod tests {
         assert!(names.iter().any(|name| name.ends_with("FieldCancel")));
         assert!(names.iter().any(|name| name.ends_with("FieldNext")));
         assert!(names.iter().any(|name| name.ends_with("FieldPrevious")));
+    }
+
+    #[test]
+    fn input_keybindings_include_standard_word_and_boundary_actions() {
+        assert!(has_binding::<FieldWordLeft>("ctrl-left"));
+        assert!(has_binding::<FieldWordRight>("ctrl-right"));
+        assert!(has_binding::<FieldSelectWordLeft>("ctrl-shift-left"));
+        assert!(has_binding::<FieldSelectWordRight>("ctrl-shift-right"));
+        assert!(has_binding::<FieldSelectHome>("shift-home"));
+        assert!(has_binding::<FieldSelectEnd>("shift-end"));
+    }
+
+    #[test]
+    fn input_word_ranges_group_words_symbols_and_whitespace() {
+        let text = "alpha beta::gamma";
+
+        assert_eq!(word_range_in_text(text, 7), 6..10);
+        assert_eq!(word_range_in_text(text, 10), 10..12);
+        assert_eq!(word_range_in_text(text, 5), 5..6);
+    }
+
+    #[test]
+    fn input_word_boundaries_are_utf8_safe() {
+        let text = "one γamma two";
+
+        assert_eq!(next_word_boundary_in_text(text, 0), 3);
+        assert_eq!(next_word_boundary_in_text(text, 3), "one γamma".len());
+        assert_eq!(
+            previous_word_boundary_in_text(text, "one γamma".len()),
+            "one ".len()
+        );
+    }
+
+    #[test]
+    fn input_word_drag_selection_extends_from_anchor_word() {
+        let (selection, reversed) = drag_selection_range(6..10, 13..18);
+
+        assert_eq!(selection, 6..18);
+        assert!(!reversed);
+
+        let (selection, reversed) = drag_selection_range(6..10, 0..5);
+        assert_eq!(selection, 0..10);
+        assert!(reversed);
     }
 }
