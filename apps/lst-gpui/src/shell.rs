@@ -13,8 +13,7 @@ use crate::actions::attach_workspace_actions;
 use crate::syntax::syntax_mode_for_path;
 use crate::viewport::{buffer_content_height, paint_viewport, prepare_viewport_paint_state};
 use crate::{
-    code_char_width, ensure_wrap_layout, LstGpuiApp, ModelInputSync, CODE_FONT_SIZE, ROW_HEIGHT,
-    WINDOW_WIDTH,
+    code_char_width, ensure_wrap_layout, LstGpuiApp, CODE_FONT_SIZE, ROW_HEIGHT, WINDOW_WIDTH,
 };
 
 impl LstGpuiApp {
@@ -49,7 +48,7 @@ impl LstGpuiApp {
                 cx.notify();
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.update_model(cx, ModelInputSync::None, true, |model| {
+                this.update_model(cx, true, |model| {
                     model.set_active_tab(ix);
                 });
                 window.focus(&this.focus_handle);
@@ -84,7 +83,7 @@ impl LstGpuiApp {
                 .child(
                     IconButton::new("new-tab-button", IconKind::Plus).on_click(cx.listener(
                         |this, _, _window, cx| {
-                            this.update_model(cx, ModelInputSync::None, true, |model| {
+                            this.update_model(cx, true, |model| {
                                 model.new_tab();
                             });
                             cx.stop_propagation();
@@ -200,14 +199,14 @@ impl LstGpuiApp {
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
             if self.model.goto_line().is_some() {
-                self.update_model(cx, ModelInputSync::None, true, |model| {
+                self.update_model(cx, true, |model| {
                     model.close_goto_line_panel();
                 });
                 cx.stop_propagation();
                 return;
             }
             if self.model.find().visible {
-                self.update_model(cx, ModelInputSync::None, true, |model| {
+                self.update_model(cx, true, |model| {
                     model.close_find_panel();
                 });
                 cx.stop_propagation();

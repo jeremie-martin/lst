@@ -160,14 +160,6 @@ struct LstGpuiApp {
     _shell_subscriptions: Vec<Subscription>,
 }
 
-#[derive(Clone, Copy)]
-enum ModelInputSync {
-    None,
-    Find,
-    Goto,
-    Changed,
-}
-
 impl LstGpuiApp {
     fn new(cx: &mut Context<Self>, launch: LaunchArgs) -> Self {
         let find_query_input = cx.new(|cx| InputField::new(cx, "Find"));
@@ -292,7 +284,6 @@ impl LstGpuiApp {
     fn update_model(
         &mut self,
         cx: &mut Context<Self>,
-        input_sync: ModelInputSync,
         notify_after_update: bool,
         update: impl FnOnce(&mut EditorModel),
     ) {
@@ -302,16 +293,9 @@ impl LstGpuiApp {
         update(&mut self.model);
         self.sync_tab_views(old_show_wrap);
         let effects = self.model.drain_effects();
-        match input_sync {
-            ModelInputSync::None => {}
-            ModelInputSync::Find => self.sync_find_inputs(cx),
-            ModelInputSync::Goto => self.sync_goto_input(cx),
-            ModelInputSync::Changed => {
-                self.sync_find_inputs_if_changed(old_find_state, cx);
-                if self.model.goto_line() != old_goto_line.as_deref() {
-                    self.sync_goto_input(cx);
-                }
-            }
+        self.sync_find_inputs_if_changed(old_find_state, cx);
+        if self.model.goto_line() != old_goto_line.as_deref() {
+            self.sync_goto_input(cx);
         }
         self.handle_model_effects(effects, cx);
         if notify_after_update {
@@ -356,20 +340,15 @@ impl LstGpuiApp {
     fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
         match event {
             InputFieldEvent::Changed(text) => {
-                self.update_model(cx, ModelInputSync::None, true, |model| {
+                self.update_model(cx, true, |model| {
                     model.update_find_query_and_select(text.clone());
                 });
             }
             InputFieldEvent::Submitted => {
-                self.update_model(cx, ModelInputSync::None, true, EditorModel::find_next_match);
+                self.update_model(cx, true, EditorModel::find_next_match);
             }
             InputFieldEvent::Cancelled => {
-                self.update_model(
-                    cx,
-                    ModelInputSync::None,
-                    true,
-                    EditorModel::close_find_panel,
-                );
+                self.update_model(cx, true, EditorModel::close_find_panel);
             }
             InputFieldEvent::NextRequested => {
                 if self.model.find().show_replace {
@@ -384,25 +363,15 @@ impl LstGpuiApp {
     fn handle_find_replace_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
         match event {
             InputFieldEvent::Changed(text) => {
-                self.update_model(cx, ModelInputSync::None, true, |model| {
+                self.update_model(cx, true, |model| {
                     model.update_find_replacement(text.clone());
                 });
             }
             InputFieldEvent::Submitted => {
-                self.update_model(
-                    cx,
-                    ModelInputSync::None,
-                    true,
-                    EditorModel::replace_current_match,
-                );
+                self.update_model(cx, true, EditorModel::replace_current_match);
             }
             InputFieldEvent::Cancelled => {
-                self.update_model(
-                    cx,
-                    ModelInputSync::None,
-                    true,
-                    EditorModel::close_find_panel,
-                );
+                self.update_model(cx, true, EditorModel::close_find_panel);
             }
             InputFieldEvent::NextRequested => {}
             InputFieldEvent::PreviousRequested => {
@@ -415,25 +384,15 @@ impl LstGpuiApp {
     fn handle_goto_line_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
         match event {
             InputFieldEvent::Changed(text) => {
-                self.update_model(cx, ModelInputSync::None, true, |model| {
+                self.update_model(cx, true, |model| {
                     model.update_goto_line(text.clone());
                 });
             }
             InputFieldEvent::Submitted => {
-                self.update_model(
-                    cx,
-                    ModelInputSync::None,
-                    true,
-                    EditorModel::submit_goto_line_input,
-                );
+                self.update_model(cx, true, EditorModel::submit_goto_line_input);
             }
             InputFieldEvent::Cancelled => {
-                self.update_model(
-                    cx,
-                    ModelInputSync::None,
-                    true,
-                    EditorModel::close_goto_line_panel,
-                );
+                self.update_model(cx, true, EditorModel::close_goto_line_panel);
             }
             InputFieldEvent::NextRequested | InputFieldEvent::PreviousRequested => {}
         }
@@ -579,7 +538,7 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         let wrap_columns = self.active_wrap_columns(window);
-        self.update_model(cx, ModelInputSync::None, true, |model| {
+        self.update_model(cx, true, |model| {
             model.move_display_rows_by(delta, select, wrap_columns);
         });
     }
@@ -640,7 +599,7 @@ impl LstGpuiApp {
         }
 
         self.hovered_tab = None;
-        self.update_model(cx, ModelInputSync::None, true, |model| {
+        self.update_model(cx, true, |model| {
             model.close_tab(index);
         });
     }

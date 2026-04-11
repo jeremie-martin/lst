@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{LstGpuiApp, ModelInputSync};
+use crate::LstGpuiApp;
 
 #[derive(Clone, Debug)]
 struct AutosaveJob {
@@ -54,11 +54,11 @@ impl LstGpuiApp {
                 }
                 EditorEffect::ReadClipboard => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        self.update_model(cx, ModelInputSync::None, true, |model| {
+                        self.update_model(cx, true, |model| {
                             model.paste_text(text);
                         });
                     } else {
-                        self.update_model(cx, ModelInputSync::None, true, |model| {
+                        self.update_model(cx, true, |model| {
                             model.clipboard_unavailable();
                         });
                     }
@@ -106,7 +106,7 @@ impl LstGpuiApp {
                     .await;
                 if view
                     .update(cx, |view, cx| {
-                        view.update_model(cx, ModelInputSync::None, false, |model| {
+                        view.update_model(cx, false, |model| {
                             model.autosave_tick();
                         });
                     })
@@ -165,19 +165,19 @@ impl LstGpuiApp {
 
     fn apply_open_file_results(&mut self, results: OpenFileResults, cx: &mut Context<Self>) {
         for (path, message) in results.failed {
-            self.update_model(cx, ModelInputSync::None, true, |model| {
+            self.update_model(cx, true, |model| {
                 model.open_file_failed(path, message);
             });
         }
         if !results.opened.is_empty() {
-            self.update_model(cx, ModelInputSync::None, true, |model| {
+            self.update_model(cx, true, |model| {
                 model.open_files(results.opened);
             });
         }
     }
 
     fn apply_save_file_result(&mut self, result: SaveFileResult, cx: &mut Context<Self>) {
-        self.update_model(cx, ModelInputSync::None, true, |model| match result {
+        self.update_model(cx, true, |model| match result {
             SaveFileResult::Saved(path) => model.save_finished(path),
             SaveFileResult::Failed { path, message } => model.save_failed(path, message),
         });
@@ -188,7 +188,7 @@ impl LstGpuiApp {
         completion: AutosaveCompletion,
         cx: &mut Context<Self>,
     ) {
-        self.update_model(cx, ModelInputSync::None, true, |model| match completion {
+        self.update_model(cx, true, |model| match completion {
             AutosaveCompletion::Finished { path, revision } => {
                 model.autosave_finished(path, revision);
             }

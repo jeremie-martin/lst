@@ -1,11 +1,10 @@
-use lst_editor::document::UndoBoundary;
 use lst_editor::position::Position;
 use lst_editor::{
     vim::{
         Key as VimKey, Mode as VimMode, Modifiers as VimModifiers, NamedKey as VimNamedKey,
         TextSnapshot as VimTextSnapshot, VimCommand, VimState,
     },
-    EditorEffect, EditorModel, EditorTab, FocusTarget, TabId,
+    EditorEffect, EditorModel, EditorTab, FocusTarget, TabId, UndoBoundary,
 };
 
 fn enter_vim_normal(model: &mut EditorModel) {

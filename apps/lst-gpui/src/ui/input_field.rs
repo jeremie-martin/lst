@@ -114,6 +114,16 @@ enum InputDragSelectionMode {
     All,
 }
 
+#[derive(Clone, Copy)]
+enum TextMovement {
+    PreviousGrapheme,
+    NextGrapheme,
+    PreviousWord,
+    NextWord,
+    Start,
+    End,
+}
+
 #[derive(Clone)]
 struct InputText {
     content: SharedString,
@@ -137,12 +147,17 @@ impl InputText {
         self.content.to_string()
     }
 
-    fn set_text(&mut self, text: &str) {
+    fn set_text(&mut self, text: &str) -> bool {
+        if self.content.as_ref() == text {
+            return false;
+        }
+
         self.content = SharedString::from(text.to_string());
         let end = self.content.len();
         self.selected_range = end..end;
         self.selection_reversed = false;
         self.marked_range = None;
+        true
     }
 
     fn select_all(&mut self) {
@@ -207,6 +222,38 @@ impl InputText {
 
     fn word_range_at_offset(&self, offset: usize) -> Range<usize> {
         word_range_in_text(self.content.as_ref(), offset)
+    }
+
+    fn movement_target(&self, movement: TextMovement) -> usize {
+        match movement {
+            TextMovement::PreviousGrapheme => self.previous_boundary(self.cursor_offset()),
+            TextMovement::NextGrapheme => self.next_boundary(self.cursor_offset()),
+            TextMovement::PreviousWord => self.previous_word_boundary(self.cursor_offset()),
+            TextMovement::NextWord => self.next_word_boundary(self.cursor_offset()),
+            TextMovement::Start => 0,
+            TextMovement::End => self.content.len(),
+        }
+    }
+
+    fn move_cursor(&mut self, movement: TextMovement, select: bool) {
+        let target = if !select && !self.selected_range.is_empty() {
+            match movement {
+                TextMovement::PreviousGrapheme | TextMovement::PreviousWord => {
+                    self.selected_range.start
+                }
+                TextMovement::NextGrapheme | TextMovement::NextWord => self.selected_range.end,
+                TextMovement::Start => 0,
+                TextMovement::End => self.content.len(),
+            }
+        } else {
+            self.movement_target(movement)
+        };
+
+        if select {
+            self.select_to(target);
+        } else {
+            self.move_to(target);
+        }
     }
 
     fn selected_text(&self) -> Option<String> {
@@ -303,9 +350,10 @@ impl InputField {
     }
 
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.text.set_text(text);
-        self.last_layout = None;
-        cx.notify();
+        if self.text.set_text(text) {
+            self.last_layout = None;
+            cx.notify();
+        }
     }
 
     #[cfg(test)]
@@ -326,43 +374,9 @@ impl InputField {
         cx.emit(InputFieldEvent::Changed(self.text.content.to_string()));
     }
 
-    fn cursor_offset(&self) -> usize {
-        self.text.cursor_offset()
-    }
-
-    fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.text.move_to(offset);
+    fn move_text(&mut self, movement: TextMovement, select: bool, cx: &mut Context<Self>) {
+        self.text.move_cursor(movement, select);
         cx.notify();
-    }
-
-    fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.text.select_to(offset);
-        cx.notify();
-    }
-
-    fn select_range(&mut self, range: Range<usize>, reversed: bool, cx: &mut Context<Self>) {
-        self.text.select_range(range, reversed);
-        cx.notify();
-    }
-
-    fn previous_boundary(&self, offset: usize) -> usize {
-        self.text.previous_boundary(offset)
-    }
-
-    fn next_boundary(&self, offset: usize) -> usize {
-        self.text.next_boundary(offset)
-    }
-
-    fn previous_word_boundary(&self, offset: usize) -> usize {
-        self.text.previous_word_boundary(offset)
-    }
-
-    fn next_word_boundary(&self, offset: usize) -> usize {
-        self.text.next_word_boundary(offset)
-    }
-
-    fn word_range_at_offset(&self, offset: usize) -> Range<usize> {
-        self.text.word_range_at_offset(offset)
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
@@ -383,56 +397,28 @@ impl InputField {
         line.closest_index_for_x(position.x - bounds.left())
     }
 
-    fn offset_to_utf16(&self, offset: usize) -> usize {
-        self.text.offset_to_utf16(offset)
-    }
-
-    fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.text.range_to_utf16(range)
-    }
-
-    fn range_from_utf16(&self, range_utf16: &Range<usize>) -> Range<usize> {
-        self.text.range_from_utf16(range_utf16)
-    }
-
     fn left(&mut self, _: &FieldLeft, _: &mut Window, cx: &mut Context<Self>) {
-        if self.text.selected_range.is_empty() {
-            self.move_to(self.previous_boundary(self.cursor_offset()), cx);
-        } else {
-            self.move_to(self.text.selected_range.start, cx);
-        }
+        self.move_text(TextMovement::PreviousGrapheme, false, cx);
     }
 
     fn right(&mut self, _: &FieldRight, _: &mut Window, cx: &mut Context<Self>) {
-        if self.text.selected_range.is_empty() {
-            self.move_to(self.next_boundary(self.cursor_offset()), cx);
-        } else {
-            self.move_to(self.text.selected_range.end, cx);
-        }
+        self.move_text(TextMovement::NextGrapheme, false, cx);
     }
 
     fn word_left(&mut self, _: &FieldWordLeft, _: &mut Window, cx: &mut Context<Self>) {
-        if self.text.selected_range.is_empty() {
-            self.move_to(self.previous_word_boundary(self.cursor_offset()), cx);
-        } else {
-            self.move_to(self.text.selected_range.start, cx);
-        }
+        self.move_text(TextMovement::PreviousWord, false, cx);
     }
 
     fn word_right(&mut self, _: &FieldWordRight, _: &mut Window, cx: &mut Context<Self>) {
-        if self.text.selected_range.is_empty() {
-            self.move_to(self.next_word_boundary(self.cursor_offset()), cx);
-        } else {
-            self.move_to(self.text.selected_range.end, cx);
-        }
+        self.move_text(TextMovement::NextWord, false, cx);
     }
 
     fn select_left(&mut self, _: &FieldSelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.previous_boundary(self.cursor_offset()), cx);
+        self.move_text(TextMovement::PreviousGrapheme, true, cx);
     }
 
     fn select_right(&mut self, _: &FieldSelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.next_boundary(self.cursor_offset()), cx);
+        self.move_text(TextMovement::NextGrapheme, true, cx);
     }
 
     fn select_word_left(
@@ -441,7 +427,7 @@ impl InputField {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.select_to(self.previous_word_boundary(self.cursor_offset()), cx);
+        self.move_text(TextMovement::PreviousWord, true, cx);
     }
 
     fn select_word_right(
@@ -450,7 +436,7 @@ impl InputField {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.select_to(self.next_word_boundary(self.cursor_offset()), cx);
+        self.move_text(TextMovement::NextWord, true, cx);
     }
 
     fn select_all_action(&mut self, _: &FieldSelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -458,31 +444,33 @@ impl InputField {
     }
 
     fn home(&mut self, _: &FieldHome, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
+        self.move_text(TextMovement::Start, false, cx);
     }
 
     fn end(&mut self, _: &FieldEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.text.content.len(), cx);
+        self.move_text(TextMovement::End, false, cx);
     }
 
     fn select_home(&mut self, _: &FieldSelectHome, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(0, cx);
+        self.move_text(TextMovement::Start, true, cx);
     }
 
     fn select_end(&mut self, _: &FieldSelectEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.text.content.len(), cx);
+        self.move_text(TextMovement::End, true, cx);
     }
 
     fn backspace(&mut self, _: &FieldBackspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.text.selected_range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor_offset()), cx);
+            self.text
+                .select_to(self.text.movement_target(TextMovement::PreviousGrapheme));
         }
         self.replace_text_in_range(None, "", window, cx);
     }
 
     fn delete(&mut self, _: &FieldDelete, window: &mut Window, cx: &mut Context<Self>) {
         if self.text.selected_range.is_empty() {
-            self.select_to(self.next_boundary(self.cursor_offset()), cx);
+            self.text
+                .select_to(self.text.movement_target(TextMovement::NextGrapheme));
         }
         self.replace_text_in_range(None, "", window, cx);
     }
@@ -536,18 +524,20 @@ impl InputField {
             return;
         }
         if event.click_count == 2 {
-            let range = self.word_range_at_offset(offset);
+            let range = self.text.word_range_at_offset(offset);
             self.drag_selecting = Some(InputDragSelectionMode::Word(range.clone()));
-            self.select_range(range, false, cx);
+            self.text.select_range(range, false);
+            cx.notify();
             return;
         }
 
         self.drag_selecting = Some(InputDragSelectionMode::Character);
         if event.modifiers.shift {
-            self.select_to(offset, cx);
+            self.text.select_to(offset);
         } else {
-            self.move_to(offset, cx);
+            self.text.move_to(offset);
         }
+        cx.notify();
     }
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
@@ -557,11 +547,15 @@ impl InputField {
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         let offset = self.index_for_mouse_position(event.position);
         match self.drag_selecting.clone() {
-            Some(InputDragSelectionMode::Character) => self.select_to(offset, cx),
+            Some(InputDragSelectionMode::Character) => {
+                self.text.select_to(offset);
+                cx.notify();
+            }
             Some(InputDragSelectionMode::Word(anchor)) => {
-                let current = self.word_range_at_offset(offset);
+                let current = self.text.word_range_at_offset(offset);
                 let (range, reversed) = drag_selection_range(anchor, current);
-                self.select_range(range, reversed, cx);
+                self.text.select_range(range, reversed);
+                cx.notify();
             }
             Some(InputDragSelectionMode::All) => self.select_all(cx),
             None => {}
@@ -579,8 +573,8 @@ impl EntityInputHandler for InputField {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let range = self.range_from_utf16(&range_utf16);
-        actual_range.replace(self.range_to_utf16(&range));
+        let range = self.text.range_from_utf16(&range_utf16);
+        actual_range.replace(self.text.range_to_utf16(&range));
         Some(self.text.content[range].to_string())
     }
 
@@ -591,7 +585,7 @@ impl EntityInputHandler for InputField {
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: self.range_to_utf16(&self.text.selected_range),
+            range: self.text.range_to_utf16(&self.text.selected_range),
             reversed: self.text.selection_reversed,
         })
     }
@@ -604,7 +598,7 @@ impl EntityInputHandler for InputField {
         self.text
             .marked_range
             .as_ref()
-            .map(|range| self.range_to_utf16(range))
+            .map(|range| self.text.range_to_utf16(range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -650,7 +644,7 @@ impl EntityInputHandler for InputField {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let last_layout = self.last_layout.as_ref()?;
-        let range = self.range_from_utf16(&range_utf16);
+        let range = self.text.range_from_utf16(&range_utf16);
         Some(Bounds::from_corners(
             point(
                 bounds.left() + last_layout.x_for_index(range.start),
@@ -672,7 +666,7 @@ impl EntityInputHandler for InputField {
         let line_point = self.last_bounds?.localize(&point)?;
         let last_layout = self.last_layout.as_ref()?;
         let utf8_index = last_layout.index_for_x(point.x - line_point.x)?;
-        Some(self.offset_to_utf16(utf8_index))
+        Some(self.text.offset_to_utf16(utf8_index))
     }
 }
 
@@ -731,7 +725,7 @@ impl Element for TextElement {
         let input = self.input.read(cx);
         let content = input.text.content.clone();
         let selected_range = input.text.selected_range.clone();
-        let cursor = input.cursor_offset();
+        let cursor = input.text.cursor_offset();
 
         let (display_text, text_color) = if content.is_empty() {
             (input.placeholder.clone(), rgb(COLOR_MUTED))
@@ -948,6 +942,18 @@ mod tests {
         assert!(has_binding::<FieldSelectWordRight>("ctrl-shift-right"));
         assert!(has_binding::<FieldSelectHome>("shift-home"));
         assert!(has_binding::<FieldSelectEnd>("shift-end"));
+    }
+
+    #[test]
+    fn setting_same_input_text_preserves_selection() {
+        let mut text = InputText::new();
+        assert!(text.set_text("alpha"));
+        text.select_range(1..4, true);
+
+        assert!(!text.set_text("alpha"));
+
+        assert_eq!(text.selected_range, 1..4);
+        assert!(text.selection_reversed);
     }
 
     #[test]

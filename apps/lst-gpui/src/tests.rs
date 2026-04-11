@@ -201,6 +201,57 @@ fn app_find_input_flow_is_observable_at_app_boundary(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn app_find_open_syncs_selected_text_into_input(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "one two one", window, cx);
+    });
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| {
+            model.set_selection(0..3, false);
+        });
+    });
+
+    cx.dispatch_action(FindOpen);
+    cx.refresh().expect("refresh after focus request");
+    cx.run_until_parked();
+
+    let snapshot = app_snapshot(&view, cx);
+    assert!(snapshot.model.find_visible);
+    assert_eq!(snapshot.model.find_query, "one");
+    assert_eq!(snapshot.find_query_input, "one");
+    assert_eq!(snapshot.model.find_matches, 2);
+    assert_tab_views_match_model(&snapshot);
+}
+
+#[gpui::test]
+fn app_goto_input_syncs_open_submit_and_close(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "alpha\nbeta\ngamma", window, cx);
+    });
+
+    cx.dispatch_action(GotoLineOpen);
+    cx.refresh().expect("refresh after goto focus request");
+    cx.run_until_parked();
+    assert_eq!(app_snapshot(&view, cx).goto_line_input, "");
+
+    cx.simulate_input("2");
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.goto_line.as_deref(), Some("2"));
+    assert_eq!(snapshot.goto_line_input, "2");
+
+    cx.simulate_keystrokes("enter");
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.cursor, "alpha\n".chars().count());
+    assert_eq!(snapshot.model.goto_line, None);
+    assert_eq!(snapshot.goto_line_input, "");
+    assert_tab_views_match_model(&snapshot);
+}
+
+#[gpui::test]
 fn app_tab_actions_keep_model_and_tab_views_aligned(cx: &mut TestAppContext) {
     let (view, cx) = new_test_app(cx, LaunchArgs::default());
 

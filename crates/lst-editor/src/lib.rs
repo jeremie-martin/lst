@@ -1,6 +1,6 @@
-pub mod document;
-pub mod editor_ops;
-pub mod effect;
+mod document;
+mod editor_ops;
+mod effect;
 pub mod find;
 pub mod position;
 pub mod selection;
@@ -9,12 +9,13 @@ mod tab;
 pub mod vim;
 pub mod wrap;
 
+pub use document::{EditKind, UndoBoundary};
 pub use effect::{EditorEffect, FocusTarget};
 pub use snapshot::EditorSnapshot;
 pub use tab::{EditorTab, TabId};
 
 use crate::{
-    document::{char_to_position, line_indent_prefix, position_to_char, EditKind, UndoBoundary},
+    document::{char_to_position, line_indent_prefix, position_to_char},
     find::FindState,
     position::Position,
     selection::{next_word_boundary, previous_word_boundary},
@@ -1703,7 +1704,7 @@ impl EditorModel {
     }
 }
 
-pub fn next_active_after_tab_close(len: usize, active_index: usize, closed_index: usize) -> usize {
+fn next_active_after_tab_close(len: usize, active_index: usize, closed_index: usize) -> usize {
     debug_assert!(len > 0);
     debug_assert!(closed_index < len);
     debug_assert!(active_index < len);
@@ -1720,7 +1721,7 @@ pub fn next_active_after_tab_close(len: usize, active_index: usize, closed_index
     }
 }
 
-pub fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: usize) -> bool {
+fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: usize) -> bool {
     active_index == closed_index
 }
 

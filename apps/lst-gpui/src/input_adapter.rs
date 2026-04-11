@@ -6,7 +6,7 @@ use ropey::Rope;
 use std::ops::Range;
 
 use crate::viewport::{code_origin_pad, row_contains_cursor, x_for_global_char};
-use crate::{LstGpuiApp, ModelInputSync, CURSOR_WIDTH, ROW_HEIGHT};
+use crate::{LstGpuiApp, CURSOR_WIDTH, ROW_HEIGHT};
 
 impl LstGpuiApp {
     pub(crate) fn maybe_handle_vim_key(
@@ -24,7 +24,7 @@ impl LstGpuiApp {
         });
 
         if event.keystroke.key == "escape" {
-            self.update_model(cx, ModelInputSync::Changed, true, |model| {
+            self.update_model(cx, true, |model| {
                 model.handle_vim_escape();
             });
             cx.stop_propagation();
@@ -47,7 +47,7 @@ impl LstGpuiApp {
             return false;
         };
 
-        self.update_model(cx, ModelInputSync::Changed, true, |model| {
+        self.update_model(cx, true, |model| {
             model.handle_vim_key(key, mods);
         });
         cx.stop_propagation();
@@ -93,7 +93,7 @@ impl EntityInputHandler for LstGpuiApp {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.update_model(cx, ModelInputSync::None, true, |model| {
+        self.update_model(cx, true, |model| {
             model.clear_marked_text();
         });
     }
@@ -111,7 +111,7 @@ impl EntityInputHandler for LstGpuiApp {
                 .as_ref()
                 .map(|range| utf16_range_to_char_range(tab.buffer(), range))
         };
-        self.update_model(cx, ModelInputSync::None, true, |model| {
+        self.update_model(cx, true, |model| {
             model.replace_text_from_input(range, text.to_string());
         });
     }
@@ -133,7 +133,7 @@ impl EntityInputHandler for LstGpuiApp {
         let selected_range = new_selected_range_utf16
             .as_ref()
             .map(|range| utf16_range_to_char_range_in_text(new_text, range));
-        self.update_model(cx, ModelInputSync::None, true, |model| {
+        self.update_model(cx, true, |model| {
             model.replace_and_mark_text(range, new_text.to_string(), selected_range);
         });
     }
