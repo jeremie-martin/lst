@@ -1,5 +1,8 @@
 # Iced Text Editor Assessment
 
+Historical note: this document describes the archived iced implementation under
+`legacy/iced-lst`. It is not guidance for the active GPUI editor.
+
 This note captures the local framework audit that was run after the large-paste
 benchmark showed multi-second latency on a ~20k-line Rust file.
 

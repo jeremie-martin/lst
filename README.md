@@ -1,102 +1,71 @@
 # lst
 
-**Lucy's Simple Text editor**, a fast, minimal, good-looking text editor for Linux.
+`lst` is being rebuilt around the GPUI implementation in `apps/lst-gpui`.
+The active editor behavior lives in framework-neutral crates under `crates/`,
+and GPUI owns the rendering and desktop integration boundary.
 
-`lst` is a native Linux text editor built with [`iced`](https://iced.rs). It focuses on fast startup, low-latency typing, and a clean UI with just the editing features you actually use.
+The old iced implementation has been archived under `legacy/iced-lst`. It is
+not part of the active workspace and should not be used as a source of shared
+modules for new editor work.
 
-The repo also contains the in-progress GPUI rewrite at [apps/lst-gpui](/home/jmartin/lst/apps/lst-gpui), which now shares document logic through [crates/lst-core](/home/jmartin/lst/crates/lst-core) and shell components through [crates/lst-ui](/home/jmartin/lst/crates/lst-ui).
+## Active Layout
 
-## Highlights
+- `apps/lst-gpui`: active GPUI desktop editor.
+- `crates/lst-core`: document, selection, find, wrap, and low-level editor operations.
+- `crates/lst-editor`: framework-neutral editor model, commands, effects, and Vim state machine.
+- `crates/lst-ui`: reusable GPUI shell widgets.
+- `benchmarks`: shared benchmark corpora for active performance tests.
+- `legacy/iced-lst`: archived iced editor, kept for historical reference only.
 
-- Catppuccin Mocha theme with GPU-rendered UI
-- Multiple tabs, tab cycling, and tab reordering
-- Open files from the CLI or with the file picker
-- Scratchpad tabs: starting `lst` without files, or pressing `Ctrl+N`, creates a timestamped Markdown note
-- Autosave every 500 ms for modified tabs
-- Find, replace, and go to line
-- Rust syntax highlighting via a lightweight tree-sitter path, many other languages via `syntect`, plus custom Markdown highlighting
-- Word wrap, grouped undo and redo, auto-indent, and line numbers
-- Line selection and editing helpers, including gutter click, word delete, duplicate line, move line, and delete line
-- Vim-style modal editing with Insert, Normal, Visual, and Visual Line modes
-- Status bar with file info, cursor position, wrap state, and Vim mode when active
+## Build And Run
 
-## Common Shortcuts
-
-- `Ctrl+N` new scratchpad, `Ctrl+O` open, `Ctrl+S` save, `Ctrl+Shift+S` save as, `Ctrl+W` close tab, `Ctrl+Q` quit
-- `Ctrl+F` find, `Ctrl+H` find and replace, `Ctrl+G` go to line
-- `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs, `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` reorder tabs
-- `Ctrl+Z` undo, `Ctrl+Shift+Z` redo, `Alt+Z` toggle word wrap
-- `Ctrl+Backspace` / `Ctrl+Delete` delete by word
-- `Ctrl+Shift+K` delete line, `Alt+Up` / `Alt+Down` move line, `Ctrl+Shift+D` duplicate line
-- `Ctrl+L` select line, `Shift+Click` extend selection, click the gutter to select a full line
-- `Tab` / `Shift+Tab` indent or unindent, `Enter` keeps the current indentation
-- `Esc` enters Vim Normal mode, `/` starts find in Vim mode, `n` / `N` move between matches
+```bash
+cargo build --release -p lst-gpui
+./target/release/lst-gpui
+./target/release/lst-gpui README.md
+./target/release/lst-gpui --title "lst GPUI"
+```
 
 ## Install
 
-`install.sh` installs `lst` to `~/.local/bin/lst` by default.
-
-Requirements:
-
-- `cargo`
-- JetBrains Mono installed at `/usr/share/fonts/jetbrains-mono/JetBrainsMono[wght].ttf` if you use `install.sh`
+`install.sh` installs the active GPUI editor to `~/.local/bin/lst-gpui` by default.
 
 ```bash
 ./install.sh
-~/.local/bin/lst
+~/.local/bin/lst-gpui
 ```
 
 Set `LST_PREFIX=/some/prefix` to change the install root.
 
-## Build and Run
-
-A recent stable Rust toolchain is enough to build from source.
-
-```bash
-cargo build --release
-./target/release/lst
-./target/release/lst README.md
-./target/release/lst README.md src/main.rs
-./target/release/lst --scratchpad-dir ~/notes
-./target/release/lst --title lst-scratchpad
-```
-
-At runtime, `lst` prefers `TX-02`, then `JetBrains Mono`, then the system monospace font.
-
 ## Testing
 
-Use the default suite as the blind refactor gate:
+Use the workspace suite as the active refactor gate:
 
 ```bash
 cargo test
 ```
 
-That suite is intended to stay focused on user-visible behavior and refactor-stable contracts.
-In practice, it compiles the integration-style suites under `tests/` and does not compile the source-file unit tests in `src/`.
-
-## Benchmarking
-
-The current performance optimization workflow is documented in [docs/performance-optimization.md](/home/jmartin/lst/docs/performance-optimization.md).
-
-Build both binaries, then run the recommended next X11 real-display paste benchmark:
+For deeper Vim state-machine coverage in the editor crate:
 
 ```bash
-cargo build --release --bin lst --bin bench_paste_x11
-./target/release/bench_paste_x11
+cargo test -p lst-editor --features internal-invariants
 ```
 
-The benchmark prints diagnostics plus a final `score=...` line. The current paste benchmark runs a fixed real-display trace that copies `benchmarks/paste-corpus-20k.rs` (~21.5k lines) from one tab, pastes it into a second empty tab, and does not finish until the saved target file exactly matches the corpus. For this benchmark, optimize `trace_wall_ms`: it is the end-to-end large-paste latency metric. `score` remains the median editor CPU-time diagnostic, and `damage_hz_proxy` is a redraw-cadence hint rather than literal FPS.
+## Benchmarks
 
-Recent benchmark attribution notes, including the Rust highlighter comparison and the `syntect` fallback command, are in [docs/highlight-attribution.md](/home/jmartin/lst/docs/highlight-attribution.md).
+Build the GPUI benchmark tools from the workspace root:
 
-## Notes
+```bash
+cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11 --example bench_syntax_highlight
+```
 
-- Launching `lst` without file arguments creates a scratchpad in `~/.local/share/lst/`
-- `Ctrl+N` creates another scratchpad tab
-- Empty scratchpad tabs are deleted when you close them
-- Clipboard integration uses `wl-copy` / `wl-paste` on Wayland and `xclip` on X11 when available
-- The window title follows the active file unless `--title` is set
-- Linux only
+Run the real-display X11 benchmark suite:
+
+```bash
+./target/release/examples/bench_editor_x11 --scenario all
+```
+
+The current performance workflow is documented in `docs/performance-optimization.md`.
 
 ## License
 

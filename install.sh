@@ -14,10 +14,10 @@ if [[ ! -f "$font_path" ]]; then
     exit 1
 fi
 
-cargo install --path . --locked --root "$prefix"
+cargo install --path apps/lst-gpui --locked --root "$prefix"
 
 cat <<EOF
-Installed lst to $prefix/bin/lst
+Installed lst-gpui to $prefix/bin/lst-gpui
 
 Make sure $prefix/bin is on your PATH.
 EOF

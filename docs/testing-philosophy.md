@@ -32,7 +32,7 @@ Every fake in a test is a piece of production code that is *not being tested*. S
 **Fake at boundaries:**
 - System clipboard (subprocess calls to wl-copy/xclip)
 - Filesystem (real I/O, path resolution)
-- Display and GPU (iced's rendering pipeline, wgpu)
+- Display and GPU (GPUI rendering, compositor, graphics driver)
 - Non-deterministic inputs (wall clock, random)
 
 **Do not fake:**
@@ -109,7 +109,7 @@ None of these were hypothetical. They were real bugs in production code, found b
 
 Not testing something is a valid choice when it is a principled boundary, not a gap. We don't test:
 
-- **iced's rendering pipeline, layout engine, wgpu** — these are framework internals. We trust them the same way we trust the standard library.
+- **GPUI's rendering pipeline, layout engine, and graphics backend** — these are framework internals. We trust them the same way we trust the standard library.
 - **Real clipboard and filesystem in CI** — behind trait boundaries, exercised in production. The traits exist precisely so we can remove these from the test path.
 - **Visual correctness** — no headless renderer available. Pixel-level assertions would be brittle even if they were possible.
 
@@ -129,10 +129,10 @@ Internal invariant tests are still valuable, but they are not part of the blind 
 
 In this repository:
 
-- `cargo test` is the blind refactor gate
-- `cargo test --features internal-invariants` runs the deeper implementation-sensitive checks
+- `cargo test` is the blind refactor gate for the active workspace
+- `cargo test -p lst-editor --features internal-invariants` runs the deeper Vim state-machine checks
 
-To keep that contract honest, source-file unit tests in `src/` are not part of the default gate. They are compiled only under `internal-invariants`, while the default gate runs the higher-level suites in `tests/`.
+To keep that contract honest, implementation-sensitive checks should stay behind explicit package or feature selections, while the default gate remains biased toward higher-level behavior.
 
 This split is not an excuse to weaken coverage. The rule is: if an implementation-sensitive test protects important user behavior, replace it with a higher-level behavioral test before demoting it.
 

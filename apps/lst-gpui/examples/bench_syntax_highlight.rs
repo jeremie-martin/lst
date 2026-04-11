@@ -23,7 +23,7 @@ const TARGET_LINES: usize = 20_000;
 
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEME: LazyLock<Theme> = LazyLock::new(|| {
-    let data = include_bytes!("../../../src/catppuccin-mocha.tmTheme");
+    let data = include_bytes!("../assets/catppuccin-mocha.tmTheme");
     let mut cursor = std::io::Cursor::new(&data[..]);
     syntect::highlighting::ThemeSet::load_from_reader(&mut cursor)
         .expect("embedded Catppuccin Mocha theme should be valid")

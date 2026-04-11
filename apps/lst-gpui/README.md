@@ -1,8 +1,8 @@
 # lst GPUI
 
-This crate is the GPUI rewrite track for `lst`.
+This crate is the active desktop editor for `lst`.
 
-It is intentionally parallel to the shipping `iced` app for now. The current implementation extracts the reusable document/search/line-edit logic into `crates/lst-core`, keeps the custom-painted editor surface in this crate, and moves the shell layer into `crates/lst-ui` for tabs and inline command inputs.
+The current implementation extracts reusable document/search/line-edit logic into `crates/lst-core`, keeps framework-neutral editor behavior in `crates/lst-editor`, keeps the custom-painted editor surface in this crate, and moves shell widgets into `crates/lst-ui`.
 The headless editor behavior contract is starting in `crates/lst-editor`; GPUI should keep moving product behavior there and remain focused on rendering and framework boundary work.
 
 ## Run
@@ -79,4 +79,4 @@ Current real-display measurements on `DISPLAY=:1` with `target/release/lst-gpui`
 ## Missing Parity
 
 - non-Rust syntax highlighting
-- full parity with the current `iced` app behavior surface
+- remaining editor behaviors that have not yet moved behind `lst-editor`

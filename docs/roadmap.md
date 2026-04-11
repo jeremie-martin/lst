@@ -25,8 +25,8 @@ Success criteria:
 
 ## 2. GPUI Performance Benchmarks
 
-The iced benchmarks are useful history, but the GPUI editor needs its own
-performance contract.
+The archived iced benchmarks are useful history, but the active GPUI editor
+needs its own performance contract.
 
 Benchmarks to add:
 
