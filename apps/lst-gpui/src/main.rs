@@ -27,10 +27,6 @@ pub(crate) use lst_core::selection::{
 };
 #[cfg(test)]
 pub(crate) use lst_core::selection::{next_word_boundary, previous_word_boundary};
-use lst_core::{
-    document::UndoBoundary,
-    wrap::{cursor_visual_row_in_line, wrap_segments},
-};
 use lst_editor::{
     vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
     EditorCommand, EditorEffect, EditorModel, EditorTab as ModelEditorTab, FocusTarget, TabId,
@@ -54,8 +50,8 @@ use syntax::{
     SyntaxMode, SyntaxSpan,
 };
 use viewport::{
-    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, line_for_visual_row,
-    row_contains_cursor, visual_row_for_char, x_for_global_char, ViewportCache, ViewportGeometry,
+    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, row_contains_cursor,
+    visual_row_for_char, x_for_global_char, ViewportCache, ViewportGeometry,
 };
 
 const WINDOW_WIDTH: f32 = 1360.0;
@@ -892,42 +888,20 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.move_visual_row(delta, select, window, cx) {
-            return;
-        }
-
-        self.apply_model_command(EditorCommand::MoveVertical { delta, select }, cx);
+        let wrap_columns = self.active_wrap_columns(window);
+        self.apply_model_command(
+            EditorCommand::MoveDisplayRows {
+                delta,
+                select,
+                wrap_columns,
+            },
+            cx,
+        );
     }
 
-    fn active_page_rows(&self) -> usize {
-        let height = self
-            .active_view()
-            .geometry
-            .borrow()
-            .bounds
-            .map(|bounds| bounds.size.height)
-            .filter(|height| *height > px(0.0))
-            .unwrap_or_else(|| px(WINDOW_HEIGHT));
-        ((height / px(ROW_HEIGHT)) as usize)
-            .saturating_sub(2)
-            .max(1)
-    }
-
-    fn move_page(&mut self, down: bool, select: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let rows = self.active_page_rows() as isize;
-        let delta = if down { rows } else { -rows };
-        self.move_vertical(delta, select, window, cx);
-    }
-
-    fn move_visual_row(
-        &mut self,
-        delta: isize,
-        select: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    fn active_wrap_columns(&mut self, window: &mut Window) -> usize {
         if !self.model.show_wrap {
-            return false;
+            return usize::MAX;
         }
 
         let active = self.model.active;
@@ -952,55 +926,27 @@ impl LstGpuiApp {
                 self.model.show_wrap,
             )
         };
+        layout.wrap_columns
+    }
 
-        let tab = &self.model.tabs[active];
-        let cursor = tab.cursor_char();
-        let line = tab.buffer.char_to_line(cursor.min(tab.buffer.len_chars()));
-        let line_start = tab.buffer.line_to_char(line);
-        let display_text = trim_display_line(lines[line].as_str());
-        let column = cursor
-            .saturating_sub(line_start)
-            .min(display_text.chars().count());
-        let segment_row = cursor_visual_row_in_line(display_text, column, layout.wrap_columns);
-        let visual_row = layout.line_row_starts[line] + segment_row;
-        let target_visual_row = if delta.is_negative() {
-            visual_row.saturating_sub(delta.unsigned_abs())
-        } else {
-            (visual_row + delta as usize).min(layout.total_rows.saturating_sub(1))
-        };
+    fn active_page_rows(&self) -> usize {
+        let height = self
+            .active_view()
+            .geometry
+            .borrow()
+            .bounds
+            .map(|bounds| bounds.size.height)
+            .filter(|height| *height > px(0.0))
+            .unwrap_or_else(|| px(WINDOW_HEIGHT));
+        ((height / px(ROW_HEIGHT)) as usize)
+            .saturating_sub(2)
+            .max(1)
+    }
 
-        if target_visual_row == visual_row {
-            return false;
-        }
-
-        let segments = wrap_segments(display_text, layout.wrap_columns);
-        let current_segment = segments
-            .get(segment_row)
-            .unwrap_or_else(|| segments.last().expect("wrap returns at least one segment"));
-        let preferred = tab
-            .preferred_column
-            .unwrap_or(column.saturating_sub(current_segment.start_col));
-        let target_line = line_for_visual_row(&layout, target_visual_row);
-        let target_text = trim_display_line(lines[target_line].as_str());
-        let target_segments = wrap_segments(target_text, layout.wrap_columns);
-        let target_row_in_line = target_visual_row - layout.line_row_starts[target_line];
-        let target_segment = target_segments.get(target_row_in_line).unwrap_or_else(|| {
-            target_segments
-                .last()
-                .expect("wrap returns at least one segment")
-        });
-        let target_col =
-            target_segment.start_col + preferred.min(target_segment.text.chars().count());
-        let target = tab.buffer.line_to_char(target_line) + target_col;
-        self.apply_model_command(
-            EditorCommand::MoveToChar {
-                offset: target,
-                select,
-                preferred_column: Some(preferred),
-            },
-            cx,
-        );
-        true
+    fn move_page(&mut self, down: bool, select: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let rows = self.active_page_rows() as isize;
+        let delta = if down { rows } else { -rows };
+        self.move_vertical(delta, select, window, cx);
     }
 
     fn close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1025,7 +971,7 @@ impl LstGpuiApp {
             .borrow()
             .wrap_layout
             .as_ref()
-            .and_then(|layout| visual_row_for_char(tab, layout))
+            .and_then(|cached| visual_row_for_char(tab, &cached.layout))
             .unwrap_or_else(|| tab.buffer.char_to_line(tab.cursor_char()));
         let caret_top = px((visual_row as f32) * ROW_HEIGHT);
         let caret_bottom = caret_top + px(ROW_HEIGHT);
@@ -1190,47 +1136,14 @@ impl LstGpuiApp {
     }
 
     fn handle_move_left(&mut self, _: &MoveLeft, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.active_tab().has_selection() {
-            self.apply_model_command(
-                EditorCommand::MoveHorizontal {
-                    delta: -1,
-                    select: false,
-                },
-                cx,
-            );
-        } else {
-            let start = self.active_tab().selection.start;
-            self.apply_model_command(
-                EditorCommand::MoveToChar {
-                    offset: start,
-                    select: false,
-                    preferred_column: None,
-                },
-                cx,
-            );
-        }
+        self.apply_model_command(EditorCommand::MoveHorizontalCollapse { backward: true }, cx);
     }
 
     fn handle_move_right(&mut self, _: &MoveRight, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.active_tab().has_selection() {
-            self.apply_model_command(
-                EditorCommand::MoveHorizontal {
-                    delta: 1,
-                    select: false,
-                },
-                cx,
-            );
-        } else {
-            let end = self.active_tab().selection.end;
-            self.apply_model_command(
-                EditorCommand::MoveToChar {
-                    offset: end,
-                    select: false,
-                    preferred_column: None,
-                },
-                cx,
-            );
-        }
+        self.apply_model_command(
+            EditorCommand::MoveHorizontalCollapse { backward: false },
+            cx,
+        );
     }
 
     fn handle_move_word_left(&mut self, _: &MoveWordLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -1689,16 +1602,10 @@ impl EntityInputHandler for LstGpuiApp {
                 .as_ref()
                 .map(|range| utf16_range_to_char_range(&tab.buffer, range))
         };
-        let boundary = if text.chars().any(char::is_whitespace) {
-            UndoBoundary::Break
-        } else {
-            UndoBoundary::Merge
-        };
         self.apply_model_command(
-            EditorCommand::ReplaceText {
+            EditorCommand::ReplaceTextFromInput {
                 range,
                 text: text.to_string(),
-                boundary,
             },
             cx,
         );
@@ -1772,10 +1679,6 @@ impl EntityInputHandler for LstGpuiApp {
         let char_index = self.active_char_index_for_point(point);
         Some(char_to_utf16(&self.active_tab().buffer, char_index))
     }
-}
-
-fn trim_display_line(line: &str) -> &str {
-    line.strip_suffix('\r').unwrap_or(line)
 }
 
 fn autosave_temp_path(path: &Path, revision: u64) -> PathBuf {

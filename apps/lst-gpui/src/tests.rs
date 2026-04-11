@@ -1,5 +1,5 @@
 use gpui::Keystroke;
-use lst_core::document::{EditKind, Tab, UndoBoundary};
+use lst_core::document::Tab;
 use lst_editor::{next_active_after_tab_close, should_refocus_editor_after_tab_close};
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorTab, TabId};
@@ -326,17 +326,6 @@ fn standard_movement_keybindings_are_registered() {
     assert!(has_binding::<DeleteWordBackward>("alt-backspace"));
     assert!(has_binding::<DeleteWordForward>("ctrl-delete"));
     assert!(has_binding::<DeleteWordForward>("alt-delete"));
-}
-
-#[test]
-fn explicit_undo_boundary_keeps_paste_separate_from_typing() {
-    let mut tab = Tab::from_text("untitled".into(), None, "", false);
-    tab.edit(EditKind::Insert, UndoBoundary::Merge, 0..0, "a");
-    tab.edit(EditKind::Insert, UndoBoundary::Break, 1..1, "paste");
-
-    assert_eq!(tab.buffer_text(), "apaste");
-    assert!(tab.undo());
-    assert_eq!(tab.buffer_text(), "a");
 }
 
 #[test]

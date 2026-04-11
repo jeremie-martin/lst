@@ -80,6 +80,121 @@ pub fn cursor_visual_row_in_line(line: &str, column: usize, max_cols: usize) -> 
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrapLayout {
+    pub show_wrap: bool,
+    pub wrap_columns: usize,
+    pub line_row_starts: Vec<usize>,
+    pub total_rows: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayRowTarget {
+    pub line: usize,
+    pub column: usize,
+    pub preferred_column: usize,
+}
+
+pub fn build_wrap_layout(lines: &[String], wrap_columns: usize, show_wrap: bool) -> WrapLayout {
+    let wrap_columns = wrap_columns.max(1);
+    let mut line_row_starts = Vec::with_capacity(lines.len() + 1);
+    let mut total_rows = 0usize;
+    line_row_starts.push(0);
+
+    for line in lines {
+        let display = trim_display_line(line);
+        total_rows += if show_wrap {
+            visual_line_count(display, wrap_columns)
+        } else {
+            1
+        };
+        line_row_starts.push(total_rows);
+    }
+
+    WrapLayout {
+        show_wrap,
+        wrap_columns,
+        line_row_starts,
+        total_rows: total_rows.max(1),
+    }
+}
+
+pub fn line_for_visual_row(layout: &WrapLayout, visual_row: usize) -> usize {
+    layout
+        .line_row_starts
+        .partition_point(|start| *start <= visual_row)
+        .saturating_sub(1)
+        .min(layout.line_row_starts.len().saturating_sub(2))
+}
+
+pub fn visual_row_for_position(
+    lines: &[String],
+    line: usize,
+    column: usize,
+    layout: &WrapLayout,
+) -> Option<usize> {
+    let line_start_row = layout.line_row_starts.get(line).copied()?;
+    let display_text = trim_display_line(lines.get(line)?);
+    let display_column = column.min(display_text.chars().count());
+    let row_in_line = if layout.show_wrap {
+        cursor_visual_row_in_line(display_text, display_column, layout.wrap_columns)
+    } else {
+        0
+    };
+    Some(line_start_row + row_in_line)
+}
+
+pub fn display_row_target(
+    lines: &[String],
+    line: usize,
+    column: usize,
+    preferred_column: Option<usize>,
+    delta: isize,
+    layout: &WrapLayout,
+) -> Option<DisplayRowTarget> {
+    if lines.is_empty() || !layout.show_wrap {
+        return None;
+    }
+
+    let display_text = trim_display_line(lines.get(line)?);
+    let column = column.min(display_text.chars().count());
+    let segment_row = cursor_visual_row_in_line(display_text, column, layout.wrap_columns);
+    let visual_row = layout.line_row_starts.get(line).copied()? + segment_row;
+    let target_visual_row = if delta.is_negative() {
+        visual_row.saturating_sub(delta.unsigned_abs())
+    } else {
+        (visual_row + delta as usize).min(layout.total_rows.saturating_sub(1))
+    };
+
+    if target_visual_row == visual_row {
+        return None;
+    }
+
+    let segments = wrap_segments(display_text, layout.wrap_columns);
+    let current_segment = segments
+        .get(segment_row)
+        .or_else(|| segments.last())
+        .expect("wrap_segments always returns at least one segment");
+    let preferred_column =
+        preferred_column.unwrap_or_else(|| column.saturating_sub(current_segment.start_col));
+    let target_line = line_for_visual_row(layout, target_visual_row);
+    let target_text = trim_display_line(lines.get(target_line)?);
+    let target_segments = wrap_segments(target_text, layout.wrap_columns);
+    let target_row_in_line = target_visual_row - layout.line_row_starts[target_line];
+    let target_segment = target_segments
+        .get(target_row_in_line)
+        .or_else(|| target_segments.last())
+        .expect("wrap_segments always returns at least one segment");
+    let target_column =
+        target_segment.start_col + preferred_column.min(target_segment.text.chars().count());
+
+    Some(DisplayRowTarget {
+        line: target_line,
+        column: target_column,
+        preferred_column,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WrappedSegment {
     pub start_col: usize,
     pub end_col: usize,
@@ -241,6 +356,10 @@ fn char_width(ch: char, col: usize) -> usize {
     }
 }
 
+fn trim_display_line(line: &str) -> &str {
+    line.strip_suffix('\r').unwrap_or(line)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +378,39 @@ mod tests {
         assert_eq!(segments[2].start_col, 11);
         assert_eq!(segments[2].end_col, 16);
         assert_eq!(visual_line_count("alpha beta gamma", 6), 3);
+    }
+
+    #[test]
+    fn wrap_layout_maps_visual_rows_to_lines() {
+        let lines = vec!["alpha beta gamma".to_string(), "short".to_string()];
+        let layout = build_wrap_layout(&lines, 6, true);
+
+        assert_eq!(layout.total_rows, 4);
+        assert_eq!(line_for_visual_row(&layout, 0), 0);
+        assert_eq!(line_for_visual_row(&layout, 2), 0);
+        assert_eq!(line_for_visual_row(&layout, 3), 1);
+    }
+
+    #[test]
+    fn display_row_target_preserves_visual_column() {
+        let lines = vec!["alpha beta gamma".to_string(), "short".to_string()];
+        let layout = build_wrap_layout(&lines, 6, true);
+
+        assert_eq!(
+            display_row_target(&lines, 0, 1, None, 1, &layout),
+            Some(DisplayRowTarget {
+                line: 0,
+                column: 7,
+                preferred_column: 1,
+            })
+        );
+        assert_eq!(
+            display_row_target(&lines, 0, 1, Some(1), 3, &layout),
+            Some(DisplayRowTarget {
+                line: 1,
+                column: 1,
+                preferred_column: 1,
+            })
+        );
     }
 }

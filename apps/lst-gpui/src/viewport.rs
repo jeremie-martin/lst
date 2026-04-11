@@ -3,8 +3,8 @@ use gpui::{
     TextRun, Window,
 };
 use lst_core::wrap::{
-    cursor_visual_row_in_line, visual_line_count, wrap_columns_with_gutter, wrap_segments,
-    WrappedSegment,
+    build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, wrap_columns_with_gutter,
+    wrap_segments, WrapLayout, WrappedSegment,
 };
 use lst_editor::{vim, EditorTab};
 use lst_ui::{
@@ -39,7 +39,7 @@ pub(crate) struct ViewportCache {
     gutter_lines: HashMap<usize, CachedShapedLine>,
     pub(crate) syntax_highlights: Option<CachedSyntaxHighlights>,
     pub(crate) syntax_highlight_inflight: Option<crate::syntax::SyntaxHighlightJobKey>,
-    pub(crate) wrap_layout: Option<WrapLayout>,
+    pub(crate) wrap_layout: Option<CachedWrapLayout>,
 }
 
 impl ViewportCache {
@@ -70,12 +70,9 @@ pub(crate) struct ViewportGeometry {
 }
 
 #[derive(Clone)]
-pub(crate) struct WrapLayout {
+pub(crate) struct CachedWrapLayout {
     pub(crate) revision: u64,
-    pub(crate) show_wrap: bool,
-    pub(crate) wrap_columns: usize,
-    pub(crate) line_row_starts: Vec<usize>,
-    pub(crate) total_rows: usize,
+    pub(crate) layout: WrapLayout,
 }
 
 pub(crate) fn buffer_content_height(visual_rows: usize) -> Pixels {
@@ -259,37 +256,21 @@ pub(crate) fn ensure_wrap_layout(
     );
     if let Some(layout) = cache.wrap_layout.as_ref() {
         if layout.revision == revision
-            && layout.wrap_columns == wrap_columns
-            && layout.show_wrap == show_wrap
-            && layout.line_row_starts.len() == lines.len() + 1
+            && layout.layout.wrap_columns == wrap_columns
+            && layout.layout.show_wrap == show_wrap
+            && layout.layout.line_row_starts.len() == lines.len() + 1
         {
-            return layout.clone();
+            return layout.layout.clone();
         }
     }
 
     cache.code_lines.clear();
 
-    let mut line_row_starts = Vec::with_capacity(lines.len() + 1);
-    let mut total_rows = 0usize;
-    line_row_starts.push(0);
-    for line in lines {
-        let display = trim_display_line(line);
-        total_rows += if show_wrap {
-            visual_line_count(display, wrap_columns)
-        } else {
-            1
-        };
-        line_row_starts.push(total_rows);
-    }
-
-    let layout = WrapLayout {
+    let layout = build_wrap_layout(lines, wrap_columns, show_wrap);
+    cache.wrap_layout = Some(CachedWrapLayout {
         revision,
-        show_wrap,
-        wrap_columns,
-        line_row_starts,
-        total_rows: total_rows.max(1),
-    };
-    cache.wrap_layout = Some(layout.clone());
+        layout: layout.clone(),
+    });
     layout
 }
 
@@ -304,14 +285,6 @@ fn visible_visual_row_range(
         .saturating_add(VIEWPORT_OVERSCAN_LINES)
         .min(total_rows.max(1));
     start..end.max(start.saturating_add(1))
-}
-
-pub(crate) fn line_for_visual_row(layout: &WrapLayout, visual_row: usize) -> usize {
-    layout
-        .line_row_starts
-        .partition_point(|start| *start <= visual_row)
-        .saturating_sub(1)
-        .min(layout.line_row_starts.len().saturating_sub(2))
 }
 
 fn shape_cached_line(

@@ -8,6 +8,7 @@ use lst_core::{
     find::FindState,
     position::Position,
     selection::{next_word_boundary, previous_word_boundary},
+    wrap,
 };
 use std::{
     ops::{Deref, DerefMut, Range},
@@ -68,6 +69,10 @@ pub enum EditorCommand {
         text: String,
         boundary: UndoBoundary,
     },
+    ReplaceTextFromInput {
+        range: Option<Range<usize>>,
+        text: String,
+    },
     ReplaceAndMarkText {
         range: Option<Range<usize>>,
         text: String,
@@ -85,9 +90,17 @@ pub enum EditorCommand {
         delta: isize,
         select: bool,
     },
+    MoveHorizontalCollapse {
+        backward: bool,
+    },
     MoveVertical {
         delta: isize,
         select: bool,
+    },
+    MoveDisplayRows {
+        delta: isize,
+        select: bool,
+        wrap_columns: usize,
     },
     MovePage {
         rows: usize,
@@ -738,6 +751,24 @@ impl EditorModel {
         true
     }
 
+    fn move_horizontal_collapse(&mut self, backward: bool) -> bool {
+        let selection = self.active_tab().selected_range();
+        if selection.start != selection.end {
+            let target = if backward {
+                selection.start
+            } else {
+                selection.end
+            };
+            let tab = self.active_tab_mut();
+            tab.preferred_column = None;
+            tab.move_to(target);
+            return true;
+        }
+
+        let delta = if backward { -1 } else { 1 };
+        self.move_horizontal(delta, false)
+    }
+
     fn move_word_boundary(&mut self, backward: bool, select: bool) -> bool {
         let target = {
             let tab = self.active_tab();
@@ -783,6 +814,51 @@ impl EditorModel {
             tab.move_to(target);
         }
         target != cursor
+    }
+
+    fn move_display_rows(&mut self, delta: isize, select: bool, wrap_columns: usize) -> bool {
+        if !self.show_wrap {
+            return self.move_vertical(delta, select);
+        }
+
+        let target = {
+            let tab = self.active_tab_mut();
+            let lines = tab.lines();
+            let position = tab.cursor_position();
+            let layout = wrap::build_wrap_layout(lines.as_ref(), wrap_columns, true);
+            wrap::display_row_target(
+                lines.as_ref(),
+                position.line,
+                position.column,
+                tab.preferred_column,
+                delta,
+                &layout,
+            )
+        };
+
+        let Some(target) = target else {
+            return false;
+        };
+
+        let target_char = {
+            let tab = self.active_tab();
+            position_to_char(
+                &tab.buffer,
+                Position {
+                    line: target.line,
+                    column: target.column,
+                },
+            )
+        };
+        let cursor = self.active_tab().cursor_char();
+        let tab = self.active_tab_mut();
+        if select {
+            tab.select_to(target_char);
+        } else {
+            tab.move_to(target_char);
+        }
+        tab.preferred_column = Some(target.preferred_column);
+        target_char != cursor || select
     }
 
     fn move_line_boundary(&mut self, to_end: bool, select: bool) -> bool {
@@ -1413,6 +1489,14 @@ impl EditorModel {
                 text,
                 boundary,
             } => self.replace_text_in_range(range, text, boundary),
+            EditorCommand::ReplaceTextFromInput { range, text } => {
+                let boundary = if text.chars().any(char::is_whitespace) {
+                    UndoBoundary::Break
+                } else {
+                    UndoBoundary::Merge
+                };
+                self.replace_text_in_range(range, text, boundary);
+            }
             EditorCommand::ReplaceAndMarkText {
                 range,
                 text,
@@ -1470,8 +1554,22 @@ impl EditorModel {
                 self.move_horizontal(delta, select);
                 self.queue_reveal_cursor();
             }
+            EditorCommand::MoveHorizontalCollapse { backward } => {
+                if self.move_horizontal_collapse(backward) {
+                    self.queue_reveal_cursor();
+                }
+            }
             EditorCommand::MoveVertical { delta, select } => {
                 if self.move_vertical(delta, select) {
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::MoveDisplayRows {
+                delta,
+                select,
+                wrap_columns,
+            } => {
+                if self.move_display_rows(delta, select, wrap_columns) {
                     self.queue_reveal_cursor();
                 }
             }

@@ -289,6 +289,188 @@ fn movement_and_selection_are_behavioral_commands() {
 }
 
 #[test]
+fn horizontal_collapse_commands_collapse_active_selection() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "abcdef",
+        )],
+        "Ready.".into(),
+    );
+
+    model.active_tab_mut().selection = 2..5;
+    model.apply(EditorCommand::MoveHorizontalCollapse { backward: true });
+    assert_eq!(model.snapshot().selection, 2..2);
+
+    model.active_tab_mut().selection = 2..5;
+    model.apply(EditorCommand::MoveHorizontalCollapse { backward: false });
+    assert_eq!(model.snapshot().selection, 5..5);
+}
+
+#[test]
+fn selecting_horizontal_movement_still_extends_selection() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "abcdef",
+        )],
+        "Ready.".into(),
+    );
+
+    model.apply(EditorCommand::MoveToChar {
+        offset: 2,
+        select: false,
+        preferred_column: None,
+    });
+    model.apply(EditorCommand::MoveHorizontal {
+        delta: 1,
+        select: true,
+    });
+
+    assert_eq!(model.snapshot().selection, 2..3);
+}
+
+#[test]
+fn display_row_movement_uses_wrapped_rows_behaviorally() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta gamma\nshort",
+        )],
+        "Ready.".into(),
+    );
+
+    model.apply(EditorCommand::MoveToChar {
+        offset: 1,
+        select: false,
+        preferred_column: None,
+    });
+    model.apply(EditorCommand::MoveDisplayRows {
+        delta: 1,
+        select: false,
+        wrap_columns: 6,
+    });
+    assert_eq!(model.snapshot().cursor, 7);
+
+    model.apply(EditorCommand::MoveDisplayRows {
+        delta: 1,
+        select: false,
+        wrap_columns: 6,
+    });
+    assert_eq!(model.snapshot().cursor, 12);
+
+    model.apply(EditorCommand::MoveDisplayRows {
+        delta: 1,
+        select: false,
+        wrap_columns: 6,
+    });
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 1, column: 1 }
+    );
+}
+
+#[test]
+fn display_row_selection_extends_from_anchor() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta gamma",
+        )],
+        "Ready.".into(),
+    );
+
+    model.apply(EditorCommand::MoveToChar {
+        offset: 1,
+        select: false,
+        preferred_column: None,
+    });
+    model.apply(EditorCommand::MoveDisplayRows {
+        delta: 1,
+        select: true,
+        wrap_columns: 6,
+    });
+
+    assert_eq!(model.snapshot().selection, 1..7);
+}
+
+#[test]
+fn display_row_movement_clamps_and_falls_back_when_wrap_is_disabled() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta gamma\nshort",
+        )],
+        "Ready.".into(),
+    );
+
+    model.apply(EditorCommand::MoveDisplayRows {
+        delta: -1,
+        select: false,
+        wrap_columns: 6,
+    });
+    assert_eq!(model.snapshot().cursor, 0);
+
+    model.show_wrap = false;
+    model.apply(EditorCommand::MoveToChar {
+        offset: 1,
+        select: false,
+        preferred_column: None,
+    });
+    model.apply(EditorCommand::MoveDisplayRows {
+        delta: 1,
+        select: false,
+        wrap_columns: 6,
+    });
+
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 1, column: 1 }
+    );
+}
+
+#[test]
+fn input_text_replacement_owns_undo_grouping_policy() {
+    let mut model = EditorModel::empty();
+
+    model.apply(EditorCommand::ReplaceTextFromInput {
+        range: None,
+        text: "a".into(),
+    });
+    model.apply(EditorCommand::ReplaceTextFromInput {
+        range: None,
+        text: "b".into(),
+    });
+    assert_eq!(model.snapshot().text, "ab");
+
+    model.apply(EditorCommand::Undo);
+    assert_eq!(model.snapshot().text, "");
+
+    model.apply(EditorCommand::ReplaceTextFromInput {
+        range: None,
+        text: "a".into(),
+    });
+    model.apply(EditorCommand::ReplaceTextFromInput {
+        range: None,
+        text: " ".into(),
+    });
+    assert_eq!(model.snapshot().text, "a ");
+
+    model.apply(EditorCommand::Undo);
+    assert_eq!(model.snapshot().text, "a");
+}
+
+#[test]
 fn delete_word_and_line_ops_are_undoable_document_behavior() {
     let mut model = EditorModel::new(
         vec![EditorTab::from_text(
