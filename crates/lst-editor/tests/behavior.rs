@@ -593,6 +593,65 @@ fn autosave_tick_emits_modified_file_backed_tabs() {
 }
 
 #[test]
+fn autosave_tick_skips_paths_open_in_multiple_tabs() {
+    let path = std::path::PathBuf::from("/tmp/example.txt");
+    let mut model = EditorModel::new(
+        vec![
+            EditorTab::from_text(
+                TabId::from_raw(1),
+                "example.txt".into(),
+                Some(path.clone()),
+                "hello",
+            ),
+            EditorTab::from_text(
+                TabId::from_raw(2),
+                "example.txt".into(),
+                Some(path),
+                "other",
+            ),
+        ],
+        "Ready.".into(),
+    );
+    model.apply(EditorCommand::InsertText("!".into()));
+    model.drain_effects();
+
+    model.apply(EditorCommand::AutosaveTick);
+
+    assert_eq!(model.drain_effects(), Vec::<EditorEffect>::new());
+}
+
+#[test]
+fn autosave_finished_only_clears_matching_revision() {
+    let path = std::path::PathBuf::from("/tmp/example.txt");
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example.txt".into(),
+            Some(path.clone()),
+            "hello",
+        )],
+        "Ready.".into(),
+    );
+    model.apply(EditorCommand::InsertText("!".into()));
+    let stale_revision = model.snapshot().active_revision;
+    model.apply(EditorCommand::InsertText("?".into()));
+    let current_revision = model.snapshot().active_revision;
+    model.drain_effects();
+
+    model.apply(EditorCommand::AutosaveFinished {
+        path: path.clone(),
+        revision: stale_revision,
+    });
+    assert!(model.snapshot().tab_modified[0]);
+
+    model.apply(EditorCommand::AutosaveFinished {
+        path,
+        revision: current_revision,
+    });
+    assert!(!model.snapshot().tab_modified[0]);
+}
+
+#[test]
 fn direct_cursor_and_selection_commands_are_model_behavior() {
     let mut model = EditorModel::new(
         vec![EditorTab::from_text(

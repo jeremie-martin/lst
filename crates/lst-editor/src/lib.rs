@@ -1781,17 +1781,21 @@ impl EditorModel {
                 self.status = format!("Failed to save {}: {message}", path.display());
             }
             EditorCommand::AutosaveTick => {
-                let mut seen = Vec::<PathBuf>::new();
                 let jobs = self
                     .tabs
                     .iter()
                     .filter(|tab| tab.modified)
                     .filter_map(|tab| {
                         let path = tab.path.clone()?;
-                        if seen.iter().any(|seen_path| seen_path == &path) {
+                        let open_tabs_for_path = self
+                            .tabs
+                            .iter()
+                            .filter(|candidate| candidate.path.as_ref() == Some(&path))
+                            .take(2)
+                            .count();
+                        if open_tabs_for_path != 1 {
                             return None;
                         }
-                        seen.push(path.clone());
                         Some((path, tab.buffer_text(), tab.revision()))
                     })
                     .collect::<Vec<_>>();
