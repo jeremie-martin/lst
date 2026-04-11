@@ -8,6 +8,7 @@ pub struct MatchPos {
     pub col: usize,
 }
 
+#[derive(Clone)]
 pub struct FindState {
     pub visible: bool,
     pub show_replace: bool,

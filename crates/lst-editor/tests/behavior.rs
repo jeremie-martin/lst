@@ -1,5 +1,12 @@
 use lst_core::document::{EditKind, UndoBoundary};
-use lst_editor::{EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, TabId};
+use lst_core::position::Position;
+use lst_editor::{
+    vim::{
+        Key as VimKey, Mode as VimMode, Modifiers as VimModifiers, NamedKey as VimNamedKey,
+        TextSnapshot as VimTextSnapshot, VimCommand, VimState,
+    },
+    EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, TabId,
+};
 
 #[test]
 fn new_tab_switches_active_with_stable_tab_identity() {
@@ -253,4 +260,183 @@ fn closing_inactive_tab_does_not_request_editor_focus() {
     assert_eq!(snapshot.active, 0);
     assert_eq!(snapshot.tab_count, 2);
     assert_eq!(model.drain_effects(), Vec::<EditorEffect>::new());
+}
+
+#[test]
+fn movement_and_selection_are_behavioral_commands() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta\ngamma",
+        )],
+        "Ready.".into(),
+    );
+
+    model.apply(EditorCommand::MoveDocumentBoundary {
+        to_end: true,
+        select: false,
+    });
+    assert_eq!(model.snapshot().cursor, "alpha beta\ngamma".chars().count());
+
+    model.apply(EditorCommand::MoveWord {
+        backward: true,
+        select: true,
+    });
+    assert_eq!(model.snapshot().selection, 11..16);
+    assert!(model.drain_effects().contains(&EditorEffect::RevealCursor));
+}
+
+#[test]
+fn delete_word_and_line_ops_are_undoable_document_behavior() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta\ngamma",
+        )],
+        "Ready.".into(),
+    );
+
+    model.apply(EditorCommand::MoveWord {
+        backward: false,
+        select: false,
+    });
+    model.apply(EditorCommand::DeleteWord { backward: false });
+    assert_eq!(model.snapshot().text, "alpha\ngamma");
+
+    model.apply(EditorCommand::DuplicateLine);
+    assert_eq!(model.snapshot().text, "alpha\nalpha\ngamma");
+
+    model.apply(EditorCommand::Undo);
+    model.apply(EditorCommand::Undo);
+    assert_eq!(model.snapshot().text, "alpha beta\ngamma");
+}
+
+#[test]
+fn clipboard_commands_emit_boundary_effects_without_fakes() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "hello world",
+        )],
+        "Ready.".into(),
+    );
+    model.active_tab_mut().selection = 0..5;
+
+    model.apply(EditorCommand::CopySelection);
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("hello".into()),
+            EditorEffect::WritePrimary("hello".into())
+        ]
+    );
+
+    model.apply(EditorCommand::CutSelection);
+    assert_eq!(model.snapshot().text, " world");
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("hello".into()),
+            EditorEffect::WritePrimary("hello".into()),
+            EditorEffect::RevealCursor
+        ]
+    );
+}
+
+#[test]
+fn file_commands_emit_runtime_effects_and_apply_results() {
+    let path = std::path::PathBuf::from("/tmp/example.txt");
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example.txt".into(),
+            Some(path.clone()),
+            "hello",
+        )],
+        "Ready.".into(),
+    );
+    model.apply(EditorCommand::InsertText(" world".into()));
+    model.drain_effects();
+
+    model.apply(EditorCommand::RequestSave);
+    assert_eq!(
+        model.drain_effects(),
+        vec![EditorEffect::SaveFile {
+            path: path.clone(),
+            body: " worldhello".into()
+        }]
+    );
+
+    model.apply(EditorCommand::SaveFinished { path: path.clone() });
+    let snapshot = model.snapshot();
+    assert!(!snapshot.tab_modified[0]);
+    assert_eq!(snapshot.status, format!("Saved {}.", path.display()));
+}
+
+#[test]
+fn autosave_tick_emits_modified_file_backed_tabs() {
+    let path = std::path::PathBuf::from("/tmp/example.txt");
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example.txt".into(),
+            Some(path.clone()),
+            "hello",
+        )],
+        "Ready.".into(),
+    );
+    model.apply(EditorCommand::InsertText("!".into()));
+    let revision = model.snapshot().active_revision;
+    model.drain_effects();
+
+    model.apply(EditorCommand::AutosaveTick);
+
+    assert_eq!(
+        model.drain_effects(),
+        vec![EditorEffect::AutosaveFile {
+            path: path.clone(),
+            body: "!hello".into(),
+            revision,
+        }]
+    );
+
+    model.apply(EditorCommand::AutosaveFinished { path, revision });
+    assert!(!model.snapshot().tab_modified[0]);
+}
+
+#[test]
+fn vim_key_translation_is_framework_neutral_behavior() {
+    let mut vim = VimState::new();
+    vim.mode = VimMode::Normal;
+    let text = VimTextSnapshot {
+        lines: vec!["alpha beta".to_string()].into(),
+        cursor: Position { line: 0, column: 0 },
+    };
+
+    assert_eq!(
+        vim.handle_key(
+            &VimKey::Character("w".into()),
+            VimModifiers::default(),
+            &text
+        ),
+        vec![VimCommand::MoveTo(Position { line: 0, column: 6 })]
+    );
+    assert_eq!(
+        vim.handle_key(
+            &VimKey::Named(VimNamedKey::ArrowRight),
+            VimModifiers::default(),
+            &text,
+        ),
+        vec![VimCommand::MoveTo(Position { line: 0, column: 1 })]
+    );
+    assert_eq!(
+        vim.handle_key(&VimKey::Character("r".into()), VimModifiers::COMMAND, &text,),
+        vec![VimCommand::Redo]
+    );
 }

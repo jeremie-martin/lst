@@ -3,7 +3,7 @@ use gpui::{
     InteractiveElement, KeyDownEvent, MouseButton, MouseUpEvent, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window,
 };
-use lst_editor::FocusTarget;
+use lst_editor::EditorCommand;
 use lst_ui::{
     IconButton, IconKind, Tab as UiTab, TabBar, COLOR_BG, COLOR_BORDER, COLOR_MUTED, COLOR_PEACH,
     COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_TEXT, INPUT_TEXT_SIZE, SHELL_EDGE_PAD,
@@ -197,17 +197,13 @@ impl LstGpuiApp {
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
             if self.goto_line.is_some() {
-                self.close_goto_line();
-                self.queue_focus(FocusTarget::Editor);
+                self.apply_model_command(EditorCommand::CloseGotoLine, cx);
                 cx.stop_propagation();
-                cx.notify();
                 return;
             }
             if self.find.visible {
-                self.close_find();
-                self.queue_focus(FocusTarget::Editor);
+                self.apply_model_command(EditorCommand::CloseFind, cx);
                 cx.stop_propagation();
-                cx.notify();
                 return;
             }
         }

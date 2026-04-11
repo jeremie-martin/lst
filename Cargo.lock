@@ -3757,7 +3757,6 @@ name = "lst-gpui"
 version = "0.1.0"
 dependencies = [
  "gpui",
- "iced_core",
  "libc",
  "lst-core",
  "lst-editor",

@@ -9,7 +9,6 @@ internal-invariants = []
 
 [dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["x11"] }
-iced_core = "0.14.0"
 lst-core = { path = "../../crates/lst-core" }
 lst-editor = { path = "../../crates/lst-editor" }
 lst-ui = { path = "../../crates/lst-ui" }

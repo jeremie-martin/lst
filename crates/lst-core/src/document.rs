@@ -32,6 +32,7 @@ struct CachedLines {
     lines: Arc<[String]>,
 }
 
+#[derive(Clone)]
 pub struct Tab {
     pub name_hint: String,
     pub path: Option<PathBuf>,

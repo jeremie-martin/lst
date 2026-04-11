@@ -1,7 +1,13 @@
+pub mod vim;
+
 use lst_core::{
-    document::{EditKind, Tab, UndoBoundary},
+    document::{
+        char_to_position, line_indent_prefix, position_to_char, EditKind, Tab, UndoBoundary,
+    },
+    editor_ops,
     find::FindState,
     position::Position,
+    selection::{next_word_boundary, previous_word_boundary},
 };
 use std::{
     ops::{Deref, DerefMut, Range},
@@ -34,30 +40,135 @@ pub enum FocusTarget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditorEffect {
     Focus(FocusTarget),
+    RevealCursor,
+    WriteClipboard(String),
+    WritePrimary(String),
+    ReadClipboard,
+    OpenFiles,
+    SaveFile {
+        path: PathBuf,
+        body: String,
+    },
+    SaveFileAs {
+        suggested_name: String,
+        body: String,
+    },
+    AutosaveFile {
+        path: PathBuf,
+        body: String,
+        revision: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditorCommand {
     InsertText(String),
+    ReplaceText {
+        range: Option<Range<usize>>,
+        text: String,
+        boundary: UndoBoundary,
+    },
+    ReplaceAndMarkText {
+        range: Option<Range<usize>>,
+        text: String,
+        selected_range: Option<Range<usize>>,
+    },
     NewTab,
     CloseTab(usize),
     SetActiveTab(usize),
+    NextTab,
+    PrevTab,
+    ToggleWrap,
     SelectAll,
-    OpenFind { show_replace: bool },
+    MoveHorizontal {
+        delta: isize,
+        select: bool,
+    },
+    MoveVertical {
+        delta: isize,
+        select: bool,
+    },
+    MovePage {
+        rows: usize,
+        down: bool,
+        select: bool,
+    },
+    MoveWord {
+        backward: bool,
+        select: bool,
+    },
+    MoveLineBoundary {
+        to_end: bool,
+        select: bool,
+    },
+    MoveDocumentBoundary {
+        to_end: bool,
+        select: bool,
+    },
+    Backspace,
+    DeleteForward,
+    DeleteWord {
+        backward: bool,
+    },
+    InsertNewline,
+    InsertTab,
+    DeleteLine,
+    MoveLineUp,
+    MoveLineDown,
+    DuplicateLine,
+    ToggleComment,
+    CopySelection,
+    CutSelection,
+    RequestPaste,
+    PasteText(String),
+    OpenFind {
+        show_replace: bool,
+    },
+    ToggleFind {
+        show_replace: bool,
+    },
     CloseFind,
     SetFindQuery(String),
+    SetFindQueryAndSelect(String),
     SetFindReplacement(String),
     FindNext,
     FindPrev,
+    ReplaceOne,
     ReplaceAll,
     OpenGotoLine,
+    ToggleGotoLine,
     CloseGotoLine,
     SetGotoLine(String),
     SubmitGotoLine,
+    RequestOpenFiles,
+    OpenFiles(Vec<(PathBuf, String)>),
+    OpenFileFailed {
+        path: PathBuf,
+        message: String,
+    },
+    RequestSave,
+    RequestSaveAs,
+    SaveFinished {
+        path: PathBuf,
+    },
+    SaveFailed {
+        path: PathBuf,
+        message: String,
+    },
+    AutosaveTick,
+    AutosaveFinished {
+        path: PathBuf,
+        revision: u64,
+    },
+    AutosaveFailed {
+        path: PathBuf,
+        message: String,
+    },
     Undo,
     Redo,
 }
 
+#[derive(Clone)]
 pub struct EditorTab {
     id: TabId,
     doc: Tab,
@@ -232,6 +343,14 @@ impl EditorModel {
         self.effects.push(EditorEffect::Focus(target));
     }
 
+    fn queue_effect(&mut self, effect: EditorEffect) {
+        self.effects.push(effect);
+    }
+
+    fn queue_reveal_cursor(&mut self) {
+        self.queue_effect(EditorEffect::RevealCursor);
+    }
+
     pub fn drain_effects(&mut self) -> Vec<EditorEffect> {
         self.effects.drain(..).collect()
     }
@@ -266,7 +385,14 @@ impl EditorModel {
 
     pub fn set_find_query(&mut self, text: String) {
         self.find.query = text;
-        self.reindex_find_matches();
+        self.reindex_find_matches_to_nearest();
+    }
+
+    pub fn set_find_query_and_select(&mut self, text: String) {
+        self.set_find_query(text);
+        if self.select_current_find_match() {
+            self.queue_reveal_cursor();
+        }
     }
 
     pub fn set_find_replacement(&mut self, text: String) {
@@ -281,6 +407,10 @@ impl EditorModel {
         self.active_tab().cursor_position()
     }
 
+    pub fn active_tab_revision(&self) -> u64 {
+        self.active_tab().revision()
+    }
+
     pub fn reindex_find_matches(&mut self) {
         if self.find.query.is_empty() {
             self.find.clear_results();
@@ -291,16 +421,63 @@ impl EditorModel {
         self.find.finish_reindex(self.active_tab().revision());
     }
 
-    fn sync_find_with_active_document(&mut self) {
+    fn selected_find_match_start(&self) -> Option<Position> {
         if self.find.query.is_empty() {
-            self.find.clear_results();
-        } else {
+            return None;
+        }
+        let tab = self.active_tab();
+        if !tab.has_selection() {
+            return None;
+        }
+        let selected = tab.selected_range();
+        if selected.end.saturating_sub(selected.start) != self.find.query.chars().count() {
+            return None;
+        }
+        Some(char_to_position(&tab.buffer, selected.start))
+    }
+
+    fn align_find_current_to_visible_match(&mut self) {
+        if self.find.matches.is_empty() {
+            return;
+        }
+        if let Some(start) = self.selected_find_match_start() {
+            if self.find.select_exact(&start) {
+                return;
+            }
+        }
+        let pos = self.active_cursor_position();
+        self.find.find_nearest(&pos);
+    }
+
+    pub fn reindex_find_matches_to_nearest(&mut self) {
+        self.reindex_find_matches();
+        if !self.find.matches.is_empty() {
+            self.align_find_current_to_visible_match();
+        }
+    }
+
+    fn ensure_find_matches_current(&mut self) {
+        if self.find.is_stale(self.active_tab_revision()) {
             self.reindex_find_matches();
         }
     }
 
+    fn sync_find_with_active_document(&mut self) {
+        if self.find.query.is_empty() {
+            self.find.clear_results();
+        } else {
+            self.reindex_find_matches_to_nearest();
+        }
+    }
+
+    fn sync_find_after_edit(&mut self) {
+        if !self.find.query.is_empty() {
+            self.reindex_find_matches_to_nearest();
+        }
+    }
+
     pub fn find_next(&mut self) -> bool {
-        self.reindex_find_matches();
+        self.ensure_find_matches_current();
         if self.find.matches.is_empty() {
             return false;
         }
@@ -309,12 +486,29 @@ impl EditorModel {
     }
 
     pub fn find_prev(&mut self) -> bool {
-        self.reindex_find_matches();
+        self.ensure_find_matches_current();
         if self.find.matches.is_empty() {
             return false;
         }
         self.find.prev();
         self.select_current_find_match()
+    }
+
+    pub fn replace_one(&mut self) -> bool {
+        self.ensure_find_matches_current();
+        let Some((start, end)) = self.find.current_match_range() else {
+            return false;
+        };
+        let replacement = self.find.replacement.clone();
+        let range = {
+            let tab = self.active_tab();
+            position_to_char(&tab.buffer, start)..position_to_char(&tab.buffer, end)
+        };
+        self.active_tab_mut()
+            .edit(EditKind::Other, UndoBoundary::Break, range, &replacement);
+        self.sync_find_after_edit();
+        self.select_current_find_match();
+        true
     }
 
     pub fn replace_all_matches(&mut self) -> bool {
@@ -339,7 +533,7 @@ impl EditorModel {
             tab.replace_char_range(range, &new_text);
             tab.set_cursor_position(cursor, None);
         }
-        self.sync_find_with_active_document();
+        self.sync_find_after_edit();
         true
     }
 
@@ -348,6 +542,7 @@ impl EditorModel {
             return false;
         };
         let Ok(line_one_based) = text.trim().parse::<usize>() else {
+            self.close_goto_line();
             return false;
         };
         let target = line_one_based
@@ -360,6 +555,7 @@ impl EditorModel {
             },
             None,
         );
+        self.close_goto_line();
         true
     }
 
@@ -367,10 +563,18 @@ impl EditorModel {
         if index >= self.tabs.len() {
             return false;
         }
+        if self.tabs[index].modified {
+            self.status = format!(
+                "Unsaved changes in {}. Save or Save As before closing this tab.",
+                self.tabs[index].display_name()
+            );
+            return false;
+        }
         if self.tabs.len() == 1 {
             self.tabs[0] = self.new_empty_tab();
             self.set_active_tab(0);
             self.queue_focus(FocusTarget::Editor);
+            self.status = "Closed tab.".to_string();
             return true;
         }
 
@@ -381,6 +585,7 @@ impl EditorModel {
         if should_refocus {
             self.queue_focus(FocusTarget::Editor);
         }
+        self.status = "Closed tab.".to_string();
         true
     }
 
@@ -389,6 +594,316 @@ impl EditorModel {
             return false;
         };
         self.active_tab_mut().set_cursor_position(end, Some(start));
+        true
+    }
+
+    fn edit_active(
+        &mut self,
+        kind: EditKind,
+        boundary: UndoBoundary,
+        range: Range<usize>,
+        text: &str,
+    ) {
+        self.active_tab_mut().edit(kind, boundary, range, text);
+        self.sync_find_after_edit();
+        self.queue_reveal_cursor();
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: String,
+        boundary: UndoBoundary,
+    ) {
+        let range = {
+            let tab = self.active_tab();
+            range
+                .or_else(|| tab.marked_range.clone())
+                .unwrap_or_else(|| tab.selected_range())
+        };
+        let kind = if text.is_empty() {
+            EditKind::Delete
+        } else {
+            EditKind::Insert
+        };
+        self.edit_active(kind, boundary, range, &text);
+    }
+
+    fn replace_and_mark_text(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: String,
+        selected_range: Option<Range<usize>>,
+    ) {
+        let range = {
+            let tab = self.active_tab();
+            range
+                .or_else(|| tab.marked_range.clone())
+                .unwrap_or_else(|| tab.selected_range())
+        };
+        let inserted_start = range.start;
+        self.active_tab_mut()
+            .edit(EditKind::Other, UndoBoundary::Break, range, &text);
+        {
+            let tab = self.active_tab_mut();
+            if text.is_empty() {
+                tab.marked_range = None;
+            } else {
+                tab.marked_range = Some(inserted_start..inserted_start + text.chars().count());
+            }
+            tab.selection = selected_range
+                .map(|range| inserted_start + range.start..inserted_start + range.end)
+                .unwrap_or_else(|| {
+                    let cursor = inserted_start + text.chars().count();
+                    cursor..cursor
+                });
+            tab.selection_reversed = false;
+        }
+        self.sync_find_after_edit();
+        self.queue_reveal_cursor();
+    }
+
+    fn delete_selection_or_word_range(tab: &EditorTab, backward: bool) -> Option<Range<usize>> {
+        if tab.has_selection() {
+            return Some(tab.selected_range());
+        }
+        let cursor = tab.cursor_char();
+        let target = if backward {
+            previous_word_boundary(&tab.buffer, cursor)
+        } else {
+            next_word_boundary(&tab.buffer, cursor)
+        };
+        (target != cursor).then_some(target.min(cursor)..target.max(cursor))
+    }
+
+    fn move_horizontal(&mut self, delta: isize, select: bool) -> bool {
+        let tab = self.active_tab_mut();
+        let target = if delta.is_negative() {
+            tab.cursor_char().saturating_sub(delta.unsigned_abs())
+        } else {
+            (tab.cursor_char() + delta as usize).min(tab.len_chars())
+        };
+        tab.preferred_column = None;
+        if select {
+            tab.select_to(target);
+        } else {
+            tab.move_to(target);
+        }
+        true
+    }
+
+    fn move_word_boundary(&mut self, backward: bool, select: bool) -> bool {
+        let target = {
+            let tab = self.active_tab();
+            if !select && tab.has_selection() {
+                if backward {
+                    tab.selection.start
+                } else {
+                    tab.selection.end
+                }
+            } else if backward {
+                previous_word_boundary(&tab.buffer, tab.cursor_char())
+            } else {
+                next_word_boundary(&tab.buffer, tab.cursor_char())
+            }
+        };
+
+        let tab = self.active_tab_mut();
+        tab.preferred_column = None;
+        if select {
+            tab.select_to(target);
+        } else {
+            tab.move_to(target);
+        }
+        true
+    }
+
+    fn move_vertical(&mut self, delta: isize, select: bool) -> bool {
+        let tab = self.active_tab_mut();
+        let cursor = tab.cursor_char();
+        let position = tab.cursor_position();
+        let preferred = tab.preferred_column.unwrap_or(position.column);
+        let target_line = if delta.is_negative() {
+            position.line.saturating_sub(delta.unsigned_abs())
+        } else {
+            (position.line + delta as usize).min(tab.line_count().saturating_sub(1))
+        };
+        let target_column = preferred.min(display_line_char_len(tab, target_line));
+        let target = tab.buffer.line_to_char(target_line) + target_column;
+        tab.preferred_column = Some(preferred);
+        if select {
+            tab.select_to(target);
+        } else {
+            tab.move_to(target);
+        }
+        target != cursor
+    }
+
+    fn move_line_boundary(&mut self, to_end: bool, select: bool) -> bool {
+        let tab = self.active_tab_mut();
+        let cursor = tab.cursor_char();
+        let line = tab.buffer.char_to_line(cursor.min(tab.len_chars()));
+        let target = if to_end {
+            tab.buffer.line_to_char(line) + display_line_char_len(tab, line)
+        } else {
+            tab.buffer.line_to_char(line)
+        };
+        tab.preferred_column = None;
+        if select {
+            tab.select_to(target);
+        } else {
+            tab.move_to(target);
+        }
+        target != cursor
+    }
+
+    fn move_document_boundary(&mut self, to_end: bool, select: bool) -> bool {
+        let target = if to_end {
+            self.active_tab().len_chars()
+        } else {
+            0
+        };
+        let cursor = self.active_tab().cursor_char();
+        let tab = self.active_tab_mut();
+        tab.preferred_column = None;
+        if select {
+            tab.select_to(target);
+        } else {
+            tab.move_to(target);
+        }
+        target != cursor
+    }
+
+    fn replace_active_lines(&mut self, lines: Vec<String>, cursor_line: usize, cursor_col: usize) {
+        let newline = preferred_newline_for_active_tab(self.active_tab());
+        {
+            let tab = self.active_tab_mut();
+            tab.set_text(&lines.join(newline));
+            tab.modified = true;
+            let cursor = position_to_char(
+                &tab.buffer,
+                Position {
+                    line: cursor_line,
+                    column: cursor_col,
+                },
+            );
+            tab.move_to(cursor);
+        }
+        self.sync_find_after_edit();
+        self.queue_reveal_cursor();
+    }
+
+    fn move_active_cursor(&mut self, cursor_line: usize, cursor_col: usize, select: bool) {
+        let position = Position {
+            line: cursor_line,
+            column: cursor_col,
+        };
+        let anchor = if select {
+            Some(self.active_cursor_position())
+        } else {
+            None
+        };
+        self.active_tab_mut().set_cursor_position(position, anchor);
+    }
+
+    fn apply_line_edit<R, F>(&mut self, edit: F) -> Option<R>
+    where
+        F: FnOnce(&mut Vec<String>) -> Option<(R, usize, usize)>,
+    {
+        let cached_lines = self.active_tab_mut().lines();
+        let mut lines: Vec<String> = cached_lines.iter().cloned().collect();
+        let (result, cursor_line, cursor_col) = edit(&mut lines)?;
+        if lines.as_slice() == cached_lines.as_ref() {
+            let cursor = self.active_cursor_position();
+            if cursor.line == cursor_line && cursor.column == cursor_col {
+                return None;
+            }
+            self.move_active_cursor(cursor_line, cursor_col, false);
+            self.queue_reveal_cursor();
+            return Some(result);
+        }
+
+        self.active_tab_mut()
+            .push_undo_snapshot(EditKind::Other, UndoBoundary::Break);
+        self.replace_active_lines(lines, cursor_line, cursor_col);
+        Some(result)
+    }
+
+    fn delete_selected_or_previous(&mut self) -> bool {
+        let range = {
+            let tab = self.active_tab();
+            if tab.has_selection() {
+                tab.selected_range()
+            } else {
+                let cursor = tab.cursor_char();
+                if cursor == 0 {
+                    return false;
+                }
+                cursor - 1..cursor
+            }
+        };
+        self.edit_active(EditKind::Delete, UndoBoundary::Merge, range, "");
+        true
+    }
+
+    fn delete_selected_or_next(&mut self) -> bool {
+        let range = {
+            let tab = self.active_tab();
+            if tab.has_selection() {
+                tab.selected_range()
+            } else {
+                let cursor = tab.cursor_char();
+                if cursor >= tab.len_chars() {
+                    return false;
+                }
+                cursor..cursor + 1
+            }
+        };
+        self.edit_active(EditKind::Delete, UndoBoundary::Merge, range, "");
+        true
+    }
+
+    fn delete_selected_or_word(&mut self, backward: bool) -> bool {
+        let Some(range) = Self::delete_selection_or_word_range(self.active_tab(), backward) else {
+            return false;
+        };
+        self.edit_active(EditKind::Delete, UndoBoundary::Break, range, "");
+        true
+    }
+
+    fn insert_newline(&mut self) {
+        let (newline, indent) = {
+            let tab = self.active_tab();
+            let line = tab
+                .buffer
+                .char_to_line(tab.cursor_char().min(tab.len_chars()));
+            (
+                preferred_newline_for_active_tab(tab),
+                line_indent_prefix(&tab.buffer, line),
+            )
+        };
+        self.replace_text_in_range(None, format!("{newline}{indent}"), UndoBoundary::Break);
+    }
+
+    fn copy_selection(&mut self) -> bool {
+        let Some(text) = self.active_tab().selected_text() else {
+            return false;
+        };
+        self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
+        self.queue_effect(EditorEffect::WritePrimary(text));
+        self.status = "Copied selection.".to_string();
+        true
+    }
+
+    fn cut_selection(&mut self) -> bool {
+        let Some(text) = self.active_tab().selected_text() else {
+            return false;
+        };
+        self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
+        self.queue_effect(EditorEffect::WritePrimary(text));
+        let range = self.active_tab().selected_range();
+        self.edit_active(EditKind::Delete, UndoBoundary::Break, range, "");
+        self.status = "Cut selection.".to_string();
         true
     }
 
@@ -402,7 +917,27 @@ impl EditorModel {
                     .unwrap_or_else(|| self.active_tab().selected_range());
                 self.active_tab_mut()
                     .edit(EditKind::Insert, UndoBoundary::Break, range, &text);
-                self.sync_find_with_active_document();
+                self.sync_find_after_edit();
+                self.queue_reveal_cursor();
+            }
+            EditorCommand::ReplaceText {
+                range,
+                text,
+                boundary,
+            } => self.replace_text_in_range(range, text, boundary),
+            EditorCommand::ReplaceAndMarkText {
+                range,
+                text,
+                selected_range,
+            } => self.replace_and_mark_text(range, text, selected_range),
+            EditorCommand::ToggleWrap => {
+                self.show_wrap = !self.show_wrap;
+                self.status = if self.show_wrap {
+                    "Soft wrap enabled.".to_string()
+                } else {
+                    "Soft wrap disabled.".to_string()
+                };
+                self.queue_reveal_cursor();
             }
             EditorCommand::NewTab => {
                 let tab = self.new_empty_tab();
@@ -416,41 +951,284 @@ impl EditorModel {
                 self.close_tab_at(index);
             }
             EditorCommand::SetActiveTab(index) => {
-                self.set_active_tab(index);
+                if self.set_active_tab(index) {
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::NextTab => {
+                if self.tabs.len() > 1 {
+                    self.set_active_tab((self.active + 1) % self.tabs.len());
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::PrevTab => {
+                if self.tabs.len() > 1 {
+                    let prev = if self.active == 0 {
+                        self.tabs.len() - 1
+                    } else {
+                        self.active - 1
+                    };
+                    self.set_active_tab(prev);
+                    self.queue_reveal_cursor();
+                }
             }
             EditorCommand::SelectAll => {
                 self.active_tab_mut().select_all();
+            }
+            EditorCommand::MoveHorizontal { delta, select } => {
+                self.move_horizontal(delta, select);
+                self.queue_reveal_cursor();
+            }
+            EditorCommand::MoveVertical { delta, select } => {
+                if self.move_vertical(delta, select) {
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::MovePage { rows, down, select } => {
+                let delta = if down {
+                    rows as isize
+                } else {
+                    -(rows as isize)
+                };
+                if self.move_vertical(delta, select) {
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::MoveWord { backward, select } => {
+                self.move_word_boundary(backward, select);
+                self.queue_reveal_cursor();
+            }
+            EditorCommand::MoveLineBoundary { to_end, select } => {
+                if self.move_line_boundary(to_end, select) {
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::MoveDocumentBoundary { to_end, select } => {
+                if self.move_document_boundary(to_end, select) {
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::Backspace => {
+                self.delete_selected_or_previous();
+            }
+            EditorCommand::DeleteForward => {
+                self.delete_selected_or_next();
+            }
+            EditorCommand::DeleteWord { backward } => {
+                self.delete_selected_or_word(backward);
+            }
+            EditorCommand::InsertNewline => self.insert_newline(),
+            EditorCommand::InsertTab => {
+                self.replace_text_in_range(None, "    ".to_string(), UndoBoundary::Break);
+            }
+            EditorCommand::DeleteLine => {
+                let pos = self.active_cursor_position();
+                let _ = self.apply_line_edit(|lines| {
+                    let line = editor_ops::delete_line(lines, pos.line);
+                    Some(((), line, pos.column))
+                });
+            }
+            EditorCommand::MoveLineUp => {
+                let pos = self.active_cursor_position();
+                let _ = self.apply_line_edit(|lines| {
+                    let line = editor_ops::move_line_up(lines, pos.line)?;
+                    Some(((), line, pos.column))
+                });
+            }
+            EditorCommand::MoveLineDown => {
+                let pos = self.active_cursor_position();
+                let _ = self.apply_line_edit(|lines| {
+                    let line = editor_ops::move_line_down(lines, pos.line)?;
+                    Some(((), line, pos.column))
+                });
+            }
+            EditorCommand::DuplicateLine => {
+                let pos = self.active_cursor_position();
+                let _ = self.apply_line_edit(|lines| {
+                    let line = editor_ops::duplicate_line(lines, pos.line);
+                    Some(((), line, pos.column))
+                });
+            }
+            EditorCommand::ToggleComment => {
+                let prefix = self
+                    .active_tab()
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.extension())
+                    .and_then(|ext| editor_ops::comment_prefix(ext.to_string_lossy().as_ref()))
+                    .unwrap_or("//");
+                let selected = self.active_tab().selected_range();
+                let cursor = self.active_cursor_position();
+                let start = char_to_position(&self.active_tab().buffer, selected.start);
+                let end = char_to_position(&self.active_tab().buffer, selected.end);
+                let first = start.line.min(end.line);
+                let last = start.line.max(end.line);
+                let _ = self.apply_line_edit(|lines| {
+                    let (line, col) = editor_ops::toggle_comment(
+                        lines,
+                        first,
+                        last,
+                        cursor.line,
+                        cursor.column,
+                        prefix,
+                    );
+                    Some(((), line, col))
+                });
+            }
+            EditorCommand::CopySelection => {
+                self.copy_selection();
+            }
+            EditorCommand::CutSelection => {
+                self.cut_selection();
+            }
+            EditorCommand::RequestPaste => self.queue_effect(EditorEffect::ReadClipboard),
+            EditorCommand::PasteText(text) => {
+                self.replace_text_in_range(None, text.clone(), UndoBoundary::Break);
+                self.status = format!("Pasted {} line(s).", text.lines().count());
             }
             EditorCommand::OpenFind { show_replace } => {
                 let selected = self.active_tab().selected_text();
                 self.open_find(show_replace, selected);
             }
+            EditorCommand::ToggleFind { show_replace } => {
+                if self.find.visible && self.find.show_replace == show_replace {
+                    self.close_find();
+                } else {
+                    let selected = self.active_tab().selected_text();
+                    self.open_find(show_replace, selected);
+                }
+            }
             EditorCommand::CloseFind => self.close_find(),
             EditorCommand::SetFindQuery(text) => self.set_find_query(text),
+            EditorCommand::SetFindQueryAndSelect(text) => self.set_find_query_and_select(text),
             EditorCommand::SetFindReplacement(text) => self.set_find_replacement(text),
             EditorCommand::FindNext => {
-                self.find_next();
+                if self.find_next() {
+                    self.queue_reveal_cursor();
+                }
             }
             EditorCommand::FindPrev => {
-                self.find_prev();
+                if self.find_prev() {
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::ReplaceOne => {
+                if self.replace_one() {
+                    self.queue_reveal_cursor();
+                }
             }
             EditorCommand::ReplaceAll => {
-                self.replace_all_matches();
+                if self.replace_all_matches() {
+                    self.queue_reveal_cursor();
+                }
             }
             EditorCommand::OpenGotoLine => self.open_goto_line(),
+            EditorCommand::ToggleGotoLine => {
+                if self.goto_line.is_some() {
+                    self.close_goto_line();
+                } else {
+                    self.open_goto_line();
+                }
+            }
             EditorCommand::CloseGotoLine => self.close_goto_line(),
             EditorCommand::SetGotoLine(text) => self.set_goto_line(text),
             EditorCommand::SubmitGotoLine => {
-                self.submit_goto_line();
+                if self.submit_goto_line() {
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::RequestOpenFiles => self.queue_effect(EditorEffect::OpenFiles),
+            EditorCommand::OpenFiles(files) => {
+                let start_len = self.tabs.len();
+                for (path, text) in files {
+                    let id = self.alloc_tab_id();
+                    self.tabs.push(EditorTab::from_path(id, path, &text));
+                }
+                if self.tabs.len() > start_len {
+                    self.set_active_tab(self.tabs.len() - 1);
+                    self.status = format!("Opened {} tab(s).", self.tabs.len() - start_len);
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::OpenFileFailed { path, message } => {
+                self.status = format!("Failed to open {}: {message}", path.display());
+            }
+            EditorCommand::RequestSave => {
+                let body = self.active_tab().buffer_text();
+                if let Some(path) = self.active_tab().path.clone() {
+                    self.queue_effect(EditorEffect::SaveFile { path, body });
+                } else {
+                    self.queue_effect(EditorEffect::SaveFileAs {
+                        suggested_name: self.active_tab().display_name(),
+                        body,
+                    });
+                }
+            }
+            EditorCommand::RequestSaveAs => {
+                self.queue_effect(EditorEffect::SaveFileAs {
+                    suggested_name: self.active_tab().display_name(),
+                    body: self.active_tab().buffer_text(),
+                });
+            }
+            EditorCommand::SaveFinished { path } => {
+                let tab = self.active_tab_mut();
+                tab.path = Some(path.clone());
+                tab.modified = false;
+                self.status = format!("Saved {}.", path.display());
+            }
+            EditorCommand::SaveFailed { path, message } => {
+                self.status = format!("Failed to save {}: {message}", path.display());
+            }
+            EditorCommand::AutosaveTick => {
+                let mut seen = Vec::<PathBuf>::new();
+                let jobs = self
+                    .tabs
+                    .iter()
+                    .filter(|tab| tab.modified)
+                    .filter_map(|tab| {
+                        let path = tab.path.clone()?;
+                        if seen.iter().any(|seen_path| seen_path == &path) {
+                            return None;
+                        }
+                        seen.push(path.clone());
+                        Some((path, tab.buffer_text(), tab.revision()))
+                    })
+                    .collect::<Vec<_>>();
+                for (path, body, revision) in jobs {
+                    self.queue_effect(EditorEffect::AutosaveFile {
+                        path,
+                        body,
+                        revision,
+                    });
+                }
+            }
+            EditorCommand::AutosaveFinished { path, revision } => {
+                for tab in &mut self.tabs {
+                    if tab.path.as_ref() == Some(&path) && tab.revision() == revision {
+                        tab.modified = false;
+                    }
+                }
+                if self.active_tab().path.as_ref() == Some(&path)
+                    && self.active_tab().revision() == revision
+                {
+                    self.status = format!("Autosaved {}.", path.display());
+                }
+            }
+            EditorCommand::AutosaveFailed { path, message } => {
+                if self.active_tab().path.as_ref() == Some(&path) {
+                    self.status = format!("Autosave failed for {}: {message}", path.display());
+                }
             }
             EditorCommand::Undo => {
                 if self.active_tab_mut().undo() {
-                    self.sync_find_with_active_document();
+                    self.sync_find_after_edit();
+                    self.queue_reveal_cursor();
                 }
             }
             EditorCommand::Redo => {
                 if self.active_tab_mut().redo() {
-                    self.sync_find_with_active_document();
+                    self.sync_find_after_edit();
+                    self.queue_reveal_cursor();
                 }
             }
         }
@@ -478,17 +1256,53 @@ pub fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: 
     active_index == closed_index
 }
 
+fn display_line_char_len(tab: &EditorTab, line_ix: usize) -> usize {
+    tab.buffer
+        .line(line_ix.min(tab.buffer.len_lines().saturating_sub(1)))
+        .chars()
+        .take_while(|ch| *ch != '\n' && *ch != '\r')
+        .count()
+}
+
+fn preferred_newline_for_active_tab(tab: &EditorTab) -> &'static str {
+    let mut chars = tab.buffer.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                return "\r\n";
+            }
+            return "\n";
+        }
+        if ch == '\n' {
+            return "\n";
+        }
+    }
+    "\n"
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditorSnapshot {
     pub active: usize,
     pub tab_count: usize,
+    pub active_tab_id: TabId,
+    pub tab_ids: Vec<TabId>,
+    pub tab_titles: Vec<String>,
+    pub tab_modified: Vec<bool>,
     pub text: String,
     pub cursor: usize,
+    pub cursor_position: Position,
     pub selection: Range<usize>,
+    pub active_path: Option<PathBuf>,
+    pub active_revision: u64,
+    pub show_wrap: bool,
+    pub show_gutter: bool,
     pub find_visible: bool,
     pub find_show_replace: bool,
     pub find_query: String,
+    pub find_replacement: String,
     pub find_matches: usize,
+    pub find_current: usize,
+    pub goto_line: Option<String>,
     pub status: String,
 }
 
@@ -498,13 +1312,25 @@ impl EditorModel {
         EditorSnapshot {
             active: self.active,
             tab_count: self.tabs.len(),
+            active_tab_id: active.id(),
+            tab_ids: self.tabs.iter().map(EditorTab::id).collect(),
+            tab_titles: self.tabs.iter().map(|tab| tab.display_name()).collect(),
+            tab_modified: self.tabs.iter().map(|tab| tab.modified).collect(),
             text: active.buffer_text(),
             cursor: active.cursor_char(),
+            cursor_position: active.cursor_position(),
             selection: active.selected_range(),
+            active_path: active.path.clone(),
+            active_revision: active.revision(),
+            show_wrap: self.show_wrap,
+            show_gutter: self.show_gutter,
             find_visible: self.find.visible,
             find_show_replace: self.find.show_replace,
             find_query: self.find.query.clone(),
+            find_replacement: self.find.replacement.clone(),
             find_matches: self.find.matches.len(),
+            find_current: self.find.current,
+            goto_line: self.goto_line.clone(),
             status: self.status.clone(),
         }
     }
