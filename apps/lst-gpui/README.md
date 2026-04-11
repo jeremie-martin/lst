@@ -10,9 +10,38 @@ It is intentionally parallel to the shipping `iced` app for now. The current imp
 cd apps/lst-gpui
 cargo run
 DISPLAY=:1 cargo run -- path/to/file.rs
+DISPLAY=:1 cargo run -- --title "lst GPUI"
 DISPLAY=:1 cargo run -- --bench-replace-corpus
 DISPLAY=:1 cargo run -- --bench-append-corpus
 ```
+
+## Benchmarks
+
+Build the GPUI editor benchmarks from the workspace root:
+
+```sh
+cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11 --example bench_syntax_highlight
+```
+
+Run the real-display X11 editor benchmark suite:
+
+```sh
+./target/release/examples/bench_editor_x11 --scenario all
+```
+
+The editor runner supports `large-paste`, `typing-medium`, `typing-large`,
+`scroll-highlighted`, `scroll-plain`, `open-large`, and `search-large`.
+Each scenario prints one `primary_metric` and waits for completed work before
+reporting measured runs.
+
+Run the production tree-sitter highlighting benchmark separately:
+
+```sh
+cargo run --release -p lst-gpui --example bench_syntax_highlight -- --backend tree-sitter-highlight --language rust --iterations 7
+```
+
+See [docs/performance-optimization.md](/home/jmartin/lst/docs/performance-optimization.md)
+for the metric contract and completion conditions.
 
 ## Status
 

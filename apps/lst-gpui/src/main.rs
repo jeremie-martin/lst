@@ -15,6 +15,7 @@ pub mod widget {
     }
 }
 
+mod bench_trace;
 mod interactions;
 mod keymap;
 mod launch;
@@ -793,10 +794,17 @@ impl LstGpuiApp {
     fn reindex_find_matches(&mut self) {
         if self.find.query.is_empty() {
             self.find.clear_results();
+            bench_trace::record_ms("find_reindex_ms", 0.0);
+            bench_trace::record_usize("find_match_count", 0);
+            bench_trace::record_usize("find_query_len", 0);
             return;
         }
         let text = self.active_tab().buffer.to_string();
+        let reindex_started = Instant::now();
         self.find.compute_matches_in_text(&text);
+        bench_trace::record_ms("find_reindex_ms", elapsed_ms(reindex_started));
+        bench_trace::record_usize("find_match_count", self.find.matches.len());
+        bench_trace::record_usize("find_query_len", self.find.query.chars().count());
         self.find.finish_reindex(self.active_tab_revision());
     }
 
@@ -1034,6 +1042,13 @@ impl LstGpuiApp {
             clipboard_read_ms,
             apply_ms,
         };
+        bench_trace::record_operation(
+            label,
+            self.last_operation.bytes,
+            self.last_operation.lines,
+            clipboard_read_ms,
+            apply_ms,
+        );
         eprintln!("lst_gpui {}", self.last_operation.summary());
     }
 
@@ -3018,11 +3033,15 @@ fn main() {
 
         let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
         let launch = launch.clone();
+        let window_title = launch
+            .window_title
+            .clone()
+            .unwrap_or_else(|| "lst GPUI".into());
         let window = match cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(gpui::TitlebarOptions {
-                    title: Some("lst GPUI".into()),
+                    title: Some(window_title.into()),
                     ..Default::default()
                 }),
                 ..Default::default()

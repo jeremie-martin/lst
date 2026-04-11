@@ -30,6 +30,26 @@ fn has_binding_in_context<A: gpui::Action + 'static>(keystroke: &str, context: &
 }
 
 #[test]
+fn launch_args_accept_benchmark_window_title() {
+    let args =
+        crate::launch::parse_launch_args_from(["--title", "lst-bench-window", "/tmp/example.rs"])
+            .expect("args should parse");
+
+    assert_eq!(args.window_title.as_deref(), Some("lst-bench-window"));
+    assert_eq!(args.files, [PathBuf::from("/tmp/example.rs")]);
+}
+
+#[test]
+fn launch_args_require_title_value() {
+    let error = crate::launch::parse_launch_args_from(["--title"]).expect_err("missing title");
+
+    assert!(matches!(
+        error,
+        crate::launch::LaunchArgError::Message(message) if message == "missing value for --title"
+    ));
+}
+
+#[test]
 fn autosave_revision_requires_a_unique_matching_tab() {
     let path = PathBuf::from("/tmp/example.rs");
     let tab = EditorTab::from_path(path.clone(), "fn main() {}\n");

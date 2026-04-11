@@ -1,6 +1,7 @@
 # Performance Optimization Workflow
 
-This repository now has four concrete performance workflows.
+This repository now has concrete performance workflows for both the shipping
+`iced` editor and the GPUI rewrite.
 
 The goal is simple:
 
@@ -8,6 +9,74 @@ The goal is simple:
 - run one fixed benchmark scenario
 - optimize one scalar metric that matches the user-visible problem
 - use the other printed values as diagnostics
+
+## GPUI performance benchmarks
+
+The GPUI editor has a real-display X11 benchmark runner for editor interaction
+latency and a separate syntax-highlighting benchmark for the production
+tree-sitter path.
+
+Build the GPUI editor and both benchmark examples:
+
+```bash
+cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11 --example bench_syntax_highlight
+```
+
+Run every GPUI editor interaction scenario:
+
+```bash
+./target/release/examples/bench_editor_x11 --scenario all
+```
+
+Run one scenario when optimizing a specific path:
+
+```bash
+./target/release/examples/bench_editor_x11 --scenario large-paste
+./target/release/examples/bench_editor_x11 --scenario typing-large
+./target/release/examples/bench_editor_x11 --scenario scroll-highlighted
+./target/release/examples/bench_editor_x11 --scenario search-large
+```
+
+Run the syntax-highlighting benchmark:
+
+```bash
+cargo run --release -p lst-gpui --example bench_syntax_highlight -- --backend tree-sitter-highlight --language rust --iterations 7
+```
+
+The editor interaction runner requires a real X11 desktop session with XTEST
+and XDamage. It may discover `DISPLAY`/`XAUTHORITY` from another desktop
+process, but the most reliable mode is running it from a desktop terminal.
+`Xvfb` is not representative for this GPUI path on this host because GPUI
+surface creation needs a real presentation backend.
+
+### GPUI editor scenarios
+
+Each scenario prints `primary_metric`, `primary_value`, per-run values, and
+secondary diagnostics such as CPU time, damage events, peak RSS, and final file
+size where relevant.
+
+| Scenario | Primary metric | Completion condition |
+| --- | --- | --- |
+| `large-paste` | `paste_complete_ms` | Copies the large Rust corpus, pastes into a second file tab, then retries `Ctrl+S` until the target file exactly matches the corpus and stays stable. |
+| `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload at the end of `benchmarks/editing-corpus.rs`, waits for redraw quiet, then verifies the saved file exactly matches the expected text. |
+| `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using `benchmarks/paste-corpus-20k.rs`. |
+| `scroll-highlighted` | `scroll_overrun_ms` | Scrolls down and back through the large Rust file on a fixed input schedule, then waits for redraw quiet. |
+| `scroll-plain` | `scroll_overrun_ms` | Same scroll trace using the large corpus as `.txt`, so syntax highlighting is out of the path. |
+| `open-large` | `open_to_quiet_ms` | Measures process spawn through benchmark window discovery and redraw quiet on the large Rust file. |
+| `search-large` | `search_reindex_ms` | Opens find, types `fn `, waits for redraw quiet, and reads the completed in-app find reindex trace. |
+
+The default runner contract is `1` priming run and `7` measured repetitions.
+Use `--repetitions <n>` and `--priming <n>` only when characterizing variance
+or shortening a local smoke test.
+
+The GPUI app writes internal benchmark trace values only when
+`LST_BENCH_TRACE_FILE` is set by the runner. Normal editor runs do not create
+trace files.
+
+Current status as of 2026-04-11: the GPUI runner builds and its pure contract
+tests pass in this shell. Representative editor-interaction numbers still need
+to be collected from a real X11 desktop session because the current non-display
+shell cannot safely drive GPUI windows with XTEST.
 
 ## Recommended next benchmark
 
@@ -159,19 +228,23 @@ The default rule is: do not trust a performance change unless `cargo test` stays
 
 ## Intended edit scope
 
-Production optimization work should primarily touch files under `src/`.
+Production optimization work for the shipping `iced` editor should primarily
+touch files under `src/`. Production optimization work for GPUI should primarily
+touch files under `apps/lst-gpui/src/` and shared behavior crates under
+`crates/`.
 
 It is also acceptable to edit:
 
 - `src/bin/bench_scroll_x11.rs` if the benchmark itself needs refinement
 - `src/bin/bench_paste_x11.rs` if the benchmark itself needs refinement
 - `src/bin/bench_editing_x11.rs` if the benchmark itself needs refinement
+- `apps/lst-gpui/examples/bench_editor_x11.rs` if the GPUI benchmark itself needs refinement
 - `README.md`
 - `docs/`
 
 Do not broaden the project into a generalized benchmark framework. Keep the workflow narrow and simple.
 
-## Syntax highlighting characterization
+## GPUI syntax highlighting characterization
 
 Use the GPUI syntax-highlighting benchmark when evaluating broad-language
 highlighting backends. This is a full-document cold workload, not an editor
