@@ -73,6 +73,7 @@ pub enum EditorCommand {
         text: String,
         selected_range: Option<Range<usize>>,
     },
+    ClearMarkedText,
     NewTab,
     CloseTab(usize),
     SetActiveTab(usize),
@@ -104,6 +105,15 @@ pub enum EditorCommand {
     MoveDocumentBoundary {
         to_end: bool,
         select: bool,
+    },
+    MoveToChar {
+        offset: usize,
+        select: bool,
+        preferred_column: Option<usize>,
+    },
+    SetSelection {
+        range: Range<usize>,
+        reversed: bool,
     },
     Backspace,
     DeleteForward,
@@ -273,6 +283,7 @@ pub struct EditorModel {
     pub find: FindState,
     pub goto_line: Option<String>,
     pub status: String,
+    pub vim: vim::VimState,
     next_tab_id: u64,
     effects: Vec<EditorEffect>,
 }
@@ -294,6 +305,7 @@ impl EditorModel {
             find: FindState::new(),
             goto_line: None,
             status,
+            vim: vim::VimState::new(),
             next_tab_id,
             effects: Vec::new(),
         }
@@ -334,9 +346,43 @@ impl EditorModel {
             return false;
         }
         self.active = index;
+        self.vim.on_tab_switch();
         self.active_tab_mut().preferred_column = None;
         self.sync_find_with_active_document();
         true
+    }
+
+    fn move_to_char(
+        &mut self,
+        offset: usize,
+        select: bool,
+        preferred_column: Option<usize>,
+    ) -> bool {
+        let end = self.active_tab().len_chars();
+        let target = offset.min(end);
+        let cursor = self.active_tab().cursor_char();
+        {
+            let tab = self.active_tab_mut();
+            tab.preferred_column = preferred_column;
+            if select {
+                tab.select_to(target);
+            } else {
+                tab.move_to(target);
+            }
+            tab.marked_range = None;
+        }
+        target != cursor || select
+    }
+
+    fn set_selection(&mut self, range: Range<usize>, reversed: bool) {
+        let end = self.active_tab().len_chars();
+        let start = range.start.min(end);
+        let finish = range.end.min(end);
+        let tab = self.active_tab_mut();
+        tab.selection = start.min(finish)..start.max(finish);
+        tab.selection_reversed = reversed;
+        tab.preferred_column = None;
+        tab.marked_range = None;
     }
 
     pub fn queue_focus(&mut self, target: FocusTarget) {
@@ -907,6 +953,448 @@ impl EditorModel {
         true
     }
 
+    fn vim_snapshot(&mut self) -> vim::TextSnapshot {
+        let cursor = self.active_cursor_position();
+        let lines = self.active_tab_mut().lines();
+        vim::TextSnapshot { lines, cursor }
+    }
+
+    pub fn handle_vim_key(&mut self, key: vim::Key, mods: vim::Modifiers) -> bool {
+        let snapshot = self.vim_snapshot();
+        let commands = self.vim.handle_key(&key, mods, &snapshot);
+        self.execute_vim_commands(commands)
+    }
+
+    pub fn handle_vim_escape(&mut self) -> bool {
+        let snapshot = self.vim_snapshot();
+        let commands = self
+            .vim
+            .enter_normal_from_escape(snapshot.cursor, &snapshot);
+        self.execute_vim_commands(commands)
+    }
+
+    fn execute_vim_commands(&mut self, commands: Vec<vim::VimCommand>) -> bool {
+        if commands.is_empty() {
+            return false;
+        }
+
+        let mut changed = false;
+        for cmd in commands {
+            match cmd {
+                vim::VimCommand::Noop => {}
+                vim::VimCommand::MoveTo(position) => {
+                    self.active_tab_mut().set_cursor_position(position, None);
+                    changed = true;
+                }
+                vim::VimCommand::Select { anchor, head } => {
+                    self.apply_vim_select(anchor, head);
+                    changed = true;
+                }
+                vim::VimCommand::DeleteRange { from, to } => {
+                    let deleted = self.vim_delete_range(from, to);
+                    self.vim.register = vim::Register::Char(deleted);
+                    changed = true;
+                }
+                vim::VimCommand::DeleteLines { first, last } => {
+                    let deleted = self.vim_delete_lines(first, last);
+                    self.vim.register = vim::Register::Line(deleted);
+                    changed = true;
+                }
+                vim::VimCommand::ChangeRange { from, to } => {
+                    let deleted = self.vim_delete_range(from, to);
+                    self.vim.register = vim::Register::Char(deleted);
+                    self.vim.mode = vim::Mode::Insert;
+                    changed = true;
+                }
+                vim::VimCommand::ChangeLines { first, last } => {
+                    let deleted = self.vim_change_lines(first, last);
+                    self.vim.register = vim::Register::Line(deleted);
+                    self.vim.mode = vim::Mode::Insert;
+                    changed = true;
+                }
+                vim::VimCommand::YankRange { from, to } => {
+                    self.vim.register = vim::Register::Char(self.vim_extract_range(from, to));
+                    changed = true;
+                }
+                vim::VimCommand::YankLines { first, last } => {
+                    self.vim.register = vim::Register::Line(self.vim_extract_lines(first, last));
+                    changed = true;
+                }
+                vim::VimCommand::EnterInsert => {
+                    self.vim.mode = vim::Mode::Insert;
+                    changed = true;
+                }
+                vim::VimCommand::PasteAfter => {
+                    self.vim_paste(false);
+                    changed = true;
+                }
+                vim::VimCommand::PasteBefore => {
+                    self.vim_paste(true);
+                    changed = true;
+                }
+                vim::VimCommand::OpenLineBelow => {
+                    self.vim_open_line(false);
+                    self.vim.mode = vim::Mode::Insert;
+                    changed = true;
+                }
+                vim::VimCommand::OpenLineAbove => {
+                    self.vim_open_line(true);
+                    self.vim.mode = vim::Mode::Insert;
+                    changed = true;
+                }
+                vim::VimCommand::JoinLines { count } => {
+                    self.vim_join_lines(count);
+                    changed = true;
+                }
+                vim::VimCommand::ReplaceChar { ch, count } => {
+                    self.vim_replace_char(ch, count);
+                    changed = true;
+                }
+                vim::VimCommand::Undo => {
+                    if self.active_tab_mut().undo() {
+                        self.sync_find_after_edit();
+                    }
+                    changed = true;
+                }
+                vim::VimCommand::Redo => {
+                    if self.active_tab_mut().redo() {
+                        self.sync_find_after_edit();
+                    }
+                    changed = true;
+                }
+                vim::VimCommand::OpenFind => {
+                    let selected = self.active_tab().selected_text();
+                    self.open_find(false, selected);
+                    changed = true;
+                }
+                vim::VimCommand::FindNext => {
+                    self.ensure_find_matches_current();
+                    if let Some(target) =
+                        self.vim_find_next_from_cursor(self.active_cursor_position())
+                    {
+                        self.move_to_vim_search_target(target);
+                    }
+                    changed = true;
+                }
+                vim::VimCommand::FindPrev => {
+                    self.ensure_find_matches_current();
+                    if let Some(target) =
+                        self.vim_find_prev_from_cursor(self.active_cursor_position())
+                    {
+                        self.move_to_vim_search_target(target);
+                    }
+                    changed = true;
+                }
+                vim::VimCommand::SearchWordUnderCursor { word, forward } => {
+                    self.find.query = word;
+                    self.reindex_find_matches();
+                    let cursor = self.active_cursor_position();
+                    let target = if forward {
+                        self.vim_find_next_from_cursor(cursor)
+                    } else {
+                        self.vim_find_prev_from_cursor(cursor)
+                    };
+                    if let Some(target) = target {
+                        self.move_to_vim_search_target(target);
+                    }
+                    changed = true;
+                }
+                vim::VimCommand::TransformCaseRange {
+                    from,
+                    to,
+                    uppercase,
+                } => {
+                    self.vim_transform_case_range(from, to, uppercase);
+                    changed = true;
+                }
+                vim::VimCommand::TransformCaseLines {
+                    first,
+                    last,
+                    uppercase,
+                } => {
+                    self.vim_transform_case_lines(first, last, uppercase);
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            self.queue_reveal_cursor();
+            self.queue_primary_selection();
+        }
+        true
+    }
+
+    fn queue_primary_selection(&mut self) {
+        if let Some(text) = self.active_tab().selected_text() {
+            self.queue_effect(EditorEffect::WritePrimary(text));
+        }
+    }
+
+    fn vim_find_next_from_cursor(&mut self, position: Position) -> Option<Position> {
+        let index = self
+            .find
+            .matches
+            .iter()
+            .position(|m| {
+                m.line > position.line || (m.line == position.line && m.col > position.column)
+            })
+            .or_else(|| (!self.find.matches.is_empty()).then_some(0))?;
+        self.find.current = index;
+        let m = self.find.matches[index];
+        Some(Position {
+            line: m.line,
+            column: m.col,
+        })
+    }
+
+    fn vim_find_prev_from_cursor(&mut self, position: Position) -> Option<Position> {
+        let index = self
+            .find
+            .matches
+            .iter()
+            .rposition(|m| {
+                m.line < position.line || (m.line == position.line && m.col < position.column)
+            })
+            .or_else(|| self.find.matches.len().checked_sub(1))?;
+        self.find.current = index;
+        let m = self.find.matches[index];
+        Some(Position {
+            line: m.line,
+            column: m.col,
+        })
+    }
+
+    fn apply_vim_select(&mut self, anchor: Position, head: Position) {
+        let tab = self.active_tab_mut();
+        let anchor_char = position_to_char(&tab.buffer, anchor);
+        let head_char = position_to_char(&tab.buffer, head);
+        let anchor_end = inclusive_position_to_exclusive_char(tab, anchor);
+        let head_end = inclusive_position_to_exclusive_char(tab, head);
+        if vim_position_lt(head, anchor) {
+            tab.selection = head_char..anchor_end.max(head_char);
+            tab.selection_reversed = true;
+        } else {
+            tab.selection = anchor_char..head_end.max(anchor_char);
+            tab.selection_reversed = false;
+        }
+        tab.marked_range = None;
+        tab.preferred_column = None;
+    }
+
+    fn move_to_vim_search_target(&mut self, target: Position) {
+        if matches!(self.vim.mode, vim::Mode::Visual | vim::Mode::VisualLine) {
+            let snapshot = self.vim_snapshot();
+            if let vim::VimCommand::Select { anchor, head } =
+                self.vim.selection_command(target, &snapshot)
+            {
+                self.apply_vim_select(anchor, head);
+            }
+        } else {
+            self.active_tab_mut().set_cursor_position(target, None);
+        }
+    }
+
+    fn vim_delete_range(&mut self, from: Position, to: Position) -> String {
+        self.apply_line_edit(|lines| {
+            let deleted = extract_text_range(lines, &from, &to);
+            remove_text_range(lines, &from, &to);
+            let cursor_col = from.column.min(
+                lines
+                    .get(from.line)
+                    .map_or(0, |line| line.chars().count().saturating_sub(1)),
+            );
+            Some((deleted, from.line, cursor_col))
+        })
+        .unwrap_or_default()
+    }
+
+    fn vim_delete_lines(&mut self, first: usize, last: usize) -> String {
+        self.apply_line_edit(|lines| {
+            let first = first.min(lines.len().saturating_sub(1));
+            let last = last.min(lines.len().saturating_sub(1));
+            let deleted = lines[first..=last].join("\n");
+            lines.drain(first..=last);
+            if lines.is_empty() {
+                lines.push(String::new());
+            }
+            let cursor_line = first.min(lines.len().saturating_sub(1));
+            Some((deleted, cursor_line, 0))
+        })
+        .unwrap_or_default()
+    }
+
+    fn vim_change_lines(&mut self, first: usize, last: usize) -> String {
+        self.apply_line_edit(|lines| {
+            let first = first.min(lines.len().saturating_sub(1));
+            let last = last.min(lines.len().saturating_sub(1));
+            let indent: String = lines[first]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
+            let deleted = lines[first..=last].join("\n");
+            lines.drain(first..=last);
+            lines.insert(first, indent.clone());
+            Some((deleted, first, indent.chars().count()))
+        })
+        .unwrap_or_default()
+    }
+
+    fn vim_extract_range(&mut self, from: Position, to: Position) -> String {
+        let lines = self.active_tab_mut().lines();
+        extract_text_range(lines.as_ref(), &from, &to)
+    }
+
+    fn vim_extract_lines(&mut self, first: usize, last: usize) -> String {
+        let lines = self.active_tab_mut().lines();
+        let first = first.min(lines.len().saturating_sub(1));
+        let last = last.min(lines.len().saturating_sub(1));
+        lines[first..=last].join("\n")
+    }
+
+    fn vim_paste(&mut self, before: bool) {
+        match self.vim.register.clone() {
+            vim::Register::Empty => {}
+            vim::Register::Char(paste_text) => {
+                let cursor = self.active_cursor_position();
+                let _ = self.apply_line_edit(|lines| {
+                    let line_chars: Vec<char> = lines[cursor.line].chars().collect();
+                    let insert_col = if before {
+                        cursor.column.min(line_chars.len())
+                    } else {
+                        (cursor.column + 1).min(line_chars.len())
+                    };
+                    let prefix: String = line_chars[..insert_col].iter().collect();
+                    let suffix: String = line_chars[insert_col..].iter().collect();
+                    let paste_lines: Vec<&str> = paste_text.split('\n').collect();
+                    if paste_lines.len() == 1 {
+                        lines[cursor.line] = format!("{prefix}{}{suffix}", paste_lines[0]);
+                        let cursor_col =
+                            insert_col + paste_lines[0].chars().count().saturating_sub(1);
+                        return Some(((), cursor.line, cursor_col));
+                    }
+
+                    let first_new = format!("{prefix}{}", paste_lines[0]);
+                    let last_new = format!("{}{suffix}", paste_lines.last().unwrap_or(&""));
+                    let mut new_lines: Vec<String> = lines[..cursor.line].to_vec();
+                    new_lines.push(first_new);
+                    for paste_line in &paste_lines[1..paste_lines.len() - 1] {
+                        new_lines.push((*paste_line).to_string());
+                    }
+                    new_lines.push(last_new);
+                    new_lines.extend(lines[cursor.line + 1..].iter().cloned());
+                    let cursor_line = cursor.line + paste_lines.len() - 1;
+                    let cursor_col = paste_lines
+                        .last()
+                        .unwrap_or(&"")
+                        .chars()
+                        .count()
+                        .saturating_sub(1);
+                    *lines = new_lines;
+                    Some(((), cursor_line, cursor_col))
+                });
+            }
+            vim::Register::Line(paste_text) => {
+                let cursor = self.active_cursor_position();
+                let _ = self.apply_line_edit(|lines| {
+                    let insert_at = if before { cursor.line } else { cursor.line + 1 };
+                    lines.splice(
+                        insert_at..insert_at,
+                        paste_text.split('\n').map(String::from),
+                    );
+                    let indent = lines.get(insert_at).map_or(0, |line| {
+                        line.chars().take_while(|c| c.is_whitespace()).count()
+                    });
+                    Some(((), insert_at, indent))
+                });
+            }
+        }
+    }
+
+    fn vim_open_line(&mut self, above: bool) {
+        let pos = self.active_cursor_position();
+        let _ = self.apply_line_edit(|lines| {
+            let indent: String = lines.get(pos.line).map_or(String::new(), |line| {
+                line.chars().take_while(|c| c.is_whitespace()).collect()
+            });
+            let idx = if above { pos.line } else { pos.line + 1 };
+            lines.insert(idx, indent.clone());
+            Some(((), idx, indent.chars().count()))
+        });
+    }
+
+    fn vim_join_lines(&mut self, count: usize) {
+        let pos = self.active_cursor_position();
+        let _ = self.apply_line_edit(|lines| {
+            if pos.line + 1 >= lines.len() {
+                return None;
+            }
+
+            let join_end = (pos.line + count).min(lines.len() - 1);
+            let mut joined = lines[pos.line].trim_end().to_string();
+            let join_col = joined.chars().count();
+            for line in lines.drain((pos.line + 1)..=join_end) {
+                let trimmed = line.trim_start();
+                if !trimmed.is_empty() {
+                    joined.push(' ');
+                    joined.push_str(trimmed);
+                }
+            }
+            lines[pos.line] = joined;
+            Some(((), pos.line, join_col))
+        });
+    }
+
+    fn vim_replace_char(&mut self, ch: char, count: usize) {
+        let pos = self.active_cursor_position();
+        let _ = self.apply_line_edit(|lines| {
+            let chars: Vec<char> = lines
+                .get(pos.line)
+                .map_or(Vec::new(), |line| line.chars().collect());
+            if pos.column + count > chars.len() {
+                return None;
+            }
+            let mut new_chars = chars;
+            for ix in 0..count {
+                new_chars[pos.column + ix] = ch;
+            }
+            lines[pos.line] = new_chars.into_iter().collect();
+            Some(((), pos.line, pos.column + count - 1))
+        });
+    }
+
+    fn vim_transform_case_range(&mut self, from: Position, to: Position, uppercase: bool) {
+        let _ = self.apply_line_edit(|lines| {
+            editor_ops::transform_case_range(
+                lines,
+                from.line,
+                from.column,
+                to.line,
+                to.column,
+                uppercase,
+            );
+            Some(((), from.line, from.column))
+        });
+    }
+
+    fn vim_transform_case_lines(&mut self, first: usize, last: usize, uppercase: bool) {
+        let _ = self.apply_line_edit(|lines| {
+            if lines.is_empty() {
+                return None;
+            }
+            let first = first.min(lines.len().saturating_sub(1));
+            let last = last.min(lines.len().saturating_sub(1));
+            for line in &mut lines[first..=last] {
+                *line = if uppercase {
+                    line.to_uppercase()
+                } else {
+                    line.to_lowercase()
+                };
+            }
+            Some(((), first, 0))
+        });
+    }
+
     pub fn apply(&mut self, command: EditorCommand) {
         match command {
             EditorCommand::InsertText(text) => {
@@ -930,6 +1418,9 @@ impl EditorModel {
                 text,
                 selected_range,
             } => self.replace_and_mark_text(range, text, selected_range),
+            EditorCommand::ClearMarkedText => {
+                self.active_tab_mut().marked_range = None;
+            }
             EditorCommand::ToggleWrap => {
                 self.show_wrap = !self.show_wrap;
                 self.status = if self.show_wrap {
@@ -1007,6 +1498,18 @@ impl EditorModel {
                 if self.move_document_boundary(to_end, select) {
                     self.queue_reveal_cursor();
                 }
+            }
+            EditorCommand::MoveToChar {
+                offset,
+                select,
+                preferred_column,
+            } => {
+                if self.move_to_char(offset, select, preferred_column) {
+                    self.queue_reveal_cursor();
+                }
+            }
+            EditorCommand::SetSelection { range, reversed } => {
+                self.set_selection(range, reversed);
             }
             EditorCommand::Backspace => {
                 self.delete_selected_or_previous();
@@ -1280,6 +1783,69 @@ fn preferred_newline_for_active_tab(tab: &EditorTab) -> &'static str {
     "\n"
 }
 
+fn vim_position_lt(a: Position, b: Position) -> bool {
+    (a.line, a.column) < (b.line, b.column)
+}
+
+fn inclusive_position_to_exclusive_char(tab: &EditorTab, position: Position) -> usize {
+    let line = position.line.min(tab.buffer.len_lines().saturating_sub(1));
+    let line_start = tab.buffer.line_to_char(line);
+    let display_len = display_line_char_len(tab, line);
+    if display_len == 0 {
+        return line_start;
+    }
+    line_start + (position.column.min(display_len.saturating_sub(1)) + 1).min(display_len)
+}
+
+fn extract_text_range(lines: &[String], from: &Position, to: &Position) -> String {
+    if from.line >= lines.len() || to.line >= lines.len() {
+        return String::new();
+    }
+    if from.line == to.line {
+        let chars: Vec<char> = lines[from.line].chars().collect();
+        let start = from.column.min(chars.len());
+        let end = (to.column + 1).min(chars.len());
+        if start >= end {
+            return String::new();
+        }
+        chars[start..end].iter().collect()
+    } else {
+        let mut result = String::new();
+        let first: Vec<char> = lines[from.line].chars().collect();
+        result.extend(&first[from.column.min(first.len())..]);
+        for line in lines.iter().take(to.line).skip(from.line + 1) {
+            result.push('\n');
+            result.push_str(line);
+        }
+        result.push('\n');
+        let last: Vec<char> = lines[to.line].chars().collect();
+        result.extend(&last[..(to.column + 1).min(last.len())]);
+        result
+    }
+}
+
+fn remove_text_range(lines: &mut Vec<String>, from: &Position, to: &Position) {
+    if from.line >= lines.len() || to.line >= lines.len() {
+        return;
+    }
+    if from.line == to.line {
+        let chars: Vec<char> = lines[from.line].chars().collect();
+        let start = from.column.min(chars.len());
+        let end = (to.column + 1).min(chars.len());
+        let remaining: String = chars[..start].iter().chain(chars[end..].iter()).collect();
+        lines[from.line] = remaining;
+    } else {
+        let first: Vec<char> = lines[from.line].chars().collect();
+        let last: Vec<char> = lines[to.line].chars().collect();
+        let prefix: String = first[..from.column.min(first.len())].iter().collect();
+        let suffix: String = last[(to.column + 1).min(last.len())..].iter().collect();
+        lines[from.line] = format!("{prefix}{suffix}");
+        if from.line < to.line {
+            lines.drain((from.line + 1)..=to.line);
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditorSnapshot {
     pub active: usize,
@@ -1303,6 +1869,8 @@ pub struct EditorSnapshot {
     pub find_matches: usize,
     pub find_current: usize,
     pub goto_line: Option<String>,
+    pub vim_mode: vim::Mode,
+    pub vim_pending: String,
     pub status: String,
 }
 
@@ -1331,6 +1899,8 @@ impl EditorModel {
             find_matches: self.find.matches.len(),
             find_current: self.find.current,
             goto_line: self.goto_line.clone(),
+            vim_mode: self.vim.mode,
+            vim_pending: self.vim.pending_display(),
             status: self.status.clone(),
         }
     }

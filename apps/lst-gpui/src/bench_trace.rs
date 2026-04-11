@@ -5,14 +5,6 @@ use std::{
     path::PathBuf,
 };
 
-pub(crate) fn record_ms(label: &str, value: f64) {
-    record_line(label, format_args!("{value:.3}"));
-}
-
-pub(crate) fn record_usize(label: &str, value: usize) {
-    record_line(label, format_args!("{value}"));
-}
-
 pub(crate) fn record_label(label: &str, value: &str) {
     record_line(label, format_args!("{value}"));
 }

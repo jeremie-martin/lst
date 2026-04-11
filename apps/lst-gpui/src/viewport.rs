@@ -6,6 +6,7 @@ use lst_core::wrap::{
     cursor_visual_row_in_line, visual_line_count, wrap_columns_with_gutter, wrap_segments,
     WrappedSegment,
 };
+use lst_editor::{vim, EditorTab};
 use lst_ui::{
     COLOR_CARET, COLOR_CURRENT_LINE, COLOR_GUTTER, COLOR_MUTED, COLOR_SELECTION, COLOR_SURFACE1,
     COLOR_TEXT,
@@ -20,9 +21,9 @@ use std::{
 
 use crate::syntax::{CachedSyntaxHighlights, SyntaxMode, SyntaxSpan};
 use crate::{
-    vim, EditorTab, CODE_FONT_SIZE, CURSOR_WIDTH, EDITOR_LEFT_PAD, EDITOR_RIGHT_PAD,
-    GUTTER_LEFT_PAD, GUTTER_SEPARATOR_WIDTH, GUTTER_WIDTH, ROW_HEIGHT, VIEWPORT_OVERSCAN_LINES,
-    WINDOW_HEIGHT, WRAP_CHAR_WIDTH_FALLBACK,
+    CODE_FONT_SIZE, CURSOR_WIDTH, EDITOR_LEFT_PAD, EDITOR_RIGHT_PAD, GUTTER_LEFT_PAD,
+    GUTTER_SEPARATOR_WIDTH, GUTTER_WIDTH, ROW_HEIGHT, VIEWPORT_OVERSCAN_LINES, WINDOW_HEIGHT,
+    WRAP_CHAR_WIDTH_FALLBACK,
 };
 
 #[derive(Clone)]
@@ -91,10 +92,6 @@ pub(crate) fn line_display_text(buffer: &Rope, line_ix: usize) -> SharedString {
         line.pop();
     }
     SharedString::from(line)
-}
-
-pub(crate) fn line_display_char_len(buffer: &Rope, line_ix: usize) -> usize {
-    line_display_text(buffer, line_ix).chars().count()
 }
 
 fn char_to_byte_index(text: &str, char_ix: usize) -> usize {

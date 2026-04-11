@@ -1,10 +1,14 @@
 use gpui::Keystroke;
+use lst_core::document::{EditKind, Tab, UndoBoundary};
+use lst_editor::{next_active_after_tab_close, should_refocus_editor_after_tab_close};
+#[cfg(feature = "internal-invariants")]
+use lst_editor::{EditorTab, TabId};
 use lst_ui::{COLOR_GREEN, COLOR_MUTED};
 
-use crate::syntax::{
-    compute_syntax_highlights, syntax_mode_for_path, SyntaxHighlightJobKey, SyntaxLanguage,
-    SyntaxMode,
-};
+#[cfg(feature = "internal-invariants")]
+use crate::syntax::SyntaxHighlightJobKey;
+use crate::syntax::{compute_syntax_highlights, syntax_mode_for_path, SyntaxLanguage, SyntaxMode};
+#[cfg(feature = "internal-invariants")]
 use crate::viewport::PaintedRow;
 use crate::*;
 
@@ -29,6 +33,11 @@ fn has_binding_in_context<A: gpui::Action + 'static>(keystroke: &str, context: &
     })
 }
 
+#[cfg(feature = "internal-invariants")]
+fn tab_from_path(path: PathBuf, text: &str) -> EditorTab {
+    EditorTab::from_path(TabId::from_raw(1), path, text)
+}
+
 #[test]
 fn launch_args_accept_benchmark_window_title() {
     let args =
@@ -50,18 +59,27 @@ fn launch_args_require_title_value() {
 }
 
 #[test]
+fn utf16_range_conversion_handles_surrogate_pairs() {
+    let buffer = Rope::from_str("a🙂b");
+
+    assert_eq!(char_range_to_utf16_range(&buffer, &(1..2)), 1..3);
+    assert_eq!(utf16_range_to_char_range_in_text("a🙂b", &(1..3)), 1..2);
+}
+
+#[cfg(feature = "internal-invariants")]
+#[test]
 fn autosave_revision_requires_a_unique_matching_tab() {
     let path = PathBuf::from("/tmp/example.rs");
-    let tab = EditorTab::from_path(path.clone(), "fn main() {}\n");
+    let tab = tab_from_path(path.clone(), "fn main() {}\n");
 
     assert!(autosave_revision_is_current(&[tab], &path, 0));
 
-    let mut stale_tab = EditorTab::from_path(path.clone(), "fn main() {}\n");
+    let mut stale_tab = tab_from_path(path.clone(), "fn main() {}\n");
     stale_tab.replace_char_range(0..0, "// ");
     assert!(!autosave_revision_is_current(&[stale_tab], &path, 0));
 
-    let first = EditorTab::from_path(path.clone(), "one\n");
-    let second = EditorTab::from_path(path.clone(), "two\n");
+    let first = tab_from_path(path.clone(), "one\n");
+    let second = tab_from_path(path.clone(), "two\n");
     assert!(!autosave_revision_is_current(&[first, second], &path, 0));
 }
 
@@ -184,35 +202,42 @@ fn javascript_highlighting_keeps_multiline_comment_context() {
     assert!(lines[2].iter().all(|span| span.color != COLOR_MUTED));
 }
 
+#[cfg(feature = "internal-invariants")]
 #[test]
 fn syntax_highlight_result_requires_matching_active_revision_and_language() {
-    let rust_tab = EditorTab::from_path(PathBuf::from("/tmp/example.rs"), "fn main() {}\n");
-    let rust_cache = rust_tab.cache.clone();
+    let rust_tab = tab_from_path(PathBuf::from("/tmp/example.rs"), "fn main() {}\n");
+    let rust_view = EditorTabView::new(&rust_tab);
+    let rust_cache = rust_view.cache.clone();
     let rust_key = SyntaxHighlightJobKey {
         language: SyntaxLanguage::Rust,
         revision: 0,
     };
     assert!(syntax_highlight_result_is_current(
         &[rust_tab],
+        &[rust_view],
         0,
         &rust_cache,
         rust_key
     ));
 
-    let mut stale_tab = EditorTab::from_path(PathBuf::from("/tmp/example.rs"), "fn main() {}\n");
-    let stale_cache = stale_tab.cache.clone();
+    let mut stale_tab = tab_from_path(PathBuf::from("/tmp/example.rs"), "fn main() {}\n");
+    let stale_view = EditorTabView::new(&stale_tab);
+    let stale_cache = stale_view.cache.clone();
     stale_tab.replace_char_range(0..0, "// ");
     assert!(!syntax_highlight_result_is_current(
         &[stale_tab],
+        &[stale_view],
         0,
         &stale_cache,
         rust_key
     ));
 
-    let python_tab = EditorTab::from_path(PathBuf::from("/tmp/example.py"), "print('lst')\n");
-    let python_cache = python_tab.cache.clone();
+    let python_tab = tab_from_path(PathBuf::from("/tmp/example.py"), "print('lst')\n");
+    let python_view = EditorTabView::new(&python_tab);
+    let python_cache = python_view.cache.clone();
     assert!(!syntax_highlight_result_is_current(
         &[python_tab],
+        &[python_view],
         0,
         &python_cache,
         rust_key
@@ -263,6 +288,7 @@ fn word_boundaries_skip_whitespace_before_moving() {
     assert_eq!(previous_word_boundary(&buffer, 10), 6);
 }
 
+#[cfg(feature = "internal-invariants")]
 #[test]
 fn drag_autoscroll_delta_only_activates_at_viewport_edges() {
     let bounds = Bounds::new(point(px(0.0), px(100.0)), gpui::size(px(100.0), px(200.0)));
@@ -356,6 +382,7 @@ fn word_delete_range_uses_selection_or_word_boundary() {
     assert_eq!(delete_selection_or_word_range(&tab, false), Some(2..8));
 }
 
+#[cfg(feature = "internal-invariants")]
 #[test]
 fn wrapped_row_boundaries_assign_cursor_to_one_row() {
     let first = PaintedRow {
@@ -381,6 +408,7 @@ fn wrapped_row_boundaries_assign_cursor_to_one_row() {
     assert!(row_contains_cursor(&second, 5));
 }
 
+#[cfg(feature = "internal-invariants")]
 #[test]
 fn eof_cursor_is_allowed_on_last_empty_row() {
     let row = PaintedRow {

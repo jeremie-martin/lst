@@ -14,25 +14,24 @@ mod syntax;
 mod tests;
 mod viewport;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use interactions::drag_autoscroll_delta;
 use interactions::DragSelectionMode;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, AutoBench, BenchAction, LaunchArgs};
 #[cfg(test)]
+use lst_core::document::Tab;
+#[cfg(test)]
 pub(crate) use lst_core::selection::{
     drag_selection_range, line_range_at_char, word_range_at_char,
 };
+#[cfg(test)]
 pub(crate) use lst_core::selection::{next_word_boundary, previous_word_boundary};
 use lst_core::{
-    document::{char_to_position, position_to_char, EditKind, Tab, UndoBoundary},
-    editor_ops,
-    find::FindState,
-    position::Position,
+    document::UndoBoundary,
     wrap::{cursor_visual_row_in_line, wrap_segments},
 };
 use lst_editor::{
-    next_active_after_tab_close, should_refocus_editor_after_tab_close,
     vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
     EditorCommand, EditorEffect, EditorModel, EditorTab as ModelEditorTab, FocusTarget, TabId,
     UNTITLED_PREFIX,
@@ -44,7 +43,7 @@ use std::{
     cell::RefCell,
     collections::HashSet,
     fs,
-    ops::{Deref, DerefMut, Range},
+    ops::Range,
     path::{Path, PathBuf},
     process,
     rc::Rc,
@@ -55,9 +54,8 @@ use syntax::{
     SyntaxMode, SyntaxSpan,
 };
 use viewport::{
-    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout,
-    line_display_char_len, line_for_visual_row, row_contains_cursor, visual_row_for_char,
-    x_for_global_char, ViewportCache, ViewportGeometry,
+    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, line_for_visual_row,
+    row_contains_cursor, visual_row_for_char, x_for_global_char, ViewportCache, ViewportGeometry,
 };
 
 const WINDOW_WIDTH: f32 = 1360.0;
@@ -172,33 +170,19 @@ struct AutosaveJob {
     revision: u64,
 }
 
-struct EditorTab {
-    model: ModelEditorTab,
+struct EditorTabView {
+    id: TabId,
+    revision: u64,
     scroll: ScrollHandle,
     cache: Rc<RefCell<ViewportCache>>,
     geometry: Rc<RefCell<ViewportGeometry>>,
 }
 
-impl EditorTab {
-    fn empty(name_hint: String) -> Self {
-        Self::from_doc(Tab::empty(name_hint))
-    }
-
-    fn from_path(path: PathBuf, text: &str) -> Self {
-        Self::from_doc(Tab::from_path(path, text))
-    }
-
-    fn from_text(name_hint: String, path: Option<PathBuf>, text: &str) -> Self {
-        Self::from_doc(Tab::from_text(name_hint, path, text, false))
-    }
-
-    fn from_doc(doc: Tab) -> Self {
-        Self::from_model(ModelEditorTab::from_doc(TabId::from_raw(0), doc))
-    }
-
-    fn from_model(model: ModelEditorTab) -> Self {
+impl EditorTabView {
+    fn new(tab: &ModelEditorTab) -> Self {
         Self {
-            model,
+            id: tab.id(),
+            revision: tab.revision(),
             scroll: ScrollHandle::new(),
             cache: Rc::new(RefCell::new(ViewportCache::default())),
             geometry: Rc::new(RefCell::new(ViewportGeometry::default())),
@@ -209,94 +193,22 @@ impl EditorTab {
         *self.cache.borrow_mut() = ViewportCache::default();
         *self.geometry.borrow_mut() = ViewportGeometry::default();
     }
-
-    fn move_to(&mut self, offset: usize) {
-        self.model.move_to(offset);
-    }
-
-    fn select_to(&mut self, offset: usize) {
-        self.model.select_to(offset);
-    }
-
-    fn replace_char_range(&mut self, range: Range<usize>, new_text: &str) -> usize {
-        let new_cursor = self.model.replace_char_range(range, new_text);
-        self.invalidate_visual_state();
-        new_cursor
-    }
-
-    fn edit(
-        &mut self,
-        kind: EditKind,
-        boundary: UndoBoundary,
-        range: Range<usize>,
-        new_text: &str,
-    ) -> usize {
-        let new_cursor = self.model.edit(kind, boundary, range, new_text);
-        self.invalidate_visual_state();
-        new_cursor
-    }
-
-    fn set_text(&mut self, text: &str) {
-        self.model.set_text(text);
-        self.invalidate_visual_state();
-    }
-
-    fn display_line_char_len(&self, line_ix: usize) -> usize {
-        line_display_char_len(&self.buffer, line_ix)
-    }
-
-    fn undo(&mut self) -> bool {
-        let changed = self.model.undo();
-        if changed {
-            self.invalidate_visual_state();
-        }
-        changed
-    }
-
-    fn redo(&mut self) -> bool {
-        let changed = self.model.redo();
-        if changed {
-            self.invalidate_visual_state();
-        }
-        changed
-    }
-}
-
-impl Deref for EditorTab {
-    type Target = ModelEditorTab;
-
-    fn deref(&self) -> &Self::Target {
-        &self.model
-    }
-}
-
-impl DerefMut for EditorTab {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.model
-    }
 }
 
 struct LstGpuiApp {
     focus_handle: FocusHandle,
-    tabs: Vec<EditorTab>,
-    active: usize,
-    next_untitled_id: usize,
+    model: EditorModel,
+    tab_views: Vec<EditorTabView>,
     tab_bar_scroll: ScrollHandle,
     hovered_tab: Option<usize>,
-    show_gutter: bool,
-    show_wrap: bool,
     drag_selecting: Option<DragSelectionMode>,
     drag_last_point: Option<Point<Pixels>>,
     drag_autoscroll_active: bool,
-    find: FindState,
-    goto_line: Option<String>,
     find_query_input: Entity<InputField>,
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
     pending_focus: Option<FocusTarget>,
-    status: String,
     last_operation: OperationStats,
-    vim: vim::VimState,
     autosave_inflight: HashSet<PathBuf>,
     autosave_started: bool,
     _shell_subscriptions: Vec<Subscription>,
@@ -305,13 +217,15 @@ struct LstGpuiApp {
 impl LstGpuiApp {
     fn new(cx: &mut Context<Self>, launch: LaunchArgs) -> Self {
         let mut tabs = Vec::new();
+        let mut next_tab_id = 1u64;
         let mut status = "Ready.".to_string();
         let find_query_input = cx.new(|cx| InputField::new(cx, "Find"));
         let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace"));
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line"));
 
         if launch.auto_bench.is_some() {
-            tabs.push(EditorTab::from_text(
+            tabs.push(ModelEditorTab::from_text(
+                TabId::from_raw(next_tab_id),
                 PathBuf::from(CORPUS_PATH)
                     .file_name()
                     .and_then(|name| name.to_str())
@@ -322,11 +236,21 @@ impl LstGpuiApp {
             ));
             status = format!("Benchmark mode. Loaded {CORPUS_PATH} at startup.");
         } else if launch.files.is_empty() {
-            tabs.push(EditorTab::empty(format!("{UNTITLED_PREFIX}-1")));
+            tabs.push(ModelEditorTab::empty(
+                TabId::from_raw(next_tab_id),
+                format!("{UNTITLED_PREFIX}-1"),
+            ));
         } else {
             for path in launch.files {
                 match fs::read_to_string(&path) {
-                    Ok(text) => tabs.push(EditorTab::from_path(path, &text)),
+                    Ok(text) => {
+                        tabs.push(ModelEditorTab::from_path(
+                            TabId::from_raw(next_tab_id),
+                            path,
+                            &text,
+                        ));
+                        next_tab_id += 1;
+                    }
                     Err(err) => {
                         status = format!("Failed to open {}: {err}", path.display());
                     }
@@ -334,15 +258,23 @@ impl LstGpuiApp {
             }
 
             if tabs.is_empty() {
-                tabs.push(EditorTab::empty(format!("{UNTITLED_PREFIX}-1")));
+                tabs.push(ModelEditorTab::empty(
+                    TabId::from_raw(next_tab_id),
+                    format!("{UNTITLED_PREFIX}-1"),
+                ));
             }
         }
 
-        let active = 0;
+        let model = EditorModel::new(tabs, status);
+        let tab_views = model
+            .tabs
+            .iter()
+            .map(EditorTabView::new)
+            .collect::<Vec<_>>();
         let last_operation = OperationStats {
             label: "startup",
-            bytes: tabs[active].buffer.len_bytes(),
-            lines: tabs[active].buffer.len_lines(),
+            bytes: model.active_tab().buffer.len_bytes(),
+            lines: model.active_tab().buffer.len_lines(),
             clipboard_read_ms: None,
             apply_ms: 0.0,
         };
@@ -351,25 +283,18 @@ impl LstGpuiApp {
 
         let mut app = Self {
             focus_handle: cx.focus_handle(),
-            tabs,
-            active,
-            next_untitled_id: 2,
+            model,
+            tab_views,
             tab_bar_scroll: ScrollHandle::new(),
             hovered_tab: None,
-            show_gutter: true,
-            show_wrap: true,
             drag_selecting: None,
             drag_last_point: None,
             drag_autoscroll_active: false,
-            find: FindState::new(),
-            goto_line: None,
             find_query_input: find_query_input.clone(),
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
             pending_focus: None,
-            status,
             last_operation,
-            vim: vim::VimState::new(),
             autosave_inflight: HashSet::new(),
             autosave_started: false,
             _shell_subscriptions: Vec::new(),
@@ -410,7 +335,7 @@ impl LstGpuiApp {
                 window.focus(&handle);
             }
             FocusTarget::FindReplace => {
-                if self.find.show_replace {
+                if self.model.find.show_replace {
                     let handle = self.find_replace_input.read(cx).focus_handle();
                     window.focus(&handle);
                 } else {
@@ -418,7 +343,7 @@ impl LstGpuiApp {
                 }
             }
             FocusTarget::GotoLine => {
-                if self.goto_line.is_some() {
+                if self.model.goto_line.is_some() {
                     let handle = self.goto_line_input.read(cx).focus_handle();
                     window.focus(&handle);
                 } else {
@@ -429,43 +354,35 @@ impl LstGpuiApp {
         bench_trace::record_label("focus_applied", focus_trace_label(target));
     }
 
-    fn to_editor_model(&self) -> EditorModel {
-        let tabs = self.tabs.iter().map(|tab| tab.model.clone()).collect();
-        let mut model = EditorModel::new(tabs, self.status.clone());
-        model.active = self.active.min(model.tabs.len().saturating_sub(1));
-        model.next_untitled_id = self.next_untitled_id;
-        model.show_gutter = self.show_gutter;
-        model.show_wrap = self.show_wrap;
-        model.find = self.find.clone();
-        model.goto_line = self.goto_line.clone();
-        model
-    }
-
-    fn sync_from_editor_model(&mut self, model: EditorModel) {
-        let old_show_wrap = self.show_wrap;
-        let new_len = model.tabs.len();
-        for (ix, model_tab) in model.tabs.into_iter().enumerate() {
-            if ix < self.tabs.len() {
-                let changed_revision = self.tabs[ix].revision() != model_tab.revision();
-                self.tabs[ix].model = model_tab;
-                if changed_revision || old_show_wrap != model.show_wrap {
-                    self.tabs[ix].invalidate_visual_state();
+    fn sync_tab_views(&mut self, old_show_wrap: bool) {
+        let mut old_views = std::mem::take(&mut self.tab_views);
+        self.tab_views = self
+            .model
+            .tabs
+            .iter()
+            .map(|tab| {
+                let mut view = old_views
+                    .iter()
+                    .position(|view| view.id == tab.id())
+                    .map(|ix| old_views.swap_remove(ix))
+                    .unwrap_or_else(|| EditorTabView::new(tab));
+                if view.revision != tab.revision() || old_show_wrap != self.model.show_wrap {
+                    view.revision = tab.revision();
+                    view.invalidate_visual_state();
                 }
-            } else {
-                self.tabs.push(EditorTab::from_model(model_tab));
-            }
+                view
+            })
+            .collect();
+        if self
+            .hovered_tab
+            .is_some_and(|ix| ix >= self.model.tabs.len())
+        {
+            self.hovered_tab = None;
         }
-        self.tabs.truncate(new_len);
-        self.active = model.active.min(self.tabs.len().saturating_sub(1));
-        self.next_untitled_id = model.next_untitled_id;
-        self.show_gutter = model.show_gutter;
-        self.show_wrap = model.show_wrap;
-        self.find = model.find;
-        self.goto_line = model.goto_line;
-        self.status = model.status;
     }
 
     fn apply_model_command(&mut self, command: EditorCommand, cx: &mut Context<Self>) {
+        let old_show_wrap = self.model.show_wrap;
         let sync_find_inputs = matches!(
             &command,
             EditorCommand::OpenFind { .. } | EditorCommand::ToggleFind { .. }
@@ -474,10 +391,9 @@ impl LstGpuiApp {
             &command,
             EditorCommand::OpenGotoLine | EditorCommand::ToggleGotoLine
         );
-        let mut model = self.to_editor_model();
-        model.apply(command);
-        let effects = model.drain_effects();
-        self.sync_from_editor_model(model);
+        self.model.apply(command);
+        self.sync_tab_views(old_show_wrap);
+        let effects = self.model.drain_effects();
         if sync_find_inputs {
             self.sync_find_inputs(cx);
         }
@@ -489,16 +405,35 @@ impl LstGpuiApp {
     }
 
     fn sync_find_inputs(&mut self, cx: &mut Context<Self>) {
-        let query = self.find.query.clone();
-        let replacement = self.find.replacement.clone();
+        let query = self.model.find.query.clone();
+        let replacement = self.model.find.replacement.clone();
         self.find_query_input
             .update(cx, |input, cx| input.set_text(&query, cx));
         self.find_replace_input
             .update(cx, |input, cx| input.set_text(&replacement, cx));
     }
 
+    fn find_input_state(&self) -> (bool, bool, String, String) {
+        (
+            self.model.find.visible,
+            self.model.find.show_replace,
+            self.model.find.query.clone(),
+            self.model.find.replacement.clone(),
+        )
+    }
+
+    fn sync_find_inputs_if_changed(
+        &mut self,
+        old_state: (bool, bool, String, String),
+        cx: &mut Context<Self>,
+    ) {
+        if self.find_input_state() != old_state {
+            self.sync_find_inputs(cx);
+        }
+    }
+
     fn sync_goto_input(&mut self, cx: &mut Context<Self>) {
-        let text = self.goto_line.clone().unwrap_or_default();
+        let text = self.model.goto_line.clone().unwrap_or_default();
         self.goto_line_input
             .update(cx, |input, cx| input.set_text(&text, cx));
     }
@@ -518,7 +453,7 @@ impl LstGpuiApp {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                         self.apply_model_command(EditorCommand::PasteText(text), cx);
                     } else {
-                        self.status =
+                        self.model.status =
                             "Clipboard does not currently contain plain text.".to_string();
                     }
                 }
@@ -589,7 +524,7 @@ impl LstGpuiApp {
                 self.apply_model_command(EditorCommand::CloseFind, cx);
             }
             InputFieldEvent::NextRequested => {
-                if self.find.show_replace {
+                if self.model.find.show_replace {
                     self.queue_focus(FocusTarget::FindReplace);
                     cx.notify();
                 }
@@ -633,8 +568,8 @@ impl LstGpuiApp {
     }
 
     fn ensure_active_syntax_highlights(&mut self, cx: &mut Context<Self>) {
-        let active = self.active;
-        let Some(tab) = self.tabs.get(active) else {
+        let active = self.model.active;
+        let Some(tab) = self.model.tabs.get(active) else {
             return;
         };
         let SyntaxMode::TreeSitter(language) = syntax_mode_for_path(tab.path.as_ref()) else {
@@ -643,7 +578,7 @@ impl LstGpuiApp {
 
         let revision = tab.revision();
         let key = SyntaxHighlightJobKey { language, revision };
-        let cache = tab.cache.clone();
+        let cache = self.tab_views[active].cache.clone();
         {
             let cache_ref = cache.borrow();
             if cache_ref
@@ -688,7 +623,13 @@ impl LstGpuiApp {
         }
 
         cache_ref.syntax_highlight_inflight = None;
-        if !syntax_highlight_result_is_current(&self.tabs, active, &cache, key) {
+        if !syntax_highlight_result_is_current(
+            &self.model.tabs,
+            &self.tab_views,
+            active,
+            &cache,
+            key,
+        ) {
             return;
         }
 
@@ -700,57 +641,17 @@ impl LstGpuiApp {
         cache_ref.clear_code_lines();
         drop(cache_ref);
 
-        if self.active == active {
+        if self.model.active == active {
             cx.notify();
         }
     }
 
-    fn active_tab(&self) -> &EditorTab {
-        &self.tabs[self.active]
+    fn active_tab(&self) -> &ModelEditorTab {
+        self.model.active_tab()
     }
 
-    fn active_tab_mut(&mut self) -> &mut EditorTab {
-        &mut self.tabs[self.active]
-    }
-
-    fn new_empty_tab(&mut self) -> EditorTab {
-        let name = format!("{UNTITLED_PREFIX}-{}", self.next_untitled_id);
-        self.next_untitled_id += 1;
-        EditorTab::empty(name)
-    }
-
-    fn set_active_tab(&mut self, index: usize) {
-        if index >= self.tabs.len() {
-            return;
-        }
-        self.active = index;
-        self.vim.on_tab_switch();
-        self.active_tab_mut().preferred_column = None;
-        self.reindex_find_matches_to_nearest();
-    }
-
-    fn active_cursor_position(&self) -> Position {
-        char_to_position(&self.active_tab().buffer, self.active_tab().cursor_char())
-    }
-
-    fn active_tab_revision(&self) -> u64 {
-        self.active_tab().revision()
-    }
-
-    fn vim_cursor_position(&self) -> Position {
-        let cursor = self.active_cursor_position();
-        Position {
-            line: cursor.line,
-            column: cursor.column,
-        }
-    }
-
-    fn vim_snapshot(&mut self) -> vim::TextSnapshot {
-        let lines = self.tabs[self.active].lines();
-        vim::TextSnapshot {
-            lines,
-            cursor: self.vim_cursor_position(),
-        }
+    fn active_view(&self) -> &EditorTabView {
+        &self.tab_views[self.model.active]
     }
 
     fn start_background_tasks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -774,12 +675,13 @@ impl LstGpuiApp {
     fn autosave_tick(&mut self, cx: &mut Context<Self>) {
         let mut seen_paths = HashSet::new();
         let jobs: Vec<AutosaveJob> = self
+            .model
             .tabs
             .iter()
             .filter(|tab| tab.modified)
             .filter_map(|tab| {
                 let path = tab.path.clone()?;
-                if !autosave_revision_is_current(&self.tabs, &path, tab.revision()) {
+                if !autosave_revision_is_current(&self.model.tabs, &path, tab.revision()) {
                     return None;
                 }
                 if self.autosave_inflight.contains(&path) || !seen_paths.insert(path.clone()) {
@@ -824,7 +726,7 @@ impl LstGpuiApp {
         self.autosave_inflight.remove(&job.path);
         match result {
             Ok(temp_path) => {
-                if !autosave_revision_is_current(&self.tabs, &job.path, job.revision) {
+                if !autosave_revision_is_current(&self.model.tabs, &job.path, job.revision) {
                     let _ = fs::remove_file(&temp_path);
                     cx.notify();
                     return;
@@ -832,181 +734,36 @@ impl LstGpuiApp {
 
                 match fs::rename(&temp_path, &job.path) {
                     Ok(()) => {
-                        for tab in &mut self.tabs {
-                            if tab.path.as_ref() == Some(&job.path)
-                                && tab.revision() == job.revision
-                            {
-                                tab.modified = false;
-                            }
-                        }
-                        if self.active_tab().path.as_ref() == Some(&job.path)
-                            && self.active_tab().revision() == job.revision
-                        {
-                            self.status = format!("Autosaved {}.", job.path.display());
-                        }
+                        self.apply_model_command(
+                            EditorCommand::AutosaveFinished {
+                                path: job.path,
+                                revision: job.revision,
+                            },
+                            cx,
+                        );
                     }
                     Err(err) => {
                         let _ = fs::remove_file(&temp_path);
-                        if self.active_tab().path.as_ref() == Some(&job.path) {
-                            self.status =
-                                format!("Autosave failed for {}: {err}", job.path.display());
-                        }
+                        self.apply_model_command(
+                            EditorCommand::AutosaveFailed {
+                                path: job.path,
+                                message: err.to_string(),
+                            },
+                            cx,
+                        );
                     }
                 }
             }
             Err(err) => {
-                if self.active_tab().path.as_ref() == Some(&job.path) {
-                    self.status = format!("Autosave failed for {}: {err}", job.path.display());
-                }
+                self.apply_model_command(
+                    EditorCommand::AutosaveFailed {
+                        path: job.path,
+                        message: err.to_string(),
+                    },
+                    cx,
+                );
             }
         }
-        cx.notify();
-    }
-
-    fn selected_find_match_start(&self) -> Option<Position> {
-        if self.find.query.is_empty() {
-            return None;
-        }
-        let tab = self.active_tab();
-        if !tab.has_selection() {
-            return None;
-        }
-        let selected = tab.selected_range();
-        if selected.end.saturating_sub(selected.start) != self.find.query.chars().count() {
-            return None;
-        }
-        Some(char_to_position(&tab.buffer, selected.start))
-    }
-
-    fn align_find_current_to_visible_match(&mut self) {
-        if self.find.matches.is_empty() {
-            return;
-        }
-
-        if let Some(start) = self.selected_find_match_start() {
-            if self.find.select_exact(&start) {
-                return;
-            }
-        }
-
-        let pos = self.active_cursor_position();
-        self.find.find_nearest(&pos);
-    }
-
-    fn reindex_find_matches(&mut self) {
-        if self.find.query.is_empty() {
-            self.find.clear_results();
-            bench_trace::record_ms("find_reindex_ms", 0.0);
-            bench_trace::record_usize("find_match_count", 0);
-            bench_trace::record_usize("find_query_len", 0);
-            return;
-        }
-        let text = self.active_tab().buffer.to_string();
-        let reindex_started = Instant::now();
-        self.find.compute_matches_in_text(&text);
-        bench_trace::record_ms("find_reindex_ms", elapsed_ms(reindex_started));
-        bench_trace::record_usize("find_match_count", self.find.matches.len());
-        bench_trace::record_usize("find_query_len", self.find.query.chars().count());
-        self.find.finish_reindex(self.active_tab_revision());
-    }
-
-    fn reindex_find_matches_to_nearest(&mut self) {
-        self.reindex_find_matches();
-        if !self.find.matches.is_empty() {
-            self.align_find_current_to_visible_match();
-        }
-    }
-
-    fn ensure_find_matches_current(&mut self) {
-        if self.find.is_stale(self.active_tab_revision()) {
-            self.reindex_find_matches();
-        }
-    }
-
-    fn sync_find_after_edit(&mut self) {
-        if self.find.visible && !self.find.query.is_empty() {
-            self.reindex_find_matches_to_nearest();
-        } else if !self.find.query.is_empty() {
-            self.find.mark_dirty();
-        }
-    }
-
-    fn selected_single_line_text(&self) -> Option<String> {
-        let text = self.active_tab().selected_text()?;
-        (!text.contains('\n')).then_some(text)
-    }
-
-    fn open_find(&mut self, show_replace: bool, cx: &mut Context<Self>) {
-        self.find.visible = true;
-        self.find.show_replace = show_replace;
-        if let Some(sel) = self.selected_single_line_text() {
-            self.find.query = sel;
-        }
-        let query = self.find.query.clone();
-        let replacement = self.find.replacement.clone();
-        self.find_query_input
-            .update(cx, |input, cx| input.set_text(&query, cx));
-        self.find_replace_input
-            .update(cx, |input, cx| input.set_text(&replacement, cx));
-        self.queue_focus(FocusTarget::FindQuery);
-        self.reindex_find_matches_to_nearest();
-    }
-
-    fn replace_active_lines(&mut self, lines: Vec<String>, cursor_line: usize, cursor_col: usize) {
-        let active = self.active;
-        {
-            let tab = &mut self.tabs[active];
-            let newline = preferred_newline_for_buffer(&tab.buffer);
-            tab.set_text(&lines.join(newline));
-            tab.modified = true;
-            let cursor = position_to_char(
-                &tab.buffer,
-                Position {
-                    line: cursor_line,
-                    column: cursor_col,
-                },
-            );
-            tab.move_to(cursor);
-        }
-        self.sync_find_after_edit();
-    }
-
-    fn move_active_cursor(&mut self, cursor_line: usize, cursor_col: usize, select: bool) {
-        let position = Position {
-            line: cursor_line,
-            column: cursor_col,
-        };
-        let active = self.active;
-        let anchor = if select {
-            Some(char_to_position(
-                &self.tabs[active].buffer,
-                self.tabs[active].cursor_char(),
-            ))
-        } else {
-            None
-        };
-        self.tabs[active].set_cursor_position(position, anchor);
-    }
-
-    fn apply_line_edit<R, F>(&mut self, edit: F) -> Option<R>
-    where
-        F: FnOnce(&mut Vec<String>) -> Option<(R, usize, usize)>,
-    {
-        let cached_lines = self.tabs[self.active].lines();
-        let mut lines: Vec<String> = cached_lines.iter().cloned().collect();
-        let (result, cursor_line, cursor_col) = edit(&mut lines)?;
-        if lines.as_slice() == cached_lines.as_ref() {
-            let cursor = self.active_cursor_position();
-            if cursor.line == cursor_line && cursor.column == cursor_col {
-                return None;
-            }
-            self.move_active_cursor(cursor_line, cursor_col, false);
-            return Some(result);
-        }
-
-        self.tabs[self.active].push_undo_snapshot(EditKind::Other, UndoBoundary::Break);
-        self.replace_active_lines(lines, cursor_line, cursor_col);
-        Some(result)
     }
 
     fn active_cursor_line_col(&self) -> (usize, usize) {
@@ -1023,30 +780,30 @@ impl LstGpuiApp {
         let tab = self.active_tab();
         let (line, column) = self.active_cursor_line_col();
         let mut parts = vec![
-            self.vim.mode.label().to_string(),
+            self.model.vim.mode.label().to_string(),
             format!("Ln {}", line + 1),
             format!("Col {}", column + 1),
-            if self.show_wrap {
+            if self.model.show_wrap {
                 "Wrap".to_string()
             } else {
                 "No Wrap".to_string()
             },
             format!("{} lines", tab.line_count()),
         ];
-        let pending = self.vim.pending_display();
+        let pending = self.model.vim.pending_display();
         if !pending.is_empty() {
             parts.push(pending);
         }
         if let Some(selection) = self.selection_summary() {
             parts.push(selection);
         }
-        if self.find.visible {
-            let current = if self.find.matches.is_empty() {
+        if self.model.find.visible {
+            let current = if self.model.find.matches.is_empty() {
                 0
             } else {
-                self.find.current + 1
+                self.model.find.current + 1
             };
-            parts.push(format!("Match {current}/{}", self.find.matches.len()));
+            parts.push(format!("Match {current}/{}", self.model.find.matches.len()));
         }
         parts.join("  ")
     }
@@ -1083,14 +840,22 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         let apply_started = Instant::now();
+        let old_show_wrap = self.model.show_wrap;
         {
-            let tab = self.active_tab_mut();
+            let tab = self.model.active_tab_mut();
+            let id = tab.id();
             let name_hint = tab.display_name();
-            *tab = EditorTab::from_text(name_hint, None, text);
+            *tab = ModelEditorTab::from_text(id, name_hint, None, text);
         }
-        self.sync_find_after_edit();
+        if !self.model.find.query.is_empty() {
+            self.model.reindex_find_matches_to_nearest();
+        }
+        self.sync_tab_views(old_show_wrap);
+        if let Some(view) = self.tab_views.get_mut(self.model.active) {
+            view.invalidate_visual_state();
+        }
         self.record_operation(label, clipboard_read_ms, elapsed_ms(apply_started));
-        self.status = format!("Loaded {} lines.", self.active_tab().line_count());
+        self.model.status = format!("Loaded {} lines.", self.active_tab().line_count());
         self.reveal_active_cursor();
         cx.notify();
     }
@@ -1103,15 +868,19 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         let apply_started = Instant::now();
+        let old_show_wrap = self.model.show_wrap;
         {
-            let tab = self.active_tab_mut();
+            let tab = self.model.active_tab_mut();
             let end = tab.len_chars();
             tab.replace_char_range(end..end, text);
             tab.modified = false;
         }
-        self.sync_find_after_edit();
+        if !self.model.find.query.is_empty() {
+            self.model.reindex_find_matches_to_nearest();
+        }
+        self.sync_tab_views(old_show_wrap);
         self.record_operation(label, clipboard_read_ms, elapsed_ms(apply_started));
-        self.status = format!("Appended {} lines.", text.lines().count());
+        self.model.status = format!("Appended {} lines.", text.lines().count());
         self.reveal_active_cursor();
         cx.notify();
     }
@@ -1123,36 +892,16 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.move_visual_row(delta, select, window) {
-            self.reveal_active_cursor();
-            cx.notify();
+        if self.move_visual_row(delta, select, window, cx) {
             return;
         }
 
-        let tab = self.active_tab_mut();
-        let cursor = tab.cursor_char();
-        let (line, column) = char_to_line_col(&tab.buffer, cursor);
-        let preferred = tab.preferred_column.unwrap_or(column);
-        let target_line = if delta.is_negative() {
-            line.saturating_sub(delta.unsigned_abs())
-        } else {
-            (line + delta as usize).min(tab.line_count().saturating_sub(1))
-        };
-        let target_column = preferred.min(tab.display_line_char_len(target_line));
-        let target = tab.buffer.line_to_char(target_line) + target_column;
-        tab.preferred_column = Some(preferred);
-        if select {
-            tab.select_to(target);
-        } else {
-            tab.move_to(target);
-        }
-        self.reveal_active_cursor();
-        cx.notify();
+        self.apply_model_command(EditorCommand::MoveVertical { delta, select }, cx);
     }
 
     fn active_page_rows(&self) -> usize {
         let height = self
-            .active_tab()
+            .active_view()
             .geometry
             .borrow()
             .bounds
@@ -1170,35 +919,41 @@ impl LstGpuiApp {
         self.move_vertical(delta, select, window, cx);
     }
 
-    fn move_visual_row(&mut self, delta: isize, select: bool, window: &mut Window) -> bool {
-        if !self.show_wrap {
+    fn move_visual_row(
+        &mut self,
+        delta: isize,
+        select: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.model.show_wrap {
             return false;
         }
 
-        let active = self.active;
-        let viewport_width = self.tabs[active]
+        let active = self.model.active;
+        let viewport_width = self.tab_views[active]
             .geometry
             .borrow()
             .bounds
             .map(|bounds| bounds.size.width)
             .unwrap_or_else(|| px(WINDOW_WIDTH - 48.0));
         let char_width = code_char_width(window);
-        let revision = self.tabs[active].revision();
-        let lines = self.tabs[active].lines();
+        let revision = self.model.tabs[active].revision();
+        let lines = self.model.tabs[active].lines();
         let layout = {
-            let mut cache = self.tabs[active].cache.borrow_mut();
+            let mut cache = self.tab_views[active].cache.borrow_mut();
             ensure_wrap_layout(
                 &mut cache,
                 lines.as_ref(),
                 revision,
                 viewport_width,
                 char_width,
-                self.show_gutter,
-                self.show_wrap,
+                self.model.show_gutter,
+                self.model.show_wrap,
             )
         };
 
-        let tab = &mut self.tabs[active];
+        let tab = &self.model.tabs[active];
         let cursor = tab.cursor_char();
         let line = tab.buffer.char_to_line(cursor.min(tab.buffer.len_chars()));
         let line_start = tab.buffer.line_to_char(line);
@@ -1237,56 +992,35 @@ impl LstGpuiApp {
         let target_col =
             target_segment.start_col + preferred.min(target_segment.text.chars().count());
         let target = tab.buffer.line_to_char(target_line) + target_col;
-        tab.preferred_column = Some(preferred);
-        if select {
-            tab.select_to(target);
-        } else {
-            tab.move_to(target);
-        }
+        self.apply_model_command(
+            EditorCommand::MoveToChar {
+                offset: target,
+                select,
+                preferred_column: Some(preferred),
+            },
+            cx,
+        );
         true
     }
 
     fn close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.tabs.len() {
+        if index >= self.model.tabs.len() {
             return;
         }
 
-        if self.tabs[index].modified {
-            self.status = format!(
-                "Unsaved changes in {}. Save or Save As before closing this tab.",
-                self.tabs[index].display_name()
-            );
-            cx.notify();
-            return;
-        }
-
-        let closed_active_tab = should_refocus_editor_after_tab_close(self.active, index);
         self.hovered_tab = None;
-        if self.tabs.len() == 1 {
-            self.tabs[0] = self.new_empty_tab();
-            self.set_active_tab(0);
-        } else {
-            let next_active = next_active_after_tab_close(self.tabs.len(), self.active, index);
-            self.tabs.remove(index);
-            self.set_active_tab(next_active);
-        }
-
-        if closed_active_tab {
-            self.queue_focus(FocusTarget::Editor);
-        }
-        self.status = "Closed tab.".to_string();
-        self.reveal_active_cursor();
-        cx.notify();
+        self.apply_model_command(EditorCommand::CloseTab(index), cx);
     }
 
     fn reveal_active_cursor(&self) {
         let tab = self.active_tab();
-        let viewport_bounds = tab.scroll.bounds();
+        let view = self.active_view();
+        let viewport_bounds = view.scroll.bounds();
         if viewport_bounds.size.height <= px(0.) {
             return;
         }
 
-        let visual_row = tab
+        let visual_row = view
             .cache
             .borrow()
             .wrap_layout
@@ -1296,7 +1030,7 @@ impl LstGpuiApp {
         let caret_top = px((visual_row as f32) * ROW_HEIGHT);
         let caret_bottom = caret_top + px(ROW_HEIGHT);
         let scroll_top = {
-            let offset_y = -tab.scroll.offset().y;
+            let offset_y = -view.scroll.offset().y;
             if offset_y > px(0.) {
                 offset_y
             } else {
@@ -1315,7 +1049,7 @@ impl LstGpuiApp {
         };
 
         if let Some(target) = target {
-            tab.scroll.set_offset(point(px(0.0), -target));
+            view.scroll.set_offset(point(px(0.0), -target));
         }
     }
 
@@ -1326,11 +1060,11 @@ impl LstGpuiApp {
     }
 
     fn active_char_index_for_point(&self, point: Point<Pixels>) -> usize {
-        let geometry = self.active_tab().geometry.borrow();
+        let geometry = self.active_view().geometry.borrow();
         let Some(bounds) = geometry.bounds else {
             return self.active_tab().cursor_char();
         };
-        let code_origin_x = bounds.left() + code_origin_pad(self.show_gutter);
+        let code_origin_x = bounds.left() + code_origin_pad(self.model.show_gutter);
 
         let row = if geometry.rows.is_empty() {
             return 0;
@@ -1423,7 +1157,7 @@ impl LstGpuiApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.apply_model_command(EditorCommand::CloseTab(self.active), cx);
+        self.apply_model_command(EditorCommand::CloseTab(self.model.active), cx);
     }
 
     fn handle_next_tab(&mut self, _: &NextTab, _: &mut Window, cx: &mut Context<Self>) {
@@ -1466,9 +1200,14 @@ impl LstGpuiApp {
             );
         } else {
             let start = self.active_tab().selection.start;
-            self.active_tab_mut().move_to(start);
-            self.reveal_active_cursor();
-            cx.notify();
+            self.apply_model_command(
+                EditorCommand::MoveToChar {
+                    offset: start,
+                    select: false,
+                    preferred_column: None,
+                },
+                cx,
+            );
         }
     }
 
@@ -1483,9 +1222,14 @@ impl LstGpuiApp {
             );
         } else {
             let end = self.active_tab().selection.end;
-            self.active_tab_mut().move_to(end);
-            self.reveal_active_cursor();
-            cx.notify();
+            self.apply_model_command(
+                EditorCommand::MoveToChar {
+                    offset: end,
+                    select: false,
+                    preferred_column: None,
+                },
+                cx,
+            );
         }
     }
 
@@ -1842,17 +1586,19 @@ impl LstGpuiApp {
         });
 
         if event.keystroke.key == "escape" {
-            let snapshot = self.vim_snapshot();
-            let commands = self
-                .vim
-                .enter_normal_from_escape(snapshot.cursor, &snapshot);
-            self.execute_vim_commands(commands, cx);
+            let old_show_wrap = self.model.show_wrap;
+            let old_find_state = self.find_input_state();
+            self.model.handle_vim_escape();
+            self.sync_tab_views(old_show_wrap);
+            self.sync_find_inputs_if_changed(old_find_state, cx);
+            let effects = self.model.drain_effects();
+            self.handle_model_effects(effects, cx);
             cx.stop_propagation();
             cx.notify();
             return true;
         }
 
-        if self.vim.mode == vim::Mode::Insert {
+        if self.model.vim.mode == vim::Mode::Insert {
             return false;
         }
 
@@ -1868,376 +1614,16 @@ impl LstGpuiApp {
             return false;
         };
 
-        let snapshot = self.vim_snapshot();
-        let commands = self.vim.handle_key(&key, mods, &snapshot);
-        self.execute_vim_commands(commands, cx);
+        let old_show_wrap = self.model.show_wrap;
+        let old_find_state = self.find_input_state();
+        self.model.handle_vim_key(key, mods);
+        self.sync_tab_views(old_show_wrap);
+        self.sync_find_inputs_if_changed(old_find_state, cx);
+        let effects = self.model.drain_effects();
+        self.handle_model_effects(effects, cx);
         cx.stop_propagation();
         cx.notify();
         true
-    }
-
-    fn execute_vim_commands(&mut self, commands: Vec<vim::VimCommand>, cx: &mut Context<Self>) {
-        for cmd in commands {
-            match cmd {
-                vim::VimCommand::Noop => {}
-                vim::VimCommand::MoveTo(position) => {
-                    self.active_tab_mut().set_cursor_position(position, None);
-                }
-                vim::VimCommand::Select { anchor, head } => self.apply_vim_select(anchor, head),
-                vim::VimCommand::DeleteRange { from, to } => {
-                    let deleted = self.vim_delete_range(from, to);
-                    self.vim.register = vim::Register::Char(deleted);
-                }
-                vim::VimCommand::DeleteLines { first, last } => {
-                    let deleted = self.vim_delete_lines(first, last);
-                    self.vim.register = vim::Register::Line(deleted);
-                }
-                vim::VimCommand::ChangeRange { from, to } => {
-                    let deleted = self.vim_delete_range(from, to);
-                    self.vim.register = vim::Register::Char(deleted);
-                    self.vim.mode = vim::Mode::Insert;
-                }
-                vim::VimCommand::ChangeLines { first, last } => {
-                    let deleted = self.vim_change_lines(first, last);
-                    self.vim.register = vim::Register::Line(deleted);
-                    self.vim.mode = vim::Mode::Insert;
-                }
-                vim::VimCommand::YankRange { from, to } => {
-                    self.vim.register = vim::Register::Char(self.vim_extract_range(from, to));
-                }
-                vim::VimCommand::YankLines { first, last } => {
-                    self.vim.register = vim::Register::Line(self.vim_extract_lines(first, last));
-                }
-                vim::VimCommand::EnterInsert => self.vim.mode = vim::Mode::Insert,
-                vim::VimCommand::PasteAfter => self.vim_paste(false),
-                vim::VimCommand::PasteBefore => self.vim_paste(true),
-                vim::VimCommand::OpenLineBelow => {
-                    self.vim_open_line(false);
-                    self.vim.mode = vim::Mode::Insert;
-                }
-                vim::VimCommand::OpenLineAbove => {
-                    self.vim_open_line(true);
-                    self.vim.mode = vim::Mode::Insert;
-                }
-                vim::VimCommand::JoinLines { count } => self.vim_join_lines(count),
-                vim::VimCommand::ReplaceChar { ch, count } => self.vim_replace_char(ch, count),
-                vim::VimCommand::Undo => {
-                    if self.active_tab_mut().undo() {
-                        self.sync_find_after_edit();
-                    }
-                }
-                vim::VimCommand::Redo => {
-                    if self.active_tab_mut().redo() {
-                        self.sync_find_after_edit();
-                    }
-                }
-                vim::VimCommand::OpenFind => self.open_find(false, cx),
-                vim::VimCommand::FindNext => {
-                    self.ensure_find_matches_current();
-                    if let Some(target) = self.vim_find_next_from_cursor(self.vim_cursor_position())
-                    {
-                        self.move_to_vim_search_target(target);
-                    }
-                }
-                vim::VimCommand::FindPrev => {
-                    self.ensure_find_matches_current();
-                    if let Some(target) = self.vim_find_prev_from_cursor(self.vim_cursor_position())
-                    {
-                        self.move_to_vim_search_target(target);
-                    }
-                }
-                vim::VimCommand::SearchWordUnderCursor { word, forward } => {
-                    self.find.query = word;
-                    self.reindex_find_matches();
-                    let cursor = self.vim_cursor_position();
-                    let target = if forward {
-                        self.vim_find_next_from_cursor(cursor)
-                    } else {
-                        self.vim_find_prev_from_cursor(cursor)
-                    };
-                    if let Some(target) = target {
-                        self.move_to_vim_search_target(target);
-                    }
-                }
-                vim::VimCommand::TransformCaseRange {
-                    from,
-                    to,
-                    uppercase,
-                } => self.vim_transform_case_range(from, to, uppercase),
-                vim::VimCommand::TransformCaseLines {
-                    first,
-                    last,
-                    uppercase,
-                } => self.vim_transform_case_lines(first, last, uppercase),
-            }
-        }
-
-        self.reveal_active_cursor();
-        self.sync_primary_selection(cx);
-    }
-
-    fn vim_find_next_from_cursor(&mut self, position: Position) -> Option<Position> {
-        let index = self
-            .find
-            .matches
-            .iter()
-            .position(|m| {
-                m.line > position.line || (m.line == position.line && m.col > position.column)
-            })
-            .or_else(|| (!self.find.matches.is_empty()).then_some(0))?;
-        self.find.current = index;
-        let m = self.find.matches[index];
-        Some(Position {
-            line: m.line,
-            column: m.col,
-        })
-    }
-
-    fn vim_find_prev_from_cursor(&mut self, position: Position) -> Option<Position> {
-        let index = self
-            .find
-            .matches
-            .iter()
-            .rposition(|m| {
-                m.line < position.line || (m.line == position.line && m.col < position.column)
-            })
-            .or_else(|| self.find.matches.len().checked_sub(1))?;
-        self.find.current = index;
-        let m = self.find.matches[index];
-        Some(Position {
-            line: m.line,
-            column: m.col,
-        })
-    }
-
-    fn apply_vim_select(&mut self, anchor: Position, head: Position) {
-        let tab = self.active_tab_mut();
-        let anchor_char = position_to_char(&tab.buffer, anchor);
-        let head_char = position_to_char(&tab.buffer, head);
-        let anchor_end = inclusive_position_to_exclusive_char(&tab.buffer, anchor);
-        let head_end = inclusive_position_to_exclusive_char(&tab.buffer, head);
-        if vim_position_lt(head, anchor) {
-            tab.selection = head_char..anchor_end.max(head_char);
-            tab.selection_reversed = true;
-        } else {
-            tab.selection = anchor_char..head_end.max(anchor_char);
-            tab.selection_reversed = false;
-        }
-        tab.marked_range = None;
-        tab.preferred_column = None;
-    }
-
-    fn move_to_vim_search_target(&mut self, target: Position) {
-        if matches!(self.vim.mode, vim::Mode::Visual | vim::Mode::VisualLine) {
-            let snapshot = self.vim_snapshot();
-            if let vim::VimCommand::Select { anchor, head } =
-                self.vim.selection_command(target, &snapshot)
-            {
-                self.apply_vim_select(anchor, head);
-            }
-        } else {
-            self.active_tab_mut().set_cursor_position(target, None);
-        }
-    }
-
-    fn vim_delete_range(&mut self, from: Position, to: Position) -> String {
-        self.apply_line_edit(|lines| {
-            let deleted = extract_text_range(lines, &from, &to);
-            remove_text_range(lines, &from, &to);
-            let cursor_col = from.column.min(
-                lines
-                    .get(from.line)
-                    .map_or(0, |line| line.chars().count().saturating_sub(1)),
-            );
-            Some((deleted, from.line, cursor_col))
-        })
-        .unwrap_or_default()
-    }
-
-    fn vim_delete_lines(&mut self, first: usize, last: usize) -> String {
-        self.apply_line_edit(|lines| {
-            let first = first.min(lines.len().saturating_sub(1));
-            let last = last.min(lines.len().saturating_sub(1));
-            let deleted = lines[first..=last].join("\n");
-            lines.drain(first..=last);
-            if lines.is_empty() {
-                lines.push(String::new());
-            }
-            let cursor_line = first.min(lines.len().saturating_sub(1));
-            Some((deleted, cursor_line, 0))
-        })
-        .unwrap_or_default()
-    }
-
-    fn vim_change_lines(&mut self, first: usize, last: usize) -> String {
-        self.apply_line_edit(|lines| {
-            let first = first.min(lines.len().saturating_sub(1));
-            let last = last.min(lines.len().saturating_sub(1));
-            let indent: String = lines[first]
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect();
-            let deleted = lines[first..=last].join("\n");
-            lines.drain(first..=last);
-            lines.insert(first, indent.clone());
-            Some((deleted, first, indent.chars().count()))
-        })
-        .unwrap_or_default()
-    }
-
-    fn vim_extract_range(&mut self, from: Position, to: Position) -> String {
-        let lines = self.tabs[self.active].lines();
-        extract_text_range(lines.as_ref(), &from, &to)
-    }
-
-    fn vim_extract_lines(&mut self, first: usize, last: usize) -> String {
-        let lines = self.tabs[self.active].lines();
-        let first = first.min(lines.len().saturating_sub(1));
-        let last = last.min(lines.len().saturating_sub(1));
-        lines[first..=last].join("\n")
-    }
-
-    fn vim_paste(&mut self, before: bool) {
-        match self.vim.register.clone() {
-            vim::Register::Empty => {}
-            vim::Register::Char(paste_text) => {
-                let cursor = self.vim_cursor_position();
-                let _ = self.apply_line_edit(|lines| {
-                    let line_chars: Vec<char> = lines[cursor.line].chars().collect();
-                    let insert_col = if before {
-                        cursor.column.min(line_chars.len())
-                    } else {
-                        (cursor.column + 1).min(line_chars.len())
-                    };
-                    let prefix: String = line_chars[..insert_col].iter().collect();
-                    let suffix: String = line_chars[insert_col..].iter().collect();
-                    let paste_lines: Vec<&str> = paste_text.split('\n').collect();
-                    if paste_lines.len() == 1 {
-                        lines[cursor.line] = format!("{prefix}{}{suffix}", paste_lines[0]);
-                        let cursor_col =
-                            insert_col + paste_lines[0].chars().count().saturating_sub(1);
-                        return Some(((), cursor.line, cursor_col));
-                    }
-
-                    let first_new = format!("{prefix}{}", paste_lines[0]);
-                    let last_new = format!("{}{suffix}", paste_lines.last().unwrap_or(&""));
-                    let mut new_lines: Vec<String> = lines[..cursor.line].to_vec();
-                    new_lines.push(first_new);
-                    for paste_line in &paste_lines[1..paste_lines.len() - 1] {
-                        new_lines.push((*paste_line).to_string());
-                    }
-                    new_lines.push(last_new);
-                    new_lines.extend(lines[cursor.line + 1..].iter().cloned());
-                    let cursor_line = cursor.line + paste_lines.len() - 1;
-                    let cursor_col = paste_lines
-                        .last()
-                        .unwrap_or(&"")
-                        .chars()
-                        .count()
-                        .saturating_sub(1);
-                    *lines = new_lines;
-                    Some(((), cursor_line, cursor_col))
-                });
-            }
-            vim::Register::Line(paste_text) => {
-                let cursor = self.vim_cursor_position();
-                let _ = self.apply_line_edit(|lines| {
-                    let insert_at = if before { cursor.line } else { cursor.line + 1 };
-                    lines.splice(
-                        insert_at..insert_at,
-                        paste_text.split('\n').map(String::from),
-                    );
-                    let indent = lines.get(insert_at).map_or(0, |line| {
-                        line.chars().take_while(|c| c.is_whitespace()).count()
-                    });
-                    Some(((), insert_at, indent))
-                });
-            }
-        }
-    }
-
-    fn vim_open_line(&mut self, above: bool) {
-        let pos = self.vim_cursor_position();
-        let _ = self.apply_line_edit(|lines| {
-            let indent: String = lines.get(pos.line).map_or(String::new(), |line| {
-                line.chars().take_while(|c| c.is_whitespace()).collect()
-            });
-            let idx = if above { pos.line } else { pos.line + 1 };
-            lines.insert(idx, indent.clone());
-            Some(((), idx, indent.chars().count()))
-        });
-    }
-
-    fn vim_join_lines(&mut self, count: usize) {
-        let pos = self.vim_cursor_position();
-        let _ = self.apply_line_edit(|lines| {
-            if pos.line + 1 >= lines.len() {
-                return None;
-            }
-
-            let join_end = (pos.line + count).min(lines.len() - 1);
-            let mut joined = lines[pos.line].trim_end().to_string();
-            let join_col = joined.chars().count();
-            for line in lines.drain((pos.line + 1)..=join_end) {
-                let trimmed = line.trim_start();
-                if !trimmed.is_empty() {
-                    joined.push(' ');
-                    joined.push_str(trimmed);
-                }
-            }
-            lines[pos.line] = joined;
-            Some(((), pos.line, join_col))
-        });
-    }
-
-    fn vim_replace_char(&mut self, ch: char, count: usize) {
-        let pos = self.vim_cursor_position();
-        let _ = self.apply_line_edit(|lines| {
-            let chars: Vec<char> = lines
-                .get(pos.line)
-                .map_or(Vec::new(), |line| line.chars().collect());
-            if pos.column + count > chars.len() {
-                return None;
-            }
-            let mut new_chars = chars;
-            for ix in 0..count {
-                new_chars[pos.column + ix] = ch;
-            }
-            lines[pos.line] = new_chars.into_iter().collect();
-            Some(((), pos.line, pos.column + count - 1))
-        });
-    }
-
-    fn vim_transform_case_range(&mut self, from: Position, to: Position, uppercase: bool) {
-        let _ = self.apply_line_edit(|lines| {
-            editor_ops::transform_case_range(
-                lines,
-                from.line,
-                from.column,
-                to.line,
-                to.column,
-                uppercase,
-            );
-            Some(((), from.line, from.column))
-        });
-    }
-
-    fn vim_transform_case_lines(&mut self, first: usize, last: usize, uppercase: bool) {
-        let _ = self.apply_line_edit(|lines| {
-            if lines.is_empty() {
-                return None;
-            }
-            let first = first.min(lines.len().saturating_sub(1));
-            let last = last.min(lines.len().saturating_sub(1));
-            for line in &mut lines[first..=last] {
-                *line = if uppercase {
-                    line.to_uppercase()
-                } else {
-                    line.to_lowercase()
-                };
-            }
-            Some(((), first, 0))
-        });
     }
 }
 
@@ -2286,8 +1672,7 @@ impl EntityInputHandler for LstGpuiApp {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.active_tab_mut().marked_range = None;
-        cx.notify();
+        self.apply_model_command(EditorCommand::ClearMarkedText, cx);
     }
 
     fn replace_text_in_range(
@@ -2298,29 +1683,26 @@ impl EntityInputHandler for LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         let apply_started = Instant::now();
-        {
-            let tab = self.active_tab_mut();
-            let range = range_utf16
+        let range = {
+            let tab = self.active_tab();
+            range_utf16
                 .as_ref()
                 .map(|range| utf16_range_to_char_range(&tab.buffer, range))
-                .or_else(|| tab.marked_range.clone())
-                .unwrap_or_else(|| tab.selected_range());
-            let kind = if text.is_empty() {
-                EditKind::Delete
-            } else {
-                EditKind::Insert
-            };
-            let boundary = if text.chars().any(char::is_whitespace) {
-                UndoBoundary::Break
-            } else {
-                UndoBoundary::Merge
-            };
-            tab.edit(kind, boundary, range, text);
-        }
-        self.sync_find_after_edit();
+        };
+        let boundary = if text.chars().any(char::is_whitespace) {
+            UndoBoundary::Break
+        } else {
+            UndoBoundary::Merge
+        };
+        self.apply_model_command(
+            EditorCommand::ReplaceText {
+                range,
+                text: text.to_string(),
+                boundary,
+            },
+            cx,
+        );
         self.record_operation("text_input", None, elapsed_ms(apply_started));
-        self.reveal_active_cursor();
-        cx.notify();
     }
 
     fn replace_and_mark_text_in_range(
@@ -2332,37 +1714,24 @@ impl EntityInputHandler for LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         let apply_started = Instant::now();
-        {
-            let tab = self.active_tab_mut();
-            let range = range_utf16
+        let range = {
+            let tab = self.active_tab();
+            range_utf16
                 .as_ref()
                 .map(|range| utf16_range_to_char_range(&tab.buffer, range))
-                .or_else(|| tab.marked_range.clone())
-                .unwrap_or_else(|| tab.selected_range());
-
-            let inserted_start = range.start;
-            tab.edit(EditKind::Other, UndoBoundary::Break, range, new_text);
-            if !new_text.is_empty() {
-                let marked_end = inserted_start + new_text.chars().count();
-                tab.marked_range = Some(inserted_start..marked_end);
-            } else {
-                tab.marked_range = None;
-            }
-
-            tab.selection = new_selected_range_utf16
-                .as_ref()
-                .map(|range| utf16_range_to_char_range(&tab.buffer, range))
-                .map(|range| inserted_start + range.start..inserted_start + range.end)
-                .unwrap_or_else(|| {
-                    let cursor = inserted_start + new_text.chars().count();
-                    cursor..cursor
-                });
-            tab.selection_reversed = false;
-        }
-        self.sync_find_after_edit();
+        };
+        let selected_range = new_selected_range_utf16
+            .as_ref()
+            .map(|range| utf16_range_to_char_range_in_text(new_text, range));
+        self.apply_model_command(
+            EditorCommand::ReplaceAndMarkText {
+                range,
+                text: new_text.to_string(),
+                selected_range,
+            },
+            cx,
+        );
         self.record_operation("ime_text_input", None, elapsed_ms(apply_started));
-        self.reveal_active_cursor();
-        cx.notify();
     }
 
     fn bounds_for_range(
@@ -2373,13 +1742,13 @@ impl EntityInputHandler for LstGpuiApp {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let tab = self.active_tab();
-        let geometry = tab.geometry.borrow();
+        let geometry = self.active_view().geometry.borrow();
         let range = utf16_range_to_char_range(&tab.buffer, &range_utf16);
         let row = geometry
             .rows
             .iter()
             .rfind(|row| row_contains_cursor(row, range.start))?;
-        let code_origin_x = element_bounds.left() + code_origin_pad(self.show_gutter);
+        let code_origin_x = element_bounds.left() + code_origin_pad(self.model.show_gutter);
         let start_x =
             code_origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| px(0.0));
         let end_x = code_origin_x
@@ -2420,7 +1789,7 @@ fn autosave_temp_path(path: &Path, revision: u64) -> PathBuf {
     ))
 }
 
-fn autosave_revision_is_current(tabs: &[EditorTab], path: &PathBuf, revision: u64) -> bool {
+fn autosave_revision_is_current(tabs: &[ModelEditorTab], path: &PathBuf, revision: u64) -> bool {
     let mut matched: Option<u64> = None;
     for tab in tabs {
         if tab.path.as_ref() != Some(path) {
@@ -2435,18 +1804,22 @@ fn autosave_revision_is_current(tabs: &[EditorTab], path: &PathBuf, revision: u6
 }
 
 fn syntax_highlight_result_is_current(
-    tabs: &[EditorTab],
+    tabs: &[ModelEditorTab],
+    tab_views: &[EditorTabView],
     active: usize,
     cache: &Rc<RefCell<ViewportCache>>,
     key: SyntaxHighlightJobKey,
 ) -> bool {
     tabs.get(active).is_some_and(|tab| {
-        Rc::ptr_eq(&tab.cache, cache)
-            && tab.revision() == key.revision
-            && syntax_mode_for_path(tab.path.as_ref()) == SyntaxMode::TreeSitter(key.language)
+        tab_views.get(active).is_some_and(|view| {
+            Rc::ptr_eq(&view.cache, cache)
+                && tab.revision() == key.revision
+                && syntax_mode_for_path(tab.path.as_ref()) == SyntaxMode::TreeSitter(key.language)
+        })
     })
 }
 
+#[cfg(test)]
 fn delete_selection_or_word_range(tab: &Tab, backward: bool) -> Option<Range<usize>> {
     if tab.has_selection() {
         return Some(tab.selected_range());
@@ -2466,22 +1839,6 @@ fn char_to_line_col(buffer: &Rope, char_offset: usize) -> (usize, usize) {
     let line = buffer.char_to_line(char_offset);
     let line_start = buffer.line_to_char(line);
     (line, char_offset - line_start)
-}
-
-fn preferred_newline_for_buffer(buffer: &Rope) -> &'static str {
-    let mut chars = buffer.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\r' {
-            if chars.peek() == Some(&'\n') {
-                return "\r\n";
-            }
-            return "\n";
-        }
-        if ch == '\n' {
-            return "\n";
-        }
-    }
-    "\n"
 }
 
 fn char_to_utf16(buffer: &Rope, char_offset: usize) -> usize {
@@ -2513,6 +1870,11 @@ fn utf16_range_to_char_range(buffer: &Rope, range: &Range<usize>) -> Range<usize
     utf16_to_char(buffer, range.start)..utf16_to_char(buffer, range.end)
 }
 
+fn utf16_range_to_char_range_in_text(text: &str, range: &Range<usize>) -> Range<usize> {
+    let buffer = Rope::from_str(text);
+    utf16_range_to_char_range(&buffer, range)
+}
+
 fn gpui_modifiers_to_vim(modifiers: gpui::Modifiers) -> VimModifiers {
     VimModifiers {
         command: modifiers.control || modifiers.platform,
@@ -2541,69 +1903,6 @@ fn gpui_key_to_vim(event: &KeyDownEvent) -> Option<VimKey> {
         "enter" => Some(VimKey::Named(VimNamedKey::Enter)),
         value if value.chars().count() == 1 => Some(VimKey::Character(value.to_string())),
         _ => None,
-    }
-}
-
-fn vim_position_lt(a: Position, b: Position) -> bool {
-    (a.line, a.column) < (b.line, b.column)
-}
-
-fn inclusive_position_to_exclusive_char(buffer: &Rope, position: Position) -> usize {
-    let line = position.line.min(buffer.len_lines().saturating_sub(1));
-    let line_start = buffer.line_to_char(line);
-    let display_len = line_display_char_len(buffer, line);
-    if display_len == 0 {
-        return line_start;
-    }
-    line_start + (position.column.min(display_len.saturating_sub(1)) + 1).min(display_len)
-}
-
-fn extract_text_range(lines: &[String], from: &Position, to: &Position) -> String {
-    if from.line >= lines.len() || to.line >= lines.len() {
-        return String::new();
-    }
-    if from.line == to.line {
-        let chars: Vec<char> = lines[from.line].chars().collect();
-        let start = from.column.min(chars.len());
-        let end = (to.column + 1).min(chars.len());
-        if start >= end {
-            return String::new();
-        }
-        chars[start..end].iter().collect()
-    } else {
-        let mut result = String::new();
-        let first: Vec<char> = lines[from.line].chars().collect();
-        result.extend(&first[from.column.min(first.len())..]);
-        for line in lines.iter().take(to.line).skip(from.line + 1) {
-            result.push('\n');
-            result.push_str(line);
-        }
-        result.push('\n');
-        let last: Vec<char> = lines[to.line].chars().collect();
-        result.extend(&last[..(to.column + 1).min(last.len())]);
-        result
-    }
-}
-
-fn remove_text_range(lines: &mut Vec<String>, from: &Position, to: &Position) {
-    if from.line >= lines.len() || to.line >= lines.len() {
-        return;
-    }
-    if from.line == to.line {
-        let chars: Vec<char> = lines[from.line].chars().collect();
-        let start = from.column.min(chars.len());
-        let end = (to.column + 1).min(chars.len());
-        let remaining: String = chars[..start].iter().chain(chars[end..].iter()).collect();
-        lines[from.line] = remaining;
-    } else {
-        let first: Vec<char> = lines[from.line].chars().collect();
-        let last: Vec<char> = lines[to.line].chars().collect();
-        let prefix: String = first[..from.column.min(first.len())].iter().collect();
-        let suffix: String = last[(to.column + 1).min(last.len())..].iter().collect();
-        lines[from.line] = format!("{prefix}{suffix}");
-        if from.line < to.line {
-            lines.drain((from.line + 1)..=to.line);
-        }
     }
 }
 

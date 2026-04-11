@@ -19,8 +19,8 @@ use crate::{
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let tab = &self.tabs[ix];
-        let active = ix == self.active;
+        let tab = &self.model.tabs[ix];
+        let active = ix == self.model.active;
         let show_close = active || self.hovered_tab == Some(ix);
         let dirty_marker = tab.modified.then_some(
             div()
@@ -49,9 +49,8 @@ impl LstGpuiApp {
                 cx.notify();
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.set_active_tab(ix);
-                this.status = format!("Switched to {}.", this.active_tab().display_name());
-                this.reveal_active_cursor();
+                this.apply_model_command(EditorCommand::SetActiveTab(ix), cx);
+                this.model.status = format!("Switched to {}.", this.active_tab().display_name());
                 window.focus(&this.focus_handle);
                 cx.notify();
             }))
@@ -69,7 +68,7 @@ impl LstGpuiApp {
     }
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut items = (0..self.tabs.len())
+        let mut items = (0..self.model.tabs.len())
             .map(|ix| self.render_tab(ix, cx).into_any_element())
             .collect::<Vec<_>>();
         items.push(
@@ -98,10 +97,14 @@ impl LstGpuiApp {
     }
 
     fn render_find_bar(&mut self) -> impl IntoElement {
-        let match_label = if self.find.matches.is_empty() {
+        let match_label = if self.model.find.matches.is_empty() {
             "0/0".to_string()
         } else {
-            format!("{}/{}", self.find.current + 1, self.find.matches.len())
+            format!(
+                "{}/{}",
+                self.model.find.current + 1,
+                self.model.find.matches.len()
+            )
         };
 
         div()
@@ -123,7 +126,7 @@ impl LstGpuiApp {
                     .child("Find"),
             )
             .child(div().w(px(280.0)).child(self.find_query_input.clone()))
-            .when(self.find.show_replace, |row| {
+            .when(self.model.find.show_replace, |row| {
                 row.child(
                     div()
                         .flex_none()
@@ -182,7 +185,7 @@ impl LstGpuiApp {
                     .truncate()
                     .text_sm()
                     .text_color(rgb(COLOR_SUBTEXT))
-                    .child(self.status.clone()),
+                    .child(self.model.status.clone()),
             )
             .child(
                 div()
@@ -196,12 +199,12 @@ impl LstGpuiApp {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
-            if self.goto_line.is_some() {
+            if self.model.goto_line.is_some() {
                 self.apply_model_command(EditorCommand::CloseGotoLine, cx);
                 cx.stop_propagation();
                 return;
             }
-            if self.find.visible {
+            if self.model.find.visible {
                 self.apply_model_command(EditorCommand::CloseFind, cx);
                 cx.stop_propagation();
                 return;
@@ -216,20 +219,20 @@ impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_active_syntax_highlights(cx);
 
-        let active = self.active;
-        let show_gutter = self.show_gutter;
-        let show_wrap = self.show_wrap;
-        let viewport_width = self.tabs[active]
+        let active = self.model.active;
+        let show_gutter = self.model.show_gutter;
+        let show_wrap = self.model.show_wrap;
+        let viewport_width = self.tab_views[active]
             .geometry
             .borrow()
             .bounds
             .map(|bounds| bounds.size.width)
             .unwrap_or_else(|| px(WINDOW_WIDTH - 48.0));
         let char_width = code_char_width(window);
-        let revision = self.tabs[active].revision();
-        let line_texts = self.tabs[active].lines();
+        let revision = self.model.tabs[active].revision();
+        let line_texts = self.model.tabs[active].lines();
         let total_content_height = {
-            let mut cache = self.tabs[active].cache.borrow_mut();
+            let mut cache = self.tab_views[active].cache.borrow_mut();
             let layout = ensure_wrap_layout(
                 &mut cache,
                 line_texts.as_ref(),
@@ -241,17 +244,18 @@ impl Render for LstGpuiApp {
             );
             buffer_content_height(layout.total_rows)
         };
-        let active_tab = &self.tabs[active];
+        let active_tab = &self.model.tabs[active];
+        let active_view = &self.tab_views[active];
         let syntax_mode = syntax_mode_for_path(active_tab.path.as_ref());
         let buffer = active_tab.buffer.clone();
         let selection = active_tab.selection.clone();
         let cursor_char = active_tab.cursor_char();
-        let viewport_scroll = active_tab.scroll.clone();
-        let viewport_cache = active_tab.cache.clone();
-        let viewport_geometry = active_tab.geometry.clone();
+        let viewport_scroll = active_view.scroll.clone();
+        let viewport_cache = active_view.cache.clone();
+        let viewport_geometry = active_view.geometry.clone();
         let focus_handle = self.focus_handle.clone();
         let entity = cx.entity();
-        let vim_mode = self.vim.mode;
+        let vim_mode = self.model.vim.mode;
 
         let root = div()
             .flex()
@@ -326,10 +330,10 @@ impl Render for LstGpuiApp {
                     .py(px(SHELL_EDGE_PAD))
                     .gap_2()
                     .child(self.render_tab_strip(cx))
-                    .when(self.find.visible, |shell| {
+                    .when(self.model.find.visible, |shell| {
                         shell.child(self.render_find_bar())
                     })
-                    .when(self.goto_line.is_some(), |shell| {
+                    .when(self.model.goto_line.is_some(), |shell| {
                         shell.child(self.render_goto_bar())
                     })
                     .child(
