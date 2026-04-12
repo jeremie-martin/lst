@@ -1,3 +1,5 @@
+use gpui::{px, Pixels};
+
 pub mod palette {
     pub const CHROME: u32 = 0x181818;
     pub const PANEL: u32 = 0x252526;
@@ -67,6 +69,13 @@ pub mod syntax {
 }
 
 pub mod metrics {
+    use super::{px, Pixels};
+
+    pub const BASE_REM_SIZE: f32 = 16.0;
+    pub const MIN_ZOOM_LEVEL: i32 = -4;
+    pub const MAX_ZOOM_LEVEL: i32 = 8;
+    pub const ZOOM_STEP: f32 = 1.1;
+
     pub const WINDOW_WIDTH: f32 = 1360.0;
     pub const WINDOW_HEIGHT: f32 = 860.0;
     pub const SHELL_EDGE_PAD: f32 = 12.0;
@@ -94,4 +103,20 @@ pub mod metrics {
     pub const GUTTER_LEFT_PAD: f32 = 12.0;
     pub const GUTTER_SEPARATOR_WIDTH: f32 = 14.0;
     pub const WRAP_CHAR_WIDTH_FALLBACK: f32 = 7.8;
+
+    pub fn zoom_scale(level: i32) -> f32 {
+        ZOOM_STEP.powi(level.clamp(MIN_ZOOM_LEVEL, MAX_ZOOM_LEVEL))
+    }
+
+    pub fn px_for_scale(value: f32, scale: f32) -> Pixels {
+        px(value * scale)
+    }
+
+    pub fn scale_for_rem(rem_size: Pixels) -> f32 {
+        rem_size / px(BASE_REM_SIZE)
+    }
+
+    pub fn px_for_rem(value: f32, rem_size: Pixels) -> Pixels {
+        px_for_scale(value, scale_for_rem(rem_size))
+    }
 }

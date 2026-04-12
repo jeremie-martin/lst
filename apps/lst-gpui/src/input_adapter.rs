@@ -156,7 +156,8 @@ impl EntityInputHandler for LstGpuiApp {
             .rows
             .iter()
             .rfind(|row| row_contains_cursor(row, range.start))?;
-        let code_origin_x = element_bounds.left() + code_origin_pad(self.model.show_gutter());
+        let code_origin_x =
+            element_bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
         let start_x =
             code_origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| gpui::px(0.0));
         let end_x = code_origin_x
@@ -165,8 +166,8 @@ impl EntityInputHandler for LstGpuiApp {
         Some(Bounds::from_corners(
             point(start_x, row.row_top),
             point(
-                end_x.max(start_x + gpui::px(metrics::CURSOR_WIDTH)),
-                row.row_top + gpui::px(metrics::ROW_HEIGHT),
+                end_x.max(start_x + metrics::px_for_scale(metrics::CURSOR_WIDTH, self.ui_scale())),
+                row.row_top + metrics::px_for_scale(metrics::ROW_HEIGHT, self.ui_scale()),
             ),
         ))
     }

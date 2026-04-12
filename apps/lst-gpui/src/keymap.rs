@@ -9,6 +9,7 @@ use crate::{
     PrevTab, Quit, Redo, SaveFile, SaveFileAs, SelectAll, SelectDocumentEnd, SelectDocumentStart,
     SelectDown, SelectLeft, SelectLineEnd, SelectLineStart, SelectPageDown, SelectPageUp,
     SelectRight, SelectUp, SelectWordLeft, SelectWordRight, ToggleComment, ToggleWrap, Undo,
+    ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
@@ -32,6 +33,14 @@ pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-tab", PrevTab, Some("Workspace && !InlineInput")),
         KeyBinding::new("cmd-shift-[", PrevTab, Some("Workspace && !InlineInput")),
         KeyBinding::new("alt-z", ToggleWrap, Some("Workspace && !InlineInput")),
+        KeyBinding::new("ctrl-=", ZoomIn, Some("Workspace")),
+        KeyBinding::new("ctrl-+", ZoomIn, Some("Workspace")),
+        KeyBinding::new("cmd-=", ZoomIn, Some("Workspace")),
+        KeyBinding::new("cmd-+", ZoomIn, Some("Workspace")),
+        KeyBinding::new("ctrl--", ZoomOut, Some("Workspace")),
+        KeyBinding::new("cmd--", ZoomOut, Some("Workspace")),
+        KeyBinding::new("ctrl-0", ZoomReset, Some("Workspace")),
+        KeyBinding::new("cmd-0", ZoomReset, Some("Workspace")),
         KeyBinding::new("ctrl-c", CopySelection, Some("Editor")),
         KeyBinding::new("cmd-c", CopySelection, Some("Editor")),
         KeyBinding::new("ctrl-x", CutSelection, Some("Editor")),

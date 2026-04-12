@@ -165,7 +165,7 @@ impl LstGpuiApp {
         let position = self.drag_last_point?;
         let geometry = self.active_view().geometry.borrow();
         let bounds = geometry.bounds?;
-        let delta = drag_autoscroll_delta(position, bounds)?;
+        let delta = drag_autoscroll_delta(position, bounds, self.ui_scale())?;
         let view = self.active_view();
         let current = (-view.scroll.offset().y).max(px(0.0));
         let max = view.scroll.max_offset().height.max(px(0.0));
@@ -195,23 +195,26 @@ impl LstGpuiApp {
 pub(crate) fn drag_autoscroll_delta(
     position: Point<Pixels>,
     bounds: Bounds<Pixels>,
+    scale: f32,
 ) -> Option<Pixels> {
     const EDGE_PX: f32 = 36.0;
-    let edge = px(EDGE_PX);
+    let edge = metrics::px_for_scale(EDGE_PX, scale);
     let top_edge = bounds.top() + edge;
     let bottom_edge = bounds.bottom() - edge;
 
     if position.y < top_edge {
-        let distance = ((top_edge - position.y) / px(1.0)).min(EDGE_PX * 2.0);
-        let rows = 0.5 + distance / EDGE_PX;
-        Some(-px(
-            (metrics::ROW_HEIGHT * rows).min(metrics::ROW_HEIGHT * 3.0)
+        let distance = ((top_edge - position.y) / px(1.0)).min(EDGE_PX * scale * 2.0);
+        let rows = 0.5 + distance / (EDGE_PX * scale);
+        Some(-metrics::px_for_scale(
+            (metrics::ROW_HEIGHT * rows).min(metrics::ROW_HEIGHT * 3.0),
+            scale,
         ))
     } else if position.y > bottom_edge {
-        let distance = ((position.y - bottom_edge) / px(1.0)).min(EDGE_PX * 2.0);
-        let rows = 0.5 + distance / EDGE_PX;
-        Some(px(
-            (metrics::ROW_HEIGHT * rows).min(metrics::ROW_HEIGHT * 3.0)
+        let distance = ((position.y - bottom_edge) / px(1.0)).min(EDGE_PX * scale * 2.0);
+        let rows = 0.5 + distance / (EDGE_PX * scale);
+        Some(metrics::px_for_scale(
+            (metrics::ROW_HEIGHT * rows).min(metrics::ROW_HEIGHT * 3.0),
+            scale,
         ))
     } else {
         None

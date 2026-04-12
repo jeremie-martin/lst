@@ -60,7 +60,8 @@ impl ParentElement for Tab {
 }
 
 impl RenderOnce for Tab {
-    fn render(self, _window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
+        let rem_size = window.rem_size();
         let background = if self.active {
             rgb(role::EDITOR_BG)
         } else {
@@ -77,11 +78,11 @@ impl RenderOnce for Tab {
             .relative()
             .flex()
             .flex_none()
-            .h(px(metrics::TAB_HEIGHT))
-            .min_w(px(metrics::TAB_MIN_WIDTH))
-            .max_w(px(metrics::TAB_MAX_WIDTH))
-            .px(px(metrics::TAB_HORIZONTAL_PAD))
-            .gap(px(metrics::SHELL_GAP))
+            .h(metrics::px_for_rem(metrics::TAB_HEIGHT, rem_size))
+            .min_w(metrics::px_for_rem(metrics::TAB_MIN_WIDTH, rem_size))
+            .max_w(metrics::px_for_rem(metrics::TAB_MAX_WIDTH, rem_size))
+            .px(metrics::px_for_rem(metrics::TAB_HORIZONTAL_PAD, rem_size))
+            .gap(metrics::px_for_rem(metrics::SHELL_GAP, rem_size))
             .items_center()
             .border_r_1()
             .border_color(rgb(role::BORDER))
@@ -92,7 +93,7 @@ impl RenderOnce for Tab {
                 div()
                     .flex()
                     .h_full()
-                    .w(px(metrics::TAB_SLOT_WIDTH))
+                    .w(metrics::px_for_rem(metrics::TAB_SLOT_WIDTH, rem_size))
                     .flex_none()
                     .items_center()
                     .justify_center()
@@ -106,7 +107,7 @@ impl RenderOnce for Tab {
                     .overflow_hidden()
                     .h_full()
                     .items_center()
-                    .text_size(px(metrics::TAB_TEXT_SIZE))
+                    .text_size(metrics::px_for_rem(metrics::TAB_TEXT_SIZE, rem_size))
                     .text_color(text)
                     .truncate()
                     .children(self.children),
@@ -115,7 +116,7 @@ impl RenderOnce for Tab {
                 div()
                     .flex()
                     .h_full()
-                    .w(px(metrics::TAB_SLOT_WIDTH))
+                    .w(metrics::px_for_rem(metrics::TAB_SLOT_WIDTH, rem_size))
                     .flex_none()
                     .items_center()
                     .justify_center()

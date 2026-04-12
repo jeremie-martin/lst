@@ -9,7 +9,7 @@ use crate::{
     OpenFile, PasteClipboard, PrevTab, Quit, Redo, ReplaceAll, ReplaceOne, SaveFile, SaveFileAs,
     SelectAll, SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd,
     SelectLineStart, SelectPageDown, SelectPageUp, SelectRight, SelectUp, SelectWordLeft,
-    SelectWordRight, ToggleComment, ToggleWrap, Undo,
+    SelectWordRight, ToggleComment, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
@@ -106,6 +106,16 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
 
     let root = root.on_action(cx.listener(|this, _: &CloseActiveTab, _window, cx| {
         this.request_close_active_tab(cx);
+    }));
+
+    let root = root.on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
+        this.zoom_in(window, cx);
+    }));
+    let root = root.on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
+        this.zoom_out(window, cx);
+    }));
+    let root = root.on_action(cx.listener(|this, _: &ZoomReset, window, cx| {
+        this.zoom_reset(window, cx);
     }));
 
     root.on_action(cx.listener(|this, _: &Quit, _window, cx| {

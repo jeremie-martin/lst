@@ -305,7 +305,7 @@ fn mouse_selection_updates_gpui_primary_selection(cx: &mut TestAppContext) {
             .borrow()
             .bounds
             .expect("viewport should have rendered bounds");
-        let x = bounds.left() + code_origin_pad(app.model.show_gutter()) + px(1.0);
+        let x = bounds.left() + code_origin_pad(app.model.show_gutter(), app.ui_scale()) + px(1.0);
         let y = bounds.top() + px(8.0);
         (point(x, y), point(x + px(80.0), y))
     });
@@ -1023,9 +1023,31 @@ fn syntax_highlight_result_requires_matching_active_revision_and_language() {
 fn drag_autoscroll_delta_only_activates_at_viewport_edges() {
     let bounds = Bounds::new(point(px(0.0), px(100.0)), gpui::size(px(100.0), px(200.0)));
 
-    assert!(drag_autoscroll_delta(point(px(50.0), px(90.0)), bounds).is_some());
-    assert!(drag_autoscroll_delta(point(px(50.0), px(310.0)), bounds).is_some());
-    assert!(drag_autoscroll_delta(point(px(50.0), px(200.0)), bounds).is_none());
+    assert!(drag_autoscroll_delta(point(px(50.0), px(90.0)), bounds, 1.0).is_some());
+    assert!(drag_autoscroll_delta(point(px(50.0), px(310.0)), bounds, 1.0).is_some());
+    assert!(drag_autoscroll_delta(point(px(50.0), px(200.0)), bounds, 1.0).is_none());
+}
+
+#[gpui::test]
+fn zoom_actions_update_window_scale(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+    let default_rem_size = cx.update_window_entity(&view, |_app, window, _cx| window.rem_size());
+
+    cx.dispatch_action(ZoomIn);
+    cx.run_until_parked();
+    let (zoomed_level, zoomed_rem_size) = cx.update_window_entity(&view, |app, window, _cx| {
+        (app.zoom_level, window.rem_size())
+    });
+    assert_eq!(zoomed_level, 1);
+    assert!(zoomed_rem_size > default_rem_size);
+
+    cx.dispatch_action(ZoomReset);
+    cx.run_until_parked();
+    let (reset_level, reset_rem_size) = cx.update_window_entity(&view, |app, window, _cx| {
+        (app.zoom_level, window.rem_size())
+    });
+    assert_eq!(reset_level, 0);
+    assert_eq!(reset_rem_size, default_rem_size);
 }
 
 #[test]
@@ -1056,6 +1078,14 @@ fn standard_movement_keybindings_are_registered() {
     assert!(has_binding::<DeleteWordBackward>("alt-backspace"));
     assert!(has_binding::<DeleteWordForward>("ctrl-delete"));
     assert!(has_binding::<DeleteWordForward>("alt-delete"));
+}
+
+#[test]
+fn zoom_keybindings_are_registered() {
+    assert!(has_binding_in_context::<ZoomIn>("ctrl-=", "Workspace"));
+    assert!(has_binding_in_context::<ZoomIn>("ctrl-+", "Workspace"));
+    assert!(has_binding_in_context::<ZoomOut>("ctrl--", "Workspace"));
+    assert!(has_binding_in_context::<ZoomReset>("ctrl-0", "Workspace"));
 }
 
 #[test]

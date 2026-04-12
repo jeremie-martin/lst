@@ -1,5 +1,5 @@
 use gpui::{
-    div, px, rgb, AnyElement, App, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    div, rgb, AnyElement, App, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     ScrollHandle, StatefulInteractiveElement, Styled,
 };
 use smallvec::SmallVec;
@@ -39,7 +39,8 @@ impl ParentElement for TabBar {
 }
 
 impl RenderOnce for TabBar {
-    fn render(self, _window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
+        let rem_size = window.rem_size();
         let tabs_row = div().id("tabs-row").flex().h_full().children(self.children);
 
         let tabs_scroll = if let Some(scroll_handle) = self.scroll_handle {
@@ -65,7 +66,7 @@ impl RenderOnce for TabBar {
             .id(self.id)
             .flex()
             .w_full()
-            .h(px(metrics::TAB_HEIGHT + 1.0))
+            .h(metrics::px_for_rem(metrics::TAB_HEIGHT + 1.0, rem_size))
             .overflow_hidden()
             .bg(rgb(role::PANEL_BG))
             .border_1()
@@ -76,8 +77,8 @@ impl RenderOnce for TabBar {
                         .flex_none()
                         .flex()
                         .h_full()
-                        .px(px(metrics::SHELL_EDGE_PAD))
-                        .gap(px(metrics::SHELL_GAP))
+                        .px(metrics::px_for_rem(metrics::SHELL_EDGE_PAD, rem_size))
+                        .gap(metrics::px_for_rem(metrics::SHELL_GAP, rem_size))
                         .items_center()
                         .border_r_1()
                         .border_color(rgb(role::BORDER))
@@ -99,8 +100,8 @@ impl RenderOnce for TabBar {
                         .flex_none()
                         .flex()
                         .h_full()
-                        .px(px(metrics::SHELL_EDGE_PAD))
-                        .gap(px(metrics::SHELL_GAP))
+                        .px(metrics::px_for_rem(metrics::SHELL_EDGE_PAD, rem_size))
+                        .gap(metrics::px_for_rem(metrics::SHELL_GAP, rem_size))
                         .items_center()
                         .border_l_1()
                         .border_color(rgb(role::BORDER))

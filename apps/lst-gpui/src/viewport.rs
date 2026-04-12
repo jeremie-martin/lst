@@ -67,8 +67,8 @@ pub(crate) struct CachedWrapLayout {
     pub(crate) layout: WrapLayout,
 }
 
-pub(crate) fn buffer_content_height(visual_rows: usize) -> Pixels {
-    px((visual_rows.max(1) as f32) * metrics::ROW_HEIGHT)
+pub(crate) fn buffer_content_height(visual_rows: usize, scale: f32) -> Pixels {
+    metrics::px_for_scale((visual_rows.max(1) as f32) * metrics::ROW_HEIGHT, scale)
 }
 
 fn trim_display_line(line: &str) -> &str {
@@ -174,11 +174,11 @@ fn text_runs_for_segment(
     (runs, style_key)
 }
 
-pub(crate) fn code_origin_pad(show_gutter: bool) -> Pixels {
+pub(crate) fn code_origin_pad(show_gutter: bool, scale: f32) -> Pixels {
     if show_gutter {
-        px(metrics::GUTTER_WIDTH)
+        metrics::px_for_scale(metrics::GUTTER_WIDTH, scale)
     } else {
-        px(metrics::EDITOR_LEFT_PAD)
+        metrics::px_for_scale(metrics::EDITOR_LEFT_PAD, scale)
     }
 }
 
@@ -203,7 +203,7 @@ pub(crate) fn code_char_width(window: &mut Window) -> Pixels {
     if shaped.width > px(0.0) {
         shaped.width / probe.chars().count() as f32
     } else {
-        px(metrics::WRAP_CHAR_WIDTH_FALLBACK)
+        metrics::px_for_rem(metrics::WRAP_CHAR_WIDTH_FALLBACK, window.rem_size())
     }
 }
 
@@ -213,6 +213,7 @@ fn wrap_columns_for_viewport(
     char_width: Pixels,
     show_gutter: bool,
     show_wrap: bool,
+    scale: f32,
 ) -> usize {
     if !show_wrap {
         return usize::MAX;
@@ -220,13 +221,13 @@ fn wrap_columns_for_viewport(
 
     wrap_columns_with_gutter(
         viewport_width / px(1.0),
-        (char_width / px(1.0)).max(metrics::WRAP_CHAR_WIDTH_FALLBACK),
+        (char_width / px(1.0)).max(metrics::WRAP_CHAR_WIDTH_FALLBACK * scale),
         line_count,
         show_gutter,
-        metrics::EDITOR_LEFT_PAD,
-        metrics::EDITOR_RIGHT_PAD,
-        metrics::GUTTER_LEFT_PAD,
-        metrics::GUTTER_SEPARATOR_WIDTH,
+        metrics::EDITOR_LEFT_PAD * scale,
+        metrics::EDITOR_RIGHT_PAD * scale,
+        metrics::GUTTER_LEFT_PAD * scale,
+        metrics::GUTTER_SEPARATOR_WIDTH * scale,
     )
 }
 
@@ -238,6 +239,7 @@ pub(crate) fn ensure_wrap_layout(
     char_width: Pixels,
     show_gutter: bool,
     show_wrap: bool,
+    scale: f32,
 ) -> WrapLayout {
     let wrap_columns = wrap_columns_for_viewport(
         viewport_width,
@@ -245,6 +247,7 @@ pub(crate) fn ensure_wrap_layout(
         char_width,
         show_gutter,
         show_wrap,
+        scale,
     );
     if let Some(layout) = cache.wrap_layout.as_ref() {
         if layout.revision == revision
@@ -270,10 +273,11 @@ fn visible_visual_row_range(
     scroll_top: Pixels,
     viewport_height: Pixels,
     total_rows: usize,
+    row_height: Pixels,
 ) -> std::ops::Range<usize> {
-    let start = ((scroll_top / px(metrics::ROW_HEIGHT)).floor() as usize)
+    let start = ((scroll_top / row_height).floor() as usize)
         .saturating_sub(metrics::VIEWPORT_OVERSCAN_LINES);
-    let end = (((scroll_top + viewport_height) / px(metrics::ROW_HEIGHT)).ceil() as usize)
+    let end = (((scroll_top + viewport_height) / row_height).ceil() as usize)
         .saturating_add(metrics::VIEWPORT_OVERSCAN_LINES)
         .min(total_rows.max(1));
     start..end.max(start.saturating_add(1))
@@ -365,12 +369,14 @@ pub(crate) fn prepare_viewport_paint_state(
     viewport_geometry: &Rc<RefCell<ViewportGeometry>>,
     bounds: Bounds<Pixels>,
     char_width: Pixels,
+    scale: f32,
     window: &mut Window,
 ) -> ViewportPaintState {
+    let row_height = metrics::px_for_scale(metrics::ROW_HEIGHT, scale);
     let viewport_height = if bounds.size.height > px(0.0) {
         bounds.size.height
     } else {
-        px(metrics::WINDOW_HEIGHT)
+        metrics::px_for_scale(metrics::WINDOW_HEIGHT, scale)
     };
     let scroll_top = {
         let offset_y = -viewport_scroll.offset().y;
@@ -408,8 +414,10 @@ pub(crate) fn prepare_viewport_paint_state(
         char_width,
         show_gutter,
         show_wrap,
+        scale,
     );
-    let visible_rows = visible_visual_row_range(scroll_top, viewport_height, layout.total_rows);
+    let visible_rows =
+        visible_visual_row_range(scroll_top, viewport_height, layout.total_rows, row_height);
     let first_line = line_for_visual_row(&layout, visible_rows.start);
     let last_visible_line = line_for_visual_row(&layout, visible_rows.end.saturating_sub(1));
     cache
@@ -452,7 +460,7 @@ pub(crate) fn prepare_viewport_paint_state(
                 continue;
             }
 
-            let row_top = bounds.top() + px((visual_row as f32) * metrics::ROW_HEIGHT) - scroll_top;
+            let row_top = bounds.top() + row_height * visual_row as f32 - scroll_top;
             let segment_start_char = line_start_char + segment.start_col;
             let segment_end_char = line_start_char + segment.end_col;
             let (code_runs, style_key) = text_runs_for_segment(
@@ -518,19 +526,24 @@ pub(crate) fn paint_viewport(
     vim_mode: vim::Mode,
     focused: bool,
     paint_state: ViewportPaintState,
+    scale: f32,
     window: &mut Window,
     cx: &mut App,
 ) {
     let line_height = window.line_height();
-    let gutter_origin_x = bounds.left() + px(metrics::GUTTER_LEFT_PAD);
-    let gutter_width = px(metrics::GUTTER_WIDTH - metrics::GUTTER_LEFT_PAD - 8.0);
-    let code_origin_x = bounds.left() + code_origin_pad(show_gutter);
+    let row_height = metrics::px_for_scale(metrics::ROW_HEIGHT, scale);
+    let gutter_origin_x = bounds.left() + metrics::px_for_scale(metrics::GUTTER_LEFT_PAD, scale);
+    let gutter_width = metrics::px_for_scale(
+        metrics::GUTTER_WIDTH - metrics::GUTTER_LEFT_PAD - 8.0,
+        scale,
+    );
+    let code_origin_x = bounds.left() + code_origin_pad(show_gutter, scale);
 
     for row in paint_state.rows {
         let cursor_in_row = row_contains_cursor(&row, cursor_char);
         let row_bounds = Bounds::new(
             point(bounds.left(), row.row_top),
-            size(bounds.size.width, px(metrics::ROW_HEIGHT)),
+            size(bounds.size.width, row_height),
         );
         window.paint_quad(fill(
             row_bounds,
@@ -545,7 +558,10 @@ pub(crate) fn paint_viewport(
             window.paint_quad(fill(
                 Bounds::new(
                     point(bounds.left(), row.row_top),
-                    size(px(metrics::GUTTER_WIDTH), px(metrics::ROW_HEIGHT)),
+                    size(
+                        metrics::px_for_scale(metrics::GUTTER_WIDTH, scale),
+                        row_height,
+                    ),
                 ),
                 rgb(role::GUTTER_BG),
             ));
@@ -568,8 +584,9 @@ pub(crate) fn paint_viewport(
                     Bounds::from_corners(
                         point(start_x, row.row_top),
                         point(
-                            end_x.max(start_x + px(metrics::CURSOR_WIDTH)),
-                            row.row_top + px(metrics::ROW_HEIGHT),
+                            end_x
+                                .max(start_x + metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)),
+                            row.row_top + row_height,
                         ),
                     ),
                     rgb(role::SELECTION_BG),
@@ -596,16 +613,15 @@ pub(crate) fn paint_viewport(
                         &row,
                         (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)),
                     )
-                    .unwrap_or_else(|| cursor_x + px(metrics::CODE_FONT_SIZE * 0.55));
-                (next_x - cursor_x).max(px(metrics::CURSOR_WIDTH * 2.0))
+                    .unwrap_or_else(|| {
+                        cursor_x + metrics::px_for_scale(metrics::CODE_FONT_SIZE * 0.55, scale)
+                    });
+                (next_x - cursor_x).max(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale))
             } else {
-                px(metrics::CURSOR_WIDTH)
+                metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)
             };
             window.paint_quad(fill(
-                Bounds::new(
-                    point(cursor_x, row.row_top),
-                    size(cursor_width, px(metrics::ROW_HEIGHT)),
-                ),
+                Bounds::new(point(cursor_x, row.row_top), size(cursor_width, row_height)),
                 if vim_mode == vim::Mode::Normal {
                     rgb(role::SELECTION_BG)
                 } else {

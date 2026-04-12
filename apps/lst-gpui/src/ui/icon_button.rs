@@ -1,5 +1,5 @@
 use gpui::{
-    div, px, rgb, App, CursorStyle, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    div, rgb, App, CursorStyle, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     Stateful, StatefulInteractiveElement, Styled,
 };
 
@@ -55,7 +55,8 @@ impl ParentElement for IconButton {
 }
 
 impl RenderOnce for IconButton {
-    fn render(self, _window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
+        let rem_size = window.rem_size();
         let background = if self.emphasized {
             rgb(role::CONTROL_BG)
         } else {
@@ -69,8 +70,8 @@ impl RenderOnce for IconButton {
 
         self.div
             .flex()
-            .w(px(metrics::ICON_BUTTON_SIZE))
-            .h(px(metrics::ICON_BUTTON_SIZE))
+            .w(metrics::px_for_rem(metrics::ICON_BUTTON_SIZE, rem_size))
+            .h(metrics::px_for_rem(metrics::ICON_BUTTON_SIZE, rem_size))
             .rounded_sm()
             .bg(background)
             .hover(|style| style.bg(hover))
@@ -78,7 +79,7 @@ impl RenderOnce for IconButton {
             .cursor(CursorStyle::PointingHand)
             .items_center()
             .justify_center()
-            .text_size(px(metrics::TAB_TEXT_SIZE))
+            .text_size(metrics::px_for_rem(metrics::TAB_TEXT_SIZE, rem_size))
             .text_color(rgb(role::TEXT_SUBTLE))
             .child(self.icon.label())
     }

@@ -707,9 +707,10 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        let rem_size = window.rem_size();
         let mut style = Style::default();
         style.size.width = relative(1.0).into();
-        style.size.height = px(metrics::INPUT_HEIGHT - 10.0).into();
+        style.size.height = metrics::px_for_rem(metrics::INPUT_HEIGHT - 10.0, rem_size).into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -768,7 +769,7 @@ impl Element for TextElement {
             vec![run]
         };
 
-        let font_size = px(metrics::INPUT_TEXT_SIZE);
+        let font_size = metrics::px_for_rem(metrics::INPUT_TEXT_SIZE, window.rem_size());
         let line = window
             .text_system()
             .shape_line(display_text, font_size, &runs, None);
@@ -780,7 +781,10 @@ impl Element for TextElement {
                 Some(fill(
                     Bounds::new(
                         point(bounds.left() + cursor_pos, bounds.top()),
-                        size(px(2.0), bounds.bottom() - bounds.top()),
+                        size(
+                            metrics::px_for_rem(2.0, window.rem_size()),
+                            bounds.bottom() - bounds.top(),
+                        ),
                     ),
                     rgb(role::ACCENT),
                 )),
@@ -888,7 +892,10 @@ impl Render for InputField {
             .on_action(cx.listener(Self::previous))
             .relative()
             .w_full()
-            .h(px(metrics::INPUT_HEIGHT))
+            .h(metrics::px_for_rem(
+                metrics::INPUT_HEIGHT,
+                window.rem_size(),
+            ))
             .px_3()
             .items_center()
             .rounded_sm()

@@ -67,6 +67,7 @@ impl LstGpuiApp {
     }
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let scale = self.ui_scale();
         let mut items = (0..self.model.tab_count())
             .map(|ix| self.render_tab(ix, cx).into_any_element())
             .collect::<Vec<_>>();
@@ -74,7 +75,7 @@ impl LstGpuiApp {
             div()
                 .flex()
                 .flex_none()
-                .h(px(metrics::TAB_HEIGHT))
+                .h(metrics::px_for_scale(metrics::TAB_HEIGHT, scale))
                 .px_2()
                 .items_center()
                 .border_r_1()
@@ -96,6 +97,7 @@ impl LstGpuiApp {
     }
 
     fn render_find_bar(&mut self) -> impl IntoElement {
+        let scale = self.ui_scale();
         let find = self.model.find();
         let match_label = if find.matches.is_empty() {
             "0/0".to_string()
@@ -107,7 +109,7 @@ impl LstGpuiApp {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(metrics::SHELL_GAP))
+            .gap(metrics::px_for_scale(metrics::SHELL_GAP, scale))
             .px_3()
             .py_2()
             .rounded_sm()
@@ -117,7 +119,7 @@ impl LstGpuiApp {
             .child(
                 div()
                     .flex_none()
-                    .text_size(px(metrics::INPUT_TEXT_SIZE))
+                    .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
                     .text_color(rgb(role::TEXT_SUBTLE))
                     .child("Find"),
             )
@@ -126,7 +128,7 @@ impl LstGpuiApp {
                 row.child(
                     div()
                         .flex_none()
-                        .text_size(px(metrics::INPUT_TEXT_SIZE))
+                        .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
                         .text_color(rgb(role::TEXT_SUBTLE))
                         .child("Replace"),
                 )
@@ -136,18 +138,19 @@ impl LstGpuiApp {
                 div()
                     .flex_none()
                     .font_family(".ZedMono")
-                    .text_size(px(metrics::INPUT_TEXT_SIZE))
+                    .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
                     .text_color(rgb(role::TEXT_MUTED))
                     .child(match_label),
             )
     }
 
     fn render_goto_bar(&mut self) -> impl IntoElement {
+        let scale = self.ui_scale();
         div()
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(metrics::SHELL_GAP))
+            .gap(metrics::px_for_scale(metrics::SHELL_GAP, scale))
             .px_3()
             .py_2()
             .rounded_sm()
@@ -157,7 +160,7 @@ impl LstGpuiApp {
             .child(
                 div()
                     .flex_none()
-                    .text_size(px(metrics::INPUT_TEXT_SIZE))
+                    .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
                     .text_color(rgb(role::TEXT_SUBTLE))
                     .child("Line"),
             )
@@ -165,6 +168,7 @@ impl LstGpuiApp {
     }
 
     fn render_editor_overlays(&mut self) -> impl IntoElement {
+        let scale = self.ui_scale();
         let mut overlays: Vec<AnyElement> = Vec::new();
         if self.model.find().visible {
             overlays.push(self.render_find_bar().into_any_element());
@@ -176,8 +180,8 @@ impl LstGpuiApp {
         div()
             .id("editor-overlays")
             .absolute()
-            .top(px(metrics::SHELL_GAP))
-            .right(px(metrics::SHELL_GAP))
+            .top(metrics::px_for_scale(metrics::SHELL_GAP, scale))
+            .right(metrics::px_for_scale(metrics::SHELL_GAP, scale))
             .flex()
             .flex_col()
             .gap_2()
@@ -185,6 +189,7 @@ impl LstGpuiApp {
     }
 
     fn render_status_bar(&self) -> impl IntoElement {
+        let scale = self.ui_scale();
         div()
             .flex_none()
             .flex()
@@ -192,7 +197,7 @@ impl LstGpuiApp {
             .items_center()
             .gap_3()
             .px_3()
-            .py(px(metrics::STATUS_HEIGHT_PAD))
+            .py(metrics::px_for_scale(metrics::STATUS_HEIGHT_PAD, scale))
             .bg(rgb(role::PANEL_BG))
             .border_1()
             .border_color(rgb(role::BORDER))
@@ -207,7 +212,7 @@ impl LstGpuiApp {
                 div()
                     .flex_none()
                     .font_family(".ZedMono")
-                    .text_size(px(12.0))
+                    .text_size(metrics::px_for_scale(12.0, scale))
                     .text_color(rgb(role::TEXT_MUTED))
                     .child(self.status_details()),
             )
@@ -247,7 +252,9 @@ impl Render for LstGpuiApp {
             .borrow()
             .bounds
             .map(|bounds| bounds.size.width)
-            .unwrap_or_else(|| px(metrics::WINDOW_WIDTH - 48.0));
+            .unwrap_or_else(|| {
+                metrics::px_for_scale(metrics::WINDOW_WIDTH - 48.0, self.ui_scale())
+            });
         let char_width = code_char_width(window);
         let (revision, syntax_mode, buffer, selection, cursor_char) = {
             let active_tab = self.model.active_tab();
@@ -270,8 +277,9 @@ impl Render for LstGpuiApp {
                 char_width,
                 show_gutter,
                 show_wrap,
+                self.ui_scale(),
             );
-            buffer_content_height(layout.total_rows)
+            buffer_content_height(layout.total_rows, self.ui_scale())
         };
         let active_view = &self.tab_views[active];
         let viewport_scroll = active_view.scroll.clone();
@@ -280,6 +288,7 @@ impl Render for LstGpuiApp {
         let focus_handle = self.focus_handle.clone();
         let entity = cx.entity();
         let vim_mode = self.model.vim_mode();
+        let ui_scale = self.ui_scale();
 
         let root = attach_workspace_actions(div().flex().flex_col().key_context("Workspace"), cx)
             .size_full()
@@ -290,8 +299,14 @@ impl Render for LstGpuiApp {
                     .flex_grow()
                     .flex()
                     .flex_col()
-                    .px(px(metrics::SHELL_EDGE_PAD))
-                    .py(px(metrics::SHELL_EDGE_PAD))
+                    .px(metrics::px_for_scale(
+                        metrics::SHELL_EDGE_PAD,
+                        self.ui_scale(),
+                    ))
+                    .py(metrics::px_for_scale(
+                        metrics::SHELL_EDGE_PAD,
+                        self.ui_scale(),
+                    ))
                     .gap_2()
                     .child(self.render_tab_strip(cx))
                     .child(
@@ -311,8 +326,14 @@ impl Render for LstGpuiApp {
                                     .border_color(rgb(role::BORDER))
                                     .bg(rgb(role::EDITOR_BG))
                                     .font_family(".ZedMono")
-                                    .text_size(px(metrics::CODE_FONT_SIZE))
-                                    .line_height(px(metrics::ROW_HEIGHT))
+                                    .text_size(metrics::px_for_scale(
+                                        metrics::CODE_FONT_SIZE,
+                                        self.ui_scale(),
+                                    ))
+                                    .line_height(metrics::px_for_scale(
+                                        metrics::ROW_HEIGHT,
+                                        self.ui_scale(),
+                                    ))
                                     .child(
                                         div()
                                             .id("buffer-scroll")
@@ -365,6 +386,7 @@ impl Render for LstGpuiApp {
                                                             &viewport_geometry,
                                                             bounds,
                                                             char_width,
+                                                            ui_scale,
                                                             window,
                                                         )
                                                     },
@@ -385,6 +407,7 @@ impl Render for LstGpuiApp {
                                                             vim_mode,
                                                             focus_handle.is_focused(window),
                                                             paint_state,
+                                                            ui_scale,
                                                             window,
                                                             cx,
                                                         );

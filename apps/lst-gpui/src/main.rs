@@ -101,6 +101,9 @@ actions!(
         MoveLineDown,
         DuplicateLine,
         ToggleComment,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset,
         Quit,
     ]
 );
@@ -154,6 +157,7 @@ struct LstGpuiApp {
     autosave_inflight: HashSet<PathBuf>,
     autosave_started: bool,
     scratchpad_dir: Option<PathBuf>,
+    zoom_level: i32,
     _shell_subscriptions: Vec<Subscription>,
 }
 
@@ -188,6 +192,7 @@ impl LstGpuiApp {
             autosave_inflight: HashSet::new(),
             autosave_started: false,
             scratchpad_dir,
+            zoom_level: 0,
             _shell_subscriptions: Vec::new(),
         };
 
@@ -218,7 +223,42 @@ impl LstGpuiApp {
             goto_line_input: self.goto_line_input.read(cx).text(),
             pending_focus: self.pending_focus,
             tab_view_ids: self.tab_views.iter().map(|view| view.id).collect(),
+            zoom_level: self.zoom_level,
         }
+    }
+
+    fn ui_scale(&self) -> f32 {
+        metrics::zoom_scale(self.zoom_level)
+    }
+
+    fn ui_px(&self, value: f32) -> Pixels {
+        metrics::px_for_scale(value, self.ui_scale())
+    }
+
+    fn set_zoom_level(&mut self, level: i32, window: &mut Window, cx: &mut Context<Self>) {
+        let level = level.clamp(metrics::MIN_ZOOM_LEVEL, metrics::MAX_ZOOM_LEVEL);
+        if self.zoom_level == level {
+            return;
+        }
+
+        self.zoom_level = level;
+        window.set_rem_size(self.ui_px(metrics::BASE_REM_SIZE));
+        for view in &mut self.tab_views {
+            view.invalidate_visual_state();
+        }
+        cx.notify();
+    }
+
+    fn zoom_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_zoom_level(self.zoom_level.saturating_add(1), window, cx);
+    }
+
+    fn zoom_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_zoom_level(self.zoom_level.saturating_sub(1), window, cx);
+    }
+
+    fn zoom_reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_zoom_level(0, window, cx);
     }
 
     fn queue_focus(&mut self, target: FocusTarget) {
@@ -585,6 +625,9 @@ impl LstGpuiApp {
         if let Some(selection) = self.selection_summary() {
             parts.push(selection);
         }
+        if self.zoom_level != 0 {
+            parts.push(format!("Zoom {:.0}%", self.ui_scale() * 100.0));
+        }
         if self.model.find().visible {
             let current = if self.model.find().matches.is_empty() {
                 0
@@ -623,7 +666,7 @@ impl LstGpuiApp {
             .borrow()
             .bounds
             .map(|bounds| bounds.size.width)
-            .unwrap_or_else(|| px(metrics::WINDOW_WIDTH - 48.0));
+            .unwrap_or_else(|| self.ui_px(metrics::WINDOW_WIDTH - 48.0));
         let char_width = code_char_width(window);
         let revision = self.model.active_tab().revision();
         let lines = self.model.active_tab_lines();
@@ -637,6 +680,7 @@ impl LstGpuiApp {
                 char_width,
                 self.model.show_gutter(),
                 self.model.show_wrap(),
+                self.ui_scale(),
             )
         };
         layout.wrap_columns
@@ -650,8 +694,8 @@ impl LstGpuiApp {
             .bounds
             .map(|bounds| bounds.size.height)
             .filter(|height| *height > px(0.0))
-            .unwrap_or_else(|| px(metrics::WINDOW_HEIGHT));
-        ((height / px(metrics::ROW_HEIGHT)) as usize)
+            .unwrap_or_else(|| self.ui_px(metrics::WINDOW_HEIGHT));
+        ((height / self.ui_px(metrics::ROW_HEIGHT)) as usize)
             .saturating_sub(2)
             .max(1)
     }
@@ -677,8 +721,9 @@ impl LstGpuiApp {
             .as_ref()
             .and_then(|cached| visual_row_for_char(tab, &cached.layout))
             .unwrap_or_else(|| tab.buffer().char_to_line(tab.cursor_char()));
-        let caret_top = px((visual_row as f32) * metrics::ROW_HEIGHT);
-        let caret_bottom = caret_top + px(metrics::ROW_HEIGHT);
+        let row_height = self.ui_px(metrics::ROW_HEIGHT);
+        let caret_top = row_height * visual_row as f32;
+        let caret_bottom = caret_top + row_height;
         let scroll_top = {
             let offset_y = -view.scroll.offset().y;
             if offset_y > px(0.) {
@@ -687,7 +732,7 @@ impl LstGpuiApp {
                 px(0.)
             }
         };
-        let margin = px(metrics::ROW_HEIGHT * 2.0);
+        let margin = self.ui_px(metrics::ROW_HEIGHT * 2.0);
         let viewport_height = viewport_bounds.size.height;
 
         let target = if caret_top < scroll_top + margin {
@@ -714,7 +759,8 @@ impl LstGpuiApp {
         let Some(bounds) = geometry.bounds else {
             return self.active_tab().cursor_char();
         };
-        let code_origin_x = bounds.left() + code_origin_pad(self.model.show_gutter());
+        let code_origin_x =
+            bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
 
         let row = if geometry.rows.is_empty() {
             return 0;
@@ -725,7 +771,8 @@ impl LstGpuiApp {
                 .rows
                 .iter()
                 .find(|row| {
-                    point.y >= row.row_top && point.y < row.row_top + px(metrics::ROW_HEIGHT)
+                    point.y >= row.row_top
+                        && point.y < row.row_top + self.ui_px(metrics::ROW_HEIGHT)
                 })
                 .unwrap_or_else(|| geometry.rows.last().expect("checked above"))
         };
@@ -755,6 +802,7 @@ pub(crate) struct AppSnapshot {
     pub(crate) goto_line_input: String,
     pub(crate) pending_focus: Option<FocusTarget>,
     pub(crate) tab_view_ids: Vec<TabId>,
+    pub(crate) zoom_level: i32,
 }
 
 fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
@@ -878,7 +926,11 @@ fn main() {
         cx.bind_keys(editor_keybindings());
         cx.bind_keys(input_keybindings());
 
-        let bounds = Bounds::centered(None, size(px(metrics::WINDOW_WIDTH), px(metrics::WINDOW_HEIGHT)), cx);
+        let bounds = Bounds::centered(
+            None,
+            size(px(metrics::WINDOW_WIDTH), px(metrics::WINDOW_HEIGHT)),
+            cx,
+        );
         let launch = launch.clone();
         let window_title = launch
             .window_title
