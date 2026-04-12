@@ -3,9 +3,7 @@ use gpui::{
     Stateful, StatefulInteractiveElement, Styled,
 };
 
-use crate::ui::theme::{
-    COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_SURFACE2, ICON_BUTTON_SIZE, TAB_TEXT_SIZE,
-};
+use crate::ui::theme::{metrics, role};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconKind {
@@ -59,29 +57,29 @@ impl ParentElement for IconButton {
 impl RenderOnce for IconButton {
     fn render(self, _window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
         let background = if self.emphasized {
-            rgb(COLOR_SURFACE1)
+            rgb(role::CONTROL_BG)
         } else {
-            rgb(COLOR_SURFACE0)
+            rgb(role::PANEL_BG)
         };
         let hover = if self.emphasized {
-            rgb(COLOR_SURFACE2)
+            rgb(role::CONTROL_BG_HOVER)
         } else {
-            rgb(COLOR_SURFACE1)
+            rgb(role::CONTROL_BG)
         };
 
         self.div
             .flex()
-            .w(px(ICON_BUTTON_SIZE))
-            .h(px(ICON_BUTTON_SIZE))
+            .w(px(metrics::ICON_BUTTON_SIZE))
+            .h(px(metrics::ICON_BUTTON_SIZE))
             .rounded_sm()
             .bg(background)
             .hover(|style| style.bg(hover))
-            .active(|style| style.bg(rgb(COLOR_SURFACE2)))
+            .active(|style| style.bg(rgb(role::CONTROL_BG_HOVER)))
             .cursor(CursorStyle::PointingHand)
             .items_center()
             .justify_center()
-            .text_size(px(TAB_TEXT_SIZE))
-            .text_color(rgb(COLOR_SUBTEXT))
+            .text_size(px(metrics::TAB_TEXT_SIZE))
+            .text_color(rgb(role::TEXT_SUBTLE))
             .child(self.icon.label())
     }
 }

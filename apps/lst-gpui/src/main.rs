@@ -18,7 +18,7 @@ mod tests;
 mod ui;
 mod viewport;
 
-use crate::ui::{input_keybindings, InputField, InputFieldEvent};
+use crate::ui::{input_keybindings, theme::metrics, InputField, InputFieldEvent};
 #[cfg(test)]
 pub(crate) use input_adapter::{char_range_to_utf16_range, utf16_range_to_char_range_in_text};
 #[cfg(all(test, feature = "internal-invariants"))]
@@ -41,19 +41,6 @@ use viewport::{
     byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, visual_row_for_char,
     ViewportCache, ViewportGeometry,
 };
-
-const WINDOW_WIDTH: f32 = 1360.0;
-const WINDOW_HEIGHT: f32 = 860.0;
-const ROW_HEIGHT: f32 = 22.0;
-const GUTTER_WIDTH: f32 = 76.0;
-const CODE_FONT_SIZE: f32 = 13.0;
-const CURSOR_WIDTH: f32 = 2.0;
-const VIEWPORT_OVERSCAN_LINES: usize = 6;
-const EDITOR_LEFT_PAD: f32 = 18.0;
-const EDITOR_RIGHT_PAD: f32 = 28.0;
-const GUTTER_LEFT_PAD: f32 = 12.0;
-const GUTTER_SEPARATOR_WIDTH: f32 = 14.0;
-const WRAP_CHAR_WIDTH_FALLBACK: f32 = 7.8;
 
 actions!(
     lst_gpui,
@@ -166,6 +153,7 @@ struct LstGpuiApp {
     pending_after_save: Option<PendingAfterSave>,
     autosave_inflight: HashSet<PathBuf>,
     autosave_started: bool,
+    scratchpad_dir: Option<PathBuf>,
     _shell_subscriptions: Vec<Subscription>,
 }
 
@@ -174,6 +162,7 @@ impl LstGpuiApp {
         let find_query_input = cx.new(|cx| InputField::new(cx, "Find"));
         let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace"));
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line"));
+        let scratchpad_dir = launch.scratchpad_dir.clone();
         let model = initial_model_from_launch(launch);
         let tab_views = model
             .tabs()
@@ -198,6 +187,7 @@ impl LstGpuiApp {
             pending_after_save: None,
             autosave_inflight: HashSet::new(),
             autosave_started: false,
+            scratchpad_dir,
             _shell_subscriptions: Vec::new(),
         };
 
@@ -633,7 +623,7 @@ impl LstGpuiApp {
             .borrow()
             .bounds
             .map(|bounds| bounds.size.width)
-            .unwrap_or_else(|| px(WINDOW_WIDTH - 48.0));
+            .unwrap_or_else(|| px(metrics::WINDOW_WIDTH - 48.0));
         let char_width = code_char_width(window);
         let revision = self.model.active_tab().revision();
         let lines = self.model.active_tab_lines();
@@ -660,8 +650,8 @@ impl LstGpuiApp {
             .bounds
             .map(|bounds| bounds.size.height)
             .filter(|height| *height > px(0.0))
-            .unwrap_or_else(|| px(WINDOW_HEIGHT));
-        ((height / px(ROW_HEIGHT)) as usize)
+            .unwrap_or_else(|| px(metrics::WINDOW_HEIGHT));
+        ((height / px(metrics::ROW_HEIGHT)) as usize)
             .saturating_sub(2)
             .max(1)
     }
@@ -687,8 +677,8 @@ impl LstGpuiApp {
             .as_ref()
             .and_then(|cached| visual_row_for_char(tab, &cached.layout))
             .unwrap_or_else(|| tab.buffer().char_to_line(tab.cursor_char()));
-        let caret_top = px((visual_row as f32) * ROW_HEIGHT);
-        let caret_bottom = caret_top + px(ROW_HEIGHT);
+        let caret_top = px((visual_row as f32) * metrics::ROW_HEIGHT);
+        let caret_bottom = caret_top + px(metrics::ROW_HEIGHT);
         let scroll_top = {
             let offset_y = -view.scroll.offset().y;
             if offset_y > px(0.) {
@@ -697,7 +687,7 @@ impl LstGpuiApp {
                 px(0.)
             }
         };
-        let margin = px(ROW_HEIGHT * 2.0);
+        let margin = px(metrics::ROW_HEIGHT * 2.0);
         let viewport_height = viewport_bounds.size.height;
 
         let target = if caret_top < scroll_top + margin {
@@ -734,7 +724,9 @@ impl LstGpuiApp {
             geometry
                 .rows
                 .iter()
-                .find(|row| point.y >= row.row_top && point.y < row.row_top + px(ROW_HEIGHT))
+                .find(|row| {
+                    point.y >= row.row_top && point.y < row.row_top + px(metrics::ROW_HEIGHT)
+                })
                 .unwrap_or_else(|| geometry.rows.last().expect("checked above"))
         };
 
@@ -771,10 +763,22 @@ fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
     let mut status = "Ready.".to_string();
 
     if launch.files.is_empty() {
-        tabs.push(ModelEditorTab::empty(
-            TabId::from_raw(next_tab_id),
-            format!("{UNTITLED_PREFIX}-1"),
-        ));
+        match runtime::create_scratchpad_note(launch.scratchpad_dir.as_deref()) {
+            Ok((path, file_stamp)) => {
+                tabs.push(ModelEditorTab::scratchpad_with_stamp(
+                    TabId::from_raw(next_tab_id),
+                    path,
+                    file_stamp,
+                ));
+            }
+            Err(err) => {
+                status = format!("Failed to create scratchpad: {err}");
+                tabs.push(ModelEditorTab::empty(
+                    TabId::from_raw(next_tab_id),
+                    format!("{UNTITLED_PREFIX}-1"),
+                ));
+            }
+        }
     } else {
         for path in launch.files {
             match runtime::read_file_with_stamp(&path) {
@@ -794,10 +798,22 @@ fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
         }
 
         if tabs.is_empty() {
-            tabs.push(ModelEditorTab::empty(
-                TabId::from_raw(next_tab_id),
-                format!("{UNTITLED_PREFIX}-1"),
-            ));
+            match runtime::create_scratchpad_note(launch.scratchpad_dir.as_deref()) {
+                Ok((path, file_stamp)) => {
+                    tabs.push(ModelEditorTab::scratchpad_with_stamp(
+                        TabId::from_raw(next_tab_id),
+                        path,
+                        file_stamp,
+                    ));
+                }
+                Err(err) => {
+                    status = format!("{status}; failed to create scratchpad: {err}");
+                    tabs.push(ModelEditorTab::empty(
+                        TabId::from_raw(next_tab_id),
+                        format!("{UNTITLED_PREFIX}-1"),
+                    ));
+                }
+            }
         }
     }
 
@@ -862,7 +878,7 @@ fn main() {
         cx.bind_keys(editor_keybindings());
         cx.bind_keys(input_keybindings());
 
-        let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
+        let bounds = Bounds::centered(None, size(px(metrics::WINDOW_WIDTH), px(metrics::WINDOW_HEIGHT)), cx);
         let launch = launch.clone();
         let window_title = launch
             .window_title
@@ -895,14 +911,13 @@ fn main() {
             .update(cx, |view, window, cx| {
                 let entity = cx.entity();
                 window.on_window_should_close(cx, move |_window, cx| {
-                    entity.update(cx, |view, cx| {
-                        if view.model.first_dirty_tab_index().is_none() {
-                            true
-                        } else {
+                    let entity = entity.clone();
+                    cx.defer(move |cx| {
+                        let _ = entity.update(cx, |view, cx| {
                             view.request_quit(cx);
-                            false
-                        }
-                    })
+                        });
+                    });
+                    false
                 });
                 window.focus(&view.focus_handle(cx));
                 cx.activate(true);

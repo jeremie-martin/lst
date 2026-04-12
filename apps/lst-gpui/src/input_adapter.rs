@@ -6,7 +6,7 @@ use ropey::Rope;
 use std::{ops::Range, time::Instant};
 
 use crate::viewport::{code_origin_pad, row_contains_cursor, x_for_global_char};
-use crate::{elapsed_ms, LstGpuiApp, CURSOR_WIDTH, ROW_HEIGHT};
+use crate::{elapsed_ms, ui::theme::metrics, LstGpuiApp};
 
 impl LstGpuiApp {
     pub(crate) fn maybe_handle_vim_key(
@@ -165,8 +165,8 @@ impl EntityInputHandler for LstGpuiApp {
         Some(Bounds::from_corners(
             point(start_x, row.row_top),
             point(
-                end_x.max(start_x + gpui::px(CURSOR_WIDTH)),
-                row.row_top + gpui::px(ROW_HEIGHT),
+                end_x.max(start_x + gpui::px(metrics::CURSOR_WIDTH)),
+                row.row_top + gpui::px(metrics::ROW_HEIGHT),
             ),
         ))
     }

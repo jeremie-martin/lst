@@ -19,7 +19,12 @@ cargo build --release -p lst-gpui
 ./target/release/lst-gpui
 ./target/release/lst-gpui README.md
 ./target/release/lst-gpui --title "lst GPUI"
+./target/release/lst-gpui --scratchpad-dir /path/to/notes
 ```
+
+Running without files creates a timestamped scratchpad note in
+`~/.local/share/lst/` by default. Use `--scratchpad-dir` to choose another
+scratchpad directory.
 
 ## Install
 
@@ -59,6 +64,13 @@ Run the full smoke suite from a real X11 session:
 
 ```bash
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario all --repetitions 1 --priming 0
+```
+
+There is also an opt-in real-display behavior smoke test for scratchpad cleanup
+and real X11 clipboard persistence:
+
+```bash
+DISPLAY=:1 cargo test -p lst-gpui --test real_x11_smoke -- --ignored --nocapture
 ```
 
 For stable baseline work, use the runner default of one priming run and seven

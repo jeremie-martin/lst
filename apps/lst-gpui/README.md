@@ -12,6 +12,7 @@ cd apps/lst-gpui
 cargo run
 DISPLAY=:1 cargo run -- path/to/file.rs
 DISPLAY=:1 cargo run -- --title "lst GPUI"
+DISPLAY=:1 cargo run -- --scratchpad-dir /path/to/notes
 ```
 
 ## Status
@@ -31,6 +32,12 @@ DISPLAY=:1 ../../target/release/examples/bench_editor_x11 --scenario all --repet
 
 Use the runner defaults for real baseline work.
 
+Run the opt-in real-display behavior smoke test with:
+
+```sh
+DISPLAY=:1 cargo test -p lst-gpui --test real_x11_smoke -- --ignored --nocapture
+```
+
 ## Current Features
 
 - editable `Ropey` buffer with cursor and selection
@@ -40,8 +47,8 @@ Use the runner defaults for real baseline work.
 - clipboard copy/cut/paste
 - multiple tabs
 - open files from CLI or file dialog
-- save and save-as
-- background autosave for file-backed dirty tabs
+- timestamped scratchpad notes in `~/.local/share/lst/` by default
+- save, save-as, and background autosave for path-backed dirty tabs
 - undo / redo
 - find / replace overlay
 - goto-line overlay

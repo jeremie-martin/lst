@@ -4,7 +4,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::ui::theme::{COLOR_BORDER, COLOR_SURFACE0, SHELL_EDGE_PAD, SHELL_GAP, TAB_HEIGHT};
+use crate::ui::theme::{metrics, role};
 
 #[derive(IntoElement)]
 pub struct TabBar {
@@ -65,22 +65,22 @@ impl RenderOnce for TabBar {
             .id(self.id)
             .flex()
             .w_full()
-            .h(px(TAB_HEIGHT + 1.0))
+            .h(px(metrics::TAB_HEIGHT + 1.0))
             .overflow_hidden()
-            .bg(rgb(COLOR_SURFACE0))
+            .bg(rgb(role::PANEL_BG))
             .border_1()
-            .border_color(rgb(COLOR_BORDER))
+            .border_color(rgb(role::BORDER))
             .children(
                 (!self.start_children.is_empty()).then_some(
                     div()
                         .flex_none()
                         .flex()
                         .h_full()
-                        .px(px(SHELL_EDGE_PAD))
-                        .gap(px(SHELL_GAP))
+                        .px(px(metrics::SHELL_EDGE_PAD))
+                        .gap(px(metrics::SHELL_GAP))
                         .items_center()
                         .border_r_1()
-                        .border_color(rgb(COLOR_BORDER))
+                        .border_color(rgb(role::BORDER))
                         .children(self.start_children)
                         .into_any_element(),
                 ),
@@ -99,11 +99,11 @@ impl RenderOnce for TabBar {
                         .flex_none()
                         .flex()
                         .h_full()
-                        .px(px(SHELL_EDGE_PAD))
-                        .gap(px(SHELL_GAP))
+                        .px(px(metrics::SHELL_EDGE_PAD))
+                        .gap(px(metrics::SHELL_GAP))
                         .items_center()
                         .border_l_1()
-                        .border_color(rgb(COLOR_BORDER))
+                        .border_color(rgb(role::BORDER))
                         .children(self.end_children)
                         .into_any_element(),
                 ),

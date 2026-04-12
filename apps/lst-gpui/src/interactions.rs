@@ -4,7 +4,7 @@ use gpui::{
 use lst_editor::selection::{drag_selection_range, line_range_at_char, word_range_at_char};
 use std::ops::Range;
 
-use crate::{LstGpuiApp, ROW_HEIGHT};
+use crate::{ui::theme::metrics, LstGpuiApp};
 
 #[derive(Clone, Debug)]
 pub(crate) enum DragSelectionMode {
@@ -49,6 +49,34 @@ impl LstGpuiApp {
         });
         self.schedule_drag_autoscroll(window, cx);
         cx.notify();
+    }
+
+    pub(crate) fn on_middle_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.persistent_overlay_focus = None;
+        window.focus(&self.focus_handle);
+        self.drag_selecting = None;
+        self.drag_last_point = None;
+        self.drag_autoscroll_active = false;
+
+        let index = self.active_char_index_for_point(event.position);
+        match cx.read_from_primary().and_then(|item| item.text()) {
+            Some(text) => {
+                self.update_model(cx, true, |model| {
+                    model.move_to_char(index, false, None);
+                    model.paste_text(text);
+                });
+            }
+            None => {
+                self.update_model(cx, true, |model| {
+                    model.clipboard_unavailable();
+                });
+            }
+        }
     }
 
     pub(crate) fn on_mouse_move(
@@ -176,11 +204,15 @@ pub(crate) fn drag_autoscroll_delta(
     if position.y < top_edge {
         let distance = ((top_edge - position.y) / px(1.0)).min(EDGE_PX * 2.0);
         let rows = 0.5 + distance / EDGE_PX;
-        Some(-px((ROW_HEIGHT * rows).min(ROW_HEIGHT * 3.0)))
+        Some(-px(
+            (metrics::ROW_HEIGHT * rows).min(metrics::ROW_HEIGHT * 3.0)
+        ))
     } else if position.y > bottom_edge {
         let distance = ((position.y - bottom_edge) / px(1.0)).min(EDGE_PX * 2.0);
         let rows = 0.5 + distance / EDGE_PX;
-        Some(px((ROW_HEIGHT * rows).min(ROW_HEIGHT * 3.0)))
+        Some(px(
+            (metrics::ROW_HEIGHT * rows).min(metrics::ROW_HEIGHT * 3.0)
+        ))
     } else {
         None
     }

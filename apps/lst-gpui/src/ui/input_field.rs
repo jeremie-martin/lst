@@ -13,10 +13,7 @@ use lst_editor::selection::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::ui::theme::{
-    COLOR_ACCENT, COLOR_BORDER, COLOR_MUTED, COLOR_SELECTION, COLOR_SURFACE1, COLOR_SURFACE2,
-    COLOR_TEXT, INPUT_HEIGHT, INPUT_TEXT_SIZE,
-};
+use crate::ui::theme::{metrics, role};
 
 actions!(
     lst_gpui_input,
@@ -712,7 +709,7 @@ impl Element for TextElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
         style.size.width = relative(1.0).into();
-        style.size.height = px(INPUT_HEIGHT - 10.0).into();
+        style.size.height = px(metrics::INPUT_HEIGHT - 10.0).into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -731,9 +728,9 @@ impl Element for TextElement {
         let cursor = input.text.cursor_offset();
 
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), rgb(COLOR_MUTED))
+            (input.placeholder.clone(), rgb(role::TEXT_MUTED))
         } else {
-            (content, rgb(COLOR_TEXT))
+            (content, rgb(role::TEXT))
         };
 
         let run = TextRun {
@@ -771,7 +768,7 @@ impl Element for TextElement {
             vec![run]
         };
 
-        let font_size = px(INPUT_TEXT_SIZE);
+        let font_size = px(metrics::INPUT_TEXT_SIZE);
         let line = window
             .text_system()
             .shape_line(display_text, font_size, &runs, None);
@@ -785,7 +782,7 @@ impl Element for TextElement {
                         point(bounds.left() + cursor_pos, bounds.top()),
                         size(px(2.0), bounds.bottom() - bounds.top()),
                     ),
-                    rgb(COLOR_ACCENT),
+                    rgb(role::ACCENT),
                 )),
             )
         } else {
@@ -801,7 +798,7 @@ impl Element for TextElement {
                             bounds.bottom(),
                         ),
                     ),
-                    rgb(COLOR_SELECTION),
+                    rgb(role::SELECTION_BG),
                 )),
                 None,
             )
@@ -859,9 +856,9 @@ impl Render for InputField {
         let entity = cx.entity();
         let focused = self.focus_handle.is_focused(window);
         let border = if focused {
-            rgb(COLOR_ACCENT)
+            rgb(role::ACCENT)
         } else {
-            rgb(COLOR_BORDER)
+            rgb(role::BORDER)
         };
 
         div()
@@ -891,18 +888,18 @@ impl Render for InputField {
             .on_action(cx.listener(Self::previous))
             .relative()
             .w_full()
-            .h(px(INPUT_HEIGHT))
+            .h(px(metrics::INPUT_HEIGHT))
             .px_3()
             .items_center()
             .rounded_sm()
             .bg(if focused {
-                rgb(COLOR_SURFACE2)
+                rgb(role::CONTROL_BG_HOVER)
             } else {
-                rgb(COLOR_SURFACE1)
+                rgb(role::CONTROL_BG)
             })
             .border_1()
             .border_color(border)
-            .hover(|style| style.bg(rgb(COLOR_SURFACE2)))
+            .hover(|style| style.bg(rgb(role::CONTROL_BG_HOVER)))
             .cursor(CursorStyle::IBeam)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))

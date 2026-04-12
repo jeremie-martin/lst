@@ -13,6 +13,7 @@ lst-editor = { path = "../../crates/lst-editor" }
 ropey = "1.6.1"
 rfd = "0.17"
 smallvec = "1.13"
+time = { version = "0.3.47", features = ["local-offset"] }
 tree-sitter = "0.26.8"
 tree-sitter-highlight = "0.26.8"
 tree-sitter-rust = "0.24.2"

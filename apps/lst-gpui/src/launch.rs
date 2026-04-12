@@ -4,6 +4,7 @@ use std::{fmt, path::PathBuf, process};
 pub(crate) struct LaunchArgs {
     pub(crate) files: Vec<PathBuf>,
     pub(crate) window_title: Option<String>,
+    pub(crate) scratchpad_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -25,7 +26,8 @@ fn usage() -> &'static str {
     "Usage:
   cargo run
   cargo run -- file1.rs file2.md
-  cargo run -- --title \"lst GPUI\""
+  cargo run -- --title \"lst GPUI\"
+  cargo run -- --scratchpad-dir /path/to/notes"
 }
 
 pub(crate) fn parse_launch_args() -> LaunchArgs {
@@ -55,6 +57,9 @@ where
             "--help" | "-h" => {
                 return Err(LaunchArgError::Help);
             }
+            _ if arg.starts_with("--title=") => {
+                args.window_title = Some(arg["--title=".len()..].to_string());
+            }
             "--title" => {
                 let Some(title) = iter.next() else {
                     return Err(LaunchArgError::Message(
@@ -62,6 +67,18 @@ where
                     ));
                 };
                 args.window_title = Some(title);
+            }
+            _ if arg.starts_with("--scratchpad-dir=") => {
+                args.scratchpad_dir =
+                    Some(PathBuf::from(arg["--scratchpad-dir=".len()..].to_string()));
+            }
+            "--scratchpad-dir" => {
+                let Some(dir) = iter.next() else {
+                    return Err(LaunchArgError::Message(
+                        "missing value for --scratchpad-dir".to_string(),
+                    ));
+                };
+                args.scratchpad_dir = Some(PathBuf::from(dir));
             }
             _ if arg.starts_with("--") => {
                 return Err(LaunchArgError::Message(format!("unknown argument: {arg}")));

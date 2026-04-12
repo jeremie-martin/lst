@@ -1,7 +1,6 @@
 use crate::ui::{
-    IconButton, IconKind, Tab as UiTab, TabBar, COLOR_BG, COLOR_BORDER, COLOR_MUTED, COLOR_PEACH,
-    COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_TEXT, INPUT_TEXT_SIZE, SHELL_EDGE_PAD,
-    SHELL_GAP, STATUS_HEIGHT_PAD, TAB_HEIGHT,
+    theme::{metrics, role},
+    IconButton, IconKind, Tab as UiTab, TabBar,
 };
 use gpui::{
     canvas, div, prelude::*, px, rgb, AnyElement, Context, CursorStyle, ElementInputHandler,
@@ -12,9 +11,7 @@ use gpui::{
 use crate::actions::attach_workspace_actions;
 use crate::syntax::syntax_mode_for_path;
 use crate::viewport::{buffer_content_height, paint_viewport, prepare_viewport_paint_state};
-use crate::{
-    code_char_width, ensure_wrap_layout, LstGpuiApp, CODE_FONT_SIZE, ROW_HEIGHT, WINDOW_WIDTH,
-};
+use crate::{code_char_width, ensure_wrap_layout, LstGpuiApp};
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
@@ -24,7 +21,7 @@ impl LstGpuiApp {
         let dirty_marker = tab.modified().then_some(
             div()
                 .flex_none()
-                .text_color(rgb(COLOR_PEACH))
+                .text_color(rgb(role::DIRTY))
                 .child("•")
                 .into_any_element(),
         );
@@ -77,17 +74,15 @@ impl LstGpuiApp {
             div()
                 .flex()
                 .flex_none()
-                .h(px(TAB_HEIGHT))
+                .h(px(metrics::TAB_HEIGHT))
                 .px_2()
                 .items_center()
                 .border_r_1()
-                .border_color(rgb(COLOR_BORDER))
+                .border_color(rgb(role::BORDER))
                 .child(
                     IconButton::new("new-tab-button", IconKind::Plus).on_click(cx.listener(
                         |this, _, _window, cx| {
-                            this.update_model(cx, true, |model| {
-                                model.new_tab();
-                            });
+                            this.request_new_tab(cx);
                             cx.stop_propagation();
                         },
                     )),
@@ -112,18 +107,18 @@ impl LstGpuiApp {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(SHELL_GAP))
+            .gap(px(metrics::SHELL_GAP))
             .px_3()
             .py_2()
             .rounded_sm()
-            .bg(rgb(COLOR_SURFACE0))
+            .bg(rgb(role::PANEL_BG))
             .border_1()
-            .border_color(rgb(COLOR_BORDER))
+            .border_color(rgb(role::BORDER))
             .child(
                 div()
                     .flex_none()
-                    .text_size(px(INPUT_TEXT_SIZE))
-                    .text_color(rgb(COLOR_SUBTEXT))
+                    .text_size(px(metrics::INPUT_TEXT_SIZE))
+                    .text_color(rgb(role::TEXT_SUBTLE))
                     .child("Find"),
             )
             .child(div().w(px(280.0)).child(self.find_query_input.clone()))
@@ -131,8 +126,8 @@ impl LstGpuiApp {
                 row.child(
                     div()
                         .flex_none()
-                        .text_size(px(INPUT_TEXT_SIZE))
-                        .text_color(rgb(COLOR_SUBTEXT))
+                        .text_size(px(metrics::INPUT_TEXT_SIZE))
+                        .text_color(rgb(role::TEXT_SUBTLE))
                         .child("Replace"),
                 )
                 .child(div().w(px(280.0)).child(self.find_replace_input.clone()))
@@ -141,8 +136,8 @@ impl LstGpuiApp {
                 div()
                     .flex_none()
                     .font_family(".ZedMono")
-                    .text_size(px(INPUT_TEXT_SIZE))
-                    .text_color(rgb(COLOR_MUTED))
+                    .text_size(px(metrics::INPUT_TEXT_SIZE))
+                    .text_color(rgb(role::TEXT_MUTED))
                     .child(match_label),
             )
     }
@@ -152,18 +147,18 @@ impl LstGpuiApp {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(SHELL_GAP))
+            .gap(px(metrics::SHELL_GAP))
             .px_3()
             .py_2()
             .rounded_sm()
-            .bg(rgb(COLOR_SURFACE0))
+            .bg(rgb(role::PANEL_BG))
             .border_1()
-            .border_color(rgb(COLOR_BORDER))
+            .border_color(rgb(role::BORDER))
             .child(
                 div()
                     .flex_none()
-                    .text_size(px(INPUT_TEXT_SIZE))
-                    .text_color(rgb(COLOR_SUBTEXT))
+                    .text_size(px(metrics::INPUT_TEXT_SIZE))
+                    .text_color(rgb(role::TEXT_SUBTLE))
                     .child("Line"),
             )
             .child(div().w(px(180.0)).child(self.goto_line_input.clone()))
@@ -181,8 +176,8 @@ impl LstGpuiApp {
         div()
             .id("editor-overlays")
             .absolute()
-            .top(px(SHELL_GAP))
-            .right(px(SHELL_GAP))
+            .top(px(metrics::SHELL_GAP))
+            .right(px(metrics::SHELL_GAP))
             .flex()
             .flex_col()
             .gap_2()
@@ -197,15 +192,15 @@ impl LstGpuiApp {
             .items_center()
             .gap_3()
             .px_3()
-            .py(px(STATUS_HEIGHT_PAD))
-            .bg(rgb(COLOR_SURFACE0))
+            .py(px(metrics::STATUS_HEIGHT_PAD))
+            .bg(rgb(role::PANEL_BG))
             .border_1()
-            .border_color(rgb(COLOR_BORDER))
+            .border_color(rgb(role::BORDER))
             .child(
                 div()
                     .truncate()
                     .text_sm()
-                    .text_color(rgb(COLOR_SUBTEXT))
+                    .text_color(rgb(role::TEXT_SUBTLE))
                     .child(self.model.status().to_string()),
             )
             .child(
@@ -213,7 +208,7 @@ impl LstGpuiApp {
                     .flex_none()
                     .font_family(".ZedMono")
                     .text_size(px(12.0))
-                    .text_color(rgb(COLOR_MUTED))
+                    .text_color(rgb(role::TEXT_MUTED))
                     .child(self.status_details()),
             )
     }
@@ -252,7 +247,7 @@ impl Render for LstGpuiApp {
             .borrow()
             .bounds
             .map(|bounds| bounds.size.width)
-            .unwrap_or_else(|| px(WINDOW_WIDTH - 48.0));
+            .unwrap_or_else(|| px(metrics::WINDOW_WIDTH - 48.0));
         let char_width = code_char_width(window);
         let (revision, syntax_mode, buffer, selection, cursor_char) = {
             let active_tab = self.model.active_tab();
@@ -288,15 +283,15 @@ impl Render for LstGpuiApp {
 
         let root = attach_workspace_actions(div().flex().flex_col().key_context("Workspace"), cx)
             .size_full()
-            .bg(rgb(COLOR_BG))
-            .text_color(rgb(COLOR_TEXT))
+            .bg(rgb(role::APP_BG))
+            .text_color(rgb(role::TEXT))
             .child(
                 div()
                     .flex_grow()
                     .flex()
                     .flex_col()
-                    .px(px(SHELL_EDGE_PAD))
-                    .py(px(SHELL_EDGE_PAD))
+                    .px(px(metrics::SHELL_EDGE_PAD))
+                    .py(px(metrics::SHELL_EDGE_PAD))
                     .gap_2()
                     .child(self.render_tab_strip(cx))
                     .child(
@@ -313,11 +308,11 @@ impl Render for LstGpuiApp {
                                     .w_full()
                                     .overflow_hidden()
                                     .border_1()
-                                    .border_color(rgb(COLOR_BORDER))
-                                    .bg(rgb(COLOR_SURFACE1))
+                                    .border_color(rgb(role::BORDER))
+                                    .bg(rgb(role::EDITOR_BG))
                                     .font_family(".ZedMono")
-                                    .text_size(px(CODE_FONT_SIZE))
-                                    .line_height(px(ROW_HEIGHT))
+                                    .text_size(px(metrics::CODE_FONT_SIZE))
+                                    .line_height(px(metrics::ROW_HEIGHT))
                                     .child(
                                         div()
                                             .id("buffer-scroll")
@@ -341,6 +336,10 @@ impl Render for LstGpuiApp {
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(Self::on_mouse_down),
+                                            )
+                                            .on_mouse_down(
+                                                MouseButton::Middle,
+                                                cx.listener(Self::on_middle_mouse_down),
                                             )
                                             .on_mouse_up(
                                                 MouseButton::Left,

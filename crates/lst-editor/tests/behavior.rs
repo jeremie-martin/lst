@@ -644,6 +644,75 @@ fn autosave_tick_emits_modified_file_backed_tabs() {
 }
 
 #[test]
+fn scratchpad_tabs_are_path_backed_and_save_without_save_as() {
+    let path = std::path::PathBuf::from("/tmp/2026-04-11_12-13-14.md");
+    let stamp = lst_editor::FileStamp::from_raw(0, Some(1));
+    let mut model = EditorModel::new(
+        vec![EditorTab::scratchpad_with_stamp(
+            TabId::from_raw(1),
+            path.clone(),
+            stamp,
+        )],
+        "Ready.".into(),
+    );
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.active_path, Some(path.clone()));
+    assert_eq!(snapshot.tab_scratchpad, [true]);
+    assert!(!snapshot.tab_modified[0]);
+
+    model.insert_text("note".into());
+    model.drain_effects();
+    model.request_save();
+
+    assert_eq!(
+        model.drain_effects(),
+        vec![EditorEffect::SaveFile {
+            tab_id: TabId::from_raw(1),
+            path,
+            body: "note".into(),
+            expected_stamp: Some(stamp),
+        }]
+    );
+}
+
+#[test]
+fn save_as_marks_scratchpad_as_normal_file() {
+    let scratchpad_path = std::path::PathBuf::from("/tmp/2026-04-11_12-13-14.md");
+    let saved_path = std::path::PathBuf::from("/tmp/saved.md");
+    let mut model = EditorModel::new(
+        vec![EditorTab::scratchpad_with_stamp(
+            TabId::from_raw(1),
+            scratchpad_path.clone(),
+            lst_editor::FileStamp::from_raw(0, Some(1)),
+        )],
+        "Ready.".into(),
+    );
+
+    model.request_save_as();
+    assert_eq!(
+        model.drain_effects(),
+        vec![EditorEffect::SaveFileAs {
+            tab_id: TabId::from_raw(1),
+            suggested_name: "2026-04-11_12-13-14.md".into(),
+            body: "".into(),
+            previous_scratchpad_path: Some(scratchpad_path),
+        }]
+    );
+
+    model.save_as_finished_for_tab(
+        TabId::from_raw(1),
+        saved_path.clone(),
+        Some(lst_editor::FileStamp::from_raw(4, Some(2))),
+    );
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.active_path, Some(saved_path));
+    assert_eq!(snapshot.tab_scratchpad, [false]);
+    assert!(!snapshot.tab_modified[0]);
+}
+
+#[test]
 fn autosave_tick_skips_paths_open_in_multiple_tabs() {
     let path = std::path::PathBuf::from("/tmp/example.txt");
     let mut model = EditorModel::new(

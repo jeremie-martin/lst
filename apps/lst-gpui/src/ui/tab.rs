@@ -4,11 +4,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::ui::theme::{
-    COLOR_ACCENT, COLOR_BORDER, COLOR_SUBTEXT, COLOR_SURFACE0, COLOR_SURFACE1, COLOR_TEXT,
-    SHELL_GAP, TAB_HEIGHT, TAB_HORIZONTAL_PAD, TAB_MAX_WIDTH, TAB_MIN_WIDTH, TAB_SLOT_WIDTH,
-    TAB_TEXT_SIZE,
-};
+use crate::ui::theme::{metrics, role};
 
 #[derive(IntoElement)]
 pub struct Tab {
@@ -66,14 +62,14 @@ impl ParentElement for Tab {
 impl RenderOnce for Tab {
     fn render(self, _window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
         let background = if self.active {
-            rgb(COLOR_SURFACE1)
+            rgb(role::EDITOR_BG)
         } else {
-            rgb(COLOR_SURFACE0)
+            rgb(role::PANEL_BG)
         };
         let text = if self.active {
-            rgb(COLOR_TEXT)
+            rgb(role::TEXT)
         } else {
-            rgb(COLOR_SUBTEXT)
+            rgb(role::TEXT_SUBTLE)
         };
 
         self.div
@@ -81,22 +77,22 @@ impl RenderOnce for Tab {
             .relative()
             .flex()
             .flex_none()
-            .h(px(TAB_HEIGHT))
-            .min_w(px(TAB_MIN_WIDTH))
-            .max_w(px(TAB_MAX_WIDTH))
-            .px(px(TAB_HORIZONTAL_PAD))
-            .gap(px(SHELL_GAP))
+            .h(px(metrics::TAB_HEIGHT))
+            .min_w(px(metrics::TAB_MIN_WIDTH))
+            .max_w(px(metrics::TAB_MAX_WIDTH))
+            .px(px(metrics::TAB_HORIZONTAL_PAD))
+            .gap(px(metrics::SHELL_GAP))
             .items_center()
             .border_r_1()
-            .border_color(rgb(COLOR_BORDER))
+            .border_color(rgb(role::BORDER))
             .bg(background)
             .cursor(CursorStyle::PointingHand)
-            .hover(|style| style.bg(rgb(COLOR_SURFACE1)))
+            .hover(|style| style.bg(rgb(role::EDITOR_BG)))
             .child(
                 div()
                     .flex()
                     .h_full()
-                    .w(px(TAB_SLOT_WIDTH))
+                    .w(px(metrics::TAB_SLOT_WIDTH))
                     .flex_none()
                     .items_center()
                     .justify_center()
@@ -110,7 +106,7 @@ impl RenderOnce for Tab {
                     .overflow_hidden()
                     .h_full()
                     .items_center()
-                    .text_size(px(TAB_TEXT_SIZE))
+                    .text_size(px(metrics::TAB_TEXT_SIZE))
                     .text_color(text)
                     .truncate()
                     .children(self.children),
@@ -119,7 +115,7 @@ impl RenderOnce for Tab {
                 div()
                     .flex()
                     .h_full()
-                    .w(px(TAB_SLOT_WIDTH))
+                    .w(px(metrics::TAB_SLOT_WIDTH))
                     .flex_none()
                     .items_center()
                     .justify_center()
@@ -133,7 +129,7 @@ impl RenderOnce for Tab {
                         .right_0()
                         .bottom_0()
                         .h(px(2.0))
-                        .bg(rgb(COLOR_ACCENT))
+                        .bg(rgb(role::ACCENT))
                         .into_any_element(),
                 ),
             )

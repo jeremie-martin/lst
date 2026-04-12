@@ -1,7 +1,4 @@
-use crate::ui::{
-    COLOR_ACCENT, COLOR_BORDER, COLOR_GREEN, COLOR_LAVENDER, COLOR_MAUVE, COLOR_MUTED, COLOR_PEACH,
-    COLOR_PINK, COLOR_SAPPHIRE, COLOR_YELLOW,
-};
+use crate::ui::theme::syntax as theme_syntax;
 use std::{path::PathBuf, sync::LazyLock};
 use tree_sitter_highlight::{
     Highlight as TreeSitterHighlight, HighlightConfiguration,
@@ -350,51 +347,51 @@ fn highlight_config(
 fn tree_sitter_color_for_capture(index: usize) -> Option<u32> {
     let capture = TREE_SITTER_CAPTURE_NAMES.get(index).copied()?;
     if capture.starts_with("comment") {
-        Some(COLOR_MUTED)
+        Some(theme_syntax::COMMENT)
     } else if capture.starts_with("string") {
-        Some(COLOR_GREEN)
+        Some(theme_syntax::STRING)
     } else if matches!(
         capture,
         "boolean" | "number" | "constant" | "constant.builtin"
     ) {
-        Some(COLOR_PEACH)
+        Some(theme_syntax::CONSTANT)
     } else if capture.starts_with("function")
         || capture.starts_with("definition.function")
         || capture.starts_with("definition.method")
         || capture == "reference.call"
     {
-        Some(COLOR_ACCENT)
+        Some(theme_syntax::FUNCTION)
     } else if capture.starts_with("keyword") {
-        Some(COLOR_MAUVE)
+        Some(theme_syntax::KEYWORD)
     } else if capture == "operator" {
-        Some(COLOR_SAPPHIRE)
+        Some(theme_syntax::OPERATOR)
     } else if capture.starts_with("type")
         || capture.starts_with("definition.class")
         || capture.starts_with("definition.interface")
         || capture == "reference.class"
         || capture == "reference.type"
     {
-        Some(COLOR_YELLOW)
+        Some(theme_syntax::TYPE)
     } else if capture.starts_with("tag") {
-        Some(COLOR_SAPPHIRE)
+        Some(theme_syntax::TAG)
     } else if capture == "text.title" {
-        Some(COLOR_YELLOW)
+        Some(theme_syntax::TITLE)
     } else if capture == "text.strong" {
-        Some(COLOR_PEACH)
+        Some(theme_syntax::STRONG)
     } else if capture == "text.emphasis" {
-        Some(COLOR_PINK)
+        Some(theme_syntax::EMPHASIS)
     } else if capture == "text.literal" {
-        Some(COLOR_GREEN)
+        Some(theme_syntax::LITERAL)
     } else if capture == "text.reference" || capture == "text.uri" {
-        Some(COLOR_SAPPHIRE)
+        Some(theme_syntax::REFERENCE)
     } else if matches!(capture, "attribute" | "property" | "property.builtin") {
-        Some(COLOR_LAVENDER)
+        Some(theme_syntax::PROPERTY)
     } else if capture == "escape" || capture.starts_with("punctuation.special") {
-        Some(COLOR_PINK)
+        Some(theme_syntax::ESCAPE)
     } else if capture.starts_with("punctuation") {
-        Some(COLOR_BORDER)
+        Some(theme_syntax::PUNCTUATION)
     } else if capture == "label" || capture == "module" || capture == "namespace" {
-        Some(COLOR_LAVENDER)
+        Some(theme_syntax::LABEL)
     } else {
         None
     }

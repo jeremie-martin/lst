@@ -27,7 +27,6 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
 
     bind_commands! {
         root,
-        NewTab => |model| model.new_tab();
         OpenFile => |model| model.request_open_files();
         SaveFile => |model| model.request_save();
         SaveFileAs => |model| model.request_save_as();
@@ -75,6 +74,10 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         DuplicateLine => |model| model.duplicate_line();
         ToggleComment => |model| model.toggle_comment();
     }
+
+    let root = root.on_action(cx.listener(|this, _: &NewTab, _window, cx| {
+        this.request_new_tab(cx);
+    }));
 
     let root = root.on_action(cx.listener(|this, _: &MoveUp, window, cx| {
         this.move_vertical(-1, false, window, cx);

@@ -75,6 +75,7 @@ pub struct EditorTab {
     pub(crate) path: Option<PathBuf>,
     pub(crate) file_stamp: Option<FileStamp>,
     pub(crate) suppressed_conflict_stamp: Option<FileStamp>,
+    pub(crate) is_scratchpad: bool,
     pub(crate) buffer: Rope,
     pub(crate) modified: bool,
     pub(crate) selection: Range<usize>,
@@ -111,6 +112,17 @@ impl EditorTab {
         Self::from_text_with_stamp(id, name_hint, Some(path), text, file_stamp)
     }
 
+    pub fn scratchpad_with_stamp(id: TabId, path: PathBuf, file_stamp: FileStamp) -> Self {
+        let name_hint = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("scratchpad")
+            .to_string();
+        let mut tab = Self::from_text_with_stamp(id, name_hint, Some(path), "", Some(file_stamp));
+        tab.is_scratchpad = true;
+        tab
+    }
+
     pub fn from_text(id: TabId, name_hint: String, path: Option<PathBuf>, text: &str) -> Self {
         Self::from_text_with_stamp(id, name_hint, path, text, None)
     }
@@ -128,6 +140,7 @@ impl EditorTab {
             path,
             file_stamp,
             suppressed_conflict_stamp: None,
+            is_scratchpad: false,
             buffer: Rope::from_str(text),
             modified: false,
             selection: 0..0,
@@ -152,6 +165,10 @@ impl EditorTab {
 
     pub fn file_stamp(&self) -> Option<FileStamp> {
         self.file_stamp
+    }
+
+    pub fn is_scratchpad(&self) -> bool {
+        self.is_scratchpad
     }
 
     pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
@@ -388,6 +405,11 @@ impl EditorTab {
         self.file_stamp = Some(file_stamp);
         self.suppressed_conflict_stamp = None;
         self.modified = false;
+    }
+
+    pub(crate) fn mark_saved_as(&mut self, path: PathBuf, file_stamp: FileStamp) {
+        self.mark_saved(path, file_stamp);
+        self.is_scratchpad = false;
     }
 
     pub(crate) fn suppress_file_conflict(&mut self, stamp: FileStamp) {

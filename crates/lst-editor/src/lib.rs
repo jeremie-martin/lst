@@ -1356,6 +1356,16 @@ impl EditorModel {
         self.queue_focus(FocusTarget::Editor);
     }
 
+    pub fn new_scratchpad_tab(&mut self, path: PathBuf, file_stamp: FileStamp) {
+        let id = self.alloc_tab_id();
+        let tab = EditorTab::scratchpad_with_stamp(id, path, file_stamp);
+        self.push_tab(tab);
+        let last = self.tabs.len().saturating_sub(1);
+        self.activate_tab(last);
+        self.status = "Created a new scratchpad.".to_string();
+        self.queue_focus(FocusTarget::Editor);
+    }
+
     pub fn close_active_tab(&mut self) {
         self.close_tab_at(self.active);
     }
@@ -1717,10 +1727,16 @@ impl EditorModel {
                 expected_stamp: tab.file_stamp(),
             });
         } else {
+            let previous_scratchpad_path = if tab.is_scratchpad() {
+                tab.path().cloned()
+            } else {
+                None
+            };
             self.queue_effect(EditorEffect::SaveFileAs {
                 tab_id,
                 suggested_name: tab.display_name(),
                 body,
+                previous_scratchpad_path,
             });
         }
     }
@@ -1733,10 +1749,16 @@ impl EditorModel {
         let Some(tab) = self.tab_by_id(tab_id) else {
             return;
         };
+        let previous_scratchpad_path = if tab.is_scratchpad() {
+            tab.path().cloned()
+        } else {
+            None
+        };
         self.queue_effect(EditorEffect::SaveFileAs {
             tab_id,
             suggested_name: tab.display_name(),
             body: tab.buffer_text(),
+            previous_scratchpad_path,
         });
     }
 
@@ -1757,6 +1779,24 @@ impl EditorModel {
             } else {
                 tab.path = Some(path.clone());
                 tab.modified = false;
+            }
+            self.status = format!("Saved {}.", path.display());
+        }
+    }
+
+    pub fn save_as_finished_for_tab(
+        &mut self,
+        tab_id: TabId,
+        path: PathBuf,
+        file_stamp: Option<FileStamp>,
+    ) {
+        if let Some(tab) = self.tab_mut_by_id(tab_id) {
+            if let Some(file_stamp) = file_stamp {
+                tab.mark_saved_as(path.clone(), file_stamp);
+            } else {
+                tab.path = Some(path.clone());
+                tab.modified = false;
+                tab.is_scratchpad = false;
             }
             self.status = format!("Saved {}.", path.display());
         }

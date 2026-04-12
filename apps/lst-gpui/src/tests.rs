@@ -1,7 +1,7 @@
-use crate::ui::{input_keybindings, COLOR_GREEN, COLOR_MUTED};
+use crate::ui::{input_keybindings, theme::syntax as theme_syntax};
 use gpui::{
-    point, px, ClipboardItem, Entity, EntityInputHandler, Keystroke, Modifiers, TestAppContext,
-    VisualContext as _, VisualTestContext,
+    point, px, ClipboardItem, Entity, EntityInputHandler, Keystroke, Modifiers, MouseButton,
+    TestAppContext, VisualContext as _, VisualTestContext,
 };
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorTab, TabId};
@@ -50,8 +50,11 @@ fn temp_dir(label: &str) -> PathBuf {
 
 fn new_test_app(
     cx: &mut TestAppContext,
-    launch: LaunchArgs,
+    mut launch: LaunchArgs,
 ) -> (Entity<LstGpuiApp>, &mut VisualTestContext) {
+    if launch.files.is_empty() && launch.scratchpad_dir.is_none() {
+        launch.scratchpad_dir = Some(temp_dir("scratchpads"));
+    }
     cx.update(|cx| {
         cx.bind_keys(editor_keybindings());
         cx.bind_keys(input_keybindings());
@@ -71,6 +74,20 @@ fn app_snapshot(view: &Entity<LstGpuiApp>, cx: &mut VisualTestContext) -> AppSna
 
 fn assert_tab_views_match_model(snapshot: &AppSnapshot) {
     assert_eq!(snapshot.tab_view_ids, snapshot.model.tab_ids);
+}
+
+fn is_timestamped_scratchpad_name(name: &str) -> bool {
+    if name.len() != "YYYY-MM-DD_HH-MM-SS.md".len() {
+        return false;
+    }
+    name.char_indices().all(|(ix, ch)| match ix {
+        4 | 7 | 13 | 16 => ch == '-',
+        10 => ch == '_',
+        19 => ch == '.',
+        20 => ch == 'm',
+        21 => ch == 'd',
+        _ => ch.is_ascii_digit(),
+    })
 }
 
 fn active_viewport_size(view: &Entity<LstGpuiApp>, cx: &mut VisualTestContext) -> (i32, i32) {
@@ -103,12 +120,40 @@ fn launch_args_accept_window_title() {
 }
 
 #[test]
+fn launch_args_accept_scratchpad_dir() {
+    let args = crate::launch::parse_launch_args_from([
+        "--scratchpad-dir",
+        "/tmp/lst-notes",
+        "--scratchpad-dir=/tmp/lst-other-notes",
+    ])
+    .expect("args should parse");
+
+    assert_eq!(
+        args.scratchpad_dir,
+        Some(PathBuf::from("/tmp/lst-other-notes"))
+    );
+    assert!(args.files.is_empty());
+}
+
+#[test]
 fn launch_args_require_title_value() {
     let error = crate::launch::parse_launch_args_from(["--title"]).expect_err("missing title");
 
     assert!(matches!(
         error,
         crate::launch::LaunchArgError::Message(message) if message == "missing value for --title"
+    ));
+}
+
+#[test]
+fn launch_args_require_scratchpad_dir_value() {
+    let error = crate::launch::parse_launch_args_from(["--scratchpad-dir"])
+        .expect_err("missing scratchpad dir");
+
+    assert!(matches!(
+        error,
+        crate::launch::LaunchArgError::Message(message)
+            if message == "missing value for --scratchpad-dir"
     ));
 }
 
@@ -130,6 +175,31 @@ fn launch_model_loads_real_files_before_gpui_wiring() {
     assert!(snapshot
         .status
         .contains(&format!("Failed to open {}", missing.display())));
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[test]
+fn launch_model_without_files_creates_timestamped_scratchpad() {
+    let dir = temp_dir("launch-scratchpad");
+
+    let model = initial_model_from_launch(LaunchArgs {
+        scratchpad_dir: Some(dir.clone()),
+        ..LaunchArgs::default()
+    });
+    let snapshot = model.snapshot();
+    let path = snapshot
+        .active_path
+        .as_ref()
+        .expect("scratchpad should be path backed");
+
+    assert_eq!(snapshot.tab_count, 1);
+    assert_eq!(snapshot.tab_scratchpad, [true]);
+    assert!(path.starts_with(&dir));
+    assert!(is_timestamped_scratchpad_name(
+        path.file_name().and_then(|name| name.to_str()).unwrap()
+    ));
+    assert_eq!(std::fs::read_to_string(path).expect("read scratchpad"), "");
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
 }
@@ -177,6 +247,77 @@ fn app_actions_copy_and_paste_through_gpui_clipboard(cx: &mut TestAppContext) {
     assert_eq!(snapshot.model.text, "replacement");
     assert_eq!(snapshot.model.status, "Pasted 1 line(s).");
     assert_tab_views_match_model(&snapshot);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn middle_click_pastes_gpui_primary_selection(cx: &mut TestAppContext) {
+    let dir = temp_dir("primary-paste");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            scratchpad_dir: Some(dir.clone()),
+            ..LaunchArgs::default()
+        },
+    );
+    cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("primary text".to_string())));
+    cx.refresh().expect("render editor before mouse paste");
+    cx.run_until_parked();
+    let paste_position = view.update(cx, |app, _cx| {
+        let bounds = app
+            .active_view()
+            .geometry
+            .borrow()
+            .bounds
+            .expect("viewport should have rendered bounds");
+        point(bounds.left() + px(80.0), bounds.top() + px(8.0))
+    });
+
+    cx.simulate_mouse_down(paste_position, MouseButton::Middle, Modifiers::default());
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.text, "primary text");
+    assert_eq!(snapshot.model.status, "Pasted 1 line(s).");
+    assert_tab_views_match_model(&snapshot);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn mouse_selection_updates_gpui_primary_selection(cx: &mut TestAppContext) {
+    let dir = temp_dir("mouse-primary");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "hello").expect("write mouse selection fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.refresh().expect("render editor before mouse selection");
+    cx.run_until_parked();
+    let (start, end) = view.update(cx, |app, _cx| {
+        let bounds = app
+            .active_view()
+            .geometry
+            .borrow()
+            .bounds
+            .expect("viewport should have rendered bounds");
+        let x = bounds.left() + code_origin_pad(app.model.show_gutter()) + px(1.0);
+        let y = bounds.top() + px(8.0);
+        (point(x, y), point(x + px(80.0), y))
+    });
+
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text())),
+        Some("hello".to_string())
+    );
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
 }
@@ -406,8 +547,258 @@ fn app_tab_actions_keep_model_and_tab_views_aligned(cx: &mut TestAppContext) {
     let snapshot = app_snapshot(&view, cx);
     assert_eq!(snapshot.model.tab_count, 2);
     assert_eq!(snapshot.model.active, 1);
-    assert_eq!(snapshot.model.tab_titles, ["untitled-1", "untitled-2"]);
+    assert!(snapshot
+        .model
+        .tab_scratchpad
+        .iter()
+        .all(|is_scratchpad| *is_scratchpad));
+    assert!(snapshot
+        .model
+        .tab_titles
+        .iter()
+        .all(|title| title.ends_with(".md")));
     assert_tab_views_match_model(&snapshot);
+}
+
+#[gpui::test]
+fn new_tab_creates_a_real_scratchpad_file(cx: &mut TestAppContext) {
+    let dir = temp_dir("new-scratchpad");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            scratchpad_dir: Some(dir.clone()),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(NewTab);
+
+    let snapshot = app_snapshot(&view, cx);
+    let active_path = snapshot
+        .model
+        .active_path
+        .as_ref()
+        .expect("active scratchpad should have a path");
+    assert_eq!(snapshot.model.tab_count, 2);
+    assert_eq!(snapshot.model.tab_scratchpad, [true, true]);
+    assert!(active_path.starts_with(&dir));
+    assert_eq!(
+        std::fs::read_dir(&dir)
+            .expect("read scratchpad dir")
+            .count(),
+        2
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn closing_empty_scratchpad_removes_its_file(cx: &mut TestAppContext) {
+    let dir = temp_dir("close-empty-scratchpad");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            scratchpad_dir: Some(dir.clone()),
+            ..LaunchArgs::default()
+        },
+    );
+    cx.dispatch_action(NewTab);
+    let empty_path = app_snapshot(&view, cx)
+        .model
+        .active_path
+        .expect("new scratchpad should have a path");
+
+    cx.dispatch_action(CloseActiveTab);
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.tab_count, 1);
+    assert!(!empty_path.exists());
+    assert_eq!(
+        std::fs::read_dir(&dir)
+            .expect("read scratchpad dir")
+            .count(),
+        1
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn closing_only_empty_scratchpad_removes_its_file(cx: &mut TestAppContext) {
+    let dir = temp_dir("close-only-empty-scratchpad");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            scratchpad_dir: Some(dir.clone()),
+            ..LaunchArgs::default()
+        },
+    );
+    let path = app_snapshot(&view, cx)
+        .model
+        .active_path
+        .expect("scratchpad should have a path");
+    assert!(path.exists());
+
+    cx.dispatch_action(CloseActiveTab);
+
+    assert!(!path.exists());
+    assert_eq!(
+        std::fs::read_dir(&dir)
+            .expect("read scratchpad dir")
+            .count(),
+        0
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn dirty_quit_cancel_keeps_unsaved_edits_without_clipboard_write(cx: &mut TestAppContext) {
+    let dir = temp_dir("quit-cancel");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "old").expect("write quit-cancel fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path.clone()],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.write_to_clipboard(ClipboardItem::new_string("before".to_string()));
+    cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("before".to_string())));
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "new ", window, cx);
+    });
+    let tab_id = app_snapshot(&view, cx).model.active_tab_id;
+
+    view.update(cx, |app, cx| {
+        app.apply_unsaved_quit_decision(tab_id, crate::runtime::UnsavedCloseDecision::Cancel, cx);
+    });
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.text, "new old");
+    assert!(snapshot.model.tab_modified[0]);
+    assert_eq!(snapshot.model.status, "Close cancelled.");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read quit-cancel file"),
+        "old"
+    );
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("before".to_string())
+    );
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text())),
+        Some("before".to_string())
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn dirty_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
+    let dir = temp_dir("quit-save");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "old").expect("write quit-save fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path.clone()],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "new ", window, cx);
+    });
+    let tab_id = app_snapshot(&view, cx).model.active_tab_id;
+
+    view.update(cx, |app, cx| {
+        app.apply_unsaved_quit_decision(tab_id, crate::runtime::UnsavedCloseDecision::Save, cx);
+    });
+
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read quit-save file"),
+        "new old"
+    );
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("new old".to_string())
+    );
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text())),
+        Some("new old".to_string())
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn dirty_scratchpad_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
+    let dir = temp_dir("quit-save-scratchpad");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            scratchpad_dir: Some(dir.clone()),
+            ..LaunchArgs::default()
+        },
+    );
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "scratch text", window, cx);
+    });
+    let snapshot = app_snapshot(&view, cx);
+    let tab_id = snapshot.model.active_tab_id;
+    let path = snapshot
+        .model
+        .active_path
+        .expect("scratchpad should be path backed");
+
+    view.update(cx, |app, cx| {
+        app.apply_unsaved_quit_decision(tab_id, crate::runtime::UnsavedCloseDecision::Save, cx);
+    });
+
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read saved scratchpad"),
+        "scratch text"
+    );
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("scratch text".to_string())
+    );
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text())),
+        Some("scratch text".to_string())
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn quit_copies_active_text_to_clipboard_and_primary(cx: &mut TestAppContext) {
+    let dir = temp_dir("quit-copy");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "quit text").expect("write quit-copy fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+
+    view.update(cx, |app, cx| {
+        app.request_quit(cx);
+    });
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("quit text".to_string())
+    );
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text())),
+        Some("quit text".to_string())
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
 }
 
 #[test]
@@ -457,9 +848,15 @@ fn rust_highlighting_keeps_multiline_comment_context() {
         "/* first line\nsecond line */\nlet x = 1;\n",
     );
 
-    assert!(lines[0].iter().any(|span| span.color == COLOR_MUTED));
-    assert!(lines[1].iter().any(|span| span.color == COLOR_MUTED));
-    assert!(lines[2].iter().all(|span| span.color != COLOR_MUTED));
+    assert!(lines[0]
+        .iter()
+        .any(|span| span.color == theme_syntax::COMMENT));
+    assert!(lines[1]
+        .iter()
+        .any(|span| span.color == theme_syntax::COMMENT));
+    assert!(lines[2]
+        .iter()
+        .all(|span| span.color != theme_syntax::COMMENT));
 }
 
 #[test]
@@ -553,8 +950,12 @@ fn python_highlighting_keeps_multiline_string_context() {
         "value = \"\"\"first\nsecond\"\"\"\nprint(value)\n",
     );
 
-    assert!(lines[0].iter().any(|span| span.color == COLOR_GREEN));
-    assert!(lines[1].iter().any(|span| span.color == COLOR_GREEN));
+    assert!(lines[0]
+        .iter()
+        .any(|span| span.color == theme_syntax::STRING));
+    assert!(lines[1]
+        .iter()
+        .any(|span| span.color == theme_syntax::STRING));
 }
 
 #[test]
@@ -564,9 +965,15 @@ fn javascript_highlighting_keeps_multiline_comment_context() {
         "/* first\nsecond */\nconst value = 1;\n",
     );
 
-    assert!(lines[0].iter().any(|span| span.color == COLOR_MUTED));
-    assert!(lines[1].iter().any(|span| span.color == COLOR_MUTED));
-    assert!(lines[2].iter().all(|span| span.color != COLOR_MUTED));
+    assert!(lines[0]
+        .iter()
+        .any(|span| span.color == theme_syntax::COMMENT));
+    assert!(lines[1]
+        .iter()
+        .any(|span| span.color == theme_syntax::COMMENT));
+    assert!(lines[2]
+        .iter()
+        .all(|span| span.color != theme_syntax::COMMENT));
 }
 
 #[cfg(feature = "internal-invariants")]

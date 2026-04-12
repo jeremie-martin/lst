@@ -3,11 +3,13 @@ use lst_editor::{EditorEffect, EditorTab as ModelEditorTab, FileStamp, TabCloseR
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::{
     collections::HashSet,
-    fs,
+    fs::{self, OpenOptions},
+    io::{self, Write},
     path::{Path, PathBuf},
-    process,
+    process::{self, Command, Stdio},
     time::{Duration, Instant},
 };
+use time::OffsetDateTime;
 
 use crate::{elapsed_ms, LstGpuiApp, PendingAfterSave};
 
@@ -134,13 +136,18 @@ impl LstGpuiApp {
                     tab_id,
                     suggested_name,
                     body,
+                    previous_scratchpad_path,
                 } => {
                     let Some(path) = FileDialog::new().set_file_name(&suggested_name).save_file()
                     else {
                         self.save_cancelled(tab_id, cx);
                         continue;
                     };
-                    self.apply_save_file_result(save_file_result(tab_id, path, body, None), cx);
+                    self.apply_save_as_file_result(
+                        save_file_result(tab_id, path, body, None),
+                        previous_scratchpad_path,
+                        cx,
+                    );
                 }
                 EditorEffect::AutosaveFile {
                     tab_id,
@@ -399,6 +406,23 @@ impl LstGpuiApp {
 
     pub(crate) fn request_close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
         self.hovered_tab = None;
+        if self.tab_is_empty_scratchpad(index) {
+            self.cleanup_scratchpad_tab_file(index);
+            if self.model.tab_count() == 1 && index == self.model.active_index() {
+                self.request_quit(cx);
+                return;
+            }
+            if let Some(tab_id) = self.model.tab(index).map(ModelEditorTab::id) {
+                self.update_model(cx, true, |model| {
+                    model.discard_close_tab_by_id(tab_id);
+                });
+            }
+            return;
+        }
+        if self.model.tab_count() == 1 && index == self.model.active_index() {
+            self.request_quit(cx);
+            return;
+        }
         match self.model.close_request_for_tab(index) {
             Some(TabCloseRequest::Close { tab_id }) => {
                 self.update_model(cx, true, |model| {
@@ -427,6 +451,7 @@ impl LstGpuiApp {
                 });
             }
             UnsavedCloseDecision::Discard => {
+                self.cleanup_scratchpad_tab_file_by_id(tab_id);
                 self.update_model(cx, true, |model| {
                     model.discard_close_tab_by_id(tab_id);
                 });
@@ -445,25 +470,36 @@ impl LstGpuiApp {
     }
 
     fn continue_quit_sequence(&mut self, cx: &mut Context<Self>) {
-        let Some(index) = self.model.first_dirty_tab_index() else {
-            cx.quit();
+        let Some(index) = self.first_dirty_tab_index_for_quit() else {
+            self.finish_quit(cx);
             return;
         };
         let Some(TabCloseRequest::Unsaved(tab)) = self.model.close_request_for_tab(index) else {
-            cx.quit();
+            self.finish_quit(cx);
             return;
         };
 
-        match prompt_unsaved_close_decision(&tab.title) {
+        let decision = prompt_unsaved_close_decision(&tab.title);
+        self.apply_unsaved_quit_decision(tab.tab_id, decision, cx);
+    }
+
+    pub(crate) fn apply_unsaved_quit_decision(
+        &mut self,
+        tab_id: TabId,
+        decision: UnsavedCloseDecision,
+        cx: &mut Context<Self>,
+    ) {
+        match decision {
             UnsavedCloseDecision::Save => {
                 self.pending_after_save = Some(PendingAfterSave::Quit);
                 self.update_model(cx, true, |model| {
-                    model.request_save_tab(tab.tab_id);
+                    model.request_save_tab(tab_id);
                 });
             }
             UnsavedCloseDecision::Discard => {
+                self.cleanup_scratchpad_tab_file_by_id(tab_id);
                 self.update_model(cx, true, |model| {
-                    model.discard_close_tab_by_id(tab.tab_id);
+                    model.discard_close_tab_by_id(tab_id);
                 });
                 self.continue_quit_sequence(cx);
             }
@@ -474,6 +510,21 @@ impl LstGpuiApp {
                 });
             }
         }
+    }
+
+    fn first_dirty_tab_index_for_quit(&self) -> Option<usize> {
+        self.model.tabs().iter().position(|tab| {
+            tab.modified() && !(tab.is_scratchpad() && tab.buffer_text().trim().is_empty())
+        })
+    }
+
+    fn finish_quit(&mut self, cx: &mut Context<Self>) {
+        let text = self.model.active_tab().buffer_text();
+        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+        cx.write_to_primary(ClipboardItem::new_string(text.clone()));
+        persist_clipboards_after_exit(&text);
+        self.cleanup_empty_scratchpad_files();
+        cx.quit();
     }
 
     fn save_cancelled(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
@@ -549,6 +600,45 @@ impl LstGpuiApp {
         }
     }
 
+    fn apply_save_as_file_result(
+        &mut self,
+        result: SaveFileResult,
+        previous_scratchpad_path: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            SaveFileResult::Saved {
+                tab_id,
+                path,
+                stamp,
+            } => {
+                self.update_model(cx, true, |model| {
+                    model.save_as_finished_for_tab(tab_id, path.clone(), Some(stamp));
+                });
+                remove_previous_scratchpad_after_save_as(previous_scratchpad_path, &path);
+                self.finish_pending_after_save(tab_id, true, cx);
+            }
+            SaveFileResult::Failed {
+                tab_id,
+                path,
+                message,
+            } => {
+                self.update_model(cx, true, |model| {
+                    model.save_failed_for_tab(tab_id, path, message);
+                });
+                self.finish_pending_after_save(tab_id, false, cx);
+            }
+            SaveFileResult::Conflict {
+                tab_id,
+                path,
+                body,
+                disk_stamp,
+            } => {
+                self.handle_file_conflict(tab_id, path, body, disk_stamp, ConflictWrite::Save, cx);
+            }
+        }
+    }
+
     fn apply_autosave_completion(
         &mut self,
         completion: AutosaveCompletion,
@@ -590,6 +680,205 @@ impl LstGpuiApp {
             ),
         }
     }
+
+    pub(crate) fn request_new_tab(&mut self, cx: &mut Context<Self>) {
+        match create_scratchpad_note(self.scratchpad_dir_override()) {
+            Ok((path, file_stamp)) => {
+                self.update_model(cx, true, |model| {
+                    model.new_scratchpad_tab(path, file_stamp);
+                });
+            }
+            Err(err) => {
+                self.update_model(cx, true, |model| {
+                    model.new_tab();
+                    model.save_failed(PathBuf::from("scratchpad"), err.to_string());
+                });
+            }
+        }
+    }
+
+    fn scratchpad_dir_override(&self) -> Option<&Path> {
+        self.scratchpad_dir.as_deref().or_else(|| {
+            self.model
+                .tabs()
+                .iter()
+                .find_map(|tab| tab.is_scratchpad().then(|| tab.path()).flatten())
+                .and_then(|path| path.parent())
+        })
+    }
+
+    fn tab_is_empty_scratchpad(&self, index: usize) -> bool {
+        self.model
+            .tab(index)
+            .is_some_and(|tab| tab.is_scratchpad() && tab.buffer_text().trim().is_empty())
+    }
+
+    fn cleanup_scratchpad_tab_file(&self, index: usize) {
+        if let Some(path) = self
+            .model
+            .tab(index)
+            .filter(|tab| tab.is_scratchpad() && tab.buffer_text().trim().is_empty())
+            .and_then(ModelEditorTab::path)
+        {
+            remove_file_best_effort(path);
+        }
+    }
+
+    fn cleanup_scratchpad_tab_file_by_id(&self, tab_id: TabId) {
+        if let Some(path) = self
+            .model
+            .tab_by_id(tab_id)
+            .filter(|tab| tab.is_scratchpad() && tab.buffer_text().trim().is_empty())
+            .and_then(ModelEditorTab::path)
+        {
+            remove_file_best_effort(path);
+        }
+    }
+
+    fn cleanup_empty_scratchpad_files(&self) {
+        for tab in self.model.tabs() {
+            if tab.is_scratchpad() && tab.buffer_text().trim().is_empty() {
+                if let Some(path) = tab.path() {
+                    remove_file_best_effort(path);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn create_scratchpad_note(
+    scratchpad_dir_override: Option<&Path>,
+) -> io::Result<(PathBuf, FileStamp)> {
+    create_scratchpad_note_with_timestamp(scratchpad_dir_override, scratchpad_timestamp())
+}
+
+fn create_scratchpad_note_with_timestamp(
+    scratchpad_dir_override: Option<&Path>,
+    timestamp: String,
+) -> io::Result<(PathBuf, FileStamp)> {
+    let dir = scratchpad_dir(scratchpad_dir_override)?;
+    fs::create_dir_all(&dir)?;
+
+    for suffix in 0usize.. {
+        let file_name = if suffix == 0 {
+            format!("{timestamp}.md")
+        } else {
+            format!("{timestamp}_{suffix}.md")
+        };
+        let path = dir.join(file_name);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return file_stamp(&path).map(|stamp| (path, stamp)),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    unreachable!("unbounded scratchpad suffix loop should return")
+}
+
+pub(crate) fn scratchpad_dir(scratchpad_dir_override: Option<&Path>) -> io::Result<PathBuf> {
+    if let Some(dir) = scratchpad_dir_override {
+        return Ok(dir.to_path_buf());
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".local/share/lst"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME environment variable not set"))
+}
+
+fn scratchpad_timestamp() -> String {
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    format!(
+        "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    )
+}
+
+fn remove_file_best_effort(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => {}
+    }
+}
+
+fn remove_previous_scratchpad_after_save_as(
+    previous_scratchpad_path: Option<PathBuf>,
+    path: &Path,
+) {
+    if let Some(old) = previous_scratchpad_path.filter(|old| old != path) {
+        remove_file_best_effort(&old);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SystemSelection {
+    Clipboard,
+    Primary,
+}
+
+fn persist_clipboards_after_exit(text: &str) {
+    persist_selection_after_exit(SystemSelection::Clipboard, text);
+    persist_selection_after_exit(SystemSelection::Primary, text);
+}
+
+fn persist_selection_after_exit(selection: SystemSelection, text: &str) {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && spawn_clipboard_owner("wl-copy", wl_copy_args(selection), text).is_ok()
+    {
+        return;
+    }
+
+    if std::env::var_os("DISPLAY").is_some()
+        && spawn_clipboard_owner("xclip", xclip_args(selection), text).is_ok()
+    {
+        return;
+    }
+
+    if std::env::var_os("DISPLAY").is_some() {
+        let _ = spawn_clipboard_owner("xsel", xsel_args(selection), text);
+    }
+}
+
+fn wl_copy_args(selection: SystemSelection) -> &'static [&'static str] {
+    match selection {
+        SystemSelection::Clipboard => &[],
+        SystemSelection::Primary => &["--primary"],
+    }
+}
+
+fn xclip_args(selection: SystemSelection) -> &'static [&'static str] {
+    match selection {
+        SystemSelection::Clipboard => &["-selection", "clipboard", "-in"],
+        SystemSelection::Primary => &["-selection", "primary", "-in"],
+    }
+}
+
+fn xsel_args(selection: SystemSelection) -> &'static [&'static str] {
+    match selection {
+        SystemSelection::Clipboard => &["--clipboard", "--input"],
+        SystemSelection::Primary => &["--primary", "--input"],
+    }
+}
+
+fn spawn_clipboard_owner(program: &str, args: &[&str], text: &str) -> io::Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes())?;
+    }
+
+    Ok(())
 }
 
 fn autosave_temp_path(path: &Path, revision: u64) -> PathBuf {
@@ -903,6 +1192,49 @@ mod tests {
             text,
             Some(FileStamp::from_raw(0, Some(0))),
         )
+    }
+
+    #[test]
+    fn scratchpad_note_creation_uses_timestamped_names_and_collision_suffixes() {
+        let dir = temp_dir("scratchpad");
+        let timestamp = "2026-04-11_12-13-14".to_string();
+
+        let (first, first_stamp) =
+            create_scratchpad_note_with_timestamp(Some(&dir), timestamp.clone())
+                .expect("create first scratchpad");
+        let (second, second_stamp) = create_scratchpad_note_with_timestamp(Some(&dir), timestamp)
+            .expect("create second scratchpad");
+
+        assert_eq!(
+            first.file_name().and_then(|name| name.to_str()),
+            Some("2026-04-11_12-13-14.md")
+        );
+        assert_eq!(
+            second.file_name().and_then(|name| name.to_str()),
+            Some("2026-04-11_12-13-14_1.md")
+        );
+        assert_eq!(fs::read_to_string(&first).expect("read first"), "");
+        assert_eq!(first_stamp, file_stamp(&first).expect("first stamp"));
+        assert_eq!(second_stamp, file_stamp(&second).expect("second stamp"));
+
+        fs::remove_dir_all(dir).expect("remove test temp dir");
+    }
+
+    #[test]
+    fn successful_save_as_removes_previous_scratchpad_file_only_when_path_changes() {
+        let dir = temp_dir("scratchpad-save-as");
+        let old = dir.join("2026-04-11_12-13-14.md");
+        let same = old.clone();
+        let new = dir.join("saved.md");
+        fs::write(&old, "").expect("write old scratchpad");
+
+        remove_previous_scratchpad_after_save_as(Some(old.clone()), &same);
+        assert!(old.exists());
+
+        remove_previous_scratchpad_after_save_as(Some(old.clone()), &new);
+        assert!(!old.exists());
+
+        fs::remove_dir_all(dir).expect("remove test temp dir");
     }
 
     #[test]

@@ -27,6 +27,7 @@ pub enum EditorEffect {
         tab_id: TabId,
         suggested_name: String,
         body: String,
+        previous_scratchpad_path: Option<PathBuf>,
     },
     AutosaveFile {
         tab_id: TabId,

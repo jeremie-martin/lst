@@ -1,7 +1,4 @@
-use crate::ui::{
-    COLOR_CARET, COLOR_CURRENT_LINE, COLOR_GUTTER, COLOR_MUTED, COLOR_SELECTION, COLOR_SURFACE1,
-    COLOR_TEXT,
-};
+use crate::ui::theme::{metrics, role};
 use gpui::{
     fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString,
     TextRun, Window,
@@ -20,11 +17,6 @@ use std::{
 };
 
 use crate::syntax::{CachedSyntaxHighlights, SyntaxMode, SyntaxSpan};
-use crate::{
-    CODE_FONT_SIZE, CURSOR_WIDTH, EDITOR_LEFT_PAD, EDITOR_RIGHT_PAD, GUTTER_LEFT_PAD,
-    GUTTER_SEPARATOR_WIDTH, GUTTER_WIDTH, ROW_HEIGHT, VIEWPORT_OVERSCAN_LINES, WINDOW_HEIGHT,
-    WRAP_CHAR_WIDTH_FALLBACK,
-};
 
 #[derive(Clone)]
 struct CachedShapedLine {
@@ -76,7 +68,7 @@ pub(crate) struct CachedWrapLayout {
 }
 
 pub(crate) fn buffer_content_height(visual_rows: usize) -> Pixels {
-    px((visual_rows.max(1) as f32) * ROW_HEIGHT)
+    px((visual_rows.max(1) as f32) * metrics::ROW_HEIGHT)
 }
 
 fn trim_display_line(line: &str) -> &str {
@@ -184,9 +176,9 @@ fn text_runs_for_segment(
 
 pub(crate) fn code_origin_pad(show_gutter: bool) -> Pixels {
     if show_gutter {
-        px(GUTTER_WIDTH)
+        px(metrics::GUTTER_WIDTH)
     } else {
-        px(EDITOR_LEFT_PAD)
+        px(metrics::EDITOR_LEFT_PAD)
     }
 }
 
@@ -200,7 +192,7 @@ pub(crate) fn code_char_width(window: &mut Window) -> Pixels {
         &[TextRun {
             len: probe.len(),
             font: style.font(),
-            color: rgb(COLOR_TEXT).into(),
+            color: rgb(role::TEXT).into(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -211,7 +203,7 @@ pub(crate) fn code_char_width(window: &mut Window) -> Pixels {
     if shaped.width > px(0.0) {
         shaped.width / probe.chars().count() as f32
     } else {
-        px(WRAP_CHAR_WIDTH_FALLBACK)
+        px(metrics::WRAP_CHAR_WIDTH_FALLBACK)
     }
 }
 
@@ -228,13 +220,13 @@ fn wrap_columns_for_viewport(
 
     wrap_columns_with_gutter(
         viewport_width / px(1.0),
-        (char_width / px(1.0)).max(WRAP_CHAR_WIDTH_FALLBACK),
+        (char_width / px(1.0)).max(metrics::WRAP_CHAR_WIDTH_FALLBACK),
         line_count,
         show_gutter,
-        EDITOR_LEFT_PAD,
-        EDITOR_RIGHT_PAD,
-        GUTTER_LEFT_PAD,
-        GUTTER_SEPARATOR_WIDTH,
+        metrics::EDITOR_LEFT_PAD,
+        metrics::EDITOR_RIGHT_PAD,
+        metrics::GUTTER_LEFT_PAD,
+        metrics::GUTTER_SEPARATOR_WIDTH,
     )
 }
 
@@ -279,10 +271,10 @@ fn visible_visual_row_range(
     viewport_height: Pixels,
     total_rows: usize,
 ) -> std::ops::Range<usize> {
-    let start =
-        ((scroll_top / px(ROW_HEIGHT)).floor() as usize).saturating_sub(VIEWPORT_OVERSCAN_LINES);
-    let end = (((scroll_top + viewport_height) / px(ROW_HEIGHT)).ceil() as usize)
-        .saturating_add(VIEWPORT_OVERSCAN_LINES)
+    let start = ((scroll_top / px(metrics::ROW_HEIGHT)).floor() as usize)
+        .saturating_sub(metrics::VIEWPORT_OVERSCAN_LINES);
+    let end = (((scroll_top + viewport_height) / px(metrics::ROW_HEIGHT)).ceil() as usize)
+        .saturating_add(metrics::VIEWPORT_OVERSCAN_LINES)
         .min(total_rows.max(1));
     start..end.max(start.saturating_add(1))
 }
@@ -378,7 +370,7 @@ pub(crate) fn prepare_viewport_paint_state(
     let viewport_height = if bounds.size.height > px(0.0) {
         bounds.size.height
     } else {
-        px(WINDOW_HEIGHT)
+        px(metrics::WINDOW_HEIGHT)
     };
     let scroll_top = {
         let offset_y = -viewport_scroll.offset().y;
@@ -393,7 +385,7 @@ pub(crate) fn prepare_viewport_paint_state(
     let code_run = TextRun {
         len: 0,
         font: style.font(),
-        color: rgb(COLOR_TEXT).into(),
+        color: rgb(role::TEXT).into(),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -401,7 +393,7 @@ pub(crate) fn prepare_viewport_paint_state(
     let gutter_run = TextRun {
         len: 0,
         font: style.font(),
-        color: rgb(COLOR_MUTED).into(),
+        color: rgb(role::TEXT_MUTED).into(),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -460,7 +452,7 @@ pub(crate) fn prepare_viewport_paint_state(
                 continue;
             }
 
-            let row_top = bounds.top() + px((visual_row as f32) * ROW_HEIGHT) - scroll_top;
+            let row_top = bounds.top() + px((visual_row as f32) * metrics::ROW_HEIGHT) - scroll_top;
             let segment_start_char = line_start_char + segment.start_col;
             let segment_end_char = line_start_char + segment.end_col;
             let (code_runs, style_key) = text_runs_for_segment(
@@ -530,22 +522,22 @@ pub(crate) fn paint_viewport(
     cx: &mut App,
 ) {
     let line_height = window.line_height();
-    let gutter_origin_x = bounds.left() + px(GUTTER_LEFT_PAD);
-    let gutter_width = px(GUTTER_WIDTH - GUTTER_LEFT_PAD - 8.0);
+    let gutter_origin_x = bounds.left() + px(metrics::GUTTER_LEFT_PAD);
+    let gutter_width = px(metrics::GUTTER_WIDTH - metrics::GUTTER_LEFT_PAD - 8.0);
     let code_origin_x = bounds.left() + code_origin_pad(show_gutter);
 
     for row in paint_state.rows {
         let cursor_in_row = row_contains_cursor(&row, cursor_char);
         let row_bounds = Bounds::new(
             point(bounds.left(), row.row_top),
-            size(bounds.size.width, px(ROW_HEIGHT)),
+            size(bounds.size.width, px(metrics::ROW_HEIGHT)),
         );
         window.paint_quad(fill(
             row_bounds,
             if cursor_in_row {
-                rgb(COLOR_CURRENT_LINE)
+                rgb(role::CURRENT_LINE_BG)
             } else {
-                rgb(COLOR_SURFACE1)
+                rgb(role::EDITOR_BG)
             },
         ));
 
@@ -553,9 +545,9 @@ pub(crate) fn paint_viewport(
             window.paint_quad(fill(
                 Bounds::new(
                     point(bounds.left(), row.row_top),
-                    size(px(GUTTER_WIDTH), px(ROW_HEIGHT)),
+                    size(px(metrics::GUTTER_WIDTH), px(metrics::ROW_HEIGHT)),
                 ),
-                rgb(COLOR_GUTTER),
+                rgb(role::GUTTER_BG),
             ));
         }
 
@@ -576,11 +568,11 @@ pub(crate) fn paint_viewport(
                     Bounds::from_corners(
                         point(start_x, row.row_top),
                         point(
-                            end_x.max(start_x + px(CURSOR_WIDTH)),
-                            row.row_top + px(ROW_HEIGHT),
+                            end_x.max(start_x + px(metrics::CURSOR_WIDTH)),
+                            row.row_top + px(metrics::ROW_HEIGHT),
                         ),
                     ),
-                    rgb(COLOR_SELECTION),
+                    rgb(role::SELECTION_BG),
                 ));
             }
         }
@@ -604,20 +596,20 @@ pub(crate) fn paint_viewport(
                         &row,
                         (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)),
                     )
-                    .unwrap_or_else(|| cursor_x + px(CODE_FONT_SIZE * 0.55));
-                (next_x - cursor_x).max(px(CURSOR_WIDTH * 2.0))
+                    .unwrap_or_else(|| cursor_x + px(metrics::CODE_FONT_SIZE * 0.55));
+                (next_x - cursor_x).max(px(metrics::CURSOR_WIDTH * 2.0))
             } else {
-                px(CURSOR_WIDTH)
+                px(metrics::CURSOR_WIDTH)
             };
             window.paint_quad(fill(
                 Bounds::new(
                     point(cursor_x, row.row_top),
-                    size(cursor_width, px(ROW_HEIGHT)),
+                    size(cursor_width, px(metrics::ROW_HEIGHT)),
                 ),
                 if vim_mode == vim::Mode::Normal {
-                    rgb(COLOR_SELECTION)
+                    rgb(role::SELECTION_BG)
                 } else {
-                    rgb(COLOR_CARET)
+                    rgb(role::CARET)
                 },
             ));
         }
