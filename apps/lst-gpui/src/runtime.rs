@@ -811,9 +811,35 @@ fn remove_previous_scratchpad_after_save_as(
     previous_scratchpad_path: Option<PathBuf>,
     path: &Path,
 ) {
-    if let Some(old) = previous_scratchpad_path.filter(|old| old != path) {
+    if let Some(old) = previous_scratchpad_path.filter(|old| !paths_refer_to_same_file(old, path)) {
         remove_file_best_effort(&old);
     }
+}
+
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
+    if left == right || files_have_same_identity(left, right) {
+        return true;
+    }
+
+    matches!(
+        (fs::canonicalize(left), fs::canonicalize(right)),
+        (Ok(left), Ok(right)) if left == right
+    )
+}
+
+#[cfg(unix)]
+fn files_have_same_identity(left: &Path, right: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    match (fs::metadata(left), fs::metadata(right)) {
+        (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn files_have_same_identity(_left: &Path, _right: &Path) -> bool {
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -1233,6 +1259,26 @@ mod tests {
 
         remove_previous_scratchpad_after_save_as(Some(old.clone()), &new);
         assert!(!old.exists());
+
+        fs::remove_dir_all(dir).expect("remove test temp dir");
+    }
+
+    #[test]
+    fn successful_save_as_keeps_target_when_path_spelling_changes() {
+        let dir = temp_dir("scratchpad-save-as-same-file");
+        let nested = dir.join("nested");
+        fs::create_dir(&nested).expect("create nested test dir");
+        let saved = dir.join("saved.md");
+        let same_file = nested.join("..").join("saved.md");
+        fs::write(&saved, "saved body").expect("write saved file");
+
+        assert_ne!(same_file, saved);
+        remove_previous_scratchpad_after_save_as(Some(same_file), &saved);
+
+        assert_eq!(
+            fs::read_to_string(&saved).expect("read saved file"),
+            "saved body"
+        );
 
         fs::remove_dir_all(dir).expect("remove test temp dir");
     }
