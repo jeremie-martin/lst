@@ -483,7 +483,7 @@ pub(crate) fn prepare_viewport_paint_state(
                 shape_cached_line(
                     &mut cache.gutter_lines,
                     line_ix,
-                    SharedString::from(format!("{:>6}", line_ix + 1)),
+                    SharedString::from(format!("{:>3}", line_ix + 1)),
                     0,
                     &gutter_run,
                     font_size,

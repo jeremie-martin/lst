@@ -94,7 +94,7 @@ pub mod metrics {
     pub const INPUT_TEXT_SIZE: f32 = 12.0;
 
     pub const ROW_HEIGHT: f32 = 22.0;
-    pub const GUTTER_WIDTH: f32 = 76.0;
+    pub const GUTTER_WIDTH: f32 = 58.0;
     pub const CODE_FONT_SIZE: f32 = 13.0;
     pub const CURSOR_WIDTH: f32 = 2.0;
     pub const VIEWPORT_OVERSCAN_LINES: usize = 6;

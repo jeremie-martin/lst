@@ -1,4 +1,4 @@
-const MIN_LINE_NUMBER_DIGITS: usize = 4;
+const MIN_LINE_NUMBER_DIGITS: usize = 3;
 const LINE_NUMBER_GAP_CHARS: usize = 1;
 const TAB_WIDTH: usize = 8;
 
@@ -363,6 +363,14 @@ fn trim_display_line(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_number_width_reserves_three_digits() {
+        assert_eq!(line_number_digits_width(1), 3);
+        assert_eq!(line_number_digits_width(99), 3);
+        assert_eq!(line_number_digits_width(100), 3);
+        assert_eq!(line_number_digits_width(1000), 4);
+    }
 
     #[test]
     fn wrap_segments_follow_visual_rows() {
