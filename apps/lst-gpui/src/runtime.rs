@@ -615,7 +615,11 @@ impl LstGpuiApp {
                 self.update_model(cx, true, |model| {
                     model.save_as_finished_for_tab(tab_id, path.clone(), Some(stamp));
                 });
-                remove_previous_scratchpad_after_save_as(previous_scratchpad_path, &path);
+                remove_previous_scratchpad_after_save_as(
+                    previous_scratchpad_path,
+                    &path,
+                    self.model.tabs(),
+                );
                 self.finish_pending_after_save(tab_id, true, cx);
             }
             SaveFileResult::Failed {
@@ -714,24 +718,26 @@ impl LstGpuiApp {
     }
 
     fn cleanup_scratchpad_tab_file(&self, index: usize) {
-        if let Some(path) = self
+        if let Some(tab) = self
             .model
             .tab(index)
             .filter(|tab| tab.is_scratchpad() && tab.buffer_text().trim().is_empty())
-            .and_then(ModelEditorTab::path)
         {
-            remove_file_best_effort(path);
+            if let Some(path) = tab.path() {
+                remove_scratchpad_file_if_unreferenced(self.model.tabs(), tab.id(), path);
+            }
         }
     }
 
     fn cleanup_scratchpad_tab_file_by_id(&self, tab_id: TabId) {
-        if let Some(path) = self
+        if let Some(tab) = self
             .model
             .tab_by_id(tab_id)
             .filter(|tab| tab.is_scratchpad() && tab.buffer_text().trim().is_empty())
-            .and_then(ModelEditorTab::path)
         {
-            remove_file_best_effort(path);
+            if let Some(path) = tab.path() {
+                remove_scratchpad_file_if_unreferenced(self.model.tabs(), tab.id(), path);
+            }
         }
     }
 
@@ -739,7 +745,7 @@ impl LstGpuiApp {
         for tab in self.model.tabs() {
             if tab.is_scratchpad() && tab.buffer_text().trim().is_empty() {
                 if let Some(path) = tab.path() {
-                    remove_file_best_effort(path);
+                    remove_scratchpad_file_if_unreferenced(self.model.tabs(), tab.id(), path);
                 }
             }
         }
@@ -810,10 +816,36 @@ fn remove_file_best_effort(path: &Path) {
 fn remove_previous_scratchpad_after_save_as(
     previous_scratchpad_path: Option<PathBuf>,
     path: &Path,
+    open_tabs: &[ModelEditorTab],
 ) {
-    if let Some(old) = previous_scratchpad_path.filter(|old| !paths_refer_to_same_file(old, path)) {
+    if let Some(old) = previous_scratchpad_path.filter(|old| {
+        !paths_refer_to_same_file(old, path) && !path_is_open_in_another_tab(open_tabs, old, None)
+    }) {
         remove_file_best_effort(&old);
     }
+}
+
+fn remove_scratchpad_file_if_unreferenced(
+    open_tabs: &[ModelEditorTab],
+    tab_id: TabId,
+    path: &Path,
+) {
+    if !path_is_open_in_another_tab(open_tabs, path, Some(tab_id)) {
+        remove_file_best_effort(path);
+    }
+}
+
+fn path_is_open_in_another_tab(
+    open_tabs: &[ModelEditorTab],
+    path: &Path,
+    ignored_tab_id: Option<TabId>,
+) -> bool {
+    open_tabs.iter().any(|tab| {
+        ignored_tab_id != Some(tab.id())
+            && tab
+                .path()
+                .is_some_and(|tab_path| paths_refer_to_same_file(tab_path, path))
+    })
 }
 
 fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
@@ -1220,6 +1252,23 @@ mod tests {
         )
     }
 
+    fn tab_for_path_with_id(id: u64, path: PathBuf, text: &str) -> ModelEditorTab {
+        ModelEditorTab::from_path_with_stamp(
+            TabId::from_raw(id),
+            path,
+            text,
+            Some(FileStamp::from_raw(0, Some(0))),
+        )
+    }
+
+    fn scratchpad_for_path_with_id(id: u64, path: PathBuf) -> ModelEditorTab {
+        ModelEditorTab::scratchpad_with_stamp(
+            TabId::from_raw(id),
+            path,
+            FileStamp::from_raw(0, Some(0)),
+        )
+    }
+
     #[test]
     fn scratchpad_note_creation_uses_timestamped_names_and_collision_suffixes() {
         let dir = temp_dir("scratchpad");
@@ -1254,10 +1303,10 @@ mod tests {
         let new = dir.join("saved.md");
         fs::write(&old, "").expect("write old scratchpad");
 
-        remove_previous_scratchpad_after_save_as(Some(old.clone()), &same);
+        remove_previous_scratchpad_after_save_as(Some(old.clone()), &same, &[]);
         assert!(old.exists());
 
-        remove_previous_scratchpad_after_save_as(Some(old.clone()), &new);
+        remove_previous_scratchpad_after_save_as(Some(old.clone()), &new, &[]);
         assert!(!old.exists());
 
         fs::remove_dir_all(dir).expect("remove test temp dir");
@@ -1273,11 +1322,50 @@ mod tests {
         fs::write(&saved, "saved body").expect("write saved file");
 
         assert_ne!(same_file, saved);
-        remove_previous_scratchpad_after_save_as(Some(same_file), &saved);
+        remove_previous_scratchpad_after_save_as(Some(same_file), &saved, &[]);
 
         assert_eq!(
             fs::read_to_string(&saved).expect("read saved file"),
             "saved body"
+        );
+
+        fs::remove_dir_all(dir).expect("remove test temp dir");
+    }
+
+    #[test]
+    fn successful_save_as_keeps_source_when_another_tab_still_uses_it() {
+        let dir = temp_dir("scratchpad-save-as-source-open");
+        let old = dir.join("2026-04-11_12-13-14.md");
+        let new = dir.join("saved.md");
+        fs::write(&old, "shared scratchpad").expect("write old scratchpad");
+        fs::write(&new, "saved body").expect("write saved file");
+        let open_tabs = vec![tab_for_path_with_id(2, old.clone(), "other tab")];
+
+        remove_previous_scratchpad_after_save_as(Some(old.clone()), &new, &open_tabs);
+
+        assert_eq!(
+            fs::read_to_string(&old).expect("read old scratchpad"),
+            "shared scratchpad"
+        );
+
+        fs::remove_dir_all(dir).expect("remove test temp dir");
+    }
+
+    #[test]
+    fn empty_scratchpad_cleanup_keeps_files_open_in_another_tab() {
+        let dir = temp_dir("scratchpad-cleanup-shared");
+        let path = dir.join("2026-04-11_12-13-14.md");
+        fs::write(&path, "other tab content").expect("write scratchpad");
+        let open_tabs = vec![
+            scratchpad_for_path_with_id(1, path.clone()),
+            tab_for_path_with_id(2, path.clone(), "other tab content"),
+        ];
+
+        remove_scratchpad_file_if_unreferenced(&open_tabs, TabId::from_raw(1), &path);
+
+        assert_eq!(
+            fs::read_to_string(&path).expect("read shared scratchpad"),
+            "other tab content"
         );
 
         fs::remove_dir_all(dir).expect("remove test temp dir");
