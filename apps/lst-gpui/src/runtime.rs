@@ -522,7 +522,14 @@ impl LstGpuiApp {
         let text = self.model.active_tab().buffer_text();
         persist_clipboards_after_exit(&text);
         self.cleanup_empty_scratchpad_files();
-        cx.quit();
+        // Spawn quit onto the next event-loop iteration so it doesn't
+        // re-enter the X11 client RefCell that is still borrowed by the
+        // WM_DELETE_WINDOW handler (same idea as the macOS platform's
+        // async quit via dispatch_async_f).
+        cx.spawn(async move |_, cx| {
+            let _ = cx.update(|app| app.quit());
+        })
+        .detach();
     }
 
     fn save_cancelled(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
