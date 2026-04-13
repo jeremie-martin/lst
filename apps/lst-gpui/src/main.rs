@@ -30,7 +30,14 @@ use lst_editor::{EditorModel, EditorTab as ModelEditorTab, FocusTarget, TabId, U
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
-use std::{cell::RefCell, collections::HashSet, path::PathBuf, process, rc::Rc, time::Instant};
+use std::{
+    cell::RefCell,
+    collections::HashSet,
+    path::PathBuf,
+    process,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_path, CachedSyntaxHighlights, SyntaxHighlightJobKey,
     SyntaxMode, SyntaxSpan,
@@ -974,7 +981,16 @@ fn main() {
                     false
                 });
                 window.focus(&view.focus_handle(cx));
+                window.activate_window();
                 cx.activate(true);
+                window
+                    .spawn(cx, async move |cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(250))
+                            .await;
+                        let _ = cx.update(|window, _cx| window.refresh());
+                    })
+                    .detach();
                 view.start_background_tasks(window, cx);
             })
             .unwrap();
