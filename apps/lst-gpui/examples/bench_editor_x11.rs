@@ -1835,13 +1835,15 @@ fn editor_path() -> Result<PathBuf, Box<dyn Error>> {
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| io::Error::other("benchmark binary has no profile directory"))?;
-    let sibling = profile_dir.join("lst-gpui");
-    if sibling.exists() {
-        return Ok(sibling);
+    for name in ["lst", "lst-gpui"] {
+        let sibling = profile_dir.join(name);
+        if sibling.exists() {
+            return Ok(sibling);
+        }
     }
 
     Err(io::Error::other(
-        "could not find sibling editor binary 'lst-gpui'; build with `cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11`",
+        "could not find sibling editor binary 'lst'; build with `cargo build --release -p lst-gpui --bin lst --example bench_editor_x11`",
     )
     .into())
 }

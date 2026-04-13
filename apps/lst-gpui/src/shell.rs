@@ -1,5 +1,5 @@
 use crate::ui::{
-    theme::{metrics, role},
+    theme::{metrics, role, typography},
     IconButton, IconKind, Tab as UiTab, TabBar,
 };
 use gpui::{
@@ -137,7 +137,7 @@ impl LstGpuiApp {
             .child(
                 div()
                     .flex_none()
-                    .font_family(".ZedMono")
+                    .font(typography::primary_font())
                     .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
                     .text_color(rgb(role::TEXT_MUTED))
                     .child(match_label),
@@ -211,7 +211,7 @@ impl LstGpuiApp {
             .child(
                 div()
                     .flex_none()
-                    .font_family(".ZedMono")
+                    .font(typography::primary_font())
                     .text_size(metrics::px_for_scale(12.0, scale))
                     .text_color(rgb(role::TEXT_MUTED))
                     .child(self.status_details()),
@@ -294,6 +294,7 @@ impl Render for LstGpuiApp {
             .size_full()
             .bg(rgb(role::APP_BG))
             .text_color(rgb(role::TEXT))
+            .font(typography::primary_font())
             .child(
                 div()
                     .flex_grow()
@@ -325,7 +326,7 @@ impl Render for LstGpuiApp {
                                     .border_1()
                                     .border_color(rgb(role::BORDER))
                                     .bg(rgb(role::EDITOR_BG))
-                                    .font_family(".ZedMono")
+                                    .font(typography::primary_font())
                                     .text_size(metrics::px_for_scale(
                                         metrics::CODE_FONT_SIZE,
                                         self.ui_scale(),

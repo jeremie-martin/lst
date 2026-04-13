@@ -2,22 +2,29 @@
 set -euo pipefail
 
 prefix="${LST_PREFIX:-$HOME/.local}"
-font_path="/usr/share/fonts/jetbrains-mono/JetBrainsMono[wght].ttf"
 
 if ! command -v cargo >/dev/null 2>&1; then
     echo "cargo is required to install lst" >&2
     exit 1
 fi
 
-if [[ ! -f "$font_path" ]]; then
-    echo "JetBrains Mono is required at $font_path" >&2
+if ! command -v fc-match >/dev/null 2>&1; then
+    echo "fontconfig is required to verify the TX-02 font" >&2
     exit 1
 fi
 
-cargo install --path apps/lst-gpui --locked --root "$prefix"
+if ! fc-match 'TX\-02' | grep -qi 'TX-02'; then
+    echo "TX-02 is required. Install it and refresh fontconfig before installing lst." >&2
+    exit 1
+fi
+
+cargo install --path apps/lst-gpui --locked --root "$prefix" --force --bin lst
+ln -sf lst "$prefix/bin/lst-gpui"
 
 cat <<EOF
-Installed lst-gpui to $prefix/bin/lst-gpui
+Installed the active GPUI editor to:
+  $prefix/bin/lst
+  $prefix/bin/lst-gpui -> lst
 
 Make sure $prefix/bin is on your PATH.
 EOF

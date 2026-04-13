@@ -197,18 +197,23 @@ fn editor_binary() -> Result<PathBuf, Box<dyn Error>> {
     if let Some(path) = env::var_os("LST_GPUI_BIN") {
         return Ok(PathBuf::from(path));
     }
+    if let Some(path) = option_env!("CARGO_BIN_EXE_lst") {
+        return Ok(PathBuf::from(path));
+    }
     if let Some(path) = option_env!("CARGO_BIN_EXE_lst-gpui") {
         return Ok(PathBuf::from(path));
     }
 
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let fallback = manifest_dir.join("../../target/debug/lst-gpui");
-    if fallback.exists() {
-        return Ok(fallback);
+    for name in ["lst", "lst-gpui"] {
+        let fallback = manifest_dir.join("../../target/debug").join(name);
+        if fallback.exists() {
+            return Ok(fallback);
+        }
     }
 
     Err(io::Error::other(
-        "could not find lst-gpui binary; run `cargo build -p lst-gpui --bin lst-gpui` or set LST_GPUI_BIN",
+        "could not find lst binary; run `cargo build -p lst-gpui --bin lst` or set LST_GPUI_BIN",
     )
     .into())
 }

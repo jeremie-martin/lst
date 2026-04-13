@@ -15,6 +15,9 @@ DISPLAY=:1 cargo run -- --title "lst GPUI"
 DISPLAY=:1 cargo run -- --scratchpad-dir /path/to/notes
 ```
 
+The installed command is `lst`. The installer also creates a `lst-gpui`
+compatibility alias for older scripts.
+
 ## Status
 
 - `cargo check` passes for this crate.
@@ -26,7 +29,7 @@ DISPLAY=:1 cargo run -- --scratchpad-dir /path/to/notes
 ## Benchmark
 
 ```sh
-cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11
+cargo build --release -p lst-gpui --bin lst --example bench_editor_x11
 DISPLAY=:1 ../../target/release/examples/bench_editor_x11 --scenario all --repetitions 1 --priming 0
 ```
 

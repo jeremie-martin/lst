@@ -1,4 +1,4 @@
-use gpui::{px, Pixels};
+use gpui::{font, px, Font, FontFallbacks, Pixels};
 
 pub mod palette {
     pub const CHROME: u32 = 0x181818;
@@ -66,6 +66,29 @@ pub mod syntax {
     pub const ESCAPE: u32 = palette::SYNTAX_GOLD;
     pub const PUNCTUATION: u32 = role::TEXT_MUTED;
     pub const LABEL: u32 = palette::SYNTAX_LIGHT_BLUE;
+}
+
+pub mod typography {
+    use super::{font, Font, FontFallbacks};
+    use std::sync::OnceLock;
+
+    pub const PRIMARY_FONT_FAMILY: &str = "TX-02";
+
+    pub fn primary_font() -> Font {
+        static FONT: OnceLock<Font> = OnceLock::new();
+
+        FONT.get_or_init(|| {
+            let mut font = font(PRIMARY_FONT_FAMILY);
+            font.fallbacks = Some(FontFallbacks::from_fonts(vec![
+                "JetBrains Mono".to_string(),
+                ".ZedMono".to_string(),
+                "Lilex".to_string(),
+                "IBM Plex Mono".to_string(),
+            ]));
+            font
+        })
+        .clone()
+    }
 }
 
 pub mod metrics {

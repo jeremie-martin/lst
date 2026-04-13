@@ -940,9 +940,10 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(gpui::TitlebarOptions {
-                    title: Some(window_title.into()),
+                    title: Some(window_title.clone().into()),
                     ..Default::default()
                 }),
+                app_id: Some("lst".to_string()),
                 ..Default::default()
             },
             move |_, cx| {
@@ -961,6 +962,7 @@ fn main() {
 
         window
             .update(cx, |view, window, cx| {
+                window.set_window_title(&window_title);
                 let entity = cx.entity();
                 window.on_window_should_close(cx, move |_window, cx| {
                     let entity = entity.clone();
