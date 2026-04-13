@@ -36,7 +36,7 @@ use std::{
     path::PathBuf,
     process,
     rc::Rc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_path, CachedSyntaxHighlights, SyntaxHighlightJobKey,
@@ -932,6 +932,12 @@ fn main() {
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys(editor_keybindings());
         cx.bind_keys(input_keybindings());
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
 
         let bounds = Bounds::centered(
             None,
@@ -973,24 +979,14 @@ fn main() {
                 let entity = cx.entity();
                 window.on_window_should_close(cx, move |_window, cx| {
                     let entity = entity.clone();
-                    cx.defer(move |cx| {
-                        let _ = entity.update(cx, |view, cx| {
-                            view.request_quit(cx);
-                        });
+                    let _ = entity.update(cx, |view, cx| {
+                        view.request_quit(cx);
                     });
                     false
                 });
                 window.focus(&view.focus_handle(cx));
                 window.activate_window();
                 cx.activate(true);
-                window
-                    .spawn(cx, async move |cx| {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(250))
-                            .await;
-                        let _ = cx.update(|window, _cx| window.refresh());
-                    })
-                    .detach();
                 view.start_background_tasks(window, cx);
             })
             .unwrap();

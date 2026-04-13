@@ -520,18 +520,25 @@ impl LstGpuiApp {
 
     fn finish_quit(&mut self, cx: &mut Context<Self>) {
         let text = self.model.active_tab().buffer_text();
-        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-        cx.write_to_primary(ClipboardItem::new_string(text.clone()));
         persist_clipboards_after_exit(&text);
         self.cleanup_empty_scratchpad_files();
-        // Spawn quit onto the next event-loop iteration so it doesn't
-        // re-enter the X11 client RefCell that is still borrowed by the
-        // WM_DELETE_WINDOW handler (same idea as the macOS platform's
-        // async quit via dispatch_async_f).
-        cx.spawn(async move |_, cx| {
-            let _ = cx.update(|app| app.quit());
-        })
-        .detach();
+        // On X11, WM_DELETE_WINDOW handling already holds GPUI's X11 client
+        // RefCell. Real builds rely on the external clipboard owner above,
+        // avoid in-process clipboard writes here, and exit after cleanup so
+        // the platform loop cannot remain alive with no windows.
+        cx.defer(move |app| {
+            #[cfg(test)]
+            {
+                app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                app.write_to_primary(ClipboardItem::new_string(text));
+                app.quit();
+            }
+            #[cfg(not(test))]
+            {
+                let _ = app;
+                process::exit(0);
+            }
+        });
     }
 
     fn save_cancelled(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
