@@ -520,8 +520,6 @@ impl LstGpuiApp {
 
     fn finish_quit(&mut self, cx: &mut Context<Self>) {
         let text = self.model.active_tab().buffer_text();
-        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-        cx.write_to_primary(ClipboardItem::new_string(text.clone()));
         persist_clipboards_after_exit(&text);
         self.cleanup_empty_scratchpad_files();
         // Spawn quit onto the next event-loop iteration so it doesn't
