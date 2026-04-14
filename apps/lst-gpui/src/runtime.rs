@@ -520,11 +520,20 @@ impl LstGpuiApp {
 
     fn finish_quit(&mut self, cx: &mut Context<Self>) {
         let text = self.model.active_tab().buffer_text();
-        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-        cx.write_to_primary(ClipboardItem::new_string(text.clone()));
         persist_clipboards_after_exit(&text);
         self.cleanup_empty_scratchpad_files();
-        cx.quit();
+        // X11 WM_DELETE_WINDOW already holds GPUI's X11 client RefCell,
+        // so defer exit until the current frame releases it. Real builds
+        // rely on the external clipboard owner above instead of in-process
+        // writes (which would re-enter that same RefCell).
+        #[cfg(test)]
+        cx.defer(move |app| {
+            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+            app.write_to_primary(ClipboardItem::new_string(text));
+            app.quit();
+        });
+        #[cfg(not(test))]
+        cx.defer(|_| process::exit(0));
     }
 
     fn save_cancelled(&mut self, tab_id: TabId, cx: &mut Context<Self>) {

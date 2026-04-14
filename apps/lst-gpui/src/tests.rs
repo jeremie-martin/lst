@@ -715,6 +715,7 @@ fn dirty_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
     view.update(cx, |app, cx| {
         app.apply_unsaved_quit_decision(tab_id, crate::runtime::UnsavedCloseDecision::Save, cx);
     });
+    cx.run_until_parked();
 
     assert_eq!(
         std::fs::read_to_string(&path).expect("read quit-save file"),
@@ -755,6 +756,7 @@ fn dirty_scratchpad_quit_save_writes_before_copying_clipboards(cx: &mut TestAppC
     view.update(cx, |app, cx| {
         app.apply_unsaved_quit_decision(tab_id, crate::runtime::UnsavedCloseDecision::Save, cx);
     });
+    cx.run_until_parked();
 
     assert_eq!(
         std::fs::read_to_string(&path).expect("read saved scratchpad"),
@@ -788,6 +790,7 @@ fn quit_copies_active_text_to_clipboard_and_primary(cx: &mut TestAppContext) {
     view.update(cx, |app, cx| {
         app.request_quit(cx);
     });
+    cx.run_until_parked();
 
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),

@@ -30,7 +30,14 @@ use lst_editor::{EditorModel, EditorTab as ModelEditorTab, FocusTarget, TabId, U
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
-use std::{cell::RefCell, collections::HashSet, path::PathBuf, process, rc::Rc, time::Instant};
+use std::{
+    cell::RefCell,
+    collections::HashSet,
+    path::PathBuf,
+    process,
+    rc::Rc,
+    time::Instant,
+};
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_path, CachedSyntaxHighlights, SyntaxHighlightJobKey,
     SyntaxMode, SyntaxSpan,
@@ -925,6 +932,12 @@ fn main() {
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys(editor_keybindings());
         cx.bind_keys(input_keybindings());
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
 
         let bounds = Bounds::centered(
             None,
@@ -966,14 +979,13 @@ fn main() {
                 let entity = cx.entity();
                 window.on_window_should_close(cx, move |_window, cx| {
                     let entity = entity.clone();
-                    cx.defer(move |cx| {
-                        let _ = entity.update(cx, |view, cx| {
-                            view.request_quit(cx);
-                        });
+                    let _ = entity.update(cx, |view, cx| {
+                        view.request_quit(cx);
                     });
                     false
                 });
                 window.focus(&view.focus_handle(cx));
+                window.activate_window();
                 cx.activate(true);
                 view.start_background_tasks(window, cx);
             })
