@@ -9,10 +9,18 @@ pub enum FocusTarget {
     GotoLine,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RevealIntent {
+    NearestEdge,
+    Center,
+    Top,
+    Bottom,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditorEffect {
     Focus(FocusTarget),
-    RevealCursor,
+    Reveal(RevealIntent),
     WriteClipboard(String),
     WritePrimary(String),
     ReadClipboard,

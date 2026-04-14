@@ -218,7 +218,7 @@ impl LstGpuiApp {
             )
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
             if self.model.goto_line().is_some() {
                 self.update_model(cx, true, |model| {
@@ -236,7 +236,7 @@ impl LstGpuiApp {
             }
         }
 
-        let _ = self.maybe_handle_vim_key(event, cx);
+        let _ = self.maybe_handle_vim_key(event, window, cx);
     }
 }
 

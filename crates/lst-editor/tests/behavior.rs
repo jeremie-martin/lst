@@ -4,7 +4,7 @@ use lst_editor::{
         Key as VimKey, Mode as VimMode, Modifiers as VimModifiers, NamedKey as VimNamedKey,
         TextSnapshot as VimTextSnapshot, VimCommand, VimState,
     },
-    EditorEffect, EditorModel, EditorTab, FocusTarget, TabId, UndoBoundary,
+    EditorEffect, EditorModel, EditorTab, FocusTarget, RevealIntent, TabId, UndoBoundary,
 };
 
 fn enter_vim_normal(model: &mut EditorModel) {
@@ -275,7 +275,9 @@ fn movement_and_selection_are_behavioral_commands() {
 
     model.move_word(true, true);
     assert_eq!(model.snapshot().selection, 11..16);
-    assert!(model.drain_effects().contains(&EditorEffect::RevealCursor));
+    assert!(model
+        .drain_effects()
+        .contains(&EditorEffect::Reveal(RevealIntent::NearestEdge)));
 }
 
 #[test]
@@ -488,7 +490,7 @@ fn clipboard_commands_emit_boundary_effects_without_fakes() {
         vec![
             EditorEffect::WriteClipboard("hello".into()),
             EditorEffect::WritePrimary("hello".into()),
-            EditorEffect::RevealCursor
+            EditorEffect::Reveal(RevealIntent::NearestEdge)
         ]
     );
 }
@@ -817,11 +819,11 @@ fn vim_delete_and_paste_execute_against_real_document() {
     );
     enter_vim_normal(&mut model);
 
-    model.handle_vim_key(VimKey::Character("d".into()), VimModifiers::default());
-    model.handle_vim_key(VimKey::Character("d".into()), VimModifiers::default());
+    model.handle_vim_key(VimKey::Character("d".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("d".into()), VimModifiers::default(), 80);
     assert_eq!(model.snapshot().text, "beta");
 
-    model.handle_vim_key(VimKey::Character("p".into()), VimModifiers::default());
+    model.handle_vim_key(VimKey::Character("p".into()), VimModifiers::default(), 80);
     assert_eq!(model.snapshot().text, "beta\nalpha");
 }
 
@@ -838,7 +840,7 @@ fn vim_search_word_under_cursor_updates_find_behaviorally() {
     );
     enter_vim_normal(&mut model);
 
-    model.handle_vim_key(VimKey::Character("*".into()), VimModifiers::default());
+    model.handle_vim_key(VimKey::Character("*".into()), VimModifiers::default(), 80);
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.find_query, "one");
@@ -851,7 +853,7 @@ fn vim_mode_and_pending_are_visible_in_snapshot() {
     let mut model = EditorModel::empty();
     enter_vim_normal(&mut model);
 
-    model.handle_vim_key(VimKey::Character("d".into()), VimModifiers::default());
+    model.handle_vim_key(VimKey::Character("d".into()), VimModifiers::default(), 80);
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.vim_mode, VimMode::Normal);

@@ -3,6 +3,7 @@
 //! Pure keystroke to command translation. The caller executes commands against
 //! whatever editor surface owns the document state.
 
+use crate::effect::RevealIntent;
 use crate::position::Position;
 use std::sync::Arc;
 
@@ -31,13 +32,25 @@ pub enum NamedKey {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Modifiers {
     pub command: bool,
+    pub control: bool,
 }
 
 impl Modifiers {
-    pub const COMMAND: Self = Self { command: true };
+    pub const COMMAND: Self = Self {
+        command: true,
+        control: false,
+    };
+    pub const CONTROL: Self = Self {
+        command: false,
+        control: true,
+    };
 
     pub fn command(self) -> bool {
         self.command
+    }
+
+    pub fn control(self) -> bool {
+        self.control
     }
 }
 
@@ -137,6 +150,14 @@ pub enum VimCommand {
         last: usize,
         uppercase: bool,
     },
+    HalfPageDown,
+    HalfPageUp,
+    PageDown,
+    PageUp,
+    MoveToScreenTop,
+    MoveToScreenMiddle,
+    MoveToScreenBottom,
+    ScrollCursor(RevealIntent),
     Noop,
 }
 
@@ -345,6 +366,12 @@ impl VimState {
         mods: Modifiers,
         text: &TextSnapshot,
     ) -> Vec<VimCommand> {
+        if let Some(cmd) = ctrl_page_command(key, mods) {
+            self.clear_pending();
+            self.clear_preferred_column();
+            return vec![cmd];
+        }
+
         if mods.command() {
             if let Key::Character(c) = key {
                 if c.as_str() == "r" {
@@ -443,7 +470,7 @@ impl VimState {
         }
 
         // Two-char sequence starters
-        if matches!(c, 'g' | 'f' | 't' | 'F' | 'T' | 'r') {
+        if matches!(c, 'g' | 'f' | 't' | 'F' | 'T' | 'r' | 'z') {
             self.pending.partial = Some(c);
             return vec![VimCommand::Noop];
         }
@@ -453,6 +480,9 @@ impl VimState {
         self.clear_preferred_column();
 
         match c {
+            'H' => vec![VimCommand::MoveToScreenTop],
+            'M' => vec![VimCommand::MoveToScreenMiddle],
+            'L' => vec![VimCommand::MoveToScreenBottom],
             'i' => vec![VimCommand::EnterInsert],
             'a' => {
                 let col = (text.cursor.column + 1).min(line_len(text, text.cursor.line));
@@ -585,6 +615,10 @@ impl VimState {
         mods: Modifiers,
         text: &TextSnapshot,
     ) -> Vec<VimCommand> {
+        if let Some(cmd) = ctrl_page_command(key, mods) {
+            return vec![cmd];
+        }
+
         if mods.command() {
             if let Key::Character(c) = key {
                 if c.as_str() == "r" {
@@ -613,6 +647,13 @@ impl VimState {
         if let Some(partial) = self.pending.partial.take() {
             if let Some(motion) = self.resolve_find_partial(partial, c) {
                 return self.apply_motion(motion, text);
+            }
+            if partial == 'z' {
+                self.clear_preferred_column();
+                return match resolve_z_intent(c) {
+                    Some(intent) => vec![VimCommand::ScrollCursor(intent)],
+                    None => vec![VimCommand::Noop],
+                };
             }
             // Text objects in Visual mode (viw, vi", vab, etc.)
             if partial == 'i' || partial == 'a' {
@@ -721,9 +762,16 @@ impl VimState {
             _ => {}
         }
 
-        if matches!(c, 'g' | 'f' | 't' | 'F' | 'T' | 'i' | 'a') {
+        if matches!(c, 'g' | 'f' | 't' | 'F' | 'T' | 'i' | 'a' | 'z') {
             self.pending.partial = Some(c);
             return vec![VimCommand::Noop];
+        }
+
+        match c {
+            'H' => return vec![VimCommand::MoveToScreenTop],
+            'M' => return vec![VimCommand::MoveToScreenMiddle],
+            'L' => return vec![VimCommand::MoveToScreenBottom],
+            _ => {}
         }
 
         // Try as motion - extend selection
@@ -780,6 +828,14 @@ impl VimState {
     fn resolve_partial(&mut self, partial: char, c: char, text: &TextSnapshot) -> Vec<VimCommand> {
         if let Some(motion) = self.resolve_find_partial(partial, c) {
             return self.apply_motion(motion, text);
+        }
+        if partial == 'z' {
+            self.clear_pending();
+            self.clear_preferred_column();
+            return match resolve_z_intent(c) {
+                Some(intent) => vec![VimCommand::ScrollCursor(intent)],
+                None => vec![VimCommand::Noop],
+            };
         }
         match partial {
             'r' => {
@@ -1167,6 +1223,31 @@ fn named_key_to_motion(named: &NamedKey) -> Option<Motion> {
         NamedKey::ArrowDown => Some(Motion::Down),
         NamedKey::Home => Some(Motion::LineStart),
         NamedKey::End => Some(Motion::LineEnd),
+        _ => None,
+    }
+}
+
+fn ctrl_page_command(key: &Key, mods: Modifiers) -> Option<VimCommand> {
+    if !mods.control() {
+        return None;
+    }
+    let Key::Character(c) = key else {
+        return None;
+    };
+    match c.as_str() {
+        "d" => Some(VimCommand::HalfPageDown),
+        "u" => Some(VimCommand::HalfPageUp),
+        "f" => Some(VimCommand::PageDown),
+        "b" => Some(VimCommand::PageUp),
+        _ => None,
+    }
+}
+
+fn resolve_z_intent(c: char) -> Option<RevealIntent> {
+    match c {
+        'z' => Some(RevealIntent::Center),
+        't' => Some(RevealIntent::Top),
+        'b' => Some(RevealIntent::Bottom),
         _ => None,
     }
 }

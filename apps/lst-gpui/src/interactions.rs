@@ -1,7 +1,12 @@
 use gpui::{
     point, px, Bounds, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Window,
 };
-use lst_editor::selection::{drag_selection_range, line_range_at_char, word_range_at_char};
+use lst_editor::{
+    selection::{drag_selection_range, line_range_at_char, word_range_at_char},
+    RevealIntent,
+};
+
+use crate::viewport::scroll_top_for;
 use std::ops::Range;
 
 use crate::{ui::theme::metrics, LstGpuiApp};
@@ -128,7 +133,7 @@ impl LstGpuiApp {
             }
             None => return false,
         }
-        self.reveal_active_cursor();
+        self.reveal_active_cursor(RevealIntent::NearestEdge);
         true
     }
 
@@ -167,7 +172,7 @@ impl LstGpuiApp {
         let bounds = geometry.bounds?;
         let delta = drag_autoscroll_delta(position, bounds, self.ui_scale())?;
         let view = self.active_view();
-        let current = (-view.scroll.offset().y).max(px(0.0));
+        let current = scroll_top_for(&view.scroll);
         let max = view.scroll.max_offset().height.max(px(0.0));
         let target = (current + delta).max(px(0.0)).min(max);
         (target != current).then_some(target)

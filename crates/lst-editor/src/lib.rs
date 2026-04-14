@@ -6,13 +6,15 @@ pub mod position;
 pub mod selection;
 mod snapshot;
 mod tab;
+pub mod viewport;
 pub mod vim;
 pub mod wrap;
 
 pub use document::{EditKind, UndoBoundary};
-pub use effect::{EditorEffect, FocusTarget};
+pub use effect::{EditorEffect, FocusTarget, RevealIntent};
 pub use snapshot::EditorSnapshot;
 pub use tab::{EditorTab, FileStamp, TabId};
+pub use viewport::Viewport;
 
 use crate::{
     document::{char_to_position, line_indent_prefix, position_to_char},
@@ -49,6 +51,7 @@ pub struct EditorModel {
     status: String,
     vim: vim::VimState,
     next_tab_id: u64,
+    viewport: Viewport,
     effects: Vec<EditorEffect>,
 }
 
@@ -71,6 +74,7 @@ impl EditorModel {
             status,
             vim: vim::VimState::new(),
             next_tab_id,
+            viewport: Viewport::default(),
             effects: Vec::new(),
         }
     }
@@ -222,8 +226,8 @@ impl EditorModel {
         self.effects.push(effect);
     }
 
-    fn queue_reveal_cursor(&mut self) {
-        self.queue_effect(EditorEffect::RevealCursor);
+    fn queue_reveal(&mut self, intent: RevealIntent) {
+        self.queue_effect(EditorEffect::Reveal(intent));
     }
 
     pub fn drain_effects(&mut self) -> Vec<EditorEffect> {
@@ -266,7 +270,7 @@ impl EditorModel {
     fn set_find_query_and_select(&mut self, text: String) {
         self.set_find_query(text);
         if self.select_current_find_match() {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::Center);
         }
     }
 
@@ -488,7 +492,7 @@ impl EditorModel {
     ) {
         self.active_tab_mut().edit(kind, boundary, range, text);
         self.sync_find_after_edit();
-        self.queue_reveal_cursor();
+        self.queue_reveal(RevealIntent::NearestEdge);
     }
 
     fn replace_text_in_range(
@@ -542,7 +546,7 @@ impl EditorModel {
             tab.selection_reversed = false;
         }
         self.sync_find_after_edit();
-        self.queue_reveal_cursor();
+        self.queue_reveal(RevealIntent::NearestEdge);
     }
 
     fn delete_selection_or_word_range(tab: &EditorTab, backward: bool) -> Option<Range<usize>> {
@@ -684,6 +688,64 @@ impl EditorModel {
         target_char != cursor || select
     }
 
+    fn move_to_visual_row(&mut self, target: usize, select: bool, wrap_columns: usize) -> bool {
+        if !self.show_wrap {
+            let current = self.active_tab().cursor_position().line;
+            if target == current {
+                return false;
+            }
+            return self.move_vertical(target as isize - current as isize, select);
+        }
+
+        // Build the wrap layout once and reuse it for both the current-row
+        // lookup and the delta application; going through `move_display_rows`
+        // would build it again.
+        let cursor = self.active_tab().cursor_char();
+        let (target_char, preferred_column) = {
+            let tab = self.active_tab_mut();
+            let lines = tab.lines();
+            let position = tab.cursor_position();
+            let layout = wrap::build_wrap_layout(lines.as_ref(), wrap_columns, true);
+            let current = wrap::visual_row_for_position(
+                lines.as_ref(),
+                position.line,
+                position.column,
+                &layout,
+            )
+            .unwrap_or(position.line);
+            if target == current {
+                return false;
+            }
+            let Some(row_target) = wrap::display_row_target(
+                lines.as_ref(),
+                position.line,
+                position.column,
+                tab.preferred_column,
+                target as isize - current as isize,
+                &layout,
+            ) else {
+                return false;
+            };
+            let target_char = position_to_char(
+                tab.buffer(),
+                Position {
+                    line: row_target.line,
+                    column: row_target.column,
+                },
+            );
+            (target_char, row_target.preferred_column)
+        };
+
+        let tab = self.active_tab_mut();
+        if select {
+            tab.select_to(target_char);
+        } else {
+            tab.move_to(target_char);
+        }
+        tab.preferred_column = Some(preferred_column);
+        target_char != cursor || select
+    }
+
     fn move_line_boundary_inner(&mut self, to_end: bool, select: bool) -> bool {
         let tab = self.active_tab_mut();
         let cursor = tab.cursor_char();
@@ -735,7 +797,7 @@ impl EditorModel {
             tab.move_to(cursor);
         }
         self.sync_find_after_edit();
-        self.queue_reveal_cursor();
+        self.queue_reveal(RevealIntent::NearestEdge);
     }
 
     fn move_active_cursor(&mut self, cursor_line: usize, cursor_col: usize, select: bool) {
@@ -764,7 +826,7 @@ impl EditorModel {
                 return None;
             }
             self.move_active_cursor(cursor_line, cursor_col, false);
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
             return Some(result);
         }
 
@@ -858,10 +920,15 @@ impl EditorModel {
         vim::TextSnapshot { lines, cursor }
     }
 
-    pub fn handle_vim_key(&mut self, key: vim::Key, mods: vim::Modifiers) -> bool {
+    pub fn handle_vim_key(
+        &mut self,
+        key: vim::Key,
+        mods: vim::Modifiers,
+        wrap_columns: usize,
+    ) -> bool {
         let snapshot = self.vim_snapshot();
         let commands = self.vim.handle_key(&key, mods, &snapshot);
-        self.execute_vim_commands(commands)
+        self.execute_vim_commands(commands, wrap_columns)
     }
 
     pub fn handle_vim_escape(&mut self) -> bool {
@@ -869,10 +936,14 @@ impl EditorModel {
         let commands = self
             .vim
             .enter_normal_from_escape(snapshot.cursor, &snapshot);
-        self.execute_vim_commands(commands)
+        self.execute_vim_commands(commands, 0)
     }
 
-    fn execute_vim_commands(&mut self, commands: Vec<vim::VimCommand>) -> bool {
+    fn execute_vim_commands(
+        &mut self,
+        commands: Vec<vim::VimCommand>,
+        wrap_columns: usize,
+    ) -> bool {
         if commands.is_empty() {
             return false;
         }
@@ -1014,11 +1085,42 @@ impl EditorModel {
                     self.vim_transform_case_lines(first, last, uppercase);
                     changed = true;
                 }
+                vim::VimCommand::HalfPageDown => {
+                    self.half_page_down(self.vim_in_visual(), wrap_columns);
+                    changed = true;
+                }
+                vim::VimCommand::HalfPageUp => {
+                    self.half_page_up(self.vim_in_visual(), wrap_columns);
+                    changed = true;
+                }
+                vim::VimCommand::PageDown => {
+                    self.page_down(self.vim_in_visual(), wrap_columns);
+                    changed = true;
+                }
+                vim::VimCommand::PageUp => {
+                    self.page_up(self.vim_in_visual(), wrap_columns);
+                    changed = true;
+                }
+                vim::VimCommand::MoveToScreenTop => {
+                    self.screen_top(self.vim_in_visual(), wrap_columns);
+                    changed = true;
+                }
+                vim::VimCommand::MoveToScreenMiddle => {
+                    self.screen_middle(self.vim_in_visual(), wrap_columns);
+                    changed = true;
+                }
+                vim::VimCommand::MoveToScreenBottom => {
+                    self.screen_bottom(self.vim_in_visual(), wrap_columns);
+                    changed = true;
+                }
+                vim::VimCommand::ScrollCursor(intent) => {
+                    self.queue_reveal(intent);
+                }
             }
         }
 
         if changed {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
             self.queue_primary_selection();
         }
         true
@@ -1028,6 +1130,10 @@ impl EditorModel {
         if let Some(text) = self.active_tab().selected_text() {
             self.queue_effect(EditorEffect::WritePrimary(text));
         }
+    }
+
+    fn vim_in_visual(&self) -> bool {
+        matches!(self.vim.mode, vim::Mode::Visual | vim::Mode::VisualLine)
     }
 
     fn vim_find_next_from_cursor(&mut self, position: Position) -> Option<Position> {
@@ -1303,7 +1409,7 @@ impl EditorModel {
         self.active_tab_mut()
             .edit(EditKind::Insert, UndoBoundary::Break, range, &text);
         self.sync_find_after_edit();
-        self.queue_reveal_cursor();
+        self.queue_reveal(RevealIntent::NearestEdge);
     }
 
     pub fn replace_text(
@@ -1344,7 +1450,7 @@ impl EditorModel {
         } else {
             "Soft wrap disabled.".to_string()
         };
-        self.queue_reveal_cursor();
+        self.queue_reveal(RevealIntent::NearestEdge);
     }
 
     pub fn new_tab(&mut self) {
@@ -1415,14 +1521,14 @@ impl EditorModel {
 
     pub fn set_active_tab(&mut self, index: usize) {
         if self.activate_tab(index) {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
     pub fn next_tab(&mut self) {
         if self.tabs.len() > 1 {
             self.activate_tab((self.active + 1) % self.tabs.len());
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
@@ -1434,7 +1540,7 @@ impl EditorModel {
                 self.active - 1
             };
             self.activate_tab(prev);
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
@@ -1447,58 +1553,120 @@ impl EditorModel {
 
     pub fn move_horizontal_by(&mut self, delta: isize, select: bool) {
         self.move_horizontal(delta, select);
-        self.queue_reveal_cursor();
+        self.queue_reveal(RevealIntent::NearestEdge);
     }
 
     pub fn move_horizontal_collapsed(&mut self, backward: bool) {
         if self.move_horizontal_collapse(backward) {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
     pub fn move_logical_rows(&mut self, delta: isize, select: bool) {
         if self.move_vertical(delta, select) {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
     pub fn move_display_rows_by(&mut self, delta: isize, select: bool, wrap_columns: usize) {
         if self.move_display_rows(delta, select, wrap_columns) {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
-    pub fn move_page(&mut self, rows: usize, down: bool, select: bool) {
-        let delta = if down {
-            rows as isize
-        } else {
-            -(rows as isize)
-        };
-        if self.move_vertical(delta, select) {
-            self.queue_reveal_cursor();
+    pub fn viewport(&self) -> Viewport {
+        self.viewport
+    }
+
+    pub fn set_viewport_rows(&mut self, rows: usize) {
+        self.viewport.rows = rows.max(1);
+    }
+
+    pub fn set_viewport_top(&mut self, row: usize) {
+        self.viewport.top_visual_row = row;
+    }
+
+    pub fn page_down(&mut self, select: bool, wrap_columns: usize) {
+        let delta = self.viewport.page() as isize;
+        if self.move_display_rows(delta, select, wrap_columns) {
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
+    }
+
+    pub fn page_up(&mut self, select: bool, wrap_columns: usize) {
+        let delta = -(self.viewport.page() as isize);
+        if self.move_display_rows(delta, select, wrap_columns) {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    pub fn half_page_down(&mut self, select: bool, wrap_columns: usize) {
+        let delta = self.viewport.half_page() as isize;
+        if self.move_display_rows(delta, select, wrap_columns) {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    pub fn half_page_up(&mut self, select: bool, wrap_columns: usize) {
+        let delta = -(self.viewport.half_page() as isize);
+        if self.move_display_rows(delta, select, wrap_columns) {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    pub fn screen_top(&mut self, select: bool, wrap_columns: usize) {
+        let target = self.viewport.screen_top_row();
+        if self.move_to_visual_row(target, select, wrap_columns) {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    pub fn screen_middle(&mut self, select: bool, wrap_columns: usize) {
+        let target = self.viewport.screen_middle_row();
+        if self.move_to_visual_row(target, select, wrap_columns) {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    pub fn screen_bottom(&mut self, select: bool, wrap_columns: usize) {
+        let target = self.viewport.screen_bottom_row();
+        if self.move_to_visual_row(target, select, wrap_columns) {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    pub fn scroll_to_center(&mut self) {
+        self.queue_reveal(RevealIntent::Center);
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.queue_reveal(RevealIntent::Top);
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.queue_reveal(RevealIntent::Bottom);
     }
 
     pub fn move_word(&mut self, backward: bool, select: bool) {
         self.move_word_boundary(backward, select);
-        self.queue_reveal_cursor();
+        self.queue_reveal(RevealIntent::NearestEdge);
     }
 
     pub fn move_line_boundary(&mut self, to_end: bool, select: bool) {
         if self.move_line_boundary_inner(to_end, select) {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
     pub fn move_document_boundary(&mut self, to_end: bool, select: bool) {
         if self.move_document_boundary_inner(to_end, select) {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
     pub fn move_to_char(&mut self, offset: usize, select: bool, preferred_column: Option<usize>) {
         if self.move_to_char_inner(offset, select, preferred_column) {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
@@ -1631,25 +1799,25 @@ impl EditorModel {
 
     pub fn find_next_match(&mut self) {
         if self.find_next() {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::Center);
         }
     }
 
     pub fn find_prev_match(&mut self) {
         if self.find_prev() {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::Center);
         }
     }
 
     pub fn replace_current_match(&mut self) {
         if self.replace_one() {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::Center);
         }
     }
 
     pub fn replace_all_matches_in_document(&mut self) {
         if self.replace_all_matches() {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::Center);
         }
     }
 
@@ -1675,7 +1843,7 @@ impl EditorModel {
 
     pub fn submit_goto_line_input(&mut self) {
         if self.submit_goto_line() {
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::Center);
         }
     }
 
@@ -1702,7 +1870,7 @@ impl EditorModel {
         if self.tabs.len() > start_len {
             self.activate_tab(self.tabs.len() - 1);
             self.status = format!("Opened {} tab(s).", self.tabs.len() - start_len);
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
@@ -1929,14 +2097,14 @@ impl EditorModel {
     pub fn undo(&mut self) {
         if self.active_tab_mut().undo() {
             self.sync_find_after_edit();
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
     pub fn redo(&mut self) {
         if self.active_tab_mut().redo() {
             self.sync_find_after_edit();
-            self.queue_reveal_cursor();
+            self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 }

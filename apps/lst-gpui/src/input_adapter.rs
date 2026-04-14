@@ -12,6 +12,7 @@ impl LstGpuiApp {
     pub(crate) fn maybe_handle_vim_key(
         &mut self,
         event: &KeyDownEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let mods = gpui_modifiers_to_vim(event.keystroke.modifiers);
@@ -21,6 +22,14 @@ impl LstGpuiApp {
             && !event.keystroke.modifiers.platform;
         let redo_key = key.as_ref().is_some_and(|key| {
             matches!(key, VimKey::Character(value) if value == "r") && mods.command()
+        });
+        let ctrl_vim_motion = key.as_ref().is_some_and(|key| {
+            mods.control()
+                && matches!(
+                    key,
+                    VimKey::Character(value)
+                        if matches!(value.as_str(), "d" | "u" | "f" | "b")
+                )
         });
 
         if event.keystroke.key == "escape" {
@@ -35,7 +44,7 @@ impl LstGpuiApp {
             return false;
         }
 
-        if !plain_vim_key && !redo_key {
+        if !plain_vim_key && !redo_key && !ctrl_vim_motion {
             return false;
         }
 
@@ -47,8 +56,9 @@ impl LstGpuiApp {
             return false;
         };
 
+        let wrap_columns = self.active_wrap_columns(window);
         self.update_model(cx, true, |model| {
-            model.handle_vim_key(key, mods);
+            model.handle_vim_key(key, mods, wrap_columns);
         });
         cx.stop_propagation();
         true
@@ -186,6 +196,7 @@ impl EntityInputHandler for LstGpuiApp {
 fn gpui_modifiers_to_vim(modifiers: gpui::Modifiers) -> VimModifiers {
     VimModifiers {
         command: modifiers.control || modifiers.platform,
+        control: modifiers.control,
     }
 }
 

@@ -26,18 +26,13 @@ pub(crate) use interactions::drag_autoscroll_delta;
 use interactions::DragSelectionMode;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
-use lst_editor::{EditorModel, EditorTab as ModelEditorTab, FocusTarget, TabId, UNTITLED_PREFIX};
+use lst_editor::{
+    EditorModel, EditorTab as ModelEditorTab, FocusTarget, RevealIntent, TabId, UNTITLED_PREFIX,
+};
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
-use std::{
-    cell::RefCell,
-    collections::HashSet,
-    path::PathBuf,
-    process,
-    rc::Rc,
-    time::Instant,
-};
+use std::{cell::RefCell, collections::HashSet, path::PathBuf, process, rc::Rc, time::Instant};
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_path, CachedSyntaxHighlights, SyntaxHighlightJobKey,
     SyntaxMode, SyntaxSpan,
@@ -45,8 +40,8 @@ use syntax::{
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use viewport::row_contains_cursor;
 use viewport::{
-    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, visual_row_for_char,
-    ViewportCache, ViewportGeometry,
+    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, scroll_top_for,
+    visual_row_for_char, ViewportCache, ViewportGeometry,
 };
 
 actions!(
@@ -379,6 +374,7 @@ impl LstGpuiApp {
         notify_after_update: bool,
         update: impl FnOnce(&mut EditorModel),
     ) {
+        self.sync_viewport_state();
         let old_show_wrap = self.model.show_wrap();
         let old_find_state = self.find_input_state();
         let old_goto_line = self.model.goto_line().map(ToOwned::to_owned);
@@ -693,27 +689,34 @@ impl LstGpuiApp {
         layout.wrap_columns
     }
 
-    fn active_page_rows(&self) -> usize {
-        let height = self
-            .active_view()
-            .geometry
-            .borrow()
-            .bounds
-            .map(|bounds| bounds.size.height)
-            .filter(|height| *height > px(0.0))
-            .unwrap_or_else(|| self.ui_px(metrics::WINDOW_HEIGHT));
-        ((height / self.ui_px(metrics::ROW_HEIGHT)) as usize)
-            .saturating_sub(2)
-            .max(1)
-    }
-
     fn move_page(&mut self, down: bool, select: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let rows = self.active_page_rows() as isize;
-        let delta = if down { rows } else { -rows };
-        self.move_vertical(delta, select, window, cx);
+        let wrap_columns = self.active_wrap_columns(window);
+        self.update_model(cx, true, |model| {
+            if down {
+                model.page_down(select, wrap_columns);
+            } else {
+                model.page_up(select, wrap_columns);
+            }
+        });
     }
 
-    fn reveal_active_cursor(&self) {
+    fn sync_viewport_state(&mut self) {
+        let bounds = self.active_view().geometry.borrow().bounds;
+        let Some(bounds) = bounds else {
+            return;
+        };
+        let row_height = self.ui_px(metrics::ROW_HEIGHT);
+        if row_height <= px(0.0) || bounds.size.height <= px(0.0) {
+            return;
+        }
+        let rows = ((bounds.size.height / row_height).floor() as usize).max(1);
+        let scroll_top = scroll_top_for(&self.active_view().scroll);
+        let top = (scroll_top / row_height).floor() as usize;
+        self.model.set_viewport_rows(rows);
+        self.model.set_viewport_top(top);
+    }
+
+    fn reveal_active_cursor(&self, intent: RevealIntent) {
         let tab = self.active_tab();
         let view = self.active_view();
         let viewport_bounds = view.scroll.bounds();
@@ -731,23 +734,29 @@ impl LstGpuiApp {
         let row_height = self.ui_px(metrics::ROW_HEIGHT);
         let caret_top = row_height * visual_row as f32;
         let caret_bottom = caret_top + row_height;
-        let scroll_top = {
-            let offset_y = -view.scroll.offset().y;
-            if offset_y > px(0.) {
-                offset_y
-            } else {
-                px(0.)
-            }
-        };
-        let margin = self.ui_px(metrics::ROW_HEIGHT * 2.0);
+        let scroll_top = scroll_top_for(&view.scroll);
         let viewport_height = viewport_bounds.size.height;
+        let max_offset = view.scroll.max_offset().height.max(px(0.0));
+        let margin = row_height * self.model.viewport().effective_scrolloff() as f32;
 
-        let target = if caret_top < scroll_top + margin {
-            Some((caret_top - margin).max(px(0.0)))
-        } else if caret_bottom > scroll_top + viewport_height - margin {
-            Some((caret_bottom + margin - viewport_height).max(px(0.0)))
-        } else {
-            None
+        let clamp = |y: Pixels| y.max(px(0.0)).min(max_offset);
+
+        let target = match intent {
+            RevealIntent::NearestEdge => {
+                if caret_top < scroll_top + margin {
+                    Some(clamp(caret_top - margin))
+                } else if caret_bottom > scroll_top + viewport_height - margin {
+                    Some(clamp(caret_bottom + margin - viewport_height))
+                } else {
+                    None
+                }
+            }
+            RevealIntent::Center => {
+                let centered = caret_top - (viewport_height - row_height) / 2.0;
+                Some(clamp(centered))
+            }
+            RevealIntent::Top => Some(clamp(caret_top - margin)),
+            RevealIntent::Bottom => Some(clamp(caret_bottom + margin - viewport_height)),
         };
 
         if let Some(target) = target {
@@ -766,6 +775,22 @@ impl LstGpuiApp {
         let Some(bounds) = geometry.bounds else {
             return self.active_tab().cursor_char();
         };
+        // If the scroll has moved since the last paint (e.g. a Reveal just
+        // repositioned the viewport), `geometry.rows` describes the previous
+        // scroll position and mapping a click through it would land on the
+        // wrong row. Bail and keep the cursor where it is; the next paint
+        // will refresh `geometry.rows` and subsequent clicks behave normally.
+        // Skip the guard during drag-autoscroll: the drag loop imperatively
+        // nudges scroll between frames and still needs the cursor to track.
+        const SCROLL_STALE_THRESHOLD: f32 = 0.5;
+        if self.drag_selecting.is_none() {
+            let current_scroll_top = scroll_top_for(&self.active_view().scroll);
+            if (current_scroll_top - geometry.scroll_top_at_paint).abs()
+                > px(SCROLL_STALE_THRESHOLD)
+            {
+                return self.active_tab().cursor_char();
+            }
+        }
         let code_origin_x =
             bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
 
@@ -923,9 +948,7 @@ fn main() {
         std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
 
     if !has_graphical_env {
-        eprintln!(
-            "lst requires a graphical session. Run it from a real X11 or Wayland desktop."
-        );
+        eprintln!("lst requires a graphical session. Run it from a real X11 or Wayland desktop.");
         process::exit(1);
     }
 

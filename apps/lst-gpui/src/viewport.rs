@@ -59,6 +59,7 @@ pub(crate) struct ViewportPaintState {
 pub(crate) struct ViewportGeometry {
     pub(crate) bounds: Option<Bounds<Pixels>>,
     pub(crate) rows: Vec<PaintedRow>,
+    pub(crate) scroll_top_at_paint: Pixels,
 }
 
 #[derive(Clone)]
@@ -69,6 +70,12 @@ pub(crate) struct CachedWrapLayout {
 
 pub(crate) fn buffer_content_height(visual_rows: usize, scale: f32) -> Pixels {
     metrics::px_for_scale((visual_rows.max(1) as f32) * metrics::ROW_HEIGHT, scale)
+}
+
+/// GPUI's `ScrollHandle::offset().y` is negative when scrolled away from the
+/// top; this helper returns the non-negative "pixels scrolled from the top."
+pub(crate) fn scroll_top_for(scroll: &ScrollHandle) -> Pixels {
+    (-scroll.offset().y).max(px(0.0))
 }
 
 fn trim_display_line(line: &str) -> &str {
@@ -378,14 +385,7 @@ pub(crate) fn prepare_viewport_paint_state(
     } else {
         metrics::px_for_scale(metrics::WINDOW_HEIGHT, scale)
     };
-    let scroll_top = {
-        let offset_y = -viewport_scroll.offset().y;
-        if offset_y > px(0.0) {
-            offset_y
-        } else {
-            px(0.0)
-        }
-    };
+    let scroll_top = scroll_top_for(viewport_scroll);
     let style = window.text_style();
     let font_size = style.font_size.to_pixels(window.rem_size());
     let code_run = TextRun {
@@ -513,6 +513,7 @@ pub(crate) fn prepare_viewport_paint_state(
     *viewport_geometry.borrow_mut() = ViewportGeometry {
         bounds: Some(bounds),
         rows: rows.clone(),
+        scroll_top_at_paint: scroll_top,
     };
 
     ViewportPaintState { rows }
