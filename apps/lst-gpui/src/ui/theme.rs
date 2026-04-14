@@ -1,4 +1,4 @@
-use gpui::{font, px, Font, FontFallbacks, Pixels};
+use gpui::{font, px, Font, FontId, Pixels, TextRun, Window};
 
 pub mod palette {
     pub const CHROME: u32 = 0x181818;
@@ -69,25 +69,208 @@ pub mod syntax {
 }
 
 pub mod typography {
-    use super::{font, Font, FontFallbacks};
-    use std::sync::OnceLock;
+    use super::{font, Font, FontId, Pixels, TextRun, Window};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::OnceLock,
+    };
+    use unicode_segmentation::UnicodeSegmentation;
 
     pub const PRIMARY_FONT_FAMILY: &str = "TX-02";
+    const PRIMARY_FONT_STACK: &[&str] = &[
+        PRIMARY_FONT_FAMILY,
+        "JetBrains Mono",
+        ".ZedMono",
+        "Lilex",
+        "IBM Plex Mono",
+    ];
 
-    pub fn primary_font() -> Font {
+    pub fn primary_font(window: &mut Window) -> Font {
         static FONT: OnceLock<Font> = OnceLock::new();
 
-        FONT.get_or_init(|| {
-            let mut font = font(PRIMARY_FONT_FAMILY);
-            font.fallbacks = Some(FontFallbacks::from_fonts(vec![
-                "JetBrains Mono".to_string(),
-                ".ZedMono".to_string(),
-                "Lilex".to_string(),
-                "IBM Plex Mono".to_string(),
-            ]));
-            font
+        FONT.get_or_init(|| font(selected_primary_font_families(window)[0]))
+            .clone()
+    }
+
+    pub fn text_runs_with_fallbacks(
+        text: &str,
+        runs: &[TextRun],
+        font_size: Pixels,
+        window: &mut Window,
+    ) -> Vec<TextRun> {
+        // GPUI's Linux backend ignores Font.fallbacks, so choose concrete families before shaping.
+        let fonts = selected_primary_font_families(window)
+            .iter()
+            .copied()
+            .map(font)
+            .collect::<Vec<_>>();
+        if fonts.len() <= 1 {
+            return runs
+                .iter()
+                .cloned()
+                .map(|mut run| {
+                    if let Some(primary) = fonts.first() {
+                        run.font = primary.clone();
+                    }
+                    run
+                })
+                .collect();
+        }
+
+        let font_ids = fonts
+            .iter()
+            .map(|font| window.text_system().resolve_font(font))
+            .collect::<Vec<_>>();
+        let mut glyph_cache = HashMap::new();
+        let mut split_runs = Vec::new();
+        let mut offset = 0;
+
+        for run in runs {
+            let end = offset + run.len;
+            let Some(run_text) = text.get(offset..end) else {
+                split_runs.push(run.clone());
+                offset = end;
+                continue;
+            };
+
+            let mut current_font_ix = None;
+            let mut current_len = 0;
+            for grapheme in run_text.graphemes(true) {
+                let font_ix = font_index_for_grapheme(
+                    grapheme,
+                    &font_ids,
+                    font_size,
+                    window,
+                    &mut glyph_cache,
+                );
+                if Some(font_ix) == current_font_ix {
+                    current_len += grapheme.len();
+                } else {
+                    push_text_run(&mut split_runs, run, current_len, current_font_ix, &fonts);
+                    current_font_ix = Some(font_ix);
+                    current_len = grapheme.len();
+                }
+            }
+            push_text_run(&mut split_runs, run, current_len, current_font_ix, &fonts);
+            offset = end;
+        }
+
+        split_runs
+    }
+
+    fn selected_primary_font_families(window: &mut Window) -> &'static Vec<&'static str> {
+        static FAMILIES: OnceLock<Vec<&'static str>> = OnceLock::new();
+
+        FAMILIES.get_or_init(|| {
+            let available = window
+                .text_system()
+                .all_font_names()
+                .into_iter()
+                .collect::<HashSet<_>>();
+            select_primary_font_families(&available)
         })
-        .clone()
+    }
+
+    fn select_primary_font_families(available: &HashSet<String>) -> Vec<&'static str> {
+        let mut selected = Vec::new();
+        let mut seen_lookup_names = HashSet::new();
+        for family in PRIMARY_FONT_STACK {
+            let lookup = font_lookup_family(family);
+            if available.contains(lookup) && seen_lookup_names.insert(lookup) {
+                selected.push(*family);
+            }
+        }
+
+        if selected.is_empty() {
+            selected.push(PRIMARY_FONT_FAMILY);
+        }
+        selected
+    }
+
+    fn font_lookup_family(family: &'static str) -> &'static str {
+        match family {
+            ".ZedMono" => "Lilex",
+            family => family,
+        }
+    }
+
+    fn font_index_for_grapheme(
+        grapheme: &str,
+        font_ids: &[FontId],
+        font_size: Pixels,
+        window: &mut Window,
+        glyph_cache: &mut HashMap<(usize, char), bool>,
+    ) -> usize {
+        for (font_ix, font_id) in font_ids.iter().enumerate() {
+            if grapheme.chars().all(|ch| {
+                *glyph_cache.entry((font_ix, ch)).or_insert_with(|| {
+                    window
+                        .text_system()
+                        .advance(*font_id, font_size, ch)
+                        .is_ok()
+                })
+            }) {
+                return font_ix;
+            }
+        }
+        0
+    }
+
+    fn push_text_run(
+        runs: &mut Vec<TextRun>,
+        template: &TextRun,
+        len: usize,
+        font_ix: Option<usize>,
+        fonts: &[Font],
+    ) {
+        let Some(font_ix) = font_ix else {
+            return;
+        };
+        if len == 0 {
+            return;
+        }
+
+        runs.push(TextRun {
+            len,
+            font: fonts[font_ix].clone(),
+            ..template.clone()
+        });
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn primary_font_stack_preserves_available_family_order() {
+            let available =
+                HashSet::from(["IBM Plex Mono".to_string(), "JetBrains Mono".to_string()]);
+
+            assert_eq!(
+                select_primary_font_families(&available),
+                ["JetBrains Mono", "IBM Plex Mono"]
+            );
+        }
+
+        #[test]
+        fn zed_mono_alias_tracks_lilex_availability() {
+            let available = HashSet::from(["Lilex".to_string(), "IBM Plex Mono".to_string()]);
+
+            assert_eq!(
+                select_primary_font_families(&available),
+                [".ZedMono", "IBM Plex Mono"]
+            );
+        }
+
+        #[test]
+        fn missing_stack_falls_back_to_primary_family_for_gpui_resolution() {
+            let available = HashSet::new();
+
+            assert_eq!(
+                select_primary_font_families(&available),
+                [PRIMARY_FONT_FAMILY]
+            );
+        }
     }
 }
 

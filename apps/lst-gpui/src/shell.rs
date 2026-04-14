@@ -3,7 +3,7 @@ use crate::ui::{
     IconButton, IconKind, Tab as UiTab, TabBar,
 };
 use gpui::{
-    canvas, div, prelude::*, px, rgb, AnyElement, Context, CursorStyle, ElementInputHandler,
+    canvas, div, prelude::*, px, rgb, AnyElement, Context, CursorStyle, ElementInputHandler, Font,
     InteractiveElement, KeyDownEvent, MouseButton, MouseUpEvent, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window,
 };
@@ -96,7 +96,7 @@ impl LstGpuiApp {
             .children(items)
     }
 
-    fn render_find_bar(&mut self) -> impl IntoElement {
+    fn render_find_bar(&mut self, primary_font: &Font) -> impl IntoElement {
         let scale = self.ui_scale();
         let find = self.model.find();
         let match_label = if find.matches.is_empty() {
@@ -137,7 +137,7 @@ impl LstGpuiApp {
             .child(
                 div()
                     .flex_none()
-                    .font(typography::primary_font())
+                    .font(primary_font.clone())
                     .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
                     .text_color(rgb(role::TEXT_MUTED))
                     .child(match_label),
@@ -167,11 +167,11 @@ impl LstGpuiApp {
             .child(div().w(px(180.0)).child(self.goto_line_input.clone()))
     }
 
-    fn render_editor_overlays(&mut self) -> impl IntoElement {
+    fn render_editor_overlays(&mut self, primary_font: &Font) -> impl IntoElement {
         let scale = self.ui_scale();
         let mut overlays: Vec<AnyElement> = Vec::new();
         if self.model.find().visible {
-            overlays.push(self.render_find_bar().into_any_element());
+            overlays.push(self.render_find_bar(primary_font).into_any_element());
         }
         if self.model.goto_line().is_some() {
             overlays.push(self.render_goto_bar().into_any_element());
@@ -188,7 +188,7 @@ impl LstGpuiApp {
             .children(overlays)
     }
 
-    fn render_status_bar(&self) -> impl IntoElement {
+    fn render_status_bar(&self, primary_font: &Font) -> impl IntoElement {
         let scale = self.ui_scale();
         div()
             .flex_none()
@@ -211,7 +211,7 @@ impl LstGpuiApp {
             .child(
                 div()
                     .flex_none()
-                    .font(typography::primary_font())
+                    .font(primary_font.clone())
                     .text_size(metrics::px_for_scale(12.0, scale))
                     .text_color(rgb(role::TEXT_MUTED))
                     .child(self.status_details()),
@@ -244,6 +244,7 @@ impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_active_syntax_highlights(cx);
 
+        let primary_font = typography::primary_font(window);
         let active = self.model.active_index();
         let show_gutter = self.model.show_gutter();
         let show_wrap = self.model.show_wrap();
@@ -294,7 +295,7 @@ impl Render for LstGpuiApp {
             .size_full()
             .bg(rgb(role::APP_BG))
             .text_color(rgb(role::TEXT))
-            .font(typography::primary_font())
+            .font(primary_font.clone())
             .child(
                 div()
                     .flex_grow()
@@ -326,7 +327,7 @@ impl Render for LstGpuiApp {
                                     .border_1()
                                     .border_color(rgb(role::BORDER))
                                     .bg(rgb(role::EDITOR_BG))
-                                    .font(typography::primary_font())
+                                    .font(primary_font.clone())
                                     .text_size(metrics::px_for_scale(
                                         metrics::CODE_FONT_SIZE,
                                         self.ui_scale(),
@@ -420,11 +421,14 @@ impl Render for LstGpuiApp {
                                     .when(
                                         self.model.find().visible
                                             || self.model.goto_line().is_some(),
-                                        |viewport| viewport.child(self.render_editor_overlays()),
+                                        |viewport| {
+                                            viewport
+                                                .child(self.render_editor_overlays(&primary_font))
+                                        },
                                     ),
                             ),
                     )
-                    .child(self.render_status_bar()),
+                    .child(self.render_status_bar(&primary_font)),
             );
         self.apply_pending_focus(window, cx);
         self.maintain_overlay_focus(window, cx);

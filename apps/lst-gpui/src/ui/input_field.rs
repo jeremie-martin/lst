@@ -13,7 +13,7 @@ use lst_editor::selection::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::ui::theme::{metrics, role};
+use crate::ui::theme::{metrics, role, typography};
 
 actions!(
     lst_gpui_input,
@@ -770,6 +770,8 @@ impl Element for TextElement {
         };
 
         let font_size = metrics::px_for_rem(metrics::INPUT_TEXT_SIZE, window.rem_size());
+        let runs =
+            typography::text_runs_with_fallbacks(display_text.as_str(), &runs, font_size, window);
         let line = window
             .text_system()
             .shape_line(display_text, font_size, &runs, None);

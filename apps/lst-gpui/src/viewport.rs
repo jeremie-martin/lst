@@ -1,4 +1,4 @@
-use crate::ui::theme::{metrics, role};
+use crate::ui::theme::{metrics, role, typography};
 use gpui::{
     fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString,
     TextRun, Window,
@@ -185,13 +185,14 @@ pub(crate) fn code_origin_pad(show_gutter: bool, scale: f32) -> Pixels {
 pub(crate) fn code_char_width(window: &mut Window) -> Pixels {
     let style = window.text_style();
     let font_size = style.font_size.to_pixels(window.rem_size());
+    let font = typography::primary_font(window);
     let probe = SharedString::from("00000000");
     let shaped = window.text_system().shape_line(
         probe.clone(),
         font_size,
         &[TextRun {
             len: probe.len(),
-            font: style.font(),
+            font,
             color: rgb(role::TEXT).into(),
             background_color: None,
             underline: None,
@@ -302,15 +303,14 @@ fn shape_cached_line(
         }
     }
 
-    let shaped = window.text_system().shape_line(
-        text.clone(),
-        font_size,
-        &[TextRun {
-            len: text.len(),
-            ..base_run.clone()
-        }],
-        None,
-    );
+    let runs = [TextRun {
+        len: text.len(),
+        ..base_run.clone()
+    }];
+    let runs = typography::text_runs_with_fallbacks(text.as_str(), &runs, font_size, window);
+    let shaped = window
+        .text_system()
+        .shape_line(text.clone(), font_size, &runs, None);
 
     cache.insert(
         line_ix,
@@ -342,9 +342,10 @@ fn shape_cached_segment(
         }
     }
 
+    let runs = typography::text_runs_with_fallbacks(text.as_str(), runs, font_size, window);
     let shaped = window
         .text_system()
-        .shape_line(text.clone(), font_size, runs, None);
+        .shape_line(text.clone(), font_size, &runs, None);
 
     cache.insert(
         key,
