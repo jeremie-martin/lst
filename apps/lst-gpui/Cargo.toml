@@ -3,6 +3,12 @@ name = "lst-gpui"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
+default-run = "lst"
+autobins = false
+
+[[bin]]
+name = "lst"
+path = "src/main.rs"
 
 [features]
 internal-invariants = []

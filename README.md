@@ -16,10 +16,10 @@ code should not be used as a source of shared modules for new editor work.
 
 ```bash
 cargo build --release -p lst-gpui
-./target/release/lst-gpui
-./target/release/lst-gpui README.md
-./target/release/lst-gpui --title "lst GPUI"
-./target/release/lst-gpui --scratchpad-dir /path/to/notes
+./target/release/lst
+./target/release/lst README.md
+./target/release/lst --title lst-scratchpad
+./target/release/lst --scratchpad-dir /path/to/notes
 ```
 
 Running without files creates a timestamped scratchpad note in
@@ -28,14 +28,21 @@ scratchpad directory.
 
 ## Install
 
-`install.sh` installs the active GPUI editor to `~/.local/bin/lst-gpui` by default.
+`install.sh` installs the active GPUI editor to `~/.local/bin/lst` by default
+and creates `~/.local/bin/lst-gpui` as a compatibility alias.
 
 ```bash
 ./install.sh
-~/.local/bin/lst-gpui
+~/.local/bin/lst
 ```
 
 Set `LST_PREFIX=/some/prefix` to change the install root.
+The installer verifies that the `TX-02` font is available because the editor
+uses it as the primary UI and code font.
+
+For scratchpad window-manager rules, spawn `~/.local/bin/lst --title lst-scratchpad`.
+The GPUI window sets that title on X11/Wayland and uses `lst` as its app id /
+X11 `WM_CLASS`.
 
 ## Testing
 
@@ -57,7 +64,7 @@ The active GPUI editor has a real-display X11 interaction benchmark. Build the
 release app and runner together:
 
 ```bash
-cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11
+cargo build --release -p lst-gpui --bin lst --example bench_editor_x11
 ```
 
 Run the full smoke suite from a real X11 session:

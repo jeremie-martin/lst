@@ -12,13 +12,13 @@ The goal is narrow:
 ## GPUI Interaction Benchmark
 
 The GPUI editor has a real-display X11 benchmark runner for editor interaction
-latency. It launches the real `lst-gpui` binary, drives it through XTEST, watches
+latency. It launches the real `lst` binary, drives it through XTEST, watches
 XDamage redraws, and verifies file contents for editing workflows.
 
 Build the release app and runner:
 
 ```bash
-cargo build --release -p lst-gpui --bin lst-gpui --example bench_editor_x11
+cargo build --release -p lst-gpui --bin lst --example bench_editor_x11
 ```
 
 Run every scenario:

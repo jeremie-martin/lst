@@ -917,7 +917,7 @@ fn main() {
 
     if !has_graphical_env {
         eprintln!(
-            "lst_gpui requires a graphical session. Run it from a real X11 or Wayland desktop."
+            "lst requires a graphical session. Run it from a real X11 or Wayland desktop."
         );
         process::exit(1);
     }
@@ -935,14 +935,15 @@ fn main() {
         let window_title = launch
             .window_title
             .clone()
-            .unwrap_or_else(|| "lst GPUI".into());
+            .unwrap_or_else(|| "lst".into());
         let window = match cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(gpui::TitlebarOptions {
-                    title: Some(window_title.into()),
+                    title: Some(window_title.clone().into()),
                     ..Default::default()
                 }),
+                app_id: Some("lst".to_string()),
                 ..Default::default()
             },
             move |_, cx| {
@@ -953,7 +954,7 @@ fn main() {
             Ok(window) => window,
             Err(err) => {
                 eprintln!(
-                    "lst_gpui failed to open a GPUI window: {err}. On this host, Xvfb is not sufficient because GPUI surface creation requires a real presentation backend."
+                    "lst failed to open a GPUI window: {err}. On this host, Xvfb is not sufficient because GPUI surface creation requires a real presentation backend."
                 );
                 process::exit(1);
             }
@@ -961,6 +962,7 @@ fn main() {
 
         window
             .update(cx, |view, window, cx| {
+                window.set_window_title(&window_title);
                 let entity = cx.entity();
                 window.on_window_should_close(cx, move |_window, cx| {
                     let entity = entity.clone();
