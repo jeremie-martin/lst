@@ -114,11 +114,15 @@ pub mod metrics {
     pub const TAB_MAX_WIDTH: f32 = 220.0;
     pub const TAB_HORIZONTAL_PAD: f32 = 10.0;
     pub const TAB_SLOT_WIDTH: f32 = 18.0;
+    pub const TAB_DIRTY_TEXT_INSET: f32 = 10.0;
     pub const TAB_TEXT_SIZE: f32 = 12.0;
+    pub const TAB_TEXT_LINE_HEIGHT: f32 = 16.0;
     pub const ICON_BUTTON_SIZE: f32 = 16.0;
 
     pub const INPUT_HEIGHT: f32 = 30.0;
+    pub const INPUT_HORIZONTAL_PAD: f32 = 12.0;
     pub const INPUT_TEXT_SIZE: f32 = 12.0;
+    pub const INPUT_TEXT_LINE_HEIGHT: f32 = 18.0;
 
     pub const ROW_HEIGHT: f32 = 22.0;
     pub const GUTTER_WIDTH: f32 = 58.0;

@@ -710,7 +710,7 @@ impl Element for TextElement {
         let rem_size = window.rem_size();
         let mut style = Style::default();
         style.size.width = relative(1.0).into();
-        style.size.height = metrics::px_for_rem(metrics::INPUT_HEIGHT - 10.0, rem_size).into();
+        style.size.height = metrics::px_for_rem(metrics::INPUT_TEXT_LINE_HEIGHT, rem_size).into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -835,7 +835,7 @@ impl Element for TextElement {
             window.paint_quad(selection);
         }
         let line = prepaint.line.take().expect("input line prepainted");
-        let _ = line.paint(bounds.origin, window.line_height(), window, cx);
+        let _ = line.paint(bounds.origin, bounds.size.height, window, cx);
         if focus_handle.is_focused(window) {
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);
@@ -891,13 +891,22 @@ impl Render for InputField {
             .on_action(cx.listener(Self::next))
             .on_action(cx.listener(Self::previous))
             .relative()
+            .flex()
             .w_full()
             .h(metrics::px_for_rem(
                 metrics::INPUT_HEIGHT,
                 window.rem_size(),
             ))
-            .px_3()
+            .px(metrics::px_for_rem(
+                metrics::INPUT_HORIZONTAL_PAD,
+                window.rem_size(),
+            ))
             .items_center()
+            .overflow_hidden()
+            .line_height(metrics::px_for_rem(
+                metrics::INPUT_TEXT_LINE_HEIGHT,
+                window.rem_size(),
+            ))
             .rounded_sm()
             .bg(if focused {
                 rgb(role::CONTROL_BG_HOVER)

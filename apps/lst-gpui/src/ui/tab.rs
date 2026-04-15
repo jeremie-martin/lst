@@ -1,6 +1,7 @@
 use gpui::{
-    div, px, rgb, AnyElement, App, CursorStyle, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    div, prelude::FluentBuilder, px, rgb, AnyElement, App, CursorStyle, InteractiveElement,
+    IntoElement, ParentElement, RenderOnce, SharedString, Stateful, StatefulInteractiveElement,
+    Styled,
 };
 use smallvec::SmallVec;
 
@@ -62,6 +63,7 @@ impl ParentElement for Tab {
 impl RenderOnce for Tab {
     fn render(self, window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
         let rem_size = window.rem_size();
+        let has_start_slot = self.start_slot.is_some();
         let background = if self.active {
             rgb(role::EDITOR_BG)
         } else {
@@ -92,22 +94,16 @@ impl RenderOnce for Tab {
             .child(
                 div()
                     .flex()
-                    .h_full()
-                    .w(metrics::px_for_rem(metrics::TAB_SLOT_WIDTH, rem_size))
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .children(self.start_slot),
-            )
-            .child(
-                div()
-                    .flex()
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
                     .h_full()
                     .items_center()
+                    .when(has_start_slot, |label| {
+                        label.pl(metrics::px_for_rem(metrics::TAB_DIRTY_TEXT_INSET, rem_size))
+                    })
                     .text_size(metrics::px_for_rem(metrics::TAB_TEXT_SIZE, rem_size))
+                    .line_height(metrics::px_for_rem(metrics::TAB_TEXT_LINE_HEIGHT, rem_size))
                     .text_color(text)
                     .truncate()
                     .children(self.children),
@@ -122,6 +118,19 @@ impl RenderOnce for Tab {
                     .justify_center()
                     .children(self.end_slot),
             )
+            .children(self.start_slot.map(|slot| {
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .flex()
+                    .w(metrics::px_for_rem(metrics::TAB_SLOT_WIDTH, rem_size))
+                    .items_center()
+                    .justify_center()
+                    .child(slot)
+                    .into_any_element()
+            }))
             .children(
                 self.active.then_some(
                     div()

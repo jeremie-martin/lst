@@ -63,7 +63,7 @@ impl LstGpuiApp {
             )
             .start_slot(dirty_marker)
             .end_slot(close_button.map(IntoElement::into_any_element))
-            .child(div().min_w_0().truncate().child(tab.display_name()))
+            .child(tab.display_name())
     }
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
