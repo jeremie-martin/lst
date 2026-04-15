@@ -99,7 +99,7 @@ impl LstGpuiApp {
         for effect in effects {
             match effect {
                 EditorEffect::Focus(target) => self.queue_focus(target),
-                EditorEffect::Reveal(intent) => self.reveal_active_cursor(intent),
+                EditorEffect::Reveal(intent) => self.queue_cursor_reveal(intent),
                 EditorEffect::WriteClipboard(text) => {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }

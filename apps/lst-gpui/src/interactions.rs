@@ -133,7 +133,7 @@ impl LstGpuiApp {
             }
             None => return false,
         }
-        self.reveal_active_cursor(RevealIntent::NearestEdge);
+        self.queue_cursor_reveal(RevealIntent::NearestEdge);
         true
     }
 

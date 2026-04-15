@@ -105,6 +105,52 @@ fn active_viewport_size(view: &Entity<LstGpuiApp>, cx: &mut VisualTestContext) -
     })
 }
 
+fn refresh_and_flush_reveal(view: &Entity<LstGpuiApp>, cx: &mut VisualTestContext, label: &str) {
+    cx.refresh()
+        .unwrap_or_else(|_| panic!("refresh {label} before queued reveal"));
+    cx.run_until_parked();
+    cx.update_window_entity(view, |app, window, cx| {
+        app.flush_pending_reveal_for_test(window, cx);
+    });
+    cx.run_until_parked();
+    cx.refresh()
+        .unwrap_or_else(|_| panic!("refresh {label} after queued reveal"));
+    cx.run_until_parked();
+}
+
+fn active_cursor_viewport_state(
+    view: &Entity<LstGpuiApp>,
+    cx: &mut VisualTestContext,
+) -> (f32, f32, f32, usize, f32, usize) {
+    view.update(cx, |app, _cx| {
+        let active_view = app.active_view();
+        let bounds = active_view
+            .geometry
+            .borrow()
+            .bounds
+            .expect("viewport should have rendered bounds");
+        let cache = active_view.cache.borrow();
+        let layout = cache
+            .wrap_layout
+            .as_ref()
+            .expect("wrap layout should have been prepared");
+        let cursor_row = crate::viewport::visual_row_for_char(app.active_tab(), &layout.layout)
+            .expect("cursor should map to a visual row");
+        let scroll_top = crate::viewport::scroll_top_for(&active_view.scroll);
+        let max_offset = active_view.scroll.max_offset().height.max(px(0.0));
+        let row_height = app.ui_px(crate::ui::theme::metrics::ROW_HEIGHT);
+
+        (
+            scroll_top / px(1.0),
+            bounds.size.height / px(1.0),
+            row_height / px(1.0),
+            cursor_row,
+            max_offset / px(1.0),
+            layout.layout.total_rows,
+        )
+    })
+}
+
 #[cfg(feature = "internal-invariants")]
 fn tab_from_path(path: PathBuf, text: &str) -> EditorTab {
     EditorTab::from_path(TabId::from_raw(1), path, text)
@@ -217,6 +263,64 @@ fn app_input_handler_updates_real_editor_model(cx: &mut TestAppContext) {
     assert_eq!(snapshot.model.text, "hello");
     assert_eq!(snapshot.model.status, "Ready.");
     assert_tab_views_match_model(&snapshot);
+}
+
+#[gpui::test]
+fn typing_at_wrapped_line_end_keeps_cursor_visible(cx: &mut TestAppContext) {
+    let dir = temp_dir("wrapped-reveal");
+    let path = dir.join("long.txt");
+    std::fs::write(&path, "a".repeat(30_000)).expect("write wrapped reveal fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    refresh_and_flush_reveal(&view, cx, "initial wrapped buffer");
+
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| {
+            let end = model.active_tab().len_chars();
+            model.move_to_char(end, false, None);
+        });
+    });
+    refresh_and_flush_reveal(&view, cx, "cursor move to wrapped EOF");
+    let before = active_cursor_viewport_state(&view, cx);
+    assert!(
+        before.0 > before.2,
+        "fixture should scroll before typing; scroll_top={}, row_height={}, cursor_row={}, max_offset={}, total_rows={}",
+        before.0,
+        before.2,
+        before.3,
+        before.4,
+        before.5
+    );
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "x", window, cx);
+    });
+    refresh_and_flush_reveal(&view, cx, "typing at wrapped EOF");
+
+    let after = active_cursor_viewport_state(&view, cx);
+    let caret_top = after.2 * after.3 as f32;
+    let caret_bottom = caret_top + after.2;
+    assert!(
+        after.0 <= caret_top + 1.0 && caret_bottom <= after.0 + after.1 + 1.0,
+        "cursor visual row should remain visible after typing; scroll_top={}, viewport_height={}, row_height={}, cursor_row={}",
+        after.0,
+        after.1,
+        after.2,
+        after.3
+    );
+    assert!(
+        after.0 >= before.0 - after.2,
+        "typing at wrapped EOF should not reset the viewport toward the top; before={}, after={}",
+        before.0,
+        after.0
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
 }
 
 #[gpui::test]

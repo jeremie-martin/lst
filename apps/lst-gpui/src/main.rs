@@ -156,6 +156,8 @@ struct LstGpuiApp {
     pending_focus: Option<FocusTarget>,
     persistent_overlay_focus: Option<FocusTarget>,
     pending_after_save: Option<PendingAfterSave>,
+    pending_reveal: Option<RevealIntent>,
+    reveal_scheduled: bool,
     autosave_inflight: HashSet<PathBuf>,
     autosave_started: bool,
     scratchpad_dir: Option<PathBuf>,
@@ -191,6 +193,8 @@ impl LstGpuiApp {
             pending_focus: None,
             persistent_overlay_focus: None,
             pending_after_save: None,
+            pending_reveal: None,
+            reveal_scheduled: false,
             autosave_inflight: HashSet::new(),
             autosave_started: false,
             scratchpad_dir,
@@ -716,21 +720,73 @@ impl LstGpuiApp {
         self.model.set_viewport_top(top);
     }
 
-    fn reveal_active_cursor(&self, intent: RevealIntent) {
-        let tab = self.active_tab();
-        let view = self.active_view();
-        let viewport_bounds = view.scroll.bounds();
-        if viewport_bounds.size.height <= px(0.) {
+    fn queue_cursor_reveal(&mut self, intent: RevealIntent) {
+        self.pending_reveal = Some(intent);
+    }
+
+    fn schedule_pending_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_reveal.is_none() || self.reveal_scheduled {
             return;
         }
 
-        let visual_row = view
-            .cache
-            .borrow()
-            .wrap_layout
-            .as_ref()
-            .and_then(|cached| visual_row_for_char(tab, &cached.layout))
-            .unwrap_or_else(|| tab.buffer().char_to_line(tab.cursor_char()));
+        self.reveal_scheduled = true;
+        cx.on_next_frame(window, |this, window, cx| {
+            this.reveal_scheduled = false;
+            this.flush_pending_reveal(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn flush_pending_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(intent) = self.pending_reveal.take() else {
+            return;
+        };
+
+        if !self.try_reveal_active_cursor(intent) {
+            self.pending_reveal = Some(intent);
+            self.schedule_pending_reveal(window, cx);
+        }
+    }
+
+    #[cfg(test)]
+    fn flush_pending_reveal_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reveal_scheduled = false;
+        self.flush_pending_reveal(window, cx);
+    }
+
+    fn active_cursor_visual_row(&self) -> Option<usize> {
+        let tab = self.active_tab();
+        let view = self.active_view();
+
+        if self.model.show_wrap() {
+            let cache = view.cache.borrow();
+            let cached = cache.wrap_layout.as_ref()?;
+            if cached.revision != tab.revision() || !cached.layout.show_wrap {
+                return None;
+            }
+            visual_row_for_char(tab, &cached.layout)
+        } else {
+            Some(tab.buffer().char_to_line(tab.cursor_char()))
+        }
+    }
+
+    fn try_reveal_active_cursor(&self, intent: RevealIntent) -> bool {
+        let view = self.active_view();
+        let viewport_bounds = {
+            let geometry = view.geometry.borrow();
+            let Some(bounds) = geometry.bounds else {
+                return false;
+            };
+            bounds
+        };
+        if viewport_bounds.size.height <= px(0.) {
+            return false;
+        }
+
+        let Some(visual_row) = self.active_cursor_visual_row() else {
+            return false;
+        };
+
         let row_height = self.ui_px(metrics::ROW_HEIGHT);
         let caret_top = row_height * visual_row as f32;
         let caret_bottom = caret_top + row_height;
@@ -762,6 +818,7 @@ impl LstGpuiApp {
         if let Some(target) = target {
             view.scroll.set_offset(point(px(0.0), -target));
         }
+        true
     }
 
     fn sync_primary_selection(&self, cx: &mut Context<Self>) {

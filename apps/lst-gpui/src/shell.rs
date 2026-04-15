@@ -426,6 +426,7 @@ impl Render for LstGpuiApp {
                     )
                     .child(self.render_status_bar()),
             );
+        self.schedule_pending_reveal(window, cx);
         self.apply_pending_focus(window, cx);
         self.maintain_overlay_focus(window, cx);
         root
