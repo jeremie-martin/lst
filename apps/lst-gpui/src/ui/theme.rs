@@ -101,8 +101,8 @@ pub mod metrics {
 
     pub const WINDOW_WIDTH: f32 = 1360.0;
     pub const WINDOW_HEIGHT: f32 = 860.0;
-    pub const SHELL_EDGE_PAD: f32 = 12.0;
     pub const SHELL_GAP: f32 = 8.0;
+    pub const SHELL_EDGE_PAD: f32 = SHELL_GAP;
     pub const STATUS_HEIGHT_PAD: f32 = 10.0;
 
     pub const TAB_HEIGHT: f32 = 30.0;
