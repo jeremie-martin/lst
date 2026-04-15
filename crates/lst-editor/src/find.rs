@@ -15,7 +15,7 @@ pub struct FindState {
     pub query: String,
     pub replacement: String,
     pub matches: Vec<MatchPos>,
-    pub current: usize,
+    pub active: Option<usize>,
     indexed_revision: Option<u64>,
     dirty_since: Option<Instant>,
 }
@@ -28,7 +28,7 @@ impl FindState {
             query: String::new(),
             replacement: String::new(),
             matches: Vec::new(),
-            current: 0,
+            active: None,
             indexed_revision: None,
             dirty_since: None,
         }
@@ -36,14 +36,16 @@ impl FindState {
 
     pub fn clear_results(&mut self) {
         self.matches.clear();
-        self.current = 0;
+        self.active = None;
         self.indexed_revision = None;
         self.dirty_since = None;
     }
 
     pub fn compute_matches_in_text(&mut self, text: &str) {
+        let previous_active = self.active;
         self.matches.clear();
         if self.query.is_empty() {
+            self.active = None;
             return;
         }
         for (line_idx, line) in text.lines().enumerate() {
@@ -58,11 +60,11 @@ impl FindState {
                 start = abs_byte + self.query.len();
             }
         }
-        if self.matches.is_empty() {
-            self.current = 0;
+        self.active = if self.matches.is_empty() {
+            None
         } else {
-            self.current = self.current.min(self.matches.len() - 1);
-        }
+            Some(previous_active.unwrap_or(0).min(self.matches.len() - 1))
+        };
     }
 
     pub fn compute_matches_in_rope(&mut self, buffer: &Rope) {
@@ -70,7 +72,7 @@ impl FindState {
     }
 
     pub fn current_match_range(&self) -> Option<(Position, Position)> {
-        let m = self.matches.get(self.current)?;
+        let m = self.matches.get(self.active?)?;
         Some((
             Position {
                 line: m.line,
@@ -84,29 +86,34 @@ impl FindState {
     }
 
     pub fn next(&mut self) {
-        if !self.matches.is_empty() {
-            self.current = (self.current + 1) % self.matches.len();
+        let len = self.matches.len();
+        if len > 0 {
+            self.active = Some(self.active.map_or(0, |current| (current + 1) % len));
         }
     }
 
     pub fn prev(&mut self) {
-        if !self.matches.is_empty() {
-            self.current = if self.current == 0 {
-                self.matches.len() - 1
-            } else {
-                self.current - 1
-            };
+        let len = self.matches.len();
+        if len > 0 {
+            self.active = Some(match self.active {
+                Some(0) | None => len - 1,
+                Some(current) => current - 1,
+            });
         }
     }
 
     pub fn find_nearest(&mut self, position: &Position) {
+        if self.matches.is_empty() {
+            self.active = None;
+            return;
+        }
         for (i, m) in self.matches.iter().enumerate() {
             if m.line > position.line || (m.line == position.line && m.col >= position.column) {
-                self.current = i;
+                self.active = Some(i);
                 return;
             }
         }
-        self.current = 0;
+        self.active = Some(0);
     }
 
     pub fn select_exact(&mut self, position: &Position) -> bool {
@@ -117,7 +124,7 @@ impl FindState {
         else {
             return false;
         };
-        self.current = index;
+        self.active = Some(index);
         true
     }
 

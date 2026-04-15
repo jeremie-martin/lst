@@ -40,6 +40,22 @@ fn has_binding_in_context<A: gpui::Action + 'static>(keystroke: &str, context: &
     })
 }
 
+fn has_binding_context_containing<A: gpui::Action + 'static>(
+    keystroke: &str,
+    expected: &[&str],
+) -> bool {
+    let typed = [Keystroke::parse(keystroke).expect("valid test keystroke")];
+    editor_keybindings().iter().any(|binding| {
+        binding.match_keystrokes(&typed) == Some(false)
+            && binding.action().as_any().is::<A>()
+            && binding
+                .predicate()
+                .as_ref()
+                .map(ToString::to_string)
+                .is_some_and(|predicate| expected.iter().all(|part| predicate.contains(part)))
+    })
+}
+
 fn temp_dir(label: &str) -> PathBuf {
     let id = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
     let dir =
@@ -449,7 +465,9 @@ fn app_find_input_flow_is_observable_at_app_boundary(cx: &mut TestAppContext) {
     assert_eq!(snapshot.model.find_query, "one");
     assert_eq!(snapshot.find_query_input, "one");
     assert_eq!(snapshot.model.find_matches, 2);
-    assert_eq!(snapshot.model.selection, 0..3);
+    assert_eq!(snapshot.model.find_current, Some(0));
+    assert_eq!(snapshot.model.find_active_match, Some(0..3));
+    assert_eq!(snapshot.model.selection, 0..0);
     assert_tab_views_match_model(&snapshot);
 
     cx.simulate_keystrokes("escape");
@@ -483,6 +501,36 @@ fn app_find_open_syncs_selected_text_into_input(cx: &mut TestAppContext) {
     assert_eq!(snapshot.find_query_input, "one");
     assert_eq!(snapshot.model.find_matches, 2);
     assert_tab_views_match_model(&snapshot);
+}
+
+#[gpui::test]
+fn find_input_navigation_does_not_extend_document_selection_without_matches(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "alpha\nbeta\ngamma", window, cx);
+    });
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| {
+            model.move_to_char("alpha\n".chars().count(), false, None);
+        });
+    });
+
+    cx.dispatch_action(FindOpen);
+    cx.refresh().expect("refresh after find focus request");
+    cx.run_until_parked();
+    cx.simulate_input("zzz");
+    cx.simulate_keystrokes("ctrl-down");
+
+    let snapshot = app_snapshot(&view, cx);
+    let expected_cursor = "alpha\n".chars().count();
+    assert_eq!(snapshot.model.find_matches, 0);
+    assert_eq!(snapshot.model.find_current, None);
+    assert_eq!(snapshot.model.find_active_match, None);
+    assert_eq!(snapshot.model.cursor, expected_cursor);
+    assert_eq!(snapshot.model.selection, expected_cursor..expected_cursor);
 }
 
 #[gpui::test]
@@ -1185,6 +1233,23 @@ fn standard_movement_keybindings_are_registered() {
     assert!(has_binding::<DeleteWordBackward>("alt-backspace"));
     assert!(has_binding::<DeleteWordForward>("ctrl-delete"));
     assert!(has_binding::<DeleteWordForward>("alt-delete"));
+}
+
+#[test]
+fn editor_keybindings_are_suppressed_while_inline_inputs_are_focused() {
+    let editor_without_inline = &["Editor", "!", "InlineInput"];
+    assert!(has_binding_context_containing::<MoveLeft>(
+        "left",
+        editor_without_inline
+    ));
+    assert!(has_binding_context_containing::<SelectDown>(
+        "ctrl-down",
+        editor_without_inline
+    ));
+    assert!(has_binding_context_containing::<CopySelection>(
+        "ctrl-c",
+        editor_without_inline
+    ));
 }
 
 #[test]

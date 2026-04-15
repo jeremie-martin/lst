@@ -434,7 +434,7 @@ impl LstGpuiApp {
             InputFieldEvent::Changed(text) => {
                 let reindex_started = Instant::now();
                 self.update_model(cx, true, |model| {
-                    model.update_find_query_and_select(text.clone());
+                    model.update_find_query_and_activate(text.clone());
                 });
                 self.record_find_metrics(elapsed_ms(reindex_started));
             }
@@ -639,7 +639,7 @@ impl LstGpuiApp {
             let current = if self.model.find().matches.is_empty() {
                 0
             } else {
-                self.model.find().current + 1
+                self.model.find().active.map_or(0, |index| index + 1)
             };
             parts.push(format!(
                 "Match {current}/{}",

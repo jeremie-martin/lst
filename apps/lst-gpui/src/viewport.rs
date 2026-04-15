@@ -13,6 +13,7 @@ use std::{
     cell::RefCell,
     collections::{hash_map::DefaultHasher, HashMap},
     hash::{Hash, Hasher},
+    ops::Range,
     rc::Rc,
 };
 
@@ -519,10 +520,51 @@ pub(crate) fn prepare_viewport_paint_state(
     ViewportPaintState { rows }
 }
 
+fn paint_range_background(
+    row: &PaintedRow,
+    range: &Range<usize>,
+    code_origin_x: Pixels,
+    row_height: Pixels,
+    scale: f32,
+    color: u32,
+    window: &mut Window,
+) {
+    if range.start == range.end
+        || range.end <= row.line_start_char
+        || range.start >= row.logical_end_char
+    {
+        return;
+    }
+
+    let start = range
+        .start
+        .max(row.line_start_char)
+        .min(row.display_end_char);
+    let end = range.end.min(row.display_end_char);
+    if end <= start {
+        return;
+    }
+
+    let start_x = code_origin_x + x_for_global_char(row, start).unwrap_or_else(|| px(0.0));
+    let end_x = code_origin_x + x_for_global_char(row, end).unwrap_or_else(|| px(0.0));
+    window.paint_quad(fill(
+        Bounds::from_corners(
+            point(start_x, row.row_top),
+            point(
+                end_x.max(start_x + metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)),
+                row.row_top + row_height,
+            ),
+        ),
+        rgb(color),
+    ));
+}
+
 pub(crate) fn paint_viewport(
     bounds: Bounds<Pixels>,
     show_gutter: bool,
-    selection: std::ops::Range<usize>,
+    selection: Range<usize>,
+    search_matches: &[Range<usize>],
+    active_search_match: Option<&Range<usize>>,
     cursor_char: usize,
     vim_mode: vim::Mode,
     focused: bool,
@@ -568,32 +610,39 @@ pub(crate) fn paint_viewport(
             ));
         }
 
-        if selection.start != selection.end
-            && selection.end > row.line_start_char
-            && selection.start < row.logical_end_char
-        {
-            let start = selection
-                .start
-                .max(row.line_start_char)
-                .min(row.display_end_char);
-            let end = selection.end.min(row.display_end_char);
-            if end > start {
-                let start_x =
-                    code_origin_x + x_for_global_char(&row, start).unwrap_or_else(|| px(0.0));
-                let end_x = code_origin_x + x_for_global_char(&row, end).unwrap_or_else(|| px(0.0));
-                window.paint_quad(fill(
-                    Bounds::from_corners(
-                        point(start_x, row.row_top),
-                        point(
-                            end_x
-                                .max(start_x + metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)),
-                            row.row_top + row_height,
-                        ),
-                    ),
-                    rgb(role::SELECTION_BG),
-                ));
-            }
+        for search_match in search_matches {
+            paint_range_background(
+                &row,
+                search_match,
+                code_origin_x,
+                row_height,
+                scale,
+                role::SEARCH_MATCH_BG,
+                window,
+            );
         }
+
+        if let Some(active_search_match) = active_search_match {
+            paint_range_background(
+                &row,
+                active_search_match,
+                code_origin_x,
+                row_height,
+                scale,
+                role::SEARCH_ACTIVE_MATCH_BG,
+                window,
+            );
+        }
+
+        paint_range_background(
+            &row,
+            &selection,
+            code_origin_x,
+            row_height,
+            scale,
+            role::SELECTION_BG,
+            window,
+        );
 
         if let Some(gutter_line) = row.gutter_line.as_ref() {
             let gutter_x = gutter_origin_x + (gutter_width - gutter_line.width);

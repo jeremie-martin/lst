@@ -18,7 +18,7 @@ pub use viewport::Viewport;
 
 use crate::{
     document::{char_to_position, line_indent_prefix, position_to_char},
-    find::FindState,
+    find::{FindState, MatchPos},
     position::Position,
     selection::{next_word_boundary, previous_word_boundary},
 };
@@ -146,6 +146,24 @@ impl EditorModel {
         &self.find
     }
 
+    pub fn find_match_ranges(&self) -> Vec<Range<usize>> {
+        self.find
+            .matches
+            .iter()
+            .copied()
+            .map(|m| self.find_match_char_range(m))
+            .collect()
+    }
+
+    pub fn active_find_match_range(&self) -> Option<Range<usize>> {
+        let active = self.find.active?;
+        self.find
+            .matches
+            .get(active)
+            .copied()
+            .map(|m| self.find_match_char_range(m))
+    }
+
     pub fn goto_line(&self) -> Option<&str> {
         self.goto_line.as_deref()
     }
@@ -240,7 +258,7 @@ impl EditorModel {
         if let Some(text) = selected_text {
             if !text.contains('\n') {
                 self.find.query = text;
-                self.reindex_find_matches();
+                self.reindex_find_matches_to_nearest();
             }
         }
         self.queue_focus(FocusTarget::FindQuery);
@@ -267,9 +285,9 @@ impl EditorModel {
         self.reindex_find_matches_to_nearest();
     }
 
-    fn set_find_query_and_select(&mut self, text: String) {
+    fn set_find_query_and_activate(&mut self, text: String) {
         self.set_find_query(text);
-        if self.select_current_find_match() {
+        if self.move_to_current_find_match() {
             self.queue_reveal(RevealIntent::Center);
         }
     }
@@ -361,7 +379,7 @@ impl EditorModel {
             return false;
         }
         self.find.next();
-        self.select_current_find_match()
+        self.move_to_current_find_match()
     }
 
     fn find_prev(&mut self) -> bool {
@@ -370,7 +388,7 @@ impl EditorModel {
             return false;
         }
         self.find.prev();
-        self.select_current_find_match()
+        self.move_to_current_find_match()
     }
 
     fn replace_one(&mut self) -> bool {
@@ -386,7 +404,7 @@ impl EditorModel {
         self.active_tab_mut()
             .edit(EditKind::Other, UndoBoundary::Break, range, &replacement);
         self.sync_find_after_edit();
-        self.select_current_find_match();
+        self.move_to_current_find_match();
         true
     }
 
@@ -475,12 +493,32 @@ impl EditorModel {
         true
     }
 
-    fn select_current_find_match(&mut self) -> bool {
-        let Some((start, end)) = self.find.current_match_range() else {
+    fn move_to_current_find_match(&mut self) -> bool {
+        let Some((start, _end)) = self.find.current_match_range() else {
             return false;
         };
-        self.active_tab_mut().set_cursor_position(end, Some(start));
+        self.active_tab_mut().set_cursor_position(start, None);
         true
+    }
+
+    fn find_match_char_range(&self, m: MatchPos) -> Range<usize> {
+        let query_len = self.find.query.chars().count();
+        let tab = self.active_tab();
+        let start = position_to_char(
+            tab.buffer(),
+            Position {
+                line: m.line,
+                column: m.col,
+            },
+        );
+        let end = position_to_char(
+            tab.buffer(),
+            Position {
+                line: m.line,
+                column: m.col + query_len,
+            },
+        );
+        start..end
     }
 
     fn edit_active(
@@ -1145,7 +1183,7 @@ impl EditorModel {
                 m.line > position.line || (m.line == position.line && m.col > position.column)
             })
             .or_else(|| (!self.find.matches.is_empty()).then_some(0))?;
-        self.find.current = index;
+        self.find.active = Some(index);
         let m = self.find.matches[index];
         Some(Position {
             line: m.line,
@@ -1162,7 +1200,7 @@ impl EditorModel {
                 m.line < position.line || (m.line == position.line && m.col < position.column)
             })
             .or_else(|| self.find.matches.len().checked_sub(1))?;
-        self.find.current = index;
+        self.find.active = Some(index);
         let m = self.find.matches[index];
         Some(Position {
             line: m.line,
@@ -1789,8 +1827,8 @@ impl EditorModel {
         self.set_find_query(text);
     }
 
-    pub fn update_find_query_and_select(&mut self, text: String) {
-        self.set_find_query_and_select(text);
+    pub fn update_find_query_and_activate(&mut self, text: String) {
+        self.set_find_query_and_activate(text);
     }
 
     pub fn update_find_replacement(&mut self, text: String) {

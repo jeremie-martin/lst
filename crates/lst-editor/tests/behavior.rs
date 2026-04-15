@@ -119,7 +119,7 @@ fn opening_find_only_after_replace_clears_replace_mode() {
 }
 
 #[test]
-fn find_next_selects_the_next_observable_match() {
+fn find_next_activates_the_next_observable_match_without_document_selection() {
     let mut model = EditorModel::new(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
@@ -135,7 +135,34 @@ fn find_next_selects_the_next_observable_match() {
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.find_matches, 2);
-    assert_eq!(snapshot.selection, 8..11);
+    assert_eq!(snapshot.find_current, Some(1));
+    assert_eq!(snapshot.find_active_match, Some(8..11));
+    assert_eq!(snapshot.cursor, 8);
+    assert_eq!(snapshot.selection, 8..8);
+}
+
+#[test]
+fn no_match_find_query_does_not_create_or_extend_document_selection() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta",
+        )],
+        "Ready.".into(),
+    );
+    model.move_to_char(6, false, None);
+
+    model.open_find_panel(false);
+    model.update_find_query_and_activate("zzz".into());
+    model.move_word(false, false);
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.find_matches, 0);
+    assert_eq!(snapshot.find_current, None);
+    assert_eq!(snapshot.find_active_match, None);
+    assert_eq!(snapshot.selection, snapshot.cursor..snapshot.cursor);
 }
 
 #[test]

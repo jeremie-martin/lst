@@ -91,13 +91,13 @@ fn find_query_and_next_emit_reveal_center() {
     model.open_find_panel(false);
     let _ = model.drain_effects();
 
-    model.update_find_query_and_select("line 150".into());
+    model.update_find_query_and_activate("line 150".into());
     assert_eq!(
         only_reveal_intents(&model.drain_effects()),
         vec![RevealIntent::Center],
     );
 
-    model.update_find_query_and_select("line 1".into());
+    model.update_find_query_and_activate("line 1".into());
     let _ = model.drain_effects();
     model.find_next_match();
     assert_eq!(

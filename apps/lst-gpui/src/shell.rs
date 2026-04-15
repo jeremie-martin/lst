@@ -102,7 +102,8 @@ impl LstGpuiApp {
         let match_label = if find.matches.is_empty() {
             "0/0".to_string()
         } else {
-            format!("{}/{}", find.current + 1, find.matches.len())
+            let active = find.active.map_or(0, |index| index + 1);
+            format!("{}/{}", active, find.matches.len())
         };
 
         div()
@@ -256,13 +257,30 @@ impl Render for LstGpuiApp {
                 metrics::px_for_scale(metrics::WINDOW_WIDTH - 48.0, self.ui_scale())
             });
         let char_width = code_char_width(window);
-        let (revision, syntax_mode, buffer, selection, cursor_char) = {
+        let show_search_decorations = self.model.find().visible;
+        let (
+            revision,
+            syntax_mode,
+            buffer,
+            selection,
+            search_matches,
+            active_search_match,
+            cursor_char,
+        ) = {
             let active_tab = self.model.active_tab();
             (
                 active_tab.revision(),
                 syntax_mode_for_path(active_tab.path()),
                 active_tab.buffer_clone(),
                 active_tab.selection(),
+                if show_search_decorations {
+                    self.model.find_match_ranges()
+                } else {
+                    Vec::new()
+                },
+                show_search_decorations
+                    .then(|| self.model.active_find_match_range())
+                    .flatten(),
                 active_tab.cursor_char(),
             )
         };
@@ -404,6 +422,8 @@ impl Render for LstGpuiApp {
                                                             bounds,
                                                             show_gutter,
                                                             selection.clone(),
+                                                            &search_matches,
+                                                            active_search_match.as_ref(),
                                                             cursor_char,
                                                             vim_mode,
                                                             focus_handle.is_focused(window),
