@@ -23,7 +23,7 @@ use crate::ui::{input_keybindings, theme::metrics, InputField, InputFieldEvent};
 pub(crate) use input_adapter::{char_range_to_utf16_range, utf16_range_to_char_range_in_text};
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use interactions::drag_autoscroll_delta;
-use interactions::DragSelectionMode;
+use interactions::ActiveDragSelection;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
@@ -147,9 +147,7 @@ struct LstGpuiApp {
     tab_views: Vec<EditorTabView>,
     tab_bar_scroll: ScrollHandle,
     hovered_tab: Option<usize>,
-    drag_selecting: Option<DragSelectionMode>,
-    drag_last_point: Option<Point<Pixels>>,
-    drag_autoscroll_active: bool,
+    selection_drag: Option<ActiveDragSelection>,
     find_query_input: Entity<InputField>,
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
@@ -184,9 +182,7 @@ impl LstGpuiApp {
             tab_views,
             tab_bar_scroll: ScrollHandle::new(),
             hovered_tab: None,
-            drag_selecting: None,
-            drag_last_point: None,
-            drag_autoscroll_active: false,
+            selection_drag: None,
             find_query_input: find_query_input.clone(),
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
@@ -840,7 +836,7 @@ impl LstGpuiApp {
         // Skip the guard during drag-autoscroll: the drag loop imperatively
         // nudges scroll between frames and still needs the cursor to track.
         const SCROLL_STALE_THRESHOLD: f32 = 0.5;
-        if self.drag_selecting.is_none() {
+        if self.selection_drag.is_none() {
             let current_scroll_top = scroll_top_for(&self.active_view().scroll);
             if (current_scroll_top - geometry.scroll_top_at_paint).abs()
                 > px(SCROLL_STALE_THRESHOLD)

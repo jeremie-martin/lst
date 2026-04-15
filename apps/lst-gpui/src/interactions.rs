@@ -18,6 +18,23 @@ pub(crate) enum DragSelectionMode {
     Line(Range<usize>),
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ActiveDragSelection {
+    mode: DragSelectionMode,
+    last_point: Point<Pixels>,
+    autoscroll_active: bool,
+}
+
+impl ActiveDragSelection {
+    fn new(mode: DragSelectionMode, last_point: Point<Pixels>) -> Self {
+        Self {
+            mode,
+            last_point,
+            autoscroll_active: false,
+        }
+    }
+}
+
 impl LstGpuiApp {
     pub(crate) fn on_mouse_down(
         &mut self,
@@ -27,11 +44,10 @@ impl LstGpuiApp {
     ) {
         self.persistent_overlay_focus = None;
         window.focus(&self.focus_handle);
-        self.drag_last_point = Some(event.position);
         let index = self.active_char_index_for_point(event.position);
         if event.click_count >= 3 {
             let line_range = line_range_at_char(self.active_tab().buffer(), index);
-            self.drag_selecting = Some(DragSelectionMode::Line(line_range.clone()));
+            self.start_drag_selection(DragSelectionMode::Line(line_range.clone()), event.position);
             self.select_active_range(line_range, cx);
             self.sync_primary_selection(cx);
             self.schedule_drag_autoscroll(window, cx);
@@ -40,7 +56,7 @@ impl LstGpuiApp {
         }
         if event.click_count == 2 {
             let word_range = word_range_at_char(self.active_tab().buffer(), index);
-            self.drag_selecting = Some(DragSelectionMode::Word(word_range.clone()));
+            self.start_drag_selection(DragSelectionMode::Word(word_range.clone()), event.position);
             self.select_active_range(word_range, cx);
             self.sync_primary_selection(cx);
             self.schedule_drag_autoscroll(window, cx);
@@ -48,7 +64,7 @@ impl LstGpuiApp {
             return;
         }
 
-        self.drag_selecting = Some(DragSelectionMode::Character);
+        self.start_drag_selection(DragSelectionMode::Character, event.position);
         self.update_model(cx, true, |model| {
             model.move_to_char(index, event.modifiers.shift, None);
         });
@@ -64,9 +80,7 @@ impl LstGpuiApp {
     ) {
         self.persistent_overlay_focus = None;
         window.focus(&self.focus_handle);
-        self.drag_selecting = None;
-        self.drag_last_point = None;
-        self.drag_autoscroll_active = false;
+        self.cancel_drag_selection();
 
         let index = self.active_char_index_for_point(event.position);
         match cx.read_from_primary().and_then(|item| item.text()) {
@@ -90,12 +104,7 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.drag_last_point = Some(event.position);
-        if !self.apply_drag_selection_at_point(event.position, cx) {
-            return;
-        }
-        self.schedule_drag_autoscroll(window, cx);
-        cx.notify();
+        self.update_drag_selection(event, window, cx);
     }
 
     pub(crate) fn on_mouse_up(
@@ -104,11 +113,44 @@ impl LstGpuiApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.drag_selecting = None;
-        self.drag_last_point = None;
-        self.drag_autoscroll_active = false;
+        self.finish_drag_selection(cx);
+    }
+
+    fn start_drag_selection(&mut self, mode: DragSelectionMode, point: Point<Pixels>) {
+        self.selection_drag = Some(ActiveDragSelection::new(mode, point));
+    }
+
+    fn update_drag_selection(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !event.dragging() {
+            self.cancel_drag_selection();
+            return;
+        }
+
+        let Some(drag) = self.selection_drag.as_mut() else {
+            return;
+        };
+        drag.last_point = event.position;
+
+        if !self.apply_drag_selection_at_point(event.position, cx) {
+            return;
+        }
+        self.schedule_drag_autoscroll(window, cx);
+        cx.notify();
+    }
+
+    fn finish_drag_selection(&mut self, cx: &mut Context<Self>) {
+        self.cancel_drag_selection();
         self.sync_primary_selection(cx);
         cx.notify();
+    }
+
+    fn cancel_drag_selection(&mut self) {
+        self.selection_drag = None;
     }
 
     fn apply_drag_selection_at_point(
@@ -117,7 +159,8 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) -> bool {
         let index = self.active_char_index_for_point(position);
-        match self.drag_selecting.clone() {
+        let mode = self.selection_drag.as_ref().map(|drag| drag.mode.clone());
+        match mode {
             Some(DragSelectionMode::Character) => {
                 self.update_model(cx, true, |model| {
                     model.move_to_char(index, true, None);
@@ -138,27 +181,31 @@ impl LstGpuiApp {
     }
 
     fn schedule_drag_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.drag_autoscroll_active || self.drag_autoscroll_target().is_none() {
+        let Some(drag) = self.selection_drag.as_ref() else {
+            return;
+        };
+        if drag.autoscroll_active || self.drag_autoscroll_target().is_none() {
             return;
         }
-        self.drag_autoscroll_active = true;
+        if let Some(drag) = self.selection_drag.as_mut() {
+            drag.autoscroll_active = true;
+        }
         cx.on_next_frame(window, |this, window, cx| {
             this.run_drag_autoscroll(window, cx);
         });
     }
 
     fn run_drag_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.drag_autoscroll_active = false;
-        if self.drag_selecting.is_none() {
-            self.drag_last_point = None;
+        let Some(drag) = self.selection_drag.as_mut() else {
             return;
-        }
+        };
+        drag.autoscroll_active = false;
 
         if let Some(target) = self.drag_autoscroll_target() {
             self.active_view()
                 .scroll
                 .set_offset(point(px(0.0), -target));
-            if let Some(position) = self.drag_last_point {
+            if let Some(position) = self.selection_drag.as_ref().map(|drag| drag.last_point) {
                 self.apply_drag_selection_at_point(position, cx);
             }
             cx.notify();
@@ -167,7 +214,7 @@ impl LstGpuiApp {
     }
 
     fn drag_autoscroll_target(&self) -> Option<Pixels> {
-        let position = self.drag_last_point?;
+        let position = self.selection_drag.as_ref()?.last_point;
         let geometry = self.active_view().geometry.borrow();
         let bounds = geometry.bounds?;
         let delta = drag_autoscroll_delta(position, bounds, self.ui_scale())?;
@@ -194,6 +241,16 @@ impl LstGpuiApp {
         self.update_model(cx, true, |model| {
             model.set_selection(selection, reversed);
         });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force_stale_drag_selection_for_test(&mut self, point: Point<Pixels>) {
+        self.start_drag_selection(DragSelectionMode::Character, point);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_active_drag_selection_for_test(&self) -> bool {
+        self.selection_drag.is_some()
     }
 }
 

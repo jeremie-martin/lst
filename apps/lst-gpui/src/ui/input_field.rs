@@ -101,7 +101,7 @@ pub struct InputField {
     placeholder: SharedString,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
-    drag_selecting: Option<InputDragSelectionMode>,
+    selection_drag: Option<InputDragSelectionMode>,
 }
 
 #[derive(Clone, Debug)]
@@ -342,7 +342,7 @@ impl InputField {
             placeholder: placeholder.into(),
             last_layout: None,
             last_bounds: None,
-            drag_selecting: None,
+            selection_drag: None,
         }
     }
 
@@ -517,19 +517,19 @@ impl InputField {
         window.focus(&self.focus_handle);
         let offset = self.index_for_mouse_position(event.position);
         if event.click_count >= 3 {
-            self.drag_selecting = Some(InputDragSelectionMode::All);
+            self.start_drag_selection(InputDragSelectionMode::All);
             self.select_all(cx);
             return;
         }
         if event.click_count == 2 {
             let range = self.text.word_range_at_offset(offset);
-            self.drag_selecting = Some(InputDragSelectionMode::Word(range.clone()));
+            self.start_drag_selection(InputDragSelectionMode::Word(range.clone()));
             self.text.select_range(range, false);
             cx.notify();
             return;
         }
 
-        self.drag_selecting = Some(InputDragSelectionMode::Character);
+        self.start_drag_selection(InputDragSelectionMode::Character);
         if event.modifiers.shift {
             self.text.select_to(offset);
         } else {
@@ -540,13 +540,30 @@ impl InputField {
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        self.drag_selecting = None;
+        self.cancel_drag_selection();
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        self.update_drag_selection(event, cx);
+    }
+
+    fn start_drag_selection(&mut self, mode: InputDragSelectionMode) {
+        self.selection_drag = Some(mode);
+    }
+
+    fn cancel_drag_selection(&mut self) {
+        self.selection_drag = None;
+    }
+
+    fn update_drag_selection(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if !event.dragging() {
+            self.cancel_drag_selection();
+            return;
+        }
+
         let offset = self.index_for_mouse_position(event.position);
-        match self.drag_selecting.clone() {
+        match self.selection_drag.clone() {
             Some(InputDragSelectionMode::Character) => {
                 self.text.select_to(offset);
                 cx.notify();
@@ -928,7 +945,7 @@ impl Render for InputField {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::Keystroke;
+    use gpui::{Keystroke, Modifiers, MouseMoveEvent, TestAppContext};
 
     fn has_binding<A: gpui::Action + 'static>(keystroke: &str) -> bool {
         let typed = [Keystroke::parse(keystroke).expect("valid test keystroke")];
@@ -1003,5 +1020,29 @@ mod tests {
         let (selection, reversed) = drag_selection_range(6..10, 0..5);
         assert_eq!(selection, 0..10);
         assert!(reversed);
+    }
+
+    #[gpui::test]
+    fn hover_move_cancels_stale_input_drag_without_selecting(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| InputField::new(cx, "Find"));
+
+        cx.update_window_entity(&view, |input, window, cx| {
+            input.set_text("alpha", cx);
+            let expected_selection = input.text.selected_range.clone();
+            input.start_drag_selection(InputDragSelectionMode::Character);
+
+            input.on_mouse_move(
+                &MouseMoveEvent {
+                    position: point(px(0.0), px(0.0)),
+                    pressed_button: None,
+                    modifiers: Modifiers::default(),
+                },
+                window,
+                cx,
+            );
+
+            assert!(input.selection_drag.is_none());
+            assert_eq!(input.text.selected_range, expected_selection);
+        });
     }
 }

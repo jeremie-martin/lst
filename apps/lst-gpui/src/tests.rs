@@ -534,6 +534,53 @@ fn find_input_navigation_does_not_extend_document_selection_without_matches(
 }
 
 #[gpui::test]
+fn hover_after_find_with_stale_drag_state_does_not_select_text(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "alpha\nbeta\ngamma", window, cx);
+    });
+    let expected_cursor = "alpha\n".chars().count();
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| {
+            model.move_to_char(expected_cursor, false, None);
+        });
+    });
+
+    cx.dispatch_action(FindOpen);
+    cx.refresh().expect("refresh after find focus request");
+    cx.run_until_parked();
+    cx.simulate_input("zzz");
+    cx.refresh().expect("render editor before stale drag hover");
+    cx.run_until_parked();
+
+    let hover_position = view.update(cx, |app, _cx| {
+        let bounds = app
+            .active_view()
+            .geometry
+            .borrow()
+            .bounds
+            .expect("viewport should have rendered bounds");
+        let x = bounds.left() + code_origin_pad(app.model.show_gutter(), app.ui_scale()) + px(1.0);
+        let y = bounds.top() + px(8.0);
+        point(x, y)
+    });
+    view.update(cx, |app, _cx| {
+        app.force_stale_drag_selection_for_test(hover_position);
+    });
+
+    cx.simulate_mouse_move(hover_position, None, Modifiers::default());
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.find_matches, 0);
+    assert_eq!(snapshot.model.cursor, expected_cursor);
+    assert_eq!(snapshot.model.selection, expected_cursor..expected_cursor);
+    view.update(cx, |app, _cx| {
+        assert!(!app.has_active_drag_selection_for_test());
+    });
+}
+
+#[gpui::test]
 fn find_overlay_click_keeps_text_input_out_of_editor(cx: &mut TestAppContext) {
     let (view, cx) = new_test_app(cx, LaunchArgs::default());
 
