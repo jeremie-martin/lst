@@ -1,5 +1,6 @@
 use crate::{
     document::{char_to_position, position_to_char, EditKind, UndoBoundary},
+    language::{self, Language},
     position::Position,
 };
 use ropey::Rope;
@@ -73,6 +74,7 @@ pub struct EditorTab {
     id: TabId,
     pub(crate) name_hint: String,
     pub(crate) path: Option<PathBuf>,
+    pub(crate) language: Option<Language>,
     pub(crate) file_stamp: Option<FileStamp>,
     pub(crate) suppressed_conflict_stamp: Option<FileStamp>,
     pub(crate) is_scratchpad: bool,
@@ -134,10 +136,12 @@ impl EditorTab {
         text: &str,
         file_stamp: Option<FileStamp>,
     ) -> Self {
+        let language = language::detect(path.as_deref(), text.split('\n').next());
         Self {
             id,
             name_hint,
             path,
+            language,
             file_stamp,
             suppressed_conflict_stamp: None,
             is_scratchpad: false,
@@ -161,6 +165,26 @@ impl EditorTab {
 
     pub fn path(&self) -> Option<&PathBuf> {
         self.path.as_ref()
+    }
+
+    pub fn language(&self) -> Option<Language> {
+        self.language
+    }
+
+    pub fn language_config(&self) -> &'static crate::language::LanguageConfig {
+        language::config_for(self.language)
+    }
+
+    pub(crate) fn set_language(&mut self, language: Option<Language>) {
+        self.language = language;
+        self.touch_content();
+    }
+
+    pub(crate) fn set_path(&mut self, path: PathBuf) {
+        self.path = Some(path);
+        if self.refresh_language() {
+            self.touch_content();
+        }
     }
 
     pub fn file_stamp(&self) -> Option<FileStamp> {
@@ -396,12 +420,13 @@ impl EditorTab {
         self.marked_range = None;
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.refresh_language();
         self.touch_content();
         self.last_edit_kind = None;
     }
 
     pub(crate) fn mark_saved(&mut self, path: PathBuf, file_stamp: FileStamp) {
-        self.path = Some(path);
+        self.set_path(path);
         self.file_stamp = Some(file_stamp);
         self.suppressed_conflict_stamp = None;
         self.modified = false;
@@ -414,6 +439,18 @@ impl EditorTab {
 
     pub(crate) fn suppress_file_conflict(&mut self, stamp: FileStamp) {
         self.suppressed_conflict_stamp = Some(stamp);
+    }
+
+    fn refresh_language(&mut self) -> bool {
+        let language = self.detect_language();
+        let changed = self.language != language;
+        self.language = language;
+        changed
+    }
+
+    fn detect_language(&self) -> Option<Language> {
+        let first_line = first_line_for_detection(&self.buffer);
+        language::detect(self.path.as_deref(), Some(first_line.as_str()))
     }
 
     pub fn undo(&mut self) -> bool {
@@ -455,6 +492,14 @@ impl EditorTab {
         self.touch_content();
         self.last_edit_kind = None;
     }
+}
+
+fn first_line_for_detection(buffer: &Rope) -> String {
+    buffer
+        .line(0)
+        .to_string()
+        .trim_end_matches(|ch| ch == '\r' || ch == '\n')
+        .to_string()
 }
 
 #[cfg(test)]

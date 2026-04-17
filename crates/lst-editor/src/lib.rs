@@ -2,6 +2,7 @@ mod document;
 mod editor_ops;
 mod effect;
 pub mod find;
+pub mod language;
 pub mod position;
 pub mod selection;
 mod snapshot;
@@ -12,6 +13,7 @@ pub mod wrap;
 
 pub use document::{EditKind, UndoBoundary};
 pub use effect::{EditorEffect, FocusTarget, RevealIntent};
+pub use language::{IndentStyle, Language, LanguageConfig};
 pub use snapshot::EditorSnapshot;
 pub use tab::{EditorTab, FileStamp, TabId};
 pub use viewport::Viewport;
@@ -123,6 +125,12 @@ impl EditorModel {
 
     fn tab_mut_by_id(&mut self, tab_id: TabId) -> Option<&mut EditorTab> {
         self.tabs.iter_mut().find(|tab| tab.id() == tab_id)
+    }
+
+    pub fn set_tab_language(&mut self, tab_id: TabId, language: Option<Language>) {
+        if let Some(tab) = self.tab_mut_by_id(tab_id) {
+            tab.set_language(language);
+        }
     }
 
     fn tab_index_by_id(&self, tab_id: TabId) -> Option<usize> {
@@ -1672,11 +1680,16 @@ impl EditorModel {
         range: &Range<usize>,
         text: &str,
     ) -> Option<Range<usize>> {
-        if text != "}" {
+        let ch = single_char(text)?;
+        let tab = self.active_tab();
+        let config = tab.language_config();
+        if !config.auto_dedent_closers.contains(&ch) {
+            return None;
+        }
+        if config.indent.uses_tabs() {
             return None;
         }
 
-        let tab = self.active_tab();
         let buffer = tab.buffer();
         let line = buffer.char_to_line(range.start);
         if line != buffer.char_to_line(range.end) {
@@ -1693,7 +1706,11 @@ impl EditorModel {
             return None;
         }
 
-        let dedent_start = range.start.saturating_sub(INDENT_WIDTH).max(line_start);
+        let width = config.indent.width();
+        let dedent_start = range.start.saturating_sub(width).max(line_start);
+        if dedent_start == range.start {
+            return None;
+        }
         Some(dedent_start..range.end)
     }
 
@@ -1702,7 +1719,8 @@ impl EditorModel {
             return None;
         }
         let ch = single_char(text)?;
-        let (_, closer) = auto_pair_pair(ch)?;
+        let config = self.active_tab().language_config();
+        let (_, closer) = auto_pair_pair_for(config, ch)?;
         if ch != closer {
             return None;
         }
@@ -1726,7 +1744,8 @@ impl EditorModel {
             return None;
         }
         let ch = single_char(text)?;
-        let (opener, closer) = auto_pair_pair(ch)?;
+        let config = self.active_tab().language_config();
+        let (opener, closer) = auto_pair_pair_for(config, ch)?;
         if ch != opener {
             return None;
         }
@@ -1752,7 +1771,8 @@ impl EditorModel {
             return None;
         }
         let ch = single_char(text)?;
-        let (opener, closer) = auto_pair_pair(ch)?;
+        let config = self.active_tab().language_config();
+        let (opener, closer) = auto_pair_pair_for(config, ch)?;
         if ch != opener {
             return None;
         }
@@ -2035,7 +2055,10 @@ impl EditorModel {
     pub fn insert_tab_at_cursor(&mut self) {
         match selection_line_span(self.active_tab()) {
             Some((first, last, true)) => self.indent_selected_lines(first, last),
-            _ => self.replace_text_in_range(None, " ".repeat(INDENT_WIDTH), UndoBoundary::Break),
+            _ => {
+                let unit = self.active_tab().language_config().indent.indent_unit();
+                self.replace_text_in_range(None, unit, UndoBoundary::Break);
+            }
         }
     }
 
@@ -2050,6 +2073,8 @@ impl EditorModel {
     }
 
     fn indent_selected_lines(&mut self, first: usize, last: usize) {
+        let unit = self.active_tab().language_config().indent.indent_unit();
+        let unit_chars = unit.chars().count();
         let (start_pos, end_pos, reversed) = self.selection_endpoints();
         // Endpoints at column 0 of a touched line stay at column 0 so the
         // new leading whitespace falls inside the selection — matches VS
@@ -2058,7 +2083,7 @@ impl EditorModel {
             if (first..=last).contains(&pos.line) && pos.column > 0 {
                 Position {
                     line: pos.line,
-                    column: pos.column + INDENT_WIDTH,
+                    column: pos.column + unit_chars,
                 }
             } else {
                 pos
@@ -2070,7 +2095,7 @@ impl EditorModel {
         // The cursor passed here is overwritten by `restore_selection` below,
         // so we just hand in a valid position on the edited range.
         let result = self.apply_line_edit(|lines| {
-            editor_ops::indent_lines(lines, first, last, INDENT_WIDTH);
+            editor_ops::indent_lines(lines, first, last, &unit);
             Some(((), new_end.line, new_end.column))
         });
         if result.is_none() {
@@ -2081,13 +2106,14 @@ impl EditorModel {
     }
 
     fn outdent_selected_lines(&mut self, first: usize, last: usize) {
+        let unit = self.active_tab().language_config().indent.indent_unit();
         let (start_pos, end_pos, reversed) = self.selection_endpoints();
         let had_selection = self.active_tab().has_selection();
         let cursor_pos = self.active_cursor_position();
         let cursor_line = cursor_pos.line;
 
         let result = self.apply_line_edit(|lines| {
-            let removed = editor_ops::outdent_lines(lines, first, last, INDENT_WIDTH);
+            let removed = editor_ops::outdent_lines(lines, first, last, &unit);
             let new_cursor_col = if (first..=last).contains(&cursor_line) {
                 let removed_for_cursor = removed.get(cursor_line - first).copied().unwrap_or(0);
                 cursor_pos.column.saturating_sub(removed_for_cursor)
@@ -2181,12 +2207,10 @@ impl EditorModel {
     }
 
     pub fn toggle_comment(&mut self) {
-        let prefix = self
-            .active_tab()
-            .path()
-            .and_then(|path| path.extension())
-            .and_then(|ext| editor_ops::comment_prefix(ext.to_string_lossy().as_ref()))
-            .unwrap_or("//");
+        let Some(prefix) = self.active_tab().language_config().line_comment else {
+            self.status = "No line-comment syntax for this language.".to_string();
+            return;
+        };
         let selected = self.active_tab().selected_range();
         let cursor = self.active_cursor_position();
         let start = char_to_position(self.active_tab().buffer(), selected.start);
@@ -2399,7 +2423,7 @@ impl EditorModel {
             if let Some(file_stamp) = file_stamp {
                 tab.mark_saved(path.clone(), file_stamp);
             } else {
-                tab.path = Some(path.clone());
+                tab.set_path(path.clone());
                 tab.modified = false;
             }
             self.status = format!("Saved {}.", path.display());
@@ -2416,7 +2440,7 @@ impl EditorModel {
             if let Some(file_stamp) = file_stamp {
                 tab.mark_saved_as(path.clone(), file_stamp);
             } else {
-                tab.path = Some(path.clone());
+                tab.set_path(path.clone());
                 tab.modified = false;
                 tab.is_scratchpad = false;
             }
@@ -2528,7 +2552,7 @@ impl EditorModel {
         let Some(tab) = self.tab_mut_by_id(tab_id) else {
             return false;
         };
-        tab.path = Some(path.clone());
+        tab.set_path(path.clone());
         tab.reset_from_disk(&text, file_stamp);
         self.sync_find_with_active_document();
         self.status = format!("Reloaded {}.", path.display());
@@ -2584,8 +2608,6 @@ fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: usiz
     active_index == closed_index
 }
 
-const INDENT_WIDTH: usize = 4;
-
 fn single_char(text: &str) -> Option<char> {
     let mut chars = text.chars();
     let ch = chars.next()?;
@@ -2595,18 +2617,15 @@ fn single_char(text: &str) -> Option<char> {
     Some(ch)
 }
 
-// TODO(filetype-gate): add ('<', '>') once filetype detection lets us gate
-// angle-bracket auto-pairing to languages like Rust/TypeScript/HTML.
-fn auto_pair_pair(ch: char) -> Option<(char, char)> {
-    match ch {
-        '(' | ')' => Some(('(', ')')),
-        '[' | ']' => Some(('[', ']')),
-        '{' | '}' => Some(('{', '}')),
-        '"' => Some(('"', '"')),
-        '\'' => Some(('\'', '\'')),
-        '`' => Some(('`', '`')),
-        _ => None,
+fn auto_pair_pair_for(config: &LanguageConfig, ch: char) -> Option<(char, char)> {
+    if is_auto_pair_quote(ch) && config.auto_pair_suppress_quotes.contains(&ch) {
+        return None;
     }
+    config
+        .auto_pairs
+        .iter()
+        .copied()
+        .find(|(opener, closer)| *opener == ch || *closer == ch)
 }
 
 fn is_auto_pair_quote(ch: char) -> bool {

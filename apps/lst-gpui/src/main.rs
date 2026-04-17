@@ -34,8 +34,8 @@ use ropey::Rope;
 pub(crate) use runtime::autosave_revision_is_current;
 use std::{cell::RefCell, collections::HashSet, path::PathBuf, process, rc::Rc, time::Instant};
 use syntax::{
-    compute_syntax_highlights, syntax_mode_for_path, CachedSyntaxHighlights, SyntaxHighlightJobKey,
-    SyntaxMode, SyntaxSpan,
+    compute_syntax_highlights, syntax_mode_for_language, CachedSyntaxHighlights,
+    SyntaxHighlightJobKey, SyntaxMode, SyntaxSpan,
 };
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use viewport::row_contains_cursor;
@@ -509,7 +509,7 @@ impl LstGpuiApp {
         let Some(tab) = self.model.tab(active) else {
             return;
         };
-        let SyntaxMode::TreeSitter(language) = syntax_mode_for_path(tab.path()) else {
+        let SyntaxMode::TreeSitter(language) = syntax_mode_for_language(tab.language()) else {
             return;
         };
 
@@ -992,7 +992,7 @@ fn syntax_highlight_result_is_current(
         tab_views.get(active).is_some_and(|view| {
             Rc::ptr_eq(&view.cache, cache)
                 && tab.revision() == key.revision
-                && syntax_mode_for_path(tab.path()) == SyntaxMode::TreeSitter(key.language)
+                && syntax_mode_for_language(tab.language()) == SyntaxMode::TreeSitter(key.language)
         })
     })
 }

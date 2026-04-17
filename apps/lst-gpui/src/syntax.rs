@@ -1,5 +1,6 @@
 use crate::ui::theme::syntax as theme_syntax;
-use std::{path::PathBuf, sync::LazyLock};
+use lst_editor::Language;
+use std::sync::LazyLock;
 use tree_sitter_highlight::{
     Highlight as TreeSitterHighlight, HighlightConfiguration,
     HighlightEvent as TreeSitterHighlightEvent, Highlighter as TreeSitterHighlighter,
@@ -226,24 +227,20 @@ pub(crate) enum SyntaxLanguage {
 }
 
 impl SyntaxLanguage {
-    pub(crate) fn from_extension(extension: &str) -> Option<Self> {
-        match extension
-            .trim_start_matches('.')
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "rs" => Some(Self::Rust),
-            "py" | "pyw" => Some(Self::Python),
-            "js" | "mjs" | "cjs" => Some(Self::JavaScript),
-            "jsx" => Some(Self::Jsx),
-            "ts" => Some(Self::TypeScript),
-            "tsx" => Some(Self::Tsx),
-            "json" => Some(Self::Json),
-            "toml" => Some(Self::Toml),
-            "yaml" | "yml" => Some(Self::Yaml),
-            "md" | "markdown" => Some(Self::Markdown),
-            "html" | "htm" => Some(Self::Html),
-            "css" => Some(Self::Css),
+    pub(crate) fn from_language(language: Language) -> Option<Self> {
+        match language {
+            Language::Rust => Some(Self::Rust),
+            Language::Python => Some(Self::Python),
+            Language::JavaScript => Some(Self::JavaScript),
+            Language::Jsx => Some(Self::Jsx),
+            Language::TypeScript => Some(Self::TypeScript),
+            Language::Tsx => Some(Self::Tsx),
+            Language::Json | Language::Jsonc => Some(Self::Json),
+            Language::Toml => Some(Self::Toml),
+            Language::Yaml => Some(Self::Yaml),
+            Language::Markdown => Some(Self::Markdown),
+            Language::Html => Some(Self::Html),
+            Language::Css | Language::Scss => Some(Self::Css),
             _ => None,
         }
     }
@@ -310,10 +307,9 @@ pub(crate) struct SyntaxHighlightJobKey {
     pub(crate) revision: u64,
 }
 
-pub(crate) fn syntax_mode_for_path(path: Option<&PathBuf>) -> SyntaxMode {
-    path.and_then(|path| path.extension())
-        .and_then(|ext| ext.to_str())
-        .and_then(SyntaxLanguage::from_extension)
+pub(crate) fn syntax_mode_for_language(language: Option<Language>) -> SyntaxMode {
+    language
+        .and_then(SyntaxLanguage::from_language)
         .map(SyntaxMode::TreeSitter)
         .unwrap_or(SyntaxMode::Plain)
 }

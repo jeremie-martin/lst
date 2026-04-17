@@ -13,7 +13,7 @@ use gpui::{
 };
 
 use crate::actions::attach_workspace_actions;
-use crate::syntax::syntax_mode_for_path;
+use crate::syntax::syntax_mode_for_language;
 use crate::viewport::{
     buffer_content_height, paint_viewport, prepare_viewport_paint_state, scroll_top_for,
 };
@@ -417,7 +417,7 @@ impl Render for LstGpuiApp {
             let active_tab = self.model.active_tab();
             (
                 active_tab.revision(),
-                syntax_mode_for_path(active_tab.path()),
+                syntax_mode_for_language(active_tab.language()),
                 active_tab.buffer_clone(),
                 active_tab.selection(),
                 if show_search_decorations {

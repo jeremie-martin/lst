@@ -16,7 +16,9 @@ use std::{
 
 #[cfg(feature = "internal-invariants")]
 use crate::syntax::SyntaxHighlightJobKey;
-use crate::syntax::{compute_syntax_highlights, syntax_mode_for_path, SyntaxLanguage, SyntaxMode};
+use crate::syntax::{
+    compute_syntax_highlights, syntax_mode_for_language, SyntaxLanguage, SyntaxMode,
+};
 #[cfg(feature = "internal-invariants")]
 use crate::viewport::PaintedRow;
 use crate::*;
@@ -1449,15 +1451,14 @@ fn syntax_mode_maps_core_extensions() {
     ];
 
     for (path, language) in cases {
+        let detected = lst_editor::language::detect(Some(&PathBuf::from(path)), None);
         assert_eq!(
-            syntax_mode_for_path(Some(&PathBuf::from(path))),
+            syntax_mode_for_language(detected),
             SyntaxMode::TreeSitter(language)
         );
     }
-    assert_eq!(
-        syntax_mode_for_path(Some(&PathBuf::from("example.txt"))),
-        SyntaxMode::Plain
-    );
+    let detected = lst_editor::language::detect(Some(&PathBuf::from("example.txt")), None);
+    assert_eq!(syntax_mode_for_language(detected), SyntaxMode::Plain);
 }
 
 #[test]

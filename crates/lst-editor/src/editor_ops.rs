@@ -39,25 +39,36 @@ pub fn duplicate_line(lines: &mut Vec<String>, cursor_line: usize) -> usize {
 // TODO(vim): wire `>>` / `<<` operators to `indent_lines` / `outdent_lines`
 // when adding visual-line indent ops to the Vim state machine.
 
-pub fn indent_lines(lines: &mut [String], first: usize, last: usize, width: usize) {
+pub fn indent_lines(lines: &mut [String], first: usize, last: usize, unit: &str) {
     if first > last || last >= lines.len() {
         return;
     }
-    let prefix: String = " ".repeat(width);
     for line in &mut lines[first..=last] {
-        line.insert_str(0, &prefix);
+        line.insert_str(0, unit);
     }
 }
 
-pub fn outdent_lines(lines: &mut [String], first: usize, last: usize, width: usize) -> Vec<usize> {
+pub fn outdent_lines(lines: &mut [String], first: usize, last: usize, unit: &str) -> Vec<usize> {
     if first > last || last >= lines.len() {
         return Vec::new();
     }
     let mut removed = Vec::with_capacity(last - first + 1);
+    let tab_unit = unit.starts_with('\t');
     for line in &mut lines[first..=last] {
-        // ASCII space is a single byte and never appears inside a multibyte
-        // UTF-8 sequence, so byte iteration is safe here and avoids decoding.
-        let to_remove = line.bytes().take(width).take_while(|b| *b == b' ').count();
+        let to_remove = if tab_unit {
+            if line.starts_with('\t') {
+                1
+            } else {
+                0
+            }
+        } else {
+            // ASCII space is a single byte and never appears inside a multibyte
+            // UTF-8 sequence, so byte iteration is safe here and avoids decoding.
+            line.bytes()
+                .take(unit.len())
+                .take_while(|b| *b == b' ')
+                .count()
+        };
         if to_remove > 0 {
             line.replace_range(0..to_remove, "");
         }
@@ -107,25 +118,6 @@ pub fn toggle_comment(
     };
 
     (cursor_line, cursor_col)
-}
-
-pub fn comment_prefix(ext: &str) -> Option<&'static str> {
-    match ext {
-        "rs" | "js" | "ts" | "jsx" | "tsx" | "c" | "cpp" | "cc" | "h" | "hpp" | "java" | "go"
-        | "cs" | "swift" | "kt" | "kts" | "scala" | "zig" | "v" | "sv" | "d" | "groovy"
-        | "jsonc" | "json5" | "scss" | "less" | "proto" => Some("//"),
-        "py" | "sh" | "bash" | "zsh" | "fish" | "rb" | "pl" | "pm" | "r" | "jl" | "yaml"
-        | "yml" | "toml" | "conf" | "cfg" | "ini" | "cmake" | "mk" | "tcl" | "awk" | "sed"
-        | "ps1" | "elixir" | "ex" | "exs" | "nim" | "cr" | "gd" => Some("#"),
-        "lua" | "hs" | "sql" | "ada" | "adb" | "ads" | "vhdl" | "vhd" => Some("--"),
-        "lisp" | "cl" | "el" | "clj" | "cljs" | "scm" | "rkt" => Some(";;"),
-        "vim" => Some("\""),
-        "tex" | "sty" | "cls" | "bib" | "erl" | "hrl" => Some("%"),
-        "bat" | "cmd" => Some("REM"),
-        "asm" | "s" => Some(";"),
-        "f90" | "f95" | "f03" | "f08" => Some("!"),
-        _ => None,
-    }
 }
 
 // Case transforms
@@ -196,7 +188,7 @@ mod tests {
     #[test]
     fn indent_lines_prepends_spaces_to_each_line() {
         let mut lines = vec!["alpha".into(), "beta".into(), "gamma".into()];
-        indent_lines(&mut lines, 0, 1, 4);
+        indent_lines(&mut lines, 0, 1, "    ");
         assert_eq!(
             lines,
             vec!["    alpha".to_string(), "    beta".into(), "gamma".into()]
@@ -206,7 +198,7 @@ mod tests {
     #[test]
     fn indent_lines_indents_empty_lines_too() {
         let mut lines = vec!["a".into(), String::new(), "b".into()];
-        indent_lines(&mut lines, 0, 2, 4);
+        indent_lines(&mut lines, 0, 2, "    ");
         assert_eq!(
             lines,
             vec!["    a".to_string(), "    ".into(), "    b".into()]
@@ -214,9 +206,16 @@ mod tests {
     }
 
     #[test]
+    fn indent_lines_inserts_tabs_for_tab_unit() {
+        let mut lines = vec!["a".into(), "b".into()];
+        indent_lines(&mut lines, 0, 1, "\t");
+        assert_eq!(lines, vec!["\ta".to_string(), "\tb".into()]);
+    }
+
+    #[test]
     fn outdent_lines_strips_up_to_width_and_reports_per_line() {
         let mut lines = vec!["      six".into(), "  two".into(), "no_ws".into()];
-        let removed = outdent_lines(&mut lines, 0, 2, 4);
+        let removed = outdent_lines(&mut lines, 0, 2, "    ");
         assert_eq!(
             lines,
             vec!["  six".to_string(), "two".into(), "no_ws".into()]
@@ -227,9 +226,20 @@ mod tests {
     #[test]
     fn outdent_lines_only_counts_leading_spaces() {
         let mut lines = vec!["\talready".into()];
-        let removed = outdent_lines(&mut lines, 0, 0, 4);
+        let removed = outdent_lines(&mut lines, 0, 0, "    ");
         assert_eq!(lines, vec!["\talready".to_string()]);
         assert_eq!(removed, vec![0]);
+    }
+
+    #[test]
+    fn outdent_lines_strips_one_leading_tab_with_tab_unit() {
+        let mut lines = vec!["\ttabbed".into(), "plain".into(), "\t\tnested".into()];
+        let removed = outdent_lines(&mut lines, 0, 2, "\t");
+        assert_eq!(
+            lines,
+            vec!["tabbed".to_string(), "plain".into(), "\tnested".into()]
+        );
+        assert_eq!(removed, vec![1, 0, 1]);
     }
 
     #[test]

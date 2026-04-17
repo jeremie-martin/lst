@@ -5,7 +5,7 @@ implement. Use this as an audit checklist for the GPUI editor.
 
 Status legend: `[ ]` not implemented · `[~]` partial · `[x]` done
 
-Status last audited: 2026-04-16 (code paths verified directly).
+Status last audited: 2026-04-17 (code paths verified directly).
 
 References use `path::symbol` rather than `path:line` so they survive
 reorganization. Grep for the symbol to navigate.
@@ -52,16 +52,16 @@ reorganization. Grep for the symbol to navigate.
 - [x] **Backspace at start of line joins with previous** — `cursor-1..cursor` crosses newline when at col 0 (`crates/lst-editor/src/lib.rs::backspace` → `::delete_selected_or_previous`)
 - [x] **Delete at end of line joins with next** — `cursor..cursor+1` crosses newline at EOL (`crates/lst-editor/src/lib.rs::delete_forward` → `::delete_selected_or_next`)
 - [x] **Smart indent on Enter** — `line_indent_prefix` preserved (`crates/lst-editor/src/lib.rs::insert_newline`)
-- [x] **Auto-dedent on close bracket** — typing `}` on a whitespace-only line removes up to one indent level of leading ASCII spaces before inserting the closer; other closers, mixed/tab indentation, and multi-line replacements fall back to ordinary input (`crates/lst-editor/src/lib.rs::insert_text`, `::replace_text_from_input`, `::apply_text_input`, `::auto_dedent_close_brace_range`)
-- [x] **Indent/outdent selection** — Tab indents every touched line on a multi-line selection and Shift+Tab outdents (saturating at 0 leading spaces); single-line/no-selection Tab still inserts 4 spaces, matching VS Code (`crates/lst-editor/src/lib.rs::insert_tab_at_cursor`, `::outdent_at_cursor`, `::indent_selected_lines`, `::outdent_selected_lines`; `crates/lst-editor/src/editor_ops.rs::indent_lines`, `::outdent_lines`; `apps/lst-gpui/src/keymap.rs` `tab` / `shift-tab` bindings)
+- [x] **Auto-dedent on close bracket** — typing a closer from the active language's `auto_dedent_closers` on a whitespace-only line removes one indent level (`indent.width()` leading ASCII spaces) before inserting the closer; Python / YAML / Lisps and other indent-sensitive languages disable it; tab-indented languages (Go, Makefile) also fall through to ordinary input (`crates/lst-editor/src/lib.rs::apply_text_input`, `::auto_dedent_close_brace_range`; `crates/lst-editor/src/language.rs::LanguageConfig::auto_dedent_closers`)
+- [x] **Indent/outdent selection** — Tab indents every touched line on a multi-line selection and Shift+Tab outdents (saturating at 0 leading spaces); single-line/no-selection Tab inserts the active language's indent unit (4 spaces in Rust/Python/C-family, 2 in JS/TS/YAML/Markdown/HTML/CSS, a literal `\t` in Go/Makefile) (`crates/lst-editor/src/lib.rs::insert_tab_at_cursor`, `::outdent_at_cursor`, `::indent_selected_lines`, `::outdent_selected_lines`; `crates/lst-editor/src/editor_ops.rs::indent_lines`, `::outdent_lines`; `crates/lst-editor/src/language.rs::IndentStyle`; `apps/lst-gpui/src/keymap.rs` `tab` / `shift-tab` bindings)
 - [x] **Move line up/down** (`crates/lst-editor/src/lib.rs::move_line_up`, `::move_line_down`; `crates/lst-editor/src/editor_ops.rs::move_line_up`, `::move_line_down`)
 - [x] **Duplicate line/selection** — duplicates the current selection inline, or the current line when there is no selection (`crates/lst-editor/src/lib.rs::duplicate_line`; `crates/lst-editor/src/editor_ops.rs::duplicate_line`)
 - [x] **Delete line** (`crates/lst-editor/src/lib.rs::delete_line`; `crates/lst-editor/src/editor_ops.rs::delete_line`)
 - [x] **Join lines with single-space collapse** — `vim_join_lines` trims and joins (`crates/lst-editor/src/lib.rs::vim_join_lines`)
 - [ ] **Transpose**
-- [~] **Toggle comment line/block** — toggles line comments by file extension; no block-comment mode (`crates/lst-editor/src/lib.rs::toggle_comment`; `crates/lst-editor/src/editor_ops.rs::toggle_comment`, `::comment_prefix`)
+- [~] **Toggle comment line/block** — toggles line comments via the active language's `line_comment`; languages without one (e.g. JSON) no-op with a status message; no block-comment mode yet (`crates/lst-editor/src/lib.rs::toggle_comment`; `crates/lst-editor/src/editor_ops.rs::toggle_comment`; `crates/lst-editor/src/language.rs::LanguageConfig::line_comment`)
 - [~] **Surround with brackets/quotes** — typing an opener with a non-empty selection wraps it via auto-pair (`crates/lst-editor/src/lib.rs::auto_pair_surround_edit`); Vim text-objects exist for `c`/`d` (`crates/lst-editor/src/vim.rs::text_object`); no dedicated Vim-style `ys` surround op yet
-- [x] **Auto-pair brackets/quotes** — typing `(`, `[`, `{`, `"`, `'`, `` ` `` inserts the matching closer and keeps the caret between; quotes skip auto-pair when adjacent to an identifier char, after `\`, or when extending repeated quote/backtick runs; typing a closer when the next char already matches steps over it; IME and programmatic paths bypass auto-pair (`crates/lst-editor/src/lib.rs::apply_text_input`, `::auto_pair_pair`). Angle brackets (`<>`) deferred pending filetype gating. Known low-priority gaps: no "inside unclosed string" detection (typing `"` inside `"foo |` still auto-pairs instead of closing); a dangling `marked_range` from an IME composition can be consumed by the non-IME path and fed into auto-pair (untested).
+- [x] **Auto-pair brackets/quotes** — the active language's `auto_pairs` drives the pair set; default includes `()`, `[]`, `{}`, `""`, `''`, `` `` ``; HTML / XML / JSX / TSX add `<>`; Rust suppresses `''` (lifetimes) via `auto_pair_suppress_quotes`; quotes still skip auto-pair when adjacent to an identifier char, after `\`, or when extending repeated quote/backtick runs; typing a closer when the next char already matches steps over it; IME and programmatic paths bypass auto-pair (`crates/lst-editor/src/lib.rs::apply_text_input`, `::auto_pair_pair_for`; `crates/lst-editor/src/language.rs::LanguageConfig::auto_pairs`, `::auto_pair_suppress_quotes`). Known low-priority gaps: no "inside unclosed string" detection (typing `"` inside `"foo |` still auto-pairs instead of closing); a dangling `marked_range` from an IME composition can be consumed by the non-IME path and fed into auto-pair (untested).
 
 ## Clipboard
 
@@ -89,7 +89,7 @@ reorganization. Grep for the symbol to navigate.
 
 - [x] **IME composition** — full `EntityInputHandler` (marked range, bounds, unmark) (`apps/lst-gpui/src/input_adapter.rs::text_for_range`, `::marked_text_range`, `::unmark_text`, `::replace_and_mark_text_in_range`; model state at `crates/lst-editor/src/tab.rs::EditorTab::marked_range`; test `crates/lst-editor/tests/behavior.rs::ime_marked_text_replacement_remains_model_behavior`)
 - [~] **Unicode grapheme clusters** — graphemes used in `input_field` widget (`apps/lst-gpui/src/ui/input_field.rs::previous_boundary`, `::next_boundary`); main editor operates on `char`s
-- [~] **Tab → spaces with soft-tab backspace** — inserts 4 spaces (`crates/lst-editor/src/lib.rs::insert_tab_at_cursor`); backspace deletes one char, not four
+- [~] **Tab → spaces with soft-tab backspace** — inserts the active language's indent unit via `IndentStyle::indent_unit` (e.g. 4 spaces for Rust, 2 for JS/TS, a literal `\t` for Go) (`crates/lst-editor/src/lib.rs::insert_tab_at_cursor`; `crates/lst-editor/src/language.rs::IndentStyle::indent_unit`); backspace deletes one char, not a full indent
 - [ ] **Trim trailing whitespace on save**
 - [ ] **Ensure final newline on save**
 - [x] **Detect/preserve line endings** — `preferred_newline_for_active_tab` scans for `\r\n` vs `\n` (`crates/lst-editor/src/lib.rs::preferred_newline_for_active_tab`)
@@ -117,6 +117,7 @@ reorganization. Grep for the symbol to navigate.
 - [ ] **Recover from crash via swap/journal**
 - [~] **Multiple tabs/buffers** — tabs, new/close/activate (`crates/lst-editor/src/lib.rs::new_tab`, `::close_tab`, `::activate_tab`); **no reorder** (no drag, no move_tab action)
 - [ ] **Recently closed** reopen
+- [~] **Filetype / language detection** — one registry in `lst-editor` detects language by filename → extension → shebang first line (Rust, Python, JS/TS/JSX/TSX, JSON/JSONC, TOML, YAML, Markdown, HTML/XML, CSS/SCSS, C/C++, Java, Go, Makefile, Dockerfile, shells, Lua, Lisps, etc.) and carries per-language indent / comments / auto-pair / auto-dedent in `LanguageConfig` (`crates/lst-editor/src/language.rs::Language`, `::LanguageConfig`, `::detect`, `::detect_from_filename`, `::detect_from_extension`, `::detect_from_shebang`; stored at `crates/lst-editor/src/tab.rs::EditorTab::language`; override via `crates/lst-editor/src/lib.rs::EditorModel::set_tab_language`; GPUI maps to tree-sitter grammars at `apps/lst-gpui/src/syntax.rs::SyntaxLanguage::from_language`, `::syntax_mode_for_language`). No user-facing language picker yet, no per-user config file
 
 ## Accessibility & Input
 
@@ -145,7 +146,7 @@ Items most often overlooked in custom editors:
 ## Summary
 
 - **Done:** 51
-- **Partial:** 9
+- **Partial:** 10
 - **Missing:** 26
 
 **Strong foundation:** Vim state machine, viewport with scroll margin, soft
@@ -155,11 +156,11 @@ auto-scroll, IME composition, current-line highlight, line-ending detection.
 **Biggest gaps to close for "idiomatic" feel:**
 1. Horizontal scroll when wrap is off
 2. Find toggles: case sensitivity, smart case, whole-word, regex
-3. Auto-pair brackets/quotes + surround op
-4. Grapheme-cluster-aware motion in the main editor
-5. Cursor blink
-6. Trim-trailing-whitespace / ensure-final-newline on save
-7. Tab reordering, recently-closed reopen
-8. Jump list / last-edit-location
-9. Multi-cursor
-10. User-configurable keybindings (config file)
+3. Grapheme-cluster-aware motion in the main editor
+4. Cursor blink
+5. Trim-trailing-whitespace / ensure-final-newline on save
+6. Tab reordering, recently-closed reopen
+7. Jump list / last-edit-location
+8. Multi-cursor
+9. User-configurable keybindings (config file)
+10. User-facing language picker / manual override UI (model API exists)
