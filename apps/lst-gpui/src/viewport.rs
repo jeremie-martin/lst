@@ -1,11 +1,11 @@
-use crate::ui::theme::{metrics, role};
+use crate::ui::theme::{metrics, role, typography};
 use gpui::{
     fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString,
     TextRun, Window,
 };
 use lst_editor::wrap::{
-    build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, wrap_columns_with_gutter,
-    wrap_segments, WrapLayout, WrappedSegment,
+    build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, wrap_segments, WrapLayout,
+    WrappedSegment,
 };
 use lst_editor::{vim, EditorTab};
 use ropey::Rope;
@@ -61,6 +61,7 @@ pub(crate) struct ViewportGeometry {
     pub(crate) bounds: Option<Bounds<Pixels>>,
     pub(crate) rows: Vec<PaintedRow>,
     pub(crate) scroll_top_at_paint: Pixels,
+    pub(crate) painted_wrap_columns: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -190,16 +191,16 @@ pub(crate) fn code_origin_pad(show_gutter: bool, scale: f32) -> Pixels {
     }
 }
 
-pub(crate) fn code_char_width(window: &mut Window) -> Pixels {
-    let style = window.text_style();
-    let font_size = style.font_size.to_pixels(window.rem_size());
+pub(crate) fn code_char_width(window: &mut Window, scale: f32) -> Pixels {
+    let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
+    let font = typography::primary_font();
     let probe = SharedString::from("00000000");
     let shaped = window.text_system().shape_line(
         probe.clone(),
         font_size,
         &[TextRun {
             len: probe.len(),
-            font: style.font(),
+            font,
             color: rgb(role::TEXT).into(),
             background_color: None,
             underline: None,
@@ -211,13 +212,12 @@ pub(crate) fn code_char_width(window: &mut Window) -> Pixels {
     if shaped.width > px(0.0) {
         shaped.width / probe.chars().count() as f32
     } else {
-        metrics::px_for_rem(metrics::WRAP_CHAR_WIDTH_FALLBACK, window.rem_size())
+        metrics::px_for_scale(metrics::WRAP_CHAR_WIDTH_FALLBACK, scale)
     }
 }
 
 fn wrap_columns_for_viewport(
     viewport_width: Pixels,
-    line_count: usize,
     char_width: Pixels,
     show_gutter: bool,
     show_wrap: bool,
@@ -227,16 +227,12 @@ fn wrap_columns_for_viewport(
         return usize::MAX;
     }
 
-    wrap_columns_with_gutter(
-        viewport_width / px(1.0),
-        (char_width / px(1.0)).max(metrics::WRAP_CHAR_WIDTH_FALLBACK * scale),
-        line_count,
-        show_gutter,
-        metrics::EDITOR_LEFT_PAD * scale,
-        metrics::EDITOR_RIGHT_PAD * scale,
-        metrics::GUTTER_LEFT_PAD * scale,
-        metrics::GUTTER_SEPARATOR_WIDTH * scale,
-    )
+    let content_width = (viewport_width
+        - code_origin_pad(show_gutter, scale)
+        - metrics::px_for_scale(metrics::CURSOR_WIDTH, scale))
+    .max(px(1.0));
+    let char_width = (char_width / px(1.0)).max(metrics::WRAP_CHAR_WIDTH_FALLBACK * scale);
+    ((content_width / px(1.0)) / char_width).floor().max(1.0) as usize
 }
 
 pub(crate) fn ensure_wrap_layout(
@@ -249,14 +245,8 @@ pub(crate) fn ensure_wrap_layout(
     show_wrap: bool,
     scale: f32,
 ) -> WrapLayout {
-    let wrap_columns = wrap_columns_for_viewport(
-        viewport_width,
-        lines.len(),
-        char_width,
-        show_gutter,
-        show_wrap,
-        scale,
-    );
+    let wrap_columns =
+        wrap_columns_for_viewport(viewport_width, char_width, show_gutter, show_wrap, scale);
     if let Some(layout) = cache.wrap_layout.as_ref() {
         if layout.revision == revision
             && layout.layout.wrap_columns == wrap_columns
@@ -387,11 +377,11 @@ pub(crate) fn prepare_viewport_paint_state(
         metrics::px_for_scale(metrics::WINDOW_HEIGHT, scale)
     };
     let scroll_top = scroll_top_for(viewport_scroll);
-    let style = window.text_style();
-    let font_size = style.font_size.to_pixels(window.rem_size());
+    let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
+    let font = typography::primary_font();
     let code_run = TextRun {
         len: 0,
-        font: style.font(),
+        font: font.clone(),
         color: rgb(role::TEXT).into(),
         background_color: None,
         underline: None,
@@ -399,7 +389,7 @@ pub(crate) fn prepare_viewport_paint_state(
     };
     let gutter_run = TextRun {
         len: 0,
-        font: style.font(),
+        font,
         color: rgb(role::TEXT_MUTED).into(),
         background_color: None,
         underline: None,
@@ -515,6 +505,7 @@ pub(crate) fn prepare_viewport_paint_state(
         bounds: Some(bounds),
         rows: rows.clone(),
         scroll_top_at_paint: scroll_top,
+        painted_wrap_columns: show_wrap.then_some(layout.wrap_columns),
     };
 
     ViewportPaintState { rows }
@@ -727,4 +718,45 @@ fn char_to_byte(text: &str, char_offset: usize) -> usize {
 
 pub(crate) fn byte_index_to_char(text: &str, byte_index: usize) -> usize {
     text[..byte_index.min(text.len())].chars().count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_columns_match_painted_code_width_with_gutter() {
+        let viewport_width = px(800.0);
+        let char_width = px(8.0);
+
+        let columns = wrap_columns_for_viewport(viewport_width, char_width, true, true, 1.0);
+
+        assert_eq!(
+            columns,
+            ((800.0 - metrics::GUTTER_WIDTH - metrics::CURSOR_WIDTH) / 8.0).floor() as usize
+        );
+    }
+
+    #[test]
+    fn wrap_columns_match_painted_code_width_without_gutter() {
+        let viewport_width = px(800.0);
+        let char_width = px(8.0);
+
+        let columns = wrap_columns_for_viewport(viewport_width, char_width, false, true, 1.0);
+
+        assert_eq!(
+            columns,
+            ((800.0 - metrics::EDITOR_LEFT_PAD - metrics::CURSOR_WIDTH) / 8.0).floor() as usize
+        );
+    }
+
+    #[test]
+    fn wrap_columns_leave_right_slack_for_the_insert_caret() {
+        let viewport_width = px(metrics::GUTTER_WIDTH + 10.0 * 8.0);
+        let char_width = px(8.0);
+
+        let columns = wrap_columns_for_viewport(viewport_width, char_width, true, true, 1.0);
+
+        assert_eq!(columns, 9);
+    }
 }

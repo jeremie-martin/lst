@@ -1,5 +1,6 @@
 pub mod icon_button;
 pub mod input_field;
+pub(crate) mod scrollbar;
 pub mod tab;
 pub mod tab_bar;
 pub mod theme;

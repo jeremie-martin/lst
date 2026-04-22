@@ -116,6 +116,11 @@ enum PendingAfterSave {
     Quit,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct EditorScrollbarDrag {
+    grab_offset_y: Pixels,
+}
+
 struct EditorTabView {
     id: TabId,
     revision: u64,
@@ -148,6 +153,8 @@ struct LstGpuiApp {
     tab_bar_scroll: ScrollHandle,
     hovered_tab: Option<usize>,
     selection_drag: Option<ActiveDragSelection>,
+    editor_scrollbar_drag: Option<EditorScrollbarDrag>,
+    editor_scrollbar_hovered: bool,
     find_query_input: Entity<InputField>,
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
@@ -183,6 +190,8 @@ impl LstGpuiApp {
             tab_bar_scroll: ScrollHandle::new(),
             hovered_tab: None,
             selection_drag: None,
+            editor_scrollbar_drag: None,
+            editor_scrollbar_hovered: false,
             find_query_input: find_query_input.clone(),
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
@@ -607,6 +616,10 @@ impl LstGpuiApp {
             .then(|| format!("Sel {}", selected.end.saturating_sub(selected.start)))
     }
 
+    fn painted_wrap_columns(&self) -> Option<usize> {
+        self.active_view().geometry.borrow().painted_wrap_columns
+    }
+
     fn status_details(&self) -> String {
         let tab = self.active_tab();
         let (line, column) = self.active_cursor_line_col();
@@ -615,7 +628,9 @@ impl LstGpuiApp {
             format!("Ln {}", line + 1),
             format!("Col {}", column + 1),
             if self.model.show_wrap() {
-                "Wrap".to_string()
+                self.painted_wrap_columns()
+                    .map(|columns| format!("Wrap {columns} cols"))
+                    .unwrap_or_else(|| "Wrap".to_string())
             } else {
                 "No Wrap".to_string()
             },
@@ -670,7 +685,7 @@ impl LstGpuiApp {
             .bounds
             .map(|bounds| bounds.size.width)
             .unwrap_or_else(|| self.ui_px(metrics::WINDOW_WIDTH - 48.0));
-        let char_width = code_char_width(window);
+        let char_width = code_char_width(window, self.ui_scale());
         let revision = self.model.active_tab().revision();
         let lines = self.model.active_tab_lines();
         let layout = {

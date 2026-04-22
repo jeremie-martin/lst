@@ -101,6 +101,7 @@ Status last audited: 2026-04-15 (code paths verified directly).
 - [x] **Current line highlight** — `CURRENT_LINE_BG` painted for row containing cursor (`apps/lst-gpui/src/viewport.rs:594`; theme at `ui/theme.rs:49`)
 - [ ] **Cursor blink** respecting OS setting
 - [x] **Scroll margin** — `DEFAULT_SCROLLOFF=4`, `DEFAULT_SIDESCROLLOFF=8` (`crates/lst-editor/src/viewport.rs:13`)
+- [x] **Visible scrollbar when content overflows** — editor renders a slim vertical scrollbar overlay for overflowing content with thumb drag and track paging, backed by existing GPUI scroll handles (`apps/lst-gpui/src/shell.rs::render_editor_scrollbar`; `apps/lst-gpui/src/ui/scrollbar.rs`; tests `apps/lst-gpui/src/tests.rs::editor_scrollbar_drag_scrolls_without_text_selection`, `::editor_scrollbar_track_click_pages_without_text_selection`, `::editor_scrollbar_is_absent_without_overflow`). This is editor-only for now; tab-strip/general scrollbar reuse may be worth extracting later if more scroll surfaces need the same behavior.
 - [x] **Horizontal scroll on long lines** — `sidescrolloff` when wrap off (`crates/lst-editor/src/viewport.rs:27`)
 - [ ] **Minimap**
 - [ ] **Indent guides**
@@ -140,7 +141,7 @@ Items most often overlooked in custom editors:
 
 ## Summary
 
-- **Done:** 40
+- **Done:** 41
 - **Partial:** 10
 - **Missing:** 32
 

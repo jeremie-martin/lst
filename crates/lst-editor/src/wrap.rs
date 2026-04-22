@@ -1,40 +1,4 @@
-const MIN_LINE_NUMBER_DIGITS: usize = 3;
-const LINE_NUMBER_GAP_CHARS: usize = 1;
 const TAB_WIDTH: usize = 8;
-
-pub fn line_number_digits_width(line_count: usize) -> usize {
-    line_count
-        .max(1)
-        .to_string()
-        .len()
-        .max(MIN_LINE_NUMBER_DIGITS)
-}
-
-pub fn wrap_columns_with_gutter(
-    viewport_width: f32,
-    char_width: f32,
-    line_count: usize,
-    show_gutter: bool,
-    editor_pad: f32,
-    right_pad: f32,
-    gutter_left_pad: f32,
-    gutter_separator_width: f32,
-) -> usize {
-    let gutter_width = if show_gutter {
-        char_width * (line_number_digits_width(line_count) + LINE_NUMBER_GAP_CHARS) as f32
-            + gutter_left_pad
-    } else {
-        0.0
-    };
-    let separator_width = if show_gutter {
-        gutter_separator_width
-    } else {
-        0.0
-    };
-    let editor_width =
-        (viewport_width - gutter_width - separator_width - editor_pad - right_pad).max(char_width);
-    (editor_width / char_width).floor().max(1.0) as usize
-}
 
 pub fn visual_line_count(line: &str, max_cols: usize) -> usize {
     if line.is_empty() || max_cols == 0 {
@@ -363,14 +327,6 @@ fn trim_display_line(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn line_number_width_reserves_three_digits() {
-        assert_eq!(line_number_digits_width(1), 3);
-        assert_eq!(line_number_digits_width(99), 3);
-        assert_eq!(line_number_digits_width(100), 3);
-        assert_eq!(line_number_digits_width(1000), 4);
-    }
 
     #[test]
     fn wrap_segments_follow_visual_rows() {

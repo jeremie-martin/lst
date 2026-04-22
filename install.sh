@@ -13,7 +13,7 @@ if ! command -v fc-match >/dev/null 2>&1; then
     exit 1
 fi
 
-if [[ "$(fc-match -f '%{family[0]}' 'TX\-02')" != "TX-02" ]]; then
+if [[ "$(fc-match -f '%{family[0]}' ':family=TX-02')" != "TX-02" ]]; then
     echo "TX-02 is required. Install it and refresh fontconfig before installing lst." >&2
     exit 1
 fi

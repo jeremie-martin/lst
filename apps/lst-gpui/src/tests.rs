@@ -1,7 +1,11 @@
-use crate::ui::{input_keybindings, theme::syntax as theme_syntax};
+use crate::ui::{
+    input_keybindings,
+    scrollbar::{vertical_scrollbar_layout, VerticalScrollbarLayout},
+    theme::syntax as theme_syntax,
+};
 use gpui::{
-    point, px, ClipboardItem, Entity, EntityInputHandler, Keystroke, Modifiers, MouseButton,
-    TestAppContext, VisualContext as _, VisualTestContext,
+    point, px, Bounds, ClipboardItem, Entity, EntityInputHandler, Keystroke, Modifiers,
+    MouseButton, TestAppContext, VisualContext as _, VisualTestContext,
 };
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorTab, TabId};
@@ -167,6 +171,35 @@ fn active_cursor_viewport_state(
     })
 }
 
+fn active_editor_scrollbar_layout(
+    view: &Entity<LstGpuiApp>,
+    cx: &mut VisualTestContext,
+) -> Option<VerticalScrollbarLayout> {
+    view.update(cx, |app, _cx| {
+        let active_view = app.active_view();
+        let bounds = active_view
+            .geometry
+            .borrow()
+            .bounds
+            .expect("viewport should have rendered bounds");
+        vertical_scrollbar_layout(
+            Bounds::new(
+                point(
+                    bounds.right() - app.ui_px(crate::ui::theme::metrics::SCROLLBAR_TRACK_WIDTH),
+                    bounds.top(),
+                ),
+                gpui::size(
+                    app.ui_px(crate::ui::theme::metrics::SCROLLBAR_TRACK_WIDTH),
+                    bounds.size.height,
+                ),
+            ),
+            crate::viewport::scroll_top_for(&active_view.scroll),
+            active_view.scroll.max_offset().height.max(px(0.0)),
+            app.ui_scale(),
+        )
+    })
+}
+
 #[cfg(feature = "internal-invariants")]
 fn tab_from_path(path: PathBuf, text: &str) -> EditorTab {
     EditorTab::from_path(TabId::from_raw(1), path, text)
@@ -179,6 +212,11 @@ fn launch_args_accept_window_title() {
 
     assert_eq!(args.window_title.as_deref(), Some("lst-window"));
     assert_eq!(args.files, [PathBuf::from("/tmp/example.rs")]);
+}
+
+#[test]
+fn primary_font_family_is_tx02() {
+    assert_eq!(crate::ui::theme::typography::PRIMARY_FONT_FAMILY, "TX-02");
 }
 
 #[test]
@@ -443,6 +481,122 @@ fn mouse_selection_updates_gpui_primary_selection(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn editor_scrollbar_drag_scrolls_without_text_selection(cx: &mut TestAppContext) {
+    let dir = temp_dir("scrollbar-drag");
+    let path = dir.join("long.txt");
+    let text = (0..400)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    std::fs::write(&path, text).expect("write scrollbar drag fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.refresh()
+        .expect("render long editor before scrollbar drag");
+    cx.run_until_parked();
+
+    let layout = active_editor_scrollbar_layout(&view, cx)
+        .expect("long editor should expose a scrollbar layout");
+    let x = layout.thumb_bounds.left() + layout.thumb_bounds.size.width / 2.0;
+    let start = point(x, layout.thumb_bounds.top() + px(2.0));
+    let end = point(x, layout.track_bounds.bottom() - px(4.0));
+
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+
+    let (scroll_top, selection, active_text_drag, active_scrollbar_drag) =
+        view.update(cx, |app, _cx| {
+            (
+                crate::viewport::scroll_top_for(&app.active_view().scroll),
+                app.model.active_tab().selection(),
+                app.selection_drag.is_some(),
+                app.editor_scrollbar_drag.is_some(),
+            )
+        });
+    assert!(
+        scroll_top > px(0.0),
+        "dragging the scrollbar thumb should move the editor scroll position"
+    );
+    assert_eq!(selection, 0..0);
+    assert!(!active_text_drag);
+    assert!(!active_scrollbar_drag);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn editor_scrollbar_track_click_pages_without_text_selection(cx: &mut TestAppContext) {
+    let dir = temp_dir("scrollbar-track");
+    let path = dir.join("long.txt");
+    let text = (0..400)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    std::fs::write(&path, text).expect("write scrollbar track fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.refresh()
+        .expect("render long editor before scrollbar track click");
+    cx.run_until_parked();
+
+    let layout = active_editor_scrollbar_layout(&view, cx)
+        .expect("long editor should expose a scrollbar layout");
+    let click = point(
+        layout.thumb_bounds.left() + layout.thumb_bounds.size.width / 2.0,
+        (layout.thumb_bounds.bottom() + px(20.0)).min(layout.track_bounds.bottom() - px(1.0)),
+    );
+
+    cx.simulate_mouse_down(click, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(click, MouseButton::Left, Modifiers::default());
+
+    let (scroll_top, selection, active_text_drag) = view.update(cx, |app, _cx| {
+        (
+            crate::viewport::scroll_top_for(&app.active_view().scroll),
+            app.model.active_tab().selection(),
+            app.selection_drag.is_some(),
+        )
+    });
+    assert!(
+        scroll_top > px(0.0),
+        "clicking below the scrollbar thumb should page the editor down"
+    );
+    assert_eq!(selection, 0..0);
+    assert!(!active_text_drag);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn editor_scrollbar_is_absent_without_overflow(cx: &mut TestAppContext) {
+    let dir = temp_dir("scrollbar-short");
+    let path = dir.join("short.txt");
+    std::fs::write(&path, "short\n").expect("write short scrollbar fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.refresh()
+        .expect("render short editor before scrollbar absence check");
+    cx.run_until_parked();
+
+    assert!(active_editor_scrollbar_layout(&view, cx).is_none());
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
 fn app_find_input_flow_is_observable_at_app_boundary(cx: &mut TestAppContext) {
     let dir = temp_dir("find");
     let path = dir.join("note.txt");
@@ -627,6 +781,190 @@ fn app_goto_input_syncs_open_submit_and_close(cx: &mut TestAppContext) {
     assert_eq!(snapshot.model.goto_line, None);
     assert_eq!(snapshot.goto_line_input, "");
     assert_tab_views_match_model(&snapshot);
+}
+
+#[gpui::test]
+fn rendered_wrapped_rows_fill_viewport_width_except_remainder(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    let text = "a".repeat(560);
+    let text_len = text.chars().count();
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, &text, window, cx);
+    });
+    cx.refresh().expect("render long line");
+    cx.run_until_parked();
+
+    cx.update_window_entity(&view, |app, window, _cx| {
+        let geometry = app.active_view().geometry.borrow();
+        let bounds = geometry.bounds.expect("viewport bounds");
+        let rows = geometry.rows.clone();
+        drop(geometry);
+
+        let char_width = crate::viewport::code_char_width(window, app.ui_scale());
+        let wrap_columns = app.active_wrap_columns(window);
+        let content_width = bounds.size.width
+            - crate::viewport::code_origin_pad(app.model.show_gutter(), app.ui_scale());
+        let row_lengths: Vec<usize> = rows
+            .iter()
+            .map(|row| row.display_end_char.saturating_sub(row.line_start_char))
+            .collect();
+
+        assert!(
+            row_lengths.len() > 1,
+            "fixture should wrap into multiple visual rows"
+        );
+        assert_eq!(row_lengths.iter().sum::<usize>(), text_len);
+
+        for row_length in row_lengths.iter().take(row_lengths.len().saturating_sub(1)) {
+            assert_eq!(
+                *row_length, wrap_columns,
+                "full wrapped rows should consume the computed wrap width"
+            );
+        }
+
+        let char_width_px = char_width / px(1.0);
+        for row in rows.iter().take(rows.len().saturating_sub(1)) {
+            let code_width = row
+                .code_line
+                .as_ref()
+                .expect("wrapped row should have shaped code")
+                .width;
+            let slack = (content_width - code_width) / px(1.0);
+            assert!(
+                (-1.0..=char_width_px + 1.0).contains(&slack),
+                "full wrapped row should end within one character cell of the viewport edge; slack={slack}, char_width={char_width_px}"
+            );
+        }
+
+        let last_width = rows
+            .last()
+            .and_then(|row| row.code_line.as_ref())
+            .expect("last wrapped row should have shaped code")
+            .width;
+        assert!(
+            last_width < content_width,
+            "the final visual row should be the shorter remainder"
+        );
+    });
+}
+
+#[gpui::test]
+fn code_font_is_effectively_monospace_for_basic_ascii(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, _cx| {
+        let font = crate::ui::theme::typography::primary_font();
+        let font_size = app.ui_px(crate::ui::theme::metrics::CODE_FONT_SIZE);
+        let style_for = |text: &str| {
+            [gpui::TextRun {
+                len: text.len(),
+                font: font.clone(),
+                color: gpui::rgb(crate::ui::theme::role::TEXT).into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }]
+        };
+        let width_per_char = |text: &str| {
+            let text = text.to_string();
+            let shaped = window
+                .text_system()
+                .shape_line(gpui::SharedString::from(text.clone()), font_size, &style_for(&text), None);
+            shaped.width / text.chars().count() as f32 / px(1.0)
+        };
+
+        let zero = width_per_char("0000000000000000");
+        let a = width_per_char("aaaaaaaaaaaaaaaa");
+        let m = width_per_char("mmmmmmmmmmmmmmmm");
+        let space = width_per_char("                ");
+        let diff = zero.max(a).max(m).max(space) - zero.min(a).min(m).min(space);
+
+        assert!(
+            diff <= 0.25,
+            "code font must be monospace-like for wrapping; zero={zero}, a={a}, m={m}, space={space}, diff={diff}"
+        );
+    });
+}
+
+#[gpui::test]
+fn exact_wrap_multiples_fill_every_visual_row(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.refresh().expect("initial render");
+    cx.run_until_parked();
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        let wrap_columns = app.active_wrap_columns(window);
+        let text = "a".repeat(wrap_columns * 4);
+        app.replace_text_in_range(None, &text, window, cx);
+    });
+    cx.refresh().expect("render exact wrap multiple");
+    cx.run_until_parked();
+
+    cx.update_window_entity(&view, |app, window, _cx| {
+        let geometry = app.active_view().geometry.borrow();
+        let bounds = geometry.bounds.expect("viewport bounds");
+        let rows = geometry.rows.clone();
+        drop(geometry);
+
+        let wrap_columns = app.active_wrap_columns(window);
+        let char_width = crate::viewport::code_char_width(window, app.ui_scale()) / px(1.0);
+        let content_width = bounds.size.width
+            - crate::viewport::code_origin_pad(app.model.show_gutter(), app.ui_scale());
+        let row_lengths: Vec<usize> = rows
+            .iter()
+            .map(|row| row.display_end_char.saturating_sub(row.line_start_char))
+            .collect();
+
+        assert_eq!(row_lengths, vec![wrap_columns; 4]);
+        for row in &rows {
+            let code_width = row
+                .code_line
+                .as_ref()
+                .expect("wrapped row should have shaped code")
+                .width;
+            let slack = (content_width - code_width) / px(1.0);
+            assert!(
+                (-1.0..=char_width + 1.0).contains(&slack),
+                "exact wrap multiple should fill the viewport on every row; slack={slack}, char_width={char_width}"
+            );
+        }
+    });
+}
+
+#[gpui::test]
+fn status_details_include_wrap_columns_after_render(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, &"a".repeat(2_000), window, cx);
+    });
+    cx.refresh().expect("render wrapped content");
+    cx.run_until_parked();
+
+    let details = view.update(cx, |app, _cx| app.status_details());
+    assert!(details.contains("Wrap "));
+    assert!(details.contains(" cols"));
+}
+
+#[gpui::test]
+fn status_details_ignore_wrap_layouts_that_have_not_been_painted(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    view.update(cx, |app, _cx| {
+        let revision = app.active_tab().revision();
+        let lines = app.model.active_tab_lines();
+        app.active_view().cache.borrow_mut().wrap_layout =
+            Some(crate::viewport::CachedWrapLayout {
+                revision,
+                layout: lst_editor::wrap::build_wrap_layout(lines.as_ref(), 37, true),
+            });
+    });
+
+    let details = view.update(cx, |app, _cx| app.status_details());
+    assert!(details.contains("Wrap"));
+    assert!(!details.contains("37 cols"));
 }
 
 #[gpui::test]
