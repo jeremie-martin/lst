@@ -1,5 +1,5 @@
 use lst_editor::{
-    vim::{Key as VimKey, Modifiers as VimModifiers},
+    vim::{Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
     EditorEffect, EditorModel, EditorTab, RevealIntent, TabId,
 };
 
@@ -129,6 +129,11 @@ fn set_cursor_line(model: &mut EditorModel, line: usize) {
     let _ = model.drain_effects();
 }
 
+fn set_cursor(model: &mut EditorModel, offset: usize, preferred_column: Option<usize>) {
+    model.move_to_char(offset, false, preferred_column);
+    let _ = model.drain_effects();
+}
+
 fn enter_normal(model: &mut EditorModel) {
     model.handle_vim_escape();
     let _ = model.drain_effects();
@@ -161,13 +166,17 @@ fn half_page_up_moves_cursor_by_half_viewport_rows() {
 }
 
 #[test]
-fn half_page_down_at_eof_clamps() {
+fn half_page_down_at_eof_snaps_to_eol() {
     let mut model = long_model();
     model.set_viewport_rows(20);
     set_cursor_line(&mut model, 199);
 
     model.half_page_down(false, 0);
     assert_eq!(model.snapshot().cursor_position.line, 199);
+    assert_eq!(
+        model.snapshot().cursor_position.column,
+        "line 199".chars().count()
+    );
 }
 
 #[test]
@@ -196,6 +205,64 @@ fn page_down_respects_current_viewport_rows() {
 }
 
 #[test]
+fn page_down_at_eof_snaps_to_line_end_and_emits_reveal() {
+    let mut model = long_model();
+    model.set_viewport_rows(20);
+    set_cursor_line(&mut model, 199);
+    model.move_horizontal_by(2, false);
+    let _ = model.drain_effects();
+
+    model.page_down(false, 0);
+    assert_eq!(model.snapshot().cursor_position.line, 199);
+    assert_eq!(
+        model.snapshot().cursor_position.column,
+        "line 199".chars().count()
+    );
+    assert_eq!(
+        only_reveal_intents(&model.drain_effects()),
+        vec![RevealIntent::NearestEdge],
+    );
+}
+
+#[test]
+fn page_up_at_bof_snaps_to_line_start_and_emits_reveal() {
+    let mut model = long_model();
+    model.set_viewport_rows(20);
+    set_cursor(&mut model, 2, None);
+
+    model.page_up(false, 0);
+    assert_eq!(model.snapshot().cursor_position.line, 0);
+    assert_eq!(model.snapshot().cursor_position.column, 0);
+    assert_eq!(
+        only_reveal_intents(&model.drain_effects()),
+        vec![RevealIntent::NearestEdge],
+    );
+}
+
+#[test]
+fn vim_arrow_down_at_eof_keeps_vim_clamp_behavior() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta",
+        )],
+        "Ready.".into(),
+    );
+    set_cursor(&mut model, "alpha\nbe".chars().count(), None);
+    enter_normal(&mut model);
+    let before = model.snapshot().cursor_position;
+
+    model.handle_vim_key(
+        VimKey::Named(VimNamedKey::ArrowDown),
+        VimModifiers::default(),
+        0,
+    );
+    assert_eq!(model.snapshot().cursor_position, before);
+}
+
+#[test]
 fn vim_ctrl_d_moves_cursor_and_emits_nearest_edge() {
     let mut model = long_model();
     model.set_viewport_rows(20);
@@ -219,6 +286,60 @@ fn vim_ctrl_u_moves_cursor_and_emits_nearest_edge() {
     let (key, mods) = ctrl("u");
     model.handle_vim_key(key, mods, 0);
     assert_eq!(model.snapshot().cursor_position.line, 70);
+}
+
+#[test]
+fn vim_half_page_commands_keep_clamped_columns_at_document_edges() {
+    let mut eof = long_model();
+    eof.set_viewport_rows(20);
+    set_cursor_line(&mut eof, 199);
+    eof.move_horizontal_by(2, false);
+    let _ = eof.drain_effects();
+    enter_normal(&mut eof);
+    let before = eof.snapshot().cursor_position;
+
+    let (key, mods) = ctrl("d");
+    eof.handle_vim_key(key, mods, 0);
+    assert_eq!(eof.snapshot().cursor_position, before);
+    let _ = eof.drain_effects();
+
+    let mut bof = long_model();
+    bof.set_viewport_rows(20);
+    set_cursor(&mut bof, 2, None);
+    enter_normal(&mut bof);
+    let before = bof.snapshot().cursor_position;
+
+    let (key, mods) = ctrl("u");
+    bof.handle_vim_key(key, mods, 0);
+    assert_eq!(bof.snapshot().cursor_position, before);
+    let _ = bof.drain_effects();
+}
+
+#[test]
+fn vim_full_page_commands_keep_clamped_columns_at_document_edges() {
+    let mut eof = long_model();
+    eof.set_viewport_rows(20);
+    set_cursor_line(&mut eof, 199);
+    eof.move_horizontal_by(2, false);
+    let _ = eof.drain_effects();
+    enter_normal(&mut eof);
+    let before = eof.snapshot().cursor_position;
+
+    let (key, mods) = ctrl("f");
+    eof.handle_vim_key(key, mods, 0);
+    assert_eq!(eof.snapshot().cursor_position, before);
+    let _ = eof.drain_effects();
+
+    let mut bof = long_model();
+    bof.set_viewport_rows(20);
+    set_cursor(&mut bof, 2, None);
+    enter_normal(&mut bof);
+    let before = bof.snapshot().cursor_position;
+
+    let (key, mods) = ctrl("b");
+    bof.handle_vim_key(key, mods, 0);
+    assert_eq!(bof.snapshot().cursor_position, before);
+    let _ = bof.drain_effects();
 }
 
 #[test]

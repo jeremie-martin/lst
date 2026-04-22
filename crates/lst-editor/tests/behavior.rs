@@ -308,6 +308,342 @@ fn movement_and_selection_are_behavioral_commands() {
 }
 
 #[test]
+fn subword_motion_moves_through_identifier_chunks() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "camelCase snake_case HTTPServer version2Alpha",
+        )],
+        "Ready.".into(),
+    );
+
+    for expected in [5, 9, 15, 20, 25, 31, 39, 40, 45] {
+        model.move_subword(false, false);
+        assert_eq!(model.snapshot().cursor, expected);
+    }
+
+    for expected in [40, 39, 32, 25, 21, 16, 10, 5, 0] {
+        model.move_subword(true, false);
+        assert_eq!(model.snapshot().cursor, expected);
+    }
+}
+
+#[test]
+fn subword_selection_extends_from_anchor() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "camelCase",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_subword(false, true);
+    let first = model.snapshot();
+    assert_eq!(first.selection, 0..5);
+    assert_eq!(first.cursor, 5);
+
+    model.move_subword(false, true);
+    let second = model.snapshot();
+    assert_eq!(second.selection, 0..9);
+    assert_eq!(second.cursor, 9);
+}
+
+#[test]
+fn subword_motion_collapses_existing_selection() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "camelCase",
+        )],
+        "Ready.".into(),
+    );
+
+    model.set_selection(5..9, false);
+    model.move_subword(true, false);
+    assert_eq!(model.snapshot().selection, 5..5);
+
+    model.set_selection(5..9, false);
+    model.move_subword(false, false);
+    assert_eq!(model.snapshot().selection, 9..9);
+}
+
+#[test]
+fn whole_word_motion_still_uses_whole_identifier() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "camelCase snake_case version2Alpha",
+        )],
+        "Ready.".into(),
+    );
+
+    for expected in [9, 20, 34] {
+        model.move_word(false, false);
+        assert_eq!(model.snapshot().cursor, expected);
+    }
+}
+
+#[test]
+fn logical_row_motion_snaps_to_document_edges() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(2, false, None);
+    model.move_logical_rows(-1, false);
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 0, column: 0 }
+    );
+
+    model.move_to_char("alpha\nbe".chars().count(), false, None);
+    model.move_logical_rows(1, false);
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 1, column: 4 }
+    );
+}
+
+#[test]
+fn logical_row_edge_snap_extends_selection() {
+    let mut top = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta",
+        )],
+        "Ready.".into(),
+    );
+    top.move_to_char(2, false, None);
+    top.move_logical_rows(-1, true);
+    let top_snapshot = top.snapshot();
+    assert_eq!(top_snapshot.selection, 0..2);
+    assert_eq!(top_snapshot.cursor, 0);
+
+    let mut bottom = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta",
+        )],
+        "Ready.".into(),
+    );
+    bottom.move_to_char("alpha\nbe".chars().count(), false, None);
+    bottom.move_logical_rows(1, true);
+    let bottom_snapshot = bottom.snapshot();
+    assert_eq!(
+        bottom_snapshot.selection,
+        "alpha\nbe".chars().count().."alpha\nbeta".chars().count()
+    );
+    assert_eq!(bottom_snapshot.cursor, "alpha\nbeta".chars().count());
+}
+
+#[test]
+fn logical_row_edge_noop_collapses_selection() {
+    let mut top = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta",
+        )],
+        "Ready.".into(),
+    );
+    top.set_selection(0..2, true);
+    top.move_logical_rows(-1, false);
+    let top_snapshot = top.snapshot();
+    assert_eq!(top_snapshot.selection, 0..0);
+    assert_eq!(top_snapshot.cursor, 0);
+
+    let mut bottom = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta",
+        )],
+        "Ready.".into(),
+    );
+    let eof = "alpha\nbeta".chars().count();
+    bottom.set_selection((eof - 2)..eof, false);
+    bottom.move_logical_rows(1, false);
+    let bottom_snapshot = bottom.snapshot();
+    assert_eq!(bottom_snapshot.selection, eof..eof);
+    assert_eq!(bottom_snapshot.cursor, eof);
+}
+
+#[test]
+fn logical_row_edge_snap_preserves_preferred_column() {
+    let mut top = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "abcd\nefghijkl",
+        )],
+        "Ready.".into(),
+    );
+    top.move_to_char(2, false, Some(6));
+    top.move_logical_rows(-1, false);
+    assert_eq!(
+        top.snapshot().cursor_position,
+        Position { line: 0, column: 0 }
+    );
+    top.move_logical_rows(1, false);
+    assert_eq!(
+        top.snapshot().cursor_position,
+        Position { line: 1, column: 6 }
+    );
+
+    let mut bottom = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "efghijkl\nabcd",
+        )],
+        "Ready.".into(),
+    );
+    bottom.move_to_char("efghijkl\nab".chars().count(), false, Some(6));
+    bottom.move_logical_rows(1, false);
+    assert_eq!(
+        bottom.snapshot().cursor_position,
+        Position { line: 1, column: 4 }
+    );
+    bottom.move_logical_rows(-1, false);
+    assert_eq!(
+        bottom.snapshot().cursor_position,
+        Position { line: 0, column: 6 }
+    );
+}
+
+#[test]
+fn smart_home_toggles_between_first_non_blank_and_line_start() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "  alpha",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(5, false, None);
+    let _ = model.drain_effects();
+
+    model.smart_home(false);
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 0, column: 2 }
+    );
+
+    model.smart_home(false);
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 0, column: 0 }
+    );
+
+    model.smart_home(false);
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 0, column: 2 }
+    );
+}
+
+#[test]
+fn smart_home_selection_tracks_the_selection_head() {
+    let mut forward = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "  alpha",
+        )],
+        "Ready.".into(),
+    );
+    forward.set_selection(0..7, false);
+    forward.smart_home(true);
+    let forward_snapshot = forward.snapshot();
+    assert_eq!(forward_snapshot.selection, 0..2);
+    assert_eq!(forward_snapshot.cursor, 2);
+
+    let mut reversed = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "  alpha",
+        )],
+        "Ready.".into(),
+    );
+    reversed.set_selection(2..7, true);
+    reversed.smart_home(true);
+    let reversed_snapshot = reversed.snapshot();
+    assert_eq!(reversed_snapshot.selection, 0..7);
+    assert_eq!(reversed_snapshot.cursor, 0);
+}
+
+#[test]
+fn smart_home_clears_preferred_column_and_skips_noop_reveal() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "  alpha\n0123456789\n    ",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(5, false, Some(8));
+    let _ = model.drain_effects();
+
+    model.smart_home(false);
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 0, column: 2 }
+    );
+    assert_eq!(
+        model.drain_effects(),
+        vec![EditorEffect::Reveal(RevealIntent::NearestEdge)]
+    );
+
+    model.move_logical_rows(1, false);
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 1, column: 2 }
+    );
+
+    model.move_document_boundary(true, false);
+    model.move_line_boundary(false, false);
+    let _ = model.drain_effects();
+    model.smart_home(false);
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 2, column: 0 }
+    );
+    assert_eq!(model.drain_effects(), Vec::<EditorEffect>::new());
+}
+
+#[test]
 fn horizontal_collapse_commands_collapse_active_selection() {
     let mut model = EditorModel::new(
         vec![EditorTab::from_text(
@@ -391,6 +727,78 @@ fn display_row_selection_extends_from_anchor() {
 }
 
 #[test]
+fn display_row_motion_snaps_to_document_edges() {
+    let mut top = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta gamma\nshort",
+        )],
+        "Ready.".into(),
+    );
+    top.move_to_char(2, false, None);
+    top.move_display_rows_by(-1, false, 6);
+    assert_eq!(
+        top.snapshot().cursor_position,
+        Position { line: 0, column: 0 }
+    );
+
+    let mut bottom = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "short\nabcdefghijkl",
+        )],
+        "Ready.".into(),
+    );
+    bottom.move_to_char("short\nabcdefghi".chars().count(), false, None);
+    bottom.move_display_rows_by(1, false, 4);
+    assert_eq!(
+        bottom.snapshot().cursor_position,
+        Position {
+            line: 1,
+            column: "abcdefghijkl".chars().count(),
+        }
+    );
+}
+
+#[test]
+fn display_row_edge_noop_collapses_selection() {
+    let mut top = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta gamma\nshort",
+        )],
+        "Ready.".into(),
+    );
+    top.set_selection(0..2, true);
+    top.move_display_rows_by(-1, false, 6);
+    let top_snapshot = top.snapshot();
+    assert_eq!(top_snapshot.selection, 0..0);
+    assert_eq!(top_snapshot.cursor, 0);
+
+    let mut bottom = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "short\nabcdefghijkl",
+        )],
+        "Ready.".into(),
+    );
+    let eof = "short\nabcdefghijkl".chars().count();
+    bottom.set_selection((eof - 3)..eof, false);
+    bottom.move_display_rows_by(1, false, 4);
+    let bottom_snapshot = bottom.snapshot();
+    assert_eq!(bottom_snapshot.selection, eof..eof);
+    assert_eq!(bottom_snapshot.cursor, eof);
+}
+
+#[test]
 fn display_row_movement_clamps_and_falls_back_when_wrap_is_disabled() {
     let mut model = EditorModel::new(
         vec![EditorTab::from_text(
@@ -402,6 +810,7 @@ fn display_row_movement_clamps_and_falls_back_when_wrap_is_disabled() {
         "Ready.".into(),
     );
 
+    model.move_to_char(2, false, None);
     model.move_display_rows_by(-1, false, 6);
     assert_eq!(model.snapshot().cursor, 0);
 

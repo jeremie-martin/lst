@@ -8,8 +8,8 @@ use gpui::{
     SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
 };
 use lst_editor::selection::{
-    drag_selection_range, next_word_boundary_in_text, previous_word_boundary_in_text,
-    word_range_in_text,
+    drag_selection_range, next_subword_boundary_in_text, next_word_boundary_in_text,
+    previous_subword_boundary_in_text, previous_word_boundary_in_text, word_range_in_text,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -22,10 +22,14 @@ actions!(
         FieldDelete,
         FieldLeft,
         FieldRight,
+        FieldSubwordLeft,
+        FieldSubwordRight,
         FieldWordLeft,
         FieldWordRight,
         FieldSelectLeft,
         FieldSelectRight,
+        FieldSelectSubwordLeft,
+        FieldSelectSubwordRight,
         FieldSelectWordLeft,
         FieldSelectWordRight,
         FieldSelectAll,
@@ -60,8 +64,8 @@ pub fn input_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("right", FieldRight, Some("InlineInput")),
         KeyBinding::new("ctrl-left", FieldWordLeft, Some("InlineInput")),
         KeyBinding::new("ctrl-right", FieldWordRight, Some("InlineInput")),
-        KeyBinding::new("alt-left", FieldWordLeft, Some("InlineInput")),
-        KeyBinding::new("alt-right", FieldWordRight, Some("InlineInput")),
+        KeyBinding::new("alt-left", FieldSubwordLeft, Some("InlineInput")),
+        KeyBinding::new("alt-right", FieldSubwordRight, Some("InlineInput")),
         KeyBinding::new("cmd-left", FieldHome, Some("InlineInput")),
         KeyBinding::new("cmd-right", FieldEnd, Some("InlineInput")),
         KeyBinding::new("shift-left", FieldSelectLeft, Some("InlineInput")),
@@ -72,8 +76,16 @@ pub fn input_keybindings() -> Vec<KeyBinding> {
             FieldSelectWordRight,
             Some("InlineInput"),
         ),
-        KeyBinding::new("alt-shift-left", FieldSelectWordLeft, Some("InlineInput")),
-        KeyBinding::new("alt-shift-right", FieldSelectWordRight, Some("InlineInput")),
+        KeyBinding::new(
+            "alt-shift-left",
+            FieldSelectSubwordLeft,
+            Some("InlineInput"),
+        ),
+        KeyBinding::new(
+            "alt-shift-right",
+            FieldSelectSubwordRight,
+            Some("InlineInput"),
+        ),
         KeyBinding::new("shift-home", FieldSelectHome, Some("InlineInput")),
         KeyBinding::new("shift-end", FieldSelectEnd, Some("InlineInput")),
         KeyBinding::new("cmd-shift-left", FieldSelectHome, Some("InlineInput")),
@@ -115,6 +127,8 @@ enum InputDragSelectionMode {
 enum TextMovement {
     PreviousGrapheme,
     NextGrapheme,
+    PreviousSubword,
+    NextSubword,
     PreviousWord,
     NextWord,
     Start,
@@ -217,6 +231,14 @@ impl InputText {
         next_word_boundary_in_text(self.content.as_ref(), offset)
     }
 
+    fn previous_subword_boundary(&self, offset: usize) -> usize {
+        previous_subword_boundary_in_text(self.content.as_ref(), offset)
+    }
+
+    fn next_subword_boundary(&self, offset: usize) -> usize {
+        next_subword_boundary_in_text(self.content.as_ref(), offset)
+    }
+
     fn word_range_at_offset(&self, offset: usize) -> Range<usize> {
         word_range_in_text(self.content.as_ref(), offset)
     }
@@ -225,6 +247,8 @@ impl InputText {
         match movement {
             TextMovement::PreviousGrapheme => self.previous_boundary(self.cursor_offset()),
             TextMovement::NextGrapheme => self.next_boundary(self.cursor_offset()),
+            TextMovement::PreviousSubword => self.previous_subword_boundary(self.cursor_offset()),
+            TextMovement::NextSubword => self.next_subword_boundary(self.cursor_offset()),
             TextMovement::PreviousWord => self.previous_word_boundary(self.cursor_offset()),
             TextMovement::NextWord => self.next_word_boundary(self.cursor_offset()),
             TextMovement::Start => 0,
@@ -235,10 +259,12 @@ impl InputText {
     fn move_cursor(&mut self, movement: TextMovement, select: bool) {
         let target = if !select && !self.selected_range.is_empty() {
             match movement {
-                TextMovement::PreviousGrapheme | TextMovement::PreviousWord => {
-                    self.selected_range.start
+                TextMovement::PreviousGrapheme
+                | TextMovement::PreviousSubword
+                | TextMovement::PreviousWord => self.selected_range.start,
+                TextMovement::NextGrapheme | TextMovement::NextSubword | TextMovement::NextWord => {
+                    self.selected_range.end
                 }
-                TextMovement::NextGrapheme | TextMovement::NextWord => self.selected_range.end,
                 TextMovement::Start => 0,
                 TextMovement::End => self.content.len(),
             }
@@ -410,6 +436,14 @@ impl InputField {
         self.move_text(TextMovement::NextWord, false, cx);
     }
 
+    fn subword_left(&mut self, _: &FieldSubwordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_text(TextMovement::PreviousSubword, false, cx);
+    }
+
+    fn subword_right(&mut self, _: &FieldSubwordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_text(TextMovement::NextSubword, false, cx);
+    }
+
     fn select_left(&mut self, _: &FieldSelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::PreviousGrapheme, true, cx);
     }
@@ -434,6 +468,24 @@ impl InputField {
         cx: &mut Context<Self>,
     ) {
         self.move_text(TextMovement::NextWord, true, cx);
+    }
+
+    fn select_subword_left(
+        &mut self,
+        _: &FieldSelectSubwordLeft,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_text(TextMovement::PreviousSubword, true, cx);
+    }
+
+    fn select_subword_right(
+        &mut self,
+        _: &FieldSelectSubwordRight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_text(TextMovement::NextSubword, true, cx);
     }
 
     fn select_all_action(&mut self, _: &FieldSelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -887,10 +939,14 @@ impl Render for InputField {
             .key_context("InlineInput")
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::subword_left))
+            .on_action(cx.listener(Self::subword_right))
             .on_action(cx.listener(Self::word_left))
             .on_action(cx.listener(Self::word_right))
             .on_action(cx.listener(Self::select_left))
             .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_subword_left))
+            .on_action(cx.listener(Self::select_subword_right))
             .on_action(cx.listener(Self::select_word_left))
             .on_action(cx.listener(Self::select_word_right))
             .on_action(cx.listener(Self::select_all_action))
@@ -973,6 +1029,14 @@ mod tests {
         assert!(has_binding::<FieldWordRight>("ctrl-right"));
         assert!(has_binding::<FieldSelectWordLeft>("ctrl-shift-left"));
         assert!(has_binding::<FieldSelectWordRight>("ctrl-shift-right"));
+        assert!(has_binding::<FieldSubwordLeft>("alt-left"));
+        assert!(has_binding::<FieldSubwordRight>("alt-right"));
+        assert!(has_binding::<FieldSelectSubwordLeft>("alt-shift-left"));
+        assert!(has_binding::<FieldSelectSubwordRight>("alt-shift-right"));
+        assert!(!has_binding::<FieldWordLeft>("alt-left"));
+        assert!(!has_binding::<FieldWordRight>("alt-right"));
+        assert!(!has_binding::<FieldSelectWordLeft>("alt-shift-left"));
+        assert!(!has_binding::<FieldSelectWordRight>("alt-shift-right"));
         assert!(has_binding::<FieldSelectHome>("shift-home"));
         assert!(has_binding::<FieldSelectEnd>("shift-end"));
     }
@@ -999,6 +1063,13 @@ mod tests {
     }
 
     #[test]
+    fn input_word_ranges_keep_subword_candidates_whole() {
+        assert_eq!(word_range_in_text("snake_case", 6), 0..10);
+        assert_eq!(word_range_in_text("HTTPServer", 4), 0..10);
+        assert_eq!(word_range_in_text("version2Alpha", 8), 0..13);
+    }
+
+    #[test]
     fn input_word_boundaries_are_utf8_safe() {
         let text = "one γamma two";
 
@@ -1008,6 +1079,46 @@ mod tests {
             previous_word_boundary_in_text(text, "one γamma".len()),
             "one ".len()
         );
+    }
+
+    #[test]
+    fn input_subword_movement_splits_identifier_chunks() {
+        let mut text = InputText::new();
+        assert!(text.set_text("camelCase snake_case HTTPServer version2Alpha"));
+        text.move_to(0);
+
+        for expected in [5, 9, 15, 20, 25, 31, 39, 40, 45] {
+            text.move_cursor(TextMovement::NextSubword, false);
+            assert_eq!(text.selected_range, expected..expected);
+        }
+
+        for expected in [40, 39, 32, 25, 21, 16, 10, 5, 0] {
+            text.move_cursor(TextMovement::PreviousSubword, false);
+            assert_eq!(text.selected_range, expected..expected);
+        }
+    }
+
+    #[test]
+    fn input_subword_selection_and_collapse_follow_editor_rules() {
+        let mut text = InputText::new();
+        assert!(text.set_text("camelCase"));
+        text.move_to(0);
+
+        text.move_cursor(TextMovement::NextSubword, true);
+        assert_eq!(text.selected_range, 0..5);
+        assert!(!text.selection_reversed);
+
+        text.move_cursor(TextMovement::NextSubword, true);
+        assert_eq!(text.selected_range, 0..9);
+        assert!(!text.selection_reversed);
+
+        text.select_range(5..9, false);
+        text.move_cursor(TextMovement::PreviousSubword, false);
+        assert_eq!(text.selected_range, 5..5);
+
+        text.select_range(5..9, false);
+        text.move_cursor(TextMovement::NextSubword, false);
+        assert_eq!(text.selected_range, 9..9);
     }
 
     #[test]

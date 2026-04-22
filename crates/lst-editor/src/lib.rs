@@ -20,7 +20,10 @@ use crate::{
     document::{char_to_position, line_indent_prefix, position_to_char},
     find::{FindState, MatchPos},
     position::Position,
-    selection::{next_word_boundary, previous_word_boundary},
+    selection::{
+        next_subword_boundary, next_word_boundary, previous_subword_boundary,
+        previous_word_boundary,
+    },
 };
 use std::{ops::Range, path::PathBuf, sync::Arc};
 
@@ -634,7 +637,13 @@ impl EditorModel {
         self.move_horizontal(delta, false)
     }
 
-    fn move_word_boundary(&mut self, backward: bool, select: bool) -> bool {
+    fn move_boundary(
+        &mut self,
+        backward: bool,
+        select: bool,
+        prev_fn: fn(&ropey::Rope, usize) -> usize,
+        next_fn: fn(&ropey::Rope, usize) -> usize,
+    ) -> bool {
         let target = {
             let tab = self.active_tab();
             if !select && tab.has_selection() {
@@ -644,9 +653,9 @@ impl EditorModel {
                     tab.selection().end
                 }
             } else if backward {
-                previous_word_boundary(tab.buffer(), tab.cursor_char())
+                prev_fn(tab.buffer(), tab.cursor_char())
             } else {
-                next_word_boundary(tab.buffer(), tab.cursor_char())
+                next_fn(tab.buffer(), tab.cursor_char())
             }
         };
 
@@ -660,70 +669,131 @@ impl EditorModel {
         true
     }
 
-    fn move_vertical(&mut self, delta: isize, select: bool) -> bool {
+    fn apply_vertical_motion_target(
+        &mut self,
+        target: usize,
+        preferred_column: usize,
+        select: bool,
+    ) -> bool {
+        let cursor = self.active_tab().cursor_char();
         let tab = self.active_tab_mut();
-        let cursor = tab.cursor_char();
-        let position = tab.cursor_position();
-        let preferred = tab.preferred_column.unwrap_or(position.column);
-        let target_line = if delta.is_negative() {
-            position.line.saturating_sub(delta.unsigned_abs())
-        } else {
-            (position.line + delta as usize).min(tab.line_count().saturating_sub(1))
-        };
-        let target_column = preferred.min(display_line_char_len(tab, target_line));
-        let target = tab.buffer.line_to_char(target_line) + target_column;
-        tab.preferred_column = Some(preferred);
         if select {
             tab.select_to(target);
         } else {
             tab.move_to(target);
         }
+        tab.preferred_column = Some(preferred_column);
         target != cursor
     }
 
-    fn move_display_rows(&mut self, delta: isize, select: bool, wrap_columns: usize) -> bool {
+    fn vertical_boundary_target(tab: &EditorTab, delta: isize) -> Option<usize> {
+        if delta < 0 {
+            Some(tab.buffer().line_to_char(0))
+        } else if delta > 0 {
+            let last_line = tab.line_count().saturating_sub(1);
+            Some(tab.buffer().line_to_char(last_line) + display_line_char_len(tab, last_line))
+        } else {
+            None
+        }
+    }
+
+    fn move_vertical(&mut self, delta: isize, select: bool, snap_to_document_edges: bool) -> bool {
+        let (target, preferred) = {
+            let tab = self.active_tab();
+            let position = tab.cursor_position();
+            let preferred = tab.preferred_column.unwrap_or(position.column);
+            let last_line = tab.line_count().saturating_sub(1);
+            let at_edge =
+                (delta < 0 && position.line == 0) || (delta > 0 && position.line == last_line);
+            let boundary_target = (snap_to_document_edges && at_edge)
+                .then(|| Self::vertical_boundary_target(tab, delta))
+                .flatten();
+            let target = if let Some(target) = boundary_target {
+                target
+            } else {
+                let target_line = if delta.is_negative() {
+                    position.line.saturating_sub(delta.unsigned_abs())
+                } else {
+                    (position.line + delta as usize).min(last_line)
+                };
+                let target_column = preferred.min(display_line_char_len(tab, target_line));
+                tab.buffer().line_to_char(target_line) + target_column
+            };
+            (target, preferred)
+        };
+
+        self.apply_vertical_motion_target(target, preferred, select)
+    }
+
+    fn move_display_rows(
+        &mut self,
+        delta: isize,
+        select: bool,
+        wrap_columns: usize,
+        snap_to_document_edges: bool,
+    ) -> bool {
         if !self.show_wrap {
-            return self.move_vertical(delta, select);
+            return self.move_vertical(delta, select, snap_to_document_edges);
         }
 
-        let target = {
+        let (target, preferred) = {
             let tab = self.active_tab_mut();
             let lines = tab.lines();
             let position = tab.cursor_position();
             let layout = wrap::build_wrap_layout(lines.as_ref(), wrap_columns, true);
-            wrap::display_row_target(
+            let row_target = wrap::display_row_target(
                 lines.as_ref(),
                 position.line,
                 position.column,
                 tab.preferred_column,
                 delta,
                 &layout,
-            )
+            );
+            let preferred = row_target
+                .map(|target| target.preferred_column)
+                .or(tab.preferred_column)
+                .unwrap_or_else(|| {
+                    let current_visual_row = wrap::visual_row_for_position(
+                        lines.as_ref(),
+                        position.line,
+                        position.column,
+                        &layout,
+                    )
+                    .unwrap_or(layout.line_row_starts[position.line]);
+                    let current_row_in_line =
+                        current_visual_row.saturating_sub(layout.line_row_starts[position.line]);
+                    let current_line = lines
+                        .get(position.line)
+                        .map(String::as_str)
+                        .unwrap_or_default();
+                    let segments = wrap::wrap_segments(current_line, layout.wrap_columns);
+                    let current_segment = segments
+                        .get(current_row_in_line)
+                        .or_else(|| segments.last())
+                        .expect("wrap_segments always returns at least one segment");
+                    position.column.saturating_sub(current_segment.start_col)
+                });
+            let target = if let Some(rt) = row_target {
+                Some(position_to_char(
+                    tab.buffer(),
+                    Position {
+                        line: rt.line,
+                        column: rt.column,
+                    },
+                ))
+            } else if snap_to_document_edges {
+                Self::vertical_boundary_target(tab, delta)
+            } else {
+                None
+            };
+            (target, preferred)
         };
 
         let Some(target) = target else {
             return false;
         };
 
-        let target_char = {
-            let tab = self.active_tab();
-            position_to_char(
-                tab.buffer(),
-                Position {
-                    line: target.line,
-                    column: target.column,
-                },
-            )
-        };
-        let cursor = self.active_tab().cursor_char();
-        let tab = self.active_tab_mut();
-        if select {
-            tab.select_to(target_char);
-        } else {
-            tab.move_to(target_char);
-        }
-        tab.preferred_column = Some(target.preferred_column);
-        target_char != cursor || select
+        self.apply_vertical_motion_target(target, preferred, select)
     }
 
     fn move_to_visual_row(&mut self, target: usize, select: bool, wrap_columns: usize) -> bool {
@@ -732,7 +802,7 @@ impl EditorModel {
             if target == current {
                 return false;
             }
-            return self.move_vertical(target as isize - current as isize, select);
+            return self.move_vertical(target as isize - current as isize, select, true);
         }
 
         // Build the wrap layout once and reuse it for both the current-row
@@ -784,6 +854,18 @@ impl EditorModel {
         target_char != cursor || select
     }
 
+    fn move_paged(
+        &mut self,
+        delta: isize,
+        select: bool,
+        wrap_columns: usize,
+        snap_to_document_edges: bool,
+    ) {
+        if self.move_display_rows(delta, select, wrap_columns, snap_to_document_edges) {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
     fn move_line_boundary_inner(&mut self, to_end: bool, select: bool) -> bool {
         let tab = self.active_tab_mut();
         let cursor = tab.cursor_char();
@@ -792,6 +874,26 @@ impl EditorModel {
             tab.buffer.line_to_char(line) + display_line_char_len(tab, line)
         } else {
             tab.buffer.line_to_char(line)
+        };
+        tab.preferred_column = None;
+        if select {
+            tab.select_to(target);
+        } else {
+            tab.move_to(target);
+        }
+        target != cursor
+    }
+
+    fn move_smart_home_inner(&mut self, select: bool) -> bool {
+        let tab = self.active_tab_mut();
+        let cursor = tab.cursor_char();
+        let line = tab.buffer.char_to_line(cursor.min(tab.len_chars()));
+        let line_start = tab.buffer.line_to_char(line);
+        let first_non_blank = line_start + first_non_blank_column(tab, line);
+        let target = if cursor == first_non_blank {
+            line_start
+        } else {
+            first_non_blank
         };
         tab.preferred_column = None;
         if select {
@@ -1124,19 +1226,23 @@ impl EditorModel {
                     changed = true;
                 }
                 vim::VimCommand::HalfPageDown => {
-                    self.half_page_down(self.vim_in_visual(), wrap_columns);
+                    let delta = self.viewport.half_page() as isize;
+                    self.move_paged(delta, self.vim_in_visual(), wrap_columns, false);
                     changed = true;
                 }
                 vim::VimCommand::HalfPageUp => {
-                    self.half_page_up(self.vim_in_visual(), wrap_columns);
+                    let delta = -(self.viewport.half_page() as isize);
+                    self.move_paged(delta, self.vim_in_visual(), wrap_columns, false);
                     changed = true;
                 }
                 vim::VimCommand::PageDown => {
-                    self.page_down(self.vim_in_visual(), wrap_columns);
+                    let delta = self.viewport.page() as isize;
+                    self.move_paged(delta, self.vim_in_visual(), wrap_columns, false);
                     changed = true;
                 }
                 vim::VimCommand::PageUp => {
-                    self.page_up(self.vim_in_visual(), wrap_columns);
+                    let delta = -(self.viewport.page() as isize);
+                    self.move_paged(delta, self.vim_in_visual(), wrap_columns, false);
                     changed = true;
                 }
                 vim::VimCommand::MoveToScreenTop => {
@@ -1601,15 +1707,13 @@ impl EditorModel {
     }
 
     pub fn move_logical_rows(&mut self, delta: isize, select: bool) {
-        if self.move_vertical(delta, select) {
+        if self.move_vertical(delta, select, true) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
     pub fn move_display_rows_by(&mut self, delta: isize, select: bool, wrap_columns: usize) {
-        if self.move_display_rows(delta, select, wrap_columns) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
+        self.move_paged(delta, select, wrap_columns, true);
     }
 
     pub fn viewport(&self) -> Viewport {
@@ -1626,30 +1730,22 @@ impl EditorModel {
 
     pub fn page_down(&mut self, select: bool, wrap_columns: usize) {
         let delta = self.viewport.page() as isize;
-        if self.move_display_rows(delta, select, wrap_columns) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
+        self.move_paged(delta, select, wrap_columns, true);
     }
 
     pub fn page_up(&mut self, select: bool, wrap_columns: usize) {
         let delta = -(self.viewport.page() as isize);
-        if self.move_display_rows(delta, select, wrap_columns) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
+        self.move_paged(delta, select, wrap_columns, true);
     }
 
     pub fn half_page_down(&mut self, select: bool, wrap_columns: usize) {
         let delta = self.viewport.half_page() as isize;
-        if self.move_display_rows(delta, select, wrap_columns) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
+        self.move_paged(delta, select, wrap_columns, true);
     }
 
     pub fn half_page_up(&mut self, select: bool, wrap_columns: usize) {
         let delta = -(self.viewport.half_page() as isize);
-        if self.move_display_rows(delta, select, wrap_columns) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
+        self.move_paged(delta, select, wrap_columns, true);
     }
 
     pub fn screen_top(&mut self, select: bool, wrap_columns: usize) {
@@ -1686,12 +1782,28 @@ impl EditorModel {
     }
 
     pub fn move_word(&mut self, backward: bool, select: bool) {
-        self.move_word_boundary(backward, select);
+        self.move_boundary(backward, select, previous_word_boundary, next_word_boundary);
+        self.queue_reveal(RevealIntent::NearestEdge);
+    }
+
+    pub fn move_subword(&mut self, backward: bool, select: bool) {
+        self.move_boundary(
+            backward,
+            select,
+            previous_subword_boundary,
+            next_subword_boundary,
+        );
         self.queue_reveal(RevealIntent::NearestEdge);
     }
 
     pub fn move_line_boundary(&mut self, to_end: bool, select: bool) {
         if self.move_line_boundary_inner(to_end, select) {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    pub fn smart_home(&mut self, select: bool) {
+        if self.move_smart_home_inner(select) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
@@ -2174,6 +2286,15 @@ fn display_line_char_len(tab: &EditorTab, line_ix: usize) -> usize {
         .chars()
         .take_while(|ch| *ch != '\n' && *ch != '\r')
         .count()
+}
+
+fn first_non_blank_column(tab: &EditorTab, line_ix: usize) -> usize {
+    tab.buffer()
+        .line(line_ix.min(tab.buffer().len_lines().saturating_sub(1)))
+        .chars()
+        .take_while(|ch| *ch != '\n' && *ch != '\r')
+        .position(|ch| !ch.is_whitespace())
+        .unwrap_or(0)
 }
 
 fn preferred_newline_for_active_tab(tab: &EditorTab) -> &'static str {

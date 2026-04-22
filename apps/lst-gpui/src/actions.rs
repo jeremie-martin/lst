@@ -5,11 +5,12 @@ use crate::{
     DeleteWordBackward, DeleteWordForward, DuplicateLine, FindNext, FindOpen, FindOpenReplace,
     FindPrev, GotoLineOpen, InsertNewline, InsertTab, LstGpuiApp, MoveDocumentEnd,
     MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd, MoveLineStart, MoveLineUp,
-    MovePageDown, MovePageUp, MoveRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab, NextTab,
-    OpenFile, PasteClipboard, PrevTab, Quit, Redo, ReplaceAll, ReplaceOne, SaveFile, SaveFileAs,
-    SelectAll, SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd,
-    SelectLineStart, SelectPageDown, SelectPageUp, SelectRight, SelectUp, SelectWordLeft,
-    SelectWordRight, ToggleComment, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
+    MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft, MoveSubwordRight, MoveUp,
+    MoveWordLeft, MoveWordRight, NewTab, NextTab, OpenFile, PasteClipboard, PrevTab, Quit, Redo,
+    ReplaceAll, ReplaceOne, SaveFile, SaveFileAs, SelectAll, SelectDocumentEnd,
+    SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd, SelectLineStart, SelectPageDown,
+    SelectPageUp, SelectRight, SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp,
+    SelectWordLeft, SelectWordRight, ToggleComment, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
@@ -40,16 +41,22 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         MoveRight => |model| model.move_horizontal_collapsed(false);
         MoveWordLeft => |model| model.move_word(true, false);
         MoveWordRight => |model| model.move_word(false, false);
+        MoveSubwordLeft => |model| model.move_subword(true, false);
+        MoveSubwordRight => |model| model.move_subword(false, false);
         MoveDocumentStart => |model| model.move_document_boundary(false, false);
         MoveDocumentEnd => |model| model.move_document_boundary(true, false);
         SelectLeft => |model| model.move_horizontal_by(-1, true);
         SelectRight => |model| model.move_horizontal_by(1, true);
         SelectWordLeft => |model| model.move_word(true, true);
         SelectWordRight => |model| model.move_word(false, true);
+        SelectSubwordLeft => |model| model.move_subword(true, true);
+        SelectSubwordRight => |model| model.move_subword(false, true);
         SelectDocumentStart => |model| model.move_document_boundary(false, true);
         SelectDocumentEnd => |model| model.move_document_boundary(true, true);
+        MoveSmartHome => |model| model.smart_home(false);
         MoveLineStart => |model| model.move_line_boundary(false, false);
         MoveLineEnd => |model| model.move_line_boundary(true, false);
+        SelectSmartHome => |model| model.smart_home(true);
         SelectLineStart => |model| model.move_line_boundary(false, true);
         SelectLineEnd => |model| model.move_line_boundary(true, true);
         Backspace => |model| model.backspace();

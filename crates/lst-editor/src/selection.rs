@@ -8,6 +8,14 @@ enum TokenClass {
     Symbol,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubwordClass {
+    Lower,
+    Upper,
+    Alpha,
+    Digit,
+}
+
 fn token_class(ch: char) -> TokenClass {
     if ch.is_whitespace() {
         TokenClass::Whitespace
@@ -16,6 +24,175 @@ fn token_class(ch: char) -> TokenClass {
     } else {
         TokenClass::Symbol
     }
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+fn is_symbol_char(ch: char) -> bool {
+    !ch.is_whitespace() && !is_identifier_char(ch)
+}
+
+fn subword_class(ch: char) -> Option<SubwordClass> {
+    if ch == '_' || !is_identifier_char(ch) {
+        None
+    } else if ch.is_numeric() {
+        Some(SubwordClass::Digit)
+    } else if ch.is_uppercase() {
+        Some(SubwordClass::Upper)
+    } else if ch.is_lowercase() {
+        Some(SubwordClass::Lower)
+    } else {
+        Some(SubwordClass::Alpha)
+    }
+}
+
+fn identifier_run_start(chars: &[char], index: usize) -> usize {
+    let mut start = index.min(chars.len());
+    while start > 0 && is_identifier_char(chars[start - 1]) {
+        start -= 1;
+    }
+    start
+}
+
+fn identifier_run_end(chars: &[char], index: usize) -> usize {
+    let mut end = index.min(chars.len());
+    while end < chars.len() && is_identifier_char(chars[end]) {
+        end += 1;
+    }
+    end
+}
+
+fn subword_chunk_end(chars: &[char], start: usize, run_end: usize) -> usize {
+    let Some(class) = subword_class(chars[start]) else {
+        return (start + 1).min(run_end);
+    };
+
+    match class {
+        SubwordClass::Digit => {
+            let mut end = start + 1;
+            while end < run_end && subword_class(chars[end]) == Some(SubwordClass::Digit) {
+                end += 1;
+            }
+            end
+        }
+        SubwordClass::Lower | SubwordClass::Alpha => {
+            let mut end = start + 1;
+            while end < run_end {
+                match subword_class(chars[end]) {
+                    Some(SubwordClass::Lower | SubwordClass::Alpha) => end += 1,
+                    _ => break,
+                }
+            }
+            end
+        }
+        SubwordClass::Upper => {
+            if start + 1 < run_end {
+                match subword_class(chars[start + 1]) {
+                    Some(SubwordClass::Lower | SubwordClass::Alpha) => {
+                        let mut end = start + 2;
+                        while end < run_end {
+                            match subword_class(chars[end]) {
+                                Some(SubwordClass::Lower | SubwordClass::Alpha) => end += 1,
+                                _ => break,
+                            }
+                        }
+                        return end;
+                    }
+                    _ => {}
+                }
+            }
+
+            let mut end = start + 1;
+            while end < run_end && subword_class(chars[end]) == Some(SubwordClass::Upper) {
+                if end + 1 < run_end {
+                    match subword_class(chars[end + 1]) {
+                        Some(SubwordClass::Lower | SubwordClass::Alpha) => break,
+                        _ => {}
+                    }
+                }
+                end += 1;
+            }
+            end
+        }
+    }
+}
+
+fn subword_chunks(chars: &[char]) -> Vec<Range<usize>> {
+    let mut chunks = Vec::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        while index < chars.len() && chars[index] == '_' {
+            index += 1;
+        }
+        if index >= chars.len() {
+            break;
+        }
+        let end = subword_chunk_end(chars, index, chars.len());
+        chunks.push(index..end);
+        index = end;
+    }
+    chunks
+}
+
+fn previous_subword_boundary_chars(chars: &[char], char_index: usize) -> usize {
+    let mut index = char_index.min(chars.len());
+    while index > 0 && chars[index - 1].is_whitespace() {
+        index -= 1;
+    }
+    if index == 0 {
+        return 0;
+    }
+
+    if is_symbol_char(chars[index - 1]) {
+        while index > 0 && is_symbol_char(chars[index - 1]) {
+            index -= 1;
+        }
+        return index;
+    }
+
+    let run_start = identifier_run_start(chars, index - 1);
+    let run_end = identifier_run_end(chars, index - 1);
+    let chunks = subword_chunks(&chars[run_start..run_end]);
+    let relative = index - run_start;
+    chunks
+        .iter()
+        .rfind(|chunk| chunk.start < relative)
+        .map_or(run_start, |chunk| run_start + chunk.start)
+}
+
+fn next_subword_boundary_chars(chars: &[char], char_index: usize) -> usize {
+    let mut index = char_index.min(chars.len());
+    while index < chars.len() && chars[index].is_whitespace() {
+        index += 1;
+    }
+    if index == chars.len() {
+        return chars.len();
+    }
+
+    if is_symbol_char(chars[index]) {
+        while index < chars.len() && is_symbol_char(chars[index]) {
+            index += 1;
+        }
+        return index;
+    }
+
+    while index < chars.len() && chars[index] == '_' {
+        index += 1;
+    }
+    if index == chars.len() {
+        return chars.len();
+    }
+
+    let run_start = identifier_run_start(chars, index);
+    let run_end = identifier_run_end(chars, index);
+    let chunks = subword_chunks(&chars[run_start..run_end]);
+    let relative = index - run_start;
+    chunks
+        .iter()
+        .find(|chunk| chunk.start <= relative && relative < chunk.end)
+        .map_or(run_end, |chunk| run_start + chunk.end)
 }
 
 pub fn previous_word_boundary(buffer: &Rope, char_index: usize) -> usize {
@@ -35,6 +212,11 @@ pub fn previous_word_boundary(buffer: &Rope, char_index: usize) -> usize {
     index
 }
 
+pub fn previous_subword_boundary(buffer: &Rope, char_index: usize) -> usize {
+    let chars: Vec<char> = buffer.chars().collect();
+    previous_subword_boundary_chars(&chars, char_index)
+}
+
 pub fn next_word_boundary(buffer: &Rope, char_index: usize) -> usize {
     let chars: Vec<char> = buffer.chars().collect();
     let mut index = char_index.min(chars.len());
@@ -50,6 +232,11 @@ pub fn next_word_boundary(buffer: &Rope, char_index: usize) -> usize {
         index += 1;
     }
     index
+}
+
+pub fn next_subword_boundary(buffer: &Rope, char_index: usize) -> usize {
+    let chars: Vec<char> = buffer.chars().collect();
+    next_subword_boundary_chars(&chars, char_index)
 }
 
 pub fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
@@ -106,6 +293,13 @@ pub fn previous_word_boundary_in_text(text: &str, offset: usize) -> usize {
     chars.get(index).map_or(0, |(byte, _)| *byte)
 }
 
+pub fn previous_subword_boundary_in_text(text: &str, offset: usize) -> usize {
+    let (byte_offsets, chars): (Vec<usize>, Vec<char>) = text.char_indices().unzip();
+    let char_index = byte_offsets.partition_point(|byte| *byte < offset.min(text.len()));
+    let target = previous_subword_boundary_chars(&chars, char_index);
+    byte_offsets.get(target).copied().unwrap_or(text.len())
+}
+
 pub fn next_word_boundary_in_text(text: &str, offset: usize) -> usize {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let mut index = chars.partition_point(|(byte, _)| *byte < offset.min(text.len()));
@@ -121,6 +315,13 @@ pub fn next_word_boundary_in_text(text: &str, offset: usize) -> usize {
         index += 1;
     }
     chars.get(index).map_or(text.len(), |(byte, _)| *byte)
+}
+
+pub fn next_subword_boundary_in_text(text: &str, offset: usize) -> usize {
+    let (byte_offsets, chars): (Vec<usize>, Vec<char>) = text.char_indices().unzip();
+    let char_index = byte_offsets.partition_point(|byte| *byte < offset.min(text.len()));
+    let target = next_subword_boundary_chars(&chars, char_index);
+    byte_offsets.get(target).copied().unwrap_or(text.len())
 }
 
 pub fn word_range_in_text(text: &str, offset: usize) -> Range<usize> {
@@ -231,6 +432,103 @@ mod tests {
         assert_eq!(next_word_boundary_in_text(text, 3), "one γamma".len());
         assert_eq!(
             previous_word_boundary_in_text(text, "one γamma".len()),
+            "one ".len()
+        );
+    }
+
+    #[test]
+    fn rope_subword_boundaries_split_camel_snake_and_digits() {
+        let buffer = Rope::from_str("camelCase snake_case HTTPServer version2Alpha");
+
+        assert_eq!(next_subword_boundary(&buffer, 0), 5);
+        assert_eq!(next_subword_boundary(&buffer, 5), 9);
+        assert_eq!(next_subword_boundary(&buffer, 10), 15);
+        assert_eq!(next_subword_boundary(&buffer, 15), 20);
+        assert_eq!(next_subword_boundary(&buffer, 21), 25);
+        assert_eq!(next_subword_boundary(&buffer, 25), 31);
+        assert_eq!(next_subword_boundary(&buffer, 32), 39);
+        assert_eq!(next_subword_boundary(&buffer, 39), 40);
+        assert_eq!(next_subword_boundary(&buffer, 40), 45);
+
+        assert_eq!(previous_subword_boundary(&buffer, 9), 5);
+        assert_eq!(previous_subword_boundary(&buffer, 5), 0);
+        assert_eq!(previous_subword_boundary(&buffer, 20), 16);
+        assert_eq!(previous_subword_boundary(&buffer, 16), 10);
+        assert_eq!(previous_subword_boundary(&buffer, 15), 10);
+        assert_eq!(previous_subword_boundary(&buffer, 31), 25);
+        assert_eq!(previous_subword_boundary(&buffer, 25), 21);
+        assert_eq!(previous_subword_boundary(&buffer, 45), 40);
+        assert_eq!(previous_subword_boundary(&buffer, 40), 39);
+        assert_eq!(previous_subword_boundary(&buffer, 39), 32);
+    }
+
+    #[test]
+    fn subword_boundaries_handle_single_char_snake_segments() {
+        let buffer = Rope::from_str("a_b_c");
+
+        assert_eq!(next_subword_boundary(&buffer, 0), 1);
+        assert_eq!(next_subword_boundary(&buffer, 1), 3);
+        assert_eq!(next_subword_boundary(&buffer, 3), 5);
+
+        assert_eq!(previous_subword_boundary(&buffer, 5), 4);
+        assert_eq!(previous_subword_boundary(&buffer, 4), 2);
+        assert_eq!(previous_subword_boundary(&buffer, 2), 0);
+    }
+
+    #[test]
+    fn subword_boundaries_keep_symbol_runs_as_stops() {
+        let buffer = Rope::from_str("foo.barBaz alpha::Beta");
+
+        assert_eq!(next_subword_boundary(&buffer, 0), 3);
+        assert_eq!(next_subword_boundary(&buffer, 3), 4);
+        assert_eq!(next_subword_boundary(&buffer, 4), 7);
+        assert_eq!(next_subword_boundary(&buffer, 7), 10);
+        assert_eq!(next_subword_boundary(&buffer, 11), 16);
+        assert_eq!(next_subword_boundary(&buffer, 16), 18);
+        assert_eq!(next_subword_boundary(&buffer, 18), 22);
+
+        assert_eq!(previous_subword_boundary(&buffer, 10), 7);
+        assert_eq!(previous_subword_boundary(&buffer, 7), 4);
+        assert_eq!(previous_subword_boundary(&buffer, 4), 3);
+        assert_eq!(previous_subword_boundary(&buffer, 22), 18);
+        assert_eq!(previous_subword_boundary(&buffer, 18), 16);
+    }
+
+    #[test]
+    fn text_subword_boundaries_are_utf8_safe() {
+        let text = "one ΓammaΔelta HTTPServer42";
+
+        assert_eq!(next_subword_boundary_in_text(text, 0), "one".len());
+        assert_eq!(
+            next_subword_boundary_in_text(text, "one ".len() + 1),
+            "one Γamma".len()
+        );
+        assert_eq!(
+            next_subword_boundary_in_text(text, "one ".len()),
+            "one Γamma".len()
+        );
+        assert_eq!(
+            next_subword_boundary_in_text(text, "one Γamma".len()),
+            "one ΓammaΔelta".len()
+        );
+        assert_eq!(
+            next_subword_boundary_in_text(text, "one ΓammaΔelta ".len()),
+            "one ΓammaΔelta HTTP".len()
+        );
+        assert_eq!(
+            next_subword_boundary_in_text(text, "one ΓammaΔelta HTTP".len()),
+            "one ΓammaΔelta HTTPServer".len()
+        );
+        assert_eq!(
+            previous_subword_boundary_in_text(text, "one ΓammaΔelta HTTPServer".len()),
+            "one ΓammaΔelta HTTP".len()
+        );
+        assert_eq!(
+            previous_subword_boundary_in_text(text, "one Γa".len()),
+            "one ".len()
+        );
+        assert_eq!(
+            previous_subword_boundary_in_text(text, "one Γamma".len()),
             "one ".len()
         );
     }

@@ -1602,6 +1602,14 @@ fn standard_movement_keybindings_are_registered() {
     assert!(has_binding::<MoveWordRight>("ctrl-right"));
     assert!(has_binding::<SelectWordLeft>("ctrl-shift-left"));
     assert!(has_binding::<SelectWordRight>("ctrl-shift-right"));
+    assert!(has_binding::<MoveSubwordLeft>("alt-left"));
+    assert!(has_binding::<MoveSubwordRight>("alt-right"));
+    assert!(has_binding::<SelectSubwordLeft>("alt-shift-left"));
+    assert!(has_binding::<SelectSubwordRight>("alt-shift-right"));
+    assert!(!has_binding::<MoveWordLeft>("alt-left"));
+    assert!(!has_binding::<MoveWordRight>("alt-right"));
+    assert!(!has_binding::<SelectWordLeft>("alt-shift-left"));
+    assert!(!has_binding::<SelectWordRight>("alt-shift-right"));
     assert!(has_binding::<MovePageUp>("pageup"));
     assert!(has_binding::<MovePageDown>("pagedown"));
     assert!(has_binding::<SelectPageUp>("shift-pageup"));
@@ -1610,9 +1618,13 @@ fn standard_movement_keybindings_are_registered() {
     assert!(has_binding::<MoveDocumentEnd>("ctrl-end"));
     assert!(has_binding::<SelectDocumentStart>("ctrl-shift-home"));
     assert!(has_binding::<SelectDocumentEnd>("ctrl-shift-end"));
+    assert!(has_binding::<MoveSmartHome>("home"));
     assert!(has_binding::<MoveLineStart>("cmd-left"));
+    assert!(!has_binding::<MoveLineStart>("home"));
     assert!(has_binding::<MoveLineEnd>("cmd-right"));
+    assert!(has_binding::<SelectSmartHome>("shift-home"));
     assert!(has_binding::<SelectLineStart>("cmd-shift-left"));
+    assert!(!has_binding::<SelectLineStart>("shift-home"));
     assert!(has_binding::<SelectLineEnd>("cmd-shift-right"));
     assert!(has_binding::<DeleteWordBackward>("ctrl-backspace"));
     assert!(has_binding::<DeleteWordBackward>("alt-backspace"));

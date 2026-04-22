@@ -11,12 +11,12 @@ Status last audited: 2026-04-15 (code paths verified directly).
 
 ## Cursor Movement & Navigation
 
-- [x] **Snap-to-end on last line** — down-at-EOF clamps line to last, column to preferred (`crates/lst-editor/src/vim.rs:1058`, `lib.rs:671` for non-vim `move_vertical`)
-- [x] **Snap-to-start on first line** — `saturating_sub` on line (`crates/lst-editor/src/vim.rs:1065`, `lib.rs:668`)
+- [x] **Snap-to-end on last line** — standard `Down` / `PageDown` snap to the active last-line EOL while preserving `preferred_column` for the next upward move (`crates/lst-editor/src/lib.rs:701`, `:741`, `:1727`; tests at `crates/lst-editor/tests/behavior.rs:332`, `:395`; `crates/lst-editor/tests/viewport.rs:204`). Vim vertical motion still clamps (`crates/lst-editor/src/vim.rs:1058`; `crates/lst-editor/tests/viewport.rs:239`)
+- [x] **Snap-to-start on first line** — standard `Up` / `PageUp` snap to column 0 on the first line while preserving `preferred_column` for the next downward move (`crates/lst-editor/src/lib.rs:701`, `:741`, `:1734`; tests at `crates/lst-editor/tests/behavior.rs:332`, `:359`, `:395`; `crates/lst-editor/tests/viewport.rs:224`). Vim vertical motion still clamps (`crates/lst-editor/src/vim.rs:1065`; `crates/lst-editor/tests/viewport.rs:239`)
 - [x] **Virtual / sticky column** — `preferred_column` preserved across Up/Down (`crates/lst-editor/src/vim.rs:896`; `lib.rs:667`)
 - [x] **Word-wise motion** (`Ctrl+←/→`) — Word/Symbol/Space classes (`crates/lst-editor/src/selection.rs:11`, `:21`, `:38`)
-- [ ] **Subword motion** — `_` folded into Word class, no camelCase/snake_case split (`crates/lst-editor/src/selection.rs:14`)
-- [~] **Smart Home** — Vim `^` → first non-blank (`crates/lst-editor/src/vim.rs:1268`); normal Home key goes to column 0 only (`keymap.rs:102`, `lib.rs:794`). No two-stage toggle.
+- [x] **Subword motion** — `Alt+←/→` and `Alt+Shift+←/→` use shared subword helpers in both the editor and inline inputs, splitting camelCase / snake_case / digit transitions while keeping `Ctrl+←/→`, double-click word selection, and delete-word behavior whole-word (`crates/lst-editor/src/selection.rs`; `crates/lst-editor/src/lib.rs`; `apps/lst-gpui/src/keymap.rs`; `apps/lst-gpui/src/ui/input_field.rs`)
+- [x] **Smart Home** — editor `Home` / `Shift+Home` toggle between first non-blank and column 0 from the current selection head; `cmd-left` remains hard line-start and Vim `Home` still maps to `0` (`apps/lst-gpui/src/keymap.rs:102`, `:106`; `crates/lst-editor/src/lib.rs:884`, `:1819`, `:2324`; tests at `crates/lst-editor/tests/behavior.rs:440`, `:474`, `:507`; `apps/lst-gpui/src/tests.rs:1461`; Vim at `crates/lst-editor/src/vim.rs:1268`)
 - [x] **End-of-line** — `$` stops at last char (`crates/lst-editor/src/vim.rs:1127`)
 - [x] **Document start/end** — `Ctrl+Home`/`Ctrl+End` wired (`apps/lst-gpui/src/keymap.rs:82`; `crates/lst-editor/src/lib.rs:805`)
 - [x] **Page up/down** — viewport-relative (`crates/lst-editor/src/lib.rs:1627`)
@@ -129,7 +129,7 @@ Status last audited: 2026-04-15 (code paths verified directly).
 Items most often overlooked in custom editors:
 
 - [x] Sticky virtual column across up/down motion
-- [~] Smart Home (two-stage) — pieces exist for Vim `^`, toggle not wired to Home key
+- [x] Smart Home (two-stage)
 - [~] Grapheme-aware motion — only in the input-field widget, not the main editor
 - [x] Undo coalescing by word/time
 - [x] Scroll margin
@@ -141,28 +141,26 @@ Items most often overlooked in custom editors:
 
 ## Summary
 
-- **Done:** 41
-- **Partial:** 10
-- **Missing:** 32
+- **Done:** 43
+- **Partial:** 9
+- **Missing:** 31
 
 **Strong foundation:** Vim state machine, viewport with scroll margin, soft
 wrap, undo coalescing, autosave, find/replace core, drag-select with
 auto-scroll, IME composition, current-line highlight, line-ending detection.
 
 **Biggest gaps to close for "idiomatic" feel:**
-1. Smart Home two-stage toggle (wire `FirstNonBlank` to the Home key)
-2. Find toggles: case sensitivity, smart case, whole-word, regex
-3. Auto-pair brackets/quotes + surround op
-4. Indent/outdent on selection (Tab/Shift+Tab doesn't indent today)
-5. Cut/copy whole line when no selection
-6. Subword motion (camelCase / snake_case splitting)
-7. Grapheme-cluster-aware motion in the main editor
-8. Cursor blink
-9. Trim-trailing-whitespace / ensure-final-newline on save
-10. Tab reordering, recently-closed reopen
-11. Jump list / last-edit-location
-12. Multi-cursor
-13. User-configurable keybindings (config file)
+1. Find toggles: case sensitivity, smart case, whole-word, regex
+2. Auto-pair brackets/quotes + surround op
+3. Indent/outdent on selection (Tab/Shift+Tab doesn't indent today)
+4. Cut/copy whole line when no selection
+5. Grapheme-cluster-aware motion in the main editor
+6. Cursor blink
+7. Trim-trailing-whitespace / ensure-final-newline on save
+8. Tab reordering, recently-closed reopen
+9. Jump list / last-edit-location
+10. Multi-cursor
+11. User-configurable keybindings (config file)
 
 ---
 
@@ -178,3 +176,4 @@ directly against source:
 - **Configurable keybindings** — previously DONE, actually **PARTIAL** (hardcoded, no config file)
 - **Tab reordering** — previously DONE, actually **PARTIAL** (tabs exist, no reorder)
 - **Go to column** — previously PARTIAL, actually **MISSING** (integer only)
+- **Subword motion** — now **DONE** for standard editor movement and inline inputs while whole-word selection/delete behavior stays unchanged (`crates/lst-editor/src/selection.rs`; `crates/lst-editor/src/lib.rs`; `apps/lst-gpui/src/ui/input_field.rs`)
