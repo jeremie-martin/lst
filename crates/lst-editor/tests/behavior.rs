@@ -252,6 +252,27 @@ fn goto_line_submit_clamps_to_existing_lines() {
 }
 
 #[test]
+fn goto_line_submit_accepts_line_and_column() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta\ngamma",
+        )],
+        "Ready.".into(),
+    );
+
+    model.open_goto_line_panel();
+    model.update_goto_line("2:3".into());
+    model.submit_goto_line_input();
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.cursor_position, Position { line: 1, column: 2 });
+    assert_eq!(snapshot.cursor, "alpha\nbe".chars().count());
+}
+
+#[test]
 fn closing_active_tab_preserves_neighbor_as_active() {
     let mut model = EditorModel::empty();
     model.new_tab();
@@ -643,6 +664,258 @@ fn smart_home_clears_preferred_column_and_skips_noop_reveal() {
     assert_eq!(model.drain_effects(), Vec::<EditorEffect>::new());
 }
 
+fn make_model(text: &str) -> EditorModel {
+    EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            text,
+        )],
+        "Ready.".into(),
+    )
+}
+
+#[test]
+fn tab_with_no_selection_inserts_four_spaces() {
+    let mut model = make_model("hello");
+    model.move_to_char(2, false, None);
+    let _ = model.drain_effects();
+
+    model.insert_tab_at_cursor();
+    assert_eq!(model.active_tab().buffer_text(), "he    llo");
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 0, column: 6 }
+    );
+}
+
+#[test]
+fn tab_with_single_line_selection_replaces_selection_with_four_spaces() {
+    let mut model = make_model("alpha beta gamma");
+    model.set_selection(6..10, false);
+    model.insert_tab_at_cursor();
+    assert_eq!(model.active_tab().buffer_text(), "alpha      gamma");
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position {
+            line: 0,
+            column: 10
+        }
+    );
+}
+
+#[test]
+fn tab_with_multi_line_selection_indents_each_line_and_keeps_selection() {
+    let mut model = make_model("alpha\nbeta\ngamma");
+    // Select from "lpha" on line 0 through "ga" on line 2.
+    let start = 1; // line 0, col 1
+    let end = "alpha\nbeta\nga".chars().count(); // line 2, col 2
+    model.set_selection(start..end, false);
+
+    model.insert_tab_at_cursor();
+    assert_eq!(
+        model.active_tab().buffer_text(),
+        "    alpha\n    beta\n    gamma"
+    );
+    let snapshot = model.snapshot();
+    // Each endpoint's column shifted by +4.
+    assert_eq!(snapshot.cursor_position, Position { line: 2, column: 6 });
+    let new_start = "    a".chars().count();
+    let new_end = "    alpha\n    beta\n    ga".chars().count();
+    assert_eq!(snapshot.selection, new_start..new_end);
+}
+
+#[test]
+fn tab_does_not_indent_line_after_selection_ending_at_column_zero() {
+    let mut model = make_model("alpha\nbeta\ngamma");
+    // Select from start of line 0 to start of line 2 (col 0).
+    let start = 0;
+    let end = "alpha\nbeta\n".chars().count();
+    model.set_selection(start..end, false);
+
+    model.insert_tab_at_cursor();
+    assert_eq!(
+        model.active_tab().buffer_text(),
+        "    alpha\n    beta\ngamma"
+    );
+    let snapshot = model.snapshot();
+    let new_end = "    alpha\n    beta\n".chars().count();
+    assert_eq!(snapshot.selection, 0..new_end);
+}
+
+#[test]
+fn tab_indents_selection_crossing_newline_to_next_line_column_zero() {
+    let mut model = make_model("alpha\nbeta");
+    let start = 1;
+    let end = "alpha\n".chars().count();
+    model.set_selection(start..end, false);
+
+    model.insert_tab_at_cursor();
+    assert_eq!(model.active_tab().buffer_text(), "    alpha\nbeta");
+    let snapshot = model.snapshot();
+    let new_start = "    a".chars().count();
+    let new_end = "    alpha\n".chars().count();
+    assert_eq!(snapshot.selection, new_start..new_end);
+}
+
+#[test]
+fn shift_tab_no_selection_outdents_current_line() {
+    let mut model = make_model("      hello");
+    model.move_to_char(8, false, None); // cursor on 'e' of "hello"
+    model.outdent_at_cursor();
+    assert_eq!(model.active_tab().buffer_text(), "  hello");
+    assert_eq!(
+        model.snapshot().cursor_position,
+        Position { line: 0, column: 4 }
+    );
+}
+
+#[test]
+fn shift_tab_outdents_partial_or_zero_whitespace() {
+    let mut partial = make_model("  hi");
+    partial.move_to_char(3, false, None);
+    partial.outdent_at_cursor();
+    assert_eq!(partial.active_tab().buffer_text(), "hi");
+    assert_eq!(
+        partial.snapshot().cursor_position,
+        Position { line: 0, column: 1 }
+    );
+
+    let mut empty = make_model("hi");
+    empty.move_to_char(1, false, None);
+    let revision_before = empty.active_tab().revision();
+    empty.outdent_at_cursor();
+    assert_eq!(empty.active_tab().buffer_text(), "hi");
+    assert_eq!(empty.active_tab().revision(), revision_before);
+}
+
+#[test]
+fn shift_tab_multi_line_selection_outdents_each_line_independently() {
+    let mut model = make_model("        eight\n  two\nzero");
+    let end = "        eight\n  two\nzero".chars().count();
+    model.set_selection(0..end, false);
+
+    model.outdent_at_cursor();
+    assert_eq!(model.active_tab().buffer_text(), "    eight\ntwo\nzero");
+    let snapshot = model.snapshot();
+    let new_end = "    eight\ntwo\nzero".chars().count();
+    assert_eq!(snapshot.selection, 0..new_end);
+}
+
+#[test]
+fn indent_then_undo_restores_original_text_and_selection() {
+    let mut model = make_model("alpha\nbeta\ngamma");
+    let start = 0;
+    let end = "alpha\nbeta\ng".chars().count();
+    model.set_selection(start..end, false);
+    let before_text = model.active_tab().buffer_text();
+    let before_selection = model.snapshot().selection;
+
+    model.insert_tab_at_cursor();
+    assert_ne!(model.active_tab().buffer_text(), before_text);
+
+    model.undo();
+    assert_eq!(model.active_tab().buffer_text(), before_text);
+    assert_eq!(model.snapshot().selection, before_selection);
+}
+
+#[test]
+fn tab_preserves_reversed_selection_flag() {
+    let mut model = make_model("alpha\nbeta\ngamma");
+    let start = "a".chars().count();
+    let end = "alpha\nbeta\nga".chars().count();
+    model.set_selection(start..end, true); // reversed: cursor at start
+
+    model.insert_tab_at_cursor();
+    let snapshot = model.snapshot();
+    let new_start = "    a".chars().count();
+    let new_end = "    alpha\n    beta\n    ga".chars().count();
+    assert_eq!(snapshot.selection, new_start..new_end);
+    // Cursor sits at the start (reversed).
+    assert_eq!(snapshot.cursor, new_start);
+}
+
+#[test]
+fn shift_tab_shifts_selection_columns_within_touched_range() {
+    let mut model = make_model("        eight\n  two\nzero");
+    // Select from col 6 of line 0 (the 'i' of "eight" is at col 9; col 6 is
+    // mid-whitespace) through col 3 of line 1 (the 'o' of "two" — col 2 is
+    // 't', col 3 is 'w').
+    let start = 6;
+    let end = "        eight\n  t".chars().count();
+    model.set_selection(start..end, false);
+
+    model.outdent_at_cursor();
+    assert_eq!(model.active_tab().buffer_text(), "    eight\ntwo\nzero");
+    let snapshot = model.snapshot();
+    // Line 0 lost 4 leading spaces → start col 6 saturates to col 2.
+    let new_start = 2;
+    // Line 1 lost 2 leading spaces → end col 3 saturates to col 1.
+    let new_end = "    eight\nt".chars().count();
+    assert_eq!(snapshot.selection, new_start..new_end);
+}
+
+#[test]
+fn shift_tab_does_not_outdent_line_after_selection_ending_at_column_zero() {
+    let mut model = make_model("    alpha\n    beta\n    gamma");
+    let start = 0;
+    let end = "    alpha\n    beta\n".chars().count();
+    model.set_selection(start..end, false);
+
+    model.outdent_at_cursor();
+    assert_eq!(model.active_tab().buffer_text(), "alpha\nbeta\n    gamma");
+    let snapshot = model.snapshot();
+    let new_end = "alpha\nbeta\n".chars().count();
+    assert_eq!(snapshot.selection, 0..new_end);
+}
+
+#[test]
+fn shift_tab_preserves_reversed_selection_flag() {
+    let mut model = make_model("    alpha\n    beta\n    gamma");
+    let start = "    a".chars().count(); // line 0 col 5
+    let end = "    alpha\n    beta\n    ga".chars().count(); // line 2 col 6
+    model.set_selection(start..end, true); // reversed: cursor at start
+
+    model.outdent_at_cursor();
+    assert_eq!(model.active_tab().buffer_text(), "alpha\nbeta\ngamma");
+    let snapshot = model.snapshot();
+    let new_start = "a".chars().count();
+    let new_end = "alpha\nbeta\nga".chars().count();
+    assert_eq!(snapshot.selection, new_start..new_end);
+    assert_eq!(snapshot.cursor, new_start);
+    assert!(model.active_tab().selection_reversed());
+}
+
+#[test]
+fn tab_indents_blank_lines_in_the_middle_of_selection() {
+    let mut model = make_model("alpha\n\ngamma");
+    let end = "alpha\n\nga".chars().count();
+    model.set_selection(0..end, false);
+
+    model.insert_tab_at_cursor();
+    assert_eq!(
+        model.active_tab().buffer_text(),
+        "    alpha\n    \n    gamma"
+    );
+}
+
+#[test]
+fn shift_tab_multi_line_undo_is_a_single_step() {
+    let mut model = make_model("    alpha\n    beta\n    gamma");
+    let end = "    alpha\n    beta\n    gamma".chars().count();
+    model.set_selection(0..end, false);
+    let before_text = model.active_tab().buffer_text();
+    let before_selection = model.snapshot().selection;
+
+    model.outdent_at_cursor();
+    assert_eq!(model.active_tab().buffer_text(), "alpha\nbeta\ngamma");
+
+    model.undo();
+    assert_eq!(model.active_tab().buffer_text(), before_text);
+    assert_eq!(model.snapshot().selection, before_selection);
+}
+
 #[test]
 fn horizontal_collapse_commands_collapse_active_selection() {
     let mut model = EditorModel::new(
@@ -844,6 +1117,477 @@ fn input_text_replacement_owns_undo_grouping_policy() {
 }
 
 #[test]
+fn insert_text_auto_dedents_close_brace_on_four_space_blank_line() {
+    let mut model = make_model("    ");
+    model.move_to_char(4, false, None);
+
+    model.insert_text("}".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "}");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 1 });
+}
+
+#[test]
+fn input_text_auto_dedents_close_brace_by_one_indent_level() {
+    let mut model = make_model("        ");
+    model.move_to_char(8, false, None);
+
+    model.replace_text_from_input(None, "}".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "    }");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 5 });
+}
+
+#[test]
+fn input_text_auto_dedent_clamps_when_indent_is_less_than_width() {
+    let mut model = make_model("  ");
+    model.move_to_char(2, false, None);
+
+    model.replace_text_from_input(None, "}".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "}");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 1 });
+}
+
+#[test]
+fn input_text_auto_dedent_replaces_whitespace_only_selection() {
+    let mut model = make_model("        ");
+    model.set_selection(2..6, false);
+
+    model.replace_text_from_input(None, "}".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "}  ");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 1 });
+}
+
+#[test]
+fn input_text_does_not_auto_dedent_close_brace_on_non_blank_line() {
+    let mut model = make_model("    alpha");
+    model.move_to_char(4, false, None);
+
+    model.replace_text_from_input(None, "}".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "    }alpha");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 5 });
+}
+
+#[test]
+fn input_text_auto_dedent_only_applies_to_single_close_brace() {
+    let mut bracket = make_model("    ");
+    bracket.move_to_char(4, false, None);
+    bracket.replace_text_from_input(None, "]".into());
+    assert_eq!(bracket.snapshot().text, "    ]");
+
+    let mut paren = make_model("    ");
+    paren.move_to_char(4, false, None);
+    paren.replace_text_from_input(None, ")".into());
+    assert_eq!(paren.snapshot().text, "    )");
+
+    let mut multi = make_model("    ");
+    multi.move_to_char(4, false, None);
+    multi.replace_text_from_input(None, "}}".into());
+    assert_eq!(multi.snapshot().text, "    }}");
+}
+
+#[test]
+fn input_text_does_not_auto_dedent_tab_or_mixed_indentation() {
+    let mut tab = make_model("\t");
+    tab.move_to_char(1, false, None);
+    tab.replace_text_from_input(None, "}".into());
+    assert_eq!(tab.snapshot().text, "\t}");
+
+    let mut mixed = make_model("  \t");
+    mixed.move_to_char(3, false, None);
+    mixed.replace_text_from_input(None, "}".into());
+    assert_eq!(mixed.snapshot().text, "  \t}");
+}
+
+#[test]
+fn input_text_auto_dedent_respects_caret_at_line_start_and_middle() {
+    let mut start = make_model("        ");
+    start.move_to_char(0, false, None);
+    start.replace_text_from_input(None, "}".into());
+    let start_snapshot = start.snapshot();
+    assert_eq!(start_snapshot.text, "}        ");
+    assert_eq!(
+        start_snapshot.cursor_position,
+        Position { line: 0, column: 1 }
+    );
+
+    let mut middle = make_model("        ");
+    middle.move_to_char(2, false, None);
+    middle.replace_text_from_input(None, "}".into());
+    let middle_snapshot = middle.snapshot();
+    assert_eq!(middle_snapshot.text, "}      ");
+    assert_eq!(
+        middle_snapshot.cursor_position,
+        Position { line: 0, column: 1 }
+    );
+}
+
+#[test]
+fn input_text_does_not_auto_dedent_multi_line_replacement_ranges() {
+    let mut model = make_model("    \nnext");
+    let end = "    \n".chars().count();
+    model.set_selection(0..end, false);
+
+    model.replace_text_from_input(None, "}".into());
+
+    assert_eq!(model.snapshot().text, "}next");
+}
+
+#[test]
+fn input_text_auto_dedent_close_brace_is_undoable() {
+    let mut model = make_model("        ");
+    model.move_to_char(8, false, None);
+
+    model.replace_text_from_input(None, "}".into());
+    assert_eq!(model.snapshot().text, "    }");
+
+    model.undo();
+    assert_eq!(model.snapshot().text, "        ");
+}
+
+#[test]
+fn input_text_auto_dedents_close_brace_on_second_line() {
+    let mut model = make_model("foo\n        ");
+    let caret = "foo\n        ".chars().count();
+    model.move_to_char(caret, false, None);
+
+    model.replace_text_from_input(None, "}".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "foo\n    }");
+    assert_eq!(snapshot.cursor_position, Position { line: 1, column: 5 });
+}
+
+#[test]
+fn input_text_auto_dedent_close_brace_undo_is_distinct_from_prior_typing() {
+    let mut model = make_model("");
+    model.replace_text_from_input(None, "        ".into());
+    assert_eq!(model.snapshot().text, "        ");
+
+    model.replace_text_from_input(None, "}".into());
+    assert_eq!(model.snapshot().text, "    }");
+
+    model.undo();
+    assert_eq!(model.snapshot().text, "        ");
+}
+
+#[test]
+fn insert_text_auto_pairs_open_paren() {
+    let mut model = make_model("");
+    model.insert_text("(".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "()");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 1 });
+}
+
+#[test]
+fn input_text_auto_pairs_each_bracket_pair() {
+    for (opener, expected) in [('(', "()"), ('[', "[]"), ('{', "{}")] {
+        let mut model = make_model("");
+        model.replace_text_from_input(None, opener.to_string());
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.text, expected, "opener {opener}");
+        assert_eq!(
+            snapshot.cursor_position,
+            Position { line: 0, column: 1 },
+            "opener {opener}"
+        );
+    }
+}
+
+#[test]
+fn input_text_auto_pairs_each_quote() {
+    for (quote, expected) in [('"', "\"\""), ('\'', "''"), ('`', "``")] {
+        let mut model = make_model("");
+        model.replace_text_from_input(None, quote.to_string());
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.text, expected, "quote {quote}");
+        assert_eq!(
+            snapshot.cursor_position,
+            Position { line: 0, column: 1 },
+            "quote {quote}"
+        );
+    }
+}
+
+#[test]
+fn input_text_third_repeated_quote_or_backtick_inserts_literally() {
+    for (quote, expected) in [('"', "\"\"\""), ('\'', "'''"), ('`', "```")] {
+        let mut model = make_model("");
+        model.replace_text_from_input(None, quote.to_string());
+        model.replace_text_from_input(None, quote.to_string());
+        model.replace_text_from_input(None, quote.to_string());
+
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.text, expected, "quote {quote}");
+        assert_eq!(
+            snapshot.cursor_position,
+            Position { line: 0, column: 3 },
+            "quote {quote}"
+        );
+    }
+}
+
+#[test]
+fn input_text_does_not_auto_pair_quote_after_identifier_char() {
+    let mut model = make_model("don");
+    model.move_to_char(3, false, None);
+
+    model.replace_text_from_input(None, "'".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "don'");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 4 });
+}
+
+#[test]
+fn input_text_does_not_auto_pair_quote_after_backslash() {
+    for (quote, expected) in [('"', "\\\""), ('\'', "\\'"), ('`', "\\`")] {
+        let mut model = make_model("\\");
+        model.move_to_char(1, false, None);
+
+        model.replace_text_from_input(None, quote.to_string());
+
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.text, expected, "quote {quote}");
+        assert_eq!(
+            snapshot.cursor_position,
+            Position { line: 0, column: 2 },
+            "quote {quote}"
+        );
+    }
+}
+
+#[test]
+fn input_text_does_not_auto_pair_quote_before_identifier_char() {
+    let mut model = make_model("abc");
+    model.move_to_char(0, false, None);
+
+    model.replace_text_from_input(None, "\"".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "\"abc");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 1 });
+}
+
+#[test]
+fn input_text_auto_pairs_quote_between_non_word_chars() {
+    let mut model = make_model("  ");
+    model.move_to_char(1, false, None);
+
+    model.replace_text_from_input(None, "'".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, " '' ");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 2 });
+}
+
+#[test]
+fn input_text_overtypes_matching_closer_when_next_char_matches() {
+    let mut model = make_model("");
+    model.replace_text_from_input(None, "(".into());
+    assert_eq!(model.snapshot().text, "()");
+
+    model.replace_text_from_input(None, ")".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "()");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 2 });
+}
+
+#[test]
+fn input_text_overtypes_matching_quote() {
+    let mut model = make_model("");
+    model.replace_text_from_input(None, "\"".into());
+    assert_eq!(model.snapshot().text, "\"\"");
+
+    model.replace_text_from_input(None, "\"".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "\"\"");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 2 });
+}
+
+#[test]
+fn input_text_closer_with_no_char_ahead_inserts_literally() {
+    let mut model = make_model("");
+    model.replace_text_from_input(None, ")".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, ")");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 1 });
+}
+
+#[test]
+fn input_text_does_not_overtype_mismatched_closer() {
+    let mut model = make_model("(]");
+    model.move_to_char(1, false, None);
+
+    model.replace_text_from_input(None, ")".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "()]");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 2 });
+}
+
+#[test]
+fn input_text_surrounds_selection_with_pair() {
+    let mut model = make_model("abc");
+    model.set_selection(0..3, false);
+
+    model.replace_text_from_input(None, "(".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "(abc)");
+    assert_eq!(snapshot.selection, 1..4);
+}
+
+#[test]
+fn input_text_surrounds_selection_with_quote() {
+    let mut model = make_model("abc");
+    model.set_selection(0..3, false);
+
+    model.replace_text_from_input(None, "\"".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "\"abc\"");
+    assert_eq!(snapshot.selection, 1..4);
+}
+
+#[test]
+fn input_text_surround_preserves_reversed_selection_flag() {
+    let mut model = make_model("abc");
+    model.set_selection(0..3, true);
+
+    model.replace_text_from_input(None, "(".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "(abc)");
+    assert_eq!(snapshot.selection, 1..4);
+    assert_eq!(snapshot.cursor, 1);
+    assert!(model.active_tab().selection_reversed());
+}
+
+#[test]
+fn input_text_auto_pair_realigns_find_after_restoring_caret() {
+    let mut model = make_model(")");
+    model.update_find_query(")".into());
+    model.move_to_char(0, false, None);
+
+    model.replace_text_from_input(None, "(".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "())");
+    assert_eq!(snapshot.selection, 1..1);
+    assert_eq!(snapshot.find_matches, 2);
+    assert_eq!(snapshot.find_current, Some(0));
+    assert_eq!(snapshot.find_active_match, Some(1..2));
+}
+
+#[test]
+fn input_text_surround_realigns_find_after_restoring_selection() {
+    let mut model = make_model("))");
+    model.update_find_query(")".into());
+    model.set_selection(0..1, false);
+
+    model.replace_text_from_input(None, "(".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "()))");
+    assert_eq!(snapshot.selection, 1..2);
+    assert_eq!(snapshot.find_matches, 3);
+    assert_eq!(snapshot.find_current, Some(0));
+    assert_eq!(snapshot.find_active_match, Some(1..2));
+}
+
+#[test]
+fn input_text_surround_preserves_multi_line_selection() {
+    let mut model = make_model("abc\ndef");
+    model.set_selection(0..7, false);
+
+    model.replace_text_from_input(None, "(".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "(abc\ndef)");
+    assert_eq!(snapshot.selection, 1..8);
+}
+
+#[test]
+fn input_text_auto_pair_is_single_undo_step() {
+    let mut model = make_model("");
+    model.replace_text_from_input(None, "(".into());
+    assert_eq!(model.snapshot().text, "()");
+
+    model.undo();
+    assert_eq!(model.snapshot().text, "");
+}
+
+#[test]
+fn input_text_surround_is_single_undo_step() {
+    let mut model = make_model("abc");
+    model.set_selection(0..3, false);
+
+    model.replace_text_from_input(None, "(".into());
+    assert_eq!(model.snapshot().text, "(abc)");
+
+    model.undo();
+    assert_eq!(model.snapshot().text, "abc");
+}
+
+#[test]
+fn input_text_auto_pair_overtype_takes_precedence_over_dedent() {
+    let mut model = make_model("        }");
+    model.move_to_char(8, false, None);
+
+    model.replace_text_from_input(None, "}".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "        }");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 9 });
+}
+
+#[test]
+fn input_text_auto_dedent_still_fires_when_no_matching_closer_ahead() {
+    let mut model = make_model("        ");
+    model.move_to_char(8, false, None);
+
+    model.replace_text_from_input(None, "}".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "    }");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 5 });
+}
+
+#[test]
+fn replace_text_does_not_auto_pair() {
+    let mut model = make_model("");
+    model.replace_text(None, "(".into(), UndoBoundary::Break);
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "(");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 1 });
+}
+
+#[test]
+fn replace_and_mark_text_does_not_auto_pair() {
+    let mut model = make_model("");
+    model.replace_and_mark_text(None, "(".into(), None);
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "(");
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 1 });
+}
+
+#[test]
 fn delete_word_and_line_ops_are_undoable_document_behavior() {
     let mut model = EditorModel::new(
         vec![EditorTab::from_text(
@@ -865,6 +1609,51 @@ fn delete_word_and_line_ops_are_undoable_document_behavior() {
     model.undo();
     model.undo();
     assert_eq!(model.snapshot().text, "alpha beta\ngamma");
+}
+
+#[test]
+fn duplicate_line_duplicates_active_selection_and_selects_the_copy() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta",
+        )],
+        "Ready.".into(),
+    );
+
+    model.set_selection(0..5, false);
+    model.duplicate_line();
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "alphaalpha beta");
+    assert_eq!(snapshot.selection, 5..10);
+    assert_eq!(snapshot.cursor, 10);
+}
+
+#[test]
+fn duplicate_selection_is_a_separate_undo_step_from_typed_input() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta",
+        )],
+        "Ready.".into(),
+    );
+
+    model.set_selection(0..5, false);
+    model.duplicate_line();
+    model.replace_text_from_input(None, "x".into());
+    assert_eq!(model.snapshot().text, "alphax beta");
+
+    model.undo();
+    assert_eq!(model.snapshot().text, "alphaalpha beta");
+
+    model.undo();
+    assert_eq!(model.snapshot().text, "alpha beta");
 }
 
 #[test]
@@ -926,6 +1715,143 @@ fn clipboard_commands_emit_boundary_effects_without_fakes() {
         vec![
             EditorEffect::WriteClipboard("hello".into()),
             EditorEffect::WritePrimary("hello".into()),
+            EditorEffect::Reveal(RevealIntent::NearestEdge)
+        ]
+    );
+}
+
+#[test]
+fn clipboard_commands_fall_back_to_the_current_line_without_selection() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta\n",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_logical_rows(1, false);
+    let _ = model.drain_effects();
+
+    model.copy_selection();
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("beta\n".into()),
+            EditorEffect::WritePrimary("beta\n".into())
+        ]
+    );
+
+    model.cut_selection();
+    assert_eq!(model.snapshot().text, "alpha\n");
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("beta\n".into()),
+            EditorEffect::WritePrimary("beta\n".into()),
+            EditorEffect::Reveal(RevealIntent::NearestEdge)
+        ]
+    );
+}
+
+#[test]
+fn clipboard_commands_treat_the_last_unterminated_line_as_linewise() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_logical_rows(1, false);
+    let _ = model.drain_effects();
+
+    model.copy_selection();
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("\nbeta".into()),
+            EditorEffect::WritePrimary("\nbeta".into())
+        ]
+    );
+
+    model.cut_selection();
+    assert_eq!(model.snapshot().text, "alpha");
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("\nbeta".into()),
+            EditorEffect::WritePrimary("\nbeta".into()),
+            EditorEffect::Reveal(RevealIntent::NearestEdge)
+        ]
+    );
+}
+
+#[test]
+fn clipboard_commands_include_the_trailing_blank_line_at_eof() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\n",
+        )],
+        "Ready.".into(),
+    );
+
+    let end = model.active_tab().len_chars();
+    model.move_to_char(end, false, None);
+    let _ = model.drain_effects();
+
+    model.copy_selection();
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("\n".into()),
+            EditorEffect::WritePrimary("\n".into())
+        ]
+    );
+
+    model.cut_selection();
+    assert_eq!(model.snapshot().text, "alpha");
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("\n".into()),
+            EditorEffect::WritePrimary("\n".into()),
+            EditorEffect::Reveal(RevealIntent::NearestEdge)
+        ]
+    );
+}
+
+#[test]
+fn clipboard_commands_preserve_crlf_when_cutting_the_trailing_blank_line() {
+    let mut model = EditorModel::new(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\r\n",
+        )],
+        "Ready.".into(),
+    );
+
+    let end = model.active_tab().len_chars();
+    model.move_to_char(end, false, None);
+    let _ = model.drain_effects();
+
+    model.cut_selection();
+    assert_eq!(model.snapshot().text, "alpha");
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("\r\n".into()),
+            EditorEffect::WritePrimary("\r\n".into()),
             EditorEffect::Reveal(RevealIntent::NearestEdge)
         ]
     );

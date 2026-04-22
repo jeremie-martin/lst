@@ -26,7 +26,7 @@ fn token_class(ch: char) -> TokenClass {
     }
 }
 
-fn is_identifier_char(ch: char) -> bool {
+pub(crate) fn is_identifier_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 

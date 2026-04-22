@@ -94,6 +94,7 @@ actions!(
         DeleteWordForward,
         InsertNewline,
         InsertTab,
+        OutdentSelection,
         SelectAll,
         Undo,
         Redo,
@@ -180,7 +181,7 @@ impl LstGpuiApp {
     fn new(cx: &mut Context<Self>, launch: LaunchArgs) -> Self {
         let find_query_input = cx.new(|cx| InputField::new(cx, "Find"));
         let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace"));
-        let goto_line_input = cx.new(|cx| InputField::new(cx, "Line"));
+        let goto_line_input = cx.new(|cx| InputField::new(cx, "Line[:Column]"));
         let scratchpad_dir = launch.scratchpad_dir.clone();
         let model = initial_model_from_launch(launch);
         let tab_views = model

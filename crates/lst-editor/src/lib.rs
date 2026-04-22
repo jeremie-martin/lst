@@ -21,8 +21,8 @@ use crate::{
     find::{FindState, MatchPos},
     position::Position,
     selection::{
-        next_subword_boundary, next_word_boundary, previous_subword_boundary,
-        previous_word_boundary,
+        is_identifier_char, line_range_at_char, next_subword_boundary, next_word_boundary,
+        previous_subword_boundary, previous_word_boundary,
     },
 };
 use std::{ops::Range, path::PathBuf, sync::Arc};
@@ -441,17 +441,34 @@ impl EditorModel {
         let Some(text) = self.goto_line.clone() else {
             return false;
         };
-        let Ok(line_one_based) = text.trim().parse::<usize>() else {
+        let trimmed = text.trim();
+        let (line_text, column_text) = match trimmed.split_once(':') {
+            Some((line, column)) => (line.trim(), Some(column.trim()).filter(|s| !s.is_empty())),
+            None => (trimmed, None),
+        };
+        let Ok(line_one_based) = line_text.parse::<usize>() else {
             self.close_goto_line();
             return false;
         };
-        let target = line_one_based
+        let target_line = line_one_based
             .saturating_sub(1)
             .min(self.active_tab().line_count().saturating_sub(1));
+        let target_column = match column_text {
+            Some(column_text) => {
+                let Ok(column_one_based) = column_text.parse::<usize>() else {
+                    self.close_goto_line();
+                    return false;
+                };
+                column_one_based
+                    .saturating_sub(1)
+                    .min(display_line_char_len(self.active_tab(), target_line))
+            }
+            None => 0,
+        };
         self.active_tab_mut().set_cursor_position(
             Position {
-                line: target,
-                column: 0,
+                line: target_line,
+                column: target_column,
             },
             None,
         );
@@ -542,12 +559,7 @@ impl EditorModel {
         text: String,
         boundary: UndoBoundary,
     ) {
-        let range = {
-            let tab = self.active_tab();
-            range
-                .or_else(|| tab.marked_range.clone())
-                .unwrap_or_else(|| tab.selected_range())
-        };
+        let range = self.resolve_text_input_range(range);
         let kind = if text.is_empty() {
             EditKind::Delete
         } else {
@@ -562,12 +574,7 @@ impl EditorModel {
         text: String,
         selected_range: Option<Range<usize>>,
     ) {
-        let range = {
-            let tab = self.active_tab();
-            range
-                .or_else(|| tab.marked_range.clone())
-                .unwrap_or_else(|| tab.selected_range())
-        };
+        let range = self.resolve_text_input_range(range);
         let inserted_start = range.start;
         self.active_tab_mut()
             .edit(EditKind::Other, UndoBoundary::Break, range, &text);
@@ -1032,25 +1039,46 @@ impl EditorModel {
         self.replace_text_in_range(None, format!("{newline}{indent}"), UndoBoundary::Break);
     }
 
-    fn copy_selection_inner(&mut self) -> bool {
-        let Some(text) = self.active_tab().selected_text() else {
-            return false;
+    fn selection_or_current_line(&self) -> (Range<usize>, String, bool) {
+        let tab = self.active_tab();
+        let use_current_line = !tab.has_selection();
+        let range = if use_current_line {
+            linewise_range_at_char(tab.buffer(), tab.cursor_char())
+        } else {
+            tab.selected_range()
         };
+        let text = tab.buffer().slice(range.clone()).to_string();
+        (range, text, use_current_line)
+    }
+
+    fn copy_selection_inner(&mut self) -> bool {
+        let (_range, text, whole_line) = self.selection_or_current_line();
+        if text.is_empty() {
+            return false;
+        }
         self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
         self.queue_effect(EditorEffect::WritePrimary(text));
-        self.status = "Copied selection.".to_string();
+        self.status = if whole_line {
+            "Copied line.".to_string()
+        } else {
+            "Copied selection.".to_string()
+        };
         true
     }
 
     fn cut_selection_inner(&mut self) -> bool {
-        let Some(text) = self.active_tab().selected_text() else {
+        let (range, text, whole_line) = self.selection_or_current_line();
+        if text.is_empty() {
             return false;
-        };
+        }
         self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
         self.queue_effect(EditorEffect::WritePrimary(text));
-        let range = self.active_tab().selected_range();
         self.edit_active(EditKind::Delete, UndoBoundary::Break, range, "");
-        self.status = "Cut selection.".to_string();
+        self.status = if whole_line {
+            "Cut line.".to_string()
+        } else {
+            "Cut selection.".to_string()
+        };
         true
     }
 
@@ -1545,15 +1573,7 @@ impl EditorModel {
     }
 
     pub fn insert_text(&mut self, text: String) {
-        let range = self
-            .active_tab()
-            .marked_range
-            .clone()
-            .unwrap_or_else(|| self.active_tab().selected_range());
-        self.active_tab_mut()
-            .edit(EditKind::Insert, UndoBoundary::Break, range, &text);
-        self.sync_find_after_edit();
-        self.queue_reveal(RevealIntent::NearestEdge);
+        self.apply_text_input(None, text, UndoBoundary::Break);
     }
 
     pub fn replace_text(
@@ -1571,7 +1591,7 @@ impl EditorModel {
         } else {
             UndoBoundary::Merge
         };
-        self.replace_text_in_range(range, text, boundary);
+        self.apply_text_input(range, text, boundary);
     }
 
     pub fn replace_and_mark_text(
@@ -1585,6 +1605,178 @@ impl EditorModel {
 
     pub fn clear_marked_text(&mut self) {
         self.active_tab_mut().marked_range = None;
+    }
+
+    fn apply_text_input(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: String,
+        boundary: UndoBoundary,
+    ) {
+        let resolved_range = self.resolve_text_input_range(range);
+        if let Some(new_cursor) = self.auto_pair_overtype_cursor(&resolved_range, &text) {
+            self.assign_selection(new_cursor..new_cursor, false);
+            self.queue_reveal(RevealIntent::NearestEdge);
+            return;
+        }
+        if let Some(dedent_range) = self.auto_dedent_close_brace_range(&resolved_range, &text) {
+            self.edit_active(EditKind::Insert, UndoBoundary::Break, dedent_range, &text);
+            return;
+        }
+        if let Some((edit_range, replacement, new_selection)) =
+            self.auto_pair_surround_edit(&resolved_range, &text)
+        {
+            // Keep the caret on whichever end the user anchored so reversed
+            // selections stay reversed after the surround.
+            let reversed = self.active_tab().selection_reversed();
+            self.edit_active(
+                EditKind::Insert,
+                UndoBoundary::Break,
+                edit_range,
+                &replacement,
+            );
+            self.assign_selection(new_selection, reversed);
+            self.align_find_current_to_visible_match();
+            return;
+        }
+        if let Some((edit_range, replacement, caret)) =
+            self.auto_pair_insert_edit(&resolved_range, &text)
+        {
+            self.edit_active(
+                EditKind::Insert,
+                UndoBoundary::Break,
+                edit_range,
+                &replacement,
+            );
+            self.assign_selection(caret..caret, false);
+            self.align_find_current_to_visible_match();
+            return;
+        }
+        let kind = if text.is_empty() {
+            EditKind::Delete
+        } else {
+            EditKind::Insert
+        };
+        self.edit_active(kind, boundary, resolved_range, &text);
+    }
+
+    fn resolve_text_input_range(&self, range: Option<Range<usize>>) -> Range<usize> {
+        let tab = self.active_tab();
+        range
+            .or_else(|| tab.marked_range.clone())
+            .unwrap_or_else(|| tab.selected_range())
+    }
+
+    fn auto_dedent_close_brace_range(
+        &self,
+        range: &Range<usize>,
+        text: &str,
+    ) -> Option<Range<usize>> {
+        if text != "}" {
+            return None;
+        }
+
+        let tab = self.active_tab();
+        let buffer = tab.buffer();
+        let line = buffer.char_to_line(range.start);
+        if line != buffer.char_to_line(range.end) {
+            return None;
+        }
+
+        let line_start = buffer.line_to_char(line);
+        let line_end = line_start + display_line_char_len(tab, line);
+        if !buffer
+            .slice(line_start..line_end)
+            .chars()
+            .all(|ch| ch == ' ')
+        {
+            return None;
+        }
+
+        let dedent_start = range.start.saturating_sub(INDENT_WIDTH).max(line_start);
+        Some(dedent_start..range.end)
+    }
+
+    fn auto_pair_overtype_cursor(&self, range: &Range<usize>, text: &str) -> Option<usize> {
+        if range.start != range.end {
+            return None;
+        }
+        let ch = single_char(text)?;
+        let (_, closer) = auto_pair_pair(ch)?;
+        if ch != closer {
+            return None;
+        }
+        let tab = self.active_tab();
+        let buffer = tab.buffer();
+        if range.end >= buffer.len_chars() {
+            return None;
+        }
+        if buffer.char(range.end) != closer {
+            return None;
+        }
+        Some(range.end + 1)
+    }
+
+    fn auto_pair_surround_edit(
+        &self,
+        range: &Range<usize>,
+        text: &str,
+    ) -> Option<(Range<usize>, String, Range<usize>)> {
+        if range.start >= range.end {
+            return None;
+        }
+        let ch = single_char(text)?;
+        let (opener, closer) = auto_pair_pair(ch)?;
+        if ch != opener {
+            return None;
+        }
+        let tab = self.active_tab();
+        let selected = tab.buffer().slice(range.clone()).to_string();
+        let mut replacement = String::with_capacity(selected.len() + 2);
+        replacement.push(opener);
+        replacement.push_str(&selected);
+        replacement.push(closer);
+        Some((
+            range.clone(),
+            replacement,
+            (range.start + 1)..(range.end + 1),
+        ))
+    }
+
+    fn auto_pair_insert_edit(
+        &self,
+        range: &Range<usize>,
+        text: &str,
+    ) -> Option<(Range<usize>, String, usize)> {
+        if range.start != range.end {
+            return None;
+        }
+        let ch = single_char(text)?;
+        let (opener, closer) = auto_pair_pair(ch)?;
+        if ch != opener {
+            return None;
+        }
+
+        if is_auto_pair_quote(ch) {
+            let buffer = self.active_tab().buffer();
+            if range.start > 0 {
+                let prev = buffer.char(range.start - 1);
+                if prev == '\\' || prev == ch || is_identifier_char(prev) {
+                    return None;
+                }
+            }
+            if range.end < buffer.len_chars() {
+                let next = buffer.char(range.end);
+                if next == ch || is_identifier_char(next) {
+                    return None;
+                }
+            }
+        }
+
+        let mut replacement = String::with_capacity(2);
+        replacement.push(opener);
+        replacement.push(closer);
+        Some((range.clone(), replacement, range.start + 1))
     }
 
     pub fn toggle_wrap(&mut self) {
@@ -1841,7 +2033,104 @@ impl EditorModel {
     }
 
     pub fn insert_tab_at_cursor(&mut self) {
-        self.replace_text_in_range(None, "    ".to_string(), UndoBoundary::Break);
+        match selection_line_span(self.active_tab()) {
+            Some((first, last, true)) => self.indent_selected_lines(first, last),
+            _ => self.replace_text_in_range(None, " ".repeat(INDENT_WIDTH), UndoBoundary::Break),
+        }
+    }
+
+    pub fn outdent_at_cursor(&mut self) {
+        let (first, last) = selection_line_span(self.active_tab())
+            .map(|(first, last, _)| (first, last))
+            .unwrap_or_else(|| {
+                let line = self.active_cursor_position().line;
+                (line, line)
+            });
+        self.outdent_selected_lines(first, last);
+    }
+
+    fn indent_selected_lines(&mut self, first: usize, last: usize) {
+        let (start_pos, end_pos, reversed) = self.selection_endpoints();
+        // Endpoints at column 0 of a touched line stay at column 0 so the
+        // new leading whitespace falls inside the selection — matches VS
+        // Code / Sublime "keep the same logical lines selected" behavior.
+        let shift = |pos: Position| -> Position {
+            if (first..=last).contains(&pos.line) && pos.column > 0 {
+                Position {
+                    line: pos.line,
+                    column: pos.column + INDENT_WIDTH,
+                }
+            } else {
+                pos
+            }
+        };
+        let new_start = shift(start_pos);
+        let new_end = shift(end_pos);
+
+        // The cursor passed here is overwritten by `restore_selection` below,
+        // so we just hand in a valid position on the edited range.
+        let result = self.apply_line_edit(|lines| {
+            editor_ops::indent_lines(lines, first, last, INDENT_WIDTH);
+            Some(((), new_end.line, new_end.column))
+        });
+        if result.is_none() {
+            return;
+        }
+
+        self.restore_selection(new_start, new_end, reversed);
+    }
+
+    fn outdent_selected_lines(&mut self, first: usize, last: usize) {
+        let (start_pos, end_pos, reversed) = self.selection_endpoints();
+        let had_selection = self.active_tab().has_selection();
+        let cursor_pos = self.active_cursor_position();
+        let cursor_line = cursor_pos.line;
+
+        let result = self.apply_line_edit(|lines| {
+            let removed = editor_ops::outdent_lines(lines, first, last, INDENT_WIDTH);
+            let new_cursor_col = if (first..=last).contains(&cursor_line) {
+                let removed_for_cursor = removed.get(cursor_line - first).copied().unwrap_or(0);
+                cursor_pos.column.saturating_sub(removed_for_cursor)
+            } else {
+                cursor_pos.column
+            };
+            Some((removed, cursor_line, new_cursor_col))
+        });
+        let Some(removed) = result else {
+            return;
+        };
+        if !had_selection {
+            return;
+        }
+
+        let shift = |pos: Position| -> Position {
+            if (first..=last).contains(&pos.line) {
+                let removed_for_line = removed.get(pos.line - first).copied().unwrap_or(0);
+                Position {
+                    line: pos.line,
+                    column: pos.column.saturating_sub(removed_for_line),
+                }
+            } else {
+                pos
+            }
+        };
+        self.restore_selection(shift(start_pos), shift(end_pos), reversed);
+    }
+
+    fn selection_endpoints(&self) -> (Position, Position, bool) {
+        let tab = self.active_tab();
+        let selection = tab.selected_range();
+        let buffer = tab.buffer();
+        let start = char_to_position(buffer, selection.start);
+        let end = char_to_position(buffer, selection.end);
+        (start, end, tab.selection_reversed())
+    }
+
+    fn restore_selection(&mut self, start: Position, end: Position, reversed: bool) {
+        let buffer = self.active_tab().buffer();
+        let start_char = position_to_char(buffer, start);
+        let end_char = position_to_char(buffer, end);
+        self.assign_selection(start_char..end_char, reversed);
     }
 
     pub fn delete_line(&mut self) {
@@ -1869,6 +2158,21 @@ impl EditorModel {
     }
 
     pub fn duplicate_line(&mut self) {
+        let tab = self.active_tab();
+        if let Some(text) = tab.selected_text() {
+            let range = tab.selected_range();
+            let char_len = range.end - range.start;
+            let inserted_start = range.end;
+            self.edit_active(
+                EditKind::Other,
+                UndoBoundary::Break,
+                inserted_start..inserted_start,
+                &text,
+            );
+            self.assign_selection(inserted_start..inserted_start + char_len, false);
+            return;
+        }
+
         let pos = self.active_cursor_position();
         let _ = self.apply_line_edit(|lines| {
             let line = editor_ops::duplicate_line(lines, pos.line);
@@ -2280,6 +2584,55 @@ fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: usiz
     active_index == closed_index
 }
 
+const INDENT_WIDTH: usize = 4;
+
+fn single_char(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    Some(ch)
+}
+
+// TODO(filetype-gate): add ('<', '>') once filetype detection lets us gate
+// angle-bracket auto-pairing to languages like Rust/TypeScript/HTML.
+fn auto_pair_pair(ch: char) -> Option<(char, char)> {
+    match ch {
+        '(' | ')' => Some(('(', ')')),
+        '[' | ']' => Some(('[', ']')),
+        '{' | '}' => Some(('{', '}')),
+        '"' => Some(('"', '"')),
+        '\'' => Some(('\'', '\'')),
+        '`' => Some(('`', '`')),
+        _ => None,
+    }
+}
+
+fn is_auto_pair_quote(ch: char) -> bool {
+    matches!(ch, '"' | '\'' | '`')
+}
+
+/// Returns `(first, last, spans_multiple_lines)` for the active selection,
+/// or `None` for a collapsed cursor. `last` excludes a trailing line whose
+/// only contribution is a column-0 anchor after a preceding newline.
+fn selection_line_span(tab: &EditorTab) -> Option<(usize, usize, bool)> {
+    let selection = tab.selected_range();
+    if selection.start == selection.end {
+        return None;
+    }
+    let buffer = tab.buffer();
+    let start = char_to_position(buffer, selection.start);
+    let end = char_to_position(buffer, selection.end);
+    let spans = start.line != end.line;
+    let last = if end.column == 0 && end.line > start.line {
+        end.line - 1
+    } else {
+        end.line
+    };
+    Some((start.line, last.max(start.line), spans))
+}
+
 fn display_line_char_len(tab: &EditorTab, line_ix: usize) -> usize {
     tab.buffer()
         .line(line_ix.min(tab.buffer().len_lines().saturating_sub(1)))
@@ -2295,6 +2648,34 @@ fn first_non_blank_column(tab: &EditorTab, line_ix: usize) -> usize {
         .take_while(|ch| *ch != '\n' && *ch != '\r')
         .position(|ch| !ch.is_whitespace())
         .unwrap_or(0)
+}
+
+fn linewise_range_at_char(buffer: &ropey::Rope, char_index: usize) -> Range<usize> {
+    let range = line_range_at_char(buffer, char_index);
+    // If the line already owns its terminator we can return as-is.
+    let ends_in_newline =
+        range.end > range.start && matches!(buffer.char(range.end - 1), '\n' | '\r');
+    if ends_in_newline {
+        return range;
+    }
+    // Only try to pull a terminator from the preceding line when the cursor
+    // sits on the buffer's final line (either the trailing unterminated line
+    // or an empty trailing row after the last `\n`).
+    if range.end != buffer.len_chars() || range.start == 0 {
+        return range;
+    }
+    let mut start = range.start;
+    match buffer.char(start - 1) {
+        '\n' => {
+            start -= 1;
+            if start > 0 && buffer.char(start - 1) == '\r' {
+                start -= 1;
+            }
+            start..range.end
+        }
+        '\r' => (start - 1)..range.end,
+        _ => range,
+    }
 }
 
 fn preferred_newline_for_active_tab(tab: &EditorTab) -> &'static str {

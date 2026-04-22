@@ -6,11 +6,11 @@ use crate::{
     FindPrev, GotoLineOpen, InsertNewline, InsertTab, MoveDocumentEnd, MoveDocumentStart, MoveDown,
     MoveLeft, MoveLineDown, MoveLineEnd, MoveLineStart, MoveLineUp, MovePageDown, MovePageUp,
     MoveRight, MoveSmartHome, MoveSubwordLeft, MoveSubwordRight, MoveUp, MoveWordLeft,
-    MoveWordRight, NewTab, NextTab, OpenFile, PasteClipboard, PrevTab, Quit, Redo, SaveFile,
-    SaveFileAs, SelectAll, SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft,
-    SelectLineEnd, SelectLineStart, SelectPageDown, SelectPageUp, SelectRight, SelectSmartHome,
-    SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight,
-    ToggleComment, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
+    MoveWordRight, NewTab, NextTab, OpenFile, OutdentSelection, PasteClipboard, PrevTab, Quit,
+    Redo, SaveFile, SaveFileAs, SelectAll, SelectDocumentEnd, SelectDocumentStart, SelectDown,
+    SelectLeft, SelectLineEnd, SelectLineStart, SelectPageDown, SelectPageUp, SelectRight,
+    SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft,
+    SelectWordRight, ToggleComment, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
 };
 
 const EDITOR_CONTEXT: &str = "Editor && !InlineInput";
@@ -116,6 +116,7 @@ pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("alt-delete", DeleteWordForward, Some(EDITOR_CONTEXT)),
         KeyBinding::new("enter", InsertNewline, Some(EDITOR_CONTEXT)),
         KeyBinding::new("tab", InsertTab, Some(EDITOR_CONTEXT)),
+        KeyBinding::new("shift-tab", OutdentSelection, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-a", SelectAll, Some(EDITOR_CONTEXT)),
         KeyBinding::new("cmd-a", SelectAll, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-q", Quit, Some("Workspace && !InlineInput")),

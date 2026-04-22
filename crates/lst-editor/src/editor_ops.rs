@@ -34,6 +34,38 @@ pub fn duplicate_line(lines: &mut Vec<String>, cursor_line: usize) -> usize {
     target + 1
 }
 
+// Indent / outdent
+//
+// TODO(vim): wire `>>` / `<<` operators to `indent_lines` / `outdent_lines`
+// when adding visual-line indent ops to the Vim state machine.
+
+pub fn indent_lines(lines: &mut [String], first: usize, last: usize, width: usize) {
+    if first > last || last >= lines.len() {
+        return;
+    }
+    let prefix: String = " ".repeat(width);
+    for line in &mut lines[first..=last] {
+        line.insert_str(0, &prefix);
+    }
+}
+
+pub fn outdent_lines(lines: &mut [String], first: usize, last: usize, width: usize) -> Vec<usize> {
+    if first > last || last >= lines.len() {
+        return Vec::new();
+    }
+    let mut removed = Vec::with_capacity(last - first + 1);
+    for line in &mut lines[first..=last] {
+        // ASCII space is a single byte and never appears inside a multibyte
+        // UTF-8 sequence, so byte iteration is safe here and avoids decoding.
+        let to_remove = line.bytes().take(width).take_while(|b| *b == b' ').count();
+        if to_remove > 0 {
+            line.replace_range(0..to_remove, "");
+        }
+        removed.push(to_remove);
+    }
+    removed
+}
+
 // Comment toggling
 
 pub fn toggle_comment(
@@ -160,6 +192,45 @@ pub fn transform_case_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indent_lines_prepends_spaces_to_each_line() {
+        let mut lines = vec!["alpha".into(), "beta".into(), "gamma".into()];
+        indent_lines(&mut lines, 0, 1, 4);
+        assert_eq!(
+            lines,
+            vec!["    alpha".to_string(), "    beta".into(), "gamma".into()]
+        );
+    }
+
+    #[test]
+    fn indent_lines_indents_empty_lines_too() {
+        let mut lines = vec!["a".into(), String::new(), "b".into()];
+        indent_lines(&mut lines, 0, 2, 4);
+        assert_eq!(
+            lines,
+            vec!["    a".to_string(), "    ".into(), "    b".into()]
+        );
+    }
+
+    #[test]
+    fn outdent_lines_strips_up_to_width_and_reports_per_line() {
+        let mut lines = vec!["      six".into(), "  two".into(), "no_ws".into()];
+        let removed = outdent_lines(&mut lines, 0, 2, 4);
+        assert_eq!(
+            lines,
+            vec!["  six".to_string(), "two".into(), "no_ws".into()]
+        );
+        assert_eq!(removed, vec![4, 2, 0]);
+    }
+
+    #[test]
+    fn outdent_lines_only_counts_leading_spaces() {
+        let mut lines = vec!["\talready".into()];
+        let removed = outdent_lines(&mut lines, 0, 0, 4);
+        assert_eq!(lines, vec!["\talready".to_string()]);
+        assert_eq!(removed, vec![0]);
+    }
 
     #[test]
     fn toggle_comment_round_trips() {

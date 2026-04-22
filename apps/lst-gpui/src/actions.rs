@@ -6,11 +6,12 @@ use crate::{
     FindPrev, GotoLineOpen, InsertNewline, InsertTab, LstGpuiApp, MoveDocumentEnd,
     MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd, MoveLineStart, MoveLineUp,
     MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft, MoveSubwordRight, MoveUp,
-    MoveWordLeft, MoveWordRight, NewTab, NextTab, OpenFile, PasteClipboard, PrevTab, Quit, Redo,
-    ReplaceAll, ReplaceOne, SaveFile, SaveFileAs, SelectAll, SelectDocumentEnd,
-    SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd, SelectLineStart, SelectPageDown,
-    SelectPageUp, SelectRight, SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp,
-    SelectWordLeft, SelectWordRight, ToggleComment, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
+    MoveWordLeft, MoveWordRight, NewTab, NextTab, OpenFile, OutdentSelection, PasteClipboard,
+    PrevTab, Quit, Redo, ReplaceAll, ReplaceOne, SaveFile, SaveFileAs, SelectAll,
+    SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd, SelectLineStart,
+    SelectPageDown, SelectPageUp, SelectRight, SelectSmartHome, SelectSubwordLeft,
+    SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight, ToggleComment, ToggleWrap, Undo,
+    ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
@@ -65,6 +66,7 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         DeleteWordForward => |model| model.delete_word(false);
         InsertNewline => |model| model.insert_newline_at_cursor();
         InsertTab => |model| model.insert_tab_at_cursor();
+        OutdentSelection => |model| model.outdent_at_cursor();
         SelectAll => |model| model.select_all();
         Undo => |model| model.undo();
         Redo => |model| model.redo();

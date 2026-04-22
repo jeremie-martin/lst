@@ -784,6 +784,32 @@ fn app_goto_input_syncs_open_submit_and_close(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn app_goto_input_accepts_line_and_column(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "alpha\nbeta\ngamma", window, cx);
+    });
+
+    cx.dispatch_action(GotoLineOpen);
+    cx.refresh().expect("refresh after goto focus request");
+    cx.run_until_parked();
+
+    cx.simulate_input("2:3");
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.goto_line.as_deref(), Some("2:3"));
+    assert_eq!(snapshot.goto_line_input, "2:3");
+
+    cx.simulate_keystrokes("enter");
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.cursor_position.line, 1);
+    assert_eq!(snapshot.model.cursor_position.column, 2);
+    assert_eq!(snapshot.model.goto_line, None);
+    assert_eq!(snapshot.goto_line_input, "");
+    assert_tab_views_match_model(&snapshot);
+}
+
+#[gpui::test]
 fn rendered_wrapped_rows_fill_viewport_width_except_remainder(cx: &mut TestAppContext) {
     let (view, cx) = new_test_app(cx, LaunchArgs::default());
 
