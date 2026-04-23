@@ -596,6 +596,17 @@ fn paint_range_background(
     ));
 }
 
+fn search_matches_for_row<'a>(
+    search_matches: &'a [Range<usize>],
+    row: &PaintedRow,
+) -> &'a [Range<usize>] {
+    // FindState emits document-order, non-overlapping ranges.
+    let first = search_matches.partition_point(|range| range.end <= row.line_start_char);
+    let last =
+        first + search_matches[first..].partition_point(|range| range.start < row.logical_end_char);
+    &search_matches[first..last]
+}
+
 pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window, cx: &mut App) {
     let ViewportPaintInput {
         bounds,
@@ -646,7 +657,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             ));
         }
 
-        for search_match in search_matches {
+        for search_match in search_matches_for_row(search_matches, &row) {
             paint_range_background(
                 &row,
                 search_match,
@@ -803,5 +814,37 @@ mod tests {
         let columns = wrap_columns_for_viewport(viewport_width, char_width, true, true, 1.0);
 
         assert_eq!(columns, 9);
+    }
+
+    #[test]
+    fn search_matches_for_row_slices_to_visible_char_range() {
+        let matches = vec![0..2, 5..7, 10..12, 15..18, 22..25];
+        let row = PaintedRow {
+            row_top: px(0.0),
+            line_start_char: 10,
+            display_end_char: 20,
+            logical_end_char: 20,
+            cursor_end_inclusive: false,
+            code_line: None,
+            gutter_line: None,
+        };
+
+        assert_eq!(search_matches_for_row(&matches, &row), &[10..12, 15..18]);
+    }
+
+    #[test]
+    fn search_matches_for_row_excludes_adjacent_ranges() {
+        let matches = vec![0..5, 5..10, 10..15, 15..20];
+        let row = PaintedRow {
+            row_top: px(0.0),
+            line_start_char: 10,
+            display_end_char: 15,
+            logical_end_char: 15,
+            cursor_end_inclusive: false,
+            code_line: None,
+            gutter_line: None,
+        };
+
+        assert_eq!(search_matches_for_row(&matches, &row), &matches[2..3]);
     }
 }

@@ -278,6 +278,7 @@ pub struct EditorTab {
     pub(crate) name_hint: String,
     pub(crate) origin: TabOrigin,
     pub(crate) language: Option<Language>,
+    language_override: Option<Option<Language>>,
     pub(crate) buffer: Rope,
     pub(crate) modified: bool,
     pub(crate) selection: Selection,
@@ -348,6 +349,7 @@ impl EditorTab {
             name_hint,
             origin,
             language,
+            language_override: None,
             buffer: Rope::from_str(text),
             modified: false,
             selection: Selection::collapsed(0),
@@ -378,6 +380,7 @@ impl EditorTab {
     }
 
     pub(crate) fn set_language(&mut self, language: Option<Language>) {
+        self.language_override = Some(language);
         self.language = language;
         self.touch_content();
     }
@@ -669,6 +672,10 @@ impl EditorTab {
     }
 
     fn refresh_language(&mut self) -> bool {
+        if self.language_override.is_some() {
+            return false;
+        }
+
         let language = self.detect_language();
         let changed = self.language != language;
         self.language = language;
