@@ -229,6 +229,12 @@ enum CharClass {
 
 // -- VimState ----------------------------------------------------------------
 
+impl Default for VimState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VimState {
     pub fn new() -> Self {
         Self {

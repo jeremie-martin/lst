@@ -392,11 +392,17 @@ impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_active_syntax_highlights(cx);
 
-        let active = self.model.active_index();
         let show_gutter = self.model.show_gutter();
         let show_wrap = self.model.show_wrap();
-        let viewport_width = self.tab_views[active]
-            .geometry
+        let (active_scroll, active_cache, active_geometry) = {
+            let active_view = self.active_view();
+            (
+                active_view.scroll.clone(),
+                active_view.cache.clone(),
+                active_view.geometry.clone(),
+            )
+        };
+        let viewport_width = active_geometry
             .borrow()
             .bounds
             .map(|bounds| bounds.size.width)
@@ -433,7 +439,7 @@ impl Render for LstGpuiApp {
         };
         let line_texts = self.model.active_tab_lines();
         let total_content_height = {
-            let mut cache = self.tab_views[active].cache.borrow_mut();
+            let mut cache = active_cache.borrow_mut();
             let layout = ensure_wrap_layout(
                 &mut cache,
                 line_texts.as_ref(),
@@ -446,11 +452,10 @@ impl Render for LstGpuiApp {
             );
             buffer_content_height(layout.total_rows, self.ui_scale())
         };
-        let active_view = &self.tab_views[active];
-        let viewport_scroll = active_view.scroll.clone();
+        let viewport_scroll = active_scroll;
         let scrollbar_scroll = viewport_scroll.clone();
-        let viewport_cache = active_view.cache.clone();
-        let viewport_geometry = active_view.geometry.clone();
+        let viewport_cache = active_cache;
+        let viewport_geometry = active_geometry;
         let focus_handle = self.focus_handle.clone();
         let entity = cx.entity();
         let prepare_entity = entity.clone();

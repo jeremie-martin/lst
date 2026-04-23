@@ -59,8 +59,7 @@ impl TabId {
 #[derive(Clone)]
 struct Snapshot {
     text: String,
-    selection: Range<usize>,
-    selection_reversed: bool,
+    selection: Selection,
 }
 
 #[derive(Clone)]
@@ -69,19 +68,219 @@ struct CachedLines {
     lines: Arc<[String]>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TabOrigin {
+    Untitled,
+    File {
+        path: PathBuf,
+        file_stamp: Option<FileStamp>,
+        suppressed_conflict_stamp: Option<FileStamp>,
+    },
+    Scratchpad {
+        path: PathBuf,
+        file_stamp: FileStamp,
+        suppressed_conflict_stamp: Option<FileStamp>,
+    },
+}
+
+impl TabOrigin {
+    fn file(path: PathBuf, file_stamp: Option<FileStamp>) -> Self {
+        Self::File {
+            path,
+            file_stamp,
+            suppressed_conflict_stamp: None,
+        }
+    }
+
+    fn scratchpad(path: PathBuf, file_stamp: FileStamp) -> Self {
+        Self::Scratchpad {
+            path,
+            file_stamp,
+            suppressed_conflict_stamp: None,
+        }
+    }
+
+    pub fn path(&self) -> Option<&PathBuf> {
+        match self {
+            Self::Untitled => None,
+            Self::File { path, .. } | Self::Scratchpad { path, .. } => Some(path),
+        }
+    }
+
+    pub fn file_stamp(&self) -> Option<FileStamp> {
+        match self {
+            Self::Untitled => None,
+            Self::File { file_stamp, .. } => *file_stamp,
+            Self::Scratchpad { file_stamp, .. } => Some(*file_stamp),
+        }
+    }
+
+    pub fn is_scratchpad(&self) -> bool {
+        matches!(self, Self::Scratchpad { .. })
+    }
+
+    pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
+        match self {
+            Self::Untitled => false,
+            Self::File {
+                suppressed_conflict_stamp,
+                ..
+            }
+            | Self::Scratchpad {
+                suppressed_conflict_stamp,
+                ..
+            } => *suppressed_conflict_stamp == Some(stamp),
+        }
+    }
+
+    fn set_path_preserving_kind(&mut self, path: PathBuf) {
+        match self {
+            Self::Untitled => *self = Self::file(path, None),
+            Self::File {
+                file_stamp,
+                suppressed_conflict_stamp,
+                ..
+            } => {
+                *self = Self::File {
+                    path,
+                    file_stamp: *file_stamp,
+                    suppressed_conflict_stamp: *suppressed_conflict_stamp,
+                };
+            }
+            Self::Scratchpad {
+                file_stamp,
+                suppressed_conflict_stamp,
+                ..
+            } => {
+                *self = Self::Scratchpad {
+                    path,
+                    file_stamp: *file_stamp,
+                    suppressed_conflict_stamp: *suppressed_conflict_stamp,
+                };
+            }
+        }
+    }
+
+    fn mark_saved(&mut self, path: PathBuf, file_stamp: FileStamp) {
+        *self = if self.is_scratchpad() {
+            Self::scratchpad(path, file_stamp)
+        } else {
+            Self::file(path, Some(file_stamp))
+        };
+    }
+
+    fn mark_saved_as(&mut self, path: PathBuf, file_stamp: FileStamp) {
+        *self = Self::file(path, Some(file_stamp));
+    }
+
+    fn reset_from_disk(&mut self, path: PathBuf, file_stamp: FileStamp) {
+        *self = if self.is_scratchpad() {
+            Self::scratchpad(path, file_stamp)
+        } else {
+            Self::file(path, Some(file_stamp))
+        };
+    }
+
+    fn update_file_stamp(&mut self, file_stamp: FileStamp) {
+        match self {
+            Self::Untitled => {}
+            Self::File {
+                file_stamp: stamp,
+                suppressed_conflict_stamp,
+                ..
+            } => {
+                *stamp = Some(file_stamp);
+                *suppressed_conflict_stamp = None;
+            }
+            Self::Scratchpad {
+                file_stamp: stamp,
+                suppressed_conflict_stamp,
+                ..
+            } => {
+                *stamp = file_stamp;
+                *suppressed_conflict_stamp = None;
+            }
+        }
+    }
+
+    fn suppress_file_conflict(&mut self, stamp: FileStamp) {
+        match self {
+            Self::Untitled => {}
+            Self::File {
+                suppressed_conflict_stamp,
+                ..
+            }
+            | Self::Scratchpad {
+                suppressed_conflict_stamp,
+                ..
+            } => *suppressed_conflict_stamp = Some(stamp),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Selection {
+    anchor: usize,
+    head: usize,
+}
+
+impl Selection {
+    fn collapsed(offset: usize) -> Self {
+        Self {
+            anchor: offset,
+            head: offset,
+        }
+    }
+
+    fn from_range(range: Range<usize>, reversed: bool) -> Self {
+        if reversed {
+            Self {
+                anchor: range.end,
+                head: range.start,
+            }
+        } else {
+            Self {
+                anchor: range.start,
+                head: range.end,
+            }
+        }
+    }
+
+    pub(crate) fn range(&self) -> Range<usize> {
+        self.anchor.min(self.head)..self.anchor.max(self.head)
+    }
+
+    pub(crate) fn is_reversed(&self) -> bool {
+        self.head < self.anchor
+    }
+
+    pub(crate) fn cursor(&self) -> usize {
+        self.head
+    }
+
+    fn has_selection(&self) -> bool {
+        self.anchor != self.head
+    }
+
+    fn move_to(&mut self, offset: usize) {
+        self.anchor = offset;
+        self.head = offset;
+    }
+
+    fn select_to(&mut self, offset: usize) {
+        self.head = offset;
+    }
+}
+
 #[derive(Clone)]
 pub struct EditorTab {
     id: TabId,
     pub(crate) name_hint: String,
-    pub(crate) path: Option<PathBuf>,
+    pub(crate) origin: TabOrigin,
     pub(crate) language: Option<Language>,
-    pub(crate) file_stamp: Option<FileStamp>,
-    pub(crate) suppressed_conflict_stamp: Option<FileStamp>,
-    pub(crate) is_scratchpad: bool,
     pub(crate) buffer: Rope,
     pub(crate) modified: bool,
-    pub(crate) selection: Range<usize>,
-    pub(crate) selection_reversed: bool,
+    pub(crate) selection: Selection,
     pub(crate) preferred_column: Option<usize>,
     revision: u64,
     line_cache: Option<CachedLines>,
@@ -120,9 +319,7 @@ impl EditorTab {
             .and_then(|name| name.to_str())
             .unwrap_or("scratchpad")
             .to_string();
-        let mut tab = Self::from_text_with_stamp(id, name_hint, Some(path), "", Some(file_stamp));
-        tab.is_scratchpad = true;
-        tab
+        Self::from_origin(id, name_hint, TabOrigin::scratchpad(path, file_stamp), "")
     }
 
     pub fn from_text(id: TabId, name_hint: String, path: Option<PathBuf>, text: &str) -> Self {
@@ -136,19 +333,24 @@ impl EditorTab {
         text: &str,
         file_stamp: Option<FileStamp>,
     ) -> Self {
-        let language = language::detect(path.as_deref(), text.split('\n').next());
+        let origin = match path {
+            Some(path) => TabOrigin::file(path, file_stamp),
+            None => TabOrigin::Untitled,
+        };
+        Self::from_origin(id, name_hint, origin, text)
+    }
+
+    fn from_origin(id: TabId, name_hint: String, origin: TabOrigin, text: &str) -> Self {
+        let language =
+            language::detect(origin.path().map(PathBuf::as_path), text.split('\n').next());
         Self {
             id,
             name_hint,
-            path,
+            origin,
             language,
-            file_stamp,
-            suppressed_conflict_stamp: None,
-            is_scratchpad: false,
             buffer: Rope::from_str(text),
             modified: false,
-            selection: 0..0,
-            selection_reversed: false,
+            selection: Selection::collapsed(0),
             preferred_column: None,
             revision: 0,
             line_cache: None,
@@ -164,7 +366,7 @@ impl EditorTab {
     }
 
     pub fn path(&self) -> Option<&PathBuf> {
-        self.path.as_ref()
+        self.origin.path()
     }
 
     pub fn language(&self) -> Option<Language> {
@@ -181,22 +383,22 @@ impl EditorTab {
     }
 
     pub(crate) fn set_path(&mut self, path: PathBuf) {
-        self.path = Some(path);
+        self.origin.set_path_preserving_kind(path);
         if self.refresh_language() {
             self.touch_content();
         }
     }
 
     pub fn file_stamp(&self) -> Option<FileStamp> {
-        self.file_stamp
+        self.origin.file_stamp()
     }
 
     pub fn is_scratchpad(&self) -> bool {
-        self.is_scratchpad
+        self.origin.is_scratchpad()
     }
 
     pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
-        self.suppressed_conflict_stamp == Some(stamp)
+        self.origin.conflict_suppressed_for(stamp)
     }
 
     pub fn buffer(&self) -> &Rope {
@@ -208,11 +410,11 @@ impl EditorTab {
     }
 
     pub fn selection(&self) -> Range<usize> {
-        self.selection.clone()
+        self.selection.range()
     }
 
     pub fn selection_reversed(&self) -> bool {
-        self.selection_reversed
+        self.selection.is_reversed()
     }
 
     pub fn marked_range(&self) -> Option<&Range<usize>> {
@@ -224,8 +426,8 @@ impl EditorTab {
     }
 
     pub fn display_name(&self) -> String {
-        self.path
-            .as_ref()
+        self.origin
+            .path()
             .and_then(|path| path.file_name())
             .and_then(|name| name.to_str())
             .map(ToOwned::to_owned)
@@ -254,11 +456,7 @@ impl EditorTab {
     }
 
     pub fn cursor_char(&self) -> usize {
-        if self.selection_reversed {
-            self.selection.start
-        } else {
-            self.selection.end
-        }
+        self.selection.cursor()
     }
 
     pub fn cursor_position(&self) -> Position {
@@ -266,16 +464,16 @@ impl EditorTab {
     }
 
     pub fn selected_range(&self) -> Range<usize> {
-        self.selection.clone()
+        self.selection.range()
     }
 
     pub fn has_selection(&self) -> bool {
-        self.selection.start != self.selection.end
+        self.selection.has_selection()
     }
 
     pub fn selected_text(&self) -> Option<String> {
         if self.has_selection() {
-            Some(self.buffer.slice(self.selection.clone()).to_string())
+            Some(self.buffer.slice(self.selection.range()).to_string())
         } else {
             None
         }
@@ -306,8 +504,7 @@ impl EditorTab {
 
     pub fn select_all(&mut self) {
         let end = self.len_chars();
-        self.selection = 0..end;
-        self.selection_reversed = false;
+        self.selection = Selection::from_range(0..end, false);
         self.marked_range = None;
     }
 
@@ -320,11 +517,21 @@ impl EditorTab {
         match select_from {
             Some(anchor) => {
                 let anchor = position_to_char(&self.buffer, anchor);
-                self.selection = anchor.min(head)..anchor.max(head);
-                self.selection_reversed = head < anchor;
+                self.selection = Selection { anchor, head };
             }
             None => self.move_to(head),
         }
+        self.marked_range = None;
+    }
+
+    pub(crate) fn set_selection_range(&mut self, mut range: Range<usize>, reversed: bool) {
+        range.start = range.start.min(self.len_chars());
+        range.end = range.end.min(self.len_chars());
+        if range.start > range.end {
+            range = range.end..range.start;
+        }
+        self.selection = Selection::from_range(range, reversed);
+        self.preferred_column = None;
         self.marked_range = None;
     }
 
@@ -346,22 +553,13 @@ impl EditorTab {
 
     pub fn move_to(&mut self, offset: usize) {
         let offset = offset.min(self.len_chars());
-        self.selection = offset..offset;
-        self.selection_reversed = false;
+        self.selection.move_to(offset);
         self.marked_range = None;
     }
 
     pub fn select_to(&mut self, offset: usize) {
         let offset = offset.min(self.len_chars());
-        if self.selection_reversed {
-            self.selection.start = offset;
-        } else {
-            self.selection.end = offset;
-        }
-        if self.selection.end < self.selection.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selection = self.selection.end..self.selection.start;
-        }
+        self.selection.select_to(offset);
         self.marked_range = None;
     }
 
@@ -380,8 +578,7 @@ impl EditorTab {
         }
 
         let new_cursor = range.start + new_text.chars().count();
-        self.selection = new_cursor..new_cursor;
-        self.selection_reversed = false;
+        self.selection.move_to(new_cursor);
         self.modified = true;
         self.preferred_column = None;
         self.marked_range = None;
@@ -410,12 +607,10 @@ impl EditorTab {
         self.last_edit_kind = None;
     }
 
-    pub(crate) fn reset_from_disk(&mut self, text: &str, file_stamp: FileStamp) {
+    pub(crate) fn reset_from_disk(&mut self, text: &str) {
         self.buffer = Rope::from_str(text);
         self.move_to(0);
         self.modified = false;
-        self.file_stamp = Some(file_stamp);
-        self.suppressed_conflict_stamp = None;
         self.preferred_column = None;
         self.marked_range = None;
         self.undo_stack.clear();
@@ -426,19 +621,51 @@ impl EditorTab {
     }
 
     pub(crate) fn mark_saved(&mut self, path: PathBuf, file_stamp: FileStamp) {
-        self.set_path(path);
-        self.file_stamp = Some(file_stamp);
-        self.suppressed_conflict_stamp = None;
+        self.origin.mark_saved(path, file_stamp);
+        self.refresh_language();
         self.modified = false;
     }
 
     pub(crate) fn mark_saved_as(&mut self, path: PathBuf, file_stamp: FileStamp) {
-        self.mark_saved(path, file_stamp);
-        self.is_scratchpad = false;
+        self.origin.mark_saved_as(path, file_stamp);
+        self.refresh_language();
+        self.modified = false;
+    }
+
+    pub(crate) fn reset_from_disk_at_path(
+        &mut self,
+        path: PathBuf,
+        text: &str,
+        file_stamp: FileStamp,
+    ) {
+        self.origin.reset_from_disk(path, file_stamp);
+        self.reset_from_disk(text);
+    }
+
+    pub(crate) fn mark_clean_at_path(&mut self, path: PathBuf) {
+        self.set_path(path);
+        self.modified = false;
+    }
+
+    pub(crate) fn mark_clean_file_at_path(&mut self, path: PathBuf) {
+        self.origin = TabOrigin::file(path, self.file_stamp());
+        self.refresh_language();
+        self.modified = false;
+    }
+
+    pub(crate) fn mark_modified(&mut self) {
+        self.modified = true;
+    }
+
+    pub(crate) fn mark_autosaved(&mut self, file_stamp: Option<FileStamp>) {
+        self.modified = false;
+        if let Some(file_stamp) = file_stamp {
+            self.origin.update_file_stamp(file_stamp);
+        }
     }
 
     pub(crate) fn suppress_file_conflict(&mut self, stamp: FileStamp) {
-        self.suppressed_conflict_stamp = Some(stamp);
+        self.origin.suppress_file_conflict(stamp);
     }
 
     fn refresh_language(&mut self) -> bool {
@@ -450,14 +677,14 @@ impl EditorTab {
 
     fn detect_language(&self) -> Option<Language> {
         let first_line = first_line_for_detection(&self.buffer);
-        language::detect(self.path.as_deref(), Some(first_line.as_str()))
+        language::detect(self.path().map(PathBuf::as_path), Some(first_line.as_str()))
     }
 
     pub fn undo(&mut self) -> bool {
         if let Some(snapshot) = self.undo_stack.pop() {
             self.redo_stack.push(self.current_snapshot());
             self.restore_snapshot(snapshot);
-            self.modified = true;
+            self.mark_modified();
             true
         } else {
             false
@@ -468,7 +695,7 @@ impl EditorTab {
         if let Some(snapshot) = self.redo_stack.pop() {
             self.undo_stack.push(self.current_snapshot());
             self.restore_snapshot(snapshot);
-            self.modified = true;
+            self.mark_modified();
             true
         } else {
             false
@@ -479,14 +706,12 @@ impl EditorTab {
         Snapshot {
             text: self.buffer_text(),
             selection: self.selection.clone(),
-            selection_reversed: self.selection_reversed,
         }
     }
 
     fn restore_snapshot(&mut self, snapshot: Snapshot) {
         self.buffer = Rope::from_str(&snapshot.text);
         self.selection = snapshot.selection;
-        self.selection_reversed = snapshot.selection_reversed;
         self.preferred_column = None;
         self.marked_range = None;
         self.touch_content();
@@ -498,7 +723,7 @@ fn first_line_for_detection(buffer: &Rope) -> String {
     buffer
         .line(0)
         .to_string()
-        .trim_end_matches(|ch| ch == '\r' || ch == '\n')
+        .trim_end_matches(['\r', '\n'])
         .to_string()
 }
 

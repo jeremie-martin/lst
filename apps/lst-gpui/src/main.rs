@@ -32,7 +32,14 @@ use lst_editor::{
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
-use std::{cell::RefCell, collections::HashSet, path::PathBuf, process, rc::Rc, time::Instant};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    process,
+    rc::Rc,
+    time::Instant,
+};
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_language, CachedSyntaxHighlights,
     SyntaxHighlightJobKey, SyntaxMode, SyntaxSpan,
@@ -129,7 +136,6 @@ struct EditorScrollbarDrag {
 }
 
 struct EditorTabView {
-    id: TabId,
     revision: u64,
     scroll: ScrollHandle,
     cache: Rc<RefCell<ViewportCache>>,
@@ -139,7 +145,6 @@ struct EditorTabView {
 impl EditorTabView {
     fn new(tab: &ModelEditorTab) -> Self {
         Self {
-            id: tab.id(),
             revision: tab.revision(),
             scroll: ScrollHandle::new(),
             cache: Rc::new(RefCell::new(ViewportCache::default())),
@@ -153,10 +158,61 @@ impl EditorTabView {
     }
 }
 
+#[derive(Default)]
+struct TabViewStore {
+    views: HashMap<TabId, EditorTabView>,
+}
+
+impl TabViewStore {
+    fn from_tabs(tabs: &[ModelEditorTab]) -> Self {
+        Self {
+            views: tabs
+                .iter()
+                .map(|tab| (tab.id(), EditorTabView::new(tab)))
+                .collect(),
+        }
+    }
+
+    fn sync(&mut self, tabs: &[ModelEditorTab], old_show_wrap: bool, show_wrap: bool) {
+        let tab_ids = tabs.iter().map(ModelEditorTab::id).collect::<HashSet<_>>();
+        self.views.retain(|tab_id, _| tab_ids.contains(tab_id));
+        for tab in tabs {
+            let view = self
+                .views
+                .entry(tab.id())
+                .or_insert_with(|| EditorTabView::new(tab));
+            if view.revision != tab.revision() || old_show_wrap != show_wrap {
+                view.revision = tab.revision();
+                view.invalidate_visual_state();
+            }
+        }
+    }
+
+    fn get(&self, tab_id: TabId) -> Option<&EditorTabView> {
+        self.views.get(&tab_id)
+    }
+
+    fn active(&self, model: &EditorModel) -> &EditorTabView {
+        self.get(model.active_tab_id())
+            .expect("active tab must have a tab view")
+    }
+
+    #[cfg(test)]
+    fn ids_for_tabs(&self, tabs: &[ModelEditorTab]) -> Vec<TabId> {
+        tabs.iter()
+            .filter_map(|tab| self.views.get_key_value(&tab.id()).map(|(id, _)| *id))
+            .collect()
+    }
+
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut EditorTabView> {
+        self.views.values_mut()
+    }
+}
+
 struct LstGpuiApp {
     focus_handle: FocusHandle,
     model: EditorModel,
-    tab_views: Vec<EditorTabView>,
+    tab_views: TabViewStore,
     tab_bar_scroll: ScrollHandle,
     hovered_tab: Option<usize>,
     selection_drag: Option<ActiveDragSelection>,
@@ -184,11 +240,7 @@ impl LstGpuiApp {
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line[:Column]"));
         let scratchpad_dir = launch.scratchpad_dir.clone();
         let model = initial_model_from_launch(launch);
-        let tab_views = model
-            .tabs()
-            .iter()
-            .map(EditorTabView::new)
-            .collect::<Vec<_>>();
+        let tab_views = TabViewStore::from_tabs(model.tabs());
 
         let mut app = Self {
             focus_handle: cx.focus_handle(),
@@ -240,7 +292,7 @@ impl LstGpuiApp {
             find_replace_input: self.find_replace_input.read(cx).text(),
             goto_line_input: self.goto_line_input.read(cx).text(),
             pending_focus: self.pending_focus,
-            tab_view_ids: self.tab_views.iter().map(|view| view.id).collect(),
+            tab_view_ids: self.tab_views.ids_for_tabs(self.model.tabs()),
             zoom_level: self.zoom_level,
         }
     }
@@ -261,7 +313,7 @@ impl LstGpuiApp {
 
         self.zoom_level = level;
         window.set_rem_size(self.ui_px(metrics::BASE_REM_SIZE));
-        for view in &mut self.tab_views {
+        for view in self.tab_views.iter_mut() {
             view.invalidate_visual_state();
         }
         cx.notify();
@@ -358,24 +410,8 @@ impl LstGpuiApp {
     }
 
     fn sync_tab_views(&mut self, old_show_wrap: bool) {
-        let mut old_views = std::mem::take(&mut self.tab_views);
-        self.tab_views = self
-            .model
-            .tabs()
-            .iter()
-            .map(|tab| {
-                let mut view = old_views
-                    .iter()
-                    .position(|view| view.id == tab.id())
-                    .map(|ix| old_views.swap_remove(ix))
-                    .unwrap_or_else(|| EditorTabView::new(tab));
-                if view.revision != tab.revision() || old_show_wrap != self.model.show_wrap() {
-                    view.revision = tab.revision();
-                    view.invalidate_visual_state();
-                }
-                view
-            })
-            .collect();
+        self.tab_views
+            .sync(self.model.tabs(), old_show_wrap, self.model.show_wrap());
         if self
             .hovered_tab
             .is_some_and(|ix| ix >= self.model.tab_count())
@@ -505,17 +541,15 @@ impl LstGpuiApp {
     }
 
     fn ensure_active_syntax_highlights(&mut self, cx: &mut Context<Self>) {
-        let active = self.model.active_index();
-        let Some(tab) = self.model.tab(active) else {
-            return;
-        };
+        let tab = self.model.active_tab();
         let SyntaxMode::TreeSitter(language) = syntax_mode_for_language(tab.language()) else {
             return;
         };
 
+        let tab_id = tab.id();
         let revision = tab.revision();
         let key = SyntaxHighlightJobKey { language, revision };
-        let cache = self.tab_views[active].cache.clone();
+        let cache = self.tab_views.active(&self.model).cache.clone();
         {
             let cache_ref = cache.borrow();
             if cache_ref
@@ -540,7 +574,7 @@ impl LstGpuiApp {
                 .spawn(async move { compute_syntax_highlights(language, &source) })
                 .await;
             let _ = this.update(cx, |view, cx| {
-                view.finish_syntax_highlights(active, key, cache, lines, cx);
+                view.finish_syntax_highlights(tab_id, key, cache, lines, cx);
             });
         })
         .detach();
@@ -548,7 +582,7 @@ impl LstGpuiApp {
 
     fn finish_syntax_highlights(
         &mut self,
-        active: usize,
+        tab_id: TabId,
         key: SyntaxHighlightJobKey,
         cache: Rc<RefCell<ViewportCache>>,
         lines: Vec<Vec<SyntaxSpan>>,
@@ -560,13 +594,7 @@ impl LstGpuiApp {
         }
 
         cache_ref.syntax_highlight_inflight = None;
-        if !syntax_highlight_result_is_current(
-            self.model.tabs(),
-            &self.tab_views,
-            active,
-            &cache,
-            key,
-        ) {
+        if !syntax_highlight_result_is_current(&self.model, &self.tab_views, tab_id, &cache, key) {
             return;
         }
 
@@ -578,7 +606,7 @@ impl LstGpuiApp {
         cache_ref.clear_code_lines();
         drop(cache_ref);
 
-        if self.model.active_index() == active {
+        if self.model.active_tab_id() == tab_id {
             cx.notify();
         }
     }
@@ -610,7 +638,7 @@ impl LstGpuiApp {
     }
 
     fn active_view(&self) -> &EditorTabView {
-        &self.tab_views[self.model.active_index()]
+        self.tab_views.active(&self.model)
     }
 
     fn active_cursor_line_col(&self) -> (usize, usize) {
@@ -685,9 +713,11 @@ impl LstGpuiApp {
             return usize::MAX;
         }
 
-        let active = self.model.active_index();
-        let viewport_width = self.tab_views[active]
-            .geometry
+        let (geometry, cache) = {
+            let active_view = self.active_view();
+            (active_view.geometry.clone(), active_view.cache.clone())
+        };
+        let viewport_width = geometry
             .borrow()
             .bounds
             .map(|bounds| bounds.size.width)
@@ -696,7 +726,7 @@ impl LstGpuiApp {
         let revision = self.model.active_tab().revision();
         let lines = self.model.active_tab_lines();
         let layout = {
-            let mut cache = self.tab_views[active].cache.borrow_mut();
+            let mut cache = cache.borrow_mut();
             ensure_wrap_layout(
                 &mut cache,
                 lines.as_ref(),
@@ -982,14 +1012,14 @@ impl Focusable for LstGpuiApp {
 }
 
 fn syntax_highlight_result_is_current(
-    tabs: &[ModelEditorTab],
-    tab_views: &[EditorTabView],
-    active: usize,
+    model: &EditorModel,
+    tab_views: &TabViewStore,
+    tab_id: TabId,
     cache: &Rc<RefCell<ViewportCache>>,
     key: SyntaxHighlightJobKey,
 ) -> bool {
-    tabs.get(active).is_some_and(|tab| {
-        tab_views.get(active).is_some_and(|view| {
+    model.tab_by_id(tab_id).is_some_and(|tab| {
+        tab_views.get(tab_id).is_some_and(|view| {
             Rc::ptr_eq(&view.cache, cache)
                 && tab.revision() == key.revision
                 && syntax_mode_for_language(tab.language()) == SyntaxMode::TreeSitter(key.language)
@@ -1077,7 +1107,7 @@ fn main() {
                 let entity = cx.entity();
                 window.on_window_should_close(cx, move |_window, cx| {
                     let entity = entity.clone();
-                    let _ = entity.update(cx, |view, cx| {
+                    entity.update(cx, |view, cx| {
                         view.request_quit(cx);
                     });
                     false

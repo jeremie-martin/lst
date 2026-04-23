@@ -8,7 +8,7 @@ use gpui::{
     MouseButton, TestAppContext, VisualContext as _, VisualTestContext,
 };
 #[cfg(feature = "internal-invariants")]
-use lst_editor::{EditorTab, TabId};
+use lst_editor::{EditorModel, EditorTab, TabId};
 use std::{
     process,
     sync::atomic::{AtomicUsize, Ordering},
@@ -1547,39 +1547,51 @@ fn javascript_highlighting_keeps_multiline_comment_context() {
 #[test]
 fn syntax_highlight_result_requires_matching_active_revision_and_language() {
     let rust_tab = tab_from_path(PathBuf::from("/tmp/example.rs"), "fn main() {}\n");
+    let rust_tab_id = rust_tab.id();
     let rust_view = EditorTabView::new(&rust_tab);
     let rust_cache = rust_view.cache.clone();
+    let rust_model = EditorModel::from_tab(rust_tab, "Ready.".to_string());
+    let mut rust_store = TabViewStore::default();
+    rust_store.views.insert(rust_tab_id, rust_view);
     let rust_key = SyntaxHighlightJobKey {
         language: SyntaxLanguage::Rust,
         revision: 0,
     };
     assert!(syntax_highlight_result_is_current(
-        &[rust_tab],
-        &[rust_view],
-        0,
+        &rust_model,
+        &rust_store,
+        rust_tab_id,
         &rust_cache,
         rust_key
     ));
 
     let mut stale_tab = tab_from_path(PathBuf::from("/tmp/example.rs"), "fn main() {}\n");
+    let stale_tab_id = stale_tab.id();
     let stale_view = EditorTabView::new(&stale_tab);
     let stale_cache = stale_view.cache.clone();
     stale_tab.replace_char_range(0..0, "// ");
+    let stale_model = EditorModel::from_tab(stale_tab, "Ready.".to_string());
+    let mut stale_store = TabViewStore::default();
+    stale_store.views.insert(stale_tab_id, stale_view);
     assert!(!syntax_highlight_result_is_current(
-        &[stale_tab],
-        &[stale_view],
-        0,
+        &stale_model,
+        &stale_store,
+        stale_tab_id,
         &stale_cache,
         rust_key
     ));
 
     let python_tab = tab_from_path(PathBuf::from("/tmp/example.py"), "print('lst')\n");
+    let python_tab_id = python_tab.id();
     let python_view = EditorTabView::new(&python_tab);
     let python_cache = python_view.cache.clone();
+    let python_model = EditorModel::from_tab(python_tab, "Ready.".to_string());
+    let mut python_store = TabViewStore::default();
+    python_store.views.insert(python_tab_id, python_view);
     assert!(!syntax_highlight_result_is_current(
-        &[python_tab],
-        &[python_view],
-        0,
+        &python_model,
+        &python_store,
+        python_tab_id,
         &python_cache,
         rust_key
     ));

@@ -486,9 +486,11 @@ fn vim_zt_in_visual_emits_reveal_top() {
 #[test]
 fn viewport_scrolloff_shrinks_when_viewport_too_small() {
     use lst_editor::viewport::Viewport;
-    let mut v = Viewport::default();
-    v.rows = 4;
-    v.scrolloff = 4;
+    let mut v = Viewport {
+        rows: 4,
+        scrolloff: 4,
+        ..Viewport::default()
+    };
     // (rows - 1) / 2 = 1; scrolloff min'd to 1.
     assert_eq!(v.effective_scrolloff(), 1);
 

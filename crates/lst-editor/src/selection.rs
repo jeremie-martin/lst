@@ -89,27 +89,27 @@ fn subword_chunk_end(chars: &[char], start: usize, run_end: usize) -> usize {
         }
         SubwordClass::Upper => {
             if start + 1 < run_end {
-                match subword_class(chars[start + 1]) {
-                    Some(SubwordClass::Lower | SubwordClass::Alpha) => {
-                        let mut end = start + 2;
-                        while end < run_end {
-                            match subword_class(chars[end]) {
-                                Some(SubwordClass::Lower | SubwordClass::Alpha) => end += 1,
-                                _ => break,
-                            }
+                if let Some(SubwordClass::Lower | SubwordClass::Alpha) =
+                    subword_class(chars[start + 1])
+                {
+                    let mut end = start + 2;
+                    while end < run_end {
+                        match subword_class(chars[end]) {
+                            Some(SubwordClass::Lower | SubwordClass::Alpha) => end += 1,
+                            _ => break,
                         }
-                        return end;
                     }
-                    _ => {}
+                    return end;
                 }
             }
 
             let mut end = start + 1;
             while end < run_end && subword_class(chars[end]) == Some(SubwordClass::Upper) {
                 if end + 1 < run_end {
-                    match subword_class(chars[end + 1]) {
-                        Some(SubwordClass::Lower | SubwordClass::Alpha) => break,
-                        _ => {}
+                    if let Some(SubwordClass::Lower | SubwordClass::Alpha) =
+                        subword_class(chars[end + 1])
+                    {
+                        break;
                     }
                 }
                 end += 1;

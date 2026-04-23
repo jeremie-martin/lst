@@ -37,7 +37,7 @@ impl EditorModel {
     pub fn snapshot(&self) -> EditorSnapshot {
         let active = self.active_tab();
         EditorSnapshot {
-            active: self.active,
+            active: self.active_index(),
             tab_count: self.tabs.len(),
             active_tab_id: active.id(),
             tab_ids: self.tabs.iter().map(EditorTab::id).collect(),

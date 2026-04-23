@@ -3,10 +3,12 @@ mod editor_ops;
 mod effect;
 pub mod find;
 pub mod language;
+mod model_io;
 pub mod position;
 pub mod selection;
 mod snapshot;
 mod tab;
+mod tab_set;
 pub mod viewport;
 pub mod vim;
 pub mod wrap;
@@ -26,6 +28,7 @@ use crate::{
         is_identifier_char, line_range_at_char, next_subword_boundary, next_word_boundary,
         previous_subword_boundary, previous_word_boundary,
     },
+    tab_set::TabSet,
 };
 use std::{ops::Range, path::PathBuf, sync::Arc};
 
@@ -46,8 +49,7 @@ pub enum TabCloseRequest {
 }
 
 pub struct EditorModel {
-    tabs: Vec<EditorTab>,
-    active: usize,
+    tabs: TabSet,
     next_untitled_id: usize,
     show_gutter: bool,
     show_wrap: bool,
@@ -55,22 +57,14 @@ pub struct EditorModel {
     goto_line: Option<String>,
     status: String,
     vim: vim::VimState,
-    next_tab_id: u64,
     viewport: Viewport,
     effects: Vec<EditorEffect>,
 }
 
 impl EditorModel {
     pub fn new(tabs: Vec<EditorTab>, status: String) -> Self {
-        let next_tab_id = tabs
-            .iter()
-            .map(|tab| tab.id().get())
-            .max()
-            .unwrap_or(0)
-            .saturating_add(1);
         Self {
-            tabs,
-            active: 0,
+            tabs: TabSet::from_vec(tabs),
             next_untitled_id: 2,
             show_gutter: true,
             show_wrap: true,
@@ -78,7 +72,25 @@ impl EditorModel {
             goto_line: None,
             status,
             vim: vim::VimState::new(),
-            next_tab_id,
+            viewport: Viewport::default(),
+            effects: Vec::new(),
+        }
+    }
+
+    pub fn from_tab(tab: EditorTab, status: String) -> Self {
+        Self::from_tabs(tab, Vec::new(), status)
+    }
+
+    pub fn from_tabs(first: EditorTab, rest: Vec<EditorTab>, status: String) -> Self {
+        Self {
+            tabs: TabSet::new(first, rest),
+            next_untitled_id: 2,
+            show_gutter: true,
+            show_wrap: true,
+            find: FindState::new(),
+            goto_line: None,
+            status,
+            vim: vim::VimState::new(),
             viewport: Viewport::default(),
             effects: Vec::new(),
         }
@@ -86,21 +98,19 @@ impl EditorModel {
 
     pub fn empty() -> Self {
         let tab = EditorTab::empty(TabId::from_raw(1), format!("{UNTITLED_PREFIX}-1"));
-        Self::new(vec![tab], "Ready.".to_string())
+        Self::from_tab(tab, "Ready.".to_string())
     }
 
     fn alloc_tab_id(&mut self) -> TabId {
-        let id = TabId::from_raw(self.next_tab_id);
-        self.next_tab_id = self.next_tab_id.saturating_add(1);
-        id
+        self.tabs.alloc_tab_id()
     }
 
     pub fn active_tab(&self) -> &EditorTab {
-        &self.tabs[self.active]
+        self.tabs.active()
     }
 
     fn active_tab_mut(&mut self) -> &mut EditorTab {
-        &mut self.tabs[self.active]
+        self.tabs.active_mut()
     }
 
     pub fn active_tab_id(&self) -> TabId {
@@ -112,7 +122,7 @@ impl EditorModel {
     }
 
     pub fn tabs(&self) -> &[EditorTab] {
-        &self.tabs
+        self.tabs.as_slice()
     }
 
     pub fn tab(&self, index: usize) -> Option<&EditorTab> {
@@ -120,11 +130,11 @@ impl EditorModel {
     }
 
     pub fn tab_by_id(&self, tab_id: TabId) -> Option<&EditorTab> {
-        self.tabs.iter().find(|tab| tab.id() == tab_id)
+        self.tabs.tab_by_id(tab_id)
     }
 
     fn tab_mut_by_id(&mut self, tab_id: TabId) -> Option<&mut EditorTab> {
-        self.tabs.iter_mut().find(|tab| tab.id() == tab_id)
+        self.tabs.tab_mut_by_id(tab_id)
     }
 
     pub fn set_tab_language(&mut self, tab_id: TabId, language: Option<Language>) {
@@ -134,7 +144,7 @@ impl EditorModel {
     }
 
     fn tab_index_by_id(&self, tab_id: TabId) -> Option<usize> {
-        self.tabs.iter().position(|tab| tab.id() == tab_id)
+        self.tabs.index_by_id(tab_id)
     }
 
     pub fn tab_count(&self) -> usize {
@@ -142,7 +152,7 @@ impl EditorModel {
     }
 
     pub fn active_index(&self) -> usize {
-        self.active
+        self.tabs.active_index()
     }
 
     pub fn show_gutter(&self) -> bool {
@@ -203,10 +213,9 @@ impl EditorModel {
     }
 
     fn activate_tab(&mut self, index: usize) -> bool {
-        if index >= self.tabs.len() {
+        if !self.tabs.activate(index) {
             return false;
         }
-        self.active = index;
         self.vim.on_tab_switch();
         self.active_tab_mut().preferred_column = None;
         self.sync_find_with_active_document();
@@ -237,14 +246,7 @@ impl EditorModel {
     }
 
     fn assign_selection(&mut self, range: Range<usize>, reversed: bool) {
-        let end = self.active_tab().len_chars();
-        let start = range.start.min(end);
-        let finish = range.end.min(end);
-        let tab = self.active_tab_mut();
-        tab.selection = start.min(finish)..start.max(finish);
-        tab.selection_reversed = reversed;
-        tab.preferred_column = None;
-        tab.marked_range = None;
+        self.active_tab_mut().set_selection_range(range, reversed);
     }
 
     fn queue_focus(&mut self, target: FocusTarget) {
@@ -503,15 +505,17 @@ impl EditorModel {
             return false;
         }
         if self.tabs.len() == 1 {
-            self.tabs[0] = self.new_empty_tab();
+            let tab = self.new_empty_tab();
+            self.tabs.replace_only(tab);
             self.activate_tab(0);
             self.queue_focus(FocusTarget::Editor);
             self.status = "Closed tab.".to_string();
             return true;
         }
 
-        let should_refocus = should_refocus_editor_after_tab_close(self.active, index);
-        let next_active = next_active_after_tab_close(self.tabs.len(), self.active, index);
+        let active = self.active_index();
+        let should_refocus = should_refocus_editor_after_tab_close(active, index);
+        let next_active = next_active_after_tab_close(self.tabs.len(), active, index);
         self.tabs.remove(index);
         self.activate_tab(next_active);
         if should_refocus {
@@ -588,18 +592,19 @@ impl EditorModel {
             .edit(EditKind::Other, UndoBoundary::Break, range, &text);
         {
             let tab = self.active_tab_mut();
-            if text.is_empty() {
-                tab.marked_range = None;
+            let marked_range = if text.is_empty() {
+                None
             } else {
-                tab.marked_range = Some(inserted_start..inserted_start + text.chars().count());
-            }
-            tab.selection = selected_range
+                Some(inserted_start..inserted_start + text.chars().count())
+            };
+            let selection = selected_range
                 .map(|range| inserted_start + range.start..inserted_start + range.end)
                 .unwrap_or_else(|| {
                     let cursor = inserted_start + text.chars().count();
                     cursor..cursor
                 });
-            tab.selection_reversed = false;
+            tab.set_selection_range(selection, false);
+            tab.marked_range = marked_range;
         }
         self.sync_find_after_edit();
         self.queue_reveal(RevealIntent::NearestEdge);
@@ -941,7 +946,7 @@ impl EditorModel {
         {
             let tab = self.active_tab_mut();
             tab.set_text(&lines.join(newline));
-            tab.modified = true;
+            tab.mark_modified();
             let cursor = position_to_char(
                 tab.buffer(),
                 Position {
@@ -1357,14 +1362,10 @@ impl EditorModel {
         let anchor_end = inclusive_position_to_exclusive_char(tab, anchor);
         let head_end = inclusive_position_to_exclusive_char(tab, head);
         if vim_position_lt(head, anchor) {
-            tab.selection = head_char..anchor_end.max(head_char);
-            tab.selection_reversed = true;
+            tab.set_selection_range(head_char..anchor_end.max(head_char), true);
         } else {
-            tab.selection = anchor_char..head_end.max(anchor_char);
-            tab.selection_reversed = false;
+            tab.set_selection_range(anchor_char..head_end.max(anchor_char), false);
         }
-        tab.marked_range = None;
-        tab.preferred_column = None;
     }
 
     fn move_to_vim_search_target(&mut self, target: Position) {
@@ -1829,7 +1830,7 @@ impl EditorModel {
     }
 
     pub fn close_active_tab(&mut self) {
-        self.close_tab_at(self.active);
+        self.close_tab_at(self.active_index());
     }
 
     pub fn close_tab(&mut self, index: usize) {
@@ -1883,17 +1884,18 @@ impl EditorModel {
 
     pub fn next_tab(&mut self) {
         if self.tabs.len() > 1 {
-            self.activate_tab((self.active + 1) % self.tabs.len());
+            self.activate_tab((self.active_index() + 1) % self.tabs.len());
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
     pub fn prev_tab(&mut self) {
         if self.tabs.len() > 1 {
-            let prev = if self.active == 0 {
+            let active = self.active_index();
+            let prev = if active == 0 {
                 self.tabs.len() - 1
             } else {
-                self.active - 1
+                active - 1
             };
             self.activate_tab(prev);
             self.queue_reveal(RevealIntent::NearestEdge);
@@ -2322,253 +2324,6 @@ impl EditorModel {
     pub fn submit_goto_line_input(&mut self) {
         if self.submit_goto_line() {
             self.queue_reveal(RevealIntent::Center);
-        }
-    }
-
-    pub fn request_open_files(&mut self) {
-        self.queue_effect(EditorEffect::OpenFiles);
-    }
-
-    pub fn open_files(&mut self, files: Vec<(PathBuf, String)>) {
-        self.open_files_with_stamps(
-            files
-                .into_iter()
-                .map(|(path, text)| (path, text, None))
-                .collect(),
-        );
-    }
-
-    pub fn open_files_with_stamps(&mut self, files: Vec<(PathBuf, String, Option<FileStamp>)>) {
-        let start_len = self.tabs.len();
-        for (path, text, file_stamp) in files {
-            let id = self.alloc_tab_id();
-            self.tabs
-                .push(EditorTab::from_path_with_stamp(id, path, &text, file_stamp));
-        }
-        if self.tabs.len() > start_len {
-            self.activate_tab(self.tabs.len() - 1);
-            self.status = format!("Opened {} tab(s).", self.tabs.len() - start_len);
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn open_file_failed(&mut self, path: PathBuf, message: String) {
-        self.status = format!("Failed to open {}: {message}", path.display());
-    }
-
-    pub fn request_save(&mut self) {
-        self.request_save_tab(self.active_tab_id());
-    }
-
-    pub fn request_save_tab(&mut self, tab_id: TabId) {
-        let Some(tab) = self.tab_by_id(tab_id) else {
-            return;
-        };
-        let body = tab.buffer_text();
-        if let Some(path) = tab.path().cloned() {
-            self.queue_effect(EditorEffect::SaveFile {
-                tab_id,
-                path,
-                body,
-                expected_stamp: tab.file_stamp(),
-            });
-        } else {
-            let previous_scratchpad_path = if tab.is_scratchpad() {
-                tab.path().cloned()
-            } else {
-                None
-            };
-            self.queue_effect(EditorEffect::SaveFileAs {
-                tab_id,
-                suggested_name: tab.display_name(),
-                body,
-                previous_scratchpad_path,
-            });
-        }
-    }
-
-    pub fn request_save_as(&mut self) {
-        self.request_save_as_tab(self.active_tab_id());
-    }
-
-    pub fn request_save_as_tab(&mut self, tab_id: TabId) {
-        let Some(tab) = self.tab_by_id(tab_id) else {
-            return;
-        };
-        let previous_scratchpad_path = if tab.is_scratchpad() {
-            tab.path().cloned()
-        } else {
-            None
-        };
-        self.queue_effect(EditorEffect::SaveFileAs {
-            tab_id,
-            suggested_name: tab.display_name(),
-            body: tab.buffer_text(),
-            previous_scratchpad_path,
-        });
-    }
-
-    pub fn save_finished(&mut self, path: PathBuf) {
-        let tab_id = self.active_tab_id();
-        self.save_finished_for_tab(tab_id, path, None);
-    }
-
-    pub fn save_finished_for_tab(
-        &mut self,
-        tab_id: TabId,
-        path: PathBuf,
-        file_stamp: Option<FileStamp>,
-    ) {
-        if let Some(tab) = self.tab_mut_by_id(tab_id) {
-            if let Some(file_stamp) = file_stamp {
-                tab.mark_saved(path.clone(), file_stamp);
-            } else {
-                tab.set_path(path.clone());
-                tab.modified = false;
-            }
-            self.status = format!("Saved {}.", path.display());
-        }
-    }
-
-    pub fn save_as_finished_for_tab(
-        &mut self,
-        tab_id: TabId,
-        path: PathBuf,
-        file_stamp: Option<FileStamp>,
-    ) {
-        if let Some(tab) = self.tab_mut_by_id(tab_id) {
-            if let Some(file_stamp) = file_stamp {
-                tab.mark_saved_as(path.clone(), file_stamp);
-            } else {
-                tab.set_path(path.clone());
-                tab.modified = false;
-                tab.is_scratchpad = false;
-            }
-            self.status = format!("Saved {}.", path.display());
-        }
-    }
-
-    pub fn save_failed(&mut self, path: PathBuf, message: String) {
-        self.status = format!("Failed to save {}: {message}", path.display());
-    }
-
-    pub fn save_failed_for_tab(&mut self, tab_id: TabId, path: PathBuf, message: String) {
-        if self.tab_by_id(tab_id).is_some() {
-            self.status = format!("Failed to save {}: {message}", path.display());
-        }
-    }
-
-    pub fn autosave_tick(&mut self) {
-        let jobs = self
-            .tabs
-            .iter()
-            .filter(|tab| tab.modified())
-            .filter_map(|tab| {
-                let path = tab.path().cloned()?;
-                let open_tabs_for_path = self
-                    .tabs
-                    .iter()
-                    .filter(|candidate| candidate.path() == Some(&path))
-                    .take(2)
-                    .count();
-                if open_tabs_for_path != 1 {
-                    return None;
-                }
-                Some((
-                    tab.id(),
-                    path,
-                    tab.buffer_text(),
-                    tab.revision(),
-                    tab.file_stamp(),
-                ))
-            })
-            .collect::<Vec<_>>();
-        for (tab_id, path, body, revision, expected_stamp) in jobs {
-            self.queue_effect(EditorEffect::AutosaveFile {
-                tab_id,
-                path,
-                body,
-                revision,
-                expected_stamp,
-            });
-        }
-    }
-
-    pub fn autosave_finished(&mut self, path: PathBuf, revision: u64) {
-        let Some(tab_id) = self
-            .tabs
-            .iter()
-            .find(|tab| tab.path() == Some(&path) && tab.revision() == revision)
-            .map(EditorTab::id)
-        else {
-            return;
-        };
-        self.autosave_finished_for_tab(tab_id, path, revision, None);
-    }
-
-    pub fn autosave_finished_for_tab(
-        &mut self,
-        tab_id: TabId,
-        path: PathBuf,
-        revision: u64,
-        file_stamp: Option<FileStamp>,
-    ) {
-        for tab in &mut self.tabs {
-            if tab.id() == tab_id && tab.path() == Some(&path) && tab.revision() == revision {
-                tab.modified = false;
-                if let Some(file_stamp) = file_stamp {
-                    tab.file_stamp = Some(file_stamp);
-                    tab.suppressed_conflict_stamp = None;
-                }
-            }
-        }
-        if self.active_tab().id() == tab_id
-            && self.active_tab().path() == Some(&path)
-            && self.active_tab().revision() == revision
-        {
-            self.status = format!("Autosaved {}.", path.display());
-        }
-    }
-
-    pub fn autosave_failed(&mut self, path: PathBuf, message: String) {
-        if self.active_tab().path() == Some(&path) {
-            self.status = format!("Autosave failed for {}: {message}", path.display());
-        }
-    }
-
-    pub fn autosave_failed_for_tab(&mut self, tab_id: TabId, path: PathBuf, message: String) {
-        if self.active_tab().id() == tab_id {
-            self.status = format!("Autosave failed for {}: {message}", path.display());
-        }
-    }
-
-    pub fn reload_tab_from_disk(
-        &mut self,
-        tab_id: TabId,
-        path: PathBuf,
-        text: String,
-        file_stamp: FileStamp,
-    ) -> bool {
-        let Some(tab) = self.tab_mut_by_id(tab_id) else {
-            return false;
-        };
-        tab.set_path(path.clone());
-        tab.reset_from_disk(&text, file_stamp);
-        self.sync_find_with_active_document();
-        self.status = format!("Reloaded {}.", path.display());
-        true
-    }
-
-    pub fn reload_failed(&mut self, tab_id: TabId, path: PathBuf, message: String) {
-        if self.tab_by_id(tab_id).is_some() {
-            self.status = format!("Failed to reload {}: {message}", path.display());
-        }
-    }
-
-    pub fn suppress_file_conflict(&mut self, tab_id: TabId, path: PathBuf, stamp: FileStamp) {
-        if let Some(tab) = self.tab_mut_by_id(tab_id) {
-            tab.suppress_file_conflict(stamp);
-            self.status = format!("Kept local changes for {}.", path.display());
         }
     }
 
