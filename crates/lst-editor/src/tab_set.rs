@@ -1,7 +1,4 @@
-use crate::{
-    tab::{EditorTab, TabId},
-    UNTITLED_PREFIX,
-};
+use crate::tab::{EditorTab, TabId};
 use std::ops::{Deref, DerefMut};
 
 pub(crate) struct TabSet {
@@ -21,17 +18,6 @@ impl TabSet {
             active: 0,
             next_tab_id,
         }
-    }
-
-    pub(crate) fn from_vec(mut tabs: Vec<EditorTab>) -> Self {
-        if tabs.is_empty() {
-            tabs.push(EditorTab::empty(
-                TabId::from_raw(1),
-                format!("{UNTITLED_PREFIX}-1"),
-            ));
-        }
-        let first = tabs.remove(0);
-        Self::new(first, tabs)
     }
 
     pub(crate) fn alloc_tab_id(&mut self) -> TabId {

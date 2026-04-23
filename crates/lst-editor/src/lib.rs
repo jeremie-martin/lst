@@ -62,21 +62,6 @@ pub struct EditorModel {
 }
 
 impl EditorModel {
-    pub fn new(tabs: Vec<EditorTab>, status: String) -> Self {
-        Self {
-            tabs: TabSet::from_vec(tabs),
-            next_untitled_id: 2,
-            show_gutter: true,
-            show_wrap: true,
-            find: FindState::new(),
-            goto_line: None,
-            status,
-            vim: vim::VimState::new(),
-            viewport: Viewport::default(),
-            effects: Vec::new(),
-        }
-    }
-
     pub fn from_tab(tab: EditorTab, status: String) -> Self {
         Self::from_tabs(tab, Vec::new(), status)
     }
@@ -2541,9 +2526,15 @@ mod tests {
         EditorTab::from_text(TabId::from_raw(id), title.to_string(), None, text)
     }
 
+    fn model_with_tabs(tabs: Vec<EditorTab>, status: String) -> EditorModel {
+        let mut tabs = tabs.into_iter();
+        let first = tabs.next().expect("test model needs at least one tab");
+        EditorModel::from_tabs(first, tabs.collect(), status)
+    }
+
     #[test]
     fn tab_switch_commands_own_switch_status() {
-        let mut model = EditorModel::new(
+        let mut model = model_with_tabs(
             vec![tab(1, "one.txt", "one"), tab(2, "two.txt", "two")],
             "Ready.".to_string(),
         );
@@ -2560,7 +2551,7 @@ mod tests {
 
     #[test]
     fn close_active_tab_command_closes_current_tab() {
-        let mut model = EditorModel::new(
+        let mut model = model_with_tabs(
             vec![tab(1, "one.txt", "one"), tab(2, "two.txt", "two")],
             "Ready.".to_string(),
         );
@@ -2576,7 +2567,7 @@ mod tests {
 
     #[test]
     fn select_all_queues_primary_selection() {
-        let mut model = EditorModel::new(vec![tab(1, "one.txt", "hello")], "Ready.".to_string());
+        let mut model = model_with_tabs(vec![tab(1, "one.txt", "hello")], "Ready.".to_string());
 
         model.select_all();
 

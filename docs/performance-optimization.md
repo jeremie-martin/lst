@@ -57,10 +57,10 @@ size where relevant.
 | Scenario | Primary metric | Completion condition |
 | --- | --- | --- |
 | `large-paste` | `paste_complete_ms` | Copies the large Rust corpus, pastes into a second file tab, then retries `Ctrl+S` until the target file exactly matches the corpus and stays stable. |
-| `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload into `benchmarks/editing-corpus.rs`, waits for redraw quiet, then verifies the saved file exactly matches the expected text. |
-| `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using `benchmarks/paste-corpus-20k.rs`. |
+| `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload into the generated medium Rust corpus, waits for redraw quiet, then verifies the saved file exactly matches the expected text. |
+| `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using the generated large Rust corpus. |
 | `scroll-highlighted` | `scroll_overrun_ms` | Scrolls down and back through the large Rust file on a fixed input schedule, then waits for redraw quiet. |
-| `scroll-plain` | `scroll_overrun_ms` | Same scroll trace using the large corpus as `.txt`, so syntax highlighting is out of the path. |
+| `scroll-plain` | `scroll_overrun_ms` | Same scroll trace using the generated large plain-text corpus, so syntax highlighting is out of the path. |
 | `open-large` | `open_to_quiet_ms` | Measures process spawn through benchmark window discovery and redraw quiet on the large Rust file. |
 | `search-large` | `search_reindex_ms` | Opens find through `Ctrl+F`, clicks the visible find query input, types `fn `, waits for redraw quiet, and reads the completed in-app find reindex trace. |
 
@@ -72,23 +72,11 @@ The GPUI app writes internal benchmark trace values only when
 `LST_BENCH_TRACE_FILE` is set by the runner. Normal editor runs do not create
 trace files.
 
-## Smoke Baseline
+## Baselines
 
-One-repetition smoke baseline collected on 2026-04-11 on `DISPLAY=:1` after
-reviving the benchmark harness:
-
-| Scenario | Primary metric | Value |
-| --- | --- | ---: |
-| `large-paste` | `paste_complete_ms` | `229.239 ms` |
-| `typing-medium` | `typing_ms_per_char` | `0.275 ms` |
-| `typing-large` | `typing_ms_per_char` | `0.263 ms` |
-| `scroll-highlighted` | `scroll_overrun_ms` | `1075.156 ms` |
-| `scroll-plain` | `scroll_overrun_ms` | `1088.000 ms` |
-| `open-large` | `open_to_quiet_ms` | `1152.084 ms` |
-| `search-large` | `search_reindex_ms` | `1.449 ms` |
-
-Treat this table as a smoke sample, not a variance-controlled baseline. Use the
-default seven measured repetitions before making optimization decisions.
+Do not keep stale baseline numbers in this document. Record comparison numbers
+in the optimization branch or PR that uses them, with the commit SHA, display
+session, scenario, repetitions, and priming count.
 
 ## Behavior Gate
 

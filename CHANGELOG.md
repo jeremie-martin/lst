@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-- Removed the legacy iced implementation, benchmark harnesses, and retained auto-benchmark entry points
+- Removed stale benchmark corpus snapshots and moved active benchmarks to generated deterministic corpora
+- Removed the `lst-gpui` install compatibility alias
+- Removed backward-compatible editor construction adapters that allowed empty tab sets
+- Removed the legacy iced implementation and old benchmark harnesses
 - Moved GPUI widget code into `apps/lst-gpui/src/ui` instead of keeping a separate app-only crate
 - Split editor commands, tabs, and snapshots into focused `lst-editor` modules
 - Made the repository root an active GPUI workspace only

@@ -19,12 +19,10 @@ if [[ "$(fc-match -f '%{family[0]}' ':family=TX-02')" != "TX-02" ]]; then
 fi
 
 cargo install --path apps/lst-gpui --locked --root "$prefix" --force --bin lst
-ln -sf lst "$prefix/bin/lst-gpui"
 
 cat <<EOF
 Installed the active GPUI editor to:
   $prefix/bin/lst
-  $prefix/bin/lst-gpui -> lst
 
 Make sure $prefix/bin is on your PATH.
 EOF

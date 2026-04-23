@@ -1,71 +1,42 @@
 # Roadmap
 
-Current direction: keep `lst` minimal, fast, and production-grade. The GPUI
-rewrite should prioritize reliable editing behavior and simple ownership over
-feature volume.
+Keep `lst` minimal, fast, and production-grade. Prefer clear ownership and
+observable behavior over feature volume.
 
-## 1. Interaction Polish And Correctness
+## Current Architecture
 
-Focus areas:
+- `lst-editor`: framework-neutral editor model, document primitives, effects,
+  snapshots, and Vim state
+- `lst-gpui`: rendering, widgets, input adaptation, dialogs, clipboard, file
+  I/O, benchmark wiring, and desktop integration
 
-- mouse selection: word/line selection, shift-click, and drag autoscroll
-- keyboard selection: modifier combinations, page movement, and line boundaries
-- focus behavior: find/replace/goto inputs, tab switching, and command routing
-- undo grouping: typing, paste, line operations, replace, and Vim commands
-- tab flows: new tab, close tab, dirty tab handling, and active tab preservation
+Product behavior should move into `lst-editor` when it can be tested through
+model APIs, effects, snapshots, or document-level contracts. GPUI should adapt
+desktop events to those contracts and render observable state.
 
-Success criteria:
+## Near-Term Priorities
 
-- common editor gestures work predictably
-- regressions have focused behavioral tests
-- mixed mouse/keyboard use does not require special-case reasoning
+- Horizontal scrolling when soft wrap is disabled
+- Find toggles: case sensitivity, smart case, whole word, and regex
+- Grapheme-aware motion in the main editor
+- Cursor blink and other small viewport polish
+- Trim-trailing-whitespace and ensure-final-newline save options
+- Tab reordering and recently closed tab recovery
+- Jump list and last edit location
+- User-configurable keybindings
+- User-facing language picker for the existing model-level override
 
-## 2. Codebase Shape
+## Codebase Shape
 
-The active split is:
+- Keep model mutation behind explicit `EditorModel` APIs.
+- Keep clipboard, filesystem, dialogs, focus, and rendering at the GPUI boundary.
+- Split modules by real behavior responsibility, not by speculative layering.
+- Avoid new traits or crates unless they remove production complexity.
 
-- `lst-editor`: framework-neutral editor model, document primitives, effects, and Vim state
-- `lst-gpui`: GPUI rendering, widgets, input adaptation, runtime effects, and desktop integration
+## Quality Gates
 
-Focus areas:
-
-- keep model mutation behind direct `EditorModel` APIs
-- keep clipboard, files, dialogs, focus, and rendering at the GPUI boundary
-- split large files only by real behavior responsibility
-- avoid new traits or packages unless they remove production complexity
-
-Success criteria:
-
-- tests exercise real production paths through model APIs, effects, and snapshots
-- modules map to behavior boundaries
-- app code cannot mutate editor state through hidden side doors
-
-## 3. File And Workspace UX
-
-Focus areas:
-
-- external file changes and reload decisions
-- clear unsaved-close/save prompts
-- better save/save-as status and error reporting
-- lightweight reopen flow if needed
-
-Success criteria:
-
-- the editor never silently loses user data
-- file errors are visible and actionable
-- new UI stays minimal
-
-## 4. Syntax Highlighting
-
-The current production path is tree-sitter highlighting in the GPUI app.
-
-Focus areas:
-
-- keep highlighting off the critical editing path
-- improve cache invalidation only when behavior or responsiveness requires it
-- preserve broad language support unless there is a clear maintenance cost
-
-Success criteria:
-
-- typing, paste, scroll, and paint remain responsive
-- highlighting failures degrade to plain text rather than breaking editing
+- `cargo test` remains the blind refactor gate.
+- `cargo test -p lst-editor --features internal-invariants` covers deeper Vim
+  state-machine invariants.
+- Performance work should use one benchmark scenario and one primary metric at a
+  time, as described in `docs/performance-optimization.md`.

@@ -1,11 +1,9 @@
 # lst
 
-`lst` is being rebuilt around the GPUI implementation in `apps/lst-gpui`.
-The active editor behavior lives in the framework-neutral `lst-editor` crate,
-and GPUI owns rendering, widgets, and desktop integration.
+`lst` is a small GPUI desktop text editor.
 
-The old iced implementation has been removed from this repository. Historical
-code should not be used as a source of shared modules for new editor work.
+Editor behavior lives in the framework-neutral `lst-editor` crate. The GPUI app
+owns rendering, widgets, desktop integration, and runtime effects.
 
 ## Active Layout
 
@@ -28,8 +26,7 @@ scratchpad directory.
 
 ## Install
 
-`install.sh` installs the active GPUI editor to `~/.local/bin/lst` by default
-and creates `~/.local/bin/lst-gpui` as a compatibility alias.
+`install.sh` installs the active GPUI editor to `~/.local/bin/lst` by default.
 
 ```bash
 ./install.sh

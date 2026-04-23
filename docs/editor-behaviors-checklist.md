@@ -5,7 +5,7 @@ implement. Use this as an audit checklist for the GPUI editor.
 
 Status legend: `[ ]` not implemented · `[~]` partial · `[x]` done
 
-Status last audited: 2026-04-17 (code paths verified directly).
+Status last refreshed: 2026-04-23.
 
 References use `path::symbol` rather than `path:line` so they survive
 reorganization. Grep for the symbol to navigate.
@@ -145,9 +145,9 @@ Items most often overlooked in custom editors:
 
 ## Summary
 
-- **Done:** 51
-- **Partial:** 10
-- **Missing:** 26
+- **Done:** 59
+- **Partial:** 12
+- **Missing:** 27
 
 **Strong foundation:** Vim state machine, viewport with scroll margin, soft
 wrap, undo coalescing, autosave, find/replace core, drag-select with

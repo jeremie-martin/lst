@@ -3,12 +3,18 @@ use lst_editor::{
     EditorEffect, EditorModel, EditorTab, RevealIntent, TabId,
 };
 
+fn model_with_tabs(tabs: Vec<EditorTab>, status: String) -> EditorModel {
+    let mut tabs = tabs.into_iter();
+    let first = tabs.next().expect("test model needs at least one tab");
+    EditorModel::from_tabs(first, tabs.collect(), status)
+}
+
 fn long_model() -> EditorModel {
     let text = (0..200)
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -241,7 +247,7 @@ fn page_up_at_bof_snaps_to_line_start_and_emits_reveal() {
 
 #[test]
 fn vim_arrow_down_at_eof_keeps_vim_clamp_behavior() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),

@@ -48,7 +48,7 @@ use syntax::{
 pub(crate) use viewport::row_contains_cursor;
 use viewport::{
     byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, scroll_top_for,
-    visual_row_for_char, ViewportCache, ViewportGeometry,
+    visual_row_for_char, ViewportCache, ViewportGeometry, WrapLayoutInput,
 };
 
 actions!(
@@ -729,13 +729,15 @@ impl LstGpuiApp {
             let mut cache = cache.borrow_mut();
             ensure_wrap_layout(
                 &mut cache,
-                lines.as_ref(),
-                revision,
-                viewport_width,
-                char_width,
-                self.model.show_gutter(),
-                self.model.show_wrap(),
-                self.ui_scale(),
+                WrapLayoutInput {
+                    lines: lines.as_ref(),
+                    revision,
+                    viewport_width,
+                    char_width,
+                    show_gutter: self.model.show_gutter(),
+                    show_wrap: self.model.show_wrap(),
+                    scale: self.ui_scale(),
+                },
             )
         };
         layout.wrap_columns
@@ -1002,7 +1004,8 @@ fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
         }
     }
 
-    EditorModel::new(tabs, status)
+    let first = tabs.remove(0);
+    EditorModel::from_tabs(first, tabs, status)
 }
 
 impl Focusable for LstGpuiApp {

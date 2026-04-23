@@ -16,6 +16,7 @@ use crate::actions::attach_workspace_actions;
 use crate::syntax::syntax_mode_for_language;
 use crate::viewport::{
     buffer_content_height, paint_viewport, prepare_viewport_paint_state, scroll_top_for,
+    ViewportPaintInput, ViewportPreparation, WrapLayoutInput,
 };
 use crate::{code_char_width, ensure_wrap_layout, EditorScrollbarDrag, LstGpuiApp};
 
@@ -442,13 +443,15 @@ impl Render for LstGpuiApp {
             let mut cache = active_cache.borrow_mut();
             let layout = ensure_wrap_layout(
                 &mut cache,
-                line_texts.as_ref(),
-                revision,
-                viewport_width,
-                char_width,
-                show_gutter,
-                show_wrap,
-                self.ui_scale(),
+                WrapLayoutInput {
+                    lines: line_texts.as_ref(),
+                    revision,
+                    viewport_width,
+                    char_width,
+                    show_gutter,
+                    show_wrap,
+                    scale: self.ui_scale(),
+                },
             );
             buffer_content_height(layout.total_rows, self.ui_scale())
         };
@@ -553,18 +556,22 @@ impl Render for LstGpuiApp {
                                                                 .painted_wrap_columns;
                                                         let paint_state =
                                                             prepare_viewport_paint_state(
-                                                                &buffer,
-                                                                line_texts.as_ref(),
-                                                                revision,
-                                                                syntax_mode,
-                                                                show_gutter,
-                                                                show_wrap,
-                                                                &viewport_scroll,
-                                                                &viewport_cache,
-                                                                &viewport_geometry,
-                                                                bounds,
-                                                                char_width,
-                                                                ui_scale,
+                                                                ViewportPreparation {
+                                                                    buffer: &buffer,
+                                                                    lines: line_texts.as_ref(),
+                                                                    revision,
+                                                                    syntax_mode,
+                                                                    show_gutter,
+                                                                    show_wrap,
+                                                                    viewport_scroll:
+                                                                        &viewport_scroll,
+                                                                    viewport_cache: &viewport_cache,
+                                                                    viewport_geometry:
+                                                                        &viewport_geometry,
+                                                                    bounds,
+                                                                    char_width,
+                                                                    scale: ui_scale,
+                                                                },
                                                                 window,
                                                             );
                                                         if previous_wrap_columns
@@ -586,16 +593,20 @@ impl Render for LstGpuiApp {
                                                             cx,
                                                         );
                                                         paint_viewport(
-                                                            bounds,
-                                                            show_gutter,
-                                                            selection.clone(),
-                                                            &search_matches,
-                                                            active_search_match.as_ref(),
-                                                            cursor_char,
-                                                            vim_mode,
-                                                            focus_handle.is_focused(window),
-                                                            paint_state,
-                                                            ui_scale,
+                                                            ViewportPaintInput {
+                                                                bounds,
+                                                                show_gutter,
+                                                                selection: selection.clone(),
+                                                                search_matches: &search_matches,
+                                                                active_search_match:
+                                                                    active_search_match.as_ref(),
+                                                                cursor_char,
+                                                                vim_mode,
+                                                                focused: focus_handle
+                                                                    .is_focused(window),
+                                                                paint_state,
+                                                                scale: ui_scale,
+                                                            },
                                                             window,
                                                             cx,
                                                         );

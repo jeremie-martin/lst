@@ -12,6 +12,12 @@ fn enter_vim_normal(model: &mut EditorModel) {
     let _ = model.drain_effects();
 }
 
+fn model_with_tabs(tabs: Vec<EditorTab>, status: String) -> EditorModel {
+    let mut tabs = tabs.into_iter();
+    let first = tabs.next().expect("test model needs at least one tab");
+    EditorModel::from_tabs(first, tabs.collect(), status)
+}
+
 #[test]
 fn new_tab_switches_active_with_stable_tab_identity() {
     let mut model = EditorModel::empty();
@@ -26,7 +32,7 @@ fn new_tab_switches_active_with_stable_tab_identity() {
 
 #[test]
 fn find_open_uses_selected_single_line_text_and_emits_focus() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -66,7 +72,7 @@ fn text_edit_is_real_document_behavior() {
 
 #[test]
 fn find_query_reindexes_real_active_document() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -86,7 +92,7 @@ fn find_query_reindexes_real_active_document() {
 
 #[test]
 fn active_tab_switch_reindexes_find_against_the_new_document() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![
             EditorTab::from_text(TabId::from_raw(1), "matches".into(), None, "one two one"),
             EditorTab::from_text(TabId::from_raw(2), "none".into(), None, "zero"),
@@ -120,7 +126,7 @@ fn opening_find_only_after_replace_clears_replace_mode() {
 
 #[test]
 fn find_next_activates_the_next_observable_match_without_document_selection() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -143,7 +149,7 @@ fn find_next_activates_the_next_observable_match_without_document_selection() {
 
 #[test]
 fn no_match_find_query_does_not_create_or_extend_document_selection() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -167,7 +173,7 @@ fn no_match_find_query_does_not_create_or_extend_document_selection() {
 
 #[test]
 fn replace_all_changes_real_document_text() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -188,7 +194,7 @@ fn replace_all_changes_real_document_text() {
 
 #[test]
 fn replace_all_is_undoable_document_behavior() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -212,7 +218,7 @@ fn replace_all_is_undoable_document_behavior() {
 
 #[test]
 fn inserting_text_refreshes_active_find_results() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -234,7 +240,7 @@ fn inserting_text_refreshes_active_find_results() {
 
 #[test]
 fn goto_line_submit_clamps_to_existing_lines() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -253,7 +259,7 @@ fn goto_line_submit_clamps_to_existing_lines() {
 
 #[test]
 fn goto_line_submit_accepts_line_and_column() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -308,7 +314,7 @@ fn closing_inactive_tab_does_not_request_editor_focus() {
 
 #[test]
 fn movement_and_selection_are_behavioral_commands() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -330,7 +336,7 @@ fn movement_and_selection_are_behavioral_commands() {
 
 #[test]
 fn subword_motion_moves_through_identifier_chunks() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -353,7 +359,7 @@ fn subword_motion_moves_through_identifier_chunks() {
 
 #[test]
 fn subword_selection_extends_from_anchor() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -376,7 +382,7 @@ fn subword_selection_extends_from_anchor() {
 
 #[test]
 fn subword_motion_collapses_existing_selection() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -397,7 +403,7 @@ fn subword_motion_collapses_existing_selection() {
 
 #[test]
 fn whole_word_motion_still_uses_whole_identifier() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -415,7 +421,7 @@ fn whole_word_motion_still_uses_whole_identifier() {
 
 #[test]
 fn logical_row_motion_snaps_to_document_edges() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -442,7 +448,7 @@ fn logical_row_motion_snaps_to_document_edges() {
 
 #[test]
 fn logical_row_edge_snap_extends_selection() {
-    let mut top = EditorModel::new(
+    let mut top = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -457,7 +463,7 @@ fn logical_row_edge_snap_extends_selection() {
     assert_eq!(top_snapshot.selection, 0..2);
     assert_eq!(top_snapshot.cursor, 0);
 
-    let mut bottom = EditorModel::new(
+    let mut bottom = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -478,7 +484,7 @@ fn logical_row_edge_snap_extends_selection() {
 
 #[test]
 fn logical_row_edge_noop_collapses_selection() {
-    let mut top = EditorModel::new(
+    let mut top = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -493,7 +499,7 @@ fn logical_row_edge_noop_collapses_selection() {
     assert_eq!(top_snapshot.selection, 0..0);
     assert_eq!(top_snapshot.cursor, 0);
 
-    let mut bottom = EditorModel::new(
+    let mut bottom = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -512,7 +518,7 @@ fn logical_row_edge_noop_collapses_selection() {
 
 #[test]
 fn logical_row_edge_snap_preserves_preferred_column() {
-    let mut top = EditorModel::new(
+    let mut top = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -533,7 +539,7 @@ fn logical_row_edge_snap_preserves_preferred_column() {
         Position { line: 1, column: 6 }
     );
 
-    let mut bottom = EditorModel::new(
+    let mut bottom = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -557,7 +563,7 @@ fn logical_row_edge_snap_preserves_preferred_column() {
 
 #[test]
 fn smart_home_toggles_between_first_non_blank_and_line_start() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -591,7 +597,7 @@ fn smart_home_toggles_between_first_non_blank_and_line_start() {
 
 #[test]
 fn smart_home_selection_tracks_the_selection_head() {
-    let mut forward = EditorModel::new(
+    let mut forward = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -606,7 +612,7 @@ fn smart_home_selection_tracks_the_selection_head() {
     assert_eq!(forward_snapshot.selection, 0..2);
     assert_eq!(forward_snapshot.cursor, 2);
 
-    let mut reversed = EditorModel::new(
+    let mut reversed = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -624,7 +630,7 @@ fn smart_home_selection_tracks_the_selection_head() {
 
 #[test]
 fn smart_home_clears_preferred_column_and_skips_noop_reveal() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -665,7 +671,7 @@ fn smart_home_clears_preferred_column_and_skips_noop_reveal() {
 }
 
 fn make_model(text: &str) -> EditorModel {
-    EditorModel::new(
+    model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -918,7 +924,7 @@ fn shift_tab_multi_line_undo_is_a_single_step() {
 
 #[test]
 fn horizontal_collapse_commands_collapse_active_selection() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -939,7 +945,7 @@ fn horizontal_collapse_commands_collapse_active_selection() {
 
 #[test]
 fn selecting_horizontal_movement_still_extends_selection() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -957,7 +963,7 @@ fn selecting_horizontal_movement_still_extends_selection() {
 
 #[test]
 fn display_row_movement_uses_wrapped_rows_behaviorally() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -983,7 +989,7 @@ fn display_row_movement_uses_wrapped_rows_behaviorally() {
 
 #[test]
 fn display_row_selection_extends_from_anchor() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1001,7 +1007,7 @@ fn display_row_selection_extends_from_anchor() {
 
 #[test]
 fn display_row_motion_snaps_to_document_edges() {
-    let mut top = EditorModel::new(
+    let mut top = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1017,7 +1023,7 @@ fn display_row_motion_snaps_to_document_edges() {
         Position { line: 0, column: 0 }
     );
 
-    let mut bottom = EditorModel::new(
+    let mut bottom = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1039,7 +1045,7 @@ fn display_row_motion_snaps_to_document_edges() {
 
 #[test]
 fn display_row_edge_noop_collapses_selection() {
-    let mut top = EditorModel::new(
+    let mut top = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1054,7 +1060,7 @@ fn display_row_edge_noop_collapses_selection() {
     assert_eq!(top_snapshot.selection, 0..0);
     assert_eq!(top_snapshot.cursor, 0);
 
-    let mut bottom = EditorModel::new(
+    let mut bottom = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1073,7 +1079,7 @@ fn display_row_edge_noop_collapses_selection() {
 
 #[test]
 fn display_row_movement_clamps_and_falls_back_when_wrap_is_disabled() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1589,7 +1595,7 @@ fn replace_and_mark_text_does_not_auto_pair() {
 
 #[test]
 fn delete_word_and_line_ops_are_undoable_document_behavior() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1613,7 +1619,7 @@ fn delete_word_and_line_ops_are_undoable_document_behavior() {
 
 #[test]
 fn duplicate_line_duplicates_active_selection_and_selects_the_copy() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1634,7 +1640,7 @@ fn duplicate_line_duplicates_active_selection_and_selects_the_copy() {
 
 #[test]
 fn duplicate_selection_is_a_separate_undo_step_from_typed_input() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1658,7 +1664,7 @@ fn duplicate_selection_is_a_separate_undo_step_from_typed_input() {
 
 #[test]
 fn delete_word_commands_delete_active_selection_before_word_boundaries() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1672,7 +1678,7 @@ fn delete_word_commands_delete_active_selection_before_word_boundaries() {
     model.delete_word(true);
     assert_eq!(model.snapshot().text, " world");
 
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1688,7 +1694,7 @@ fn delete_word_commands_delete_active_selection_before_word_boundaries() {
 
 #[test]
 fn clipboard_commands_emit_boundary_effects_without_fakes() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1722,7 +1728,7 @@ fn clipboard_commands_emit_boundary_effects_without_fakes() {
 
 #[test]
 fn clipboard_commands_fall_back_to_the_current_line_without_selection() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1758,7 +1764,7 @@ fn clipboard_commands_fall_back_to_the_current_line_without_selection() {
 
 #[test]
 fn clipboard_commands_treat_the_last_unterminated_line_as_linewise() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1794,7 +1800,7 @@ fn clipboard_commands_treat_the_last_unterminated_line_as_linewise() {
 
 #[test]
 fn clipboard_commands_include_the_trailing_blank_line_at_eof() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1831,7 +1837,7 @@ fn clipboard_commands_include_the_trailing_blank_line_at_eof() {
 
 #[test]
 fn clipboard_commands_preserve_crlf_when_cutting_the_trailing_blank_line() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -1860,7 +1866,7 @@ fn clipboard_commands_preserve_crlf_when_cutting_the_trailing_blank_line() {
 #[test]
 fn file_commands_emit_runtime_effects_and_apply_results() {
     let path = std::path::PathBuf::from("/tmp/example.txt");
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example.txt".into(),
@@ -1901,7 +1907,7 @@ fn save_effects_can_target_inactive_tabs_by_id() {
         "second",
     );
     second.replace_char_range(0..0, "edited ");
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![
             EditorTab::from_text(
                 TabId::from_raw(1),
@@ -1945,7 +1951,7 @@ fn save_finished_for_tab_does_not_clear_the_active_tab_by_accident() {
     );
     first.replace_char_range(0..0, "edited ");
     second.replace_char_range(0..0, "saved ");
-    let mut model = EditorModel::new(vec![first, second], "Ready.".into());
+    let mut model = model_with_tabs(vec![first, second], "Ready.".into());
 
     model.save_finished_for_tab(
         TabId::from_raw(2),
@@ -1977,7 +1983,7 @@ fn dirty_tab_close_requires_confirmation_and_discard_can_close_it() {
 #[test]
 fn autosave_tick_emits_modified_file_backed_tabs() {
     let path = std::path::PathBuf::from("/tmp/example.txt");
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example.txt".into(),
@@ -2011,7 +2017,7 @@ fn autosave_tick_emits_modified_file_backed_tabs() {
 fn scratchpad_tabs_are_path_backed_and_save_without_save_as() {
     let path = std::path::PathBuf::from("/tmp/2026-04-11_12-13-14.md");
     let stamp = lst_editor::FileStamp::from_raw(0, Some(1));
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::scratchpad_with_stamp(
             TabId::from_raw(1),
             path.clone(),
@@ -2044,7 +2050,7 @@ fn scratchpad_tabs_are_path_backed_and_save_without_save_as() {
 fn save_as_marks_scratchpad_as_normal_file() {
     let scratchpad_path = std::path::PathBuf::from("/tmp/2026-04-11_12-13-14.md");
     let saved_path = std::path::PathBuf::from("/tmp/saved.md");
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::scratchpad_with_stamp(
             TabId::from_raw(1),
             scratchpad_path.clone(),
@@ -2079,7 +2085,7 @@ fn save_as_marks_scratchpad_as_normal_file() {
 #[test]
 fn autosave_tick_skips_paths_open_in_multiple_tabs() {
     let path = std::path::PathBuf::from("/tmp/example.txt");
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![
             EditorTab::from_text(
                 TabId::from_raw(1),
@@ -2107,7 +2113,7 @@ fn autosave_tick_skips_paths_open_in_multiple_tabs() {
 #[test]
 fn autosave_finished_only_clears_matching_revision() {
     let path = std::path::PathBuf::from("/tmp/example.txt");
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example.txt".into(),
@@ -2131,7 +2137,7 @@ fn autosave_finished_only_clears_matching_revision() {
 
 #[test]
 fn direct_cursor_and_selection_commands_are_model_behavior() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -2170,7 +2176,7 @@ fn ime_marked_text_replacement_remains_model_behavior() {
 
 #[test]
 fn vim_delete_and_paste_execute_against_real_document() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),
@@ -2191,7 +2197,7 @@ fn vim_delete_and_paste_execute_against_real_document() {
 
 #[test]
 fn vim_search_word_under_cursor_updates_find_behaviorally() {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "example".into(),

@@ -2,8 +2,14 @@ use lst_editor::position::Position;
 use lst_editor::{EditorModel, EditorTab, FileStamp, Language, TabId};
 use std::path::PathBuf;
 
+fn model_with_tabs(tabs: Vec<EditorTab>, status: String) -> EditorModel {
+    let mut tabs = tabs.into_iter();
+    let first = tabs.next().expect("test model needs at least one tab");
+    EditorModel::from_tabs(first, tabs.collect(), status)
+}
+
 fn model_with_path(path: &str, text: &str) -> EditorModel {
-    EditorModel::new(
+    model_with_tabs(
         vec![EditorTab::from_path(
             TabId::from_raw(1),
             PathBuf::from(path),
@@ -14,7 +20,7 @@ fn model_with_path(path: &str, text: &str) -> EditorModel {
 }
 
 fn model_with_language(language: Option<Language>, text: &str) -> EditorModel {
-    let mut model = EditorModel::new(
+    let mut model = model_with_tabs(
         vec![EditorTab::from_text(
             TabId::from_raw(1),
             "scratch".into(),

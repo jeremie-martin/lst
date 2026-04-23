@@ -70,6 +70,44 @@ pub(crate) struct CachedWrapLayout {
     pub(crate) layout: WrapLayout,
 }
 
+pub(crate) struct WrapLayoutInput<'a> {
+    pub(crate) lines: &'a [String],
+    pub(crate) revision: u64,
+    pub(crate) viewport_width: Pixels,
+    pub(crate) char_width: Pixels,
+    pub(crate) show_gutter: bool,
+    pub(crate) show_wrap: bool,
+    pub(crate) scale: f32,
+}
+
+pub(crate) struct ViewportPreparation<'a> {
+    pub(crate) buffer: &'a Rope,
+    pub(crate) lines: &'a [String],
+    pub(crate) revision: u64,
+    pub(crate) syntax_mode: SyntaxMode,
+    pub(crate) show_gutter: bool,
+    pub(crate) show_wrap: bool,
+    pub(crate) viewport_scroll: &'a ScrollHandle,
+    pub(crate) viewport_cache: &'a Rc<RefCell<ViewportCache>>,
+    pub(crate) viewport_geometry: &'a Rc<RefCell<ViewportGeometry>>,
+    pub(crate) bounds: Bounds<Pixels>,
+    pub(crate) char_width: Pixels,
+    pub(crate) scale: f32,
+}
+
+pub(crate) struct ViewportPaintInput<'a> {
+    pub(crate) bounds: Bounds<Pixels>,
+    pub(crate) show_gutter: bool,
+    pub(crate) selection: Range<usize>,
+    pub(crate) search_matches: &'a [Range<usize>],
+    pub(crate) active_search_match: Option<&'a Range<usize>>,
+    pub(crate) cursor_char: usize,
+    pub(crate) vim_mode: vim::Mode,
+    pub(crate) focused: bool,
+    pub(crate) paint_state: ViewportPaintState,
+    pub(crate) scale: f32,
+}
+
 pub(crate) fn buffer_content_height(visual_rows: usize, scale: f32) -> Pixels {
     metrics::px_for_scale((visual_rows.max(1) as f32) * metrics::ROW_HEIGHT, scale)
 }
@@ -237,14 +275,17 @@ fn wrap_columns_for_viewport(
 
 pub(crate) fn ensure_wrap_layout(
     cache: &mut ViewportCache,
-    lines: &[String],
-    revision: u64,
-    viewport_width: Pixels,
-    char_width: Pixels,
-    show_gutter: bool,
-    show_wrap: bool,
-    scale: f32,
+    input: WrapLayoutInput<'_>,
 ) -> WrapLayout {
+    let WrapLayoutInput {
+        lines,
+        revision,
+        viewport_width,
+        char_width,
+        show_gutter,
+        show_wrap,
+        scale,
+    } = input;
     let wrap_columns =
         wrap_columns_for_viewport(viewport_width, char_width, show_gutter, show_wrap, scale);
     if let Some(layout) = cache.wrap_layout.as_ref() {
@@ -356,20 +397,23 @@ fn shape_cached_segment(
 }
 
 pub(crate) fn prepare_viewport_paint_state(
-    buffer: &Rope,
-    lines: &[String],
-    revision: u64,
-    syntax_mode: SyntaxMode,
-    show_gutter: bool,
-    show_wrap: bool,
-    viewport_scroll: &ScrollHandle,
-    viewport_cache: &Rc<RefCell<ViewportCache>>,
-    viewport_geometry: &Rc<RefCell<ViewportGeometry>>,
-    bounds: Bounds<Pixels>,
-    char_width: Pixels,
-    scale: f32,
+    input: ViewportPreparation<'_>,
     window: &mut Window,
 ) -> ViewportPaintState {
+    let ViewportPreparation {
+        buffer,
+        lines,
+        revision,
+        syntax_mode,
+        show_gutter,
+        show_wrap,
+        viewport_scroll,
+        viewport_cache,
+        viewport_geometry,
+        bounds,
+        char_width,
+        scale,
+    } = input;
     let row_height = metrics::px_for_scale(metrics::ROW_HEIGHT, scale);
     let viewport_height = if bounds.size.height > px(0.0) {
         bounds.size.height
@@ -399,13 +443,15 @@ pub(crate) fn prepare_viewport_paint_state(
     let mut cache = viewport_cache.borrow_mut();
     let layout = ensure_wrap_layout(
         &mut cache,
-        lines,
-        revision,
-        bounds.size.width,
-        char_width,
-        show_gutter,
-        show_wrap,
-        scale,
+        WrapLayoutInput {
+            lines,
+            revision,
+            viewport_width: bounds.size.width,
+            char_width,
+            show_gutter,
+            show_wrap,
+            scale,
+        },
     );
     let visible_rows =
         visible_visual_row_range(scroll_top, viewport_height, layout.total_rows, row_height);
@@ -550,20 +596,19 @@ fn paint_range_background(
     ));
 }
 
-pub(crate) fn paint_viewport(
-    bounds: Bounds<Pixels>,
-    show_gutter: bool,
-    selection: Range<usize>,
-    search_matches: &[Range<usize>],
-    active_search_match: Option<&Range<usize>>,
-    cursor_char: usize,
-    vim_mode: vim::Mode,
-    focused: bool,
-    paint_state: ViewportPaintState,
-    scale: f32,
-    window: &mut Window,
-    cx: &mut App,
-) {
+pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window, cx: &mut App) {
+    let ViewportPaintInput {
+        bounds,
+        show_gutter,
+        selection,
+        search_matches,
+        active_search_match,
+        cursor_char,
+        vim_mode,
+        focused,
+        paint_state,
+        scale,
+    } = input;
     let line_height = window.line_height();
     let row_height = metrics::px_for_scale(metrics::ROW_HEIGHT, scale);
     let gutter_origin_x = bounds.left() + metrics::px_for_scale(metrics::GUTTER_LEFT_PAD, scale);

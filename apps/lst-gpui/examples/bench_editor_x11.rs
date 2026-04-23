@@ -20,8 +20,6 @@ use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
 use x11rb::NONE;
 
-const LARGE_CORPUS_REL: &str = "../../benchmarks/paste-corpus-20k.rs";
-const MEDIUM_CORPUS_REL: &str = "../../benchmarks/editing-corpus.rs";
 const DEFAULT_REPETITIONS: usize = 7;
 const DEFAULT_PRIMING_RUNS: usize = 1;
 const INTER_RUN_SLEEP_MS: u64 = 1_000;
@@ -37,6 +35,10 @@ const SCROLL_WHEEL_COUNT: usize = 240;
 const SCROLL_HALF_MS: u64 = 1_500;
 const TYPING_CHARS: usize = 320;
 const SEARCH_QUERY: &str = "fn ";
+const MEDIUM_RUST_MODULES: usize = 64;
+const LARGE_RUST_MODULES: usize = 256;
+const RUST_FUNCTIONS_PER_MODULE: usize = 8;
+const LARGE_PLAIN_LINES: usize = 18_000;
 const FIND_QUERY_CLICK_X_FRACTION: f32 = 0.82;
 const FIND_QUERY_CLICK_Y_FRACTION: f32 = 0.10;
 const BUTTON_LEFT: u8 = 1;
@@ -194,13 +196,6 @@ enum CorpusKind {
 }
 
 impl CorpusKind {
-    fn source_rel(self) -> &'static str {
-        match self {
-            Self::MediumRust => MEDIUM_CORPUS_REL,
-            Self::LargeRust | Self::LargePlain => LARGE_CORPUS_REL,
-        }
-    }
-
     fn extension(self) -> &'static str {
         match self {
             Self::MediumRust | Self::LargeRust => "rs",
@@ -212,6 +207,14 @@ impl CorpusKind {
         match self {
             Self::MediumRust | Self::LargeRust => "rust-tree-sitter",
             Self::LargePlain => "plain",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::MediumRust => "generated-medium-rust",
+            Self::LargeRust => "generated-large-rust",
+            Self::LargePlain => "generated-large-plain",
         }
     }
 }
@@ -289,7 +292,7 @@ struct Bench {
 
 impl Bench {
     fn run_scenario(&self, scenario: Scenario, args: &Args) -> Result<(), Box<dyn Error>> {
-        let corpus = Corpus::load(scenario.corpus_kind())?;
+        let corpus = Corpus::load(scenario.corpus_kind());
         let mut runs = Vec::with_capacity(args.repetitions);
         let mut expected_window = None;
         let total_runs = args.priming_runs + args.repetitions;
@@ -458,19 +461,19 @@ impl Bench {
                 self.keycodes.v,
             )?;
             let (paste_damage_events, save_retry_count, final_stats) =
-                wait_for_file_text_with_save_retry(
-                    &self.conn,
-                    damage.damage(),
-                    window.id,
-                    &mut child,
-                    self.root,
-                    &self.keycodes,
-                    &target_path,
-                    &corpus.text,
-                    Duration::from_millis(FILE_STABLE_MS),
-                    Duration::from_millis(SAVE_RETRY_MS),
-                    Duration::from_millis(FILE_STABLE_TIMEOUT_MS),
-                )?;
+                wait_for_file_text_with_save_retry(FileTextWait {
+                    conn: &self.conn,
+                    damage_id: damage.damage(),
+                    window: window.id,
+                    child: &mut child,
+                    root: self.root,
+                    keycodes: &self.keycodes,
+                    path: &target_path,
+                    expected_text: &corpus.text,
+                    stable_for: Duration::from_millis(FILE_STABLE_MS),
+                    save_retry_every: Duration::from_millis(SAVE_RETRY_MS),
+                    timeout: Duration::from_millis(FILE_STABLE_TIMEOUT_MS),
+                })?;
             let paste_complete_ms = elapsed_ms(paste_started);
             damage_events += paste_damage_events;
 
@@ -577,19 +580,19 @@ impl Bench {
             )?;
             let typing_input_to_quiet_ms = elapsed_ms(typing_started);
             let (_file_damage_events, save_retry_count, final_stats) =
-                wait_for_file_text_with_save_retry(
-                    &self.conn,
-                    damage.damage(),
-                    window.id,
-                    &mut child,
-                    self.root,
-                    &self.keycodes,
-                    &file_path,
-                    &expected_text,
-                    Duration::from_millis(FILE_STABLE_MS),
-                    Duration::from_millis(SAVE_RETRY_MS),
-                    Duration::from_millis(FILE_STABLE_TIMEOUT_MS),
-                )?;
+                wait_for_file_text_with_save_retry(FileTextWait {
+                    conn: &self.conn,
+                    damage_id: damage.damage(),
+                    window: window.id,
+                    child: &mut child,
+                    root: self.root,
+                    keycodes: &self.keycodes,
+                    path: &file_path,
+                    expected_text: &expected_text,
+                    stable_for: Duration::from_millis(FILE_STABLE_MS),
+                    save_retry_every: Duration::from_millis(SAVE_RETRY_MS),
+                    timeout: Duration::from_millis(FILE_STABLE_TIMEOUT_MS),
+                })?;
             let trace_wall_ms = elapsed_ms(trace_started);
             let after = proc_sample(pid)?;
             let trace = read_editor_trace(&trace_path)?;
@@ -979,18 +982,75 @@ struct Corpus {
 }
 
 impl Corpus {
-    fn load(kind: CorpusKind) -> Result<Self, Box<dyn Error>> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(kind.source_rel());
-        let text = fs::read_to_string(&path)?;
-        Ok(Self {
-            label: kind.source_rel().to_string(),
+    fn load(kind: CorpusKind) -> Self {
+        let text = match kind {
+            CorpusKind::MediumRust => {
+                generated_rust_corpus(MEDIUM_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE)
+            }
+            CorpusKind::LargeRust => {
+                generated_rust_corpus(LARGE_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE)
+            }
+            CorpusKind::LargePlain => generated_plain_corpus(LARGE_PLAIN_LINES),
+        };
+        Self {
+            label: kind.label().to_string(),
             bytes: text.len() as u64,
             lines: text.lines().count(),
             text,
             extension: kind.extension(),
             highlight: kind.highlight_label(),
-        })
+        }
     }
+}
+
+fn generated_rust_corpus(module_count: usize, functions_per_module: usize) -> String {
+    let mut text = String::new();
+    text.push_str("// Generated benchmark corpus for the active GPUI editor.\n");
+    text.push_str("// It is intentionally deterministic and framework-neutral.\n\n");
+
+    for module_ix in 0..module_count {
+        text.push_str(&format!("pub mod bench_module_{module_ix:04} {{\n"));
+        text.push_str("    #[derive(Clone, Debug, PartialEq, Eq)]\n");
+        text.push_str("    pub struct RowState {\n");
+        text.push_str("        pub id: usize,\n");
+        text.push_str("        pub label: &'static str,\n");
+        text.push_str("        pub selected: bool,\n");
+        text.push_str("    }\n\n");
+
+        for function_ix in 0..functions_per_module {
+            let factor = module_ix + function_ix + 3;
+            text.push_str(&format!(
+                "    pub fn transform_{module_ix:04}_{function_ix:02}(input: usize) -> RowState {{\n"
+            ));
+            text.push_str(&format!(
+                "        let scaled = input.wrapping_mul({factor}).wrapping_add({module_ix});\n"
+            ));
+            text.push_str("        let selected = scaled % 7 == 0 || scaled % 11 == 0;\n");
+            text.push_str("        let label = if selected { \"selected\" } else { \"idle\" };\n");
+            text.push_str("        RowState { id: scaled, label, selected }\n");
+            text.push_str("    }\n\n");
+        }
+
+        text.push_str("}\n\n");
+    }
+
+    text
+}
+
+fn generated_plain_corpus(lines: usize) -> String {
+    let mut text = String::new();
+    text.push_str(
+        "Generated plain-text benchmark corpus for scrolling without syntax highlighting.\n",
+    );
+    for line_ix in 0..lines {
+        text.push_str(&format!(
+            "row {line_ix:05}: viewport measurement text with numbers {} {} {}\n",
+            line_ix % 17,
+            line_ix % 31,
+            line_ix % 127
+        ));
+    }
+    text
 }
 
 #[derive(Debug)]
@@ -1651,19 +1711,36 @@ fn wait_for_damage_quiet(
     }
 }
 
-fn wait_for_file_text_with_save_retry(
-    conn: &RustConnection,
+struct FileTextWait<'a> {
+    conn: &'a RustConnection,
     damage_id: damage::Damage,
     window: xproto::Window,
-    child: &mut Child,
+    child: &'a mut Child,
     root: xproto::Window,
-    keycodes: &Keycodes,
-    path: &Path,
-    expected_text: &str,
+    keycodes: &'a Keycodes,
+    path: &'a Path,
+    expected_text: &'a str,
     stable_for: Duration,
     save_retry_every: Duration,
     timeout: Duration,
+}
+
+fn wait_for_file_text_with_save_retry(
+    input: FileTextWait<'_>,
 ) -> Result<(u64, u64, FileStats), Box<dyn Error>> {
+    let FileTextWait {
+        conn,
+        damage_id,
+        window,
+        child,
+        root,
+        keycodes,
+        path,
+        expected_text,
+        stable_for,
+        save_retry_every,
+        timeout,
+    } = input;
     let deadline = Instant::now() + timeout;
     let mut last_text = fs::read_to_string(path).unwrap_or_default();
     let mut last_change = Instant::now();
@@ -1835,11 +1912,9 @@ fn editor_path() -> Result<PathBuf, Box<dyn Error>> {
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| io::Error::other("benchmark binary has no profile directory"))?;
-    for name in ["lst", "lst-gpui"] {
-        let sibling = profile_dir.join(name);
-        if sibling.exists() {
-            return Ok(sibling);
-        }
+    let sibling = profile_dir.join("lst");
+    if sibling.exists() {
+        return Ok(sibling);
     }
 
     Err(io::Error::other(
@@ -2192,6 +2267,26 @@ mod tests {
         assert_eq!(primary_metrics["scroll-plain"], "scroll_overrun_ms");
         assert_eq!(primary_metrics["open-large"], "open_to_quiet_ms");
         assert_eq!(primary_metrics["search-large"], "search_reindex_ms");
+    }
+
+    #[test]
+    fn generated_corpora_match_scenario_contracts() {
+        let medium = Corpus::load(CorpusKind::MediumRust);
+        assert_eq!(medium.label, "generated-medium-rust");
+        assert_eq!(medium.extension, "rs");
+        assert!(medium.text.contains("fn "));
+
+        let large = Corpus::load(CorpusKind::LargeRust);
+        assert_eq!(large.label, "generated-large-rust");
+        assert_eq!(large.extension, "rs");
+        assert!(large.bytes > medium.bytes);
+        assert!(large.lines > medium.lines);
+        assert!(large.text.contains("fn "));
+
+        let plain = Corpus::load(CorpusKind::LargePlain);
+        assert_eq!(plain.label, "generated-large-plain");
+        assert_eq!(plain.extension, "txt");
+        assert!(!plain.text.contains("fn "));
     }
 
     #[test]
