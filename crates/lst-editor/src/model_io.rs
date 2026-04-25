@@ -6,15 +6,6 @@ impl EditorModel {
         self.queue_effect(EditorEffect::OpenFiles);
     }
 
-    pub fn open_files(&mut self, files: Vec<(PathBuf, String)>) {
-        self.open_files_with_stamps(
-            files
-                .into_iter()
-                .map(|(path, text)| (path, text, None))
-                .collect(),
-        );
-    }
-
     pub fn open_files_with_stamps(&mut self, files: Vec<(PathBuf, String, Option<FileStamp>)>) {
         let start_len = self.tabs.len();
         for (path, text, file_stamp) in files {
@@ -85,23 +76,9 @@ impl EditorModel {
         });
     }
 
-    pub fn save_finished(&mut self, path: PathBuf) {
-        let tab_id = self.active_tab_id();
-        self.save_finished_for_tab(tab_id, path, None);
-    }
-
-    pub fn save_finished_for_tab(
-        &mut self,
-        tab_id: TabId,
-        path: PathBuf,
-        file_stamp: Option<FileStamp>,
-    ) {
+    pub fn save_finished_for_tab(&mut self, tab_id: TabId, path: PathBuf, file_stamp: FileStamp) {
         if let Some(tab) = self.tab_mut_by_id(tab_id) {
-            if let Some(file_stamp) = file_stamp {
-                tab.mark_saved(path.clone(), file_stamp);
-            } else {
-                tab.mark_clean_at_path(path.clone());
-            }
+            tab.mark_saved(path.clone(), file_stamp);
             self.status = format!("Saved {}.", path.display());
         }
     }
@@ -110,14 +87,10 @@ impl EditorModel {
         &mut self,
         tab_id: TabId,
         path: PathBuf,
-        file_stamp: Option<FileStamp>,
+        file_stamp: FileStamp,
     ) {
         if let Some(tab) = self.tab_mut_by_id(tab_id) {
-            if let Some(file_stamp) = file_stamp {
-                tab.mark_saved_as(path.clone(), file_stamp);
-            } else {
-                tab.mark_clean_file_at_path(path.clone());
-            }
+            tab.mark_saved_as(path.clone(), file_stamp);
             self.status = format!("Saved {}.", path.display());
         }
     }
@@ -168,26 +141,14 @@ impl EditorModel {
         }
     }
 
-    pub fn autosave_finished(&mut self, path: PathBuf, revision: u64) {
-        let Some(tab_id) = self
-            .tabs
-            .iter()
-            .find(|tab| tab.path() == Some(&path) && tab.revision() == revision)
-            .map(EditorTab::id)
-        else {
-            return;
-        };
-        self.autosave_finished_for_tab(tab_id, path, revision, None);
-    }
-
     pub fn autosave_finished_for_tab(
         &mut self,
         tab_id: TabId,
         path: PathBuf,
         revision: u64,
-        file_stamp: Option<FileStamp>,
+        file_stamp: FileStamp,
     ) {
-        for tab in &mut self.tabs {
+        for tab in self.tabs.iter_mut() {
             if tab.id() == tab_id && tab.path() == Some(&path) && tab.revision() == revision {
                 tab.mark_autosaved(file_stamp);
             }
@@ -197,12 +158,6 @@ impl EditorModel {
             && self.active_tab().revision() == revision
         {
             self.status = format!("Autosaved {}.", path.display());
-        }
-    }
-
-    pub fn autosave_failed(&mut self, path: PathBuf, message: String) {
-        if self.active_tab().path() == Some(&path) {
-            self.status = format!("Autosave failed for {}: {message}", path.display());
         }
     }
 

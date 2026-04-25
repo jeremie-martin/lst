@@ -38,10 +38,6 @@ impl TabSet {
         self.active
     }
 
-    pub(crate) fn as_slice(&self) -> &[EditorTab] {
-        &self.tabs
-    }
-
     pub(crate) fn activate(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
             return false;
@@ -95,24 +91,6 @@ impl Deref for TabSet {
 impl DerefMut for TabSet {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.tabs
-    }
-}
-
-impl<'a> IntoIterator for &'a TabSet {
-    type IntoIter = std::slice::Iter<'a, EditorTab>;
-    type Item = &'a EditorTab;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.tabs.iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut TabSet {
-    type IntoIter = std::slice::IterMut<'a, EditorTab>;
-    type Item = &'a mut EditorTab;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.tabs.iter_mut()
     }
 }
 

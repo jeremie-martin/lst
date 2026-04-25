@@ -4,7 +4,8 @@ use lst_editor::{
         Key as VimKey, Mode as VimMode, Modifiers as VimModifiers, NamedKey as VimNamedKey,
         TextSnapshot as VimTextSnapshot, VimCommand, VimState,
     },
-    EditorEffect, EditorModel, EditorTab, FocusTarget, RevealIntent, TabId, UndoBoundary,
+    EditorEffect, EditorModel, EditorTab, FileStamp, FocusTarget, RevealIntent, TabId,
+    UndoBoundary,
 };
 
 fn enter_vim_normal(model: &mut EditorModel) {
@@ -16,6 +17,10 @@ fn model_with_tabs(tabs: Vec<EditorTab>, status: String) -> EditorModel {
     let mut tabs = tabs.into_iter();
     let first = tabs.next().expect("test model needs at least one tab");
     EditorModel::from_tabs(first, tabs.collect(), status)
+}
+
+fn dummy_stamp() -> FileStamp {
+    FileStamp::from_raw(0, None)
 }
 
 #[test]
@@ -285,7 +290,8 @@ fn closing_active_tab_preserves_neighbor_as_active() {
     model.new_tab();
     assert_eq!(model.snapshot().active, 2);
 
-    model.close_tab(2);
+    let third_id = model.tab(2).map(EditorTab::id).expect("third tab exists");
+    assert!(model.close_clean_tab_by_id(third_id));
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.active, 1);
@@ -304,7 +310,8 @@ fn closing_inactive_tab_does_not_request_editor_focus() {
     model.set_active_tab(0);
     model.drain_effects();
 
-    model.close_tab(1);
+    let second_id = model.tab(1).map(EditorTab::id).expect("second tab exists");
+    assert!(model.close_clean_tab_by_id(second_id));
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.active, 0);
@@ -1889,7 +1896,8 @@ fn file_commands_emit_runtime_effects_and_apply_results() {
         }]
     );
 
-    model.save_finished(path.clone());
+    let tab_id = model.active_tab_id();
+    model.save_finished_for_tab(tab_id, path.clone(), dummy_stamp());
     let snapshot = model.snapshot();
     assert!(!snapshot.tab_modified[0]);
     assert_eq!(snapshot.status, format!("Saved {}.", path.display()));
@@ -1956,7 +1964,7 @@ fn save_finished_for_tab_does_not_clear_the_active_tab_by_accident() {
     model.save_finished_for_tab(
         TabId::from_raw(2),
         second_path,
-        Some(lst_editor::FileStamp::from_raw(10, Some(20))),
+        lst_editor::FileStamp::from_raw(10, Some(20)),
     );
 
     assert_eq!(model.snapshot().tab_modified, [true, false]);
@@ -2009,7 +2017,8 @@ fn autosave_tick_emits_modified_file_backed_tabs() {
         }]
     );
 
-    model.autosave_finished(path, revision);
+    let tab_id = model.active_tab_id();
+    model.autosave_finished_for_tab(tab_id, path, revision, dummy_stamp());
     assert!(!model.snapshot().tab_modified[0]);
 }
 
@@ -2073,7 +2082,7 @@ fn save_as_marks_scratchpad_as_normal_file() {
     model.save_as_finished_for_tab(
         TabId::from_raw(1),
         saved_path.clone(),
-        Some(lst_editor::FileStamp::from_raw(4, Some(2))),
+        lst_editor::FileStamp::from_raw(4, Some(2)),
     );
 
     let snapshot = model.snapshot();
@@ -2128,10 +2137,11 @@ fn autosave_finished_only_clears_matching_revision() {
     let current_revision = model.snapshot().active_revision;
     model.drain_effects();
 
-    model.autosave_finished(path.clone(), stale_revision);
+    let tab_id = model.active_tab_id();
+    model.autosave_finished_for_tab(tab_id, path.clone(), stale_revision, dummy_stamp());
     assert!(model.snapshot().tab_modified[0]);
 
-    model.autosave_finished(path, current_revision);
+    model.autosave_finished_for_tab(tab_id, path, current_revision, dummy_stamp());
     assert!(!model.snapshot().tab_modified[0]);
 }
 

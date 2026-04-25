@@ -107,7 +107,7 @@ impl EditorModel {
     }
 
     pub fn tabs(&self) -> &[EditorTab] {
-        self.tabs.as_slice()
+        &self.tabs
     }
 
     pub fn tab(&self, index: usize) -> Option<&EditorTab> {
@@ -208,12 +208,7 @@ impl EditorModel {
         true
     }
 
-    fn move_to_char_inner(
-        &mut self,
-        offset: usize,
-        select: bool,
-        preferred_column: Option<usize>,
-    ) -> bool {
+    pub fn move_to_char(&mut self, offset: usize, select: bool, preferred_column: Option<usize>) {
         let end = self.active_tab().len_chars();
         let target = offset.min(end);
         let cursor = self.active_tab().cursor_char();
@@ -227,7 +222,9 @@ impl EditorModel {
             }
             tab.marked_range = None;
         }
-        target != cursor || select
+        if target != cursor || select {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
     }
 
     fn assign_selection(&mut self, range: Range<usize>, reversed: bool) {
@@ -250,10 +247,10 @@ impl EditorModel {
         self.effects.drain(..).collect()
     }
 
-    fn open_find(&mut self, show_replace: bool, selected_text: Option<String>) {
+    pub fn open_find_panel(&mut self, show_replace: bool) {
         self.find.visible = true;
         self.find.show_replace = show_replace;
-        if let Some(text) = selected_text {
+        if let Some(text) = self.active_tab().selected_text() {
             if !text.contains('\n') {
                 self.find.query = text;
                 self.reindex_find_matches_to_nearest();
@@ -262,39 +259,39 @@ impl EditorModel {
         self.queue_focus(FocusTarget::FindQuery);
     }
 
-    fn close_find(&mut self) {
+    pub fn close_find_panel(&mut self) {
         self.find.visible = false;
         self.find.show_replace = false;
         self.queue_focus(FocusTarget::Editor);
     }
 
-    fn open_goto_line(&mut self) {
+    pub fn open_goto_line_panel(&mut self) {
         self.goto_line = Some(String::new());
         self.queue_focus(FocusTarget::GotoLine);
     }
 
-    fn close_goto_line(&mut self) {
+    pub fn close_goto_line_panel(&mut self) {
         self.goto_line = None;
         self.queue_focus(FocusTarget::Editor);
     }
 
-    fn set_find_query(&mut self, text: String) {
+    pub fn update_find_query(&mut self, text: String) {
         self.find.query = text;
         self.reindex_find_matches_to_nearest();
     }
 
-    fn set_find_query_and_activate(&mut self, text: String) {
-        self.set_find_query(text);
+    pub fn update_find_query_and_activate(&mut self, text: String) {
+        self.update_find_query(text);
         if self.move_to_current_find_match() {
             self.queue_reveal(RevealIntent::Center);
         }
     }
 
-    fn set_find_replacement(&mut self, text: String) {
+    pub fn update_find_replacement(&mut self, text: String) {
         self.find.replacement = text;
     }
 
-    fn set_goto_line(&mut self, text: String) {
+    pub fn update_goto_line(&mut self, text: String) {
         self.goto_line = Some(text);
     }
 
@@ -432,9 +429,9 @@ impl EditorModel {
         true
     }
 
-    fn submit_goto_line(&mut self) -> bool {
+    pub fn submit_goto_line_input(&mut self) {
         let Some(text) = self.goto_line.clone() else {
-            return false;
+            return;
         };
         let trimmed = text.trim();
         let (line_text, column_text) = match trimmed.split_once(':') {
@@ -442,8 +439,8 @@ impl EditorModel {
             None => (trimmed, None),
         };
         let Ok(line_one_based) = line_text.parse::<usize>() else {
-            self.close_goto_line();
-            return false;
+            self.close_goto_line_panel();
+            return;
         };
         let target_line = line_one_based
             .saturating_sub(1)
@@ -451,8 +448,8 @@ impl EditorModel {
         let target_column = match column_text {
             Some(column_text) => {
                 let Ok(column_one_based) = column_text.parse::<usize>() else {
-                    self.close_goto_line();
-                    return false;
+                    self.close_goto_line_panel();
+                    return;
                 };
                 column_one_based
                     .saturating_sub(1)
@@ -467,22 +464,8 @@ impl EditorModel {
             },
             None,
         );
-        self.close_goto_line();
-        true
-    }
-
-    fn close_tab_at(&mut self, index: usize) -> bool {
-        if index >= self.tabs.len() {
-            return false;
-        }
-        if self.tabs[index].modified() {
-            self.status = format!(
-                "Unsaved changes in {}. Save or Save As before closing this tab.",
-                self.tabs[index].display_name()
-            );
-            return false;
-        }
-        self.close_tab_at_unchecked(index)
+        self.close_goto_line_panel();
+        self.queue_reveal(RevealIntent::Center);
     }
 
     fn close_tab_at_unchecked(&mut self, index: usize) -> bool {
@@ -550,7 +533,7 @@ impl EditorModel {
         self.queue_reveal(RevealIntent::NearestEdge);
     }
 
-    fn replace_text_in_range(
+    pub fn replace_text(
         &mut self,
         range: Option<Range<usize>>,
         text: String,
@@ -565,7 +548,7 @@ impl EditorModel {
         self.edit_active(kind, boundary, range, &text);
     }
 
-    fn replace_and_mark_text_inner(
+    pub fn replace_and_mark_text(
         &mut self,
         range: Option<Range<usize>>,
         text: String,
@@ -610,10 +593,11 @@ impl EditorModel {
 
     fn move_horizontal(&mut self, delta: isize, select: bool) -> bool {
         let tab = self.active_tab_mut();
+        let cursor = tab.cursor_char();
         let target = if delta.is_negative() {
-            tab.cursor_char().saturating_sub(delta.unsigned_abs())
+            cursor.saturating_sub(delta.unsigned_abs())
         } else {
-            (tab.cursor_char() + delta as usize).min(tab.len_chars())
+            (cursor + delta as usize).min(tab.len_chars())
         };
         tab.preferred_column = None;
         if select {
@@ -621,10 +605,10 @@ impl EditorModel {
         } else {
             tab.move_to(target);
         }
-        true
+        target != cursor || select
     }
 
-    fn move_horizontal_collapse(&mut self, backward: bool) -> bool {
+    pub fn move_horizontal_collapsed(&mut self, backward: bool) {
         let selection = self.active_tab().selected_range();
         if selection.start != selection.end {
             let target = if backward {
@@ -635,11 +619,13 @@ impl EditorModel {
             let tab = self.active_tab_mut();
             tab.preferred_column = None;
             tab.move_to(target);
-            return true;
+            self.queue_reveal(RevealIntent::NearestEdge);
+            return;
         }
 
-        let delta = if backward { -1 } else { 1 };
-        self.move_horizontal(delta, false)
+        if self.move_horizontal(if backward { -1 } else { 1 }, false) {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
     }
 
     fn move_boundary(
@@ -649,18 +635,19 @@ impl EditorModel {
         prev_fn: fn(&ropey::Rope, usize) -> usize,
         next_fn: fn(&ropey::Rope, usize) -> usize,
     ) -> bool {
+        let cursor = self.active_tab().cursor_char();
         let target = {
             let tab = self.active_tab();
             if !select && tab.has_selection() {
                 if backward {
-                    tab.selection().start
+                    tab.selected_range().start
                 } else {
-                    tab.selection().end
+                    tab.selected_range().end
                 }
             } else if backward {
-                prev_fn(tab.buffer(), tab.cursor_char())
+                prev_fn(tab.buffer(), cursor)
             } else {
-                next_fn(tab.buffer(), tab.cursor_char())
+                next_fn(tab.buffer(), cursor)
             }
         };
 
@@ -671,7 +658,7 @@ impl EditorModel {
         } else {
             tab.move_to(target);
         }
-        true
+        target != cursor || select
     }
 
     fn apply_vertical_motion_target(
@@ -871,7 +858,7 @@ impl EditorModel {
         }
     }
 
-    fn move_line_boundary_inner(&mut self, to_end: bool, select: bool) -> bool {
+    pub fn move_line_boundary(&mut self, to_end: bool, select: bool) {
         let tab = self.active_tab_mut();
         let cursor = tab.cursor_char();
         let line = tab.buffer.char_to_line(cursor.min(tab.len_chars()));
@@ -886,10 +873,12 @@ impl EditorModel {
         } else {
             tab.move_to(target);
         }
-        target != cursor
+        if target != cursor {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
     }
 
-    fn move_smart_home_inner(&mut self, select: bool) -> bool {
+    pub fn smart_home(&mut self, select: bool) {
         let tab = self.active_tab_mut();
         let cursor = tab.cursor_char();
         let line = tab.buffer.char_to_line(cursor.min(tab.len_chars()));
@@ -906,10 +895,12 @@ impl EditorModel {
         } else {
             tab.move_to(target);
         }
-        target != cursor
+        if target != cursor {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
     }
 
-    fn move_document_boundary_inner(&mut self, to_end: bool, select: bool) -> bool {
+    pub fn move_document_boundary(&mut self, to_end: bool, select: bool) {
         let target = if to_end {
             self.active_tab().len_chars()
         } else {
@@ -923,7 +914,9 @@ impl EditorModel {
         } else {
             tab.move_to(target);
         }
-        target != cursor
+        if target != cursor {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
     }
 
     fn replace_active_lines(&mut self, lines: Vec<String>, cursor_line: usize, cursor_col: usize) {
@@ -1034,7 +1027,7 @@ impl EditorModel {
                 line_indent_prefix(tab.buffer(), line),
             )
         };
-        self.replace_text_in_range(None, format!("{newline}{indent}"), UndoBoundary::Break);
+        self.replace_text(None, format!("{newline}{indent}"), UndoBoundary::Break);
     }
 
     fn selection_or_current_line(&self) -> (Range<usize>, String, bool) {
@@ -1049,10 +1042,10 @@ impl EditorModel {
         (range, text, use_current_line)
     }
 
-    fn copy_selection_inner(&mut self) -> bool {
+    pub fn copy_selection(&mut self) {
         let (_range, text, whole_line) = self.selection_or_current_line();
         if text.is_empty() {
-            return false;
+            return;
         }
         self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
         self.queue_effect(EditorEffect::WritePrimary(text));
@@ -1061,13 +1054,12 @@ impl EditorModel {
         } else {
             "Copied selection.".to_string()
         };
-        true
     }
 
-    fn cut_selection_inner(&mut self) -> bool {
+    pub fn cut_selection(&mut self) {
         let (range, text, whole_line) = self.selection_or_current_line();
         if text.is_empty() {
-            return false;
+            return;
         }
         self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
         self.queue_effect(EditorEffect::WritePrimary(text));
@@ -1077,7 +1069,6 @@ impl EditorModel {
         } else {
             "Cut selection.".to_string()
         };
-        true
     }
 
     fn vim_snapshot(&mut self) -> vim::TextSnapshot {
@@ -1199,8 +1190,7 @@ impl EditorModel {
                     changed = true;
                 }
                 vim::VimCommand::OpenFind => {
-                    let selected = self.active_tab().selected_text();
-                    self.open_find(false, selected);
+                    self.open_find_panel(false);
                     changed = true;
                 }
                 vim::VimCommand::FindNext => {
@@ -1570,15 +1560,6 @@ impl EditorModel {
         self.apply_text_input(None, text, UndoBoundary::Break);
     }
 
-    pub fn replace_text(
-        &mut self,
-        range: Option<Range<usize>>,
-        text: String,
-        boundary: UndoBoundary,
-    ) {
-        self.replace_text_in_range(range, text, boundary);
-    }
-
     pub fn replace_text_from_input(&mut self, range: Option<Range<usize>>, text: String) {
         let boundary = if text.chars().any(char::is_whitespace) {
             UndoBoundary::Break
@@ -1586,15 +1567,6 @@ impl EditorModel {
             UndoBoundary::Merge
         };
         self.apply_text_input(range, text, boundary);
-    }
-
-    pub fn replace_and_mark_text(
-        &mut self,
-        range: Option<Range<usize>>,
-        text: String,
-        selected_range: Option<Range<usize>>,
-    ) {
-        self.replace_and_mark_text_inner(range, text, selected_range);
     }
 
     pub fn clear_marked_text(&mut self) {
@@ -1814,14 +1786,6 @@ impl EditorModel {
         self.queue_focus(FocusTarget::Editor);
     }
 
-    pub fn close_active_tab(&mut self) {
-        self.close_tab_at(self.active_index());
-    }
-
-    pub fn close_tab(&mut self, index: usize) {
-        self.close_tab_at(index);
-    }
-
     pub fn close_request_for_tab(&self, index: usize) -> Option<TabCloseRequest> {
         let tab = self.tabs.get(index)?;
         if tab.modified() {
@@ -1895,12 +1859,7 @@ impl EditorModel {
     }
 
     pub fn move_horizontal_by(&mut self, delta: isize, select: bool) {
-        self.move_horizontal(delta, select);
-        self.queue_reveal(RevealIntent::NearestEdge);
-    }
-
-    pub fn move_horizontal_collapsed(&mut self, backward: bool) {
-        if self.move_horizontal_collapse(backward) {
+        if self.move_horizontal(delta, select) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
@@ -1981,40 +1940,18 @@ impl EditorModel {
     }
 
     pub fn move_word(&mut self, backward: bool, select: bool) {
-        self.move_boundary(backward, select, previous_word_boundary, next_word_boundary);
-        self.queue_reveal(RevealIntent::NearestEdge);
+        if self.move_boundary(backward, select, previous_word_boundary, next_word_boundary) {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
     }
 
     pub fn move_subword(&mut self, backward: bool, select: bool) {
-        self.move_boundary(
+        if self.move_boundary(
             backward,
             select,
             previous_subword_boundary,
             next_subword_boundary,
-        );
-        self.queue_reveal(RevealIntent::NearestEdge);
-    }
-
-    pub fn move_line_boundary(&mut self, to_end: bool, select: bool) {
-        if self.move_line_boundary_inner(to_end, select) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn smart_home(&mut self, select: bool) {
-        if self.move_smart_home_inner(select) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn move_document_boundary(&mut self, to_end: bool, select: bool) {
-        if self.move_document_boundary_inner(to_end, select) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn move_to_char(&mut self, offset: usize, select: bool, preferred_column: Option<usize>) {
-        if self.move_to_char_inner(offset, select, preferred_column) {
+        ) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
@@ -2044,7 +1981,7 @@ impl EditorModel {
             Some((first, last, true)) => self.indent_selected_lines(first, last),
             _ => {
                 let unit = self.active_tab().language_config().indent.indent_unit();
-                self.replace_text_in_range(None, unit, UndoBoundary::Break);
+                self.replace_text(None, unit, UndoBoundary::Break);
             }
         }
     }
@@ -2211,14 +2148,6 @@ impl EditorModel {
         });
     }
 
-    pub fn copy_selection(&mut self) {
-        self.copy_selection_inner();
-    }
-
-    pub fn cut_selection(&mut self) {
-        self.cut_selection_inner();
-    }
-
     pub fn request_paste(&mut self) {
         self.queue_effect(EditorEffect::ReadClipboard);
     }
@@ -2228,38 +2157,16 @@ impl EditorModel {
     }
 
     pub fn paste_text(&mut self, text: String) {
-        self.replace_text_in_range(None, text.clone(), UndoBoundary::Break);
+        self.replace_text(None, text.clone(), UndoBoundary::Break);
         self.status = format!("Pasted {} line(s).", text.lines().count());
-    }
-
-    pub fn open_find_panel(&mut self, show_replace: bool) {
-        let selected = self.active_tab().selected_text();
-        self.open_find(show_replace, selected);
     }
 
     pub fn toggle_find_panel(&mut self, show_replace: bool) {
         if self.find.visible && self.find.show_replace == show_replace {
-            self.close_find();
+            self.close_find_panel();
         } else {
-            let selected = self.active_tab().selected_text();
-            self.open_find(show_replace, selected);
+            self.open_find_panel(show_replace);
         }
-    }
-
-    pub fn close_find_panel(&mut self) {
-        self.close_find();
-    }
-
-    pub fn update_find_query(&mut self, text: String) {
-        self.set_find_query(text);
-    }
-
-    pub fn update_find_query_and_activate(&mut self, text: String) {
-        self.set_find_query_and_activate(text);
-    }
-
-    pub fn update_find_replacement(&mut self, text: String) {
-        self.set_find_replacement(text);
     }
 
     pub fn find_next_match(&mut self) {
@@ -2286,29 +2193,11 @@ impl EditorModel {
         }
     }
 
-    pub fn open_goto_line_panel(&mut self) {
-        self.open_goto_line();
-    }
-
     pub fn toggle_goto_line_panel(&mut self) {
         if self.goto_line.is_some() {
-            self.close_goto_line();
+            self.close_goto_line_panel();
         } else {
-            self.open_goto_line();
-        }
-    }
-
-    pub fn close_goto_line_panel(&mut self) {
-        self.close_goto_line();
-    }
-
-    pub fn update_goto_line(&mut self, text: String) {
-        self.set_goto_line(text);
-    }
-
-    pub fn submit_goto_line_input(&mut self) {
-        if self.submit_goto_line() {
-            self.queue_reveal(RevealIntent::Center);
+            self.open_goto_line_panel();
         }
     }
 
@@ -2557,7 +2446,8 @@ mod tests {
         );
         model.set_active_tab(1);
 
-        model.close_active_tab();
+        let active_id = model.active_tab_id();
+        assert!(model.close_clean_tab_by_id(active_id));
 
         let snapshot = model.snapshot();
         assert_eq!(snapshot.tab_titles, ["one.txt"]);

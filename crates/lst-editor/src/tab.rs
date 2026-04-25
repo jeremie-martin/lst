@@ -68,34 +68,29 @@ struct CachedLines {
     lines: Arc<[String]>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveKind {
+    Regular,
+    Scratchpad,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TabOrigin {
     Untitled,
-    File {
+    Saved {
         path: PathBuf,
         file_stamp: Option<FileStamp>,
-        suppressed_conflict_stamp: Option<FileStamp>,
-    },
-    Scratchpad {
-        path: PathBuf,
-        file_stamp: FileStamp,
+        kind: SaveKind,
         suppressed_conflict_stamp: Option<FileStamp>,
     },
 }
 
 impl TabOrigin {
-    fn file(path: PathBuf, file_stamp: Option<FileStamp>) -> Self {
-        Self::File {
+    fn saved(path: PathBuf, file_stamp: Option<FileStamp>, kind: SaveKind) -> Self {
+        Self::Saved {
             path,
             file_stamp,
-            suppressed_conflict_stamp: None,
-        }
-    }
-
-    fn scratchpad(path: PathBuf, file_stamp: FileStamp) -> Self {
-        Self::Scratchpad {
-            path,
-            file_stamp,
+            kind,
             suppressed_conflict_stamp: None,
         }
     }
@@ -103,117 +98,69 @@ impl TabOrigin {
     pub fn path(&self) -> Option<&PathBuf> {
         match self {
             Self::Untitled => None,
-            Self::File { path, .. } | Self::Scratchpad { path, .. } => Some(path),
+            Self::Saved { path, .. } => Some(path),
         }
     }
 
     pub fn file_stamp(&self) -> Option<FileStamp> {
         match self {
             Self::Untitled => None,
-            Self::File { file_stamp, .. } => *file_stamp,
-            Self::Scratchpad { file_stamp, .. } => Some(*file_stamp),
+            Self::Saved { file_stamp, .. } => *file_stamp,
         }
     }
 
     pub fn is_scratchpad(&self) -> bool {
-        matches!(self, Self::Scratchpad { .. })
+        matches!(
+            self,
+            Self::Saved {
+                kind: SaveKind::Scratchpad,
+                ..
+            }
+        )
     }
 
     pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
         match self {
             Self::Untitled => false,
-            Self::File {
-                suppressed_conflict_stamp,
-                ..
-            }
-            | Self::Scratchpad {
+            Self::Saved {
                 suppressed_conflict_stamp,
                 ..
             } => *suppressed_conflict_stamp == Some(stamp),
         }
     }
 
-    fn set_path_preserving_kind(&mut self, path: PathBuf) {
-        match self {
-            Self::Untitled => *self = Self::file(path, None),
-            Self::File {
-                file_stamp,
-                suppressed_conflict_stamp,
-                ..
-            } => {
-                *self = Self::File {
-                    path,
-                    file_stamp: *file_stamp,
-                    suppressed_conflict_stamp: *suppressed_conflict_stamp,
-                };
-            }
-            Self::Scratchpad {
-                file_stamp,
-                suppressed_conflict_stamp,
-                ..
-            } => {
-                *self = Self::Scratchpad {
-                    path,
-                    file_stamp: *file_stamp,
-                    suppressed_conflict_stamp: *suppressed_conflict_stamp,
-                };
-            }
-        }
-    }
-
     fn mark_saved(&mut self, path: PathBuf, file_stamp: FileStamp) {
-        *self = if self.is_scratchpad() {
-            Self::scratchpad(path, file_stamp)
+        let kind = if self.is_scratchpad() {
+            SaveKind::Scratchpad
         } else {
-            Self::file(path, Some(file_stamp))
+            SaveKind::Regular
         };
+        *self = Self::saved(path, Some(file_stamp), kind);
     }
 
     fn mark_saved_as(&mut self, path: PathBuf, file_stamp: FileStamp) {
-        *self = Self::file(path, Some(file_stamp));
-    }
-
-    fn reset_from_disk(&mut self, path: PathBuf, file_stamp: FileStamp) {
-        *self = if self.is_scratchpad() {
-            Self::scratchpad(path, file_stamp)
-        } else {
-            Self::file(path, Some(file_stamp))
-        };
+        *self = Self::saved(path, Some(file_stamp), SaveKind::Regular);
     }
 
     fn update_file_stamp(&mut self, file_stamp: FileStamp) {
-        match self {
-            Self::Untitled => {}
-            Self::File {
-                file_stamp: stamp,
-                suppressed_conflict_stamp,
-                ..
-            } => {
-                *stamp = Some(file_stamp);
-                *suppressed_conflict_stamp = None;
-            }
-            Self::Scratchpad {
-                file_stamp: stamp,
-                suppressed_conflict_stamp,
-                ..
-            } => {
-                *stamp = file_stamp;
-                *suppressed_conflict_stamp = None;
-            }
+        if let Self::Saved {
+            file_stamp: stamp,
+            suppressed_conflict_stamp,
+            ..
+        } = self
+        {
+            *stamp = Some(file_stamp);
+            *suppressed_conflict_stamp = None;
         }
     }
 
     fn suppress_file_conflict(&mut self, stamp: FileStamp) {
-        match self {
-            Self::Untitled => {}
-            Self::File {
-                suppressed_conflict_stamp,
-                ..
-            }
-            | Self::Scratchpad {
-                suppressed_conflict_stamp,
-                ..
-            } => *suppressed_conflict_stamp = Some(stamp),
+        if let Self::Saved {
+            suppressed_conflict_stamp,
+            ..
+        } = self
+        {
+            *suppressed_conflict_stamp = Some(stamp);
         }
     }
 }
@@ -320,7 +267,12 @@ impl EditorTab {
             .and_then(|name| name.to_str())
             .unwrap_or("scratchpad")
             .to_string();
-        Self::from_origin(id, name_hint, TabOrigin::scratchpad(path, file_stamp), "")
+        Self::from_origin(
+            id,
+            name_hint,
+            TabOrigin::saved(path, Some(file_stamp), SaveKind::Scratchpad),
+            "",
+        )
     }
 
     pub fn from_text(id: TabId, name_hint: String, path: Option<PathBuf>, text: &str) -> Self {
@@ -335,7 +287,7 @@ impl EditorTab {
         file_stamp: Option<FileStamp>,
     ) -> Self {
         let origin = match path {
-            Some(path) => TabOrigin::file(path, file_stamp),
+            Some(path) => TabOrigin::saved(path, file_stamp, SaveKind::Regular),
             None => TabOrigin::Untitled,
         };
         Self::from_origin(id, name_hint, origin, text)
@@ -385,13 +337,6 @@ impl EditorTab {
         self.touch_content();
     }
 
-    pub(crate) fn set_path(&mut self, path: PathBuf) {
-        self.origin.set_path_preserving_kind(path);
-        if self.refresh_language() {
-            self.touch_content();
-        }
-    }
-
     pub fn file_stamp(&self) -> Option<FileStamp> {
         self.origin.file_stamp()
     }
@@ -410,10 +355,6 @@ impl EditorTab {
 
     pub fn buffer_clone(&self) -> Rope {
         self.buffer.clone()
-    }
-
-    pub fn selection(&self) -> Range<usize> {
-        self.selection.range()
     }
 
     pub fn selection_reversed(&self) -> bool {
@@ -641,30 +582,17 @@ impl EditorTab {
         text: &str,
         file_stamp: FileStamp,
     ) {
-        self.origin.reset_from_disk(path, file_stamp);
+        self.origin.mark_saved(path, file_stamp);
         self.reset_from_disk(text);
-    }
-
-    pub(crate) fn mark_clean_at_path(&mut self, path: PathBuf) {
-        self.set_path(path);
-        self.modified = false;
-    }
-
-    pub(crate) fn mark_clean_file_at_path(&mut self, path: PathBuf) {
-        self.origin = TabOrigin::file(path, self.file_stamp());
-        self.refresh_language();
-        self.modified = false;
     }
 
     pub(crate) fn mark_modified(&mut self) {
         self.modified = true;
     }
 
-    pub(crate) fn mark_autosaved(&mut self, file_stamp: Option<FileStamp>) {
+    pub(crate) fn mark_autosaved(&mut self, file_stamp: FileStamp) {
         self.modified = false;
-        if let Some(file_stamp) = file_stamp {
-            self.origin.update_file_stamp(file_stamp);
-        }
+        self.origin.update_file_stamp(file_stamp);
     }
 
     pub(crate) fn suppress_file_conflict(&mut self, stamp: FileStamp) {

@@ -593,7 +593,7 @@ impl LstGpuiApp {
                 stamp,
             } => {
                 self.update_model(cx, true, |model| {
-                    model.save_finished_for_tab(tab_id, path, Some(stamp));
+                    model.save_finished_for_tab(tab_id, path, stamp);
                 });
                 self.finish_pending_after_save(tab_id, true, cx);
             }
@@ -631,7 +631,7 @@ impl LstGpuiApp {
                 stamp,
             } => {
                 self.update_model(cx, true, |model| {
-                    model.save_as_finished_for_tab(tab_id, path.clone(), Some(stamp));
+                    model.save_as_finished_for_tab(tab_id, path.clone(), stamp);
                 });
                 remove_previous_scratchpad_after_save_as(
                     previous_scratchpad_path,
@@ -674,7 +674,7 @@ impl LstGpuiApp {
                 stamp,
             } => {
                 self.update_model(cx, true, |model| {
-                    model.autosave_finished_for_tab(tab_id, path, revision, Some(stamp));
+                    model.autosave_finished_for_tab(tab_id, path, revision, stamp);
                 });
             }
             AutosaveCompletion::Failed {

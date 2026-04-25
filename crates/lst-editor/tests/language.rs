@@ -255,11 +255,7 @@ fn save_as_recomputes_language_from_new_path() {
     assert_eq!(model.active_tab().language(), Some(Language::Python));
 
     let id = model.active_tab_id();
-    model.save_as_finished_for_tab(
-        id,
-        PathBuf::from("main.rs"),
-        Some(FileStamp::from_raw(5, None)),
-    );
+    model.save_as_finished_for_tab(id, PathBuf::from("main.rs"), FileStamp::from_raw(5, None));
     assert_eq!(model.active_tab().language(), Some(Language::Rust));
 
     model.toggle_comment();
@@ -275,7 +271,7 @@ fn save_preserves_explicit_language_override() {
     model.save_finished_for_tab(
         id,
         PathBuf::from("example.py"),
-        Some(FileStamp::from_raw(5, None)),
+        FileStamp::from_raw(5, None),
     );
 
     assert_eq!(model.active_tab().language(), Some(Language::Rust));
@@ -290,7 +286,7 @@ fn save_preserves_explicit_no_language_override() {
     model.save_finished_for_tab(
         id,
         PathBuf::from("example.rs"),
-        Some(FileStamp::from_raw(10, None)),
+        FileStamp::from_raw(10, None),
     );
 
     assert_eq!(model.active_tab().language(), None);
@@ -305,7 +301,7 @@ fn save_as_preserves_explicit_language_override() {
     model.save_as_finished_for_tab(
         id,
         PathBuf::from("example.txt"),
-        Some(FileStamp::from_raw(5, None)),
+        FileStamp::from_raw(5, None),
     );
 
     assert_eq!(model.active_tab().language(), Some(Language::Rust));
@@ -316,7 +312,7 @@ fn saved_untitled_tab_detects_language_from_saved_path() {
     let mut model = EditorModel::empty();
     let id = model.active_tab_id();
 
-    model.save_as_finished_for_tab(id, PathBuf::from("main.rs"), None);
+    model.save_as_finished_for_tab(id, PathBuf::from("main.rs"), FileStamp::from_raw(0, None));
     assert_eq!(model.active_tab().language(), Some(Language::Rust));
 }
 

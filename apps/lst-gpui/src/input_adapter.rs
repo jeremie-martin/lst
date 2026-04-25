@@ -87,7 +87,7 @@ impl EntityInputHandler for LstGpuiApp {
     ) -> Option<UTF16Selection> {
         let tab = self.active_tab();
         Some(UTF16Selection {
-            range: char_range_to_utf16_range(tab.buffer(), &tab.selection()),
+            range: char_range_to_utf16_range(tab.buffer(), &tab.selected_range()),
             reversed: tab.selection_reversed(),
         })
     }

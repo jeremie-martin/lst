@@ -418,7 +418,7 @@ impl Render for LstGpuiApp {
                 active_tab.revision(),
                 syntax_mode_for_language(active_tab.language()),
                 active_tab.buffer_clone(),
-                active_tab.selection(),
+                active_tab.selected_range(),
                 if show_search_decorations {
                     self.model.find_match_ranges()
                 } else {

@@ -515,7 +515,7 @@ fn editor_scrollbar_drag_scrolls_without_text_selection(cx: &mut TestAppContext)
         view.update(cx, |app, _cx| {
             (
                 crate::viewport::scroll_top_for(&app.active_view().scroll),
-                app.model.active_tab().selection(),
+                app.model.active_tab().selected_range(),
                 app.selection_drag.is_some(),
                 app.editor_scrollbar_drag.is_some(),
             )
@@ -563,7 +563,7 @@ fn editor_scrollbar_track_click_pages_without_text_selection(cx: &mut TestAppCon
     let (scroll_top, selection, active_text_drag) = view.update(cx, |app, _cx| {
         (
             crate::viewport::scroll_top_for(&app.active_view().scroll),
-            app.model.active_tab().selection(),
+            app.model.active_tab().selected_range(),
             app.selection_drag.is_some(),
         )
     });
