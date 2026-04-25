@@ -18,7 +18,7 @@ use crate::viewport::{
     buffer_content_height, paint_viewport, prepare_viewport_paint_state, scroll_top_for,
     ViewportPaintInput, ViewportPreparation, WrapLayoutInput,
 };
-use crate::{code_char_width, ensure_wrap_layout, EditorScrollbarDrag, LstGpuiApp};
+use crate::{code_char_width, ensure_wrap_layout, EditorScrollbarDrag, FocusTarget, LstGpuiApp};
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
@@ -45,7 +45,7 @@ impl LstGpuiApp {
                 cx.notify();
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.persistent_overlay_focus = None;
+                this.set_focus(FocusTarget::Editor);
                 this.update_model(cx, true, |model| {
                     model.set_active_tab(ix);
                 });
@@ -55,7 +55,7 @@ impl LstGpuiApp {
             .on_mouse_up(
                 MouseButton::Middle,
                 cx.listener(move |this, _: &MouseUpEvent, window, cx| {
-                    this.persistent_overlay_focus = None;
+                    this.set_focus(FocusTarget::Editor);
                     this.request_close_tab_at(ix, cx);
                     window.focus(&this.focus_handle);
                     cx.stop_propagation();
@@ -257,7 +257,7 @@ impl LstGpuiApp {
                                 None
                             };
                             entity_for_down.update(cx, |this, _| {
-                                this.persistent_overlay_focus = None;
+                                this.set_focus(FocusTarget::Editor);
                                 this.selection_drag = None;
                                 this.editor_scrollbar_hovered = on_thumb;
                                 this.editor_scrollbar_drag = drag;
@@ -618,8 +618,7 @@ impl Render for LstGpuiApp {
                     .child(self.render_status_bar()),
             );
         self.schedule_pending_reveal(window, cx);
-        self.apply_pending_focus(window, cx);
-        self.maintain_overlay_focus(window, cx);
+        self.apply_focus(window, cx);
         root
     }
 }

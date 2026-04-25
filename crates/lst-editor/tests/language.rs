@@ -2,11 +2,8 @@ use lst_editor::position::Position;
 use lst_editor::{EditorModel, EditorTab, FileStamp, Language, TabId};
 use std::path::PathBuf;
 
-fn model_with_tabs(tabs: Vec<EditorTab>, status: String) -> EditorModel {
-    let mut tabs = tabs.into_iter();
-    let first = tabs.next().expect("test model needs at least one tab");
-    EditorModel::from_tabs(first, tabs.collect(), status)
-}
+mod common;
+use common::model_with_tabs;
 
 fn model_with_path(path: &str, text: &str) -> EditorModel {
     model_with_tabs(

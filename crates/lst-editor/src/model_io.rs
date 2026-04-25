@@ -41,16 +41,11 @@ impl EditorModel {
                 expected_stamp: tab.file_stamp(),
             });
         } else {
-            let previous_scratchpad_path = if tab.is_scratchpad() {
-                tab.path().cloned()
-            } else {
-                None
-            };
             self.queue_effect(EditorEffect::SaveFileAs {
                 tab_id,
                 suggested_name: tab.display_name(),
                 body,
-                previous_scratchpad_path,
+                previous_scratchpad_path: tab.scratchpad_path_for_cleanup(),
             });
         }
     }
@@ -63,16 +58,11 @@ impl EditorModel {
         let Some(tab) = self.tab_by_id(tab_id) else {
             return;
         };
-        let previous_scratchpad_path = if tab.is_scratchpad() {
-            tab.path().cloned()
-        } else {
-            None
-        };
         self.queue_effect(EditorEffect::SaveFileAs {
             tab_id,
             suggested_name: tab.display_name(),
             body: tab.buffer_text(),
-            previous_scratchpad_path,
+            previous_scratchpad_path: tab.scratchpad_path_for_cleanup(),
         });
     }
 
@@ -97,12 +87,6 @@ impl EditorModel {
 
     pub fn save_failed(&mut self, path: PathBuf, message: String) {
         self.status = format!("Failed to save {}: {message}", path.display());
-    }
-
-    pub fn save_failed_for_tab(&mut self, tab_id: TabId, path: PathBuf, message: String) {
-        if self.tab_by_id(tab_id).is_some() {
-            self.status = format!("Failed to save {}: {message}", path.display());
-        }
     }
 
     pub fn autosave_tick(&mut self) {
@@ -148,23 +132,21 @@ impl EditorModel {
         revision: u64,
         file_stamp: FileStamp,
     ) {
-        for tab in self.tabs.iter_mut() {
-            if tab.id() == tab_id && tab.path() == Some(&path) && tab.revision() == revision {
-                tab.mark_autosaved(file_stamp);
-            }
+        let active_id = self.active_tab_id();
+        let Some(tab) = self.tab_mut_by_id(tab_id) else {
+            return;
+        };
+        if tab.path() != Some(&path) || tab.revision() != revision {
+            return;
         }
-        if self.active_tab().id() == tab_id
-            && self.active_tab().path() == Some(&path)
-            && self.active_tab().revision() == revision
-        {
+        tab.mark_autosaved(file_stamp);
+        if tab_id == active_id {
             self.status = format!("Autosaved {}.", path.display());
         }
     }
 
-    pub fn autosave_failed_for_tab(&mut self, tab_id: TabId, path: PathBuf, message: String) {
-        if self.active_tab().id() == tab_id {
-            self.status = format!("Autosave failed for {}: {message}", path.display());
-        }
+    pub fn autosave_failed(&mut self, path: PathBuf, message: String) {
+        self.status = format!("Autosave failed for {}: {message}", path.display());
     }
 
     pub fn reload_tab_from_disk(
@@ -183,10 +165,8 @@ impl EditorModel {
         true
     }
 
-    pub fn reload_failed(&mut self, tab_id: TabId, path: PathBuf, message: String) {
-        if self.tab_by_id(tab_id).is_some() {
-            self.status = format!("Failed to reload {}: {message}", path.display());
-        }
+    pub fn reload_failed(&mut self, path: PathBuf, message: String) {
+        self.status = format!("Failed to reload {}: {message}", path.display());
     }
 
     pub fn suppress_file_conflict(&mut self, tab_id: TabId, path: PathBuf, stamp: FileStamp) {

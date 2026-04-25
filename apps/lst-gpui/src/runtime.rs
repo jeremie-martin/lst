@@ -11,10 +11,9 @@ use std::{
 
 use crate::{elapsed_ms, LstGpuiApp, PendingAfterSave};
 
-mod clipboard;
+pub(crate) mod clipboard;
 mod scratchpad;
 
-use clipboard::persist_clipboards_after_exit;
 pub(crate) use scratchpad::create_scratchpad_note;
 #[cfg(test)]
 use scratchpad::create_scratchpad_note_with_timestamp;
@@ -107,7 +106,7 @@ impl LstGpuiApp {
     ) {
         for effect in effects {
             match effect {
-                EditorEffect::Focus(target) => self.queue_focus(target),
+                EditorEffect::Focus(target) => self.set_focus(target),
                 EditorEffect::Reveal(intent) => self.queue_cursor_reveal(intent),
                 EditorEffect::WriteClipboard(text) => {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -402,7 +401,7 @@ impl LstGpuiApp {
             }
             Err(err) => {
                 self.update_model(cx, true, |model| {
-                    model.reload_failed(tab_id, path, err.to_string());
+                    model.reload_failed(path, err.to_string());
                 });
             }
         }
@@ -528,19 +527,16 @@ impl LstGpuiApp {
     }
 
     fn finish_quit(&mut self, cx: &mut Context<Self>) {
-        let text = self.model.active_tab().buffer_text();
-        persist_clipboards_after_exit(&text);
+        self.exit_clipboard
+            .persist(&self.model.active_tab().buffer_text());
         self.cleanup_empty_scratchpad_files();
         // X11 WM_DELETE_WINDOW already holds GPUI's X11 client RefCell,
-        // so defer exit until the current frame releases it. Real builds
-        // rely on the external clipboard owner above instead of in-process
-        // writes (which would re-enter that same RefCell).
+        // so defer exit until the current frame releases it. Production
+        // shutdown calls `process::exit`; tests cannot terminate the host
+        // process and instead route through GPUI's `quit` so the test
+        // harness can observe the shutdown and assert on captured state.
         #[cfg(test)]
-        cx.defer(move |app| {
-            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-            app.write_to_primary(ClipboardItem::new_string(text));
-            app.quit();
-        });
+        cx.defer(|app| app.quit());
         #[cfg(not(test))]
         cx.defer(|_| process::exit(0));
     }
@@ -603,7 +599,7 @@ impl LstGpuiApp {
                 message,
             } => {
                 self.update_model(cx, true, |model| {
-                    model.save_failed_for_tab(tab_id, path, message);
+                    model.save_failed(path, message);
                 });
                 self.finish_pending_after_save(tab_id, false, cx);
             }
@@ -646,7 +642,7 @@ impl LstGpuiApp {
                 message,
             } => {
                 self.update_model(cx, true, |model| {
-                    model.save_failed_for_tab(tab_id, path, message);
+                    model.save_failed(path, message);
                 });
                 self.finish_pending_after_save(tab_id, false, cx);
             }
@@ -678,12 +674,12 @@ impl LstGpuiApp {
                 });
             }
             AutosaveCompletion::Failed {
-                tab_id,
+                tab_id: _,
                 path,
                 message,
             } => {
                 self.update_model(cx, true, |model| {
-                    model.autosave_failed_for_tab(tab_id, path, message);
+                    model.autosave_failed(path, message);
                 });
             }
             AutosaveCompletion::Conflict {
@@ -724,7 +720,7 @@ impl LstGpuiApp {
             self.model
                 .tabs()
                 .iter()
-                .find_map(|tab| tab.is_scratchpad().then(|| tab.path()).flatten())
+                .find_map(ModelEditorTab::scratchpad_path)
                 .and_then(|path| path.parent())
         })
     }

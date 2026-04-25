@@ -3,15 +3,39 @@ use std::{
     process::{Command, Stdio},
 };
 
+/// Persist the active tab's text into the system clipboard at app shutdown.
+/// The production impl forks a clipboard owner process so contents survive `lst` exiting;
+/// live copy/paste during a session goes through GPUI's own clipboard, not this trait.
+pub(crate) trait ExitClipboard: Send + Sync + 'static {
+    fn persist(&self, text: &str);
+}
+
+pub(crate) struct SubprocessExitClipboard;
+
+impl ExitClipboard for SubprocessExitClipboard {
+    fn persist(&self, text: &str) {
+        persist_selection_after_exit(SystemSelection::Clipboard, text);
+        persist_selection_after_exit(SystemSelection::Primary, text);
+    }
+}
+
+#[cfg(test)]
+#[derive(Default, Clone)]
+pub(crate) struct CapturingExitClipboard {
+    pub(crate) persisted: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[cfg(test)]
+impl ExitClipboard for CapturingExitClipboard {
+    fn persist(&self, text: &str) {
+        self.persisted.lock().unwrap().push(text.to_string());
+    }
+}
+
 #[derive(Clone, Copy)]
 enum SystemSelection {
     Clipboard,
     Primary,
-}
-
-pub(super) fn persist_clipboards_after_exit(text: &str) {
-    persist_selection_after_exit(SystemSelection::Clipboard, text);
-    persist_selection_after_exit(SystemSelection::Primary, text);
 }
 
 fn persist_selection_after_exit(selection: SystemSelection, text: &str) {

@@ -9,7 +9,7 @@ use lst_editor::{
 use crate::viewport::scroll_top_for;
 use std::ops::Range;
 
-use crate::{ui::theme::metrics, LstGpuiApp};
+use crate::{ui::theme::metrics, FocusTarget, LstGpuiApp};
 
 #[derive(Clone, Debug)]
 pub(crate) enum DragSelectionMode {
@@ -42,7 +42,7 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.persistent_overlay_focus = None;
+        self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);
         let index = self.active_char_index_for_point(event.position);
         if event.click_count >= 3 {
@@ -78,7 +78,7 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.persistent_overlay_focus = None;
+        self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);
         self.cancel_drag_selection();
 

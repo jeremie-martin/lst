@@ -9,6 +9,8 @@ use gpui::{
 };
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorModel, EditorTab, TabId};
+#[cfg(feature = "internal-invariants")]
+use std::collections::HashMap;
 use std::{
     process,
     sync::atomic::{AtomicUsize, Ordering},
@@ -72,8 +74,20 @@ fn temp_dir(label: &str) -> PathBuf {
 
 fn new_test_app(
     cx: &mut TestAppContext,
-    mut launch: LaunchArgs,
+    launch: LaunchArgs,
 ) -> (Entity<LstGpuiApp>, &mut VisualTestContext) {
+    let (view, cx, _captured) = new_test_app_capturing(cx, launch);
+    (view, cx)
+}
+
+fn new_test_app_capturing(
+    cx: &mut TestAppContext,
+    mut launch: LaunchArgs,
+) -> (
+    Entity<LstGpuiApp>,
+    &mut VisualTestContext,
+    crate::runtime::clipboard::CapturingExitClipboard,
+) {
     if launch.files.is_empty() && launch.scratchpad_dir.is_none() {
         launch.scratchpad_dir = Some(temp_dir("scratchpads"));
     }
@@ -81,22 +95,30 @@ fn new_test_app(
         cx.bind_keys(editor_keybindings());
         cx.bind_keys(input_keybindings());
     });
+    let captured = crate::runtime::clipboard::CapturingExitClipboard::default();
     let (view, cx) = cx.add_window_view(|_, cx| LstGpuiApp::new(cx, launch));
+    view.update(cx, |app, _| {
+        app.exit_clipboard = std::sync::Arc::new(captured.clone());
+    });
     cx.update(|window, cx| {
         window.focus(&view.read(cx).focus_handle);
         window.activate_window();
     });
     cx.run_until_parked();
-    (view, cx)
+    (view, cx, captured)
 }
 
 fn app_snapshot(view: &Entity<LstGpuiApp>, cx: &mut VisualTestContext) -> AppSnapshot {
     view.update(cx, |app, cx| app.snapshot(cx))
 }
 
+#[cfg(feature = "internal-invariants")]
 fn assert_tab_views_match_model(snapshot: &AppSnapshot) {
     assert_eq!(snapshot.tab_view_ids, snapshot.model.tab_ids);
 }
+
+#[cfg(not(feature = "internal-invariants"))]
+fn assert_tab_views_match_model(_snapshot: &AppSnapshot) {}
 
 fn is_timestamped_scratchpad_name(name: &str) -> bool {
     if name.len() != "YYYY-MM-DD_HH-MM-SS.md".len() {
@@ -115,10 +137,7 @@ fn is_timestamped_scratchpad_name(name: &str) -> bool {
 fn active_viewport_size(view: &Entity<LstGpuiApp>, cx: &mut VisualTestContext) -> (i32, i32) {
     view.update(cx, |app, _cx| {
         let bounds = app
-            .active_view()
-            .geometry
-            .borrow()
-            .bounds
+            .active_viewport_bounds()
             .expect("viewport should have rendered bounds");
         (
             (bounds.size.width / px(1.0)).round() as i32,
@@ -145,30 +164,16 @@ fn active_cursor_viewport_state(
     cx: &mut VisualTestContext,
 ) -> (f32, f32, f32, usize, f32, usize) {
     view.update(cx, |app, _cx| {
-        let active_view = app.active_view();
-        let bounds = active_view
-            .geometry
-            .borrow()
-            .bounds
-            .expect("viewport should have rendered bounds");
-        let cache = active_view.cache.borrow();
-        let layout = cache
-            .wrap_layout
-            .as_ref()
-            .expect("wrap layout should have been prepared");
-        let cursor_row = crate::viewport::visual_row_for_char(app.active_tab(), &layout.layout)
-            .expect("cursor should map to a visual row");
-        let scroll_top = crate::viewport::scroll_top_for(&active_view.scroll);
-        let max_offset = active_view.scroll.max_offset().height.max(px(0.0));
-        let row_height = app.ui_px(crate::ui::theme::metrics::ROW_HEIGHT);
-
+        let obs = app
+            .observable_cursor_viewport()
+            .expect("cursor viewport should be observable after paint");
         (
-            scroll_top / px(1.0),
-            bounds.size.height / px(1.0),
-            row_height / px(1.0),
-            cursor_row,
-            max_offset / px(1.0),
-            layout.layout.total_rows,
+            obs.scroll_top,
+            obs.viewport_height,
+            obs.row_height,
+            obs.cursor_row,
+            obs.max_offset,
+            obs.total_rows,
         )
     })
 }
@@ -178,12 +183,10 @@ fn active_editor_scrollbar_layout(
     cx: &mut VisualTestContext,
 ) -> Option<VerticalScrollbarLayout> {
     view.update(cx, |app, _cx| {
-        let active_view = app.active_view();
-        let bounds = active_view
-            .geometry
-            .borrow()
-            .bounds
+        let bounds = app
+            .active_viewport_bounds()
             .expect("viewport should have rendered bounds");
+        let active_view = app.active_view();
         vertical_scrollbar_layout(
             Bounds::new(
                 point(
@@ -426,10 +429,7 @@ fn middle_click_pastes_gpui_primary_selection(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let paste_position = view.update(cx, |app, _cx| {
         let bounds = app
-            .active_view()
-            .geometry
-            .borrow()
-            .bounds
+            .active_viewport_bounds()
             .expect("viewport should have rendered bounds");
         point(bounds.left() + px(80.0), bounds.top() + px(8.0))
     });
@@ -460,10 +460,7 @@ fn mouse_selection_updates_gpui_primary_selection(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let (start, end) = view.update(cx, |app, _cx| {
         let bounds = app
-            .active_view()
-            .geometry
-            .borrow()
-            .bounds
+            .active_viewport_bounds()
             .expect("viewport should have rendered bounds");
         let x = bounds.left() + code_origin_pad(app.model.show_gutter(), app.ui_scale()) + px(1.0);
         let y = bounds.top() + px(8.0);
@@ -629,7 +626,7 @@ fn app_find_input_flow_is_observable_at_app_boundary(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     let snapshot = app_snapshot(&view, cx);
     assert!(!snapshot.model.find_visible);
-    assert_eq!(snapshot.pending_focus, None);
+    assert_eq!(snapshot.focus_target, FocusTarget::Editor);
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
 }
@@ -712,10 +709,7 @@ fn hover_after_find_with_stale_drag_state_does_not_select_text(cx: &mut TestAppC
 
     let hover_position = view.update(cx, |app, _cx| {
         let bounds = app
-            .active_view()
-            .geometry
-            .borrow()
-            .bounds
+            .active_viewport_bounds()
             .expect("viewport should have rendered bounds");
         let x = bounds.left() + code_origin_pad(app.model.show_gutter(), app.ui_scale()) + px(1.0);
         let y = bounds.top() + px(8.0);
@@ -824,10 +818,8 @@ fn rendered_wrapped_rows_fill_viewport_width_except_remainder(cx: &mut TestAppCo
     cx.run_until_parked();
 
     cx.update_window_entity(&view, |app, window, _cx| {
-        let geometry = app.active_view().geometry.borrow();
-        let bounds = geometry.bounds.expect("viewport bounds");
-        let rows = geometry.rows.clone();
-        drop(geometry);
+        let bounds = app.active_viewport_bounds().expect("viewport bounds");
+        let rows = app.active_painted_rows();
 
         let char_width = crate::viewport::code_char_width(window, app.ui_scale());
         let wrap_columns = app.active_wrap_columns(window);
@@ -931,10 +923,8 @@ fn exact_wrap_multiples_fill_every_visual_row(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     cx.update_window_entity(&view, |app, window, _cx| {
-        let geometry = app.active_view().geometry.borrow();
-        let bounds = geometry.bounds.expect("viewport bounds");
-        let rows = geometry.rows.clone();
-        drop(geometry);
+        let bounds = app.active_viewport_bounds().expect("viewport bounds");
+        let rows = app.active_painted_rows();
 
         let wrap_columns = app.active_wrap_columns(window);
         let char_width = crate::viewport::code_char_width(window, app.ui_scale()) / px(1.0);
@@ -976,6 +966,8 @@ fn status_details_include_wrap_columns_after_render(cx: &mut TestAppContext) {
     assert!(details.contains(" cols"));
 }
 
+// Seeds the wrap-layout cache directly; demoted from the blind-refactor gate.
+#[cfg(feature = "internal-invariants")]
 #[gpui::test]
 fn status_details_ignore_wrap_layouts_that_have_not_been_painted(cx: &mut TestAppContext) {
     let (view, cx) = new_test_app(cx, LaunchArgs::default());
@@ -1222,15 +1214,13 @@ fn dirty_quit_cancel_keeps_unsaved_edits_without_clipboard_write(cx: &mut TestAp
     let dir = temp_dir("quit-cancel");
     let path = dir.join("note.txt");
     std::fs::write(&path, "old").expect("write quit-cancel fixture");
-    let (view, cx) = new_test_app(
+    let (view, cx, captured) = new_test_app_capturing(
         cx,
         LaunchArgs {
             files: vec![path.clone()],
             ..LaunchArgs::default()
         },
     );
-    cx.write_to_clipboard(ClipboardItem::new_string("before".to_string()));
-    cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("before".to_string())));
     cx.update_window_entity(&view, |app, window, cx| {
         app.replace_text_in_range(None, "new ", window, cx);
     });
@@ -1248,13 +1238,9 @@ fn dirty_quit_cancel_keeps_unsaved_edits_without_clipboard_write(cx: &mut TestAp
         std::fs::read_to_string(&path).expect("read quit-cancel file"),
         "old"
     );
-    assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("before".to_string())
-    );
-    assert_eq!(
-        cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text())),
-        Some("before".to_string())
+    assert!(
+        captured.persisted.lock().unwrap().is_empty(),
+        "cancelling quit must not persist clipboard contents"
     );
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
@@ -1265,7 +1251,7 @@ fn dirty_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
     let dir = temp_dir("quit-save");
     let path = dir.join("note.txt");
     std::fs::write(&path, "old").expect("write quit-save fixture");
-    let (view, cx) = new_test_app(
+    let (view, cx, captured) = new_test_app_capturing(
         cx,
         LaunchArgs {
             files: vec![path.clone()],
@@ -1287,12 +1273,8 @@ fn dirty_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
         "new old"
     );
     assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("new old".to_string())
-    );
-    assert_eq!(
-        cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text())),
-        Some("new old".to_string())
+        captured.persisted.lock().unwrap().as_slice(),
+        ["new old".to_string()].as_slice(),
     );
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
@@ -1301,7 +1283,7 @@ fn dirty_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
 #[gpui::test]
 fn dirty_scratchpad_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
     let dir = temp_dir("quit-save-scratchpad");
-    let (view, cx) = new_test_app(
+    let (view, cx, captured) = new_test_app_capturing(
         cx,
         LaunchArgs {
             scratchpad_dir: Some(dir.clone()),
@@ -1328,23 +1310,19 @@ fn dirty_scratchpad_quit_save_writes_before_copying_clipboards(cx: &mut TestAppC
         "scratch text"
     );
     assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("scratch text".to_string())
-    );
-    assert_eq!(
-        cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text())),
-        Some("scratch text".to_string())
+        captured.persisted.lock().unwrap().as_slice(),
+        ["scratch text".to_string()].as_slice(),
     );
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
 }
 
 #[gpui::test]
-fn quit_copies_active_text_to_clipboard_and_primary(cx: &mut TestAppContext) {
+fn quit_persists_active_text_to_system_clipboard(cx: &mut TestAppContext) {
     let dir = temp_dir("quit-copy");
     let path = dir.join("note.txt");
     std::fs::write(&path, "quit text").expect("write quit-copy fixture");
-    let (view, cx) = new_test_app(
+    let (view, cx, captured) = new_test_app_capturing(
         cx,
         LaunchArgs {
             files: vec![path],
@@ -1358,12 +1336,8 @@ fn quit_copies_active_text_to_clipboard_and_primary(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("quit text".to_string())
-    );
-    assert_eq!(
-        cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text())),
-        Some("quit text".to_string())
+        captured.persisted.lock().unwrap().as_slice(),
+        ["quit text".to_string()].as_slice(),
     );
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
@@ -1551,8 +1525,8 @@ fn syntax_highlight_result_requires_matching_active_revision_and_language() {
     let rust_view = EditorTabView::new(&rust_tab);
     let rust_cache = rust_view.cache.clone();
     let rust_model = EditorModel::from_tab(rust_tab, "Ready.".to_string());
-    let mut rust_store = TabViewStore::default();
-    rust_store.views.insert(rust_tab_id, rust_view);
+    let mut rust_store: HashMap<TabId, EditorTabView> = HashMap::new();
+    rust_store.insert(rust_tab_id, rust_view);
     let rust_key = SyntaxHighlightJobKey {
         language: SyntaxLanguage::Rust,
         revision: 0,
@@ -1571,8 +1545,8 @@ fn syntax_highlight_result_requires_matching_active_revision_and_language() {
     let stale_cache = stale_view.cache.clone();
     stale_tab.replace_char_range(0..0, "// ");
     let stale_model = EditorModel::from_tab(stale_tab, "Ready.".to_string());
-    let mut stale_store = TabViewStore::default();
-    stale_store.views.insert(stale_tab_id, stale_view);
+    let mut stale_store: HashMap<TabId, EditorTabView> = HashMap::new();
+    stale_store.insert(stale_tab_id, stale_view);
     assert!(!syntax_highlight_result_is_current(
         &stale_model,
         &stale_store,
@@ -1586,8 +1560,8 @@ fn syntax_highlight_result_requires_matching_active_revision_and_language() {
     let python_view = EditorTabView::new(&python_tab);
     let python_cache = python_view.cache.clone();
     let python_model = EditorModel::from_tab(python_tab, "Ready.".to_string());
-    let mut python_store = TabViewStore::default();
-    python_store.views.insert(python_tab_id, python_view);
+    let mut python_store: HashMap<TabId, EditorTabView> = HashMap::new();
+    python_store.insert(python_tab_id, python_view);
     assert!(!syntax_highlight_result_is_current(
         &python_model,
         &python_store,

@@ -93,10 +93,19 @@ mod tests {
     #[test]
     fn session_header_includes_version_pid_and_timestamp() {
         let header = format_session_header(fixed_time(), 12345, "0.1.0");
-        assert!(header.contains("lst v0.1.0"), "header missing version: {header}");
-        assert!(header.contains("2026-04-25 14:30:00"), "header missing timestamp: {header}");
+        assert!(
+            header.contains("lst v0.1.0"),
+            "header missing version: {header}"
+        );
+        assert!(
+            header.contains("2026-04-25 14:30:00"),
+            "header missing timestamp: {header}"
+        );
         assert!(header.contains("pid 12345"), "header missing pid: {header}");
-        assert!(header.starts_with('\n'), "header should start with newline so entries don't run together");
+        assert!(
+            header.starts_with('\n'),
+            "header should start with newline so entries don't run together"
+        );
     }
 
     #[test]

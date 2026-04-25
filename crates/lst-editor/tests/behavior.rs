@@ -8,15 +8,12 @@ use lst_editor::{
     UndoBoundary,
 };
 
+mod common;
+use common::model_with_tabs;
+
 fn enter_vim_normal(model: &mut EditorModel) {
     model.handle_vim_escape();
     let _ = model.drain_effects();
-}
-
-fn model_with_tabs(tabs: Vec<EditorTab>, status: String) -> EditorModel {
-    let mut tabs = tabs.into_iter();
-    let first = tabs.next().expect("test model needs at least one tab");
-    EditorModel::from_tabs(first, tabs.collect(), status)
 }
 
 fn dummy_stamp() -> FileStamp {

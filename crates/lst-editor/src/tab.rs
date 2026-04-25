@@ -345,6 +345,14 @@ impl EditorTab {
         self.origin.is_scratchpad()
     }
 
+    pub fn scratchpad_path(&self) -> Option<&PathBuf> {
+        self.is_scratchpad().then(|| self.path()).flatten()
+    }
+
+    pub fn scratchpad_path_for_cleanup(&self) -> Option<PathBuf> {
+        self.scratchpad_path().cloned()
+    }
+
     pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
         self.origin.conflict_suppressed_for(stamp)
     }

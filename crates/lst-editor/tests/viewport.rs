@@ -3,11 +3,8 @@ use lst_editor::{
     EditorEffect, EditorModel, EditorTab, RevealIntent, TabId,
 };
 
-fn model_with_tabs(tabs: Vec<EditorTab>, status: String) -> EditorModel {
-    let mut tabs = tabs.into_iter();
-    let first = tabs.next().expect("test model needs at least one tab");
-    EditorModel::from_tabs(first, tabs.collect(), status)
-}
+mod common;
+use common::model_with_tabs;
 
 fn long_model() -> EditorModel {
     let text = (0..200)

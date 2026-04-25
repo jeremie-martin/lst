@@ -33,12 +33,14 @@ use lst_editor::{
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
+use runtime::clipboard::{ExitClipboard, SubprocessExitClipboard};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     path::PathBuf,
     process,
     rc::Rc,
+    sync::Arc,
     time::Instant,
 };
 use syntax::{
@@ -159,61 +161,10 @@ impl EditorTabView {
     }
 }
 
-#[derive(Default)]
-struct TabViewStore {
-    views: HashMap<TabId, EditorTabView>,
-}
-
-impl TabViewStore {
-    fn from_tabs(tabs: &[ModelEditorTab]) -> Self {
-        Self {
-            views: tabs
-                .iter()
-                .map(|tab| (tab.id(), EditorTabView::new(tab)))
-                .collect(),
-        }
-    }
-
-    fn sync(&mut self, tabs: &[ModelEditorTab], old_show_wrap: bool, show_wrap: bool) {
-        let tab_ids = tabs.iter().map(ModelEditorTab::id).collect::<HashSet<_>>();
-        self.views.retain(|tab_id, _| tab_ids.contains(tab_id));
-        for tab in tabs {
-            let view = self
-                .views
-                .entry(tab.id())
-                .or_insert_with(|| EditorTabView::new(tab));
-            if view.revision != tab.revision() || old_show_wrap != show_wrap {
-                view.revision = tab.revision();
-                view.invalidate_visual_state();
-            }
-        }
-    }
-
-    fn get(&self, tab_id: TabId) -> Option<&EditorTabView> {
-        self.views.get(&tab_id)
-    }
-
-    fn active(&self, model: &EditorModel) -> &EditorTabView {
-        self.get(model.active_tab_id())
-            .expect("active tab must have a tab view")
-    }
-
-    #[cfg(test)]
-    fn ids_for_tabs(&self, tabs: &[ModelEditorTab]) -> Vec<TabId> {
-        tabs.iter()
-            .filter_map(|tab| self.views.get_key_value(&tab.id()).map(|(id, _)| *id))
-            .collect()
-    }
-
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut EditorTabView> {
-        self.views.values_mut()
-    }
-}
-
 struct LstGpuiApp {
     focus_handle: FocusHandle,
     model: EditorModel,
-    tab_views: TabViewStore,
+    tab_views: HashMap<TabId, EditorTabView>,
     tab_bar_scroll: ScrollHandle,
     hovered_tab: Option<usize>,
     selection_drag: Option<ActiveDragSelection>,
@@ -222,8 +173,8 @@ struct LstGpuiApp {
     find_query_input: Entity<InputField>,
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
-    pending_focus: Option<FocusTarget>,
-    persistent_overlay_focus: Option<FocusTarget>,
+    focus_target: FocusTarget,
+    focus_last_applied: FocusTarget,
     pending_after_save: Option<PendingAfterSave>,
     pending_reveal: Option<RevealIntent>,
     reveal_scheduled: bool,
@@ -231,6 +182,7 @@ struct LstGpuiApp {
     autosave_started: bool,
     scratchpad_dir: Option<PathBuf>,
     zoom_level: i32,
+    exit_clipboard: Arc<dyn ExitClipboard>,
     _shell_subscriptions: Vec<Subscription>,
 }
 
@@ -241,12 +193,11 @@ impl LstGpuiApp {
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line[:Column]"));
         let scratchpad_dir = launch.scratchpad_dir.clone();
         let model = initial_model_from_launch(launch);
-        let tab_views = TabViewStore::from_tabs(model.tabs());
 
         let mut app = Self {
             focus_handle: cx.focus_handle(),
             model,
-            tab_views,
+            tab_views: HashMap::new(),
             tab_bar_scroll: ScrollHandle::new(),
             hovered_tab: None,
             selection_drag: None,
@@ -255,8 +206,8 @@ impl LstGpuiApp {
             find_query_input: find_query_input.clone(),
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
-            pending_focus: None,
-            persistent_overlay_focus: None,
+            focus_target: FocusTarget::Editor,
+            focus_last_applied: FocusTarget::Editor,
             pending_after_save: None,
             pending_reveal: None,
             reveal_scheduled: false,
@@ -264,8 +215,11 @@ impl LstGpuiApp {
             autosave_started: false,
             scratchpad_dir,
             zoom_level: 0,
+            exit_clipboard: Arc::new(SubprocessExitClipboard),
             _shell_subscriptions: Vec::new(),
         };
+        let show_wrap = app.model.show_wrap();
+        app.sync_tab_views(show_wrap);
 
         app._shell_subscriptions.push(
             cx.subscribe(&find_query_input, |this, _, event: &InputFieldEvent, cx| {
@@ -292,10 +246,48 @@ impl LstGpuiApp {
             find_query_input: self.find_query_input.read(cx).text(),
             find_replace_input: self.find_replace_input.read(cx).text(),
             goto_line_input: self.goto_line_input.read(cx).text(),
-            pending_focus: self.pending_focus,
-            tab_view_ids: self.tab_views.ids_for_tabs(self.model.tabs()),
+            focus_target: self.focus_target,
+            #[cfg(feature = "internal-invariants")]
+            tab_view_ids: self
+                .model
+                .tabs()
+                .iter()
+                .filter(|tab| self.tab_views.contains_key(&tab.id()))
+                .map(|tab| tab.id())
+                .collect(),
             zoom_level: self.zoom_level,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_viewport_bounds(&self) -> Option<gpui::Bounds<Pixels>> {
+        self.active_view().geometry.borrow().bounds
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_painted_rows(&self) -> Vec<viewport::PaintedRow> {
+        self.active_view().geometry.borrow().rows.clone()
+    }
+
+    /// `None` until the wrap layout has been built for the current tab.
+    #[cfg(test)]
+    pub(crate) fn observable_cursor_viewport(&self) -> Option<ObservableCursorViewport> {
+        let active_view = self.active_view();
+        let bounds = active_view.geometry.borrow().bounds?;
+        let cache = active_view.cache.borrow();
+        let layout = cache.wrap_layout.as_ref()?;
+        let cursor_row = visual_row_for_char(self.active_tab(), &layout.layout)?;
+        let scroll_top = scroll_top_for(&active_view.scroll);
+        let max_offset = active_view.scroll.max_offset().height.max(px(0.0));
+        let row_height = self.ui_px(metrics::ROW_HEIGHT);
+        Some(ObservableCursorViewport {
+            scroll_top: scroll_top / px(1.0),
+            viewport_height: bounds.size.height / px(1.0),
+            row_height: row_height / px(1.0),
+            cursor_row,
+            max_offset: max_offset / px(1.0),
+            total_rows: layout.layout.total_rows,
+        })
     }
 
     fn ui_scale(&self) -> f32 {
@@ -314,7 +306,7 @@ impl LstGpuiApp {
 
         self.zoom_level = level;
         window.set_rem_size(self.ui_px(metrics::BASE_REM_SIZE));
-        for view in self.tab_views.iter_mut() {
+        for view in self.tab_views.values_mut() {
             view.invalidate_visual_state();
         }
         cx.notify();
@@ -332,87 +324,59 @@ impl LstGpuiApp {
         self.set_zoom_level(0, window, cx);
     }
 
-    fn queue_focus(&mut self, target: FocusTarget) {
-        bench_trace::record_label("focus_queued", focus_trace_label(target));
-        self.persistent_overlay_focus = match target {
-            FocusTarget::FindQuery | FocusTarget::FindReplace | FocusTarget::GotoLine => {
-                Some(target)
-            }
-            FocusTarget::Editor => None,
-        };
-        self.pending_focus = Some(target);
-    }
-
-    fn apply_pending_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = self.pending_focus.take() else {
-            return;
-        };
-
-        match target {
-            FocusTarget::Editor => window.focus(&self.focus_handle),
-            FocusTarget::FindQuery => {
-                let handle = self.find_query_input.read(cx).focus_handle();
-                window.focus(&handle);
-            }
-            FocusTarget::FindReplace => {
-                if self.model.find().show_replace {
-                    let handle = self.find_replace_input.read(cx).focus_handle();
-                    window.focus(&handle);
-                } else {
-                    self.pending_focus = Some(FocusTarget::FindQuery);
-                }
-            }
-            FocusTarget::GotoLine => {
-                if self.model.goto_line().is_some() {
-                    let handle = self.goto_line_input.read(cx).focus_handle();
-                    window.focus(&handle);
-                } else {
-                    self.pending_focus = Some(FocusTarget::Editor);
-                }
-            }
+    pub(crate) fn set_focus(&mut self, target: FocusTarget) {
+        if self.focus_target != target {
+            bench_trace::record_label("focus_queued", focus_trace_label(target));
+            self.focus_target = target;
         }
-        bench_trace::record_label("focus_applied", focus_trace_label(target));
     }
 
-    fn maintain_overlay_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = self.persistent_overlay_focus else {
+    fn apply_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.focus_target;
+        let just_changed = target != self.focus_last_applied;
+        if matches!(target, FocusTarget::Editor) && !just_changed {
             return;
-        };
-        let Some(handle) = self.focus_handle_for_target(target, cx) else {
-            return;
-        };
-        if !handle.is_focused(window) {
+        }
+        let handle = self.handle_for(target, cx);
+        let needs_focus = just_changed || !handle.is_focused(window);
+        if needs_focus {
             window.focus(&handle);
-            bench_trace::record_label("focus_maintained", focus_trace_label(target));
+            let label = if just_changed {
+                "focus_applied"
+            } else {
+                "focus_maintained"
+            };
+            bench_trace::record_label(label, focus_trace_label(target));
         }
+        self.focus_last_applied = target;
     }
 
-    fn focus_handle_for_target(
-        &self,
-        target: FocusTarget,
-        cx: &mut Context<Self>,
-    ) -> Option<FocusHandle> {
+    /// Invariant: every `Focus(target)` emitter mutates the model into `target`'s
+    /// renderable state in the same call before queueing the effect, so this is total.
+    fn handle_for(&self, target: FocusTarget, cx: &mut Context<Self>) -> FocusHandle {
         match target {
-            FocusTarget::Editor => Some(self.focus_handle.clone()),
-            FocusTarget::FindQuery => self
-                .model
-                .find()
-                .visible
-                .then(|| self.find_query_input.read(cx).focus_handle()),
-            FocusTarget::FindReplace => (self.model.find().visible
-                && self.model.find().show_replace)
-                .then(|| self.find_replace_input.read(cx).focus_handle()),
-            FocusTarget::GotoLine => self
-                .model
-                .goto_line()
-                .is_some()
-                .then(|| self.goto_line_input.read(cx).focus_handle()),
+            FocusTarget::Editor => self.focus_handle.clone(),
+            FocusTarget::FindQuery => self.find_query_input.read(cx).focus_handle(),
+            FocusTarget::FindReplace => self.find_replace_input.read(cx).focus_handle(),
+            FocusTarget::GotoLine => self.goto_line_input.read(cx).focus_handle(),
         }
     }
 
     fn sync_tab_views(&mut self, old_show_wrap: bool) {
+        let show_wrap = self.model.show_wrap();
+        let tabs = self.model.tabs();
         self.tab_views
-            .sync(self.model.tabs(), old_show_wrap, self.model.show_wrap());
+            .retain(|tab_id, _| tabs.iter().any(|tab| tab.id() == *tab_id));
+        for tab in tabs {
+            let view = self
+                .tab_views
+                .entry(tab.id())
+                .or_insert_with(|| EditorTabView::new(tab));
+            if view.revision != tab.revision() || old_show_wrap != show_wrap {
+                view.revision = tab.revision();
+                view.invalidate_visual_state();
+            }
+        }
         if self
             .hovered_tab
             .is_some_and(|ix| ix >= self.model.tab_count())
@@ -495,7 +459,7 @@ impl LstGpuiApp {
             }
             InputFieldEvent::NextRequested => {
                 if self.model.find().show_replace {
-                    self.queue_focus(FocusTarget::FindReplace);
+                    self.set_focus(FocusTarget::FindReplace);
                     cx.notify();
                 }
             }
@@ -518,7 +482,7 @@ impl LstGpuiApp {
             }
             InputFieldEvent::NextRequested => {}
             InputFieldEvent::PreviousRequested => {
-                self.queue_focus(FocusTarget::FindQuery);
+                self.set_focus(FocusTarget::FindQuery);
                 cx.notify();
             }
         }
@@ -550,7 +514,7 @@ impl LstGpuiApp {
         let tab_id = tab.id();
         let revision = tab.revision();
         let key = SyntaxHighlightJobKey { language, revision };
-        let cache = self.tab_views.active(&self.model).cache.clone();
+        let cache = self.active_view().cache.clone();
         {
             let cache_ref = cache.borrow();
             if cache_ref
@@ -639,7 +603,9 @@ impl LstGpuiApp {
     }
 
     fn active_view(&self) -> &EditorTabView {
-        self.tab_views.active(&self.model)
+        self.tab_views
+            .get(&self.model.active_tab_id())
+            .expect("active tab must have a tab view")
     }
 
     fn active_cursor_line_col(&self) -> (usize, usize) {
@@ -799,6 +765,7 @@ impl LstGpuiApp {
         }
     }
 
+    /// `cx.on_next_frame` may not fire under `run_until_parked` before the next paint commits.
     #[cfg(test)]
     fn flush_pending_reveal_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.reveal_scheduled = false;
@@ -940,9 +907,21 @@ pub(crate) struct AppSnapshot {
     pub(crate) find_query_input: String,
     pub(crate) find_replace_input: String,
     pub(crate) goto_line_input: String,
-    pub(crate) pending_focus: Option<FocusTarget>,
+    pub(crate) focus_target: FocusTarget,
+    #[cfg(feature = "internal-invariants")]
     pub(crate) tab_view_ids: Vec<TabId>,
     pub(crate) zoom_level: i32,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ObservableCursorViewport {
+    pub(crate) scroll_top: f32,
+    pub(crate) viewport_height: f32,
+    pub(crate) row_height: f32,
+    pub(crate) cursor_row: usize,
+    pub(crate) max_offset: f32,
+    pub(crate) total_rows: usize,
 }
 
 fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
@@ -1017,13 +996,13 @@ impl Focusable for LstGpuiApp {
 
 fn syntax_highlight_result_is_current(
     model: &EditorModel,
-    tab_views: &TabViewStore,
+    tab_views: &HashMap<TabId, EditorTabView>,
     tab_id: TabId,
     cache: &Rc<RefCell<ViewportCache>>,
     key: SyntaxHighlightJobKey,
 ) -> bool {
     model.tab_by_id(tab_id).is_some_and(|tab| {
-        tab_views.get(tab_id).is_some_and(|view| {
+        tab_views.get(&tab_id).is_some_and(|view| {
             Rc::ptr_eq(&view.cache, cache)
                 && tab.revision() == key.revision
                 && syntax_mode_for_language(tab.language()) == SyntaxMode::TreeSitter(key.language)

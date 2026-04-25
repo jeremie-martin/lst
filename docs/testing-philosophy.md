@@ -130,11 +130,25 @@ Internal invariant tests are still valuable, but they are not part of the blind 
 In this repository:
 
 - `cargo test` is the blind refactor gate for the active workspace
+- `cargo test --features internal-invariants` runs the full suite including app-level cache and scheduler checks
 - `cargo test -p lst-editor --features internal-invariants` runs the deeper Vim state-machine checks
 
 To keep that contract honest, implementation-sensitive checks should stay behind explicit package or feature selections, while the default gate remains biased toward higher-level behavior.
 
+### What lives where
+
+- **Default `cargo test`** — observable behaviour: vim motions, find/replace text outcomes, save/autosave file contents, focus follows the model, reveal causes the cursor to become visible, status string updates, tab open/close semantics. Boundary fakes only at clipboard/filesystem/display/clock.
+- **`--features internal-invariants`** — internal coordination: `assert_tab_views_match_model` (the `tab_views` HashMap mirrors `model.tabs()`), wrap-layout cache seeding (`status_details_ignore_wrap_layouts_that_have_not_been_painted`), syntax-highlight job key consistency, drag-autoscroll delta math, autosave-revision uniqueness, exact reveal scheduling, vim deeper state-machine traces. These tests can fail under a healthy rewrite that preserves user-visible behaviour, which is exactly why they are not part of the blind refactor gate.
+
 This split is not an excuse to weaken coverage. The rule is: if an implementation-sensitive test protects important user behavior, replace it with a higher-level behavioral test before demoting it.
+
+### Test-only escape hatches in production code
+
+A few `#[cfg(test)]` items remain in production code. Each is justified or it should be removed:
+
+- `LstGpuiApp::flush_pending_reveal_for_test` — frame-timing escape hatch. GPUI's `cx.on_next_frame` does not always fire under `run_until_parked` before the next paint commits, so tests that assert on observable scroll behaviour need to drain the queued reveal explicitly. The behaviour under test is observable; only the frame timing is bypassed.
+- `runtime::clipboard::CapturingExitClipboard` — boundary fake for the exit-time clipboard subprocess. Wired through the `ExitClipboard` trait field on `LstGpuiApp` and constructed in the test factory. There is no `#[cfg(test)]` branch in the production `finish_quit` path.
+- `process::exit(0)` vs `cx.defer(|app| app.quit())` in `finish_quit` — unavoidable platform difference. Tests cannot terminate the host process; production cannot persist clipboard subprocesses if the app is still alive. The only `#[cfg(test)]` left in `finish_quit` is the exit step itself.
 
 
 ## The testability feedback loop
