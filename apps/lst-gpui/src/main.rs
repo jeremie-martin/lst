@@ -6,6 +6,7 @@ use gpui::{
 
 mod actions;
 mod bench_trace;
+mod crash_log;
 mod input_adapter;
 mod interactions;
 mod keymap;
@@ -1051,6 +1052,8 @@ pub(crate) fn elapsed_ms(started: Instant) -> f64 {
 }
 
 fn main() {
+    crash_log::install();
+
     let launch = parse_launch_args();
     let has_graphical_env =
         std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
