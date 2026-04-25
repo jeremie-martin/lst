@@ -25,13 +25,6 @@ impl LstGpuiApp {
         let tab = self.model.tab(ix).expect("rendered tab index must exist");
         let active = ix == self.model.active_index();
         let show_close = active || self.hovered_tab == Some(ix);
-        let dirty_marker = tab.modified().then_some(
-            div()
-                .flex_none()
-                .text_color(rgb(role::DIRTY))
-                .child("•")
-                .into_any_element(),
-        );
         let close_button: Option<IconButton> = show_close.then(|| {
             IconButton::new(("tab-close", ix), IconKind::Close)
                 .emphasized(active)
@@ -68,7 +61,6 @@ impl LstGpuiApp {
                     cx.stop_propagation();
                 }),
             )
-            .start_slot(dirty_marker)
             .end_slot(close_button.map(IntoElement::into_any_element))
             .child(tab.display_name())
     }

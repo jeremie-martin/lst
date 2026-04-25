@@ -43,7 +43,6 @@ pub mod role {
     pub const TEXT_SUBTLE: u32 = palette::TEXT_SUBTLE;
     pub const TEXT_MUTED: u32 = palette::TEXT_MUTED;
     pub const ACCENT: u32 = palette::ACCENT_BLUE;
-    pub const DIRTY: u32 = palette::SYNTAX_ORANGE;
     pub const SELECTION_BG: u32 = palette::SELECTION_BLUE;
     pub const SEARCH_MATCH_BG: u32 = palette::SEARCH_MATCH;
     pub const SEARCH_ACTIVE_MATCH_BG: u32 = palette::SEARCH_ACTIVE_MATCH;
@@ -118,7 +117,6 @@ pub mod metrics {
     pub const TAB_MAX_WIDTH: f32 = 220.0;
     pub const TAB_HORIZONTAL_PAD: f32 = 10.0;
     pub const TAB_SLOT_WIDTH: f32 = 18.0;
-    pub const TAB_DIRTY_TEXT_INSET: f32 = 10.0;
     pub const TAB_TEXT_SIZE: f32 = 12.0;
     pub const TAB_TEXT_LINE_HEIGHT: f32 = 16.0;
     pub const ICON_BUTTON_SIZE: f32 = 16.0;

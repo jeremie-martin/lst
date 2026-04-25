@@ -1,7 +1,6 @@
 use gpui::{
-    div, prelude::FluentBuilder, px, rgb, AnyElement, App, CursorStyle, InteractiveElement,
-    IntoElement, ParentElement, RenderOnce, SharedString, Stateful, StatefulInteractiveElement,
-    Styled,
+    div, px, rgb, AnyElement, App, CursorStyle, InteractiveElement, IntoElement, ParentElement,
+    RenderOnce, SharedString, Stateful, StatefulInteractiveElement, Styled,
 };
 use smallvec::SmallVec;
 
@@ -13,7 +12,6 @@ pub struct Tab {
     active: bool,
     group_name: SharedString,
     children: SmallVec<[AnyElement; 2]>,
-    start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
 }
 
@@ -25,18 +23,12 @@ impl Tab {
             active: false,
             group_name: format!("tab-{id:?}").into(),
             children: SmallVec::new(),
-            start_slot: None,
             end_slot: None,
         }
     }
 
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
-        self
-    }
-
-    pub fn start_slot(mut self, element: Option<AnyElement>) -> Self {
-        self.start_slot = element;
         self
     }
 
@@ -63,7 +55,6 @@ impl ParentElement for Tab {
 impl RenderOnce for Tab {
     fn render(self, window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
         let rem_size = window.rem_size();
-        let has_start_slot = self.start_slot.is_some();
         let background = if self.active {
             rgb(role::EDITOR_BG)
         } else {
@@ -99,9 +90,6 @@ impl RenderOnce for Tab {
                     .overflow_hidden()
                     .h_full()
                     .items_center()
-                    .when(has_start_slot, |label| {
-                        label.pl(metrics::px_for_rem(metrics::TAB_DIRTY_TEXT_INSET, rem_size))
-                    })
                     .text_size(metrics::px_for_rem(metrics::TAB_TEXT_SIZE, rem_size))
                     .line_height(metrics::px_for_rem(metrics::TAB_TEXT_LINE_HEIGHT, rem_size))
                     .text_color(text)
@@ -118,19 +106,6 @@ impl RenderOnce for Tab {
                     .justify_center()
                     .children(self.end_slot),
             )
-            .children(self.start_slot.map(|slot| {
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .flex()
-                    .w(metrics::px_for_rem(metrics::TAB_SLOT_WIDTH, rem_size))
-                    .items_center()
-                    .justify_center()
-                    .child(slot)
-                    .into_any_element()
-            }))
             .children(
                 self.active.then_some(
                     div()
