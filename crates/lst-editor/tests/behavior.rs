@@ -1968,15 +1968,15 @@ fn save_finished_for_tab_does_not_clear_the_active_tab_by_accident() {
 }
 
 #[test]
-fn dirty_tab_close_requires_confirmation_and_discard_can_close_it() {
+fn dirty_tab_close_request_signals_save_and_close() {
     let mut model = EditorModel::empty();
     let tab_id = model.active_tab().id();
     model.insert_text("unsaved".into());
 
-    assert!(matches!(
+    assert_eq!(
         model.close_request_for_tab(0),
-        Some(lst_editor::TabCloseRequest::Unsaved(tab)) if tab.tab_id == tab_id
-    ));
+        Some(lst_editor::TabCloseRequest::SaveAndClose { tab_id })
+    );
 
     assert!(model.discard_close_tab_by_id(tab_id));
     let snapshot = model.snapshot();

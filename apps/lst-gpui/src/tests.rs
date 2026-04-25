@@ -1006,60 +1006,41 @@ fn find_and_goto_overlays_do_not_resize_viewport(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn dirty_close_decision_can_cancel_or_discard_without_dialog(cx: &mut TestAppContext) {
-    let (view, cx) = new_test_app(cx, LaunchArgs::default());
-    cx.update_window_entity(&view, |app, window, cx| {
-        app.replace_text_in_range(None, "unsaved", window, cx);
-    });
-    let tab_id = app_snapshot(&view, cx).model.active_tab_id;
-
-    view.update(cx, |app, cx| {
-        app.apply_unsaved_close_decision(tab_id, crate::runtime::UnsavedCloseDecision::Cancel, cx);
-    });
-    let snapshot = app_snapshot(&view, cx);
-    assert_eq!(snapshot.model.text, "unsaved");
-    assert!(snapshot.model.tab_modified[0]);
-    assert_eq!(snapshot.model.status, "Close cancelled.");
-
-    view.update(cx, |app, cx| {
-        app.apply_unsaved_close_decision(tab_id, crate::runtime::UnsavedCloseDecision::Discard, cx);
-    });
-    let snapshot = app_snapshot(&view, cx);
-    assert_eq!(snapshot.model.tab_count, 1);
-    assert_eq!(snapshot.model.text, "");
-    assert!(!snapshot.model.tab_modified[0]);
-}
-
-#[gpui::test]
-fn dirty_close_save_writes_exact_tab_then_closes(cx: &mut TestAppContext) {
+fn closing_dirty_tab_silently_saves_then_closes(cx: &mut TestAppContext) {
     let dir = temp_dir("close-save");
-    let path = dir.join("note.txt");
-    std::fs::write(&path, "old").expect("write close-save fixture");
+    let first = dir.join("first.txt");
+    let second = dir.join("second.txt");
+    std::fs::write(&first, "old").expect("write first close-save fixture");
+    std::fs::write(&second, "keep").expect("write second close-save fixture");
     let (view, cx) = new_test_app(
         cx,
         LaunchArgs {
-            files: vec![path.clone()],
+            files: vec![first.clone(), second.clone()],
             ..LaunchArgs::default()
         },
     );
     cx.update_window_entity(&view, |app, window, cx| {
         app.replace_text_in_range(None, "new ", window, cx);
     });
-    let tab_id = app_snapshot(&view, cx).model.active_tab_id;
 
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.active_path.as_deref(), Some(first.as_path()));
+    let active_index = snapshot.model.active;
     view.update(cx, |app, cx| {
-        app.apply_unsaved_close_decision(tab_id, crate::runtime::UnsavedCloseDecision::Save, cx);
+        app.request_close_tab_at(active_index, cx);
     });
     cx.run_until_parked();
 
     assert_eq!(
-        std::fs::read_to_string(&path).expect("read saved close file"),
+        std::fs::read_to_string(&first).expect("read silently saved close file"),
         "new old"
     );
     let snapshot = app_snapshot(&view, cx);
     assert_eq!(snapshot.model.tab_count, 1);
-    assert_eq!(snapshot.model.active_path, None);
-    assert_eq!(snapshot.model.text, "");
+    assert_eq!(
+        snapshot.model.active_path.as_deref(),
+        Some(second.as_path())
+    );
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
 }
@@ -1210,44 +1191,7 @@ fn closing_only_empty_scratchpad_removes_its_file(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn dirty_quit_cancel_keeps_unsaved_edits_without_clipboard_write(cx: &mut TestAppContext) {
-    let dir = temp_dir("quit-cancel");
-    let path = dir.join("note.txt");
-    std::fs::write(&path, "old").expect("write quit-cancel fixture");
-    let (view, cx, captured) = new_test_app_capturing(
-        cx,
-        LaunchArgs {
-            files: vec![path.clone()],
-            ..LaunchArgs::default()
-        },
-    );
-    cx.update_window_entity(&view, |app, window, cx| {
-        app.replace_text_in_range(None, "new ", window, cx);
-    });
-    let tab_id = app_snapshot(&view, cx).model.active_tab_id;
-
-    view.update(cx, |app, cx| {
-        app.apply_unsaved_quit_decision(tab_id, crate::runtime::UnsavedCloseDecision::Cancel, cx);
-    });
-
-    let snapshot = app_snapshot(&view, cx);
-    assert_eq!(snapshot.model.text, "new old");
-    assert!(snapshot.model.tab_modified[0]);
-    assert_eq!(snapshot.model.status, "Close cancelled.");
-    assert_eq!(
-        std::fs::read_to_string(&path).expect("read quit-cancel file"),
-        "old"
-    );
-    assert!(
-        captured.persisted.lock().unwrap().is_empty(),
-        "cancelling quit must not persist clipboard contents"
-    );
-
-    std::fs::remove_dir_all(dir).expect("remove test temp dir");
-}
-
-#[gpui::test]
-fn dirty_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
+fn quit_silently_saves_dirty_file_tabs(cx: &mut TestAppContext) {
     let dir = temp_dir("quit-save");
     let path = dir.join("note.txt");
     std::fs::write(&path, "old").expect("write quit-save fixture");
@@ -1261,10 +1205,9 @@ fn dirty_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
     cx.update_window_entity(&view, |app, window, cx| {
         app.replace_text_in_range(None, "new ", window, cx);
     });
-    let tab_id = app_snapshot(&view, cx).model.active_tab_id;
 
     view.update(cx, |app, cx| {
-        app.apply_unsaved_quit_decision(tab_id, crate::runtime::UnsavedCloseDecision::Save, cx);
+        app.request_quit(cx);
     });
     cx.run_until_parked();
 
@@ -1281,7 +1224,38 @@ fn dirty_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn dirty_scratchpad_quit_save_writes_before_copying_clipboards(cx: &mut TestAppContext) {
+fn quit_silently_truncates_emptied_file_tab(cx: &mut TestAppContext) {
+    let dir = temp_dir("quit-truncate");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "old contents").expect("write quit-truncate fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path.clone()],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.dispatch_action(SelectAll);
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "", window, cx);
+    });
+    assert_eq!(app_snapshot(&view, cx).model.text, "");
+
+    view.update(cx, |app, cx| {
+        app.request_quit(cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read truncated file"),
+        ""
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn quit_silently_saves_dirty_scratchpad_tabs(cx: &mut TestAppContext) {
     let dir = temp_dir("quit-save-scratchpad");
     let (view, cx, captured) = new_test_app_capturing(
         cx,
@@ -1293,15 +1267,13 @@ fn dirty_scratchpad_quit_save_writes_before_copying_clipboards(cx: &mut TestAppC
     cx.update_window_entity(&view, |app, window, cx| {
         app.replace_text_in_range(None, "scratch text", window, cx);
     });
-    let snapshot = app_snapshot(&view, cx);
-    let tab_id = snapshot.model.active_tab_id;
-    let path = snapshot
+    let path = app_snapshot(&view, cx)
         .model
         .active_path
         .expect("scratchpad should be path backed");
 
     view.update(cx, |app, cx| {
-        app.apply_unsaved_quit_decision(tab_id, crate::runtime::UnsavedCloseDecision::Save, cx);
+        app.request_quit(cx);
     });
     cx.run_until_parked();
 

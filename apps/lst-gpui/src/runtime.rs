@@ -79,13 +79,6 @@ enum AutosaveCompletion {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum UnsavedCloseDecision {
-    Save,
-    Discard,
-    Cancel,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileConflictDecision {
     Reload,
     Overwrite,
@@ -437,39 +430,10 @@ impl LstGpuiApp {
                     model.close_clean_tab_by_id(tab_id);
                 });
             }
-            Some(TabCloseRequest::Unsaved(tab)) => {
-                let decision = prompt_unsaved_close_decision(&tab.title);
-                self.apply_unsaved_close_decision(tab.tab_id, decision, cx);
+            Some(TabCloseRequest::SaveAndClose { tab_id }) => {
+                self.start_save_for_pending(tab_id, PendingAfterSave::CloseTab(tab_id), cx);
             }
             None => {}
-        }
-    }
-
-    pub(crate) fn apply_unsaved_close_decision(
-        &mut self,
-        tab_id: TabId,
-        decision: UnsavedCloseDecision,
-        cx: &mut Context<Self>,
-    ) {
-        match decision {
-            UnsavedCloseDecision::Save => {
-                self.pending_after_save = Some(PendingAfterSave::CloseTab(tab_id));
-                self.update_model(cx, true, |model| {
-                    model.request_save_tab(tab_id);
-                });
-            }
-            UnsavedCloseDecision::Discard => {
-                self.cleanup_scratchpad_tab_file_by_id(tab_id);
-                self.update_model(cx, true, |model| {
-                    model.discard_close_tab_by_id(tab_id);
-                });
-            }
-            UnsavedCloseDecision::Cancel => {
-                self.pending_after_save = None;
-                self.update_model(cx, true, |model| {
-                    model.close_cancelled();
-                });
-            }
         }
     }
 
@@ -482,48 +446,32 @@ impl LstGpuiApp {
             self.finish_quit(cx);
             return;
         };
-        let Some(TabCloseRequest::Unsaved(tab)) = self.model.close_request_for_tab(index) else {
+        let Some(TabCloseRequest::SaveAndClose { tab_id }) =
+            self.model.close_request_for_tab(index)
+        else {
             self.finish_quit(cx);
             return;
         };
-
-        let decision = prompt_unsaved_close_decision(&tab.title);
-        self.apply_unsaved_quit_decision(tab.tab_id, decision, cx);
+        self.start_save_for_pending(tab_id, PendingAfterSave::Quit, cx);
     }
 
-    pub(crate) fn apply_unsaved_quit_decision(
+    fn start_save_for_pending(
         &mut self,
         tab_id: TabId,
-        decision: UnsavedCloseDecision,
+        pending: PendingAfterSave,
         cx: &mut Context<Self>,
     ) {
-        match decision {
-            UnsavedCloseDecision::Save => {
-                self.pending_after_save = Some(PendingAfterSave::Quit);
-                self.update_model(cx, true, |model| {
-                    model.request_save_tab(tab_id);
-                });
-            }
-            UnsavedCloseDecision::Discard => {
-                self.cleanup_scratchpad_tab_file_by_id(tab_id);
-                self.update_model(cx, true, |model| {
-                    model.discard_close_tab_by_id(tab_id);
-                });
-                self.continue_quit_sequence(cx);
-            }
-            UnsavedCloseDecision::Cancel => {
-                self.pending_after_save = None;
-                self.update_model(cx, true, |model| {
-                    model.close_cancelled();
-                });
-            }
-        }
+        self.pending_after_save = Some(pending);
+        self.update_model(cx, true, |model| {
+            model.request_save_tab(tab_id);
+        });
     }
 
     fn first_dirty_tab_index_for_quit(&self) -> Option<usize> {
-        self.model.tabs().iter().position(|tab| {
-            tab.modified() && !(tab.is_scratchpad() && tab.buffer_text().trim().is_empty())
-        })
+        self.model
+            .tabs()
+            .iter()
+            .position(|tab| tab.modified() && !(tab.is_scratchpad() && tab.is_blank()))
     }
 
     fn finish_quit(&mut self, cx: &mut Context<Self>) {
@@ -728,26 +676,14 @@ impl LstGpuiApp {
     fn tab_is_empty_scratchpad(&self, index: usize) -> bool {
         self.model
             .tab(index)
-            .is_some_and(|tab| tab.is_scratchpad() && tab.buffer_text().trim().is_empty())
+            .is_some_and(|tab| tab.is_scratchpad() && tab.is_blank())
     }
 
     fn cleanup_scratchpad_tab_file(&self, index: usize) {
         if let Some(tab) = self
             .model
             .tab(index)
-            .filter(|tab| tab.is_scratchpad() && tab.buffer_text().trim().is_empty())
-        {
-            if let Some(path) = tab.path() {
-                remove_scratchpad_file_if_unreferenced(self.model.tabs(), tab.id(), path);
-            }
-        }
-    }
-
-    fn cleanup_scratchpad_tab_file_by_id(&self, tab_id: TabId) {
-        if let Some(tab) = self
-            .model
-            .tab_by_id(tab_id)
-            .filter(|tab| tab.is_scratchpad() && tab.buffer_text().trim().is_empty())
+            .filter(|tab| tab.is_scratchpad() && tab.is_blank())
         {
             if let Some(path) = tab.path() {
                 remove_scratchpad_file_if_unreferenced(self.model.tabs(), tab.id(), path);
@@ -757,7 +693,7 @@ impl LstGpuiApp {
 
     fn cleanup_empty_scratchpad_files(&self) {
         for tab in self.model.tabs() {
-            if tab.is_scratchpad() && tab.buffer_text().trim().is_empty() {
+            if tab.is_scratchpad() && tab.is_blank() {
                 if let Some(path) = tab.path() {
                     remove_scratchpad_file_if_unreferenced(self.model.tabs(), tab.id(), path);
                 }
@@ -1005,26 +941,6 @@ fn file_conflict_stamp(
         Err(err) => return Err(err),
     };
     Ok((disk_stamp != expected_stamp).then_some(disk_stamp))
-}
-
-pub(crate) fn prompt_unsaved_close_decision(title: &str) -> UnsavedCloseDecision {
-    match MessageDialog::new()
-        .set_level(MessageLevel::Warning)
-        .set_title("Unsaved changes")
-        .set_description(format!("Save changes to {title} before closing?"))
-        .set_buttons(MessageButtons::YesNoCancelCustom(
-            "Save".to_string(),
-            "Discard".to_string(),
-            "Cancel".to_string(),
-        ))
-        .show()
-    {
-        MessageDialogResult::Custom(label) if label == "Save" => UnsavedCloseDecision::Save,
-        MessageDialogResult::Custom(label) if label == "Discard" => UnsavedCloseDecision::Discard,
-        MessageDialogResult::Yes => UnsavedCloseDecision::Save,
-        MessageDialogResult::No => UnsavedCloseDecision::Discard,
-        _ => UnsavedCloseDecision::Cancel,
-    }
 }
 
 fn prompt_file_conflict_decision(title: &str) -> FileConflictDecision {

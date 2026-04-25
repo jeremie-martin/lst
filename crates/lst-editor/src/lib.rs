@@ -34,18 +34,10 @@ use std::{ops::Range, path::PathBuf, sync::Arc};
 
 pub const UNTITLED_PREFIX: &str = "untitled";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UnsavedTab {
-    pub index: usize,
-    pub tab_id: TabId,
-    pub title: String,
-    pub path: Option<PathBuf>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabCloseRequest {
     Close { tab_id: TabId },
-    Unsaved(UnsavedTab),
+    SaveAndClose { tab_id: TabId },
 }
 
 pub struct EditorModel {
@@ -1789,12 +1781,7 @@ impl EditorModel {
     pub fn close_request_for_tab(&self, index: usize) -> Option<TabCloseRequest> {
         let tab = self.tabs.get(index)?;
         if tab.modified() {
-            Some(TabCloseRequest::Unsaved(UnsavedTab {
-                index,
-                tab_id: tab.id(),
-                title: tab.display_name(),
-                path: tab.path().cloned(),
-            }))
+            Some(TabCloseRequest::SaveAndClose { tab_id: tab.id() })
         } else {
             Some(TabCloseRequest::Close { tab_id: tab.id() })
         }
@@ -1819,10 +1806,6 @@ impl EditorModel {
             return false;
         };
         self.close_tab_at_unchecked(index)
-    }
-
-    pub fn close_cancelled(&mut self) {
-        self.status = "Close cancelled.".to_string();
     }
 
     pub fn set_active_tab(&mut self, index: usize) {

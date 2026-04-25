@@ -407,6 +407,10 @@ impl EditorTab {
         self.buffer.to_string()
     }
 
+    pub fn is_blank(&self) -> bool {
+        self.buffer.chars().all(char::is_whitespace)
+    }
+
     pub fn cursor_char(&self) -> usize {
         self.selection.cursor()
     }
