@@ -50,8 +50,8 @@ use syntax::{
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use viewport::row_contains_cursor;
 use viewport::{
-    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, scroll_top_for,
-    visual_row_for_char, ViewportCache, ViewportGeometry, WrapLayoutInput,
+    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, scroll_left_for,
+    scroll_top_for, visual_row_for_char, ViewportCache, ViewportGeometry, WrapLayoutInput,
 };
 
 actions!(
@@ -138,6 +138,11 @@ struct EditorScrollbarDrag {
     grab_offset_y: Pixels,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct EditorHorizontalScrollbarDrag {
+    grab_offset_x: Pixels,
+}
+
 struct EditorTabView {
     revision: u64,
     scroll: ScrollHandle,
@@ -170,6 +175,8 @@ struct LstGpuiApp {
     selection_drag: Option<ActiveDragSelection>,
     editor_scrollbar_drag: Option<EditorScrollbarDrag>,
     editor_scrollbar_hovered: bool,
+    editor_horizontal_scrollbar_drag: Option<EditorHorizontalScrollbarDrag>,
+    editor_horizontal_scrollbar_hovered: bool,
     find_query_input: Entity<InputField>,
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
@@ -203,6 +210,8 @@ impl LstGpuiApp {
             selection_drag: None,
             editor_scrollbar_drag: None,
             editor_scrollbar_hovered: false,
+            editor_horizontal_scrollbar_drag: None,
+            editor_horizontal_scrollbar_hovered: false,
             find_query_input: find_query_input.clone(),
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
@@ -375,6 +384,10 @@ impl LstGpuiApp {
             if view.revision != tab.revision() || old_show_wrap != show_wrap {
                 view.revision = tab.revision();
                 view.invalidate_visual_state();
+                if old_show_wrap != show_wrap {
+                    let current_y = view.scroll.offset().y;
+                    view.scroll.set_offset(point(px(0.0), current_y));
+                }
             }
         }
         if self
@@ -833,10 +846,77 @@ impl LstGpuiApp {
             RevealIntent::Bottom => Some(clamp(caret_bottom + margin - viewport_height)),
         };
 
+        let current_x = view.scroll.offset().x;
         if let Some(target) = target {
-            view.scroll.set_offset(point(px(0.0), -target));
+            view.scroll.set_offset(point(current_x, -target));
+        }
+
+        if !self.model.show_wrap() {
+            self.try_reveal_active_cursor_horizontally(view, viewport_bounds);
         }
         true
+    }
+
+    fn try_reveal_active_cursor_horizontally(
+        &self,
+        view: &EditorTabView,
+        viewport_bounds: Bounds<Pixels>,
+    ) {
+        let geometry = view.geometry.borrow();
+        let char_width = geometry.painted_char_width;
+        if char_width <= px(0.0) {
+            return;
+        }
+
+        let max_offset_x = view.scroll.max_offset().width.max(px(0.0));
+        let scroll_left = scroll_left_for(&view.scroll);
+        let pad = code_origin_pad(self.model.show_gutter(), self.ui_scale());
+        let visible_width = (viewport_bounds.size.width - pad).max(px(0.0));
+        if visible_width <= px(0.0) {
+            return;
+        }
+
+        let visible_cols = ((visible_width / px(1.0)) / (char_width / px(1.0))).floor() as usize;
+        if visible_cols == 0 {
+            return;
+        }
+
+        let cursor_column = self.active_cursor_logical_column();
+        let cursor_x = char_width * cursor_column as f32;
+
+        let raw_margin = self.model.viewport().sidescrolloff;
+        let margin_cols = if visible_cols <= 1 {
+            0
+        } else {
+            raw_margin.min((visible_cols - 1) / 2)
+        };
+        let margin = char_width * margin_cols as f32;
+
+        let target_x = if cursor_x < scroll_left + margin {
+            Some((cursor_x - margin).max(px(0.0)).min(max_offset_x))
+        } else if cursor_x > scroll_left + visible_width - margin {
+            Some(
+                (cursor_x + margin - visible_width)
+                    .max(px(0.0))
+                    .min(max_offset_x),
+            )
+        } else {
+            None
+        };
+
+        if let Some(target_x) = target_x {
+            drop(geometry);
+            let current_y = view.scroll.offset().y;
+            view.scroll.set_offset(point(-target_x, current_y));
+        }
+    }
+
+    fn active_cursor_logical_column(&self) -> usize {
+        let tab = self.active_tab();
+        let cursor = tab.cursor_char().min(tab.buffer().len_chars());
+        let line = tab.buffer().char_to_line(cursor);
+        let line_start = tab.buffer().line_to_char(line);
+        cursor - line_start
     }
 
     fn sync_primary_selection(&self, cx: &mut Context<Self>) {

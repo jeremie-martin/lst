@@ -105,7 +105,7 @@ reorganization. Grep for the symbol to navigate.
 - [ ] **Cursor blink** respecting OS setting
 - [x] **Scroll margin** — `DEFAULT_SCROLLOFF=4`, `DEFAULT_SIDESCROLLOFF=8` (`crates/lst-editor/src/viewport.rs::DEFAULT_SCROLLOFF`, `::DEFAULT_SIDESCROLLOFF`)
 - [x] **Visible scrollbar when content overflows** — editor renders a slim vertical scrollbar overlay for overflowing content with thumb drag and track paging, backed by existing GPUI scroll handles (`apps/lst-gpui/src/shell.rs::render_editor_scrollbar`; `apps/lst-gpui/src/ui/scrollbar.rs`; tests `apps/lst-gpui/src/tests.rs::editor_scrollbar_drag_scrolls_without_text_selection`, `::editor_scrollbar_track_click_pages_without_text_selection`, `::editor_scrollbar_is_absent_without_overflow`). This is editor-only for now; tab-strip/general scrollbar reuse may be worth extracting later if more scroll surfaces need the same behavior.
-- [ ] **Horizontal scroll on long lines** — wrap can be disabled, but the UI only exposes vertical scrolling (`apps/lst-gpui/src/shell.rs` only uses `overflow_y_scroll`); `sidescrolloff` exists in model state but is not used (`crates/lst-editor/src/viewport.rs::Viewport::sidescrolloff`)
+- [x] **Horizontal scroll on long lines** — when soft-wrap is off the buffer scroll surface enables both axes (`apps/lst-gpui/src/shell.rs::LstGpuiApp::render` uses `overflow_x_scroll().overflow_y_scroll()` only when `!show_wrap`), the inner content is sized to the longest line × cached `char_width` (max-line-chars cached on `apps/lst-gpui/src/viewport.rs::ViewportCache::max_line_chars`), the painter offsets each row by the current horizontal scroll (`apps/lst-gpui/src/viewport.rs::paint_viewport`), a slim horizontal scrollbar at the bottom mirrors the vertical one (`apps/lst-gpui/src/shell.rs::render_editor_horizontal_scrollbar` and the `*_horizontal_*` helpers in `apps/lst-gpui/src/ui/scrollbar.rs`), and cursor moves trigger horizontal reveal-on-cursor that respects `Viewport::sidescrolloff` (`apps/lst-gpui/src/main.rs::try_reveal_active_cursor_horizontally`). Tests: `apps/lst-gpui/src/tests.rs::editor_horizontal_scrollbar_drag_scrolls_without_text_selection`, `::editor_horizontal_scrollbar_track_click_pages_without_text_selection`, `::editor_horizontal_scrollbar_is_absent_when_wrap_is_on`, `::editor_horizontal_scrollbar_is_absent_without_overflow`, `::arrow_right_at_long_line_scrolls_horizontally_to_keep_cursor_in_sidescrolloff`.
 - [ ] **Minimap**
 - [ ] **Indent guides**
 
@@ -154,13 +154,12 @@ wrap, undo coalescing, autosave, find/replace core, drag-select with
 auto-scroll, IME composition, current-line highlight, line-ending detection.
 
 **Biggest gaps to close for "idiomatic" feel:**
-1. Horizontal scroll when wrap is off
-2. Find toggles: case sensitivity, smart case, whole-word, regex
-3. Grapheme-cluster-aware word/subword boundaries (single-step motion is grapheme-aware)
-4. Cursor blink
-5. Trim-trailing-whitespace / ensure-final-newline on save
-6. Tab reordering, recently-closed reopen
-7. Jump list / last-edit-location
-8. Multi-cursor
-9. User-configurable keybindings (config file)
-10. User-facing language picker / manual override UI (model API exists)
+1. Find toggles: case sensitivity, smart case, whole-word, regex
+2. Grapheme-cluster-aware word/subword boundaries (single-step motion is grapheme-aware)
+3. Cursor blink
+4. Trim-trailing-whitespace / ensure-final-newline on save
+5. Tab reordering, recently-closed reopen
+6. Jump list / last-edit-location
+7. Multi-cursor
+8. User-configurable keybindings (config file)
+9. User-facing language picker / manual override UI (model API exists)

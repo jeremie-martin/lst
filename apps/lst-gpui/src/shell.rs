@@ -1,7 +1,8 @@
 use crate::ui::{
     scrollbar::{
-        paint_vertical_scrollbar, scroll_top_for_thumb_drag, scroll_top_for_track_click,
-        vertical_scrollbar_layout,
+        horizontal_scrollbar_layout, paint_horizontal_scrollbar, paint_vertical_scrollbar,
+        scroll_left_for_thumb_drag, scroll_left_for_track_click, scroll_top_for_thumb_drag,
+        scroll_top_for_track_click, vertical_scrollbar_layout,
     },
     theme::{metrics, role, typography},
     IconButton, IconKind, Tab as UiTab, TabBar,
@@ -15,10 +16,13 @@ use gpui::{
 use crate::actions::attach_workspace_actions;
 use crate::syntax::syntax_mode_for_language;
 use crate::viewport::{
-    buffer_content_height, paint_viewport, prepare_viewport_paint_state, scroll_top_for,
-    ViewportPaintInput, ViewportPreparation, WrapLayoutInput,
+    buffer_content_height, code_origin_pad, paint_viewport, prepare_viewport_paint_state,
+    scroll_left_for, scroll_top_for, ViewportPaintInput, ViewportPreparation, WrapLayoutInput,
 };
-use crate::{code_char_width, ensure_wrap_layout, EditorScrollbarDrag, FocusTarget, LstGpuiApp};
+use crate::{
+    code_char_width, ensure_wrap_layout, EditorHorizontalScrollbarDrag, EditorScrollbarDrag,
+    FocusTarget, LstGpuiApp,
+};
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
@@ -253,7 +257,8 @@ impl LstGpuiApp {
                             } else {
                                 let target =
                                     scroll_top_for_track_click(&layout, event.position.y, current);
-                                scroll_for_down.set_offset(gpui::point(px(0.0), -target));
+                                let current_x = scroll_for_down.offset().x;
+                                scroll_for_down.set_offset(gpui::point(current_x, -target));
                                 None
                             };
                             entity_for_down.update(cx, |this, _| {
@@ -281,7 +286,8 @@ impl LstGpuiApp {
                                         event.position.y,
                                         drag.grab_offset_y,
                                     );
-                                    scroll_for_move.set_offset(gpui::point(px(0.0), -target));
+                                    let current_x = scroll_for_move.offset().x;
+                                    scroll_for_move.set_offset(gpui::point(current_x, -target));
                                     entity_for_move.update(cx, |this, _| {
                                         this.editor_scrollbar_hovered = true;
                                     });
@@ -317,6 +323,153 @@ impl LstGpuiApp {
                                 entity_for_up.update(cx, |this, _| {
                                     this.editor_scrollbar_drag = None;
                                     this.editor_scrollbar_hovered =
+                                        layout.thumb_bounds.contains(&event.position);
+                                });
+                                cx.stop_propagation();
+                                cx.notify(entity_for_up.entity_id());
+                            }
+                        });
+                    },
+                )
+                .size_full(),
+            )
+    }
+
+    fn render_editor_horizontal_scrollbar(
+        &mut self,
+        viewport_scroll: ScrollHandle,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let scale = self.ui_scale();
+        let track_height = metrics::px_for_scale(metrics::SCROLLBAR_TRACK_WIDTH, scale);
+        let has_overflow = viewport_scroll.max_offset().width > px(0.0);
+        let prepare_scroll = viewport_scroll.clone();
+        let paint_scroll = viewport_scroll;
+        let entity = cx.entity();
+
+        div()
+            .id("editor-horizontal-scrollbar")
+            .absolute()
+            .left_0()
+            .bottom_0()
+            .right(track_height)
+            .h(track_height)
+            .when(has_overflow, |bar| bar.cursor(CursorStyle::Arrow))
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        horizontal_scrollbar_layout(
+                            bounds,
+                            scroll_left_for(&prepare_scroll),
+                            prepare_scroll.max_offset().width.max(px(0.0)),
+                            scale,
+                        )
+                    },
+                    move |_, layout, window, cx| {
+                        let Some(layout) = layout else {
+                            return;
+                        };
+
+                        let (active, hovered) = {
+                            let app = entity.read(cx);
+                            (
+                                app.editor_horizontal_scrollbar_drag.is_some(),
+                                app.editor_horizontal_scrollbar_hovered
+                                    || layout.thumb_bounds.contains(&window.mouse_position()),
+                            )
+                        };
+                        paint_horizontal_scrollbar(&layout, active, hovered, scale, window);
+
+                        let entity_for_down = entity.clone();
+                        let scroll_for_down = paint_scroll.clone();
+                        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                            if !phase.bubble()
+                                || event.button != MouseButton::Left
+                                || !layout.track_bounds.contains(&event.position)
+                            {
+                                return;
+                            }
+
+                            let focus_handle = entity_for_down.read(cx).focus_handle.clone();
+                            window.focus(&focus_handle);
+                            let current = scroll_left_for(&scroll_for_down);
+                            let on_thumb = layout.thumb_bounds.contains(&event.position);
+                            let drag = if on_thumb {
+                                let grab_offset_x = event.position.x - layout.thumb_bounds.left();
+                                Some(EditorHorizontalScrollbarDrag { grab_offset_x })
+                            } else {
+                                let target =
+                                    scroll_left_for_track_click(&layout, event.position.x, current);
+                                let current_y = scroll_for_down.offset().y;
+                                scroll_for_down.set_offset(gpui::point(-target, current_y));
+                                None
+                            };
+                            entity_for_down.update(cx, |this, _| {
+                                this.set_focus(FocusTarget::Editor);
+                                this.selection_drag = None;
+                                this.editor_horizontal_scrollbar_hovered = on_thumb;
+                                this.editor_horizontal_scrollbar_drag = drag;
+                            });
+                            cx.stop_propagation();
+                            cx.notify(entity_for_down.entity_id());
+                        });
+
+                        let entity_for_move = entity.clone();
+                        let scroll_for_move = paint_scroll.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                            if !phase.bubble() {
+                                return;
+                            }
+
+                            let drag = entity_for_move.read(cx).editor_horizontal_scrollbar_drag;
+                            if let Some(drag) = drag {
+                                if event.dragging() {
+                                    let target = scroll_left_for_thumb_drag(
+                                        &layout,
+                                        event.position.x,
+                                        drag.grab_offset_x,
+                                    );
+                                    let current_y = scroll_for_move.offset().y;
+                                    scroll_for_move.set_offset(gpui::point(-target, current_y));
+                                    entity_for_move.update(cx, |this, _| {
+                                        this.editor_horizontal_scrollbar_hovered = true;
+                                    });
+                                    cx.stop_propagation();
+                                    cx.notify(entity_for_move.entity_id());
+                                } else {
+                                    entity_for_move.update(cx, |this, _| {
+                                        this.editor_horizontal_scrollbar_drag = None;
+                                    });
+                                    cx.notify(entity_for_move.entity_id());
+                                }
+                                return;
+                            }
+
+                            let hovered = layout.thumb_bounds.contains(&event.position);
+                            if entity_for_move.read(cx).editor_horizontal_scrollbar_hovered
+                                != hovered
+                            {
+                                entity_for_move.update(cx, |this, _| {
+                                    this.editor_horizontal_scrollbar_hovered = hovered;
+                                });
+                                cx.notify(entity_for_move.entity_id());
+                            }
+                        });
+
+                        let entity_for_up = entity.clone();
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                            if !phase.bubble() || event.button != MouseButton::Left {
+                                return;
+                            }
+
+                            let was_dragging = entity_for_up
+                                .read(cx)
+                                .editor_horizontal_scrollbar_drag
+                                .is_some();
+                            if was_dragging || layout.track_bounds.contains(&event.position) {
+                                entity_for_up.update(cx, |this, _| {
+                                    this.editor_horizontal_scrollbar_drag = None;
+                                    this.editor_horizontal_scrollbar_hovered =
                                         layout.thumb_bounds.contains(&event.position);
                                 });
                                 cx.stop_propagation();
@@ -447,8 +600,28 @@ impl Render for LstGpuiApp {
             );
             buffer_content_height(layout.total_rows, self.ui_scale())
         };
+        let total_content_width = (!show_wrap).then(|| {
+            let max_chars = {
+                let mut cache = active_cache.borrow_mut();
+                match cache.max_line_chars {
+                    Some((cached_revision, n)) if cached_revision == revision => n,
+                    _ => {
+                        let n = line_texts
+                            .iter()
+                            .map(|line| line.chars().count())
+                            .max()
+                            .unwrap_or(0);
+                        cache.max_line_chars = Some((revision, n));
+                        n
+                    }
+                }
+            };
+            let pad = code_origin_pad(show_gutter, self.ui_scale());
+            pad + char_width * (max_chars as f32 + 2.0)
+        });
         let viewport_scroll = active_scroll;
         let scrollbar_scroll = viewport_scroll.clone();
+        let h_scrollbar_scroll = viewport_scroll.clone();
         let viewport_cache = active_cache;
         let viewport_geometry = active_geometry;
         let focus_handle = self.focus_handle.clone();
@@ -505,13 +678,19 @@ impl Render for LstGpuiApp {
                                     .child(
                                         div()
                                             .id("buffer-scroll")
-                                            .overflow_y_scroll()
                                             .absolute()
                                             .left_0()
                                             .top_0()
                                             .size_full()
+                                            .overflow_x_scroll()
+                                            .overflow_y_scroll()
                                             .track_scroll(&viewport_scroll)
-                                            .child(div().h(total_content_height).w_full()),
+                                            .child(match total_content_width {
+                                                Some(width) => {
+                                                    div().h(total_content_height).w(width)
+                                                }
+                                                None => div().h(total_content_height).w_full(),
+                                            }),
                                     )
                                     .child(
                                         div()
@@ -541,39 +720,46 @@ impl Render for LstGpuiApp {
                                             .on_mouse_move(cx.listener(Self::on_mouse_move))
                                             .child(
                                                 canvas(
-                                                    move |bounds, window, cx| {
-                                                        let previous_wrap_columns =
-                                                            viewport_geometry
-                                                                .borrow()
-                                                                .painted_wrap_columns;
-                                                        let paint_state =
-                                                            prepare_viewport_paint_state(
-                                                                ViewportPreparation {
-                                                                    buffer: &buffer,
-                                                                    lines: line_texts.as_ref(),
-                                                                    revision,
-                                                                    syntax_mode,
-                                                                    show_gutter,
-                                                                    show_wrap,
-                                                                    viewport_scroll:
-                                                                        &viewport_scroll,
-                                                                    viewport_cache: &viewport_cache,
-                                                                    viewport_geometry:
-                                                                        &viewport_geometry,
-                                                                    bounds,
-                                                                    char_width,
-                                                                    scale: ui_scale,
-                                                                },
-                                                                window,
-                                                            );
-                                                        if previous_wrap_columns
-                                                            != viewport_geometry
-                                                                .borrow()
-                                                                .painted_wrap_columns
-                                                        {
-                                                            cx.notify(prepare_entity.entity_id());
+                                                    {
+                                                        let viewport_scroll =
+                                                            viewport_scroll.clone();
+                                                        move |bounds, window, cx| {
+                                                            let previous_wrap_columns =
+                                                                viewport_geometry
+                                                                    .borrow()
+                                                                    .painted_wrap_columns;
+                                                            let paint_state =
+                                                                prepare_viewport_paint_state(
+                                                                    ViewportPreparation {
+                                                                        buffer: &buffer,
+                                                                        lines: line_texts.as_ref(),
+                                                                        revision,
+                                                                        syntax_mode,
+                                                                        show_gutter,
+                                                                        show_wrap,
+                                                                        viewport_scroll:
+                                                                            &viewport_scroll,
+                                                                        viewport_cache:
+                                                                            &viewport_cache,
+                                                                        viewport_geometry:
+                                                                            &viewport_geometry,
+                                                                        bounds,
+                                                                        char_width,
+                                                                        scale: ui_scale,
+                                                                    },
+                                                                    window,
+                                                                );
+                                                            if previous_wrap_columns
+                                                                != viewport_geometry
+                                                                    .borrow()
+                                                                    .painted_wrap_columns
+                                                            {
+                                                                cx.notify(
+                                                                    prepare_entity.entity_id(),
+                                                                );
+                                                            }
+                                                            paint_state
                                                         }
-                                                        paint_state
                                                     },
                                                     move |bounds, paint_state, window, cx| {
                                                         window.handle_input(
@@ -584,6 +770,11 @@ impl Render for LstGpuiApp {
                                                             ),
                                                             cx,
                                                         );
+                                                        let horizontal_scroll = if show_wrap {
+                                                            px(0.0)
+                                                        } else {
+                                                            scroll_left_for(&viewport_scroll)
+                                                        };
                                                         paint_viewport(
                                                             ViewportPaintInput {
                                                                 bounds,
@@ -598,6 +789,7 @@ impl Render for LstGpuiApp {
                                                                     .is_focused(window),
                                                                 paint_state,
                                                                 scale: ui_scale,
+                                                                horizontal_scroll,
                                                             },
                                                             window,
                                                             cx,
@@ -608,6 +800,12 @@ impl Render for LstGpuiApp {
                                             ),
                                     )
                                     .child(self.render_editor_scrollbar(scrollbar_scroll, cx))
+                                    .when(!show_wrap, |viewport| {
+                                        viewport.child(self.render_editor_horizontal_scrollbar(
+                                            h_scrollbar_scroll,
+                                            cx,
+                                        ))
+                                    })
                                     .when(
                                         self.model.find().visible
                                             || self.model.goto_line().is_some(),
