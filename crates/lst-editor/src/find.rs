@@ -88,8 +88,7 @@ impl FindState {
     // Single source of truth for query interpretation — keeps
     // `compute_matches_in_text` and the replace paths in lock-step.
     pub fn build_regex(&self) -> Result<Regex, regex::Error> {
-        let ignore_case =
-            !self.case_sensitive && !self.query.chars().any(|c| c.is_uppercase());
+        let ignore_case = !self.case_sensitive && !self.query.chars().any(|c| c.is_uppercase());
         let core = if self.use_regex {
             self.query.clone()
         } else {
@@ -149,12 +148,8 @@ impl FindState {
                 if !(start_aligned && end_aligned) {
                     continue;
                 }
-                let col = cells
-                    .get(start_idx)
-                    .map_or(line_char_len, |c| c.char_start);
-                let end_col = cells
-                    .get(end_idx)
-                    .map_or(line_char_len, |c| c.char_start);
+                let col = cells.get(start_idx).map_or(line_char_len, |c| c.char_start);
+                let end_col = cells.get(end_idx).map_or(line_char_len, |c| c.char_start);
                 self.matches.push(MatchPos {
                     line: line_idx,
                     col,

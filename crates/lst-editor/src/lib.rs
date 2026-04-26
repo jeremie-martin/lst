@@ -26,8 +26,8 @@ use crate::{
     position::Position,
     selection::{
         is_identifier_char, line_display_text, line_range_at_char, next_grapheme_boundary,
-        next_subword_boundary, next_word_boundary, previous_grapheme_boundary,
-        previous_subword_boundary, previous_word_boundary,
+        next_subword_boundary, next_word_boundary, paragraph_range_at_char,
+        previous_grapheme_boundary, previous_subword_boundary, previous_word_boundary,
     },
     tab_set::TabSet,
 };
@@ -488,8 +488,7 @@ impl EditorModel {
         let (range, expanded) = {
             let tab = self.active_tab();
             let buffer = tab.buffer();
-            let range =
-                position_to_char(buffer, start)..position_to_char(buffer, end);
+            let range = position_to_char(buffer, start)..position_to_char(buffer, end);
             let expanded = if let Some(re) = regex {
                 let line_byte_start = buffer.char_to_byte(buffer.line_to_char(start.line));
                 let match_byte_start = buffer.char_to_byte(range.start);
@@ -1122,7 +1121,8 @@ impl EditorModel {
                 if cursor == 0 {
                     return false;
                 }
-                previous_grapheme_boundary(tab.buffer(), cursor)..cursor
+                soft_tab_backspace_range(tab)
+                    .unwrap_or_else(|| previous_grapheme_boundary(tab.buffer(), cursor)..cursor)
             }
         };
         self.edit_active(EditKind::Delete, UndoBoundary::Merge, range, "");
@@ -1419,6 +1419,23 @@ impl EditorModel {
                 vim::VimCommand::ScrollCursor(intent) => {
                     self.queue_reveal(intent);
                 }
+                vim::VimCommand::SurroundRange {
+                    from,
+                    to,
+                    open,
+                    close,
+                } => {
+                    self.vim_surround_range(from, to, open, close);
+                    changed = true;
+                }
+                vim::VimCommand::DeleteSurround { open } => {
+                    self.vim_delete_surround(open);
+                    changed = true;
+                }
+                vim::VimCommand::ChangeSurround { from_open, to_open } => {
+                    self.vim_change_surround(from_open, to_open);
+                    changed = true;
+                }
             }
         }
 
@@ -1542,6 +1559,68 @@ impl EditorModel {
             Some((deleted, first, indent.chars().count()))
         })
         .unwrap_or_default()
+    }
+
+    fn vim_surround_range(&mut self, from: Position, to: Position, open: char, close: char) {
+        let _ = self.apply_line_edit(|lines| {
+            if from.line >= lines.len() || to.line >= lines.len() {
+                return None;
+            }
+            let mut buf = [0u8; 4];
+            // Insert close first so the open insertion's byte index doesn't
+            // shift when the range spans a single line.
+            let (_, close_byte) = line_byte_range(&lines[to.line], to.column, to.column);
+            lines[to.line].insert_str(close_byte, close.encode_utf8(&mut buf));
+            let (open_byte, _) = line_byte_range(&lines[from.line], from.column, from.column);
+            lines[from.line].insert_str(open_byte, open.encode_utf8(&mut buf));
+            Some(((), from.line, from.column))
+        });
+    }
+
+    fn vim_delete_surround(&mut self, open: char) {
+        let (open, close) =
+            vim::surround_pair_for_char(open).expect("validated by resolve_surround");
+        let snapshot = self.vim_snapshot();
+        let Some((open_pos, close_pos)) = vim::find_surround_pair(&snapshot, open, close) else {
+            self.status = "No surrounding pair.".to_string();
+            return;
+        };
+        let _ = self.apply_line_edit(|lines| {
+            if open_pos.line >= lines.len() || close_pos.line >= lines.len() {
+                return None;
+            }
+            let (cs, ce) =
+                line_byte_range(&lines[close_pos.line], close_pos.column, close_pos.column);
+            lines[close_pos.line].replace_range(cs..ce, "");
+            let (os, oe) = line_byte_range(&lines[open_pos.line], open_pos.column, open_pos.column);
+            lines[open_pos.line].replace_range(os..oe, "");
+            Some(((), open_pos.line, open_pos.column))
+        });
+    }
+
+    fn vim_change_surround(&mut self, from_open: char, to_open: char) {
+        let (from_open, from_close) =
+            vim::surround_pair_for_char(from_open).expect("validated by resolve_surround");
+        let (to_open, to_close) =
+            vim::surround_pair_for_char(to_open).expect("validated by resolve_surround");
+        let snapshot = self.vim_snapshot();
+        let Some((open_pos, close_pos)) = vim::find_surround_pair(&snapshot, from_open, from_close)
+        else {
+            self.status = "No surrounding pair.".to_string();
+            return;
+        };
+        let _ = self.apply_line_edit(|lines| {
+            if open_pos.line >= lines.len() || close_pos.line >= lines.len() {
+                return None;
+            }
+            let mut buf = [0u8; 4];
+            let (cs, ce) =
+                line_byte_range(&lines[close_pos.line], close_pos.column, close_pos.column);
+            lines[close_pos.line].replace_range(cs..ce, to_close.encode_utf8(&mut buf));
+            let (os, oe) = line_byte_range(&lines[open_pos.line], open_pos.column, open_pos.column);
+            lines[open_pos.line].replace_range(os..oe, to_open.encode_utf8(&mut buf));
+            Some(((), open_pos.line, open_pos.column))
+        });
     }
 
     fn vim_extract_range(&mut self, from: Position, to: Position) -> String {
@@ -2106,6 +2185,18 @@ impl EditorModel {
         self.assign_selection(range, reversed);
     }
 
+    pub fn select_current_line(&mut self) {
+        let tab = self.active_tab();
+        let range = line_range_at_char(tab.buffer(), tab.cursor_char());
+        self.assign_selection(range, false);
+    }
+
+    pub fn select_current_paragraph(&mut self) {
+        let tab = self.active_tab();
+        let range = paragraph_range_at_char(tab.buffer(), tab.cursor_char());
+        self.assign_selection(range, false);
+    }
+
     pub fn backspace(&mut self) {
         self.delete_selected_or_previous();
     }
@@ -2294,6 +2385,41 @@ impl EditorModel {
         });
     }
 
+    pub fn toggle_block_comment(&mut self) {
+        let Some((open, close)) = self.active_tab().language_config().block_comment else {
+            self.status = "No block-comment syntax for this language.".to_string();
+            return;
+        };
+        let tab = self.active_tab();
+        let buffer = tab.buffer();
+        let range = if tab.has_selection() {
+            tab.selected_range()
+        } else {
+            // Operate on the line content only — exclude the trailing terminator
+            // so the closer doesn't end up floating on its own line, and so a
+            // second press unwraps cleanly.
+            let mut r = line_range_at_char(buffer, tab.cursor_char());
+            while r.end > r.start && matches!(buffer.char(r.end - 1), '\n' | '\r') {
+                r.end -= 1;
+            }
+            r
+        };
+        let from = char_to_position(buffer, range.start);
+        let to = char_to_position(buffer, range.end);
+        let _ = self.apply_line_edit(|lines| {
+            let (line, col) = editor_ops::toggle_block_comment(
+                lines,
+                from.line,
+                from.column,
+                to.line,
+                to.column,
+                open,
+                close,
+            );
+            Some(((), line, col))
+        });
+    }
+
     pub fn request_paste(&mut self) {
         self.queue_effect(EditorEffect::ReadClipboard);
     }
@@ -2405,6 +2531,40 @@ fn auto_pair_pair_for(config: &LanguageConfig, ch: char) -> Option<(char, char)>
 
 fn is_auto_pair_quote(ch: char) -> bool {
     matches!(ch, '"' | '\'' | '`')
+}
+
+/// When the cursor sits in aligned leading indent of a space-indent language,
+/// collapse one full indent unit instead of one grapheme. Returns `None` to
+/// fall back to the regular grapheme delete.
+fn soft_tab_backspace_range(tab: &EditorTab) -> Option<Range<usize>> {
+    let cfg = tab.language_config();
+    if cfg.indent.uses_tabs() {
+        return None;
+    }
+    let unit = cfg.indent.width();
+    if unit == 0 {
+        return None;
+    }
+    let buffer = tab.buffer();
+    let cursor = tab.cursor_char();
+    let line = buffer.char_to_line(cursor);
+    let line_start = buffer.line_to_char(line);
+    let col = cursor - line_start;
+    if col == 0 || !col.is_multiple_of(unit) {
+        return None;
+    }
+    // Space-indent languages should only collapse real spaces; hard tabs fall
+    // back to the regular grapheme delete even when they appear in indentation.
+    let prefix_len = buffer
+        .line(line)
+        .chars()
+        .take_while(|ch| *ch == ' ')
+        .take(col)
+        .count();
+    if col > prefix_len {
+        return None;
+    }
+    Some((cursor - unit)..cursor)
 }
 
 /// Returns `(first, last, spans_multiple_lines)` for the active selection,

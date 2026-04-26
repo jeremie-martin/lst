@@ -120,6 +120,54 @@ pub fn toggle_comment(
     (cursor_line, cursor_col)
 }
 
+pub fn toggle_block_comment(
+    lines: &mut [String],
+    from_line: usize,
+    from_col: usize,
+    to_line: usize,
+    to_col: usize,
+    open: &str,
+    close: &str,
+) -> (usize, usize) {
+    if from_line >= lines.len() || to_line >= lines.len() {
+        return (from_line, from_col);
+    }
+    if from_line > to_line || (from_line == to_line && from_col > to_col) {
+        return (from_line, from_col);
+    }
+
+    let open_n = open.chars().count();
+    let close_n = close.chars().count();
+    let starts_at_open = line_has_at(&lines[from_line], from_col, open);
+    let ends_at_close = to_col >= close_n && line_has_at(&lines[to_line], to_col - close_n, close);
+
+    if starts_at_open && ends_at_close {
+        // Unwrap: closer first so the opener column stays valid on single-line ranges.
+        line_splice(&mut lines[to_line], to_col - close_n, to_col, "");
+        line_splice(&mut lines[from_line], from_col, from_col + open_n, "");
+        return (from_line, from_col);
+    }
+    line_splice(&mut lines[to_line], to_col, to_col, close);
+    line_splice(&mut lines[from_line], from_col, from_col, open);
+    (from_line, from_col + open_n)
+}
+
+fn line_has_at(line: &str, col: usize, needle: &str) -> bool {
+    let mut iter = line.chars().skip(col);
+    needle.chars().all(|c| iter.next() == Some(c))
+}
+
+fn line_splice(line: &mut String, from_col: usize, to_col: usize, with: &str) {
+    let chars: Vec<char> = line.chars().collect();
+    let from = from_col.min(chars.len());
+    let to = to_col.min(chars.len()).max(from);
+    let mut out = String::with_capacity(line.len() + with.len());
+    out.extend(chars[..from].iter());
+    out.push_str(with);
+    out.extend(chars[to..].iter());
+    *line = out;
+}
+
 // Case transforms
 
 fn transform_case_chars(chars: &[char], uppercase: bool) -> String {
@@ -250,5 +298,27 @@ mod tests {
         assert_eq!(col, 3);
         let _ = toggle_comment(&mut lines, 0, 0, 0, col, "//");
         assert_eq!(lines, vec!["fn main() {}".to_string()]);
+    }
+
+    #[test]
+    fn toggle_block_comment_wraps_and_unwraps_single_line() {
+        let mut lines = vec!["alpha beta".to_string()];
+        let (line, col) = toggle_block_comment(&mut lines, 0, 6, 0, 10, "/*", "*/");
+        assert_eq!(lines, vec!["alpha /*beta*/".to_string()]);
+        assert_eq!((line, col), (0, 8));
+        let (line, col) = toggle_block_comment(&mut lines, 0, 6, 0, 14, "/*", "*/");
+        assert_eq!(lines, vec!["alpha beta".to_string()]);
+        assert_eq!((line, col), (0, 6));
+    }
+
+    #[test]
+    fn toggle_block_comment_wraps_multi_line() {
+        let mut lines = vec!["one".to_string(), "two".to_string(), "three".to_string()];
+        let (line, col) = toggle_block_comment(&mut lines, 0, 0, 2, 5, "/*", "*/");
+        assert_eq!(
+            lines,
+            vec!["/*one".to_string(), "two".into(), "three*/".into()]
+        );
+        assert_eq!((line, col), (0, 2));
     }
 }

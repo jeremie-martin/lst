@@ -466,6 +466,40 @@ pub fn line_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     start..end
 }
 
+/// Maximal run of lines around `char_index` whose blank/non-blank state matches
+/// the cursor line. Blank = line content is whitespace-only (excluding the
+/// terminator). Includes the trailing newline of the last line in the run when
+/// one exists.
+pub fn paragraph_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
+    let total_lines = buffer.len_lines();
+    let clamped = char_index.min(buffer.len_chars());
+    let cur = buffer.char_to_line(clamped);
+    let on_blank = is_blank_line(buffer, cur);
+
+    let mut first = cur;
+    while first > 0 && is_blank_line(buffer, first - 1) == on_blank {
+        first -= 1;
+    }
+    let mut last = cur;
+    while last + 1 < total_lines && is_blank_line(buffer, last + 1) == on_blank {
+        last += 1;
+    }
+    let start = buffer.line_to_char(first);
+    let end = if last + 1 < total_lines {
+        buffer.line_to_char(last + 1)
+    } else {
+        buffer.len_chars()
+    };
+    start..end
+}
+
+fn is_blank_line(buffer: &Rope, line_ix: usize) -> bool {
+    if line_ix >= buffer.len_lines() {
+        return true;
+    }
+    buffer.line(line_ix).chars().all(char::is_whitespace)
+}
+
 pub fn previous_word_boundary_in_text(text: &str, offset: usize) -> usize {
     let cells = cells_of_str(text);
     let target = previous_word_boundary_cells(&cells, cell_partition_by_byte(&cells, offset));
@@ -572,6 +606,25 @@ mod tests {
         assert_eq!(line_range_at_char(&buffer, 1), 0..4);
         assert_eq!(line_range_at_char(&buffer, 5), 4..8);
         assert_eq!(line_range_at_char(&buffer, 10), 8..13);
+    }
+
+    #[test]
+    fn paragraph_range_groups_consecutive_non_blank_lines() {
+        let buffer = Rope::from_str("alpha\nbeta\n\ngamma\ndelta\n");
+
+        // Cursor on first paragraph: "alpha\nbeta\n".
+        assert_eq!(paragraph_range_at_char(&buffer, 0), 0..11);
+        assert_eq!(paragraph_range_at_char(&buffer, 7), 0..11);
+        // Cursor on second paragraph: "gamma\ndelta\n".
+        assert_eq!(paragraph_range_at_char(&buffer, 12), 12..24);
+    }
+
+    #[test]
+    fn paragraph_range_groups_blank_lines_when_cursor_blank() {
+        let buffer = Rope::from_str("alpha\n\n\nbeta\n");
+
+        // Cursor on the blank run at line 1 → covers lines 1 and 2.
+        assert_eq!(paragraph_range_at_char(&buffer, 6), 6..8);
     }
 
     #[test]

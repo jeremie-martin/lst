@@ -106,6 +106,53 @@ fn toggle_comment_is_noop_when_language_has_no_line_comment() {
 }
 
 #[test]
+fn toggle_block_comment_wraps_selection_for_rust() {
+    let mut model = model_with_path("example.rs", "let x = 1 + 2;");
+    model.set_selection(8..13, false);
+    model.toggle_block_comment();
+    assert_eq!(model.snapshot().text, "let x = /*1 + 2*/;");
+}
+
+#[test]
+fn toggle_block_comment_unwraps_existing_block() {
+    let mut model = model_with_path("example.rs", "let x = /*1 + 2*/;");
+    model.set_selection(8..17, false);
+    model.toggle_block_comment();
+    assert_eq!(model.snapshot().text, "let x = 1 + 2;");
+}
+
+#[test]
+fn toggle_block_comment_falls_back_to_current_line_without_selection() {
+    let mut model = model_with_path("example.rs", "let x = 1;\n");
+    model.toggle_block_comment();
+    assert_eq!(model.snapshot().text, "/*let x = 1;*/\n");
+}
+
+#[test]
+fn toggle_block_comment_unwraps_current_line_without_selection() {
+    let mut model = model_with_path("example.rs", "/*let x = 1;*/\n");
+    model.toggle_block_comment();
+    assert_eq!(model.snapshot().text, "let x = 1;\n");
+}
+
+#[test]
+fn toggle_block_comment_is_noop_for_python() {
+    let mut model = model_with_path("example.py", "x = 1");
+    model.set_selection(0..5, false);
+    let before = model.snapshot().text.clone();
+    model.toggle_block_comment();
+    assert_eq!(model.snapshot().text, before);
+}
+
+#[test]
+fn toggle_block_comment_uses_html_delimiters_for_html() {
+    let mut model = model_with_path("page.html", "<p>hi</p>");
+    model.set_selection(3..5, false);
+    model.toggle_block_comment();
+    assert_eq!(model.snapshot().text, "<p><!--hi--></p>");
+}
+
+#[test]
 fn auto_pair_angle_brackets_fire_for_tsx() {
     let mut model = model_with_path("component.tsx", "");
     model.replace_text_from_input(None, "<".into());
@@ -200,6 +247,48 @@ fn tab_inserts_tab_character_for_go() {
     let mut model = model_with_path("main.go", "");
     model.insert_tab_at_cursor();
     assert_eq!(model.snapshot().text, "\t");
+}
+
+#[test]
+fn backspace_removes_indent_unit_for_space_language() {
+    let mut model = model_with_path("main.js", "      ");
+    model.move_to_char(6, false, None);
+    model.backspace();
+    assert_eq!(model.snapshot().text, "    ");
+}
+
+#[test]
+fn backspace_removes_one_grapheme_for_tab_language() {
+    let mut model = model_with_path("main.go", "\tfoo");
+    model.move_to_char(1, false, None);
+    model.backspace();
+    assert_eq!(model.snapshot().text, "foo");
+}
+
+#[test]
+fn backspace_removes_one_grapheme_when_cursor_past_indent() {
+    let mut model = model_with_path("main.rs", "    fn x");
+    model.move_to_char(8, false, None);
+    model.backspace();
+    assert_eq!(model.snapshot().text, "    fn ");
+}
+
+#[test]
+fn backspace_removes_one_grapheme_when_indent_misaligned() {
+    let mut model = model_with_path("main.rs", "   fn x");
+    // Rust indent is 4 spaces but the line only has 3 leading spaces; the
+    // cursor at column 3 isn't on a unit boundary, so backspace removes one.
+    model.move_to_char(3, false, None);
+    model.backspace();
+    assert_eq!(model.snapshot().text, "  fn x");
+}
+
+#[test]
+fn backspace_does_not_collapse_hard_tab_in_space_language() {
+    let mut model = model_with_path("main.rs", "\t   fn x");
+    model.move_to_char(4, false, None);
+    model.backspace();
+    assert_eq!(model.snapshot().text, "\t  fn x");
 }
 
 #[test]
