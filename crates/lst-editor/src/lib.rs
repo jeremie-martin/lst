@@ -20,6 +20,41 @@ pub use snapshot::EditorSnapshot;
 pub use tab::{EditorTab, FileStamp, TabId};
 pub use viewport::Viewport;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GutterMode {
+    #[default]
+    Absolute,
+    Relative,
+    Hybrid,
+}
+
+impl GutterMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Absolute => "Absolute",
+            Self::Relative => "Relative",
+            Self::Hybrid => "Hybrid",
+        }
+    }
+
+    fn cycle(self) -> Self {
+        match self {
+            Self::Absolute => Self::Relative,
+            Self::Relative => Self::Hybrid,
+            Self::Hybrid => Self::Absolute,
+        }
+    }
+
+    pub fn format(self, line_ix: usize, cursor_line: usize) -> String {
+        match self {
+            Self::Absolute => format!("{:>3}", line_ix + 1),
+            Self::Relative => format!("{:>3}", line_ix.abs_diff(cursor_line)),
+            Self::Hybrid if line_ix == cursor_line => format!("{:>3}", line_ix + 1),
+            Self::Hybrid => format!("{:>3}", line_ix.abs_diff(cursor_line)),
+        }
+    }
+}
+
 use crate::{
     document::{char_to_position, line_indent_prefix, position_to_char},
     find::{FindScope, FindState, MatchPos},
@@ -86,6 +121,7 @@ pub struct EditorModel {
     next_untitled_id: usize,
     show_gutter: bool,
     show_wrap: bool,
+    gutter_mode: GutterMode,
     find: FindState,
     goto_line: Option<String>,
     status: String,
@@ -105,6 +141,7 @@ impl EditorModel {
             next_untitled_id: 2,
             show_gutter: true,
             show_wrap: true,
+            gutter_mode: GutterMode::Absolute,
             find: FindState::new(),
             goto_line: None,
             status,
@@ -179,6 +216,15 @@ impl EditorModel {
 
     pub fn show_wrap(&self) -> bool {
         self.show_wrap
+    }
+
+    pub fn gutter_mode(&self) -> GutterMode {
+        self.gutter_mode
+    }
+
+    pub fn cycle_gutter_mode(&mut self) {
+        self.gutter_mode = self.gutter_mode.cycle();
+        self.status = format!("Line numbers: {}", self.gutter_mode.label());
     }
 
     pub fn find(&self) -> &FindState {
@@ -1058,10 +1104,11 @@ impl EditorModel {
 
     fn replace_active_lines(&mut self, lines: Vec<String>, cursor_line: usize, cursor_col: usize) {
         let newline = preferred_newline_for_active_tab(self.active_tab());
+        let new_text = lines.join(newline);
+        let len = self.active_tab().len_chars();
         {
             let tab = self.active_tab_mut();
-            tab.set_text(&lines.join(newline));
-            tab.mark_modified();
+            tab.replace_char_range(0..len, &new_text);
             let cursor = position_to_char(
                 tab.buffer(),
                 Position {
@@ -1435,6 +1482,15 @@ impl EditorModel {
                 vim::VimCommand::ChangeSurround { from_open, to_open } => {
                     self.vim_change_surround(from_open, to_open);
                     changed = true;
+                }
+                vim::VimCommand::JumpToLastEdit { enter_insert } => {
+                    if let Some(target) = self.active_tab().last_edit_position() {
+                        self.active_tab_mut().move_to(target);
+                        if enter_insert {
+                            self.vim.mode = vim::Mode::Insert;
+                        }
+                        changed = true;
+                    }
                 }
             }
         }
@@ -2076,6 +2132,22 @@ impl EditorModel {
         }
     }
 
+    pub fn move_tab(&mut self, from: usize, to: usize) {
+        if self.tabs.reorder(from, to) {
+            self.status = format!("Reordered tab to position {}.", to + 1);
+        }
+    }
+
+    pub fn move_active_tab(&mut self, delta: isize) {
+        let len = self.tabs.len();
+        if len < 2 {
+            return;
+        }
+        let from = self.active_index();
+        let to = (from as isize + delta).rem_euclid(len as isize) as usize;
+        self.move_tab(from, to);
+    }
+
     pub fn select_all(&mut self) {
         self.active_tab_mut().select_all();
         if let Some(text) = self.active_tab().selected_text() {
@@ -2486,6 +2558,17 @@ impl EditorModel {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
+
+    pub fn swap_redo_branch(&mut self) {
+        if self.active_tab_mut().swap_redo_branch() {
+            self.status = format!(
+                "Switched to alternate redo branch ({} more saved).",
+                self.active_tab().redo_branch_count(),
+            );
+        } else {
+            self.status = "No saved redo branches.".to_string();
+        }
+    }
 }
 
 fn next_active_after_tab_close(len: usize, active_index: usize, closed_index: usize) -> usize {
@@ -2766,6 +2849,93 @@ mod tests {
         assert_eq!(snapshot.tab_titles, ["one.txt"]);
         assert_eq!(snapshot.active, 0);
         assert_eq!(snapshot.status, "Closed tab.");
+    }
+
+    #[test]
+    fn gutter_mode_renders_each_kind() {
+        assert_eq!(GutterMode::Absolute.format(4, 7), "  5");
+        assert_eq!(GutterMode::Relative.format(4, 7), "  3");
+        assert_eq!(GutterMode::Relative.format(7, 4), "  3");
+        // Hybrid: cursor row shows the absolute number, others show distance.
+        assert_eq!(GutterMode::Hybrid.format(7, 7), "  8");
+        assert_eq!(GutterMode::Hybrid.format(2, 7), "  5");
+    }
+
+    #[test]
+    fn cycle_gutter_mode_advances_through_three_modes() {
+        let mut model = model_with_tabs(vec![tab(1, "one.txt", "")], "Ready.".to_string());
+        assert_eq!(model.gutter_mode(), GutterMode::Absolute);
+        model.cycle_gutter_mode();
+        assert_eq!(model.gutter_mode(), GutterMode::Relative);
+        model.cycle_gutter_mode();
+        assert_eq!(model.gutter_mode(), GutterMode::Hybrid);
+        model.cycle_gutter_mode();
+        assert_eq!(model.gutter_mode(), GutterMode::Absolute);
+    }
+
+    #[test]
+    fn move_active_tab_keeps_focus_on_dragged_tab() {
+        let mut model = model_with_tabs(
+            vec![
+                tab(1, "one.txt", "1"),
+                tab(2, "two.txt", "2"),
+                tab(3, "three.txt", "3"),
+            ],
+            "Ready.".to_string(),
+        );
+        model.set_active_tab(0);
+
+        model.move_active_tab(1);
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.tab_titles, ["two.txt", "one.txt", "three.txt"]);
+        assert_eq!(snapshot.active, 1);
+
+        model.move_active_tab(-1);
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.tab_titles, ["one.txt", "two.txt", "three.txt"]);
+        assert_eq!(snapshot.active, 0);
+    }
+
+    #[test]
+    fn move_active_tab_wraps_around_when_delta_overshoots() {
+        let mut model = model_with_tabs(
+            vec![
+                tab(1, "one.txt", "1"),
+                tab(2, "two.txt", "2"),
+                tab(3, "three.txt", "3"),
+            ],
+            "Ready.".to_string(),
+        );
+
+        model.set_active_tab(2);
+        model.move_active_tab(1);
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.tab_titles, ["three.txt", "one.txt", "two.txt"]);
+        assert_eq!(snapshot.active, 0);
+
+        model.move_active_tab(-1);
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.tab_titles, ["one.txt", "two.txt", "three.txt"]);
+        assert_eq!(snapshot.active, 2);
+    }
+
+    #[test]
+    fn move_tab_shifts_other_tabs_without_changing_active_content() {
+        let mut model = model_with_tabs(
+            vec![
+                tab(1, "one.txt", "1"),
+                tab(2, "two.txt", "2"),
+                tab(3, "three.txt", "3"),
+            ],
+            "Ready.".to_string(),
+        );
+        model.set_active_tab(2);
+
+        model.move_tab(0, 2);
+
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.tab_titles, ["two.txt", "three.txt", "one.txt"]);
+        assert_eq!(snapshot.active, 1);
     }
 
     #[test]

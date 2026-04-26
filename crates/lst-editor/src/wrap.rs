@@ -1,29 +1,35 @@
+use crate::selection::{cells_of_str, GraphemeCell};
+
 const TAB_WIDTH: usize = 8;
 
 pub fn visual_line_count(line: &str, max_cols: usize) -> usize {
     if line.is_empty() || max_cols == 0 {
         return 1;
     }
+    let cells = cells_of_str(line);
+    if cells.is_empty() {
+        return 1;
+    }
 
     let mut lines = 1usize;
     let mut col = 0usize;
-    let mut chars = line.chars().peekable();
+    let mut idx = 0usize;
 
-    while chars.peek().is_some() {
-        let (token_len, token_width) = token_shape(chars.clone(), col);
+    while idx < cells.len() {
+        let token_end = token_end(&cells, idx);
+        let token_width = span_width(&cells[idx..token_end], col);
 
         if col > 0 && token_width > max_cols.saturating_sub(col) {
             lines += 1;
             col = 0;
         }
 
-        for _ in 0..token_len {
-            let ch = chars.next().expect("token length came from this iterator");
-            let mut width = char_width(ch, col);
+        while idx < token_end {
+            let mut width = cell_width(cells[idx].repr, col);
             if col > 0 && col + width > max_cols {
                 lines += 1;
                 col = 0;
-                width = char_width(ch, col);
+                width = cell_width(cells[idx].repr, col);
             }
 
             col += width;
@@ -31,6 +37,8 @@ pub fn visual_line_count(line: &str, max_cols: usize) -> usize {
                 lines += 1;
                 col -= max_cols;
             }
+
+            idx += 1;
         }
     }
 
@@ -174,27 +182,33 @@ pub fn wrap_segments(line: &str, max_cols: usize) -> Vec<WrappedSegment> {
         }];
     }
 
-    let chars: Vec<char> = line.chars().collect();
-    let layout = line_layout(line, max_cols);
+    let cells = cells_of_str(line);
+    let layout = line_layout_from_cells(&cells, max_cols);
+    let total_chars = layout.cursor_rows.len().saturating_sub(1);
     let mut segments = Vec::new();
-    let mut start = 0usize;
+    let mut start_char = 0usize;
+    let mut start_byte = 0usize;
     let mut row = 0usize;
-    for idx in 1..=chars.len() {
-        let current_row = layout.cursor_rows[idx];
-        if current_row != row {
+    // Cluster boundaries are the only places a row transition can occur, so
+    // checking each cell start is enough — and slicing `line` by byte_start
+    // skips the per-segment chars-collect.
+    for cell in cells.iter().skip(1) {
+        let cell_row = layout.cursor_rows[cell.char_start];
+        if cell_row != row {
             segments.push(WrappedSegment {
-                start_col: start,
-                end_col: idx,
-                text: chars[start..idx].iter().collect(),
+                start_col: start_char,
+                end_col: cell.char_start,
+                text: line[start_byte..cell.byte_start].to_string(),
             });
-            start = idx;
-            row = current_row;
+            start_char = cell.char_start;
+            start_byte = cell.byte_start;
+            row = cell_row;
         }
     }
     segments.push(WrappedSegment {
-        start_col: start,
-        end_col: chars.len(),
-        text: chars[start..].iter().collect(),
+        start_col: start_char,
+        end_col: total_chars,
+        text: line[start_byte..].to_string(),
     });
     segments
 }
@@ -204,36 +218,41 @@ struct LineLayout {
 }
 
 fn line_layout(line: &str, max_cols: usize) -> LineLayout {
-    if line.is_empty() || max_cols == 0 {
+    line_layout_from_cells(&cells_of_str(line), max_cols)
+}
+
+fn line_layout_from_cells(cells: &[GraphemeCell], max_cols: usize) -> LineLayout {
+    let char_count: usize = cells.iter().map(|cell| cell.char_len as usize).sum();
+    if char_count == 0 || max_cols == 0 {
         return LineLayout {
-            cursor_rows: vec![0],
+            cursor_rows: vec![0; char_count + 1],
         };
     }
 
-    let chars: Vec<char> = line.chars().collect();
-    let mut cursor_rows = vec![0; chars.len() + 1];
+    let mut cursor_rows = vec![0; char_count + 1];
     let mut row = 0usize;
     let mut col = 0usize;
-    let mut index = 0usize;
+    let mut idx = 0usize;
 
-    while index < chars.len() {
-        let token_end = token_end(&chars, index);
+    while idx < cells.len() {
+        let token_end = token_end(cells, idx);
 
-        if col > 0 && span_width(&chars[index..token_end], col) > max_cols.saturating_sub(col) {
+        if col > 0 && span_width(&cells[idx..token_end], col) > max_cols.saturating_sub(col) {
             row += 1;
             col = 0;
-            cursor_rows[index] = row;
+            mark_cluster_rows(&mut cursor_rows, &cells[idx], row);
         }
 
-        while index < token_end {
-            cursor_rows[index] = row;
+        while idx < token_end {
+            let cell = cells[idx];
+            mark_cluster_rows(&mut cursor_rows, &cell, row);
 
-            let mut width = char_width(chars[index], col);
+            let mut width = cell_width(cell.repr, col);
             if col > 0 && col + width > max_cols {
                 row += 1;
                 col = 0;
-                cursor_rows[index] = row;
-                width = char_width(chars[index], col);
+                mark_cluster_rows(&mut cursor_rows, &cell, row);
+                width = cell_width(cell.repr, col);
             }
 
             col += width;
@@ -242,26 +261,32 @@ fn line_layout(line: &str, max_cols: usize) -> LineLayout {
                 col -= max_cols;
             }
 
-            index += 1;
-            cursor_rows[index] = row;
+            idx += 1;
+            cursor_rows[cell.char_start + cell.char_len as usize] = row;
         }
     }
 
     LineLayout { cursor_rows }
 }
 
-fn token_end(chars: &[char], start: usize) -> usize {
+fn mark_cluster_rows(cursor_rows: &mut [usize], cell: &GraphemeCell, row: usize) {
+    for offset in 0..cell.char_len as usize {
+        cursor_rows[cell.char_start + offset] = row;
+    }
+}
+
+fn token_end(cells: &[GraphemeCell], start: usize) -> usize {
     let mut end = start;
 
-    if chars[start].is_whitespace() {
-        while end < chars.len() && chars[end].is_whitespace() {
+    if cells[start].repr.is_whitespace() {
+        while end < cells.len() && cells[end].repr.is_whitespace() {
             end += 1;
         }
     } else {
-        while end < chars.len() && !chars[end].is_whitespace() {
+        while end < cells.len() && !cells[end].repr.is_whitespace() {
             end += 1;
         }
-        while end < chars.len() && chars[end].is_whitespace() {
+        while end < cells.len() && cells[end].repr.is_whitespace() {
             end += 1;
         }
     }
@@ -269,50 +294,16 @@ fn token_end(chars: &[char], start: usize) -> usize {
     end
 }
 
-fn span_width(chars: &[char], start_col: usize) -> usize {
+fn span_width(cells: &[GraphemeCell], start_col: usize) -> usize {
     let mut col = start_col;
-    for ch in chars {
-        col += char_width(*ch, col);
+    for cell in cells {
+        col += cell_width(cell.repr, col);
     }
     col - start_col
 }
 
-fn token_shape(
-    mut chars: std::iter::Peekable<std::str::Chars<'_>>,
-    start_col: usize,
-) -> (usize, usize) {
-    let Some(first) = chars.peek().copied() else {
-        return (0, 0);
-    };
-
-    let whitespace = first.is_whitespace();
-    let mut token_len = 0usize;
-    let mut col = start_col;
-    let mut in_trailing_whitespace = false;
-
-    while let Some(ch) = chars.peek().copied() {
-        if whitespace {
-            if !ch.is_whitespace() {
-                break;
-            }
-        } else if !in_trailing_whitespace {
-            if ch.is_whitespace() {
-                in_trailing_whitespace = true;
-            }
-        } else if !ch.is_whitespace() {
-            break;
-        }
-
-        col += char_width(ch, col);
-        token_len += 1;
-        chars.next();
-    }
-
-    (token_len, col - start_col)
-}
-
-fn char_width(ch: char, col: usize) -> usize {
-    if ch == '\t' {
+fn cell_width(repr: char, col: usize) -> usize {
+    if repr == '\t' {
         let tab_stop = TAB_WIDTH - (col % TAB_WIDTH);
         tab_stop.max(1)
     } else {
@@ -376,5 +367,20 @@ mod tests {
                 preferred_column: 1,
             })
         );
+    }
+
+    #[test]
+    fn wrap_keeps_grapheme_cluster_intact() {
+        // "naïve" decomposed: n, a, i, U+0308 (combining diaeresis), v, e — 6 chars / 5 clusters.
+        let line = "na\u{0069}\u{0308}ve";
+        let segments = wrap_segments(line, 3);
+
+        for segment in &segments {
+            // No segment should ever begin with a combining mark — that would mean a cluster was split.
+            assert_ne!(segment.text.chars().next(), Some('\u{0308}'));
+        }
+        // Combining mark stays glued to its base char in cursor_rows.
+        let layout = line_layout(line, 3);
+        assert_eq!(layout.cursor_rows[2], layout.cursor_rows[3]);
     }
 }

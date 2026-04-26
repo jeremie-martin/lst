@@ -13,6 +13,9 @@ use std::{
 };
 
 const MAX_UNDO: usize = 100;
+// Each branch can still hold up to MAX_UNDO full-buffer snapshots, so this
+// only caps how many alternate timelines we keep — not total memory.
+const MAX_REDO_BRANCHES: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileStamp {
@@ -234,7 +237,12 @@ pub struct EditorTab {
     line_cache: Option<CachedLines>,
     undo_stack: Vec<Snapshot>,
     redo_stack: Vec<Snapshot>,
+    // Abandoned redo paths, most-recent last. A fresh edit moves the current
+    // redo path here instead of dropping it, so `swap_redo_branch` can pull
+    // the latest sibling branch back into reach.
+    redo_branches: Vec<Vec<Snapshot>>,
     last_edit_kind: Option<EditKind>,
+    last_edit_position: Option<usize>,
     pub marked_range: Option<Range<usize>>,
 }
 
@@ -310,7 +318,9 @@ impl EditorTab {
             line_cache: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            redo_branches: Vec::new(),
             last_edit_kind: None,
+            last_edit_position: None,
             marked_range: None,
         }
     }
@@ -502,9 +512,33 @@ impl EditorTab {
             if self.undo_stack.len() > MAX_UNDO {
                 self.undo_stack.remove(0);
             }
-            self.redo_stack.clear();
+            if !self.redo_stack.is_empty() {
+                let abandoned = std::mem::take(&mut self.redo_stack);
+                self.redo_branches.push(abandoned);
+                if self.redo_branches.len() > MAX_REDO_BRANCHES {
+                    self.redo_branches.remove(0);
+                }
+            }
         }
         self.last_edit_kind = Some(kind);
+    }
+
+    // Cycles through abandoned redo paths so a fresh edit no longer permanently
+    // strands the previous redo branch. Returns false when there is nothing to
+    // swap — current redo stack is left untouched.
+    pub fn swap_redo_branch(&mut self) -> bool {
+        let Some(branch) = self.redo_branches.pop() else {
+            return false;
+        };
+        let current = std::mem::replace(&mut self.redo_stack, branch);
+        if !current.is_empty() {
+            self.redo_branches.insert(0, current);
+        }
+        true
+    }
+
+    pub fn redo_branch_count(&self) -> usize {
+        self.redo_branches.len()
     }
 
     pub fn move_to(&mut self, offset: usize) {
@@ -538,8 +572,15 @@ impl EditorTab {
         self.modified = true;
         self.preferred_column = None;
         self.marked_range = None;
+        self.last_edit_position = Some(new_cursor);
         self.touch_content();
         new_cursor
+    }
+
+    // Returns None until the buffer has been edited; clamps to the current
+    // length so callers never need to re-validate after undo/redo trims text.
+    pub fn last_edit_position(&self) -> Option<usize> {
+        self.last_edit_position.map(|pos| pos.min(self.len_chars()))
     }
 
     pub fn edit(
@@ -561,6 +602,7 @@ impl EditorTab {
         self.marked_range = None;
         self.touch_content();
         self.last_edit_kind = None;
+        self.last_edit_position = None;
     }
 
     pub(crate) fn reset_from_disk(&mut self, text: &str) {
@@ -571,9 +613,11 @@ impl EditorTab {
         self.marked_range = None;
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.redo_branches.clear();
         self.refresh_language();
         self.touch_content();
         self.last_edit_kind = None;
+        self.last_edit_position = None;
     }
 
     pub(crate) fn mark_saved(&mut self, path: PathBuf, file_stamp: FileStamp) {
@@ -704,6 +748,82 @@ mod tests {
         tab.edit(EditKind::Insert, UndoBoundary::Break, 1..1, " ");
         tab.undo();
         assert_eq!(tab.buffer_text(), "a");
+    }
+
+    #[test]
+    fn swap_redo_branch_recovers_abandoned_redo_path() {
+        let mut tab = EditorTab::from_text(TabId::from_raw(1), "untitled".into(), None, "");
+        tab.edit(EditKind::Insert, UndoBoundary::Break, 0..0, "a");
+        tab.edit(EditKind::Insert, UndoBoundary::Break, 1..1, "b");
+        assert_eq!(tab.buffer_text(), "ab");
+        assert!(tab.undo());
+        assert_eq!(tab.buffer_text(), "a");
+
+        // A fresh edit normally drops the "ab" redo path; preservation keeps it
+        // so the user can recover it via swap_redo_branch.
+        tab.edit(EditKind::Insert, UndoBoundary::Break, 1..1, "c");
+        assert_eq!(tab.buffer_text(), "ac");
+        assert_eq!(tab.redo_branch_count(), 1);
+
+        assert!(tab.undo());
+        assert_eq!(tab.buffer_text(), "a");
+        assert!(tab.swap_redo_branch());
+        assert!(tab.redo());
+        assert_eq!(tab.buffer_text(), "ab");
+    }
+
+    #[test]
+    fn swap_redo_branch_cycles_through_multiple_branches() {
+        let mut tab = EditorTab::from_text(TabId::from_raw(1), "untitled".into(), None, "a");
+
+        // Type a label, undo, then the next edit abandons that redo path —
+        // the loop leaves 3 abandoned branches plus the latest as the active
+        // redo path, so 4 distinct timelines should be reachable in total.
+        for label in ['X', 'Y', 'Z', 'W'] {
+            let end = tab.len_chars();
+            tab.edit(
+                EditKind::Insert,
+                UndoBoundary::Break,
+                end..end,
+                &label.to_string(),
+            );
+            assert!(tab.undo());
+        }
+        assert_eq!(tab.redo_branch_count(), 3);
+
+        let mut seen = Vec::new();
+        let collect = |tab: &mut EditorTab, seen: &mut Vec<String>| {
+            assert!(tab.redo());
+            seen.push(tab.buffer_text());
+            assert!(tab.undo());
+        };
+
+        collect(&mut tab, &mut seen);
+        for _ in 0..3 {
+            assert!(tab.swap_redo_branch());
+            collect(&mut tab, &mut seen);
+        }
+        seen.sort();
+        assert_eq!(seen, vec!["aW", "aX", "aY", "aZ"]);
+    }
+
+    #[test]
+    fn swap_redo_branch_returns_false_with_no_branches() {
+        let mut tab = EditorTab::from_text(TabId::from_raw(1), "untitled".into(), None, "x");
+        tab.edit(EditKind::Insert, UndoBoundary::Break, 1..1, "y");
+        assert!(!tab.swap_redo_branch());
+    }
+
+    #[test]
+    fn last_edit_position_records_caret_after_each_edit() {
+        let mut tab = EditorTab::from_text(TabId::from_raw(1), "untitled".into(), None, "abcdef");
+        assert_eq!(tab.last_edit_position(), None);
+
+        tab.edit(EditKind::Insert, UndoBoundary::Break, 3..3, "X");
+        assert_eq!(tab.last_edit_position(), Some(4));
+
+        tab.edit(EditKind::Insert, UndoBoundary::Break, 0..0, "YY");
+        assert_eq!(tab.last_edit_position(), Some(2));
     }
 
     #[test]
