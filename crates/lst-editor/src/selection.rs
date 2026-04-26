@@ -1,5 +1,6 @@
 use ropey::Rope;
 use std::ops::Range;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TokenClass {
@@ -264,6 +265,79 @@ pub fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     (line_start + start)..(line_start + end)
 }
 
+pub fn next_grapheme_column(line: &str, column: usize) -> usize {
+    let total = line.chars().count();
+    if column >= total {
+        return total;
+    }
+    let local_byte = byte_of_char_index(line, column);
+    let next_byte = line
+        .grapheme_indices(true)
+        .find_map(|(b, _)| (b > local_byte).then_some(b))
+        .unwrap_or(line.len());
+    line[..next_byte].chars().count()
+}
+
+pub fn previous_grapheme_column(line: &str, column: usize) -> usize {
+    if column == 0 {
+        return 0;
+    }
+    let total = line.chars().count();
+    let column = column.min(total);
+    let local_byte = if column == total {
+        line.len()
+    } else {
+        byte_of_char_index(line, column)
+    };
+    let prev_byte = line
+        .grapheme_indices(true)
+        .rev()
+        .find_map(|(b, _)| (b < local_byte).then_some(b))
+        .unwrap_or(0);
+    line[..prev_byte].chars().count()
+}
+
+pub fn last_grapheme_column(line: &str) -> usize {
+    line.grapheme_indices(true)
+        .next_back()
+        .map_or(0, |(b, _)| line[..b].chars().count())
+}
+
+pub fn next_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
+    let total = buffer.len_chars();
+    let ci = char_index.min(total);
+    if ci == total {
+        return total;
+    }
+    let line = buffer.char_to_line(ci);
+    let line_start = buffer.line_to_char(line);
+    let body = line_display_text(buffer, line);
+    let local_ci = ci - line_start;
+    if local_ci >= body.chars().count() {
+        return (ci + 1).min(total);
+    }
+    line_start + next_grapheme_column(&body, local_ci)
+}
+
+pub fn previous_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
+    let total = buffer.len_chars();
+    let ci = char_index.min(total);
+    if ci == 0 {
+        return 0;
+    }
+    let line = buffer.char_to_line(ci);
+    let line_start = buffer.line_to_char(line);
+    if ci == line_start {
+        return ci - 1;
+    }
+    let body = line_display_text(buffer, line);
+    let local_ci = ci - line_start;
+    if local_ci > body.chars().count() {
+        return ci - 1;
+    }
+    line_start + previous_grapheme_column(&body, local_ci)
+}
+
 pub fn line_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     let clamped = char_index.min(buffer.len_chars());
     let line = buffer.char_to_line(clamped);
@@ -354,6 +428,13 @@ pub fn drag_selection_range(anchor: Range<usize>, current: Range<usize>) -> (Ran
             false,
         )
     }
+}
+
+fn byte_of_char_index(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len())
 }
 
 fn char_index_containing_offset(text: &str, offset: usize) -> Option<usize> {

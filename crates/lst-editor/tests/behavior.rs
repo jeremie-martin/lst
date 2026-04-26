@@ -2265,3 +2265,96 @@ fn vim_key_translation_is_framework_neutral_behavior() {
         vec![VimCommand::Redo]
     );
 }
+
+#[test]
+fn arrow_right_steps_over_combining_acute() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "e\u{0301}f",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(0, false, None);
+    model.move_horizontal_collapsed(false);
+
+    assert_eq!(model.snapshot().selection, 2..2);
+}
+
+#[test]
+fn arrow_left_steps_over_emoji() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "a\u{1F1EB}\u{1F1F7}b",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(3, false, None);
+    model.move_horizontal_collapsed(true);
+
+    assert_eq!(model.snapshot().selection, 1..1);
+}
+
+#[test]
+fn backspace_removes_full_grapheme() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "Xe\u{0301}Y",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(3, false, None);
+    model.backspace();
+
+    assert_eq!(model.active_tab().buffer_text(), "XY");
+    assert_eq!(model.snapshot().selection, 1..1);
+}
+
+#[test]
+fn delete_forward_removes_full_emoji() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "X\u{1F1EB}\u{1F1F7}Y",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(1, false, None);
+    model.delete_forward();
+
+    assert_eq!(model.active_tab().buffer_text(), "XY");
+    assert_eq!(model.snapshot().selection, 1..1);
+}
+
+#[test]
+fn vim_l_steps_over_emoji() {
+    let mut vim = VimState::new();
+    vim.mode = VimMode::Normal;
+    let text = VimTextSnapshot {
+        lines: vec!["a\u{1F1EB}\u{1F1F7}b".to_string()].into(),
+        cursor: Position { line: 0, column: 1 },
+    };
+
+    assert_eq!(
+        vim.handle_key(
+            &VimKey::Character("l".into()),
+            VimModifiers::default(),
+            &text,
+        ),
+        vec![VimCommand::MoveTo(Position { line: 0, column: 3 })]
+    );
+}

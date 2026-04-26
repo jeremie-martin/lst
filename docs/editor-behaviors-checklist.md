@@ -88,7 +88,7 @@ reorganization. Grep for the symbol to navigate.
 ## Text Input
 
 - [x] **IME composition** — full `EntityInputHandler` (marked range, bounds, unmark) (`apps/lst-gpui/src/input_adapter.rs::text_for_range`, `::marked_text_range`, `::unmark_text`, `::replace_and_mark_text_in_range`; model state at `crates/lst-editor/src/tab.rs::EditorTab::marked_range`; test `crates/lst-editor/tests/behavior.rs::ime_marked_text_replacement_remains_model_behavior`)
-- [~] **Unicode grapheme clusters** — graphemes used in `input_field` widget (`apps/lst-gpui/src/ui/input_field.rs::previous_boundary`, `::next_boundary`); main editor operates on `char`s
+- [~] **Unicode grapheme clusters** — main-editor single-step motion, Backspace, Delete-forward, and Vim `h`/`l` step by graphemes via `crates/lst-editor/src/selection.rs::next_grapheme_boundary`, `::previous_grapheme_boundary`, `::next_grapheme_column`, `::previous_grapheme_column`, `::last_grapheme_column` (used from `crates/lst-editor/src/lib.rs::move_horizontal`, `::delete_selected_or_previous`, `::delete_selected_or_next`; `crates/lst-editor/src/vim.rs::compute_motion` `Motion::Left`/`Motion::Right`); `apps/lst-gpui/src/ui/input_field.rs::previous_boundary`, `::next_boundary` cover the inline input. Word/subword boundaries still operate on chars (boundaries can land inside a grapheme cluster like NFD `é`).
 - [~] **Tab → spaces with soft-tab backspace** — inserts the active language's indent unit via `IndentStyle::indent_unit` (e.g. 4 spaces for Rust, 2 for JS/TS, a literal `\t` for Go) (`crates/lst-editor/src/lib.rs::insert_tab_at_cursor`; `crates/lst-editor/src/language.rs::IndentStyle::indent_unit`); backspace deletes one char, not a full indent
 - [ ] **Trim trailing whitespace on save**
 - [ ] **Ensure final newline on save**
@@ -134,7 +134,7 @@ Items most often overlooked in custom editors:
 
 - [x] Sticky virtual column across up/down motion
 - [x] Smart Home (two-stage)
-- [~] Grapheme-aware motion — only in the input-field widget, not the main editor
+- [~] Grapheme-aware motion — main-editor single-step motion, Backspace, Delete-forward, and Vim `h`/`l` step by graphemes; word/subword still char-based
 - [x] Undo coalescing by word/time
 - [x] Scroll margin
 - [x] Auto-scroll during drag-selection
@@ -156,7 +156,7 @@ auto-scroll, IME composition, current-line highlight, line-ending detection.
 **Biggest gaps to close for "idiomatic" feel:**
 1. Horizontal scroll when wrap is off
 2. Find toggles: case sensitivity, smart case, whole-word, regex
-3. Grapheme-cluster-aware motion in the main editor
+3. Grapheme-cluster-aware word/subword boundaries (single-step motion is grapheme-aware)
 4. Cursor blink
 5. Trim-trailing-whitespace / ensure-final-newline on save
 6. Tab reordering, recently-closed reopen

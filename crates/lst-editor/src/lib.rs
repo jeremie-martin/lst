@@ -25,8 +25,9 @@ use crate::{
     find::{FindState, MatchPos},
     position::Position,
     selection::{
-        is_identifier_char, line_range_at_char, next_subword_boundary, next_word_boundary,
-        previous_subword_boundary, previous_word_boundary,
+        is_identifier_char, line_range_at_char, next_grapheme_boundary, next_subword_boundary,
+        next_word_boundary, previous_grapheme_boundary, previous_subword_boundary,
+        previous_word_boundary,
     },
     tab_set::TabSet,
 };
@@ -586,11 +587,25 @@ impl EditorModel {
     fn move_horizontal(&mut self, delta: isize, select: bool) -> bool {
         let tab = self.active_tab_mut();
         let cursor = tab.cursor_char();
-        let target = if delta.is_negative() {
-            cursor.saturating_sub(delta.unsigned_abs())
+        let mut target = cursor;
+        let steps = delta.unsigned_abs();
+        if delta.is_negative() {
+            for _ in 0..steps {
+                let next = previous_grapheme_boundary(tab.buffer(), target);
+                if next == target {
+                    break;
+                }
+                target = next;
+            }
         } else {
-            (cursor + delta as usize).min(tab.len_chars())
-        };
+            for _ in 0..steps {
+                let next = next_grapheme_boundary(tab.buffer(), target);
+                if next == target {
+                    break;
+                }
+                target = next;
+            }
+        }
         tab.preferred_column = None;
         if select {
             tab.select_to(target);
@@ -976,7 +991,7 @@ impl EditorModel {
                 if cursor == 0 {
                     return false;
                 }
-                cursor - 1..cursor
+                previous_grapheme_boundary(tab.buffer(), cursor)..cursor
             }
         };
         self.edit_active(EditKind::Delete, UndoBoundary::Merge, range, "");
@@ -993,7 +1008,7 @@ impl EditorModel {
                 if cursor >= tab.len_chars() {
                     return false;
                 }
-                cursor..cursor + 1
+                cursor..next_grapheme_boundary(tab.buffer(), cursor)
             }
         };
         self.edit_active(EditKind::Delete, UndoBoundary::Merge, range, "");

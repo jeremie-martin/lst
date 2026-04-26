@@ -5,6 +5,7 @@
 
 use crate::effect::RevealIntent;
 use crate::position::Position;
+use crate::selection::{last_grapheme_column, next_grapheme_column, previous_grapheme_column};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1054,12 +1055,37 @@ fn compute_motion(
     let n = count.unwrap_or(1);
     match motion {
         Motion::Left => {
-            let col = text.cursor.column.saturating_sub(n);
+            let line_text = text
+                .lines
+                .get(text.cursor.line)
+                .map(String::as_str)
+                .unwrap_or("");
+            let mut col = text.cursor.column;
+            for _ in 0..n {
+                let next = previous_grapheme_column(line_text, col);
+                if next == col {
+                    break;
+                }
+                col = next;
+            }
             pos(text.cursor.line, col)
         }
         Motion::Right => {
-            let max = line_len(text, text.cursor.line).saturating_sub(1);
-            pos(text.cursor.line, (text.cursor.column + n).min(max))
+            let line_text = text
+                .lines
+                .get(text.cursor.line)
+                .map(String::as_str)
+                .unwrap_or("");
+            let last = last_grapheme_column(line_text);
+            let mut col = text.cursor.column.min(last);
+            for _ in 0..n {
+                let next = next_grapheme_column(line_text, col);
+                if next == col || next > last {
+                    break;
+                }
+                col = next;
+            }
+            pos(text.cursor.line, col)
         }
         Motion::Down => {
             let line = (text.cursor.line + n).min(text.line_count().saturating_sub(1));
