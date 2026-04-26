@@ -33,12 +33,21 @@ pub(crate) struct ViewportCache {
     pub(crate) syntax_highlights: Option<CachedSyntaxHighlights>,
     pub(crate) syntax_highlight_inflight: Option<crate::syntax::SyntaxHighlightJobKey>,
     pub(crate) wrap_layout: Option<CachedWrapLayout>,
+    max_unwrapped_line_width: Option<CachedUnwrappedLineWidth>,
 }
 
 impl ViewportCache {
     pub(crate) fn clear_code_lines(&mut self) {
         self.code_lines.clear();
     }
+}
+
+#[derive(Clone, Copy)]
+struct CachedUnwrappedLineWidth {
+    revision: u64,
+    char_width: Pixels,
+    font_size: Pixels,
+    width: Pixels,
 }
 
 #[derive(Clone)]
@@ -61,7 +70,11 @@ pub(crate) struct ViewportGeometry {
     pub(crate) bounds: Option<Bounds<Pixels>>,
     pub(crate) rows: Vec<PaintedRow>,
     pub(crate) scroll_top_at_paint: Pixels,
+    pub(crate) scroll_left_at_paint: Pixels,
     pub(crate) painted_wrap_columns: Option<usize>,
+    /// Lets the reveal handler translate logical columns to pixels without
+    /// requiring a `&mut Window` to re-shape a probe line.
+    pub(crate) painted_char_width: Pixels,
 }
 
 #[derive(Clone)]
@@ -106,6 +119,7 @@ pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) focused: bool,
     pub(crate) paint_state: ViewportPaintState,
     pub(crate) scale: f32,
+    pub(crate) horizontal_scroll: Pixels,
 }
 
 pub(crate) fn buffer_content_height(visual_rows: usize, scale: f32) -> Pixels {
@@ -116,6 +130,12 @@ pub(crate) fn buffer_content_height(visual_rows: usize, scale: f32) -> Pixels {
 /// top; this helper returns the non-negative "pixels scrolled from the top."
 pub(crate) fn scroll_top_for(scroll: &ScrollHandle) -> Pixels {
     (-scroll.offset().y).max(px(0.0))
+}
+
+/// Mirror of `scroll_top_for` for the horizontal axis: returns non-negative
+/// "pixels scrolled from the left."
+pub(crate) fn scroll_left_for(scroll: &ScrollHandle) -> Pixels {
+    (-scroll.offset().x).max(px(0.0))
 }
 
 fn trim_display_line(line: &str) -> &str {
@@ -252,6 +272,113 @@ pub(crate) fn code_char_width(window: &mut Window, scale: f32) -> Pixels {
     } else {
         metrics::px_for_scale(metrics::WRAP_CHAR_WIDTH_FALLBACK, scale)
     }
+}
+
+pub(crate) fn unwrapped_content_width(
+    cache: &mut ViewportCache,
+    lines: &[String],
+    revision: u64,
+    char_width: Pixels,
+    show_gutter: bool,
+    scale: f32,
+    theme: Theme,
+    window: &mut Window,
+) -> Pixels {
+    let width = max_unwrapped_line_width(cache, lines, revision, char_width, scale, theme, window);
+    code_origin_pad(show_gutter, scale) + width + char_width * 2.0
+}
+
+pub(crate) fn x_for_display_char(
+    line_text: &str,
+    char_offset: usize,
+    char_width: Pixels,
+    scale: f32,
+    theme: Theme,
+    window: &mut Window,
+) -> Pixels {
+    let line_text = trim_display_line(line_text);
+    let char_offset = char_offset.min(line_text.chars().count());
+    if is_plain_monospace_text(line_text) {
+        return char_width * char_offset as f32;
+    }
+
+    let Some(shaped) = shape_display_line(line_text, scale, theme, window) else {
+        return px(0.0);
+    };
+    let byte = char_to_byte(line_text, char_offset);
+    shaped.x_for_index(byte)
+}
+
+fn max_unwrapped_line_width(
+    cache: &mut ViewportCache,
+    lines: &[String],
+    revision: u64,
+    char_width: Pixels,
+    scale: f32,
+    theme: Theme,
+    window: &mut Window,
+) -> Pixels {
+    let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
+    if let Some(cached) = cache.max_unwrapped_line_width {
+        if cached.revision == revision
+            && cached.char_width == char_width
+            && cached.font_size == font_size
+        {
+            return cached.width;
+        }
+    }
+
+    let mut width = px(0.0);
+    for line in lines {
+        let display_line = trim_display_line(line);
+        let line_width = if is_plain_monospace_text(display_line) {
+            char_width * display_line.chars().count() as f32
+        } else {
+            shape_display_line(display_line, scale, theme, window)
+                .map_or(px(0.0), |line| line.width)
+        };
+        width = width.max(line_width);
+    }
+
+    cache.max_unwrapped_line_width = Some(CachedUnwrappedLineWidth {
+        revision,
+        char_width,
+        font_size,
+        width,
+    });
+    width
+}
+
+fn is_plain_monospace_text(text: &str) -> bool {
+    text.bytes().all(|byte| byte.is_ascii() && byte != b'\t')
+}
+
+fn shape_display_line(
+    text: &str,
+    scale: f32,
+    theme: Theme,
+    window: &mut Window,
+) -> Option<ShapedLine> {
+    if text.is_empty() {
+        return None;
+    }
+
+    let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
+    let text = SharedString::from(text.to_string());
+    let font = typography::primary_font();
+    Some(window.text_system().shape_line(
+        text.clone(),
+        font_size,
+        &[TextRun {
+            len: text.len(),
+            font,
+            color: rgb(theme.role.text).into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        None,
+    ))
 }
 
 fn wrap_columns_for_viewport(
@@ -421,6 +548,7 @@ pub(crate) fn prepare_viewport_paint_state(
         metrics::px_for_scale(metrics::WINDOW_HEIGHT, scale)
     };
     let scroll_top = scroll_top_for(viewport_scroll);
+    let scroll_left = scroll_left_for(viewport_scroll);
     let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
     let font = typography::primary_font();
     let code_run = TextRun {
@@ -551,7 +679,9 @@ pub(crate) fn prepare_viewport_paint_state(
         bounds: Some(bounds),
         rows: rows.clone(),
         scroll_top_at_paint: scroll_top,
+        scroll_left_at_paint: scroll_left,
         painted_wrap_columns: show_wrap.then_some(layout.wrap_columns),
+        painted_char_width: char_width,
     };
 
     ViewportPaintState { rows }
@@ -619,6 +749,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         focused,
         paint_state,
         scale,
+        horizontal_scroll,
     } = input;
     let line_height = window.line_height();
     let row_height = metrics::px_for_scale(metrics::ROW_HEIGHT, scale);
@@ -627,7 +758,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         metrics::GUTTER_WIDTH - metrics::GUTTER_LEFT_PAD - 8.0,
         scale,
     );
-    let code_origin_x = bounds.left() + code_origin_pad(show_gutter, scale);
+    let code_origin_x = bounds.left() + code_origin_pad(show_gutter, scale) - horizontal_scroll;
 
     for row in paint_state.rows {
         let cursor_in_row = row_contains_cursor(&row, cursor_char);
@@ -643,19 +774,6 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 rgb(role::EDITOR_BG)
             },
         ));
-
-        if show_gutter {
-            window.paint_quad(fill(
-                Bounds::new(
-                    point(bounds.left(), row.row_top),
-                    size(
-                        metrics::px_for_scale(metrics::GUTTER_WIDTH, scale),
-                        row_height,
-                    ),
-                ),
-                rgb(role::GUTTER_BG),
-            ));
-        }
 
         for search_match in search_matches_for_row(search_matches, &row) {
             paint_range_background(
@@ -691,11 +809,6 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             window,
         );
 
-        if let Some(gutter_line) = row.gutter_line.as_ref() {
-            let gutter_x = gutter_origin_x + (gutter_width - gutter_line.width);
-            let _ = gutter_line.paint(point(gutter_x, row.row_top), line_height, window, cx);
-        }
-
         if let Some(code_line) = row.code_line.as_ref() {
             let _ = code_line.paint(point(code_origin_x, row.row_top), line_height, window, cx);
         }
@@ -725,6 +838,23 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                     rgb(role::CARET)
                 },
             ));
+        }
+
+        if show_gutter {
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(bounds.left(), row.row_top),
+                    size(
+                        metrics::px_for_scale(metrics::GUTTER_WIDTH, scale),
+                        row_height,
+                    ),
+                ),
+                rgb(role::GUTTER_BG),
+            ));
+            if let Some(gutter_line) = row.gutter_line.as_ref() {
+                let gutter_x = gutter_origin_x + (gutter_width - gutter_line.width);
+                let _ = gutter_line.paint(point(gutter_x, row.row_top), line_height, window, cx);
+            }
         }
     }
 }

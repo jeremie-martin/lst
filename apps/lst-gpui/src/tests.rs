@@ -1,6 +1,9 @@
 use crate::ui::{
     input_keybindings,
-    scrollbar::{vertical_scrollbar_layout, VerticalScrollbarLayout},
+    scrollbar::{
+        horizontal_scrollbar_layout, vertical_scrollbar_layout, HorizontalScrollbarLayout,
+        VerticalScrollbarLayout,
+    },
     theme::syntax as theme_syntax,
 };
 use gpui::{
@@ -200,6 +203,33 @@ fn active_editor_scrollbar_layout(
             ),
             crate::viewport::scroll_top_for(&active_view.scroll),
             active_view.scroll.max_offset().height.max(px(0.0)),
+            app.ui_scale(),
+        )
+    })
+}
+
+fn active_editor_horizontal_scrollbar_layout(
+    view: &Entity<LstGpuiApp>,
+    cx: &mut VisualTestContext,
+) -> Option<HorizontalScrollbarLayout> {
+    view.update(cx, |app, _cx| {
+        let bounds = app
+            .active_viewport_bounds()
+            .expect("viewport should have rendered bounds");
+        let active_view = app.active_view();
+        horizontal_scrollbar_layout(
+            Bounds::new(
+                point(
+                    bounds.left(),
+                    bounds.bottom() - app.ui_px(crate::ui::theme::metrics::SCROLLBAR_TRACK_WIDTH),
+                ),
+                gpui::size(
+                    bounds.size.width,
+                    app.ui_px(crate::ui::theme::metrics::SCROLLBAR_TRACK_WIDTH),
+                ),
+            ),
+            crate::viewport::scroll_left_for(&active_view.scroll),
+            active_view.scroll.max_offset().width.max(px(0.0)),
             app.ui_scale(),
         )
     })
@@ -570,6 +600,366 @@ fn editor_scrollbar_track_click_pages_without_text_selection(cx: &mut TestAppCon
     );
     assert_eq!(selection, 0..0);
     assert!(!active_text_drag);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn editor_horizontal_scrollbar_drag_scrolls_without_text_selection(cx: &mut TestAppContext) {
+    let dir = temp_dir("h-scrollbar-drag");
+    let path = dir.join("wide.txt");
+    let text = "x".repeat(2000);
+    std::fs::write(&path, text).expect("write wide fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.toggle_wrap());
+    });
+    cx.refresh().expect("first paint after wrap toggle");
+    cx.run_until_parked();
+    cx.refresh().expect("re-paint with content width");
+    cx.run_until_parked();
+
+    let layout = active_editor_horizontal_scrollbar_layout(&view, cx)
+        .expect("wide editor should expose a horizontal scrollbar layout");
+    let y = layout.thumb_bounds.top() + layout.thumb_bounds.size.height / 2.0;
+    let start = point(layout.thumb_bounds.left() + px(2.0), y);
+    let end = point(layout.track_bounds.right() - px(4.0), y);
+
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+
+    let (scroll_left, selection, active_text_drag, active_h_drag) = view.update(cx, |app, _cx| {
+        (
+            crate::viewport::scroll_left_for(&app.active_view().scroll),
+            app.model.active_tab().selected_range(),
+            app.selection_drag.is_some(),
+            app.editor_horizontal_scrollbar_drag.is_some(),
+        )
+    });
+    assert!(
+        scroll_left > px(0.0),
+        "dragging the horizontal thumb should move the editor scroll position"
+    );
+    assert_eq!(selection, 0..0);
+    assert!(!active_text_drag);
+    assert!(!active_h_drag);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn editor_horizontal_scrollbar_track_click_pages_without_text_selection(cx: &mut TestAppContext) {
+    let dir = temp_dir("h-scrollbar-track");
+    let path = dir.join("wide.txt");
+    let text = "x".repeat(2000);
+    std::fs::write(&path, text).expect("write wide fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.toggle_wrap());
+    });
+    cx.refresh().expect("first paint after wrap toggle");
+    cx.run_until_parked();
+    cx.refresh().expect("re-paint with content width");
+    cx.run_until_parked();
+
+    let layout = active_editor_horizontal_scrollbar_layout(&view, cx)
+        .expect("wide editor should expose a horizontal scrollbar layout");
+    let click = point(
+        (layout.thumb_bounds.right() + px(20.0)).min(layout.track_bounds.right() - px(1.0)),
+        layout.thumb_bounds.top() + layout.thumb_bounds.size.height / 2.0,
+    );
+
+    cx.simulate_mouse_down(click, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(click, MouseButton::Left, Modifiers::default());
+
+    let (scroll_left, selection, active_text_drag) = view.update(cx, |app, _cx| {
+        (
+            crate::viewport::scroll_left_for(&app.active_view().scroll),
+            app.model.active_tab().selected_range(),
+            app.selection_drag.is_some(),
+        )
+    });
+    assert!(
+        scroll_left > px(0.0),
+        "clicking right of the horizontal thumb should page the editor right"
+    );
+    assert_eq!(selection, 0..0);
+    assert!(!active_text_drag);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn editor_horizontal_scrollbar_is_absent_when_wrap_is_on(cx: &mut TestAppContext) {
+    let dir = temp_dir("h-scrollbar-wrap-on");
+    let path = dir.join("wide.txt");
+    let text = "x".repeat(2000);
+    std::fs::write(&path, text).expect("write wide fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.refresh().expect("render wide editor with wrap on");
+    cx.run_until_parked();
+
+    assert!(active_editor_horizontal_scrollbar_layout(&view, cx).is_none());
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn editor_horizontal_scrollbar_is_absent_without_overflow(cx: &mut TestAppContext) {
+    let dir = temp_dir("h-scrollbar-short");
+    let path = dir.join("short.txt");
+    std::fs::write(&path, "short\n").expect("write short fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.toggle_wrap());
+    });
+    cx.refresh().expect("first paint after wrap toggle");
+    cx.run_until_parked();
+    cx.refresh().expect("re-paint after layout");
+    cx.run_until_parked();
+
+    assert!(active_editor_horizontal_scrollbar_layout(&view, cx).is_none());
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn arrow_right_at_long_line_scrolls_horizontally_to_keep_cursor_in_sidescrolloff(
+    cx: &mut TestAppContext,
+) {
+    let dir = temp_dir("h-scrollbar-reveal");
+    let path = dir.join("wide.txt");
+    let text = "x".repeat(2000);
+    std::fs::write(&path, text).expect("write wide fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.toggle_wrap());
+    });
+    cx.refresh().expect("first paint after wrap toggle");
+    cx.run_until_parked();
+    cx.refresh().expect("re-paint with content width");
+    cx.run_until_parked();
+
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.move_to_char(1500, false, None));
+    });
+    refresh_and_flush_reveal(&view, cx, "horizontal-cursor-reveal");
+
+    let scroll_left = view.update(cx, |app, _| {
+        crate::viewport::scroll_left_for(&app.active_view().scroll)
+    });
+    assert!(
+        scroll_left > px(0.0),
+        "moving the cursor far right should scroll horizontally to keep it visible"
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn horizontal_scroll_uses_rendered_glyph_width(cx: &mut TestAppContext) {
+    let dir = temp_dir("h-scrollbar-glyphs");
+    let path = dir.join("glyphs.txt");
+    let text = "\u{1f642}".repeat(320);
+    let glyph_count = text.chars().count();
+    std::fs::write(&path, &text).expect("write glyph fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.toggle_wrap());
+    });
+    cx.refresh().expect("first paint after wrap toggle");
+    cx.run_until_parked();
+    cx.refresh().expect("re-paint with rendered tab width");
+    cx.run_until_parked();
+
+    let (count_based_overflow, char_width, max_offset) = view.update(cx, |app, _cx| {
+        let bounds = app
+            .active_viewport_bounds()
+            .expect("viewport should have rendered bounds");
+        let geometry = app.active_view().geometry.borrow();
+        let char_width = geometry.painted_char_width;
+        let count_based_width = code_origin_pad(app.model.show_gutter(), app.ui_scale())
+            + char_width * (glyph_count as f32 + 2.0);
+        (
+            (count_based_width - bounds.size.width).max(px(0.0)),
+            char_width,
+            app.active_view().scroll.max_offset().width.max(px(0.0)),
+        )
+    });
+    assert!(
+        max_offset > count_based_overflow + char_width * 100.0,
+        "wide-glyph lines should expose horizontal overflow beyond character-count sizing: max_offset={}, count_based_overflow={}, char_width={}",
+        max_offset / px(1.0),
+        count_based_overflow / px(1.0),
+        char_width / px(1.0)
+    );
+
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| {
+            model.move_to_char(glyph_count, false, None)
+        });
+    });
+    refresh_and_flush_reveal(&view, cx, "horizontal-glyph-reveal");
+
+    let scroll_left = view.update(cx, |app, _| {
+        crate::viewport::scroll_left_for(&app.active_view().scroll)
+    });
+    assert!(
+        scroll_left > count_based_overflow + char_width * 100.0,
+        "cursor reveal should be able to scroll to rendered glyph positions"
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn clicking_horizontally_scrolled_text_hits_visible_column(cx: &mut TestAppContext) {
+    let dir = temp_dir("h-scroll-hit-test");
+    let path = dir.join("wide.txt");
+    let text = "x".repeat(2000);
+    std::fs::write(&path, text).expect("write wide fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.toggle_wrap());
+    });
+    cx.refresh().expect("first paint after wrap toggle");
+    cx.run_until_parked();
+    cx.refresh().expect("re-paint with content width");
+    cx.run_until_parked();
+
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.move_to_char(1500, false, None));
+    });
+    refresh_and_flush_reveal(&view, cx, "horizontal-hit-test-reveal");
+
+    let (click, first_visible_col) = view.update(cx, |app, _cx| {
+        let bounds = app
+            .active_viewport_bounds()
+            .expect("viewport should have rendered bounds");
+        let rows = app.active_painted_rows();
+        let row = rows.first().expect("wide editor should paint a row");
+        let geometry = app.active_view().geometry.borrow();
+        let char_width = geometry.painted_char_width;
+        let scroll_left = crate::viewport::scroll_left_for(&app.active_view().scroll);
+        assert!(
+            scroll_left > char_width * 100.0,
+            "precondition: cursor reveal should scroll far enough to expose the bug"
+        );
+        let first_visible_col = ((scroll_left / px(1.0)) / (char_width / px(1.0))).floor();
+        let code_origin_x =
+            bounds.left() + code_origin_pad(app.model.show_gutter(), app.ui_scale());
+        (
+            point(
+                code_origin_x + char_width * 10.0,
+                row.row_top + app.ui_px(crate::ui::theme::metrics::ROW_HEIGHT) / 2.0,
+            ),
+            first_visible_col as usize,
+        )
+    });
+
+    cx.simulate_mouse_down(click, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(click, MouseButton::Left, Modifiers::default());
+
+    let snapshot = app_snapshot(&view, cx);
+    assert!(
+        snapshot.model.cursor >= first_visible_col,
+        "click should land in the horizontally visible text, not near the unscrolled line start"
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn toggling_wrap_back_on_resets_horizontal_scroll(cx: &mut TestAppContext) {
+    let dir = temp_dir("h-scroll-reset");
+    let path = dir.join("wide.txt");
+    let text = "x".repeat(2000);
+    std::fs::write(&path, text).expect("write wide fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.toggle_wrap());
+    });
+    cx.refresh().expect("first paint after wrap toggle");
+    cx.run_until_parked();
+    cx.refresh().expect("re-paint with content width");
+    cx.run_until_parked();
+
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.move_to_char(1500, false, None));
+    });
+    refresh_and_flush_reveal(&view, cx, "wrap-reset-reveal");
+
+    let scrolled_left = view.update(cx, |app, _| {
+        crate::viewport::scroll_left_for(&app.active_view().scroll)
+    });
+    assert!(
+        scrolled_left > px(0.0),
+        "preconditions: cursor reveal should have scrolled right"
+    );
+
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.toggle_wrap());
+    });
+    cx.refresh().expect("paint after toggling wrap back on");
+    cx.run_until_parked();
+
+    let after_toggle = view.update(cx, |app, _| {
+        crate::viewport::scroll_left_for(&app.active_view().scroll)
+    });
+    assert_eq!(
+        after_toggle,
+        px(0.0),
+        "toggling wrap back on should clear the stale horizontal scroll offset"
+    );
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
 }

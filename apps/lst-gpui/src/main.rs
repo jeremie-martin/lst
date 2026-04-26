@@ -50,8 +50,9 @@ use syntax::{
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use viewport::row_contains_cursor;
 use viewport::{
-    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, scroll_top_for,
-    visual_row_for_char, ViewportCache, ViewportGeometry, WrapLayoutInput,
+    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, line_display_text,
+    scroll_left_for, scroll_top_for, visual_row_for_char, x_for_display_char, ViewportCache,
+    ViewportGeometry, WrapLayoutInput,
 };
 
 actions!(
@@ -138,6 +139,11 @@ struct EditorScrollbarDrag {
     grab_offset_y: Pixels,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct EditorHorizontalScrollbarDrag {
+    grab_offset_x: Pixels,
+}
+
 struct EditorTabView {
     revision: u64,
     scroll: ScrollHandle,
@@ -170,6 +176,8 @@ struct LstGpuiApp {
     selection_drag: Option<ActiveDragSelection>,
     editor_scrollbar_drag: Option<EditorScrollbarDrag>,
     editor_scrollbar_hovered: bool,
+    editor_horizontal_scrollbar_drag: Option<EditorHorizontalScrollbarDrag>,
+    editor_horizontal_scrollbar_hovered: bool,
     find_query_input: Entity<InputField>,
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
@@ -203,6 +211,8 @@ impl LstGpuiApp {
             selection_drag: None,
             editor_scrollbar_drag: None,
             editor_scrollbar_hovered: false,
+            editor_horizontal_scrollbar_drag: None,
+            editor_horizontal_scrollbar_hovered: false,
             find_query_input: find_query_input.clone(),
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
@@ -375,6 +385,10 @@ impl LstGpuiApp {
             if view.revision != tab.revision() || old_show_wrap != show_wrap {
                 view.revision = tab.revision();
                 view.invalidate_visual_state();
+                if old_show_wrap != show_wrap {
+                    let current_y = view.scroll.offset().y;
+                    view.scroll.set_offset(point(px(0.0), current_y));
+                }
             }
         }
         if self
@@ -759,7 +773,7 @@ impl LstGpuiApp {
             return;
         };
 
-        if !self.try_reveal_active_cursor(intent) {
+        if !self.try_reveal_active_cursor(intent, window) {
             self.pending_reveal = Some(intent);
             self.schedule_pending_reveal(window, cx);
         }
@@ -788,7 +802,7 @@ impl LstGpuiApp {
         }
     }
 
-    fn try_reveal_active_cursor(&self, intent: RevealIntent) -> bool {
+    fn try_reveal_active_cursor(&self, intent: RevealIntent, window: &mut Window) -> bool {
         let view = self.active_view();
         let viewport_bounds = {
             let geometry = view.geometry.borrow();
@@ -833,10 +847,88 @@ impl LstGpuiApp {
             RevealIntent::Bottom => Some(clamp(caret_bottom + margin - viewport_height)),
         };
 
+        let current_x = view.scroll.offset().x;
         if let Some(target) = target {
-            view.scroll.set_offset(point(px(0.0), -target));
+            view.scroll.set_offset(point(current_x, -target));
+        }
+
+        if !self.model.show_wrap() {
+            self.try_reveal_active_cursor_horizontally(view, viewport_bounds, window);
         }
         true
+    }
+
+    fn try_reveal_active_cursor_horizontally(
+        &self,
+        view: &EditorTabView,
+        viewport_bounds: Bounds<Pixels>,
+        window: &mut Window,
+    ) {
+        let geometry = view.geometry.borrow();
+        let char_width = geometry.painted_char_width;
+        if char_width <= px(0.0) {
+            return;
+        }
+
+        let max_offset_x = view.scroll.max_offset().width.max(px(0.0));
+        let scroll_left = scroll_left_for(&view.scroll);
+        let pad = code_origin_pad(self.model.show_gutter(), self.ui_scale());
+        let visible_width = (viewport_bounds.size.width - pad).max(px(0.0));
+        if visible_width <= px(0.0) {
+            return;
+        }
+
+        let visible_cols = ((visible_width / px(1.0)) / (char_width / px(1.0))).floor() as usize;
+        if visible_cols == 0 {
+            return;
+        }
+
+        let cursor_x = self.active_cursor_rendered_x(char_width, window);
+
+        let raw_margin = self.model.viewport().sidescrolloff;
+        let margin_cols = if visible_cols <= 1 {
+            0
+        } else {
+            raw_margin.min((visible_cols - 1) / 2)
+        };
+        let margin = char_width * margin_cols as f32;
+
+        let target_x = if cursor_x < scroll_left + margin {
+            Some((cursor_x - margin).max(px(0.0)).min(max_offset_x))
+        } else if cursor_x > scroll_left + visible_width - margin {
+            Some(
+                (cursor_x + margin - visible_width)
+                    .max(px(0.0))
+                    .min(max_offset_x),
+            )
+        } else {
+            None
+        };
+
+        if let Some(target_x) = target_x {
+            drop(geometry);
+            let current_y = view.scroll.offset().y;
+            view.scroll.set_offset(point(-target_x, current_y));
+        }
+    }
+
+    fn active_cursor_rendered_x(&self, char_width: Pixels, window: &mut Window) -> Pixels {
+        let tab = self.active_tab();
+        let cursor = tab.cursor_char().min(tab.buffer().len_chars());
+        let line = tab.buffer().char_to_line(cursor);
+        let line_start = tab.buffer().line_to_char(line);
+        let display_text = line_display_text(tab.buffer(), line);
+        let column = cursor
+            .saturating_sub(line_start)
+            .min(display_text.as_ref().chars().count());
+        x_for_display_char(
+            display_text.as_ref(),
+            column,
+            char_width,
+            self.ui_scale(),
+            self.theme(),
+            window,
+        )
     }
 
     fn sync_primary_selection(&self, cx: &mut Context<Self>) {
@@ -846,7 +938,8 @@ impl LstGpuiApp {
     }
 
     fn active_char_index_for_point(&self, point: Point<Pixels>) -> usize {
-        let geometry = self.active_view().geometry.borrow();
+        let active_view = self.active_view();
+        let geometry = active_view.geometry.borrow();
         let Some(bounds) = geometry.bounds else {
             return self.active_tab().cursor_char();
         };
@@ -858,10 +951,13 @@ impl LstGpuiApp {
         // Skip the guard during drag-autoscroll: the drag loop imperatively
         // nudges scroll between frames and still needs the cursor to track.
         const SCROLL_STALE_THRESHOLD: f32 = 0.5;
+        let current_scroll_top = scroll_top_for(&active_view.scroll);
+        let current_scroll_left = scroll_left_for(&active_view.scroll);
         if self.selection_drag.is_none() {
-            let current_scroll_top = scroll_top_for(&self.active_view().scroll);
             if (current_scroll_top - geometry.scroll_top_at_paint).abs()
                 > px(SCROLL_STALE_THRESHOLD)
+                || (current_scroll_left - geometry.scroll_left_at_paint).abs()
+                    > px(SCROLL_STALE_THRESHOLD)
             {
                 return self.active_tab().cursor_char();
             }
@@ -884,8 +980,8 @@ impl LstGpuiApp {
                 .unwrap_or_else(|| geometry.rows.last().expect("checked above"))
         };
 
-        let x = if point.x > code_origin_x {
-            point.x - code_origin_x
+        let x = if point.x >= code_origin_x {
+            point.x - code_origin_x + current_scroll_left
         } else {
             px(0.0)
         };
