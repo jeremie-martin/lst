@@ -40,25 +40,28 @@ Every fake in a test is a piece of production code that is *not being tested*. S
 - Pure logic (text manipulation, vim motions, find/replace matching)
 - Anything that is "hard to set up" — if it is hard to set up, that is a design problem
 
-A boundary fake should be a minimal trait implementation, not a general-purpose mock framework. A `NullClipboard` with empty methods is better than a dynamic mock that silently returns defaults for every call. The fake should be simple enough that you trust it without testing it.
+A boundary fake should be a minimal trait implementation, not a general-purpose mock framework. The trait carries only the operations the editor actually invokes at that boundary, and the fake is small enough to trust on inspection. The exit-clipboard pair in `apps/lst-gpui/src/runtime/clipboard.rs` is the live example:
 
 ```rust
-pub trait Clipboard {
-    fn copy(&self, text: &str);
-    fn copy_primary(&self, text: &str);
-    fn read_primary(&self) -> Option<String>;
+pub(crate) trait ExitClipboard: Send + Sync + 'static {
+    fn persist(&self, text: &str);
 }
 
-pub struct NullClipboard;
+#[cfg(test)]
+#[derive(Default, Clone)]
+pub(crate) struct CapturingExitClipboard {
+    pub(crate) persisted: Arc<Mutex<Vec<String>>>,
+}
 
-impl Clipboard for NullClipboard {
-    fn copy(&self, _: &str) {}
-    fn copy_primary(&self, _: &str) {}
-    fn read_primary(&self) -> Option<String> { None }
+#[cfg(test)]
+impl ExitClipboard for CapturingExitClipboard {
+    fn persist(&self, text: &str) {
+        self.persisted.lock().unwrap().push(text.to_string());
+    }
 }
 ```
 
-One fake per boundary. Shared across all tests. Maintained as test infrastructure, not duplicated per test file.
+The trait carries one method because shutdown persistence has one operation; live copy/paste during a session goes through GPUI's own clipboard, not this trait. The fake records into a `Vec` so a test can assert on what would have been persisted. One fake per boundary, shared across tests, maintained as test infrastructure rather than duplicated per file.
 
 
 ## The design constraint
