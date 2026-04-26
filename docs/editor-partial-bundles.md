@@ -51,11 +51,11 @@ shippable as a single "editing-ops sweep."
 Heterogeneous but each item is small and standalone — file together because
 they don't fit the other groups, not because they share a surface.
 
-- [~] **Tab reorder** — no `reorder_tab` / `move_tab` / `drag_tab` in the codebase; tabs in `crates/lst-editor/src/tab_set.rs` are creation-ordered only.
-- [~] **Line numbers (relative / hybrid)** — `apps/lst-gpui/src/viewport.rs` row-paint `gutter_lines` block only formats absolute (`{:>3}`); no mode flag.
-- [~] **Wrap segment grapheme alignment** — `crates/lst-editor/src/wrap.rs` iterates by `chars()` and can split a cluster at the wrap column.
-- [~] **Redo branch preservation** — `crates/lst-editor/src/tab.rs::push_undo_snapshot` unconditionally calls `redo_stack.clear()` on any fresh edit; redo is linear with no branch infra.
-- **Worth noting:** Last edit location (`[ ]` `gi`/`g;`) — `crates/lst-editor/src/tab.rs::last_edit_kind` exists but only for undo coalescing; no `last_edit_position` or jump command. Genuinely missing, not partial.
+- [x] **Tab reorder** — `TabSet::reorder` plus `EditorModel::move_active_tab`, exposed via `MoveTabLeft`/`MoveTabRight` (`ctrl/cmd-shift-pageup/pagedown`).
+- [x] **Line numbers (relative / hybrid)** — `GutterMode` (Absolute/Relative/Hybrid), `EditorModel::cycle_gutter_mode`, `ToggleLineNumberMode` (`alt-l`).
+- [x] **Wrap segment grapheme alignment** — `crates/lst-editor/src/wrap.rs` walks `cells_of_str` so wrap segments never split a grapheme cluster.
+- [x] **Redo branch preservation** — `EditorTab::redo_branches` keeps abandoned redo paths; `swap_redo_branch` cycles through them (`ctrl-alt-y` / `cmd-alt-shift-z`).
+- [x] **Last edit location (`gi`/`g;`)** — `EditorTab::last_edit_position` plus `VimCommand::JumpToLastEdit { enter_insert }`; `g;` jumps, `gi` jumps and enters Insert.
 
 ---
 

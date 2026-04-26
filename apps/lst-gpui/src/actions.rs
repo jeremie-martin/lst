@@ -5,14 +5,15 @@ use crate::{
     DeleteWordBackward, DeleteWordForward, DuplicateLine, FindNext, FindOpen, FindOpenReplace,
     FindPrev, GotoLineOpen, InsertNewline, InsertTab, LstGpuiApp, MoveDocumentEnd,
     MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd, MoveLineStart, MoveLineUp,
-    MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft, MoveSubwordRight, MoveUp,
-    MoveWordLeft, MoveWordRight, NewTab, NextTab, OpenFile, OutdentSelection, PasteClipboard,
-    PrevTab, Quit, Redo, ReplaceAll, ReplaceOne, SaveFile, SaveFileAs, SelectAll,
-    SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft, SelectLine, SelectLineEnd,
-    SelectLineStart, SelectPageDown, SelectPageUp, SelectParagraph, SelectRight, SelectSmartHome,
-    SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight,
-    ToggleBlockComment, ToggleComment, ToggleFindCase, ToggleFindInSelection, ToggleFindRegex,
-    ToggleFindWholeWord, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
+    MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft, MoveSubwordRight,
+    MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab, NextTab, OpenFile,
+    OutdentSelection, PasteClipboard, PrevTab, Quit, Redo, ReplaceAll, ReplaceOne, SaveFile,
+    SaveFileAs, SelectAll, SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft,
+    SelectLine, SelectLineEnd, SelectLineStart, SelectPageDown, SelectPageUp, SelectParagraph,
+    SelectRight, SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft,
+    SelectWordRight, SwapRedoBranch, ToggleBlockComment, ToggleComment, ToggleFindCase,
+    ToggleFindInSelection, ToggleFindRegex, ToggleFindWholeWord, ToggleLineNumberMode, ToggleWrap,
+    Undo, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
@@ -35,7 +36,10 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         SaveFileAs => |model| model.request_save_as();
         NextTab => |model| model.next_tab();
         PrevTab => |model| model.prev_tab();
+        MoveTabLeft => |model| model.move_active_tab(-1);
+        MoveTabRight => |model| model.move_active_tab(1);
         ToggleWrap => |model| model.toggle_wrap();
+        ToggleLineNumberMode => |model| model.cycle_gutter_mode();
         CopySelection => |model| model.copy_selection();
         CutSelection => |model| model.cut_selection();
         PasteClipboard => |model| model.request_paste();
@@ -73,6 +77,7 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         SelectParagraph => |model| model.select_current_paragraph();
         Undo => |model| model.undo();
         Redo => |model| model.redo();
+        SwapRedoBranch => |model| model.swap_redo_branch();
         FindOpen => |model| model.toggle_find_panel(false);
         FindOpenReplace => |model| model.toggle_find_panel(true);
         FindNext => |model| model.find_next_match();

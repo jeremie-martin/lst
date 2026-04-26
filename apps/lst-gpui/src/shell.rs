@@ -601,6 +601,7 @@ impl Render for LstGpuiApp {
 
         let show_gutter = self.model.show_gutter();
         let show_wrap = self.model.show_wrap();
+        let gutter_mode = self.model.gutter_mode();
         let (active_scroll, active_cache, active_geometry) = {
             let active_view = self.active_view();
             (
@@ -644,6 +645,7 @@ impl Render for LstGpuiApp {
                 active_tab.cursor_char(),
             )
         };
+        let cursor_line = self.model.active_tab().cursor_position().line;
         let line_texts = self.model.active_tab_lines();
         let total_content_height = {
             let mut cache = active_cache.borrow_mut();
@@ -791,6 +793,8 @@ impl Render for LstGpuiApp {
                                                                         revision,
                                                                         syntax_mode,
                                                                         show_gutter,
+                                                                        gutter_mode,
+                                                                        cursor_line,
                                                                         show_wrap,
                                                                         viewport_scroll:
                                                                             &viewport_scroll,

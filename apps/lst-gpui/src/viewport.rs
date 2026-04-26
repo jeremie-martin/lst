@@ -7,7 +7,7 @@ use lst_editor::wrap::{
     build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, wrap_segments, WrapLayout,
     WrappedSegment,
 };
-use lst_editor::{vim, EditorTab};
+use lst_editor::{vim, EditorTab, GutterMode};
 use ropey::Rope;
 use std::{
     cell::RefCell,
@@ -99,6 +99,8 @@ pub(crate) struct ViewportPreparation<'a> {
     pub(crate) revision: u64,
     pub(crate) syntax_mode: SyntaxMode,
     pub(crate) show_gutter: bool,
+    pub(crate) gutter_mode: GutterMode,
+    pub(crate) cursor_line: usize,
     pub(crate) show_wrap: bool,
     pub(crate) viewport_scroll: &'a ScrollHandle,
     pub(crate) viewport_cache: &'a Rc<RefCell<ViewportCache>>,
@@ -533,6 +535,8 @@ pub(crate) fn prepare_viewport_paint_state(
         revision,
         syntax_mode,
         show_gutter,
+        gutter_mode,
+        cursor_line,
         show_wrap,
         viewport_scroll,
         viewport_cache,
@@ -648,7 +652,7 @@ pub(crate) fn prepare_viewport_paint_state(
                 shape_cached_line(
                     &mut cache.gutter_lines,
                     line_ix,
-                    SharedString::from(format!("{:>3}", line_ix + 1)),
+                    SharedString::from(gutter_mode.format(line_ix, cursor_line)),
                     0,
                     &gutter_run,
                     font_size,

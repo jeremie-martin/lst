@@ -176,6 +176,9 @@ pub enum VimCommand {
         from_open: char,
         to_open: char,
     },
+    JumpToLastEdit {
+        enter_insert: bool,
+    },
     Noop,
 }
 
@@ -910,6 +913,17 @@ impl VimState {
                     vec![VimCommand::Noop]
                 } else {
                     vec![VimCommand::ReplaceChar { ch: c, count }]
+                }
+            }
+            'g' => {
+                self.clear_pending();
+                self.clear_preferred_column();
+                match c {
+                    ';' => vec![VimCommand::JumpToLastEdit {
+                        enter_insert: false,
+                    }],
+                    'i' => vec![VimCommand::JumpToLastEdit { enter_insert: true }],
+                    _ => vec![VimCommand::Noop],
                 }
             }
             'i' | 'a' => {
@@ -2570,6 +2584,28 @@ mod tests {
         assert_eq!(
             press_keys(&mut v, "99gg", &text),
             vec![VimCommand::MoveTo(pos(2, 0))]
+        );
+    }
+
+    #[test]
+    fn g_semicolon_emits_jump_to_last_edit() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb"], 1, 1);
+        assert_eq!(
+            press_keys(&mut v, "g;", &text),
+            vec![VimCommand::JumpToLastEdit {
+                enter_insert: false
+            }]
+        );
+    }
+
+    #[test]
+    fn g_i_emits_jump_to_last_edit_and_enters_insert() {
+        let mut v = normal();
+        let text = snapshot(&["aaa", "bbb"], 1, 1);
+        assert_eq!(
+            press_keys(&mut v, "gi", &text),
+            vec![VimCommand::JumpToLastEdit { enter_insert: true }]
         );
     }
 
