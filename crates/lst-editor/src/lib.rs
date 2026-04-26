@@ -1516,18 +1516,30 @@ impl EditorModel {
     fn vim_replace_char(&mut self, ch: char, count: usize) {
         let pos = self.active_cursor_position();
         let _ = self.apply_line_edit(|lines| {
-            let chars: Vec<char> = lines
-                .get(pos.line)
-                .map_or(Vec::new(), |line| line.chars().collect());
-            if pos.column + count > chars.len() {
+            let line = lines.get(pos.line)?;
+            let cells = selection::cells_of_str(line);
+            if cells.is_empty() {
                 return None;
             }
-            let mut new_chars = chars;
-            for ix in 0..count {
-                new_chars[pos.column + ix] = ch;
+            let start_cell = selection::cell_partition_by_char(&cells, pos.column);
+            let end_cell = start_cell.checked_add(count)?;
+            if end_cell > cells.len() {
+                return None;
             }
-            lines[pos.line] = new_chars.into_iter().collect();
-            Some(((), pos.line, pos.column + count - 1))
+            let start_byte = cells[start_cell].byte_start;
+            let end_byte = cells
+                .get(end_cell)
+                .map_or(line.len(), |cell| cell.byte_start);
+            let replacement: String = std::iter::repeat_n(ch, count).collect();
+            let mut new_line = String::with_capacity(line.len());
+            new_line.push_str(&line[..start_byte]);
+            new_line.push_str(&replacement);
+            new_line.push_str(&line[end_byte..]);
+            lines[pos.line] = new_line;
+            // Cursor lands at the start of the last replaced cluster, which —
+            // since `ch` is a single scalar — is one char per replacement.
+            let cursor_col = cells[start_cell].char_start + count - 1;
+            Some(((), pos.line, cursor_col))
         });
     }
 
@@ -2356,31 +2368,40 @@ fn inclusive_position_to_exclusive_char(tab: &EditorTab, position: Position) -> 
     line_start + (position.column.min(display_len.saturating_sub(1)) + 1).min(display_len)
 }
 
+// Inclusive char-column range `[from_col, to_col]` as a byte range on `line`.
+// Saturates `from_col` past EOL to `line.len()` and rounds `to_col` to its
+// cluster's far edge, so multi-char clusters can't be split.
+fn line_byte_range(line: &str, from_col: usize, to_col: usize) -> (usize, usize) {
+    let cells = selection::cells_of_str(line);
+    if cells.is_empty() {
+        return (0, 0);
+    }
+    let start_cell = selection::cell_partition_by_char(&cells, from_col);
+    let start_byte = cells.get(start_cell).map_or(line.len(), |c| c.byte_start);
+    let end_cell = selection::cell_containing_char(&cells, to_col) + 1;
+    let end_byte = cells.get(end_cell).map_or(line.len(), |c| c.byte_start);
+    (start_byte, end_byte.max(start_byte))
+}
+
 fn extract_text_range(lines: &[String], from: &Position, to: &Position) -> String {
     if from.line >= lines.len() || to.line >= lines.len() {
         return String::new();
     }
     if from.line == to.line {
-        let chars: Vec<char> = lines[from.line].chars().collect();
-        let start = from.column.min(chars.len());
-        let end = (to.column + 1).min(chars.len());
-        if start >= end {
-            return String::new();
-        }
-        chars[start..end].iter().collect()
-    } else {
-        let mut result = String::new();
-        let first: Vec<char> = lines[from.line].chars().collect();
-        result.extend(&first[from.column.min(first.len())..]);
-        for line in lines.iter().take(to.line).skip(from.line + 1) {
-            result.push('\n');
-            result.push_str(line);
-        }
-        result.push('\n');
-        let last: Vec<char> = lines[to.line].chars().collect();
-        result.extend(&last[..(to.column + 1).min(last.len())]);
-        result
+        let (s, e) = line_byte_range(&lines[from.line], from.column, to.column);
+        return lines[from.line][s..e].to_string();
     }
+    let (first_start, _) = line_byte_range(&lines[from.line], from.column, usize::MAX);
+    let (_, last_end) = line_byte_range(&lines[to.line], 0, to.column);
+    let mut result = String::new();
+    result.push_str(&lines[from.line][first_start..]);
+    for line in lines.iter().take(to.line).skip(from.line + 1) {
+        result.push('\n');
+        result.push_str(line);
+    }
+    result.push('\n');
+    result.push_str(&lines[to.line][..last_end]);
+    result
 }
 
 fn remove_text_range(lines: &mut Vec<String>, from: &Position, to: &Position) {
@@ -2388,16 +2409,14 @@ fn remove_text_range(lines: &mut Vec<String>, from: &Position, to: &Position) {
         return;
     }
     if from.line == to.line {
-        let chars: Vec<char> = lines[from.line].chars().collect();
-        let start = from.column.min(chars.len());
-        let end = (to.column + 1).min(chars.len());
-        let remaining: String = chars[..start].iter().chain(chars[end..].iter()).collect();
-        lines[from.line] = remaining;
+        let (s, e) = line_byte_range(&lines[from.line], from.column, to.column);
+        let line = &lines[from.line];
+        lines[from.line] = format!("{}{}", &line[..s], &line[e..]);
     } else {
-        let first: Vec<char> = lines[from.line].chars().collect();
-        let last: Vec<char> = lines[to.line].chars().collect();
-        let prefix: String = first[..from.column.min(first.len())].iter().collect();
-        let suffix: String = last[(to.column + 1).min(last.len())..].iter().collect();
+        let (first_start, _) = line_byte_range(&lines[from.line], from.column, usize::MAX);
+        let (_, last_end) = line_byte_range(&lines[to.line], 0, to.column);
+        let prefix = lines[from.line][..first_start].to_string();
+        let suffix = lines[to.line][last_end..].to_string();
         lines[from.line] = format!("{prefix}{suffix}");
         if from.line < to.line {
             lines.drain((from.line + 1)..=to.line);

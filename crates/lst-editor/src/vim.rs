@@ -5,7 +5,11 @@
 
 use crate::effect::RevealIntent;
 use crate::position::Position;
-use crate::selection::{last_grapheme_column, next_grapheme_column, previous_grapheme_column};
+use crate::selection::{
+    cell_containing_char, cell_partition_by_char, cells_of_str, is_identifier_char,
+    last_grapheme_column, next_grapheme_column, previous_grapheme_column, vim_token_class,
+    GraphemeCell, TokenClass,
+};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,13 +225,6 @@ enum Motion {
     Percent,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CharClass {
-    Word,
-    Punct,
-    Space,
-}
-
 // -- VimState ----------------------------------------------------------------
 
 impl Default for VimState {
@@ -340,10 +337,17 @@ impl VimState {
                 self.mode = Mode::Normal;
                 self.clear_pending();
                 self.clear_preferred_column();
-                // vim: cursor moves left by 1 when leaving Insert (unless at col 0)
-                let ll = line_len(text, cursor.line);
+                // vim: cursor moves left by 1 when leaving Insert (unless at col 0).
+                // Step by grapheme cluster, then clamp to the start of the last
+                // cluster so we never land mid-cluster on a multi-char grapheme.
+                let line_text = text
+                    .lines
+                    .get(cursor.line)
+                    .map(String::as_str)
+                    .unwrap_or("");
                 let col = if cursor.column > 0 {
-                    (cursor.column - 1).min(ll.saturating_sub(1))
+                    previous_grapheme_column(line_text, cursor.column)
+                        .min(last_cluster_col(text, cursor.line))
                 } else {
                     0
                 };
@@ -1356,154 +1360,162 @@ fn reverse_find(motion: &Motion) -> Motion {
 
 // -- Word motions ------------------------------------------------------------
 
-fn classify(c: char, big: bool) -> CharClass {
-    if big {
-        if c.is_whitespace() {
-            CharClass::Space
-        } else {
-            CharClass::Word
-        }
-    } else if c.is_alphanumeric() || c == '_' {
-        CharClass::Word
-    } else if c.is_whitespace() {
-        CharClass::Space
-    } else {
-        CharClass::Punct
-    }
-}
-
-fn word_forward(text: &TextSnapshot, mut line: usize, mut col: usize, big: bool) -> (usize, usize) {
-    let chars = line_chars(text, line);
-    if chars.is_empty() {
-        // Empty line - advance to next line
+fn word_forward(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> (usize, usize) {
+    let mut cells = line_cells(text, line);
+    if cells.is_empty() {
         if line + 1 < text.line_count() {
             return (line + 1, 0);
         }
         return (line, 0);
     }
 
-    let col_clamped = col.min(chars.len() - 1);
-    let start_class = classify(chars[col_clamped], big);
+    let containing = cell_containing_char(&cells, col);
+    let start_class = vim_token_class(cells[containing].repr, big);
+    // If the cursor is past EOL we start advancing from one-past-end so the
+    // class-skip loop falls through to the next line; otherwise advance from
+    // the containing cluster.
+    let mut cell_ix = if col >= line_len(text, line) {
+        cells.len()
+    } else {
+        containing
+    };
 
-    // Skip current class
-    if start_class != CharClass::Space {
-        while col < chars.len() && classify(chars[col], big) == start_class {
-            col += 1;
+    if start_class != TokenClass::Whitespace {
+        while cell_ix < cells.len() && vim_token_class(cells[cell_ix].repr, big) == start_class {
+            cell_ix += 1;
         }
     }
 
-    // Skip whitespace, crossing line boundaries (empty lines are word boundaries)
     loop {
-        let chars = line_chars(text, line);
-        while col < chars.len() && classify(chars[col], big) == CharClass::Space {
-            col += 1;
+        while cell_ix < cells.len()
+            && vim_token_class(cells[cell_ix].repr, big) == TokenClass::Whitespace
+        {
+            cell_ix += 1;
         }
-        if col < chars.len() {
-            return (line, col);
+        if cell_ix < cells.len() {
+            return (line, cells[cell_ix].char_start);
         }
         if line + 1 < text.line_count() {
             line += 1;
-            col = 0;
-            if line_len(text, line) == 0 {
+            cells = line_cells(text, line);
+            cell_ix = 0;
+            if cells.is_empty() {
                 return (line, 0);
             }
         } else {
-            let ll = line_len(text, line);
-            return (line, ll.saturating_sub(1));
+            return (line, last_cluster_col(text, line));
         }
     }
 }
 
-fn word_backward(
-    text: &TextSnapshot,
-    mut line: usize,
-    mut col: usize,
-    big: bool,
-) -> (usize, usize) {
-    // Move left by one to start
-    if col > 0 {
-        col -= 1;
-    } else if line > 0 {
-        line -= 1;
-        if line_len(text, line) == 0 {
-            return (line, 0); // empty line is a word boundary
-        }
-        col = line_len(text, line).saturating_sub(1);
-    } else {
-        return (0, 0);
-    }
+fn word_backward(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> (usize, usize) {
+    let mut cells = line_cells(text, line);
 
-    // Skip whitespace backward, crossing lines (empty lines are word boundaries)
-    loop {
-        let chars = line_chars(text, line);
-        if !chars.is_empty() {
-            while col > 0 && classify(chars[col], big) == CharClass::Space {
-                col -= 1;
-            }
-            if classify(chars[col], big) != CharClass::Space {
-                break;
-            }
-        }
-        if line > 0 {
-            line -= 1;
-            if line_len(text, line) == 0 {
-                return (line, 0);
-            }
-            col = line_len(text, line).saturating_sub(1);
-        } else {
+    // Step left by one cluster, possibly crossing to the previous line. A
+    // mid-cluster column rounds back to the cluster start (defensive: cursors
+    // are normally grapheme-aligned).
+    let mut cell_ix = if cells.is_empty() {
+        None
+    } else {
+        cell_partition_by_char(&cells, col).checked_sub(1)
+    };
+
+    if cell_ix.is_none() {
+        if line == 0 {
             return (0, 0);
         }
+        line -= 1;
+        cells = line_cells(text, line);
+        if cells.is_empty() {
+            return (line, 0);
+        }
+        cell_ix = Some(cells.len() - 1);
+    }
+    let mut cell_ix = cell_ix.unwrap();
+
+    loop {
+        if !cells.is_empty() {
+            while cell_ix > 0 && vim_token_class(cells[cell_ix].repr, big) == TokenClass::Whitespace
+            {
+                cell_ix -= 1;
+            }
+            if vim_token_class(cells[cell_ix].repr, big) != TokenClass::Whitespace {
+                break;
+            }
+        }
+        if line == 0 {
+            return (0, 0);
+        }
+        line -= 1;
+        cells = line_cells(text, line);
+        if cells.is_empty() {
+            return (line, 0);
+        }
+        cell_ix = cells.len() - 1;
     }
 
-    // At end of a word - find its start
-    let chars = line_chars(text, line);
-    let word_class = classify(chars[col], big);
-    while col > 0 && classify(chars[col - 1], big) == word_class {
-        col -= 1;
+    let word_class = vim_token_class(cells[cell_ix].repr, big);
+    while cell_ix > 0 && vim_token_class(cells[cell_ix - 1].repr, big) == word_class {
+        cell_ix -= 1;
     }
 
-    (line, col)
+    (line, cells[cell_ix].char_start)
 }
 
-fn word_end(text: &TextSnapshot, mut line: usize, mut col: usize, big: bool) -> (usize, usize) {
-    // Move right by one to start
-    let ll = line_len(text, line);
-    if col + 1 < ll {
-        col += 1;
-    } else if line + 1 < text.line_count() {
-        line += 1;
-        col = 0;
-    } else {
-        return (line, ll.saturating_sub(1));
-    }
+fn word_end(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> (usize, usize) {
+    let mut cells = line_cells(text, line);
 
-    // Skip whitespace forward, crossing lines
+    // Step right by one cluster, possibly crossing to the next line. The next
+    // cell is the one just past the cluster currently containing the cursor.
+    let mut cell_ix = if cells.is_empty() {
+        if line + 1 < text.line_count() {
+            line += 1;
+            cells = line_cells(text, line);
+            0
+        } else {
+            return (line, 0);
+        }
+    } else {
+        let containing = cell_containing_char(&cells, col);
+        if containing + 1 < cells.len() {
+            containing + 1
+        } else if line + 1 < text.line_count() {
+            line += 1;
+            cells = line_cells(text, line);
+            0
+        } else {
+            return (line, last_cluster_col(text, line));
+        }
+    };
+
     loop {
-        let chars = line_chars(text, line);
-        if !chars.is_empty() {
-            while col < chars.len() && classify(chars[col], big) == CharClass::Space {
-                col += 1;
+        if !cells.is_empty() {
+            while cell_ix < cells.len()
+                && vim_token_class(cells[cell_ix].repr, big) == TokenClass::Whitespace
+            {
+                cell_ix += 1;
             }
-            if col < chars.len() {
+            if cell_ix < cells.len() {
                 break;
             }
         }
         if line + 1 < text.line_count() {
             line += 1;
-            col = 0;
+            cells = line_cells(text, line);
+            cell_ix = 0;
         } else {
-            return (line, line_len(text, line).saturating_sub(1));
+            return (line, last_cluster_col(text, line));
         }
     }
 
-    // At start of a word - find its end
-    let chars = line_chars(text, line);
-    let word_class = classify(chars[col], big);
-    while col + 1 < chars.len() && classify(chars[col + 1], big) == word_class {
-        col += 1;
+    let word_class = vim_token_class(cells[cell_ix].repr, big);
+    while cell_ix + 1 < cells.len() && vim_token_class(cells[cell_ix + 1].repr, big) == word_class {
+        cell_ix += 1;
     }
 
-    (line, col)
+    // The cursor sits on the cluster, so the "end of word" target is the
+    // cluster's start column — never an interior char column.
+    (line, cells[cell_ix].char_start)
 }
 
 // -- Text objects ------------------------------------------------------------
@@ -1555,48 +1567,67 @@ fn word_object_at(
     big: bool,
 ) -> Option<(Position, Position)> {
     let line = cursor.line;
-    let chars = line_chars(text, line);
-    if chars.is_empty() {
+    let cells = line_cells(text, line);
+    if cells.is_empty() {
         return None;
     }
-    let col = cursor.column.min(chars.len() - 1);
-    let cur_class = classify(chars[col], big);
+    let col = cursor.column.min(line_len(text, line).saturating_sub(1));
+    let cell_ix = cell_containing_char(&cells, col);
+    let cur_class = vim_token_class(cells[cell_ix].repr, big);
 
-    let mut start = col;
-    while start > 0 && classify(chars[start - 1], big) == cur_class {
+    let mut start = cell_ix;
+    while start > 0 && vim_token_class(cells[start - 1].repr, big) == cur_class {
         start -= 1;
     }
 
-    let mut end = col;
-    while end + 1 < chars.len() && classify(chars[end + 1], big) == cur_class {
+    let mut end = cell_ix;
+    while end + 1 < cells.len() && vim_token_class(cells[end + 1].repr, big) == cur_class {
         end += 1;
     }
 
     if inner {
-        return Some((pos(line, start), pos(line, end)));
+        return Some((
+            pos(line, cells[start].char_start),
+            pos(line, cells[end].char_start),
+        ));
     }
 
-    if cur_class == CharClass::Space {
-        if let Some((_, next_end)) = next_non_space_range(&chars, end + 1, big) {
-            return Some((pos(line, start), pos(line, next_end)));
+    if cur_class == TokenClass::Whitespace {
+        if let Some((_, next_end)) = next_non_space_range(&cells, end + 1, big) {
+            return Some((
+                pos(line, cells[start].char_start),
+                pos(line, cells[next_end].char_start),
+            ));
         }
-        if let Some((prev_start, _)) = prev_non_space_range(&chars, start, big) {
-            return Some((pos(line, prev_start), pos(line, end)));
+        if let Some((prev_start, _)) = prev_non_space_range(&cells, start, big) {
+            return Some((
+                pos(line, cells[prev_start].char_start),
+                pos(line, cells[end].char_start),
+            ));
         }
-        return Some((pos(line, start), pos(line, end)));
+        return Some((
+            pos(line, cells[start].char_start),
+            pos(line, cells[end].char_start),
+        ));
     }
 
-    if end + 1 < chars.len() && classify(chars[end + 1], big) == CharClass::Space {
-        while end + 1 < chars.len() && classify(chars[end + 1], big) == CharClass::Space {
+    if end + 1 < cells.len() && vim_token_class(cells[end + 1].repr, big) == TokenClass::Whitespace
+    {
+        while end + 1 < cells.len()
+            && vim_token_class(cells[end + 1].repr, big) == TokenClass::Whitespace
+        {
             end += 1;
         }
-    } else if start > 0 && classify(chars[start - 1], big) == CharClass::Space {
-        while start > 0 && classify(chars[start - 1], big) == CharClass::Space {
+    } else if start > 0 && vim_token_class(cells[start - 1].repr, big) == TokenClass::Whitespace {
+        while start > 0 && vim_token_class(cells[start - 1].repr, big) == TokenClass::Whitespace {
             start -= 1;
         }
     }
 
-    Some((pos(line, start), pos(line, end)))
+    Some((
+        pos(line, cells[start].char_start),
+        pos(line, cells[end].char_start),
+    ))
 }
 
 fn paragraph_object(text: &TextSnapshot, inner: bool) -> Option<(Position, Position)> {
@@ -1751,28 +1782,32 @@ fn quote_object(text: &TextSnapshot, quote: char, inner: bool) -> Option<(Positi
     }
 }
 
-fn next_non_space_range(chars: &[char], mut start: usize, big: bool) -> Option<(usize, usize)> {
-    while start < chars.len() && classify(chars[start], big) == CharClass::Space {
+fn next_non_space_range(
+    cells: &[GraphemeCell],
+    mut start: usize,
+    big: bool,
+) -> Option<(usize, usize)> {
+    while start < cells.len() && vim_token_class(cells[start].repr, big) == TokenClass::Whitespace {
         start += 1;
     }
-    if start >= chars.len() {
+    if start >= cells.len() {
         return None;
     }
-    let class = classify(chars[start], big);
+    let class = vim_token_class(cells[start].repr, big);
     let mut end = start;
-    while end + 1 < chars.len() && classify(chars[end + 1], big) == class {
+    while end + 1 < cells.len() && vim_token_class(cells[end + 1].repr, big) == class {
         end += 1;
     }
     Some((start, end))
 }
 
-fn prev_non_space_range(chars: &[char], start: usize, big: bool) -> Option<(usize, usize)> {
+fn prev_non_space_range(cells: &[GraphemeCell], start: usize, big: bool) -> Option<(usize, usize)> {
     if start == 0 {
         return None;
     }
     let mut end = start - 1;
     loop {
-        if classify(chars[end], big) != CharClass::Space {
+        if vim_token_class(cells[end].repr, big) != TokenClass::Whitespace {
             break;
         }
         if end == 0 {
@@ -1781,9 +1816,9 @@ fn prev_non_space_range(chars: &[char], start: usize, big: bool) -> Option<(usiz
         end -= 1;
     }
 
-    let class = classify(chars[end], big);
+    let class = vim_token_class(cells[end].repr, big);
     let mut range_start = end;
-    while range_start > 0 && classify(chars[range_start - 1], big) == class {
+    while range_start > 0 && vim_token_class(cells[range_start - 1].repr, big) == class {
         range_start -= 1;
     }
     Some((range_start, end))
@@ -1908,30 +1943,51 @@ fn line_len(text: &TextSnapshot, line: usize) -> usize {
     text.lines.get(line).map_or(0, |l| l.chars().count())
 }
 
+// Used by bracket / quote / paragraph helpers, which target ASCII chars and
+// don't need grapheme awareness (every match is a single-cluster ASCII char).
+// Word/text-object motion uses `line_cells` instead.
 fn line_chars(text: &TextSnapshot, line: usize) -> Vec<char> {
     text.lines
         .get(line)
         .map_or(Vec::new(), |l| l.chars().collect())
 }
 
+fn line_cells(text: &TextSnapshot, line: usize) -> Vec<GraphemeCell> {
+    text.lines.get(line).map_or(Vec::new(), |l| cells_of_str(l))
+}
+
+// Char column of the start of the last grapheme cluster on `line`, or 0 for
+// an empty line. The canonical "EOL clamp" for normal-mode cursors — using
+// `line_len - 1` would land mid-cluster on multi-char clusters.
+fn last_cluster_col(text: &TextSnapshot, line: usize) -> usize {
+    text.lines.get(line).map_or(0, |l| last_grapheme_column(l))
+}
+
 fn word_under_cursor(text: &TextSnapshot) -> Option<String> {
-    let chars = line_chars(text, text.cursor.line);
-    if chars.is_empty() {
+    let line = text.lines.get(text.cursor.line)?;
+    let cells = cells_of_str(line);
+    if cells.is_empty() {
         return None;
     }
-    let col = text.cursor.column.min(chars.len().saturating_sub(1));
-    if !chars[col].is_alphanumeric() && chars[col] != '_' {
+    let col = text
+        .cursor
+        .column
+        .min(line_len(text, text.cursor.line).saturating_sub(1));
+    let cell_ix = cell_containing_char(&cells, col);
+    if !is_identifier_char(cells[cell_ix].repr) {
         return None;
     }
-    let mut start = col;
-    while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+    let mut start = cell_ix;
+    while start > 0 && is_identifier_char(cells[start - 1].repr) {
         start -= 1;
     }
-    let mut end = col;
-    while end + 1 < chars.len() && (chars[end + 1].is_alphanumeric() || chars[end + 1] == '_') {
+    let mut end = cell_ix;
+    while end + 1 < cells.len() && is_identifier_char(cells[end + 1].repr) {
         end += 1;
     }
-    Some(chars[start..=end].iter().collect())
+    let start_byte = cells[start].byte_start;
+    let end_byte = cells.get(end + 1).map_or(line.len(), |c| c.byte_start);
+    Some(line[start_byte..end_byte].to_string())
 }
 
 fn first_non_blank(text: &TextSnapshot, line: usize) -> usize {

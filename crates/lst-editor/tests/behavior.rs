@@ -2358,3 +2358,279 @@ fn vim_l_steps_over_emoji() {
         vec![VimCommand::MoveTo(Position { line: 0, column: 3 })]
     );
 }
+
+#[test]
+fn ctrl_right_steps_over_combining_acute_word_boundary() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "nai\u{0308}ve word",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(0, false, None);
+    model.move_word(false, false);
+
+    // Cursor lands on the space after the cluster, never inside it (would be 3).
+    assert_eq!(model.snapshot().selection, 6..6);
+}
+
+#[test]
+fn ctrl_right_steps_over_regional_indicator() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "a\u{1F1EB}\u{1F1F7}b cc",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(0, false, None);
+    model.move_word(false, false);
+    let first = model.snapshot().selection;
+    model.move_word(false, false);
+    let second = model.snapshot().selection;
+    model.move_word(false, false);
+    let third = model.snapshot().selection;
+
+    // First Ctrl+Right: end of `a`, start of the regional pair.
+    assert_eq!(first, 1..1);
+    // Second Ctrl+Right skips the entire regional cluster as one Symbol run and
+    // lands at the start of `b` — char 3, never the mid-cluster char-2.
+    assert_eq!(second, 3..3);
+    // Third Ctrl+Right walks past `b` to the space.
+    assert_eq!(third, 4..4);
+}
+
+#[test]
+fn alt_right_subword_steps_over_combining_mark() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "nai\u{0308}veCase",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(0, false, None);
+    model.move_subword(false, false);
+
+    // The subword run is `naïve` (6 chars, 5 graphemes); next subword stops at `C`.
+    assert_eq!(model.snapshot().selection, 6..6);
+}
+
+#[test]
+fn vim_w_steps_over_combining_acute() {
+    let mut vim = VimState::new();
+    vim.mode = VimMode::Normal;
+    let text = VimTextSnapshot {
+        lines: vec!["nai\u{0308}ve word".to_string()].into(),
+        cursor: Position { line: 0, column: 0 },
+    };
+
+    // `w` skips the whole `naïve` cluster run and lands on `w`, never inside
+    // the NFD combining mark.
+    assert_eq!(
+        vim.handle_key(
+            &VimKey::Character("w".into()),
+            VimModifiers::default(),
+            &text,
+        ),
+        vec![VimCommand::MoveTo(Position { line: 0, column: 7 })]
+    );
+}
+
+#[test]
+fn vim_e_lands_on_full_emoji_cluster_start() {
+    let mut vim = VimState::new();
+    vim.mode = VimMode::Normal;
+    let text = VimTextSnapshot {
+        lines: vec!["a\u{1F1EB}\u{1F1F7} b".to_string()].into(),
+        cursor: Position { line: 0, column: 0 },
+    };
+
+    // `e` lands at the regional cluster's *start* (col 1), since the cursor
+    // sits on the cluster as a whole — never at the mid-cluster col 2.
+    assert_eq!(
+        vim.handle_key(
+            &VimKey::Character("e".into()),
+            VimModifiers::default(),
+            &text,
+        ),
+        vec![VimCommand::MoveTo(Position { line: 0, column: 1 })]
+    );
+}
+
+#[test]
+fn vim_daw_keeps_emoji_cluster_intact() {
+    let mut vim = VimState::new();
+    vim.mode = VimMode::Normal;
+    // "x 🇫🇷naïve y" with NFD ï. The 🇫🇷 cluster sits at chars 2..4 and the
+    // identifier "naïve" at chars 4..10 (5 graphemes). With cursor inside
+    // `naïve`, `daw` covers the whole identifier word plus surrounding space.
+    let text = VimTextSnapshot {
+        lines: vec!["x \u{1F1EB}\u{1F1F7}nai\u{0308}ve y".to_string()].into(),
+        cursor: Position { line: 0, column: 5 },
+    };
+
+    // `d` and `a` set the operator + text-object pending; emit Noop until the
+    // motion target arrives.
+    vim.handle_key(
+        &VimKey::Character("d".into()),
+        VimModifiers::default(),
+        &text,
+    );
+    vim.handle_key(
+        &VimKey::Character("a".into()),
+        VimModifiers::default(),
+        &text,
+    );
+    let cmds = vim.handle_key(
+        &VimKey::Character("w".into()),
+        VimModifiers::default(),
+        &text,
+    );
+
+    let Some(VimCommand::DeleteRange { from, to }) = cmds.iter().find_map(|c| {
+        if matches!(c, VimCommand::DeleteRange { .. }) {
+            Some(c.clone())
+        } else {
+            None
+        }
+    }) else {
+        panic!("expected DeleteRange, got {:?}", cmds);
+    };
+
+    // Both endpoints land on cluster starts (no mid-cluster char-3 of the
+    // regional pair, no mid-cluster char-7 of the NFD ï).
+    assert_ne!(from.column, 3);
+    assert_ne!(to.column, 3);
+    assert_ne!(from.column, 7);
+    assert_ne!(to.column, 7);
+    // Concretely: `daw` with cursor in `naïve` deletes `naïve` plus the
+    // trailing space — the regional cluster is a separate word and stays.
+    assert_eq!(from, Position { line: 0, column: 4 });
+    assert_eq!(
+        to,
+        Position {
+            line: 0,
+            column: 10
+        }
+    );
+}
+
+#[test]
+fn vim_star_extracts_full_grapheme_word() {
+    let mut vim = VimState::new();
+    vim.mode = VimMode::Normal;
+    let text = VimTextSnapshot {
+        lines: vec!["nai\u{0308}ve nai\u{0308}ve".to_string()].into(),
+        cursor: Position { line: 0, column: 0 },
+    };
+
+    let cmds = vim.handle_key(
+        &VimKey::Character("*".into()),
+        VimModifiers::default(),
+        &text,
+    );
+
+    let (word, forward) = cmds
+        .iter()
+        .find_map(|c| match c {
+            VimCommand::SearchWordUnderCursor { word, forward } => Some((word.clone(), *forward)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected SearchWordUnderCursor, got {:?}", cmds));
+
+    assert!(forward);
+    // The extracted pattern must be the full NFD `naïve`, not `na` (which
+    // would happen if extraction stopped at the combining mark).
+    assert_eq!(word, "nai\u{0308}ve");
+}
+
+#[test]
+fn vim_de_removes_trailing_combining_mark_with_word() {
+    // "cafe\u{0301}" — NFD café. Without grapheme-aware deletion, `de` at col 0
+    // would remove only "cafe" via `to.column + 1`, leaving the orphan
+    // combining mark.
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "cafe\u{0301}",
+        )],
+        "Ready.".into(),
+    );
+
+    enter_vim_normal(&mut model);
+    model.move_to_char(0, false, None);
+    model.handle_vim_key(VimKey::Character("d".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("e".into()), VimModifiers::default(), 80);
+
+    assert_eq!(model.active_tab().buffer_text(), "");
+}
+
+#[test]
+fn vim_escape_from_insert_lands_on_cluster_start() {
+    // Cursor in Insert at the past-EOL column of "cafe\u{0301}" (ll = 5). Vim
+    // moves left by 1 on Escape; without grapheme awareness that lands at col
+    // 4 (the combining mark), mid-cluster. The fix lands at col 3 (start of é).
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "cafe\u{0301}",
+        )],
+        "Ready.".into(),
+    );
+
+    model.move_to_char(5, false, None);
+    enter_vim_normal(&mut model);
+
+    assert_eq!(model.snapshot().cursor, 3);
+}
+
+#[test]
+fn vim_r_replaces_full_grapheme_cluster() {
+    // "cafe\u{0301}" with cursor on the é NFD cluster (col 3). Vim `r X` must
+    // replace the whole cluster with `X`, not just the base `e`.
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "cafe\u{0301}",
+        )],
+        "Ready.".into(),
+    );
+
+    enter_vim_normal(&mut model);
+    model.move_to_char(3, false, None);
+    model.handle_vim_key(VimKey::Character("r".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("X".into()), VimModifiers::default(), 80);
+
+    assert_eq!(model.active_tab().buffer_text(), "cafX");
+}
+
+#[test]
+fn double_click_on_combining_mark_selects_full_grapheme() {
+    use lst_editor::selection::word_range_at_char;
+    use ropey::Rope;
+
+    let buffer = Rope::from_str("nai\u{0308}ve word");
+
+    // Click on the base `i`, the combining mark, and the trailing `e` — all
+    // produce the same `naïve` token range, with the cluster intact.
+    assert_eq!(word_range_at_char(&buffer, 2), 0..6);
+    assert_eq!(word_range_at_char(&buffer, 3), 0..6);
+    assert_eq!(word_range_at_char(&buffer, 5), 0..6);
+}
