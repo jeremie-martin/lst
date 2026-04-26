@@ -10,8 +10,9 @@ use crate::{
     PrevTab, Quit, Redo, ReplaceAll, ReplaceOne, SaveFile, SaveFileAs, SelectAll,
     SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd, SelectLineStart,
     SelectPageDown, SelectPageUp, SelectRight, SelectSmartHome, SelectSubwordLeft,
-    SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight, ToggleComment, ToggleWrap, Undo,
-    ZoomIn, ZoomOut, ZoomReset,
+    SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight, ToggleComment, ToggleFindCase,
+    ToggleFindInSelection, ToggleFindRegex, ToggleFindWholeWord, ToggleWrap, Undo, ZoomIn, ZoomOut,
+    ZoomReset,
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
@@ -76,6 +77,10 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         FindPrev => |model| model.find_prev_match();
         ReplaceOne => |model| model.replace_current_match();
         ReplaceAll => |model| model.replace_all_matches_in_document();
+        ToggleFindCase => |model| model.toggle_find_case_sensitive();
+        ToggleFindWholeWord => |model| model.toggle_find_whole_word();
+        ToggleFindRegex => |model| model.toggle_find_regex();
+        ToggleFindInSelection => |model| model.toggle_find_in_selection();
         GotoLineOpen => |model| model.toggle_goto_line_panel();
         DeleteLine => |model| model.delete_line();
         MoveLineUp => |model| model.move_line_up();

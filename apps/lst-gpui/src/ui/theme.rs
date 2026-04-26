@@ -11,6 +11,7 @@ pub mod palette {
     pub const TEXT_SUBTLE: u32 = 0xA6A6A6;
     pub const TEXT_MUTED: u32 = 0x808080;
     pub const ACCENT_BLUE: u32 = 0x0078D4;
+    pub const ERROR_RED: u32 = 0xF14C4C;
     pub const SELECTION_BLUE: u32 = 0x264F78;
     pub const SEARCH_MATCH: u32 = 0x3A3D41;
     pub const SEARCH_ACTIVE_MATCH: u32 = 0x6B4F1D;
@@ -43,6 +44,7 @@ pub mod role {
     pub const TEXT_SUBTLE: u32 = palette::TEXT_SUBTLE;
     pub const TEXT_MUTED: u32 = palette::TEXT_MUTED;
     pub const ACCENT: u32 = palette::ACCENT_BLUE;
+    pub const ERROR_TEXT: u32 = palette::ERROR_RED;
     pub const SELECTION_BG: u32 = palette::SELECTION_BLUE;
     pub const SEARCH_MATCH_BG: u32 = palette::SEARCH_MATCH;
     pub const SEARCH_ACTIVE_MATCH_BG: u32 = palette::SEARCH_ACTIVE_MATCH;
