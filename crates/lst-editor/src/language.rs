@@ -79,10 +79,14 @@ impl IndentStyle {
 pub struct LanguageConfig {
     pub indent: IndentStyle,
     pub line_comment: Option<&'static str>,
+    pub block_comment: Option<(&'static str, &'static str)>,
     pub auto_pairs: &'static [(char, char)],
     pub auto_pair_suppress_quotes: &'static [char],
     pub auto_dedent_closers: &'static [char],
 }
+
+const BLOCK_C: Option<(&str, &str)> = Some(("/*", "*/"));
+const BLOCK_HTML: Option<(&str, &str)> = Some(("<!--", "-->"));
 
 // Shared auto-pair sets.
 const PAIRS_BASIC: &[(char, char)] = &[
@@ -114,6 +118,7 @@ const SUPPRESS_NONE: &[char] = &[];
 const CONFIG_RUST: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_NO_SINGLE_QUOTE,
     auto_pair_suppress_quotes: SUPPRESS_SINGLE_QUOTE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -122,6 +127,7 @@ const CONFIG_RUST: LanguageConfig = LanguageConfig {
 const CONFIG_PYTHON: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -130,6 +136,7 @@ const CONFIG_PYTHON: LanguageConfig = LanguageConfig {
 const CONFIG_JAVASCRIPT: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -138,6 +145,7 @@ const CONFIG_JAVASCRIPT: LanguageConfig = LanguageConfig {
 const CONFIG_JSX: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_WITH_ANGLE,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -146,6 +154,7 @@ const CONFIG_JSX: LanguageConfig = LanguageConfig {
 const CONFIG_TYPESCRIPT: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -154,6 +163,7 @@ const CONFIG_TYPESCRIPT: LanguageConfig = LanguageConfig {
 const CONFIG_TSX: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_WITH_ANGLE,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -162,6 +172,7 @@ const CONFIG_TSX: LanguageConfig = LanguageConfig {
 const CONFIG_JSON: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: None,
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -170,6 +181,7 @@ const CONFIG_JSON: LanguageConfig = LanguageConfig {
 const CONFIG_JSONC: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -178,6 +190,7 @@ const CONFIG_JSONC: LanguageConfig = LanguageConfig {
 const CONFIG_TOML: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -186,6 +199,7 @@ const CONFIG_TOML: LanguageConfig = LanguageConfig {
 const CONFIG_YAML: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -194,6 +208,7 @@ const CONFIG_YAML: LanguageConfig = LanguageConfig {
 const CONFIG_MARKDOWN: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: None,
+    block_comment: BLOCK_HTML,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -202,6 +217,7 @@ const CONFIG_MARKDOWN: LanguageConfig = LanguageConfig {
 const CONFIG_HTML: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: None,
+    block_comment: BLOCK_HTML,
     auto_pairs: PAIRS_WITH_ANGLE,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -210,6 +226,7 @@ const CONFIG_HTML: LanguageConfig = LanguageConfig {
 const CONFIG_XML: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: None,
+    block_comment: BLOCK_HTML,
     auto_pairs: PAIRS_WITH_ANGLE,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -218,6 +235,7 @@ const CONFIG_XML: LanguageConfig = LanguageConfig {
 const CONFIG_CSS: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: None,
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -226,6 +244,7 @@ const CONFIG_CSS: LanguageConfig = LanguageConfig {
 const CONFIG_SCSS: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -234,6 +253,7 @@ const CONFIG_SCSS: LanguageConfig = LanguageConfig {
 const CONFIG_C: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -242,6 +262,7 @@ const CONFIG_C: LanguageConfig = LanguageConfig {
 const CONFIG_CPP: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -250,6 +271,7 @@ const CONFIG_CPP: LanguageConfig = LanguageConfig {
 const CONFIG_JAVA: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -258,6 +280,7 @@ const CONFIG_JAVA: LanguageConfig = LanguageConfig {
 const CONFIG_GO: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Tabs { display_width: 4 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -266,6 +289,7 @@ const CONFIG_GO: LanguageConfig = LanguageConfig {
 const CONFIG_CSHARP: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -274,6 +298,7 @@ const CONFIG_CSHARP: LanguageConfig = LanguageConfig {
 const CONFIG_SWIFT: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -282,6 +307,7 @@ const CONFIG_SWIFT: LanguageConfig = LanguageConfig {
 const CONFIG_KOTLIN: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -290,6 +316,7 @@ const CONFIG_KOTLIN: LanguageConfig = LanguageConfig {
 const CONFIG_SCALA: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -298,6 +325,7 @@ const CONFIG_SCALA: LanguageConfig = LanguageConfig {
 const CONFIG_ZIG: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("//"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -306,6 +334,7 @@ const CONFIG_ZIG: LanguageConfig = LanguageConfig {
 const CONFIG_SHELL: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -314,6 +343,7 @@ const CONFIG_SHELL: LanguageConfig = LanguageConfig {
 const CONFIG_BASH: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -322,6 +352,7 @@ const CONFIG_BASH: LanguageConfig = LanguageConfig {
 const CONFIG_ZSH: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -330,6 +361,7 @@ const CONFIG_ZSH: LanguageConfig = LanguageConfig {
 const CONFIG_FISH: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -338,6 +370,7 @@ const CONFIG_FISH: LanguageConfig = LanguageConfig {
 const CONFIG_RUBY: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("#"),
+    block_comment: Some(("=begin", "=end")),
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -346,6 +379,7 @@ const CONFIG_RUBY: LanguageConfig = LanguageConfig {
 const CONFIG_PERL: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -354,6 +388,7 @@ const CONFIG_PERL: LanguageConfig = LanguageConfig {
 const CONFIG_LUA: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("--"),
+    block_comment: Some(("--[[", "]]")),
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -362,6 +397,7 @@ const CONFIG_LUA: LanguageConfig = LanguageConfig {
 const CONFIG_SQL: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("--"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -370,6 +406,7 @@ const CONFIG_SQL: LanguageConfig = LanguageConfig {
 const CONFIG_HASKELL: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("--"),
+    block_comment: Some(("{-", "-}")),
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -378,6 +415,7 @@ const CONFIG_HASKELL: LanguageConfig = LanguageConfig {
 const CONFIG_ELIXIR: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -386,6 +424,7 @@ const CONFIG_ELIXIR: LanguageConfig = LanguageConfig {
 const CONFIG_ERLANG: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("%"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -394,6 +433,7 @@ const CONFIG_ERLANG: LanguageConfig = LanguageConfig {
 const CONFIG_CLOJURE: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some(";;"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -402,6 +442,7 @@ const CONFIG_CLOJURE: LanguageConfig = LanguageConfig {
 const CONFIG_COMMONLISP: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some(";;"),
+    block_comment: Some(("#|", "|#")),
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -410,6 +451,7 @@ const CONFIG_COMMONLISP: LanguageConfig = LanguageConfig {
 const CONFIG_SCHEME: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some(";;"),
+    block_comment: Some(("#|", "|#")),
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -418,6 +460,7 @@ const CONFIG_SCHEME: LanguageConfig = LanguageConfig {
 const CONFIG_EMACSLISP: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some(";;"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -426,6 +469,7 @@ const CONFIG_EMACSLISP: LanguageConfig = LanguageConfig {
 const CONFIG_DOCKERFILE: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -434,6 +478,7 @@ const CONFIG_DOCKERFILE: LanguageConfig = LanguageConfig {
 const CONFIG_MAKEFILE: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Tabs { display_width: 4 },
     line_comment: Some("#"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -442,6 +487,7 @@ const CONFIG_MAKEFILE: LanguageConfig = LanguageConfig {
 const CONFIG_CMAKE: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("#"),
+    block_comment: Some(("#[[", "]]")),
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -450,6 +496,7 @@ const CONFIG_CMAKE: LanguageConfig = LanguageConfig {
 const CONFIG_INI: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: Some(";"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -458,6 +505,7 @@ const CONFIG_INI: LanguageConfig = LanguageConfig {
 const CONFIG_PROTO: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("//"),
+    block_comment: BLOCK_C,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -466,6 +514,7 @@ const CONFIG_PROTO: LanguageConfig = LanguageConfig {
 const CONFIG_VIM: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("\""),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_NONE,
@@ -474,6 +523,7 @@ const CONFIG_VIM: LanguageConfig = LanguageConfig {
 const CONFIG_TEX: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 2 },
     line_comment: Some("%"),
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,
@@ -485,6 +535,7 @@ const CONFIG_TEX: LanguageConfig = LanguageConfig {
 const CONFIG_DEFAULT: LanguageConfig = LanguageConfig {
     indent: IndentStyle::Spaces { width: 4 },
     line_comment: None,
+    block_comment: None,
     auto_pairs: PAIRS_BASIC,
     auto_pair_suppress_quotes: SUPPRESS_NONE,
     auto_dedent_closers: CLOSERS_BRACE,

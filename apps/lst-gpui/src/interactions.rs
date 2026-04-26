@@ -2,7 +2,9 @@ use gpui::{
     point, px, Bounds, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Window,
 };
 use lst_editor::{
-    selection::{drag_selection_range, line_range_at_char, word_range_at_char},
+    selection::{
+        drag_selection_range, line_range_at_char, paragraph_range_at_char, word_range_at_char,
+    },
     RevealIntent,
 };
 
@@ -16,6 +18,7 @@ pub(crate) enum DragSelectionMode {
     Character,
     Word(Range<usize>),
     Line(Range<usize>),
+    Paragraph(Range<usize>),
 }
 
 #[derive(Clone, Debug)]
@@ -45,7 +48,19 @@ impl LstGpuiApp {
         self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);
         let index = self.active_char_index_for_point(event.position);
-        if event.click_count >= 3 {
+        if event.click_count >= 4 {
+            let para_range = paragraph_range_at_char(self.active_tab().buffer(), index);
+            self.start_drag_selection(
+                DragSelectionMode::Paragraph(para_range.clone()),
+                event.position,
+            );
+            self.select_active_range(para_range, cx);
+            self.sync_primary_selection(cx);
+            self.schedule_drag_autoscroll(window, cx);
+            cx.notify();
+            return;
+        }
+        if event.click_count == 3 {
             let line_range = line_range_at_char(self.active_tab().buffer(), index);
             self.start_drag_selection(DragSelectionMode::Line(line_range.clone()), event.position);
             self.select_active_range(line_range, cx);
@@ -172,6 +187,10 @@ impl LstGpuiApp {
             }
             Some(DragSelectionMode::Line(anchor)) => {
                 let current = line_range_at_char(self.active_tab().buffer(), index);
+                self.select_active_drag_range(anchor, current, cx);
+            }
+            Some(DragSelectionMode::Paragraph(anchor)) => {
+                let current = paragraph_range_at_char(self.active_tab().buffer(), index);
                 self.select_active_drag_range(anchor, current, cx);
             }
             None => return false,

@@ -162,15 +162,39 @@ impl LstGpuiApp {
                         .child(err),
                 )
             })
-            .child(find_chip("find-chip-case", "Aa", case_sensitive, true, scale, cx, |this, cx| {
-                this.update_model(cx, true, |m| m.toggle_find_case_sensitive());
-            }))
-            .child(find_chip("find-chip-word", "W", whole_word, true, scale, cx, |this, cx| {
-                this.update_model(cx, true, |m| m.toggle_find_whole_word());
-            }))
-            .child(find_chip("find-chip-regex", ".*", use_regex, true, scale, cx, |this, cx| {
-                this.update_model(cx, true, |m| m.toggle_find_regex());
-            }))
+            .child(find_chip(
+                "find-chip-case",
+                "Aa",
+                case_sensitive,
+                true,
+                scale,
+                cx,
+                |this, cx| {
+                    this.update_model(cx, true, |m| m.toggle_find_case_sensitive());
+                },
+            ))
+            .child(find_chip(
+                "find-chip-word",
+                "W",
+                whole_word,
+                true,
+                scale,
+                cx,
+                |this, cx| {
+                    this.update_model(cx, true, |m| m.toggle_find_whole_word());
+                },
+            ))
+            .child(find_chip(
+                "find-chip-regex",
+                ".*",
+                use_regex,
+                true,
+                scale,
+                cx,
+                |this, cx| {
+                    this.update_model(cx, true, |m| m.toggle_find_regex());
+                },
+            ))
             .child(find_chip(
                 "find-chip-scope",
                 "In Sel",
@@ -869,8 +893,16 @@ fn find_chip<F>(
 where
     F: Fn(&mut LstGpuiApp, &mut Context<LstGpuiApp>) + 'static,
 {
-    let bg = if active { role::ACCENT } else { role::CONTROL_BG };
-    let hover_bg = if active { role::ACCENT } else { role::CONTROL_BG_HOVER };
+    let bg = if active {
+        role::ACCENT
+    } else {
+        role::CONTROL_BG
+    };
+    let hover_bg = if active {
+        role::ACCENT
+    } else {
+        role::CONTROL_BG_HOVER
+    };
     let fg = if !enabled {
         role::TEXT_MUTED
     } else if active {

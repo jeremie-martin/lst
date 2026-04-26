@@ -320,11 +320,7 @@ fn vim_search_word_flips_whole_word_and_case_sensitive_in_snapshot() {
     enter_vim_normal(&mut model);
 
     // Press `*` on the first word (`foo` at column 0).
-    model.handle_vim_key(
-        VimKey::Character("*".into()),
-        VimModifiers::default(),
-        0,
-    );
+    model.handle_vim_key(VimKey::Character("*".into()), VimModifiers::default(), 0);
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.find_query, "foo");
@@ -2804,6 +2800,146 @@ fn vim_r_replaces_full_grapheme_cluster() {
     model.handle_vim_key(VimKey::Character("X".into()), VimModifiers::default(), 80);
 
     assert_eq!(model.active_tab().buffer_text(), "cafX");
+}
+
+#[test]
+fn select_current_line_covers_full_line_including_newline() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta\ngamma",
+        )],
+        "Ready.".into(),
+    );
+    model.move_to_char(7, false, None);
+    model.select_current_line();
+    assert_eq!(model.snapshot().selection, 6..11);
+}
+
+#[test]
+fn select_current_paragraph_inside_paragraph() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\nbeta\n\ngamma\n",
+        )],
+        "Ready.".into(),
+    );
+    model.move_to_char(7, false, None);
+    model.select_current_paragraph();
+    assert_eq!(model.snapshot().selection, 0..11);
+}
+
+#[test]
+fn select_current_paragraph_on_blank_line_selects_blank_block() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha\n\n\nbeta\n",
+        )],
+        "Ready.".into(),
+    );
+    model.move_to_char(6, false, None);
+    model.select_current_paragraph();
+    assert_eq!(model.snapshot().selection, 6..8);
+}
+
+fn vim_press_chars(model: &mut EditorModel, keys: &str) {
+    for ch in keys.chars() {
+        let s = ch.to_string();
+        model.handle_vim_key(VimKey::Character(s), VimModifiers::default(), 80);
+    }
+}
+
+#[test]
+fn vim_ysiw_wraps_word_in_parens() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta gamma",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+    // Cursor starts on 'a' of "alpha".
+    vim_press_chars(&mut model, "ysiw)");
+    assert_eq!(model.snapshot().text, "(alpha) beta gamma");
+}
+
+#[test]
+fn vim_ysiw_with_quote_wraps_in_quotes() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alpha beta",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+    vim_press_chars(&mut model, "ysiw\"");
+    assert_eq!(model.snapshot().text, "\"alpha\" beta");
+}
+
+#[test]
+fn vim_ds_paren_removes_surrounding_parens() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "fn (alpha) end",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+    // Move into the parenthesized region.
+    vim_press_chars(&mut model, "5l");
+    vim_press_chars(&mut model, "ds(");
+    assert_eq!(model.snapshot().text, "fn alpha end");
+}
+
+#[test]
+fn vim_cs_paren_to_bracket_replaces_pair() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "fn (alpha) end",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+    vim_press_chars(&mut model, "5l");
+    vim_press_chars(&mut model, "cs([");
+    assert_eq!(model.snapshot().text, "fn [alpha] end");
+}
+
+#[test]
+fn vim_ds_quote_removes_quote_pair() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "say \"hi\" loud",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+    vim_press_chars(&mut model, "5l");
+    vim_press_chars(&mut model, "ds\"");
+    assert_eq!(model.snapshot().text, "say hi loud");
 }
 
 #[test]

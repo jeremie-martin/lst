@@ -8,11 +8,11 @@ use crate::{
     MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft, MoveSubwordRight, MoveUp,
     MoveWordLeft, MoveWordRight, NewTab, NextTab, OpenFile, OutdentSelection, PasteClipboard,
     PrevTab, Quit, Redo, ReplaceAll, ReplaceOne, SaveFile, SaveFileAs, SelectAll,
-    SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd, SelectLineStart,
-    SelectPageDown, SelectPageUp, SelectRight, SelectSmartHome, SelectSubwordLeft,
-    SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight, ToggleComment, ToggleFindCase,
-    ToggleFindInSelection, ToggleFindRegex, ToggleFindWholeWord, ToggleWrap, Undo, ZoomIn, ZoomOut,
-    ZoomReset,
+    SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft, SelectLine, SelectLineEnd,
+    SelectLineStart, SelectPageDown, SelectPageUp, SelectParagraph, SelectRight, SelectSmartHome,
+    SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight,
+    ToggleBlockComment, ToggleComment, ToggleFindCase, ToggleFindInSelection, ToggleFindRegex,
+    ToggleFindWholeWord, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
@@ -69,6 +69,8 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         InsertTab => |model| model.insert_tab_at_cursor();
         OutdentSelection => |model| model.outdent_at_cursor();
         SelectAll => |model| model.select_all();
+        SelectLine => |model| model.select_current_line();
+        SelectParagraph => |model| model.select_current_paragraph();
         Undo => |model| model.undo();
         Redo => |model| model.redo();
         FindOpen => |model| model.toggle_find_panel(false);
@@ -87,6 +89,7 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         MoveLineDown => |model| model.move_line_down();
         DuplicateLine => |model| model.duplicate_line();
         ToggleComment => |model| model.toggle_comment();
+        ToggleBlockComment => |model| model.toggle_block_comment();
     }
 
     let root = root.on_action(cx.listener(|this, _: &NewTab, _window, cx| {
