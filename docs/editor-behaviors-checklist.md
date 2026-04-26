@@ -5,7 +5,7 @@ implement. Use this as an audit checklist for the GPUI editor.
 
 Status legend: `[ ]` not implemented · `[~]` partial · `[x]` done
 
-Status last refreshed: 2026-04-23.
+Status last refreshed: 2026-04-26.
 
 References use `path::symbol` rather than `path:line` so they survive
 reorganization. Grep for the symbol to navigate.
@@ -88,7 +88,7 @@ reorganization. Grep for the symbol to navigate.
 ## Text Input
 
 - [x] **IME composition** — full `EntityInputHandler` (marked range, bounds, unmark) (`apps/lst-gpui/src/input_adapter.rs::text_for_range`, `::marked_text_range`, `::unmark_text`, `::replace_and_mark_text_in_range`; model state at `crates/lst-editor/src/tab.rs::EditorTab::marked_range`; test `crates/lst-editor/tests/behavior.rs::ime_marked_text_replacement_remains_model_behavior`)
-- [~] **Unicode grapheme clusters** — main-editor single-step motion, Backspace, Delete-forward, and Vim `h`/`l` step by graphemes via `crates/lst-editor/src/selection.rs::next_grapheme_boundary`, `::previous_grapheme_boundary`, `::next_grapheme_column`, `::previous_grapheme_column`, `::last_grapheme_column` (used from `crates/lst-editor/src/lib.rs::move_horizontal`, `::delete_selected_or_previous`, `::delete_selected_or_next`; `crates/lst-editor/src/vim.rs::compute_motion` `Motion::Left`/`Motion::Right`); `apps/lst-gpui/src/ui/input_field.rs::previous_boundary`, `::next_boundary` cover the inline input. Word/subword boundaries still operate on chars (boundaries can land inside a grapheme cluster like NFD `é`).
+- [x] **Unicode grapheme clusters** — every cursor-position-producing helper walks `GraphemeCell`s built from `unicode-segmentation`'s extended grapheme clusters, classifying each cluster by its first scalar (matches Helix and Zed). Single-step motion uses `crates/lst-editor/src/selection.rs::next_grapheme_boundary`, `::previous_grapheme_boundary`, `::next_grapheme_column`, `::previous_grapheme_column`, `::last_grapheme_column`. Word, subword, and double-click selection use cell-based `::previous_word_boundary`, `::next_word_boundary`, `::previous_subword_boundary`, `::next_subword_boundary`, `::word_range_at_char` (and their `_in_text` byte-offset siblings used by `apps/lst-gpui/src/ui/input_field.rs`). Vim `w`/`b`/`e`, text objects (`iw`/`aw`/`iW`/`aW`), and `*` star-search route through `crates/lst-editor/src/vim.rs::word_forward`, `::word_backward`, `::word_end`, `::word_object_at`, `::word_under_cursor`, all walking cells via the shared `crates/lst-editor/src/selection.rs::cells_of_str`/`::cells_of_rope`/`::cells_of_rope_line` builders and `::cell_partition_by_char`/`::cell_containing_char` lookups. Known limitations (separate roadmap items): find-match positions in `crates/lst-editor/src/find.rs::compute_matches_in_text` round to byte offsets but not cluster boundaries; soft-wrap segments in `crates/lst-editor/src/wrap.rs` can split a cluster at the wrap column.
 - [~] **Tab → spaces with soft-tab backspace** — inserts the active language's indent unit via `IndentStyle::indent_unit` (e.g. 4 spaces for Rust, 2 for JS/TS, a literal `\t` for Go) (`crates/lst-editor/src/lib.rs::insert_tab_at_cursor`; `crates/lst-editor/src/language.rs::IndentStyle::indent_unit`); backspace deletes one char, not a full indent
 - [ ] **Trim trailing whitespace on save**
 - [ ] **Ensure final newline on save**
@@ -134,7 +134,7 @@ Items most often overlooked in custom editors:
 
 - [x] Sticky virtual column across up/down motion
 - [x] Smart Home (two-stage)
-- [~] Grapheme-aware motion — main-editor single-step motion, Backspace, Delete-forward, and Vim `h`/`l` step by graphemes; word/subword still char-based
+- [x] Grapheme-aware motion — single-step, word, subword, double-click word selection, Vim `w`/`b`/`e`, text objects, and `*` all walk grapheme clusters
 - [x] Undo coalescing by word/time
 - [x] Scroll margin
 - [x] Auto-scroll during drag-selection
@@ -145,21 +145,24 @@ Items most often overlooked in custom editors:
 
 ## Summary
 
-- **Done:** 59
-- **Partial:** 12
+- **Done:** 60
+- **Partial:** 11
 - **Missing:** 27
 
 **Strong foundation:** Vim state machine, viewport with scroll margin, soft
 wrap, undo coalescing, autosave, find/replace core, drag-select with
-auto-scroll, IME composition, current-line highlight, line-ending detection.
+auto-scroll, IME composition, current-line highlight, line-ending detection,
+grapheme-cluster awareness for every cursor-positioning helper.
 
 **Biggest gaps to close for "idiomatic" feel:**
-1. Find toggles: case sensitivity, smart case, whole-word, regex
-2. Grapheme-cluster-aware word/subword boundaries (single-step motion is grapheme-aware)
-3. Cursor blink
-4. Trim-trailing-whitespace / ensure-final-newline on save
-5. Tab reordering, recently-closed reopen
-6. Jump list / last-edit-location
-7. Multi-cursor
-8. User-configurable keybindings (config file)
-9. User-facing language picker / manual override UI (model API exists)
+1. Find toggles: case sensitivity, smart case, whole-word, regex (the same
+   work would also align find-match positions to grapheme clusters)
+2. Cursor blink
+3. Trim-trailing-whitespace / ensure-final-newline on save
+4. Tab reordering, recently-closed reopen
+5. Jump list / last-edit-location
+6. Multi-cursor
+7. User-configurable keybindings (config file)
+8. User-facing language picker / manual override UI (model API exists)
+9. Soft-wrap segment alignment to grapheme clusters (wrap can split a cluster
+   at the wrap column — separate rework in `crates/lst-editor/src/wrap.rs`)

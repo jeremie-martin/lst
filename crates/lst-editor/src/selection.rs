@@ -3,7 +3,7 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum TokenClass {
+pub(crate) enum TokenClass {
     Whitespace,
     Word,
     Symbol,
@@ -24,6 +24,16 @@ fn token_class(ch: char) -> TokenClass {
         TokenClass::Word
     } else {
         TokenClass::Symbol
+    }
+}
+
+// Vim's "big word" (`W`/`B`/`E`) collapses Symbol into Word — only whitespace
+// breaks a big-word run. With `big = false` this matches `token_class`.
+pub(crate) fn vim_token_class(ch: char, big: bool) -> TokenClass {
+    if big && !ch.is_whitespace() {
+        TokenClass::Word
+    } else {
+        token_class(ch)
     }
 }
 
@@ -49,31 +59,118 @@ fn subword_class(ch: char) -> Option<SubwordClass> {
     }
 }
 
-fn identifier_run_start(chars: &[char], index: usize) -> usize {
-    let mut start = index.min(chars.len());
-    while start > 0 && is_identifier_char(chars[start - 1]) {
+// A single extended grapheme cluster within its source text.
+//
+// Boundary helpers walk by `GraphemeCell` instead of by `char`, so cursor
+// positions and selection endpoints always land on cluster boundaries.
+// Combining marks and ZWJ joiners ride along with their base scalar; each
+// cluster is classified by `repr` (the first scalar) — base wins, matching
+// Helix and Zed.
+#[derive(Clone, Copy)]
+pub(crate) struct GraphemeCell {
+    pub(crate) byte_start: usize,
+    pub(crate) char_start: usize,
+    pub(crate) char_len: u8,
+    pub(crate) repr: char,
+}
+
+pub(crate) fn cells_of_str(text: &str) -> Vec<GraphemeCell> {
+    let mut cells = Vec::new();
+    let mut char_start = 0usize;
+    for (byte_start, cluster) in text.grapheme_indices(true) {
+        let mut chars = cluster.chars();
+        let Some(repr) = chars.next() else {
+            continue;
+        };
+        let char_len = 1 + chars.count();
+        debug_assert!(char_len <= u8::MAX as usize);
+        cells.push(GraphemeCell {
+            byte_start,
+            char_start,
+            char_len: char_len as u8,
+            repr,
+        });
+        char_start += char_len;
+    }
+    cells
+}
+
+fn cells_of_rope(buffer: &Rope) -> Vec<GraphemeCell> {
+    cells_of_str(&buffer.to_string())
+}
+
+fn cells_of_rope_line(buffer: &Rope, line: usize) -> (usize, Vec<GraphemeCell>) {
+    let line_ix = line.min(buffer.len_lines().saturating_sub(1));
+    let line_start_char = buffer.line_to_char(line_ix);
+    let body = line_display_text(buffer, line_ix);
+    (line_start_char, cells_of_str(&body))
+}
+
+// First cell whose `char_start >= char_index`. Mid-cluster offsets round up to
+// the next cluster boundary. Returns `cells.len()` if `char_index` is past end.
+pub(crate) fn cell_partition_by_char(cells: &[GraphemeCell], char_index: usize) -> usize {
+    cells.partition_point(|cell| cell.char_start < char_index)
+}
+
+fn cell_partition_by_byte(cells: &[GraphemeCell], byte_offset: usize) -> usize {
+    cells.partition_point(|cell| cell.byte_start < byte_offset)
+}
+
+// Index of the cell containing `char_index`. Mid-cluster offsets land on the
+// containing cluster; offsets past end clamp to the last cluster. Callers
+// MUST pre-check `cells.is_empty()` — when there are no cells this returns 0
+// and indexing the result would panic.
+pub(crate) fn cell_containing_char(cells: &[GraphemeCell], char_index: usize) -> usize {
+    cells
+        .partition_point(|cell| cell.char_start <= char_index)
+        .saturating_sub(1)
+}
+
+fn cell_containing_byte(cells: &[GraphemeCell], byte_offset: usize) -> usize {
+    cells
+        .partition_point(|cell| cell.byte_start <= byte_offset)
+        .saturating_sub(1)
+}
+
+fn char_index_at_cell(cells: &[GraphemeCell], cell_ix: usize, total_chars: usize) -> usize {
+    cells
+        .get(cell_ix)
+        .map(|cell| cell.char_start)
+        .unwrap_or(total_chars)
+}
+
+fn byte_offset_at_cell(cells: &[GraphemeCell], cell_ix: usize, total_bytes: usize) -> usize {
+    cells
+        .get(cell_ix)
+        .map(|cell| cell.byte_start)
+        .unwrap_or(total_bytes)
+}
+
+fn identifier_run_start_cells(cells: &[GraphemeCell], index: usize) -> usize {
+    let mut start = index.min(cells.len());
+    while start > 0 && is_identifier_char(cells[start - 1].repr) {
         start -= 1;
     }
     start
 }
 
-fn identifier_run_end(chars: &[char], index: usize) -> usize {
-    let mut end = index.min(chars.len());
-    while end < chars.len() && is_identifier_char(chars[end]) {
+fn identifier_run_end_cells(cells: &[GraphemeCell], index: usize) -> usize {
+    let mut end = index.min(cells.len());
+    while end < cells.len() && is_identifier_char(cells[end].repr) {
         end += 1;
     }
     end
 }
 
-fn subword_chunk_end(chars: &[char], start: usize, run_end: usize) -> usize {
-    let Some(class) = subword_class(chars[start]) else {
+fn subword_chunk_end(cells: &[GraphemeCell], start: usize, run_end: usize) -> usize {
+    let Some(class) = subword_class(cells[start].repr) else {
         return (start + 1).min(run_end);
     };
 
     match class {
         SubwordClass::Digit => {
             let mut end = start + 1;
-            while end < run_end && subword_class(chars[end]) == Some(SubwordClass::Digit) {
+            while end < run_end && subword_class(cells[end].repr) == Some(SubwordClass::Digit) {
                 end += 1;
             }
             end
@@ -81,7 +178,7 @@ fn subword_chunk_end(chars: &[char], start: usize, run_end: usize) -> usize {
         SubwordClass::Lower | SubwordClass::Alpha => {
             let mut end = start + 1;
             while end < run_end {
-                match subword_class(chars[end]) {
+                match subword_class(cells[end].repr) {
                     Some(SubwordClass::Lower | SubwordClass::Alpha) => end += 1,
                     _ => break,
                 }
@@ -91,11 +188,11 @@ fn subword_chunk_end(chars: &[char], start: usize, run_end: usize) -> usize {
         SubwordClass::Upper => {
             if start + 1 < run_end {
                 if let Some(SubwordClass::Lower | SubwordClass::Alpha) =
-                    subword_class(chars[start + 1])
+                    subword_class(cells[start + 1].repr)
                 {
                     let mut end = start + 2;
                     while end < run_end {
-                        match subword_class(chars[end]) {
+                        match subword_class(cells[end].repr) {
                             Some(SubwordClass::Lower | SubwordClass::Alpha) => end += 1,
                             _ => break,
                         }
@@ -105,10 +202,10 @@ fn subword_chunk_end(chars: &[char], start: usize, run_end: usize) -> usize {
             }
 
             let mut end = start + 1;
-            while end < run_end && subword_class(chars[end]) == Some(SubwordClass::Upper) {
+            while end < run_end && subword_class(cells[end].repr) == Some(SubwordClass::Upper) {
                 if end + 1 < run_end {
                     if let Some(SubwordClass::Lower | SubwordClass::Alpha) =
-                        subword_class(chars[end + 1])
+                        subword_class(cells[end + 1].repr)
                     {
                         break;
                     }
@@ -120,42 +217,78 @@ fn subword_chunk_end(chars: &[char], start: usize, run_end: usize) -> usize {
     }
 }
 
-fn subword_chunks(chars: &[char]) -> Vec<Range<usize>> {
+fn subword_chunks(cells: &[GraphemeCell]) -> Vec<Range<usize>> {
     let mut chunks = Vec::new();
     let mut index = 0usize;
-    while index < chars.len() {
-        while index < chars.len() && chars[index] == '_' {
+    while index < cells.len() {
+        while index < cells.len() && cells[index].repr == '_' {
             index += 1;
         }
-        if index >= chars.len() {
+        if index >= cells.len() {
             break;
         }
-        let end = subword_chunk_end(chars, index, chars.len());
+        let end = subword_chunk_end(cells, index, cells.len());
         chunks.push(index..end);
         index = end;
     }
     chunks
 }
 
-fn previous_subword_boundary_chars(chars: &[char], char_index: usize) -> usize {
-    let mut index = char_index.min(chars.len());
-    while index > 0 && chars[index - 1].is_whitespace() {
+// All of these `_cells` helpers take a cell index (not a char index / byte
+// offset) and return a cell index. Callers translate to char indices via
+// `char_index_at_cell` or to byte offsets via `byte_offset_at_cell`.
+
+fn previous_word_boundary_cells(cells: &[GraphemeCell], cell_index: usize) -> usize {
+    let mut index = cell_index.min(cells.len());
+    while index > 0 && token_class(cells[index - 1].repr) == TokenClass::Whitespace {
         index -= 1;
     }
     if index == 0 {
         return 0;
     }
 
-    if is_symbol_char(chars[index - 1]) {
-        while index > 0 && is_symbol_char(chars[index - 1]) {
+    let class = token_class(cells[index - 1].repr);
+    while index > 0 && token_class(cells[index - 1].repr) == class {
+        index -= 1;
+    }
+    index
+}
+
+fn next_word_boundary_cells(cells: &[GraphemeCell], cell_index: usize) -> usize {
+    let mut index = cell_index.min(cells.len());
+    while index < cells.len() && token_class(cells[index].repr) == TokenClass::Whitespace {
+        index += 1;
+    }
+    if index == cells.len() {
+        return cells.len();
+    }
+
+    let class = token_class(cells[index].repr);
+    while index < cells.len() && token_class(cells[index].repr) == class {
+        index += 1;
+    }
+    index
+}
+
+fn previous_subword_boundary_cells(cells: &[GraphemeCell], cell_index: usize) -> usize {
+    let mut index = cell_index.min(cells.len());
+    while index > 0 && cells[index - 1].repr.is_whitespace() {
+        index -= 1;
+    }
+    if index == 0 {
+        return 0;
+    }
+
+    if is_symbol_char(cells[index - 1].repr) {
+        while index > 0 && is_symbol_char(cells[index - 1].repr) {
             index -= 1;
         }
         return index;
     }
 
-    let run_start = identifier_run_start(chars, index - 1);
-    let run_end = identifier_run_end(chars, index - 1);
-    let chunks = subword_chunks(&chars[run_start..run_end]);
+    let run_start = identifier_run_start_cells(cells, index - 1);
+    let run_end = identifier_run_end_cells(cells, index - 1);
+    let chunks = subword_chunks(&cells[run_start..run_end]);
     let relative = index - run_start;
     chunks
         .iter()
@@ -163,32 +296,32 @@ fn previous_subword_boundary_chars(chars: &[char], char_index: usize) -> usize {
         .map_or(run_start, |chunk| run_start + chunk.start)
 }
 
-fn next_subword_boundary_chars(chars: &[char], char_index: usize) -> usize {
-    let mut index = char_index.min(chars.len());
-    while index < chars.len() && chars[index].is_whitespace() {
+fn next_subword_boundary_cells(cells: &[GraphemeCell], cell_index: usize) -> usize {
+    let mut index = cell_index.min(cells.len());
+    while index < cells.len() && cells[index].repr.is_whitespace() {
         index += 1;
     }
-    if index == chars.len() {
-        return chars.len();
+    if index == cells.len() {
+        return cells.len();
     }
 
-    if is_symbol_char(chars[index]) {
-        while index < chars.len() && is_symbol_char(chars[index]) {
+    if is_symbol_char(cells[index].repr) {
+        while index < cells.len() && is_symbol_char(cells[index].repr) {
             index += 1;
         }
         return index;
     }
 
-    while index < chars.len() && chars[index] == '_' {
+    while index < cells.len() && cells[index].repr == '_' {
         index += 1;
     }
-    if index == chars.len() {
-        return chars.len();
+    if index == cells.len() {
+        return cells.len();
     }
 
-    let run_start = identifier_run_start(chars, index);
-    let run_end = identifier_run_end(chars, index);
-    let chunks = subword_chunks(&chars[run_start..run_end]);
+    let run_start = identifier_run_start_cells(cells, index);
+    let run_end = identifier_run_end_cells(cells, index);
+    let chunks = subword_chunks(&cells[run_start..run_end]);
     let relative = index - run_start;
     chunks
         .iter()
@@ -197,72 +330,55 @@ fn next_subword_boundary_chars(chars: &[char], char_index: usize) -> usize {
 }
 
 pub fn previous_word_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let chars: Vec<char> = buffer.chars().collect();
-    let mut index = char_index.min(chars.len());
-    while index > 0 && token_class(chars[index - 1]) == TokenClass::Whitespace {
-        index -= 1;
-    }
-    if index == 0 {
-        return 0;
-    }
-
-    let class = token_class(chars[index - 1]);
-    while index > 0 && token_class(chars[index - 1]) == class {
-        index -= 1;
-    }
-    index
+    let cells = cells_of_rope(buffer);
+    let total_chars = buffer.len_chars();
+    let target = previous_word_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
+    char_index_at_cell(&cells, target, total_chars)
 }
 
 pub fn previous_subword_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let chars: Vec<char> = buffer.chars().collect();
-    previous_subword_boundary_chars(&chars, char_index)
+    let cells = cells_of_rope(buffer);
+    let total_chars = buffer.len_chars();
+    let target =
+        previous_subword_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
+    char_index_at_cell(&cells, target, total_chars)
 }
 
 pub fn next_word_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let chars: Vec<char> = buffer.chars().collect();
-    let mut index = char_index.min(chars.len());
-    while index < chars.len() && token_class(chars[index]) == TokenClass::Whitespace {
-        index += 1;
-    }
-    if index == chars.len() {
-        return chars.len();
-    }
-
-    let class = token_class(chars[index]);
-    while index < chars.len() && token_class(chars[index]) == class {
-        index += 1;
-    }
-    index
+    let cells = cells_of_rope(buffer);
+    let total_chars = buffer.len_chars();
+    let target = next_word_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
+    char_index_at_cell(&cells, target, total_chars)
 }
 
 pub fn next_subword_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let chars: Vec<char> = buffer.chars().collect();
-    next_subword_boundary_chars(&chars, char_index)
+    let cells = cells_of_rope(buffer);
+    let total_chars = buffer.len_chars();
+    let target = next_subword_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
+    char_index_at_cell(&cells, target, total_chars)
 }
 
 pub fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     let clamped = char_index.min(buffer.len_chars());
-    let line = buffer.char_to_line(clamped);
-    let line_start = buffer.line_to_char(line);
-    let display_text = line_display_text(buffer, line);
-    let chars: Vec<char> = display_text.chars().collect();
-    if chars.is_empty() {
+    let (line_start, cells) = cells_of_rope_line(buffer, buffer.char_to_line(clamped));
+    if cells.is_empty() {
         return clamped..clamped;
     }
-
-    let local = clamped
-        .saturating_sub(line_start)
-        .min(chars.len().saturating_sub(1));
-    let class = token_class(chars[local]);
-    let mut start = local;
-    while start > 0 && token_class(chars[start - 1]) == class {
+    let local = clamped.saturating_sub(line_start);
+    let cell_ix = cell_containing_char(&cells, local);
+    let class = token_class(cells[cell_ix].repr);
+    let mut start = cell_ix;
+    while start > 0 && token_class(cells[start - 1].repr) == class {
         start -= 1;
     }
-    let mut end = local + 1;
-    while end < chars.len() && token_class(chars[end]) == class {
+    let mut end = cell_ix + 1;
+    while end < cells.len() && token_class(cells[end].repr) == class {
         end += 1;
     }
-    (line_start + start)..(line_start + end)
+    let line_chars: usize = cells.iter().map(|c| c.char_len as usize).sum();
+    let start_char = cells[start].char_start;
+    let end_char = char_index_at_cell(&cells, end, line_chars);
+    (line_start + start_char)..(line_start + end_char)
 }
 
 pub fn next_grapheme_column(line: &str, column: usize) -> usize {
@@ -351,71 +467,50 @@ pub fn line_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
 }
 
 pub fn previous_word_boundary_in_text(text: &str, offset: usize) -> usize {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let mut index = chars.partition_point(|(byte, _)| *byte < offset.min(text.len()));
-    while index > 0 && token_class(chars[index - 1].1) == TokenClass::Whitespace {
-        index -= 1;
-    }
-    if index == 0 {
-        return 0;
-    }
-
-    let class = token_class(chars[index - 1].1);
-    while index > 0 && token_class(chars[index - 1].1) == class {
-        index -= 1;
-    }
-    chars.get(index).map_or(0, |(byte, _)| *byte)
+    let cells = cells_of_str(text);
+    let target = previous_word_boundary_cells(&cells, cell_partition_by_byte(&cells, offset));
+    byte_offset_at_cell(&cells, target, text.len())
 }
 
 pub fn previous_subword_boundary_in_text(text: &str, offset: usize) -> usize {
-    let (byte_offsets, chars): (Vec<usize>, Vec<char>) = text.char_indices().unzip();
-    let char_index = byte_offsets.partition_point(|byte| *byte < offset.min(text.len()));
-    let target = previous_subword_boundary_chars(&chars, char_index);
-    byte_offsets.get(target).copied().unwrap_or(text.len())
+    let cells = cells_of_str(text);
+    let target = previous_subword_boundary_cells(&cells, cell_partition_by_byte(&cells, offset));
+    byte_offset_at_cell(&cells, target, text.len())
 }
 
 pub fn next_word_boundary_in_text(text: &str, offset: usize) -> usize {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let mut index = chars.partition_point(|(byte, _)| *byte < offset.min(text.len()));
-    while index < chars.len() && token_class(chars[index].1) == TokenClass::Whitespace {
-        index += 1;
-    }
-    if index == chars.len() {
-        return text.len();
-    }
-
-    let class = token_class(chars[index].1);
-    while index < chars.len() && token_class(chars[index].1) == class {
-        index += 1;
-    }
-    chars.get(index).map_or(text.len(), |(byte, _)| *byte)
+    let cells = cells_of_str(text);
+    let target = next_word_boundary_cells(&cells, cell_partition_by_byte(&cells, offset));
+    byte_offset_at_cell(&cells, target, text.len())
 }
 
 pub fn next_subword_boundary_in_text(text: &str, offset: usize) -> usize {
-    let (byte_offsets, chars): (Vec<usize>, Vec<char>) = text.char_indices().unzip();
-    let char_index = byte_offsets.partition_point(|byte| *byte < offset.min(text.len()));
-    let target = next_subword_boundary_chars(&chars, char_index);
-    byte_offsets.get(target).copied().unwrap_or(text.len())
+    let cells = cells_of_str(text);
+    let target = next_subword_boundary_cells(&cells, cell_partition_by_byte(&cells, offset));
+    byte_offset_at_cell(&cells, target, text.len())
 }
 
 pub fn word_range_in_text(text: &str, offset: usize) -> Range<usize> {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let Some(local) = char_index_containing_offset(text, offset) else {
+    let cells = cells_of_str(text);
+    if cells.is_empty() {
         return 0..0;
+    }
+    let local = if offset >= text.len() {
+        cells.len() - 1
+    } else {
+        cell_containing_byte(&cells, offset)
     };
-
-    let class = token_class(chars[local].1);
+    let class = token_class(cells[local].repr);
     let mut start = local;
-    while start > 0 && token_class(chars[start - 1].1) == class {
+    while start > 0 && token_class(cells[start - 1].repr) == class {
         start -= 1;
     }
     let mut end = local + 1;
-    while end < chars.len() && token_class(chars[end].1) == class {
+    while end < cells.len() && token_class(cells[end].repr) == class {
         end += 1;
     }
-
-    let start_byte = chars[start].0;
-    let end_byte = chars.get(end).map_or(text.len(), |(byte, _)| *byte);
+    let start_byte = cells[start].byte_start;
+    let end_byte = byte_offset_at_cell(&cells, end, text.len());
     start_byte..end_byte
 }
 
@@ -435,23 +530,6 @@ fn byte_of_char_index(text: &str, char_index: usize) -> usize {
         .nth(char_index)
         .map(|(byte, _)| byte)
         .unwrap_or(text.len())
-}
-
-fn char_index_containing_offset(text: &str, offset: usize) -> Option<usize> {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    if chars.is_empty() {
-        return None;
-    }
-
-    let offset = offset.min(text.len());
-    if offset == text.len() {
-        return Some(chars.len() - 1);
-    }
-
-    chars.iter().enumerate().find_map(|(index, (start, _))| {
-        let end = chars.get(index + 1).map_or(text.len(), |(byte, _)| *byte);
-        (offset >= *start && offset < end).then_some(index)
-    })
 }
 
 fn line_display_text(buffer: &Rope, line_ix: usize) -> String {
@@ -611,6 +689,110 @@ mod tests {
         assert_eq!(
             previous_subword_boundary_in_text(text, "one Γamma".len()),
             "one ".len()
+        );
+    }
+
+    #[test]
+    fn rope_word_boundary_skips_full_combining_acute_cluster() {
+        // "naïve word" with NFD ï = i + U+0308. 11 chars, 10 graphemes.
+        // The combining mark sits at char index 3.
+        let buffer = Rope::from_str("nai\u{0308}ve word");
+
+        assert_eq!(next_word_boundary(&buffer, 0), 6);
+        // Mid-cluster cursor still lands past the cluster, never inside it.
+        assert_eq!(next_word_boundary(&buffer, 3), 6);
+        assert_eq!(next_word_boundary(&buffer, 6), 11);
+        assert_eq!(previous_word_boundary(&buffer, 11), 7);
+        assert_eq!(previous_word_boundary(&buffer, 7), 0);
+    }
+
+    #[test]
+    fn rope_word_boundary_treats_regional_indicator_pair_as_one_cluster() {
+        // "a🇫🇷b cc" — regional indicator pair (4 bytes each) is one grapheme.
+        // Char layout: [a, 🇫, 🇷, b, ' ', c, c] = 7 chars, 6 graphemes.
+        let buffer = Rope::from_str("a\u{1F1EB}\u{1F1F7}b cc");
+
+        assert_eq!(next_word_boundary(&buffer, 0), 1);
+        // From the first regional indicator, jump past the second to `b` start.
+        assert_eq!(next_word_boundary(&buffer, 1), 3);
+        assert_eq!(next_word_boundary(&buffer, 3), 4);
+        assert_eq!(previous_word_boundary(&buffer, 4), 3);
+        // From after `b`, walking back lands at the regional pair start, not between them.
+        assert_eq!(previous_word_boundary(&buffer, 3), 1);
+        assert_eq!(previous_word_boundary(&buffer, 1), 0);
+    }
+
+    #[test]
+    fn rope_subword_boundary_skips_combining_acute_cluster() {
+        // "naïveCase" NFD: n, a, i, U+0308, v, e, C, a, s, e = 10 chars, 9 graphemes.
+        let buffer = Rope::from_str("nai\u{0308}veCase");
+
+        // From start, first subword spans the lowercase-only run before `C`.
+        assert_eq!(next_subword_boundary(&buffer, 0), 6);
+        assert_eq!(next_subword_boundary(&buffer, 6), 10);
+        assert_eq!(previous_subword_boundary(&buffer, 10), 6);
+        assert_eq!(previous_subword_boundary(&buffer, 6), 0);
+    }
+
+    #[test]
+    fn rope_word_range_groups_full_combining_acute_cluster() {
+        let buffer = Rope::from_str("nai\u{0308}ve word");
+
+        // Click anywhere on the cluster — including on the combining mark — and
+        // the whole `naïve` token comes back.
+        assert_eq!(word_range_at_char(&buffer, 0), 0..6);
+        assert_eq!(word_range_at_char(&buffer, 3), 0..6);
+        assert_eq!(word_range_at_char(&buffer, 5), 0..6);
+        assert_eq!(word_range_at_char(&buffer, 7), 7..11);
+    }
+
+    #[test]
+    fn text_word_boundary_skips_full_combining_acute_cluster() {
+        let text = "nai\u{0308}ve word";
+
+        let after_naive = "nai\u{0308}ve".len();
+        let space = "nai\u{0308}ve ".len();
+        let i_byte = "na".len();
+        let combining_byte = "nai".len();
+
+        assert_eq!(next_word_boundary_in_text(text, 0), after_naive);
+        assert_eq!(
+            next_word_boundary_in_text(text, combining_byte),
+            after_naive
+        );
+        assert_eq!(previous_word_boundary_in_text(text, text.len()), space);
+        assert_eq!(previous_word_boundary_in_text(text, after_naive), 0);
+        // Mid-cluster offset rounds out to the same cluster boundary as `i` start.
+        assert_eq!(
+            previous_word_boundary_in_text(text, combining_byte),
+            previous_word_boundary_in_text(text, i_byte)
+        );
+    }
+
+    #[test]
+    fn text_subword_boundary_skips_full_combining_acute_cluster() {
+        let text = "nai\u{0308}veCase";
+
+        let after_naive = "nai\u{0308}ve".len();
+        assert_eq!(next_subword_boundary_in_text(text, 0), after_naive);
+        assert_eq!(next_subword_boundary_in_text(text, after_naive), text.len());
+        assert_eq!(
+            previous_subword_boundary_in_text(text, text.len()),
+            after_naive
+        );
+        assert_eq!(previous_subword_boundary_in_text(text, after_naive), 0);
+    }
+
+    #[test]
+    fn text_word_range_groups_full_regional_indicator_cluster() {
+        let text = "a\u{1F1EB}\u{1F1F7}b cc";
+        let flag_start = "a".len();
+        let after_flag = "a\u{1F1EB}\u{1F1F7}".len();
+        // Click on either regional indicator — the range covers the full cluster.
+        assert_eq!(word_range_in_text(text, flag_start), flag_start..after_flag);
+        assert_eq!(
+            word_range_in_text(text, flag_start + "\u{1F1EB}".len()),
+            flag_start..after_flag,
         );
     }
 
