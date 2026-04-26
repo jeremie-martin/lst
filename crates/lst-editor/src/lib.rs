@@ -22,16 +22,56 @@ pub use viewport::Viewport;
 
 use crate::{
     document::{char_to_position, line_indent_prefix, position_to_char},
-    find::{FindState, MatchPos},
+    find::{FindScope, FindState, MatchPos},
     position::Position,
     selection::{
-        is_identifier_char, line_range_at_char, next_grapheme_boundary, next_subword_boundary,
-        next_word_boundary, previous_grapheme_boundary, previous_subword_boundary,
-        previous_word_boundary,
+        is_identifier_char, line_display_text, line_range_at_char, next_grapheme_boundary,
+        next_subword_boundary, next_word_boundary, previous_grapheme_boundary,
+        previous_subword_boundary, previous_word_boundary,
     },
     tab_set::TabSet,
 };
+use regex::Regex;
+use ropey::Rope;
 use std::{ops::Range, path::PathBuf, sync::Arc};
+
+fn match_char_range(buffer: &Rope, m: MatchPos) -> Range<usize> {
+    let start = position_to_char(
+        buffer,
+        Position {
+            line: m.line,
+            column: m.col,
+        },
+    );
+    let end = position_to_char(
+        buffer,
+        Position {
+            line: m.line,
+            column: m.col + m.char_len,
+        },
+    );
+    start..end
+}
+
+// Running the regex against full line context (rather than the matched
+// slice) is what lets anchors like `\B`, `\b`, `^`, `$` see the right
+// neighbouring text. Falls back to the literal template if the stored
+// byte offset no longer matches — only on stale state.
+fn expand_match_replacement(
+    regex: &Regex,
+    line: &str,
+    byte_start_in_line: usize,
+    template: &str,
+) -> String {
+    if let Some(caps) = regex.captures_at(line, byte_start_in_line) {
+        if caps.get(0).is_some_and(|m| m.start() == byte_start_in_line) {
+            let mut buf = String::new();
+            caps.expand(template, &mut buf);
+            return buf;
+        }
+    }
+    template.to_string()
+}
 
 pub const UNTITLED_PREFIX: &str = "untitled";
 
@@ -146,21 +186,19 @@ impl EditorModel {
     }
 
     pub fn find_match_ranges(&self) -> Vec<Range<usize>> {
+        let buffer = self.active_tab().buffer();
         self.find
             .matches
             .iter()
             .copied()
-            .map(|m| self.find_match_char_range(m))
+            .map(|m| match_char_range(buffer, m))
             .collect()
     }
 
     pub fn active_find_match_range(&self) -> Option<Range<usize>> {
         let active = self.find.active?;
-        self.find
-            .matches
-            .get(active)
-            .copied()
-            .map(|m| self.find_match_char_range(m))
+        let m = *self.find.matches.get(active)?;
+        Some(match_char_range(self.active_tab().buffer(), m))
     }
 
     pub fn goto_line(&self) -> Option<&str> {
@@ -284,6 +322,41 @@ impl EditorModel {
         self.find.replacement = text;
     }
 
+    pub fn toggle_find_case_sensitive(&mut self) {
+        self.find.case_sensitive = !self.find.case_sensitive;
+        self.reindex_find_matches_to_nearest();
+    }
+
+    pub fn toggle_find_whole_word(&mut self) {
+        self.find.whole_word = !self.find.whole_word;
+        self.reindex_find_matches_to_nearest();
+    }
+
+    pub fn toggle_find_regex(&mut self) {
+        self.find.use_regex = !self.find.use_regex;
+        self.reindex_find_matches_to_nearest();
+    }
+
+    // No-op when toggling on without a selection (UI grays the chip).
+    pub fn toggle_find_in_selection(&mut self) {
+        let active_tab_id = self.active_tab_id();
+        if self.find.scope.is_selection_for(active_tab_id) {
+            self.find.scope = FindScope::Document;
+            self.reindex_find_matches_to_nearest();
+            return;
+        }
+
+        let sel = self.active_tab().selected_range();
+        if sel.start < sel.end {
+            self.find.scope = FindScope::Selection {
+                tab_id: active_tab_id,
+                start_char: sel.start,
+                end_char: sel.end,
+            };
+            self.reindex_find_matches_to_nearest();
+        }
+    }
+
     pub fn update_goto_line(&mut self, text: String) {
         self.goto_line = Some(text);
     }
@@ -303,6 +376,28 @@ impl EditorModel {
         }
         let text = self.active_tab().buffer_text();
         self.find.compute_matches_in_text(&text);
+        if let Some(scope) = self.find.scope.selection_range_for(self.active_tab_id()) {
+            let buffer = self.active_tab().buffer();
+            let buffer_len = buffer.len_chars();
+            let scope_start = scope.start.min(buffer_len);
+            let scope_end = scope.end.min(buffer_len);
+            let kept: Vec<MatchPos> = self
+                .find
+                .matches
+                .iter()
+                .copied()
+                .filter(|m| {
+                    let r = match_char_range(buffer, *m);
+                    r.start >= scope_start && r.end <= scope_end
+                })
+                .collect();
+            self.find.matches = kept;
+            if self.find.matches.is_empty() {
+                self.find.active = None;
+            } else if let Some(idx) = self.find.active {
+                self.find.active = Some(idx.min(self.find.matches.len() - 1));
+            }
+        }
         self.find.finish_reindex(self.active_tab().revision());
     }
 
@@ -384,13 +479,34 @@ impl EditorModel {
         let Some((start, end)) = self.find.current_match_range() else {
             return false;
         };
-        let replacement = self.find.replacement.clone();
-        let range = {
+        let regex = if self.find.use_regex {
+            self.find.build_regex().ok()
+        } else {
+            None
+        };
+        let template = self.find.replacement.clone();
+        let (range, expanded) = {
             let tab = self.active_tab();
-            position_to_char(tab.buffer(), start)..position_to_char(tab.buffer(), end)
+            let buffer = tab.buffer();
+            let range =
+                position_to_char(buffer, start)..position_to_char(buffer, end);
+            let expanded = if let Some(re) = regex {
+                let line_byte_start = buffer.char_to_byte(buffer.line_to_char(start.line));
+                let match_byte_start = buffer.char_to_byte(range.start);
+                let line_text = line_display_text(buffer, start.line);
+                expand_match_replacement(
+                    &re,
+                    &line_text,
+                    match_byte_start - line_byte_start,
+                    &template,
+                )
+            } else {
+                template
+            };
+            (range, expanded)
         };
         self.active_tab_mut()
-            .edit(EditKind::Other, UndoBoundary::Break, range, &replacement);
+            .edit(EditKind::Other, UndoBoundary::Break, range, &expanded);
         self.sync_find_after_edit();
         self.move_to_current_find_match();
         true
@@ -398,15 +514,50 @@ impl EditorModel {
 
     fn replace_all_matches(&mut self) -> bool {
         self.reindex_find_matches();
-        if self.find.query.is_empty() {
+        if self.find.query.is_empty() || self.find.matches.is_empty() {
             return false;
         }
 
-        let query = self.find.query.clone();
-        let replacement = self.find.replacement.clone();
-        let text = self.active_tab().buffer_text();
-        let new_text = text.replace(&query, &replacement);
-        if new_text == text {
+        let regex = if self.find.use_regex {
+            match self.find.build_regex() {
+                Ok(r) => Some(r),
+                Err(_) => return false,
+            }
+        } else {
+            None
+        };
+        let template = self.find.replacement.clone();
+
+        // (doc_byte_start, doc_byte_end, line_idx, byte_start_within_line)
+        let spans: Vec<(usize, usize, usize, usize)> = {
+            let buffer = self.active_tab().buffer();
+            self.find
+                .matches
+                .iter()
+                .copied()
+                .map(|m| {
+                    let r = match_char_range(buffer, m);
+                    let line_byte_start = buffer.char_to_byte(buffer.line_to_char(m.line));
+                    let byte_start = buffer.char_to_byte(r.start);
+                    let byte_end = buffer.char_to_byte(r.end);
+                    (byte_start, byte_end, m.line, byte_start - line_byte_start)
+                })
+                .collect()
+        };
+
+        let original_text = self.active_tab().buffer_text();
+        let mut new_text = original_text.clone();
+        // Walk in reverse so unprocessed earlier spans keep their byte offsets.
+        for &(byte_start, byte_end, line_idx, byte_in_line) in spans.iter().rev() {
+            let expanded = if let Some(re) = &regex {
+                let line_text = line_display_text(self.active_tab().buffer(), line_idx);
+                expand_match_replacement(re, &line_text, byte_in_line, &template)
+            } else {
+                template.clone()
+            };
+            new_text.replace_range(byte_start..byte_end, &expanded);
+        }
+        if new_text == original_text {
             return false;
         }
 
@@ -492,26 +643,6 @@ impl EditorModel {
         };
         self.active_tab_mut().set_cursor_position(start, None);
         true
-    }
-
-    fn find_match_char_range(&self, m: MatchPos) -> Range<usize> {
-        let query_len = self.find.query.chars().count();
-        let tab = self.active_tab();
-        let start = position_to_char(
-            tab.buffer(),
-            Position {
-                line: m.line,
-                column: m.col,
-            },
-        );
-        let end = position_to_char(
-            tab.buffer(),
-            Position {
-                line: m.line,
-                column: m.col + query_len,
-            },
-        );
-        start..end
     }
 
     fn edit_active(
@@ -1220,6 +1351,11 @@ impl EditorModel {
                 }
                 vim::VimCommand::SearchWordUnderCursor { word, forward } => {
                     self.find.query = word;
+                    // Vim `*` / `#` are whole-word, case-sensitive, literal.
+                    self.find.whole_word = true;
+                    self.find.case_sensitive = true;
+                    self.find.use_regex = false;
+                    self.find.scope = FindScope::Document;
                     self.reindex_find_matches();
                     let cursor = self.active_cursor_position();
                     let target = if forward {

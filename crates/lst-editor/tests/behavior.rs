@@ -219,6 +219,35 @@ fn replace_all_is_undoable_document_behavior() {
 }
 
 #[test]
+fn replace_all_identity_replacement_preserves_document_state() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "foo foo",
+        )],
+        "Ready.".into(),
+    );
+    model.update_find_query("foo".into());
+    model.update_find_replacement("foo".into());
+    let before = model.snapshot();
+
+    model.replace_all_matches_in_document();
+    let after_replace = model.snapshot();
+    assert_eq!(after_replace.text, before.text);
+    assert_eq!(after_replace.active_revision, before.active_revision);
+    assert_eq!(after_replace.tab_modified, before.tab_modified);
+    assert_eq!(after_replace.find_matches, 2);
+
+    model.undo();
+    let after_undo = model.snapshot();
+    assert_eq!(after_undo.text, before.text);
+    assert_eq!(after_undo.active_revision, before.active_revision);
+    assert_eq!(after_undo.tab_modified, before.tab_modified);
+}
+
+#[test]
 fn inserting_text_refreshes_active_find_results() {
     let mut model = model_with_tabs(
         vec![EditorTab::from_text(
@@ -238,6 +267,215 @@ fn inserting_text_refreshes_active_find_results() {
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "aa");
     assert_eq!(snapshot.find_matches, 2);
+}
+
+#[test]
+fn replace_all_with_regex_capture_groups_rewrites_document() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alice@example bob@host",
+        )],
+        "Ready.".into(),
+    );
+
+    model.toggle_find_regex();
+    model.update_find_query(r"(\w+)@(\w+)".into());
+    model.update_find_replacement("${2}_${1}".into());
+    model.replace_all_matches_in_document();
+
+    assert_eq!(model.snapshot().text, "example_alice host_bob");
+}
+
+#[test]
+fn replace_all_with_case_insensitive_rewrites_all_variants() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "Foo foo FOO",
+        )],
+        "Ready.".into(),
+    );
+
+    // Smart-case: lowercase query implies case-insensitive matching.
+    model.update_find_query("foo".into());
+    model.update_find_replacement("bar".into());
+    model.replace_all_matches_in_document();
+
+    assert_eq!(model.snapshot().text, "bar bar bar");
+}
+
+#[test]
+fn find_in_selection_only_finds_within_captured_range() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "foo bar foo bar foo",
+        )],
+        "Ready.".into(),
+    );
+
+    // Select the middle "bar foo bar" (chars 4..15) and scope to it.
+    model.set_selection(4..15, false);
+    model.toggle_find_in_selection();
+    assert!(model.snapshot().find_in_selection);
+
+    model.update_find_query("foo".into());
+    // Only the middle `foo` (at char 8) is inside [4, 15); the other two are outside.
+    assert_eq!(model.snapshot().find_matches, 1);
+
+    model.toggle_find_in_selection();
+    assert!(!model.snapshot().find_in_selection);
+    assert_eq!(model.snapshot().find_matches, 3);
+}
+
+#[test]
+fn find_in_selection_does_not_filter_other_tabs() {
+    let mut model = model_with_tabs(
+        vec![
+            EditorTab::from_text(TabId::from_raw(1), "first".into(), None, "foo bar foo"),
+            EditorTab::from_text(TabId::from_raw(2), "second".into(), None, "foo foo"),
+        ],
+        "Ready.".into(),
+    );
+
+    model.set_selection(Selection::from_range(0..3, false));
+    model.toggle_find_in_selection();
+    model.update_find_query("foo".into());
+    assert!(model.snapshot().find_in_selection);
+    assert_eq!(model.snapshot().find_matches, 1);
+
+    model.set_active_tab(TabId::from_raw(2));
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.active_tab_id, TabId::from_raw(2));
+    assert!(!snapshot.find_in_selection);
+    assert_eq!(snapshot.find_matches, 2);
+}
+
+#[test]
+fn vim_search_word_flips_whole_word_and_case_sensitive_in_snapshot() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "foo foobar foo",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+
+    // Press `*` on the first word (`foo` at column 0).
+    model.handle_vim_key(
+        VimKey::Character("*".into()),
+        VimModifiers::default(),
+        0,
+    );
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.find_query, "foo");
+    assert!(snapshot.find_whole_word);
+    assert!(snapshot.find_case_sensitive);
+    assert!(!snapshot.find_use_regex);
+    // `foobar` is rejected by whole-word; only the two standalone `foo`s match.
+    assert_eq!(snapshot.find_matches, 2);
+}
+
+#[test]
+fn replace_all_does_not_re_replace_inside_expanded_replacement() {
+    // Replacement text contains the query as a substring. Naive
+    // implementations re-scan and run away; we splice each pre-computed
+    // match span exactly once.
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "foo foo",
+        )],
+        "Ready.".into(),
+    );
+
+    model.update_find_query("foo".into());
+    model.update_find_replacement("xfoox".into());
+    model.replace_all_matches_in_document();
+
+    assert_eq!(model.snapshot().text, "xfoox xfoox");
+}
+
+#[test]
+fn replace_all_regex_with_alternation_respects_whole_word_boundaries() {
+    // Validates that the whole-word wrapper `(?:\b(?:foo|bar)\b)` binds
+    // alternation tightly — without parens the pattern `\bfoo|bar\b`
+    // would reduce to "starts-with-foo OR ends-with-bar", matching far
+    // too much.
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "foobar foo barfoo bar",
+        )],
+        "Ready.".into(),
+    );
+
+    model.toggle_find_regex();
+    model.toggle_find_whole_word();
+    model.update_find_query("foo|bar".into());
+
+    // Only `foo` (idx 7..10) and `bar` (idx 18..21) stand alone.
+    assert_eq!(model.snapshot().find_matches, 2);
+}
+
+#[test]
+fn replace_one_with_regex_expands_capture_groups() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "alice@example bob@host",
+        )],
+        "Ready.".into(),
+    );
+
+    model.toggle_find_regex();
+    model.update_find_query(r"(\w+)@(\w+)".into());
+    model.update_find_replacement("${2}_${1}".into());
+    model.replace_current_match();
+
+    // First match is replaced with captures swapped; second is untouched.
+    assert_eq!(model.snapshot().text, "example_alice bob@host");
+}
+
+#[test]
+fn invalid_regex_query_surfaces_error_in_snapshot() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            "[abc] [def]",
+        )],
+        "Ready.".into(),
+    );
+
+    model.toggle_find_regex();
+    model.update_find_query("[".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.find_matches, 0);
+    assert!(
+        snapshot.find_error.is_some(),
+        "invalid regex must populate find_error",
+    );
 }
 
 #[test]

@@ -10,7 +10,7 @@ use crate::ui::{
 use gpui::{
     canvas, div, prelude::*, px, rgb, AnyElement, Context, CursorStyle, ElementInputHandler,
     InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled, Window,
+    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window,
 };
 
 use crate::actions::attach_workspace_actions;
@@ -100,7 +100,7 @@ impl LstGpuiApp {
             .children(items)
     }
 
-    fn render_find_bar(&mut self) -> impl IntoElement {
+    fn render_find_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
         let find = self.model.find();
         let match_label = if find.matches.is_empty() {
@@ -109,6 +109,13 @@ impl LstGpuiApp {
             let active = find.active.map_or(0, |index| index + 1);
             format!("{}/{}", active, find.matches.len())
         };
+        let case_sensitive = find.case_sensitive;
+        let whole_word = find.whole_word;
+        let use_regex = find.use_regex;
+        let in_selection = find.scope.is_selection_for(self.model.active_tab_id());
+        let selection_chip_enabled = in_selection || self.model.active_tab().has_selection();
+        let error = find.error.clone();
+        let show_replace = find.show_replace;
 
         div()
             .flex_none()
@@ -129,7 +136,7 @@ impl LstGpuiApp {
                     .child("Find"),
             )
             .child(div().w(px(280.0)).child(self.find_query_input.clone()))
-            .when(find.show_replace, |row| {
+            .when(show_replace, |row| {
                 row.child(
                     div()
                         .flex_none()
@@ -147,6 +154,35 @@ impl LstGpuiApp {
                     .text_color(rgb(role::TEXT_MUTED))
                     .child(match_label),
             )
+            .when_some(error, |row, err| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
+                        .text_color(rgb(role::ERROR_TEXT))
+                        .child(err),
+                )
+            })
+            .child(find_chip("find-chip-case", "Aa", case_sensitive, true, scale, cx, |this, cx| {
+                this.update_model(cx, true, |m| m.toggle_find_case_sensitive());
+            }))
+            .child(find_chip("find-chip-word", "W", whole_word, true, scale, cx, |this, cx| {
+                this.update_model(cx, true, |m| m.toggle_find_whole_word());
+            }))
+            .child(find_chip("find-chip-regex", ".*", use_regex, true, scale, cx, |this, cx| {
+                this.update_model(cx, true, |m| m.toggle_find_regex());
+            }))
+            .child(find_chip(
+                "find-chip-scope",
+                "In Sel",
+                in_selection,
+                selection_chip_enabled,
+                scale,
+                cx,
+                |this, cx| {
+                    this.update_model(cx, true, |m| m.toggle_find_in_selection());
+                },
+            ))
     }
 
     fn render_goto_bar(&mut self) -> impl IntoElement {
@@ -172,11 +208,11 @@ impl LstGpuiApp {
             .child(div().w(px(180.0)).child(self.goto_line_input.clone()))
     }
 
-    fn render_editor_overlays(&mut self) -> impl IntoElement {
+    fn render_editor_overlays(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
         let mut overlays: Vec<AnyElement> = Vec::new();
         if self.model.find().visible {
-            overlays.push(self.render_find_bar().into_any_element());
+            overlays.push(self.render_find_bar(cx).into_any_element());
         }
         if self.model.goto_line().is_some() {
             overlays.push(self.render_goto_bar().into_any_element());
@@ -804,7 +840,7 @@ impl Render for LstGpuiApp {
                                     .when(
                                         self.model.find().visible
                                             || self.model.goto_line().is_some(),
-                                        |viewport| viewport.child(self.render_editor_overlays()),
+                                        |viewport| viewport.child(self.render_editor_overlays(cx)),
                                     ),
                             ),
                     )
@@ -814,4 +850,50 @@ impl Render for LstGpuiApp {
         self.apply_focus(window, cx);
         root
     }
+}
+
+fn find_chip<F>(
+    id: &'static str,
+    label: &'static str,
+    active: bool,
+    enabled: bool,
+    scale: f32,
+    cx: &mut Context<LstGpuiApp>,
+    on_click: F,
+) -> impl IntoElement
+where
+    F: Fn(&mut LstGpuiApp, &mut Context<LstGpuiApp>) + 'static,
+{
+    let bg = if active { role::ACCENT } else { role::CONTROL_BG };
+    let hover_bg = if active { role::ACCENT } else { role::CONTROL_BG_HOVER };
+    let fg = if !enabled {
+        role::TEXT_MUTED
+    } else if active {
+        role::TEXT
+    } else {
+        role::TEXT_SUBTLE
+    };
+    let label_id: SharedString = id.into();
+    div()
+        .id(label_id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .px(metrics::px_for_scale(8.0, scale))
+        .h(metrics::px_for_scale(22.0, scale))
+        .min_w(metrics::px_for_scale(26.0, scale))
+        .rounded_sm()
+        .bg(rgb(bg))
+        .when(enabled, |s| {
+            s.cursor(CursorStyle::PointingHand)
+                .hover(|h| h.bg(rgb(hover_bg)))
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    on_click(this, cx);
+                    cx.stop_propagation();
+                }))
+        })
+        .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
+        .text_color(rgb(fg))
+        .child(label)
 }

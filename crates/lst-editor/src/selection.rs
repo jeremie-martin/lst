@@ -112,7 +112,7 @@ pub(crate) fn cell_partition_by_char(cells: &[GraphemeCell], char_index: usize) 
     cells.partition_point(|cell| cell.char_start < char_index)
 }
 
-fn cell_partition_by_byte(cells: &[GraphemeCell], byte_offset: usize) -> usize {
+pub(crate) fn cell_partition_by_byte(cells: &[GraphemeCell], byte_offset: usize) -> usize {
     cells.partition_point(|cell| cell.byte_start < byte_offset)
 }
 
@@ -532,7 +532,7 @@ fn byte_of_char_index(text: &str, char_index: usize) -> usize {
         .unwrap_or(text.len())
 }
 
-fn line_display_text(buffer: &Rope, line_ix: usize) -> String {
+pub(crate) fn line_display_text(buffer: &Rope, line_ix: usize) -> String {
     let mut line = buffer
         .line(line_ix.min(buffer.len_lines().saturating_sub(1)))
         .to_string();
