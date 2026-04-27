@@ -2,6 +2,77 @@ use ropey::Rope;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
+/// Editor selection as an `(anchor, head)` pair of char offsets.
+///
+/// `anchor` is the fixed end of the selection (where it started); `head` is
+/// the active end where the cursor lives. When `anchor == head` the selection
+/// is collapsed and acts as a plain cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Selection {
+    anchor: usize,
+    head: usize,
+}
+
+impl Selection {
+    pub fn collapsed(offset: usize) -> Self {
+        Self {
+            anchor: offset,
+            head: offset,
+        }
+    }
+
+    pub fn new(anchor: usize, head: usize) -> Self {
+        Self { anchor, head }
+    }
+
+    pub fn from_range(range: Range<usize>, reversed: bool) -> Self {
+        if reversed {
+            Self {
+                anchor: range.end,
+                head: range.start,
+            }
+        } else {
+            Self {
+                anchor: range.start,
+                head: range.end,
+            }
+        }
+    }
+
+    pub fn anchor(&self) -> usize {
+        self.anchor
+    }
+
+    pub fn head(&self) -> usize {
+        self.head
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.head
+    }
+
+    pub fn range(&self) -> Range<usize> {
+        self.anchor.min(self.head)..self.anchor.max(self.head)
+    }
+
+    pub fn is_reversed(&self) -> bool {
+        self.head < self.anchor
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.anchor != self.head
+    }
+
+    pub fn move_to(&mut self, offset: usize) {
+        self.anchor = offset;
+        self.head = offset;
+    }
+
+    pub fn select_to(&mut self, offset: usize) {
+        self.head = offset;
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TokenClass {
     Whitespace,

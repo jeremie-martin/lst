@@ -5,7 +5,7 @@ use lst_editor::{
     selection::{
         drag_selection_range, line_range_at_char, paragraph_range_at_char, word_range_at_char,
     },
-    RevealIntent,
+    RevealIntent, Selection,
 };
 
 use crate::viewport::scroll_top_for;
@@ -246,7 +246,7 @@ impl LstGpuiApp {
 
     fn select_active_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         self.update_model(cx, true, |model| {
-            model.set_selection(range, false);
+            model.set_selection(Selection::from_range(range, false));
         });
     }
 
@@ -258,7 +258,7 @@ impl LstGpuiApp {
     ) {
         let (selection, reversed) = drag_selection_range(anchor, current);
         self.update_model(cx, true, |model| {
-            model.set_selection(selection, reversed);
+            model.set_selection(Selection::from_range(selection, reversed));
         });
     }
 

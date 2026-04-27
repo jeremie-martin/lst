@@ -413,9 +413,9 @@ impl LstGpuiApp {
                 self.request_quit(cx);
                 return;
             }
-            if let Some(tab_id) = self.model.tab(index).map(ModelEditorTab::id) {
+            if let Some(tab_id) = self.model.tab_id_at(index) {
                 self.update_model(cx, true, |model| {
-                    model.discard_close_tab_by_id(tab_id);
+                    model.discard_close_tab(tab_id);
                 });
             }
             return;
@@ -424,10 +424,13 @@ impl LstGpuiApp {
             self.request_quit(cx);
             return;
         }
-        match self.model.close_request_for_tab(index) {
+        let Some(tab_id) = self.model.tab_id_at(index) else {
+            return;
+        };
+        match self.model.close_request_for_tab(tab_id) {
             Some(TabCloseRequest::Close { tab_id }) => {
                 self.update_model(cx, true, |model| {
-                    model.close_clean_tab_by_id(tab_id);
+                    model.close_clean_tab(tab_id);
                 });
             }
             Some(TabCloseRequest::SaveAndClose { tab_id }) => {
@@ -446,8 +449,12 @@ impl LstGpuiApp {
             self.finish_quit(cx);
             return;
         };
+        let Some(tab_id) = self.model.tab_id_at(index) else {
+            self.finish_quit(cx);
+            return;
+        };
         let Some(TabCloseRequest::SaveAndClose { tab_id }) =
-            self.model.close_request_for_tab(index)
+            self.model.close_request_for_tab(tab_id)
         else {
             self.finish_quit(cx);
             return;
@@ -502,7 +509,7 @@ impl LstGpuiApp {
                 self.pending_after_save = None;
                 if success {
                     self.update_model(cx, true, |model| {
-                        model.close_clean_tab_by_id(tab_id);
+                        model.close_clean_tab(tab_id);
                     });
                 }
             }

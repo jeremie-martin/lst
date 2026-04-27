@@ -1,5 +1,5 @@
 use crate::position::Position;
-use crate::{vim, EditorModel, EditorTab, TabId};
+use crate::{vim, EditorModel, EditorTab, Selection, TabId};
 use std::{ops::Range, path::PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -14,7 +14,7 @@ pub struct EditorSnapshot {
     pub text: String,
     pub cursor: usize,
     pub cursor_position: Position,
-    pub selection: Range<usize>,
+    pub selection: Selection,
     pub active_path: Option<PathBuf>,
     pub active_revision: u64,
     pub show_wrap: bool,
@@ -52,7 +52,7 @@ impl EditorModel {
             text: active.buffer_text(),
             cursor: active.cursor_char(),
             cursor_position: active.cursor_position(),
-            selection: active.selected_range(),
+            selection: active.selection(),
             active_path: active.path().cloned(),
             active_revision: active.revision(),
             show_wrap: self.show_wrap,

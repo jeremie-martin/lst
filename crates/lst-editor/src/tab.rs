@@ -2,6 +2,7 @@ use crate::{
     document::{char_to_position, position_to_char, EditKind, UndoBoundary},
     language::{self, Language},
     position::Position,
+    selection::Selection,
 };
 use ropey::Rope;
 use std::{
@@ -168,60 +169,6 @@ impl TabOrigin {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Selection {
-    anchor: usize,
-    head: usize,
-}
-
-impl Selection {
-    fn collapsed(offset: usize) -> Self {
-        Self {
-            anchor: offset,
-            head: offset,
-        }
-    }
-
-    fn from_range(range: Range<usize>, reversed: bool) -> Self {
-        if reversed {
-            Self {
-                anchor: range.end,
-                head: range.start,
-            }
-        } else {
-            Self {
-                anchor: range.start,
-                head: range.end,
-            }
-        }
-    }
-
-    pub(crate) fn range(&self) -> Range<usize> {
-        self.anchor.min(self.head)..self.anchor.max(self.head)
-    }
-
-    pub(crate) fn is_reversed(&self) -> bool {
-        self.head < self.anchor
-    }
-
-    pub(crate) fn cursor(&self) -> usize {
-        self.head
-    }
-
-    fn has_selection(&self) -> bool {
-        self.anchor != self.head
-    }
-
-    fn move_to(&mut self, offset: usize) {
-        self.anchor = offset;
-        self.head = offset;
-    }
-
-    fn select_to(&mut self, offset: usize) {
-        self.head = offset;
-    }
-}
-
 #[derive(Clone)]
 pub struct EditorTab {
     id: TabId,
@@ -375,6 +322,10 @@ impl EditorTab {
         self.buffer.clone()
     }
 
+    pub fn selection(&self) -> Selection {
+        self.selection
+    }
+
     pub fn selection_reversed(&self) -> bool {
         self.selection.is_reversed()
     }
@@ -483,20 +434,18 @@ impl EditorTab {
         match select_from {
             Some(anchor) => {
                 let anchor = position_to_char(&self.buffer, anchor);
-                self.selection = Selection { anchor, head };
+                self.selection = Selection::new(anchor, head);
             }
             None => self.move_to(head),
         }
         self.marked_range = None;
     }
 
-    pub(crate) fn set_selection_range(&mut self, mut range: Range<usize>, reversed: bool) {
-        range.start = range.start.min(self.len_chars());
-        range.end = range.end.min(self.len_chars());
-        if range.start > range.end {
-            range = range.end..range.start;
-        }
-        self.selection = Selection::from_range(range, reversed);
+    pub(crate) fn set_selection(&mut self, selection: Selection) {
+        let len = self.len_chars();
+        let anchor = selection.anchor().min(len);
+        let head = selection.head().min(len);
+        self.selection = Selection::new(anchor, head);
         self.preferred_column = None;
         self.marked_range = None;
     }
@@ -696,7 +645,7 @@ impl EditorTab {
     fn current_snapshot(&self) -> Snapshot {
         Snapshot {
             text: self.buffer_text(),
-            selection: self.selection.clone(),
+            selection: self.selection,
         }
     }
 

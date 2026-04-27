@@ -16,6 +16,7 @@ pub mod wrap;
 pub use document::{EditKind, UndoBoundary};
 pub use effect::{EditorEffect, FocusTarget, RevealIntent};
 pub use language::{IndentStyle, Language, LanguageConfig};
+pub use selection::Selection;
 pub use snapshot::EditorSnapshot;
 pub use tab::{EditorTab, FileStamp, TabId};
 pub use viewport::Viewport;
@@ -304,8 +305,8 @@ impl EditorModel {
         }
     }
 
-    fn assign_selection(&mut self, range: Range<usize>, reversed: bool) {
-        self.active_tab_mut().set_selection_range(range, reversed);
+    fn assign_selection(&mut self, selection: Selection) {
+        self.active_tab_mut().set_selection(selection);
     }
 
     fn queue_focus(&mut self, target: FocusTarget) {
@@ -740,7 +741,7 @@ impl EditorModel {
                     let cursor = inserted_start + text.chars().count();
                     cursor..cursor
                 });
-            tab.set_selection_range(selection, false);
+            tab.set_selection(Selection::from_range(selection, false));
             tab.marked_range = marked_range;
         }
         self.sync_find_after_edit();
@@ -1492,6 +1493,14 @@ impl EditorModel {
                         changed = true;
                     }
                 }
+                vim::VimCommand::IndentLines { first, last } => {
+                    self.indent_selected_lines(first, last);
+                    changed = true;
+                }
+                vim::VimCommand::OutdentLines { first, last } => {
+                    self.outdent_selected_lines(first, last);
+                    changed = true;
+                }
             }
         }
 
@@ -1553,9 +1562,15 @@ impl EditorModel {
         let anchor_end = inclusive_position_to_exclusive_char(tab, anchor);
         let head_end = inclusive_position_to_exclusive_char(tab, head);
         if vim_position_lt(head, anchor) {
-            tab.set_selection_range(head_char..anchor_end.max(head_char), true);
+            tab.set_selection(Selection::from_range(
+                head_char..anchor_end.max(head_char),
+                true,
+            ));
         } else {
-            tab.set_selection_range(anchor_char..head_end.max(anchor_char), false);
+            tab.set_selection(Selection::from_range(
+                anchor_char..head_end.max(anchor_char),
+                false,
+            ));
         }
     }
 
@@ -1871,7 +1886,7 @@ impl EditorModel {
     ) {
         let resolved_range = self.resolve_text_input_range(range);
         if let Some(new_cursor) = self.auto_pair_overtype_cursor(&resolved_range, &text) {
-            self.assign_selection(new_cursor..new_cursor, false);
+            self.assign_selection(Selection::collapsed(new_cursor));
             self.queue_reveal(RevealIntent::NearestEdge);
             return;
         }
@@ -1891,7 +1906,7 @@ impl EditorModel {
                 edit_range,
                 &replacement,
             );
-            self.assign_selection(new_selection, reversed);
+            self.assign_selection(Selection::from_range(new_selection, reversed));
             self.align_find_current_to_visible_match();
             return;
         }
@@ -1904,7 +1919,7 @@ impl EditorModel {
                 edit_range,
                 &replacement,
             );
-            self.assign_selection(caret..caret, false);
+            self.assign_selection(Selection::collapsed(caret));
             self.align_find_current_to_visible_match();
             return;
         }
@@ -2076,8 +2091,8 @@ impl EditorModel {
         self.queue_focus(FocusTarget::Editor);
     }
 
-    pub fn close_request_for_tab(&self, index: usize) -> Option<TabCloseRequest> {
-        let tab = self.tabs.get(index)?;
+    pub fn close_request_for_tab(&self, tab_id: TabId) -> Option<TabCloseRequest> {
+        let tab = self.tab_by_id(tab_id)?;
         if tab.modified() {
             Some(TabCloseRequest::SaveAndClose { tab_id: tab.id() })
         } else {
@@ -2089,7 +2104,11 @@ impl EditorModel {
         self.tabs.iter().position(EditorTab::modified)
     }
 
-    pub fn close_clean_tab_by_id(&mut self, tab_id: TabId) -> bool {
+    pub fn tab_id_at(&self, index: usize) -> Option<TabId> {
+        self.tabs.get(index).map(EditorTab::id)
+    }
+
+    pub fn close_clean_tab(&mut self, tab_id: TabId) -> bool {
         let Some(index) = self.tab_index_by_id(tab_id) else {
             return false;
         };
@@ -2099,14 +2118,17 @@ impl EditorModel {
         self.close_tab_at_unchecked(index)
     }
 
-    pub fn discard_close_tab_by_id(&mut self, tab_id: TabId) -> bool {
+    pub fn discard_close_tab(&mut self, tab_id: TabId) -> bool {
         let Some(index) = self.tab_index_by_id(tab_id) else {
             return false;
         };
         self.close_tab_at_unchecked(index)
     }
 
-    pub fn set_active_tab(&mut self, index: usize) {
+    pub fn set_active_tab(&mut self, tab_id: TabId) {
+        let Some(index) = self.tab_index_by_id(tab_id) else {
+            return;
+        };
         if self.activate_tab(index) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
@@ -2253,20 +2275,24 @@ impl EditorModel {
         }
     }
 
-    pub fn set_selection(&mut self, range: Range<usize>, reversed: bool) {
-        self.assign_selection(range, reversed);
+    pub fn set_selection(&mut self, selection: Selection) {
+        self.assign_selection(selection);
+    }
+
+    pub fn selection(&self) -> Selection {
+        self.active_tab().selection()
     }
 
     pub fn select_current_line(&mut self) {
         let tab = self.active_tab();
         let range = line_range_at_char(tab.buffer(), tab.cursor_char());
-        self.assign_selection(range, false);
+        self.assign_selection(Selection::from_range(range, false));
     }
 
     pub fn select_current_paragraph(&mut self) {
         let tab = self.active_tab();
         let range = paragraph_range_at_char(tab.buffer(), tab.cursor_char());
-        self.assign_selection(range, false);
+        self.assign_selection(Selection::from_range(range, false));
     }
 
     pub fn backspace(&mut self) {
@@ -2389,7 +2415,7 @@ impl EditorModel {
         let buffer = self.active_tab().buffer();
         let start_char = position_to_char(buffer, start);
         let end_char = position_to_char(buffer, end);
-        self.assign_selection(start_char..end_char, reversed);
+        self.assign_selection(Selection::from_range(start_char..end_char, reversed));
     }
 
     pub fn delete_line(&mut self) {
@@ -2428,7 +2454,10 @@ impl EditorModel {
                 inserted_start..inserted_start,
                 &text,
             );
-            self.assign_selection(inserted_start..inserted_start + char_len, false);
+            self.assign_selection(Selection::from_range(
+                inserted_start..inserted_start + char_len,
+                false,
+            ));
             return;
         }
 
@@ -2824,7 +2853,7 @@ mod tests {
             "Ready.".to_string(),
         );
 
-        model.set_active_tab(1);
+        model.set_active_tab(model.tab_id_at(1).unwrap());
         assert_eq!(model.snapshot().status, "Switched to two.txt.");
 
         model.prev_tab();
@@ -2840,10 +2869,10 @@ mod tests {
             vec![tab(1, "one.txt", "one"), tab(2, "two.txt", "two")],
             "Ready.".to_string(),
         );
-        model.set_active_tab(1);
+        model.set_active_tab(model.tab_id_at(1).unwrap());
 
         let active_id = model.active_tab_id();
-        assert!(model.close_clean_tab_by_id(active_id));
+        assert!(model.close_clean_tab(active_id));
 
         let snapshot = model.snapshot();
         assert_eq!(snapshot.tab_titles, ["one.txt"]);
@@ -2883,7 +2912,7 @@ mod tests {
             ],
             "Ready.".to_string(),
         );
-        model.set_active_tab(0);
+        model.set_active_tab(model.tab_id_at(0).unwrap());
 
         model.move_active_tab(1);
         let snapshot = model.snapshot();
@@ -2907,7 +2936,7 @@ mod tests {
             "Ready.".to_string(),
         );
 
-        model.set_active_tab(2);
+        model.set_active_tab(model.tab_id_at(2).unwrap());
         model.move_active_tab(1);
         let snapshot = model.snapshot();
         assert_eq!(snapshot.tab_titles, ["three.txt", "one.txt", "two.txt"]);
@@ -2929,7 +2958,7 @@ mod tests {
             ],
             "Ready.".to_string(),
         );
-        model.set_active_tab(2);
+        model.set_active_tab(model.tab_id_at(2).unwrap());
 
         model.move_tab(0, 2);
 
@@ -2944,7 +2973,7 @@ mod tests {
 
         model.select_all();
 
-        assert_eq!(model.snapshot().selection, 0..5);
+        assert_eq!(model.snapshot().selection.range(), 0..5);
         assert_eq!(
             model.drain_effects(),
             vec![EditorEffect::WritePrimary("hello".to_string())]
