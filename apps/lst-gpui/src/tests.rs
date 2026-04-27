@@ -10,6 +10,7 @@ use gpui::{
     point, px, Bounds, ClipboardItem, Entity, EntityInputHandler, Keystroke, Modifiers,
     MouseButton, TestAppContext, VisualContext as _, VisualTestContext,
 };
+use lst_editor::Selection;
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorModel, EditorTab, TabId};
 #[cfg(feature = "internal-invariants")]
@@ -1010,7 +1011,7 @@ fn app_find_input_flow_is_observable_at_app_boundary(cx: &mut TestAppContext) {
     assert_eq!(snapshot.model.find_matches, 2);
     assert_eq!(snapshot.model.find_current, Some(0));
     assert_eq!(snapshot.model.find_active_match, Some(0..3));
-    assert_eq!(snapshot.model.selection, 0..0);
+    assert_eq!(snapshot.model.selection.range(), 0..0);
     assert_tab_views_match_model(&snapshot);
 
     cx.simulate_keystrokes("escape");
@@ -1030,7 +1031,7 @@ fn app_find_open_syncs_selected_text_into_input(cx: &mut TestAppContext) {
     });
     view.update(cx, |app, cx| {
         app.update_model(cx, true, |model| {
-            model.set_selection(0..3, false);
+            model.set_selection(Selection::from_range(0..3, false));
         });
     });
 
@@ -1073,7 +1074,10 @@ fn find_input_navigation_does_not_extend_document_selection_without_matches(
     assert_eq!(snapshot.model.find_current, None);
     assert_eq!(snapshot.model.find_active_match, None);
     assert_eq!(snapshot.model.cursor, expected_cursor);
-    assert_eq!(snapshot.model.selection, expected_cursor..expected_cursor);
+    assert_eq!(
+        snapshot.model.selection.range(),
+        expected_cursor..expected_cursor
+    );
 }
 
 #[gpui::test]
@@ -1114,7 +1118,10 @@ fn hover_after_find_with_stale_drag_state_does_not_select_text(cx: &mut TestAppC
     let snapshot = app_snapshot(&view, cx);
     assert_eq!(snapshot.model.find_matches, 0);
     assert_eq!(snapshot.model.cursor, expected_cursor);
-    assert_eq!(snapshot.model.selection, expected_cursor..expected_cursor);
+    assert_eq!(
+        snapshot.model.selection.range(),
+        expected_cursor..expected_cursor
+    );
     view.update(cx, |app, _cx| {
         assert!(!app.has_active_drag_selection_for_test());
     });

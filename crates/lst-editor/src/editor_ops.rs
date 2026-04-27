@@ -35,9 +35,6 @@ pub fn duplicate_line(lines: &mut Vec<String>, cursor_line: usize) -> usize {
 }
 
 // Indent / outdent
-//
-// TODO(vim): wire `>>` / `<<` operators to `indent_lines` / `outdent_lines`
-// when adding visual-line indent ops to the Vim state machine.
 
 pub fn indent_lines(lines: &mut [String], first: usize, last: usize, unit: &str) {
     if first > last || last >= lines.len() {

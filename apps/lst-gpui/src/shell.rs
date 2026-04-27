@@ -52,7 +52,9 @@ impl LstGpuiApp {
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.set_focus(FocusTarget::Editor);
                 this.update_model(cx, true, |model| {
-                    model.set_active_tab(ix);
+                    if let Some(id) = model.tab_id_at(ix) {
+                        model.set_active_tab(id);
+                    }
                 });
                 window.focus(&this.focus_handle);
                 cx.notify();

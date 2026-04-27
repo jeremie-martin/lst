@@ -443,7 +443,7 @@ fn vim_ctrl_d_in_visual_extends_selection() {
     model.handle_vim_key(key, mods, 0);
     assert_eq!(model.snapshot().cursor_position.line, 20);
     // Selection runs from original anchor (line 10, col 0) to new cursor.
-    assert!(model.snapshot().selection.end > model.snapshot().selection.start);
+    assert!(model.snapshot().selection.range().end > model.snapshot().selection.range().start);
 }
 
 #[test]
@@ -456,7 +456,7 @@ fn vim_capital_h_in_visual_extends_selection() {
 
     model.handle_vim_key(VimKey::Character("H".into()), VimModifiers::default(), 0);
     assert_eq!(model.snapshot().cursor_position.line, 104);
-    assert!(model.snapshot().selection.end > model.snapshot().selection.start);
+    assert!(model.snapshot().selection.range().end > model.snapshot().selection.range().start);
 }
 
 #[test]

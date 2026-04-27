@@ -4,7 +4,7 @@ use lst_editor::{
         Key as VimKey, Mode as VimMode, Modifiers as VimModifiers, NamedKey as VimNamedKey,
         TextSnapshot as VimTextSnapshot, VimCommand, VimState,
     },
-    EditorEffect, EditorModel, EditorTab, FileStamp, FocusTarget, RevealIntent, TabId,
+    EditorEffect, EditorModel, EditorTab, FileStamp, FocusTarget, RevealIntent, Selection, TabId,
     UndoBoundary,
 };
 
@@ -44,7 +44,7 @@ fn find_open_uses_selected_single_line_text_and_emits_focus() {
         "Ready.".into(),
     );
 
-    model.set_selection(0..3, false);
+    model.set_selection(Selection::from_range(0..3, false));
     model.open_find_panel(false);
 
     let snapshot = model.snapshot();
@@ -105,7 +105,7 @@ fn active_tab_switch_reindexes_find_against_the_new_document() {
     model.update_find_query("one".into());
     assert_eq!(model.snapshot().find_matches, 2);
 
-    model.set_active_tab(1);
+    model.set_active_tab(model.tab_id_at(1).unwrap());
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.active, 1);
@@ -146,7 +146,7 @@ fn find_next_activates_the_next_observable_match_without_document_selection() {
     assert_eq!(snapshot.find_current, Some(1));
     assert_eq!(snapshot.find_active_match, Some(8..11));
     assert_eq!(snapshot.cursor, 8);
-    assert_eq!(snapshot.selection, 8..8);
+    assert_eq!(snapshot.selection.range(), 8..8);
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn no_match_find_query_does_not_create_or_extend_document_selection() {
     assert_eq!(snapshot.find_matches, 0);
     assert_eq!(snapshot.find_current, None);
     assert_eq!(snapshot.find_active_match, None);
-    assert_eq!(snapshot.selection, snapshot.cursor..snapshot.cursor);
+    assert_eq!(snapshot.selection.range(), snapshot.cursor..snapshot.cursor);
 }
 
 #[test]
@@ -322,7 +322,7 @@ fn find_in_selection_only_finds_within_captured_range() {
     );
 
     // Select the middle "bar foo bar" (chars 4..15) and scope to it.
-    model.set_selection(4..15, false);
+    model.set_selection(Selection::from_range(4..15, false));
     model.toggle_find_in_selection();
     assert!(model.snapshot().find_in_selection);
 
@@ -522,7 +522,7 @@ fn closing_active_tab_preserves_neighbor_as_active() {
     assert_eq!(model.snapshot().active, 2);
 
     let third_id = model.tab(2).map(EditorTab::id).expect("third tab exists");
-    assert!(model.close_clean_tab_by_id(third_id));
+    assert!(model.close_clean_tab(third_id));
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.active, 1);
@@ -538,11 +538,11 @@ fn closing_inactive_tab_does_not_request_editor_focus() {
     let mut model = EditorModel::empty();
     model.new_tab();
     model.new_tab();
-    model.set_active_tab(0);
+    model.set_active_tab(model.tab_id_at(0).unwrap());
     model.drain_effects();
 
     let second_id = model.tab(1).map(EditorTab::id).expect("second tab exists");
-    assert!(model.close_clean_tab_by_id(second_id));
+    assert!(model.close_clean_tab(second_id));
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.active, 0);
@@ -566,7 +566,7 @@ fn movement_and_selection_are_behavioral_commands() {
     assert_eq!(model.snapshot().cursor, "alpha beta\ngamma".chars().count());
 
     model.move_word(true, true);
-    assert_eq!(model.snapshot().selection, 11..16);
+    assert_eq!(model.snapshot().selection.range(), 11..16);
     assert!(model
         .drain_effects()
         .contains(&EditorEffect::Reveal(RevealIntent::NearestEdge)));
@@ -609,12 +609,12 @@ fn subword_selection_extends_from_anchor() {
 
     model.move_subword(false, true);
     let first = model.snapshot();
-    assert_eq!(first.selection, 0..5);
+    assert_eq!(first.selection.range(), 0..5);
     assert_eq!(first.cursor, 5);
 
     model.move_subword(false, true);
     let second = model.snapshot();
-    assert_eq!(second.selection, 0..9);
+    assert_eq!(second.selection.range(), 0..9);
     assert_eq!(second.cursor, 9);
 }
 
@@ -630,13 +630,13 @@ fn subword_motion_collapses_existing_selection() {
         "Ready.".into(),
     );
 
-    model.set_selection(5..9, false);
+    model.set_selection(Selection::from_range(5..9, false));
     model.move_subword(true, false);
-    assert_eq!(model.snapshot().selection, 5..5);
+    assert_eq!(model.snapshot().selection.range(), 5..5);
 
-    model.set_selection(5..9, false);
+    model.set_selection(Selection::from_range(5..9, false));
     model.move_subword(false, false);
-    assert_eq!(model.snapshot().selection, 9..9);
+    assert_eq!(model.snapshot().selection.range(), 9..9);
 }
 
 #[test]
@@ -698,7 +698,7 @@ fn logical_row_edge_snap_extends_selection() {
     top.move_to_char(2, false, None);
     top.move_logical_rows(-1, true);
     let top_snapshot = top.snapshot();
-    assert_eq!(top_snapshot.selection, 0..2);
+    assert_eq!(top_snapshot.selection.range(), 0..2);
     assert_eq!(top_snapshot.cursor, 0);
 
     let mut bottom = model_with_tabs(
@@ -714,7 +714,7 @@ fn logical_row_edge_snap_extends_selection() {
     bottom.move_logical_rows(1, true);
     let bottom_snapshot = bottom.snapshot();
     assert_eq!(
-        bottom_snapshot.selection,
+        bottom_snapshot.selection.range(),
         "alpha\nbe".chars().count().."alpha\nbeta".chars().count()
     );
     assert_eq!(bottom_snapshot.cursor, "alpha\nbeta".chars().count());
@@ -731,10 +731,10 @@ fn logical_row_edge_noop_collapses_selection() {
         )],
         "Ready.".into(),
     );
-    top.set_selection(0..2, true);
+    top.set_selection(Selection::from_range(0..2, true));
     top.move_logical_rows(-1, false);
     let top_snapshot = top.snapshot();
-    assert_eq!(top_snapshot.selection, 0..0);
+    assert_eq!(top_snapshot.selection.range(), 0..0);
     assert_eq!(top_snapshot.cursor, 0);
 
     let mut bottom = model_with_tabs(
@@ -747,10 +747,10 @@ fn logical_row_edge_noop_collapses_selection() {
         "Ready.".into(),
     );
     let eof = "alpha\nbeta".chars().count();
-    bottom.set_selection((eof - 2)..eof, false);
+    bottom.set_selection(Selection::from_range((eof - 2)..eof, false));
     bottom.move_logical_rows(1, false);
     let bottom_snapshot = bottom.snapshot();
-    assert_eq!(bottom_snapshot.selection, eof..eof);
+    assert_eq!(bottom_snapshot.selection.range(), eof..eof);
     assert_eq!(bottom_snapshot.cursor, eof);
 }
 
@@ -844,10 +844,10 @@ fn smart_home_selection_tracks_the_selection_head() {
         )],
         "Ready.".into(),
     );
-    forward.set_selection(0..7, false);
+    forward.set_selection(Selection::from_range(0..7, false));
     forward.smart_home(true);
     let forward_snapshot = forward.snapshot();
-    assert_eq!(forward_snapshot.selection, 0..2);
+    assert_eq!(forward_snapshot.selection.range(), 0..2);
     assert_eq!(forward_snapshot.cursor, 2);
 
     let mut reversed = model_with_tabs(
@@ -859,10 +859,10 @@ fn smart_home_selection_tracks_the_selection_head() {
         )],
         "Ready.".into(),
     );
-    reversed.set_selection(2..7, true);
+    reversed.set_selection(Selection::from_range(2..7, true));
     reversed.smart_home(true);
     let reversed_snapshot = reversed.snapshot();
-    assert_eq!(reversed_snapshot.selection, 0..7);
+    assert_eq!(reversed_snapshot.selection.range(), 0..7);
     assert_eq!(reversed_snapshot.cursor, 0);
 }
 
@@ -937,7 +937,7 @@ fn tab_with_no_selection_inserts_four_spaces() {
 #[test]
 fn tab_with_single_line_selection_replaces_selection_with_four_spaces() {
     let mut model = make_model("alpha beta gamma");
-    model.set_selection(6..10, false);
+    model.set_selection(Selection::from_range(6..10, false));
     model.insert_tab_at_cursor();
     assert_eq!(model.active_tab().buffer_text(), "alpha      gamma");
     assert_eq!(
@@ -955,7 +955,7 @@ fn tab_with_multi_line_selection_indents_each_line_and_keeps_selection() {
     // Select from "lpha" on line 0 through "ga" on line 2.
     let start = 1; // line 0, col 1
     let end = "alpha\nbeta\nga".chars().count(); // line 2, col 2
-    model.set_selection(start..end, false);
+    model.set_selection(Selection::from_range(start..end, false));
 
     model.insert_tab_at_cursor();
     assert_eq!(
@@ -967,7 +967,7 @@ fn tab_with_multi_line_selection_indents_each_line_and_keeps_selection() {
     assert_eq!(snapshot.cursor_position, Position { line: 2, column: 6 });
     let new_start = "    a".chars().count();
     let new_end = "    alpha\n    beta\n    ga".chars().count();
-    assert_eq!(snapshot.selection, new_start..new_end);
+    assert_eq!(snapshot.selection.range(), new_start..new_end);
 }
 
 #[test]
@@ -976,7 +976,7 @@ fn tab_does_not_indent_line_after_selection_ending_at_column_zero() {
     // Select from start of line 0 to start of line 2 (col 0).
     let start = 0;
     let end = "alpha\nbeta\n".chars().count();
-    model.set_selection(start..end, false);
+    model.set_selection(Selection::from_range(start..end, false));
 
     model.insert_tab_at_cursor();
     assert_eq!(
@@ -985,7 +985,7 @@ fn tab_does_not_indent_line_after_selection_ending_at_column_zero() {
     );
     let snapshot = model.snapshot();
     let new_end = "    alpha\n    beta\n".chars().count();
-    assert_eq!(snapshot.selection, 0..new_end);
+    assert_eq!(snapshot.selection.range(), 0..new_end);
 }
 
 #[test]
@@ -993,14 +993,14 @@ fn tab_indents_selection_crossing_newline_to_next_line_column_zero() {
     let mut model = make_model("alpha\nbeta");
     let start = 1;
     let end = "alpha\n".chars().count();
-    model.set_selection(start..end, false);
+    model.set_selection(Selection::from_range(start..end, false));
 
     model.insert_tab_at_cursor();
     assert_eq!(model.active_tab().buffer_text(), "    alpha\nbeta");
     let snapshot = model.snapshot();
     let new_start = "    a".chars().count();
     let new_end = "    alpha\n".chars().count();
-    assert_eq!(snapshot.selection, new_start..new_end);
+    assert_eq!(snapshot.selection.range(), new_start..new_end);
 }
 
 #[test]
@@ -1038,13 +1038,13 @@ fn shift_tab_outdents_partial_or_zero_whitespace() {
 fn shift_tab_multi_line_selection_outdents_each_line_independently() {
     let mut model = make_model("        eight\n  two\nzero");
     let end = "        eight\n  two\nzero".chars().count();
-    model.set_selection(0..end, false);
+    model.set_selection(Selection::from_range(0..end, false));
 
     model.outdent_at_cursor();
     assert_eq!(model.active_tab().buffer_text(), "    eight\ntwo\nzero");
     let snapshot = model.snapshot();
     let new_end = "    eight\ntwo\nzero".chars().count();
-    assert_eq!(snapshot.selection, 0..new_end);
+    assert_eq!(snapshot.selection.range(), 0..new_end);
 }
 
 #[test]
@@ -1052,7 +1052,7 @@ fn indent_then_undo_restores_original_text_and_selection() {
     let mut model = make_model("alpha\nbeta\ngamma");
     let start = 0;
     let end = "alpha\nbeta\ng".chars().count();
-    model.set_selection(start..end, false);
+    model.set_selection(Selection::from_range(start..end, false));
     let before_text = model.active_tab().buffer_text();
     let before_selection = model.snapshot().selection;
 
@@ -1069,13 +1069,13 @@ fn tab_preserves_reversed_selection_flag() {
     let mut model = make_model("alpha\nbeta\ngamma");
     let start = "a".chars().count();
     let end = "alpha\nbeta\nga".chars().count();
-    model.set_selection(start..end, true); // reversed: cursor at start
+    model.set_selection(Selection::from_range(start..end, true)); // reversed: cursor at start
 
     model.insert_tab_at_cursor();
     let snapshot = model.snapshot();
     let new_start = "    a".chars().count();
     let new_end = "    alpha\n    beta\n    ga".chars().count();
-    assert_eq!(snapshot.selection, new_start..new_end);
+    assert_eq!(snapshot.selection.range(), new_start..new_end);
     // Cursor sits at the start (reversed).
     assert_eq!(snapshot.cursor, new_start);
 }
@@ -1088,7 +1088,7 @@ fn shift_tab_shifts_selection_columns_within_touched_range() {
     // 't', col 3 is 'w').
     let start = 6;
     let end = "        eight\n  t".chars().count();
-    model.set_selection(start..end, false);
+    model.set_selection(Selection::from_range(start..end, false));
 
     model.outdent_at_cursor();
     assert_eq!(model.active_tab().buffer_text(), "    eight\ntwo\nzero");
@@ -1097,7 +1097,7 @@ fn shift_tab_shifts_selection_columns_within_touched_range() {
     let new_start = 2;
     // Line 1 lost 2 leading spaces → end col 3 saturates to col 1.
     let new_end = "    eight\nt".chars().count();
-    assert_eq!(snapshot.selection, new_start..new_end);
+    assert_eq!(snapshot.selection.range(), new_start..new_end);
 }
 
 #[test]
@@ -1105,13 +1105,13 @@ fn shift_tab_does_not_outdent_line_after_selection_ending_at_column_zero() {
     let mut model = make_model("    alpha\n    beta\n    gamma");
     let start = 0;
     let end = "    alpha\n    beta\n".chars().count();
-    model.set_selection(start..end, false);
+    model.set_selection(Selection::from_range(start..end, false));
 
     model.outdent_at_cursor();
     assert_eq!(model.active_tab().buffer_text(), "alpha\nbeta\n    gamma");
     let snapshot = model.snapshot();
     let new_end = "alpha\nbeta\n".chars().count();
-    assert_eq!(snapshot.selection, 0..new_end);
+    assert_eq!(snapshot.selection.range(), 0..new_end);
 }
 
 #[test]
@@ -1119,14 +1119,14 @@ fn shift_tab_preserves_reversed_selection_flag() {
     let mut model = make_model("    alpha\n    beta\n    gamma");
     let start = "    a".chars().count(); // line 0 col 5
     let end = "    alpha\n    beta\n    ga".chars().count(); // line 2 col 6
-    model.set_selection(start..end, true); // reversed: cursor at start
+    model.set_selection(Selection::from_range(start..end, true)); // reversed: cursor at start
 
     model.outdent_at_cursor();
     assert_eq!(model.active_tab().buffer_text(), "alpha\nbeta\ngamma");
     let snapshot = model.snapshot();
     let new_start = "a".chars().count();
     let new_end = "alpha\nbeta\nga".chars().count();
-    assert_eq!(snapshot.selection, new_start..new_end);
+    assert_eq!(snapshot.selection.range(), new_start..new_end);
     assert_eq!(snapshot.cursor, new_start);
     assert!(model.active_tab().selection_reversed());
 }
@@ -1135,7 +1135,7 @@ fn shift_tab_preserves_reversed_selection_flag() {
 fn tab_indents_blank_lines_in_the_middle_of_selection() {
     let mut model = make_model("alpha\n\ngamma");
     let end = "alpha\n\nga".chars().count();
-    model.set_selection(0..end, false);
+    model.set_selection(Selection::from_range(0..end, false));
 
     model.insert_tab_at_cursor();
     assert_eq!(
@@ -1148,7 +1148,7 @@ fn tab_indents_blank_lines_in_the_middle_of_selection() {
 fn shift_tab_multi_line_undo_is_a_single_step() {
     let mut model = make_model("    alpha\n    beta\n    gamma");
     let end = "    alpha\n    beta\n    gamma".chars().count();
-    model.set_selection(0..end, false);
+    model.set_selection(Selection::from_range(0..end, false));
     let before_text = model.active_tab().buffer_text();
     let before_selection = model.snapshot().selection;
 
@@ -1172,13 +1172,13 @@ fn horizontal_collapse_commands_collapse_active_selection() {
         "Ready.".into(),
     );
 
-    model.set_selection(2..5, false);
+    model.set_selection(Selection::from_range(2..5, false));
     model.move_horizontal_collapsed(true);
-    assert_eq!(model.snapshot().selection, 2..2);
+    assert_eq!(model.snapshot().selection.range(), 2..2);
 
-    model.set_selection(2..5, false);
+    model.set_selection(Selection::from_range(2..5, false));
     model.move_horizontal_collapsed(false);
-    assert_eq!(model.snapshot().selection, 5..5);
+    assert_eq!(model.snapshot().selection.range(), 5..5);
 }
 
 #[test]
@@ -1196,7 +1196,7 @@ fn selecting_horizontal_movement_still_extends_selection() {
     model.move_to_char(2, false, None);
     model.move_horizontal_by(1, true);
 
-    assert_eq!(model.snapshot().selection, 2..3);
+    assert_eq!(model.snapshot().selection.range(), 2..3);
 }
 
 #[test]
@@ -1240,7 +1240,7 @@ fn display_row_selection_extends_from_anchor() {
     model.move_to_char(1, false, None);
     model.move_display_rows_by(1, true, 6);
 
-    assert_eq!(model.snapshot().selection, 1..7);
+    assert_eq!(model.snapshot().selection.range(), 1..7);
 }
 
 #[test]
@@ -1292,10 +1292,10 @@ fn display_row_edge_noop_collapses_selection() {
         )],
         "Ready.".into(),
     );
-    top.set_selection(0..2, true);
+    top.set_selection(Selection::from_range(0..2, true));
     top.move_display_rows_by(-1, false, 6);
     let top_snapshot = top.snapshot();
-    assert_eq!(top_snapshot.selection, 0..0);
+    assert_eq!(top_snapshot.selection.range(), 0..0);
     assert_eq!(top_snapshot.cursor, 0);
 
     let mut bottom = model_with_tabs(
@@ -1308,10 +1308,10 @@ fn display_row_edge_noop_collapses_selection() {
         "Ready.".into(),
     );
     let eof = "short\nabcdefghijkl".chars().count();
-    bottom.set_selection((eof - 3)..eof, false);
+    bottom.set_selection(Selection::from_range((eof - 3)..eof, false));
     bottom.move_display_rows_by(1, false, 4);
     let bottom_snapshot = bottom.snapshot();
-    assert_eq!(bottom_snapshot.selection, eof..eof);
+    assert_eq!(bottom_snapshot.selection.range(), eof..eof);
     assert_eq!(bottom_snapshot.cursor, eof);
 }
 
@@ -1399,7 +1399,7 @@ fn input_text_auto_dedent_clamps_when_indent_is_less_than_width() {
 #[test]
 fn input_text_auto_dedent_replaces_whitespace_only_selection() {
     let mut model = make_model("        ");
-    model.set_selection(2..6, false);
+    model.set_selection(Selection::from_range(2..6, false));
 
     model.replace_text_from_input(None, "}".into());
 
@@ -1478,7 +1478,7 @@ fn input_text_auto_dedent_respects_caret_at_line_start_and_middle() {
 fn input_text_does_not_auto_dedent_multi_line_replacement_ranges() {
     let mut model = make_model("    \nnext");
     let end = "    \n".chars().count();
-    model.set_selection(0..end, false);
+    model.set_selection(Selection::from_range(0..end, false));
 
     model.replace_text_from_input(None, "}".into());
 
@@ -1686,37 +1686,37 @@ fn input_text_does_not_overtype_mismatched_closer() {
 #[test]
 fn input_text_surrounds_selection_with_pair() {
     let mut model = make_model("abc");
-    model.set_selection(0..3, false);
+    model.set_selection(Selection::from_range(0..3, false));
 
     model.replace_text_from_input(None, "(".into());
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "(abc)");
-    assert_eq!(snapshot.selection, 1..4);
+    assert_eq!(snapshot.selection.range(), 1..4);
 }
 
 #[test]
 fn input_text_surrounds_selection_with_quote() {
     let mut model = make_model("abc");
-    model.set_selection(0..3, false);
+    model.set_selection(Selection::from_range(0..3, false));
 
     model.replace_text_from_input(None, "\"".into());
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "\"abc\"");
-    assert_eq!(snapshot.selection, 1..4);
+    assert_eq!(snapshot.selection.range(), 1..4);
 }
 
 #[test]
 fn input_text_surround_preserves_reversed_selection_flag() {
     let mut model = make_model("abc");
-    model.set_selection(0..3, true);
+    model.set_selection(Selection::from_range(0..3, true));
 
     model.replace_text_from_input(None, "(".into());
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "(abc)");
-    assert_eq!(snapshot.selection, 1..4);
+    assert_eq!(snapshot.selection.range(), 1..4);
     assert_eq!(snapshot.cursor, 1);
     assert!(model.active_tab().selection_reversed());
 }
@@ -1731,7 +1731,7 @@ fn input_text_auto_pair_realigns_find_after_restoring_caret() {
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "())");
-    assert_eq!(snapshot.selection, 1..1);
+    assert_eq!(snapshot.selection.range(), 1..1);
     assert_eq!(snapshot.find_matches, 2);
     assert_eq!(snapshot.find_current, Some(0));
     assert_eq!(snapshot.find_active_match, Some(1..2));
@@ -1741,13 +1741,13 @@ fn input_text_auto_pair_realigns_find_after_restoring_caret() {
 fn input_text_surround_realigns_find_after_restoring_selection() {
     let mut model = make_model("))");
     model.update_find_query(")".into());
-    model.set_selection(0..1, false);
+    model.set_selection(Selection::from_range(0..1, false));
 
     model.replace_text_from_input(None, "(".into());
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "()))");
-    assert_eq!(snapshot.selection, 1..2);
+    assert_eq!(snapshot.selection.range(), 1..2);
     assert_eq!(snapshot.find_matches, 3);
     assert_eq!(snapshot.find_current, Some(0));
     assert_eq!(snapshot.find_active_match, Some(1..2));
@@ -1756,13 +1756,13 @@ fn input_text_surround_realigns_find_after_restoring_selection() {
 #[test]
 fn input_text_surround_preserves_multi_line_selection() {
     let mut model = make_model("abc\ndef");
-    model.set_selection(0..7, false);
+    model.set_selection(Selection::from_range(0..7, false));
 
     model.replace_text_from_input(None, "(".into());
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "(abc\ndef)");
-    assert_eq!(snapshot.selection, 1..8);
+    assert_eq!(snapshot.selection.range(), 1..8);
 }
 
 #[test]
@@ -1778,7 +1778,7 @@ fn input_text_auto_pair_is_single_undo_step() {
 #[test]
 fn input_text_surround_is_single_undo_step() {
     let mut model = make_model("abc");
-    model.set_selection(0..3, false);
+    model.set_selection(Selection::from_range(0..3, false));
 
     model.replace_text_from_input(None, "(".into());
     assert_eq!(model.snapshot().text, "(abc)");
@@ -1867,12 +1867,12 @@ fn duplicate_line_duplicates_active_selection_and_selects_the_copy() {
         "Ready.".into(),
     );
 
-    model.set_selection(0..5, false);
+    model.set_selection(Selection::from_range(0..5, false));
     model.duplicate_line();
 
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "alphaalpha beta");
-    assert_eq!(snapshot.selection, 5..10);
+    assert_eq!(snapshot.selection.range(), 5..10);
     assert_eq!(snapshot.cursor, 10);
 }
 
@@ -1888,7 +1888,7 @@ fn duplicate_selection_is_a_separate_undo_step_from_typed_input() {
         "Ready.".into(),
     );
 
-    model.set_selection(0..5, false);
+    model.set_selection(Selection::from_range(0..5, false));
     model.duplicate_line();
     model.replace_text_from_input(None, "x".into());
     assert_eq!(model.snapshot().text, "alphax beta");
@@ -1912,7 +1912,7 @@ fn delete_word_commands_delete_active_selection_before_word_boundaries() {
         "Ready.".into(),
     );
 
-    model.set_selection(0..5, false);
+    model.set_selection(Selection::from_range(0..5, false));
     model.delete_word(true);
     assert_eq!(model.snapshot().text, " world");
 
@@ -1925,7 +1925,7 @@ fn delete_word_commands_delete_active_selection_before_word_boundaries() {
         )],
         "Ready.".into(),
     );
-    model.set_selection(6..11, false);
+    model.set_selection(Selection::from_range(6..11, false));
     model.delete_word(false);
     assert_eq!(model.snapshot().text, "hello ");
 }
@@ -1941,7 +1941,7 @@ fn clipboard_commands_emit_boundary_effects_without_fakes() {
         )],
         "Ready.".into(),
     );
-    model.set_selection(0..5, false);
+    model.set_selection(Selection::from_range(0..5, false));
 
     model.copy_selection();
     assert_eq!(
@@ -2208,11 +2208,11 @@ fn dirty_tab_close_request_signals_save_and_close() {
     model.insert_text("unsaved".into());
 
     assert_eq!(
-        model.close_request_for_tab(0),
+        model.close_request_for_tab(tab_id),
         Some(lst_editor::TabCloseRequest::SaveAndClose { tab_id })
     );
 
-    assert!(model.discard_close_tab_by_id(tab_id));
+    assert!(model.discard_close_tab(tab_id));
     let snapshot = model.snapshot();
     assert_eq!(snapshot.tab_count, 1);
     assert_eq!(snapshot.text, "");
@@ -2392,11 +2392,11 @@ fn direct_cursor_and_selection_commands_are_model_behavior() {
     assert_eq!(model.snapshot().cursor, 6);
 
     model.move_to_char(10, true, None);
-    assert_eq!(model.snapshot().selection, 6..10);
+    assert_eq!(model.snapshot().selection.range(), 6..10);
 
-    model.set_selection(0..5, true);
+    model.set_selection(Selection::from_range(0..5, true));
     let snapshot = model.snapshot();
-    assert_eq!(snapshot.selection, 0..5);
+    assert_eq!(snapshot.selection.range(), 0..5);
     assert_eq!(snapshot.cursor, 0);
 }
 
@@ -2407,7 +2407,7 @@ fn ime_marked_text_replacement_remains_model_behavior() {
     model.replace_and_mark_text(None, "a🙂b".into(), Some(1..2));
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "a🙂b");
-    assert_eq!(snapshot.selection, 1..2);
+    assert_eq!(snapshot.selection.range(), 1..2);
 
     model.clear_marked_text();
     model.replace_text(None, "Z".into(), UndoBoundary::Break);
@@ -2434,6 +2434,141 @@ fn vim_delete_and_paste_execute_against_real_document() {
 
     model.handle_vim_key(VimKey::Character("p".into()), VimModifiers::default(), 80);
     assert_eq!(model.snapshot().text, "beta\nalpha");
+}
+
+#[test]
+fn vim_double_gt_indents_current_line_by_language_unit() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_path(
+            TabId::from_raw(1),
+            std::path::PathBuf::from("example.rs"),
+            "alpha\nbeta",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+
+    model.handle_vim_key(VimKey::Character(">".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character(">".into()), VimModifiers::default(), 80);
+
+    // Rust indents by 4 spaces; only the cursor line is touched.
+    assert_eq!(model.snapshot().text, "    alpha\nbeta");
+}
+
+#[test]
+fn vim_count_double_gt_indents_n_lines_starting_at_cursor() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_path(
+            TabId::from_raw(1),
+            std::path::PathBuf::from("example.rs"),
+            "alpha\nbeta\ngamma\ndelta",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+
+    model.handle_vim_key(VimKey::Character("2".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character(">".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character(">".into()), VimModifiers::default(), 80);
+
+    assert_eq!(model.snapshot().text, "    alpha\n    beta\ngamma\ndelta");
+}
+
+#[test]
+fn vim_double_lt_outdents_current_line_saturating_at_zero() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_path(
+            TabId::from_raw(1),
+            std::path::PathBuf::from("example.rs"),
+            "        alpha\nbeta",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+
+    model.handle_vim_key(VimKey::Character("<".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("<".into()), VimModifiers::default(), 80);
+    assert_eq!(model.snapshot().text, "    alpha\nbeta");
+
+    // Outdent again, then once more — saturate at zero leading spaces.
+    model.handle_vim_key(VimKey::Character("<".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("<".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("<".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("<".into()), VimModifiers::default(), 80);
+    assert_eq!(model.snapshot().text, "alpha\nbeta");
+}
+
+#[test]
+fn vim_visual_line_gt_indents_selection() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_path(
+            TabId::from_raw(1),
+            std::path::PathBuf::from("example.rs"),
+            "alpha\nbeta\ngamma",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+
+    model.handle_vim_key(VimKey::Character("V".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("j".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character(">".into()), VimModifiers::default(), 80);
+
+    assert_eq!(model.snapshot().text, "    alpha\n    beta\ngamma");
+    // `>` on visual selection drops back to Normal mode.
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.vim_mode, VimMode::Normal);
+    assert!(!snapshot.selection.has_selection());
+    assert_eq!(snapshot.selection, Selection::collapsed(snapshot.cursor));
+
+    model.handle_vim_key(VimKey::Character("i".into()), VimModifiers::default(), 80);
+    model.insert_text("x".into());
+    assert_eq!(model.snapshot().text, "x    alpha\n    beta\ngamma");
+}
+
+#[test]
+fn vim_visual_line_lt_outdents_selection_and_collapses_cursor() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_path(
+            TabId::from_raw(1),
+            std::path::PathBuf::from("example.rs"),
+            "    alpha\n    beta\ngamma",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+
+    model.handle_vim_key(VimKey::Character("V".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("j".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("<".into()), VimModifiers::default(), 80);
+
+    assert_eq!(model.snapshot().text, "alpha\nbeta\ngamma");
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.vim_mode, VimMode::Normal);
+    assert!(!snapshot.selection.has_selection());
+    assert_eq!(snapshot.selection, Selection::collapsed(snapshot.cursor));
+
+    model.handle_vim_key(VimKey::Character("i".into()), VimModifiers::default(), 80);
+    model.insert_text("x".into());
+    assert_eq!(model.snapshot().text, "xalpha\nbeta\ngamma");
+}
+
+#[test]
+fn vim_double_gt_uses_javascript_two_space_unit() {
+    let mut model = model_with_tabs(
+        vec![EditorTab::from_path(
+            TabId::from_raw(1),
+            std::path::PathBuf::from("example.js"),
+            "alpha",
+        )],
+        "Ready.".into(),
+    );
+    enter_vim_normal(&mut model);
+
+    model.handle_vim_key(VimKey::Character(">".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character(">".into()), VimModifiers::default(), 80);
+
+    assert_eq!(model.snapshot().text, "  alpha");
 }
 
 #[test]
@@ -2515,7 +2650,7 @@ fn arrow_right_steps_over_combining_acute() {
     model.move_to_char(0, false, None);
     model.move_horizontal_collapsed(false);
 
-    assert_eq!(model.snapshot().selection, 2..2);
+    assert_eq!(model.snapshot().selection.range(), 2..2);
 }
 
 #[test]
@@ -2533,7 +2668,7 @@ fn arrow_left_steps_over_emoji() {
     model.move_to_char(3, false, None);
     model.move_horizontal_collapsed(true);
 
-    assert_eq!(model.snapshot().selection, 1..1);
+    assert_eq!(model.snapshot().selection.range(), 1..1);
 }
 
 #[test]
@@ -2552,7 +2687,7 @@ fn backspace_removes_full_grapheme() {
     model.backspace();
 
     assert_eq!(model.active_tab().buffer_text(), "XY");
-    assert_eq!(model.snapshot().selection, 1..1);
+    assert_eq!(model.snapshot().selection.range(), 1..1);
 }
 
 #[test]
@@ -2571,7 +2706,7 @@ fn delete_forward_removes_full_emoji() {
     model.delete_forward();
 
     assert_eq!(model.active_tab().buffer_text(), "XY");
-    assert_eq!(model.snapshot().selection, 1..1);
+    assert_eq!(model.snapshot().selection.range(), 1..1);
 }
 
 #[test]
@@ -2609,7 +2744,7 @@ fn ctrl_right_steps_over_combining_acute_word_boundary() {
     model.move_word(false, false);
 
     // Cursor lands on the space after the cluster, never inside it (would be 3).
-    assert_eq!(model.snapshot().selection, 6..6);
+    assert_eq!(model.snapshot().selection.range(), 6..6);
 }
 
 #[test]
@@ -2633,12 +2768,12 @@ fn ctrl_right_steps_over_regional_indicator() {
     let third = model.snapshot().selection;
 
     // First Ctrl+Right: end of `a`, start of the regional pair.
-    assert_eq!(first, 1..1);
+    assert_eq!(first.range(), 1..1);
     // Second Ctrl+Right skips the entire regional cluster as one Symbol run and
     // lands at the start of `b` — char 3, never the mid-cluster char-2.
-    assert_eq!(second, 3..3);
+    assert_eq!(second.range(), 3..3);
     // Third Ctrl+Right walks past `b` to the space.
-    assert_eq!(third, 4..4);
+    assert_eq!(third.range(), 4..4);
 }
 
 #[test]
@@ -2657,7 +2792,7 @@ fn alt_right_subword_steps_over_combining_mark() {
     model.move_subword(false, false);
 
     // The subword run is `naïve` (6 chars, 5 graphemes); next subword stops at `C`.
-    assert_eq!(model.snapshot().selection, 6..6);
+    assert_eq!(model.snapshot().selection.range(), 6..6);
 }
 
 #[test]
@@ -2868,7 +3003,7 @@ fn select_current_line_covers_full_line_including_newline() {
     );
     model.move_to_char(7, false, None);
     model.select_current_line();
-    assert_eq!(model.snapshot().selection, 6..11);
+    assert_eq!(model.snapshot().selection.range(), 6..11);
 }
 
 #[test]
@@ -2884,7 +3019,7 @@ fn select_current_paragraph_inside_paragraph() {
     );
     model.move_to_char(7, false, None);
     model.select_current_paragraph();
-    assert_eq!(model.snapshot().selection, 0..11);
+    assert_eq!(model.snapshot().selection.range(), 0..11);
 }
 
 #[test]
@@ -2900,7 +3035,7 @@ fn select_current_paragraph_on_blank_line_selects_blank_block() {
     );
     model.move_to_char(6, false, None);
     model.select_current_paragraph();
-    assert_eq!(model.snapshot().selection, 6..8);
+    assert_eq!(model.snapshot().selection.range(), 6..8);
 }
 
 fn vim_press_chars(model: &mut EditorModel, keys: &str) {

@@ -1,5 +1,5 @@
 use lst_editor::position::Position;
-use lst_editor::{EditorModel, EditorTab, FileStamp, Language, TabId};
+use lst_editor::{EditorModel, EditorTab, FileStamp, Language, Selection, TabId};
 use std::path::PathBuf;
 
 mod common;
@@ -108,7 +108,7 @@ fn toggle_comment_is_noop_when_language_has_no_line_comment() {
 #[test]
 fn toggle_block_comment_wraps_selection_for_rust() {
     let mut model = model_with_path("example.rs", "let x = 1 + 2;");
-    model.set_selection(8..13, false);
+    model.set_selection(Selection::from_range(8..13, false));
     model.toggle_block_comment();
     assert_eq!(model.snapshot().text, "let x = /*1 + 2*/;");
 }
@@ -116,7 +116,7 @@ fn toggle_block_comment_wraps_selection_for_rust() {
 #[test]
 fn toggle_block_comment_unwraps_existing_block() {
     let mut model = model_with_path("example.rs", "let x = /*1 + 2*/;");
-    model.set_selection(8..17, false);
+    model.set_selection(Selection::from_range(8..17, false));
     model.toggle_block_comment();
     assert_eq!(model.snapshot().text, "let x = 1 + 2;");
 }
@@ -138,7 +138,7 @@ fn toggle_block_comment_unwraps_current_line_without_selection() {
 #[test]
 fn toggle_block_comment_is_noop_for_python() {
     let mut model = model_with_path("example.py", "x = 1");
-    model.set_selection(0..5, false);
+    model.set_selection(Selection::from_range(0..5, false));
     let before = model.snapshot().text.clone();
     model.toggle_block_comment();
     assert_eq!(model.snapshot().text, before);
@@ -147,7 +147,7 @@ fn toggle_block_comment_is_noop_for_python() {
 #[test]
 fn toggle_block_comment_uses_html_delimiters_for_html() {
     let mut model = model_with_path("page.html", "<p>hi</p>");
-    model.set_selection(3..5, false);
+    model.set_selection(Selection::from_range(3..5, false));
     model.toggle_block_comment();
     assert_eq!(model.snapshot().text, "<p><!--hi--></p>");
 }
@@ -405,7 +405,7 @@ fn saved_untitled_tab_detects_language_from_saved_path() {
 #[test]
 fn indent_selection_uses_language_unit() {
     let mut model = model_with_path("main.js", "alpha\nbeta\n");
-    model.set_selection(0..10, false);
+    model.set_selection(Selection::from_range(0..10, false));
     model.insert_tab_at_cursor();
 
     assert_eq!(model.snapshot().text, "  alpha\n  beta\n");
@@ -414,7 +414,7 @@ fn indent_selection_uses_language_unit() {
 #[test]
 fn outdent_selection_uses_language_unit_for_tabs() {
     let mut model = model_with_path("main.go", "\talpha\n\tbeta\n");
-    model.set_selection(0..12, false);
+    model.set_selection(Selection::from_range(0..12, false));
     model.outdent_at_cursor();
 
     assert_eq!(model.snapshot().text, "alpha\nbeta\n");

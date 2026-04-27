@@ -108,6 +108,14 @@ pub enum VimCommand {
         first: usize,
         last: usize,
     },
+    IndentLines {
+        first: usize,
+        last: usize,
+    },
+    OutdentLines {
+        first: usize,
+        last: usize,
+    },
     ChangeRange {
         from: Position,
         to: Position,
@@ -537,7 +545,7 @@ impl VimState {
         }
 
         // Two-char sequence starters
-        if matches!(c, 'g' | 'f' | 't' | 'F' | 'T' | 'r' | 'z') {
+        if matches!(c, 'g' | 'f' | 't' | 'F' | 'T' | 'r' | 'z' | '>' | '<') {
             self.pending.partial = Some(c);
             return vec![VimCommand::Noop];
         }
@@ -785,6 +793,22 @@ impl VimState {
                 }
                 return vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)];
             }
+            '>' => {
+                self.exit_visual();
+                let (first, last) = ordered_lines(anchor.line, text.cursor.line);
+                return vec![
+                    VimCommand::IndentLines { first, last },
+                    VimCommand::MoveTo(pos(first, 0)),
+                ];
+            }
+            '<' => {
+                self.exit_visual();
+                let (first, last) = ordered_lines(anchor.line, text.cursor.line);
+                return vec![
+                    VimCommand::OutdentLines { first, last },
+                    VimCommand::MoveTo(pos(first, 0)),
+                ];
+            }
             'v' => {
                 if self.mode == Mode::Visual {
                     self.exit_visual();
@@ -924,6 +948,23 @@ impl VimState {
                     }],
                     'i' => vec![VimCommand::JumpToLastEdit { enter_insert: true }],
                     _ => vec![VimCommand::Noop],
+                }
+            }
+            '>' | '<' if c == partial => {
+                let count = self.motion_count().unwrap_or(1);
+                self.clear_pending();
+                self.clear_preferred_column();
+                let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
+                if partial == '>' {
+                    vec![VimCommand::IndentLines {
+                        first: text.cursor.line,
+                        last,
+                    }]
+                } else {
+                    vec![VimCommand::OutdentLines {
+                        first: text.cursor.line,
+                        last,
+                    }]
                 }
             }
             'i' | 'a' => {

@@ -8,20 +8,19 @@ References use `path::symbol` to survive reorganization.
 
 ---
 
-## 1. Find subsystem upgrade
+## 1. Find subsystem upgrade — ✅ shipped
 
-Single module, single state struct, single panel. Highest "idiomatic feel"
-payoff — the checklist summary already calls it out as gap #1.
+Single module, single state struct, single panel.
 
-- [~] **Grapheme: find-match cluster alignment** — `crates/lst-editor/src/find.rs::compute_matches_in_text` rounds match positions via `.chars().count()` rather than grapheme cluster boundaries.
-- Natural `[ ]` ride-alongs (same edit point):
-  - Case sensitivity + smart case (`line.find(&query)` is currently always case-sensitive)
-  - Whole-word toggle
-  - Regex toggle (capture groups)
-  - Find-in-selection scope
+- [x] **Grapheme: find-match cluster alignment** — `crates/lst-editor/src/find.rs::compute_matches_in_text` partitions cells via `cell_partition_by_byte` and skips matches not aligned to cluster boundaries (test `find.rs::grapheme_boundary_filters_mid_cluster_match`).
+- [x] **Case sensitivity + smart case** — `FindState::case_sensitive` plus uppercase-aware `build_regex` (`crates/lst-editor/src/find.rs::FindState::build_regex`).
+- [x] **Whole-word toggle** — `FindState::whole_word` wraps the pattern with `\b…\b` (`build_regex`).
+- [x] **Regex toggle** — `FindState::use_regex`; replace paths expand capture refs via `caps.expand` in `crates/lst-editor/src/lib.rs::expand_match_replacement`.
+- [x] **Find-in-selection scope** — `FindScope::{Document, Selection}` clamps matches; `EditorModel::toggle_find_in_selection` re-derives scope from the active selection.
 
-Tradeoff: regex pulls in a crate dep and changes the "find next" perf profile;
-worth deciding up front whether to gate it behind a toggle.
+Bound to `ToggleFindCase` / `ToggleFindWholeWord` / `ToggleFindRegex` /
+`ToggleFindInSelection` actions in `apps/lst-gpui/src/actions.rs` and
+`apps/lst-gpui/src/keymap.rs`.
 
 ## 2. User config-file infrastructure
 
@@ -34,19 +33,15 @@ other future settings (theme, autosave cadence, per-language save hooks).
 Tradeoff: you commit to a config schema (likely `~/.config/lst/config.toml`)
 that is painful to break later — design it once, deliberately.
 
-## 3. Editing & selection primitives
+## 3. Editing & selection primitives — ✅ shipped
 
-Small, scattered "didn't quite finish" items that share testing patterns and
-mostly live in `crates/lst-editor/src/lib.rs` + `editor_ops.rs`. Naturally
-shippable as a single "editing-ops sweep."
+- [x] **Block-comment toggle** — `LanguageConfig::block_comment` carries the open/close pair; `EditorModel::toggle_block_comment` wraps/unwraps via `editor_ops::toggle_block_comment` (`crates/lst-editor/src/language.rs::LanguageConfig::block_comment`; `crates/lst-editor/src/editor_ops.rs::toggle_block_comment`; bindings `ctrl/cmd-shift-/`).
+- [x] **Vim surround (`ys`/`ds`/`cs`)** — `SurroundPhase` state machine drives the three operators; commands are `VimCommand::SurroundRange`, `::DeleteSurround`, `::ChangeSurround` applied in `crates/lst-editor/src/lib.rs`.
+- [x] **Soft-tab backspace** — `crates/lst-editor/src/lib.rs::soft_tab_backspace_range` snaps backspace to a full `IndentStyle::indent_unit` when the cursor sits in leading whitespace; falls back to a single grapheme otherwise.
+- [x] **Select line / select paragraph** — `EditorModel::select_current_line` / `::select_current_paragraph` plus `SelectLine` (`ctrl/cmd-l`) and `SelectParagraph` (`ctrl/cmd-shift-p`) actions.
+- [x] **Quad-click paragraph** — `apps/lst-gpui/src/interactions.rs::on_mouse_down` `click_count >= 4` selects the enclosing paragraph via `paragraph_range_at_char`.
 
-- [~] **Block-comment toggle** — `crates/lst-editor/src/language.rs::LanguageConfig` only has `line_comment`; no `block_comment` field.
-- [~] **Vim surround (`ys`/`ds`/`cs`)** — only `crates/lst-editor/src/lib.rs::auto_pair_surround_edit` (typing an opener over a selection wraps it); no Vim-style surround ops in `crates/lst-editor/src/vim.rs`.
-- [~] **Soft-tab backspace** — `crates/lst-editor/src/lib.rs::backspace` deletes one grapheme via `delete_selected_or_previous`; should delete a full `IndentStyle::indent_unit` when the cursor sits in leading indent.
-- [~] **Select line / select paragraph** — only triple-click and Vim `V` / text objects exist. No non-Vim keyboard action; nothing in `apps/lst-gpui/src/keymap.rs`.
-- **Worth noting:** Quad-click paragraph (`[ ]`) — `apps/lst-gpui/src/interactions.rs::on_mouse_down` uses `click_count >= 3`, so quadruple-click currently re-runs triple-click line-select instead of escalating to paragraph. Cheap to wire up once paragraph-select exists.
-
-## 4. Tabs, rendering chrome & history
+## 4. Tabs, rendering chrome & history — ✅ shipped
 
 Heterogeneous but each item is small and standalone — file together because
 they don't fit the other groups, not because they share a surface.
@@ -61,7 +56,7 @@ they don't fit the other groups, not because they share a surface.
 
 ## Suggested order
 
-1. **Group 1** — biggest perceived-quality win, contained to `find.rs` + find panel.
-2. **Group 2** — unlocks future settings; the schema decision is the hard part.
-3. **Group 3** — pick whichever subset fits a sprint; each item is self-contained.
-4. **Group 4** — opportunistic, tackle when adjacent code is already open.
+Groups 1, 3, and 4 are shipped. The only remaining bundle is Group 2 (user
+config infrastructure) — the schema decision is the hard part; designing it
+once unlocks both keybindings and language overrides plus future settings
+(theme, autosave cadence, per-language hooks).
