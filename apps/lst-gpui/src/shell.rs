@@ -4,7 +4,7 @@ use crate::ui::{
         scroll_left_for_thumb_drag, scroll_left_for_track_click, scroll_top_for_thumb_drag,
         scroll_top_for_track_click, vertical_scrollbar_layout,
     },
-    theme::{metrics, role, typography},
+    theme::{metrics, typography},
     IconButton, IconKind, Tab as UiTab, TabBar,
 };
 use gpui::{
@@ -27,11 +27,12 @@ use crate::{
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme();
         let tab = self.model.tab(ix).expect("rendered tab index must exist");
         let active = !self.recent_panel_visible && ix == self.model.active_index();
         let show_close = active || self.hovered_tab == Some(ix);
         let close_button: Option<IconButton> = show_close.then(|| {
-            IconButton::new(("tab-close", ix), IconKind::Close)
+            IconButton::new(("tab-close", ix), IconKind::Close, theme)
                 .emphasized(active)
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.request_close_tab_at(ix, cx);
@@ -39,7 +40,7 @@ impl LstGpuiApp {
                 }))
         });
 
-        UiTab::new(("tab", ix))
+        UiTab::new(("tab", ix), theme)
             .active(active)
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
@@ -76,7 +77,8 @@ impl LstGpuiApp {
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
-        let recent_button = IconButton::new("recent-files-button", IconKind::Recent)
+        let theme = self.theme();
+        let recent_button = IconButton::new("recent-files-button", IconKind::Recent, theme)
             .emphasized(self.recent_panel_visible)
             .on_click(cx.listener(|this, _, window, cx| {
                 this.toggle_recent_files_panel(window, cx);
@@ -93,9 +95,9 @@ impl LstGpuiApp {
                 .px_2()
                 .items_center()
                 .border_r_1()
-                .border_color(rgb(role::BORDER))
+                .border_color(rgb(theme.role.border))
                 .child(
-                    IconButton::new("new-tab-button", IconKind::Plus).on_click(cx.listener(
+                    IconButton::new("new-tab-button", IconKind::Plus, theme).on_click(cx.listener(
                         |this, _, _window, cx| {
                             this.request_new_tab(cx);
                             cx.stop_propagation();
@@ -105,7 +107,7 @@ impl LstGpuiApp {
                 .into_any_element(),
         );
 
-        TabBar::new("editor-tabs")
+        TabBar::new("editor-tabs", theme)
             .start_child(recent_button)
             .track_scroll(&self.tab_bar_scroll)
             .children(items)
@@ -113,6 +115,7 @@ impl LstGpuiApp {
 
     fn render_find_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
+        let theme = self.theme();
         let find = self.model.find();
         let match_label = if find.matches.is_empty() {
             "0/0".to_string()
@@ -136,14 +139,14 @@ impl LstGpuiApp {
             .px_3()
             .py_2()
             .rounded_sm()
-            .bg(rgb(role::PANEL_BG))
+            .bg(rgb(theme.role.panel_bg))
             .border_1()
-            .border_color(rgb(role::BORDER))
+            .border_color(rgb(theme.role.border))
             .child(
                 div()
                     .flex_none()
                     .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
-                    .text_color(rgb(role::TEXT_SUBTLE))
+                    .text_color(rgb(theme.role.text_subtle))
                     .child("Find"),
             )
             .child(div().w(px(280.0)).child(self.find_query_input.clone()))
@@ -152,7 +155,7 @@ impl LstGpuiApp {
                     div()
                         .flex_none()
                         .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
-                        .text_color(rgb(role::TEXT_SUBTLE))
+                        .text_color(rgb(theme.role.text_subtle))
                         .child("Replace"),
                 )
                 .child(div().w(px(280.0)).child(self.find_replace_input.clone()))
@@ -162,7 +165,7 @@ impl LstGpuiApp {
                     .flex_none()
                     .font(typography::primary_font())
                     .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
-                    .text_color(rgb(role::TEXT_MUTED))
+                    .text_color(rgb(theme.role.text_muted))
                     .child(match_label),
             )
             .when_some(error, |row, err| {
@@ -170,15 +173,18 @@ impl LstGpuiApp {
                     div()
                         .flex_none()
                         .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
-                        .text_color(rgb(role::ERROR_TEXT))
+                        .text_color(rgb(theme.role.error_text))
                         .child(err),
                 )
             })
             .child(find_chip(
                 "find-chip-case",
                 "Aa",
-                case_sensitive,
-                true,
+                FindChipState {
+                    active: case_sensitive,
+                    enabled: true,
+                },
+                theme,
                 scale,
                 cx,
                 |this, cx| {
@@ -188,8 +194,11 @@ impl LstGpuiApp {
             .child(find_chip(
                 "find-chip-word",
                 "W",
-                whole_word,
-                true,
+                FindChipState {
+                    active: whole_word,
+                    enabled: true,
+                },
+                theme,
                 scale,
                 cx,
                 |this, cx| {
@@ -199,8 +208,11 @@ impl LstGpuiApp {
             .child(find_chip(
                 "find-chip-regex",
                 ".*",
-                use_regex,
-                true,
+                FindChipState {
+                    active: use_regex,
+                    enabled: true,
+                },
+                theme,
                 scale,
                 cx,
                 |this, cx| {
@@ -210,8 +222,11 @@ impl LstGpuiApp {
             .child(find_chip(
                 "find-chip-scope",
                 "In Sel",
-                in_selection,
-                selection_chip_enabled,
+                FindChipState {
+                    active: in_selection,
+                    enabled: selection_chip_enabled,
+                },
+                theme,
                 scale,
                 cx,
                 |this, cx| {
@@ -222,6 +237,7 @@ impl LstGpuiApp {
 
     fn render_goto_bar(&mut self) -> impl IntoElement {
         let scale = self.ui_scale();
+        let theme = self.theme();
         div()
             .flex_none()
             .flex()
@@ -230,14 +246,14 @@ impl LstGpuiApp {
             .px_3()
             .py_2()
             .rounded_sm()
-            .bg(rgb(role::PANEL_BG))
+            .bg(rgb(theme.role.panel_bg))
             .border_1()
-            .border_color(rgb(role::BORDER))
+            .border_color(rgb(theme.role.border))
             .child(
                 div()
                     .flex_none()
                     .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
-                    .text_color(rgb(role::TEXT_SUBTLE))
+                    .text_color(rgb(theme.role.text_subtle))
                     .child("Line"),
             )
             .child(div().w(px(180.0)).child(self.goto_line_input.clone()))
@@ -245,6 +261,7 @@ impl LstGpuiApp {
 
     fn render_recent_files_view(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
+        let theme = self.theme();
         let filtered_paths = self.recent_filtered_paths();
         let total = filtered_paths.len();
         let visible_paths = filtered_paths
@@ -270,7 +287,7 @@ impl LstGpuiApp {
         div()
             .id("recent-files-view")
             .size_full()
-            .bg(rgb(role::PANEL_BG))
+            .bg(rgb(theme.role.panel_bg))
             .child(
                 div()
                     .flex()
@@ -295,16 +312,15 @@ impl LstGpuiApp {
                                         metrics::INPUT_TEXT_SIZE,
                                         scale,
                                     ))
-                                    .text_color(rgb(role::TEXT_MUTED))
+                                    .text_color(rgb(theme.role.text_muted))
                                     .child(count_label),
                             )
                             .child(
-                                IconButton::new("recent-files-close", IconKind::Close).on_click(
-                                    cx.listener(|this, _, _window, cx| {
+                                IconButton::new("recent-files-close", IconKind::Close, theme)
+                                    .on_click(cx.listener(|this, _, _window, cx| {
                                         this.close_recent_files_panel(cx);
                                         cx.stop_propagation();
-                                    }),
-                                ),
+                                    })),
                             ),
                     )
                     .child(
@@ -327,7 +343,7 @@ impl LstGpuiApp {
                                                     metrics::INPUT_TEXT_SIZE,
                                                     scale,
                                                 ))
-                                                .text_color(rgb(role::TEXT_MUTED))
+                                                .text_color(rgb(theme.role.text_muted))
                                                 .child("No recent files"),
                                         )
                                     }),
@@ -346,6 +362,7 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let scale = self.ui_scale();
+        let theme = self.theme();
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -356,11 +373,12 @@ impl LstGpuiApp {
             .map(|parent| parent.display().to_string())
             .unwrap_or_default();
         let (preview_text, preview_color) = match self.recent_previews.get(&path) {
-            Some(RecentPreviewState::Loaded(text)) => (text.clone(), role::TEXT_SUBTLE),
-            Some(RecentPreviewState::Failed(message)) => {
-                (format!("Preview unavailable: {message}"), role::ERROR_TEXT)
-            }
-            _ => ("Loading preview...".to_string(), role::TEXT_MUTED),
+            Some(RecentPreviewState::Loaded(text)) => (text.clone(), theme.role.text_subtle),
+            Some(RecentPreviewState::Failed(message)) => (
+                format!("Preview unavailable: {message}"),
+                theme.role.error_text,
+            ),
+            _ => ("Loading preview...".to_string(), theme.role.text_muted),
         };
 
         div()
@@ -376,11 +394,11 @@ impl LstGpuiApp {
             .px_3()
             .py_3()
             .rounded_sm()
-            .bg(rgb(role::EDITOR_BG))
+            .bg(rgb(theme.role.editor_bg))
             .border_1()
-            .border_color(rgb(role::BORDER))
+            .border_color(rgb(theme.role.border))
             .cursor(CursorStyle::PointingHand)
-            .hover(|style| style.bg(rgb(role::CONTROL_BG)))
+            .hover(move |style| style.bg(rgb(theme.role.control_bg)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _window, cx| {
@@ -394,7 +412,7 @@ impl LstGpuiApp {
                     .truncate()
                     .text_size(metrics::px_for_scale(metrics::TAB_TEXT_SIZE, scale))
                     .line_height(metrics::px_for_scale(metrics::TAB_TEXT_LINE_HEIGHT, scale))
-                    .text_color(rgb(role::TEXT))
+                    .text_color(rgb(theme.role.text))
                     .child(file_name),
             )
             .child(
@@ -403,7 +421,7 @@ impl LstGpuiApp {
                     .truncate()
                     .text_size(metrics::px_for_scale(11.0, scale))
                     .line_height(metrics::px_for_scale(15.0, scale))
-                    .text_color(rgb(role::TEXT_MUTED))
+                    .text_color(rgb(theme.role.text_muted))
                     .child(parent),
             )
             .child(
@@ -422,6 +440,7 @@ impl LstGpuiApp {
 
     fn render_recent_load_more_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
+        let theme = self.theme();
         div()
             .id("recent-files-load-more")
             .flex()
@@ -431,11 +450,11 @@ impl LstGpuiApp {
             .px_3()
             .py_2()
             .rounded_sm()
-            .bg(rgb(role::CONTROL_BG))
-            .hover(|style| style.bg(rgb(role::CONTROL_BG_HOVER)))
+            .bg(rgb(theme.role.control_bg))
+            .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
             .cursor(CursorStyle::PointingHand)
             .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
-            .text_color(rgb(role::TEXT))
+            .text_color(rgb(theme.role.text))
             .on_click(cx.listener(|this, _, _window, cx| {
                 this.load_more_recent_files(cx);
                 cx.stop_propagation();
@@ -470,6 +489,7 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let scale = self.ui_scale();
+        let theme = self.theme();
         let track_width = metrics::px_for_scale(metrics::SCROLLBAR_TRACK_WIDTH, scale);
         let has_overflow = viewport_scroll.max_offset().height > px(0.0);
         let prepare_scroll = viewport_scroll.clone();
@@ -507,7 +527,7 @@ impl LstGpuiApp {
                                     || layout.thumb_bounds.contains(&window.mouse_position()),
                             )
                         };
-                        paint_vertical_scrollbar(&layout, active, hovered, scale, window);
+                        paint_vertical_scrollbar(&layout, active, hovered, scale, theme, window);
 
                         let entity_for_down = entity.clone();
                         let scroll_for_down = paint_scroll.clone();
@@ -613,6 +633,7 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let scale = self.ui_scale();
+        let theme = self.theme();
         let track_height = metrics::px_for_scale(metrics::SCROLLBAR_TRACK_WIDTH, scale);
         let has_overflow = viewport_scroll.max_offset().width > px(0.0);
         let prepare_scroll = viewport_scroll.clone();
@@ -650,7 +671,7 @@ impl LstGpuiApp {
                                     || layout.thumb_bounds.contains(&window.mouse_position()),
                             )
                         };
-                        paint_horizontal_scrollbar(&layout, active, hovered, scale, window);
+                        paint_horizontal_scrollbar(&layout, active, hovered, scale, theme, window);
 
                         let entity_for_down = entity.clone();
                         let scroll_for_down = paint_scroll.clone();
@@ -754,8 +775,9 @@ impl LstGpuiApp {
             )
     }
 
-    fn render_status_bar(&self) -> impl IntoElement {
+    fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
+        let theme = self.theme();
         div()
             .flex_none()
             .flex()
@@ -764,23 +786,45 @@ impl LstGpuiApp {
             .gap_3()
             .px_3()
             .py(metrics::px_for_scale(metrics::STATUS_HEIGHT_PAD, scale))
-            .bg(rgb(role::PANEL_BG))
+            .bg(rgb(theme.role.panel_bg))
             .border_1()
-            .border_color(rgb(role::BORDER))
+            .border_color(rgb(theme.role.border))
             .child(
                 div()
                     .truncate()
                     .text_sm()
-                    .text_color(rgb(role::TEXT_SUBTLE))
+                    .text_color(rgb(theme.role.text_subtle))
                     .child(self.model.status().to_string()),
             )
             .child(
                 div()
+                    .flex()
                     .flex_none()
-                    .font(typography::primary_font())
-                    .text_size(metrics::px_for_scale(12.0, scale))
-                    .text_color(rgb(role::TEXT_MUTED))
-                    .child(self.status_details()),
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        IconButton::new("theme-toggle-button", IconKind::Theme, theme).on_click(
+                            cx.listener(|this, _, _window, cx| {
+                                this.cycle_theme(cx);
+                                cx.stop_propagation();
+                            }),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(metrics::px_for_scale(12.0, scale))
+                            .text_color(rgb(theme.role.text_muted))
+                            .child(theme.name),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .font(typography::primary_font())
+                            .text_size(metrics::px_for_scale(12.0, scale))
+                            .text_color(rgb(theme.role.text_muted))
+                            .child(self.status_details()),
+                    ),
             )
     }
 
@@ -818,6 +862,7 @@ impl Render for LstGpuiApp {
         let show_gutter = self.model.show_gutter();
         let show_wrap = self.model.show_wrap();
         let gutter_mode = self.model.gutter_mode();
+        let theme = self.theme();
         let (active_scroll, active_cache, active_geometry) = {
             let active_view = self.active_view();
             (
@@ -833,7 +878,7 @@ impl Render for LstGpuiApp {
             .unwrap_or_else(|| {
                 metrics::px_for_scale(metrics::WINDOW_WIDTH - 48.0, self.ui_scale())
             });
-        let char_width = code_char_width(window, self.ui_scale());
+        let char_width = code_char_width(window, self.ui_scale(), theme);
         let show_search_decorations = self.model.find().visible;
         let (
             revision,
@@ -905,8 +950,8 @@ impl Render for LstGpuiApp {
 
         let root = attach_workspace_actions(div().flex().flex_col().key_context("Workspace"), cx)
             .size_full()
-            .bg(rgb(role::APP_BG))
-            .text_color(rgb(role::TEXT))
+            .bg(rgb(theme.role.app_bg))
+            .text_color(rgb(theme.role.text))
             .font(typography::primary_font())
             .child(
                 div()
@@ -937,8 +982,8 @@ impl Render for LstGpuiApp {
                                     .w_full()
                                     .overflow_hidden()
                                     .border_1()
-                                    .border_color(rgb(role::BORDER))
-                                    .bg(rgb(role::EDITOR_BG))
+                                    .border_color(rgb(theme.role.border))
+                                    .bg(rgb(theme.role.editor_bg))
                                     .font(typography::primary_font())
                                     .text_size(metrics::px_for_scale(
                                         metrics::CODE_FONT_SIZE,
@@ -1030,6 +1075,7 @@ impl Render for LstGpuiApp {
                                                                                 bounds,
                                                                                 char_width,
                                                                                 scale: ui_scale,
+                                                                                theme,
                                                                             },
                                                                             window,
                                                                         );
@@ -1081,6 +1127,7 @@ impl Render for LstGpuiApp {
                                                                         paint_state,
                                                                         scale: ui_scale,
                                                                         horizontal_scroll,
+                                                                        theme,
                                                                     },
                                                                     window,
                                                                     cx,
@@ -1112,7 +1159,7 @@ impl Render for LstGpuiApp {
                                     })
                             ),
                     )
-                    .child(self.render_status_bar()),
+                    .child(self.render_status_bar(cx)),
             );
         self.schedule_pending_reveal(window, cx);
         self.apply_focus(window, cx);
@@ -1120,11 +1167,17 @@ impl Render for LstGpuiApp {
     }
 }
 
+#[derive(Clone, Copy)]
+struct FindChipState {
+    active: bool,
+    enabled: bool,
+}
+
 fn find_chip<F>(
     id: &'static str,
     label: &'static str,
-    active: bool,
-    enabled: bool,
+    state: FindChipState,
+    theme: crate::ui::theme::Theme,
     scale: f32,
     cx: &mut Context<LstGpuiApp>,
     on_click: F,
@@ -1132,22 +1185,22 @@ fn find_chip<F>(
 where
     F: Fn(&mut LstGpuiApp, &mut Context<LstGpuiApp>) + 'static,
 {
-    let bg = if active {
-        role::ACCENT
+    let bg = if state.active {
+        theme.role.accent
     } else {
-        role::CONTROL_BG
+        theme.role.control_bg
     };
-    let hover_bg = if active {
-        role::ACCENT
+    let hover_bg = if state.active {
+        theme.role.accent
     } else {
-        role::CONTROL_BG_HOVER
+        theme.role.control_bg_hover
     };
-    let fg = if !enabled {
-        role::TEXT_MUTED
-    } else if active {
-        role::TEXT
+    let fg = if !state.enabled {
+        theme.role.text_muted
+    } else if state.active {
+        theme.role.accent_text
     } else {
-        role::TEXT_SUBTLE
+        theme.role.text_subtle
     };
     let label_id: SharedString = id.into();
     div()
@@ -1161,7 +1214,7 @@ where
         .min_w(metrics::px_for_scale(26.0, scale))
         .rounded_sm()
         .bg(rgb(bg))
-        .when(enabled, |s| {
+        .when(state.enabled, |s| {
             s.cursor(CursorStyle::PointingHand)
                 .hover(|h| h.bg(rgb(hover_bg)))
                 .on_click(cx.listener(move |this, _, _window, cx| {

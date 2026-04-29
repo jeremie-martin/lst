@@ -20,7 +20,11 @@ mod tests;
 mod ui;
 mod viewport;
 
-use crate::ui::{input_keybindings, theme::metrics, InputField, InputFieldEvent};
+use crate::ui::{
+    input_keybindings,
+    theme::{metrics, Theme, ThemeId},
+    InputField, InputFieldEvent,
+};
 #[cfg(test)]
 pub(crate) use input_adapter::{char_range_to_utf16_range, utf16_range_to_char_range_in_text};
 #[cfg(all(test, feature = "internal-invariants"))]
@@ -76,6 +80,7 @@ actions!(
         MoveTabRight,
         ToggleWrap,
         ToggleLineNumberMode,
+        ToggleTheme,
         CopySelection,
         CutSelection,
         PasteClipboard,
@@ -226,6 +231,7 @@ struct LstGpuiApp {
     recent_content_search_inflight: HashSet<String>,
     force_editor_focus: bool,
     zoom_level: i32,
+    theme_id: ThemeId,
     exit_clipboard: Arc<dyn ExitClipboard>,
     _shell_subscriptions: Vec<Subscription>,
 }
@@ -284,11 +290,13 @@ impl LstGpuiApp {
             recent_content_search_inflight: HashSet::new(),
             force_editor_focus: false,
             zoom_level: 0,
+            theme_id: ThemeId::default(),
             exit_clipboard: Arc::new(SubprocessExitClipboard),
             _shell_subscriptions: Vec::new(),
         };
         let show_wrap = app.model.show_wrap();
         app.sync_tab_views(show_wrap);
+        app.sync_input_themes(cx);
 
         app._shell_subscriptions.push(
             cx.subscribe(&find_query_input, |this, _, event: &InputFieldEvent, cx| {
@@ -333,6 +341,7 @@ impl LstGpuiApp {
                 .map(|tab| tab.id())
                 .collect(),
             zoom_level: self.zoom_level,
+            theme_id: self.theme_id,
         }
     }
 
@@ -373,6 +382,39 @@ impl LstGpuiApp {
 
     fn ui_px(&self, value: f32) -> Pixels {
         metrics::px_for_scale(value, self.ui_scale())
+    }
+
+    fn theme(&self) -> Theme {
+        self.theme_id.theme()
+    }
+
+    fn sync_input_themes(&mut self, cx: &mut Context<Self>) {
+        let theme = self.theme();
+        self.find_query_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.find_replace_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.goto_line_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.recent_query_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+    }
+
+    fn set_theme(&mut self, theme_id: ThemeId, cx: &mut Context<Self>) {
+        if self.theme_id == theme_id {
+            return;
+        }
+
+        self.theme_id = theme_id;
+        self.sync_input_themes(cx);
+        for view in self.tab_views.values_mut() {
+            view.cache.borrow_mut().clear_shaped_lines();
+        }
+        cx.notify();
+    }
+
+    fn cycle_theme(&mut self, cx: &mut Context<Self>) {
+        self.set_theme(self.theme_id.next(), cx);
     }
 
     fn set_zoom_level(&mut self, level: i32, window: &mut Window, cx: &mut Context<Self>) {
@@ -1004,7 +1046,7 @@ impl LstGpuiApp {
             .bounds
             .map(|bounds| bounds.size.width)
             .unwrap_or_else(|| self.ui_px(metrics::WINDOW_WIDTH - 48.0));
-        let char_width = code_char_width(window, self.ui_scale());
+        let char_width = code_char_width(window, self.ui_scale(), self.theme());
         let revision = self.model.active_tab().revision();
         let lines = self.model.active_tab_lines();
         let layout = {
@@ -1312,6 +1354,7 @@ pub(crate) struct AppSnapshot {
     #[cfg(feature = "internal-invariants")]
     pub(crate) tab_view_ids: Vec<TabId>,
     pub(crate) zoom_level: i32,
+    pub(crate) theme_id: ThemeId,
 }
 
 #[cfg(test)]

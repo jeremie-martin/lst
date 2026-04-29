@@ -4,23 +4,25 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::ui::theme::{metrics, role};
+use crate::ui::theme::{metrics, Theme};
 
 #[derive(IntoElement)]
 pub struct Tab {
     div: Stateful<gpui::Div>,
     active: bool,
+    theme: Theme,
     group_name: SharedString,
     children: SmallVec<[AnyElement; 2]>,
     end_slot: Option<AnyElement>,
 }
 
 impl Tab {
-    pub fn new(id: impl Into<gpui::ElementId>) -> Self {
+    pub fn new(id: impl Into<gpui::ElementId>, theme: Theme) -> Self {
         let id = id.into();
         Self {
             div: div().id(id.clone()),
             active: false,
+            theme,
             group_name: format!("tab-{id:?}").into(),
             children: SmallVec::new(),
             end_slot: None,
@@ -56,15 +58,16 @@ impl RenderOnce for Tab {
     fn render(self, window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
         let rem_size = window.rem_size();
         let background = if self.active {
-            rgb(role::EDITOR_BG)
+            rgb(self.theme.role.editor_bg)
         } else {
-            rgb(role::PANEL_BG)
+            rgb(self.theme.role.panel_bg)
         };
         let text = if self.active {
-            rgb(role::TEXT)
+            rgb(self.theme.role.text)
         } else {
-            rgb(role::TEXT_SUBTLE)
+            rgb(self.theme.role.text_subtle)
         };
+        let hover_bg = self.theme.role.editor_bg;
 
         self.div
             .group(self.group_name)
@@ -78,10 +81,10 @@ impl RenderOnce for Tab {
             .gap(metrics::px_for_rem(metrics::SHELL_GAP, rem_size))
             .items_center()
             .border_r_1()
-            .border_color(rgb(role::BORDER))
+            .border_color(rgb(self.theme.role.border))
             .bg(background)
             .cursor(CursorStyle::PointingHand)
-            .hover(|style| style.bg(rgb(role::EDITOR_BG)))
+            .hover(move |style| style.bg(rgb(hover_bg)))
             .child(
                 div()
                     .flex()
@@ -114,7 +117,7 @@ impl RenderOnce for Tab {
                         .right_0()
                         .bottom_0()
                         .h(px(2.0))
-                        .bg(rgb(role::ACCENT))
+                        .bg(rgb(self.theme.role.accent))
                         .into_any_element(),
                 ),
             )

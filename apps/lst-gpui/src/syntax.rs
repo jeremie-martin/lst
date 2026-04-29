@@ -1,4 +1,4 @@
-use crate::ui::theme::syntax as theme_syntax;
+use crate::ui::theme::SyntaxRole;
 use lst_editor::Language;
 use std::sync::LazyLock;
 use tree_sitter_highlight::{
@@ -291,7 +291,7 @@ pub(crate) enum SyntaxMode {
 pub(crate) struct SyntaxSpan {
     pub(crate) start: usize,
     pub(crate) end: usize,
-    pub(crate) color: u32,
+    pub(crate) role: SyntaxRole,
 }
 
 #[derive(Clone)]
@@ -340,54 +340,54 @@ fn highlight_config(
     config
 }
 
-fn tree_sitter_color_for_capture(index: usize) -> Option<u32> {
+fn tree_sitter_role_for_capture(index: usize) -> Option<SyntaxRole> {
     let capture = TREE_SITTER_CAPTURE_NAMES.get(index).copied()?;
     if capture.starts_with("comment") {
-        Some(theme_syntax::COMMENT)
+        Some(SyntaxRole::Comment)
     } else if capture.starts_with("string") {
-        Some(theme_syntax::STRING)
+        Some(SyntaxRole::String)
     } else if matches!(
         capture,
         "boolean" | "number" | "constant" | "constant.builtin"
     ) {
-        Some(theme_syntax::CONSTANT)
+        Some(SyntaxRole::Constant)
     } else if capture.starts_with("function")
         || capture.starts_with("definition.function")
         || capture.starts_with("definition.method")
         || capture == "reference.call"
     {
-        Some(theme_syntax::FUNCTION)
+        Some(SyntaxRole::Function)
     } else if capture.starts_with("keyword") {
-        Some(theme_syntax::KEYWORD)
+        Some(SyntaxRole::Keyword)
     } else if capture == "operator" {
-        Some(theme_syntax::OPERATOR)
+        Some(SyntaxRole::Operator)
     } else if capture.starts_with("type")
         || capture.starts_with("definition.class")
         || capture.starts_with("definition.interface")
         || capture == "reference.class"
         || capture == "reference.type"
     {
-        Some(theme_syntax::TYPE)
+        Some(SyntaxRole::Type)
     } else if capture.starts_with("tag") {
-        Some(theme_syntax::TAG)
+        Some(SyntaxRole::Tag)
     } else if capture == "text.title" {
-        Some(theme_syntax::TITLE)
+        Some(SyntaxRole::Title)
     } else if capture == "text.strong" {
-        Some(theme_syntax::STRONG)
+        Some(SyntaxRole::Strong)
     } else if capture == "text.emphasis" {
-        Some(theme_syntax::EMPHASIS)
+        Some(SyntaxRole::Emphasis)
     } else if capture == "text.literal" {
-        Some(theme_syntax::LITERAL)
+        Some(SyntaxRole::Literal)
     } else if capture == "text.reference" || capture == "text.uri" {
-        Some(theme_syntax::REFERENCE)
+        Some(SyntaxRole::Reference)
     } else if matches!(capture, "attribute" | "property" | "property.builtin") {
-        Some(theme_syntax::PROPERTY)
+        Some(SyntaxRole::Property)
     } else if capture == "escape" || capture.starts_with("punctuation.special") {
-        Some(theme_syntax::ESCAPE)
+        Some(SyntaxRole::Escape)
     } else if capture.starts_with("punctuation") {
-        Some(theme_syntax::PUNCTUATION)
+        Some(SyntaxRole::Punctuation)
     } else if capture == "label" || capture == "module" || capture == "namespace" {
-        Some(theme_syntax::LABEL)
+        Some(SyntaxRole::Label)
     } else {
         None
     }
@@ -426,7 +426,7 @@ fn push_highlight_span(
     display_ends: &[usize],
     mut start: usize,
     end: usize,
-    color: u32,
+    role: SyntaxRole,
 ) {
     while start < end {
         let line_ix = line_starts
@@ -441,7 +441,7 @@ fn push_highlight_span(
             lines[line_ix].push(SyntaxSpan {
                 start: start - line_start,
                 end: visible_end - line_start,
-                color,
+                role,
             });
         }
 
@@ -470,13 +470,13 @@ fn highlight_source(language: SyntaxLanguage, source: &str) -> Vec<Vec<SyntaxSpa
                 let _ = stack.pop();
             }
             Ok(TreeSitterHighlightEvent::Source { start, end }) if start < end => {
-                let Some(color) = stack
+                let Some(role) = stack
                     .last()
-                    .and_then(|highlight| tree_sitter_color_for_capture(highlight.0))
+                    .and_then(|highlight| tree_sitter_role_for_capture(highlight.0))
                 else {
                     continue;
                 };
-                push_highlight_span(&mut lines, &line_starts, &display_ends, start, end, color);
+                push_highlight_span(&mut lines, &line_starts, &display_ends, start, end, role);
             }
             Ok(TreeSitterHighlightEvent::Source { .. }) => {}
             Err(_) => return vec![Vec::new(); line_starts.len()],

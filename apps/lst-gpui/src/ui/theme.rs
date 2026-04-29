@@ -1,81 +1,226 @@
 use gpui::{font, px, Font, FontFallbacks, Pixels};
 
-pub mod palette {
-    pub const CHROME: u32 = 0x181818;
-    pub const PANEL: u32 = 0x252526;
-    pub const EDITOR: u32 = 0x1F1F1F;
-    pub const CONTROL: u32 = 0x313131;
-    pub const CONTROL_HOVER: u32 = 0x3C3C3C;
-    pub const BORDER: u32 = 0x3C3C3C;
-    pub const TEXT: u32 = 0xCCCCCC;
-    pub const TEXT_SUBTLE: u32 = 0xA6A6A6;
-    pub const TEXT_MUTED: u32 = 0x808080;
-    pub const ACCENT_BLUE: u32 = 0x0078D4;
-    pub const ERROR_RED: u32 = 0xF14C4C;
-    pub const SELECTION_BLUE: u32 = 0x264F78;
-    pub const SEARCH_MATCH: u32 = 0x3A3D41;
-    pub const SEARCH_ACTIVE_MATCH: u32 = 0x6B4F1D;
-    pub const CURRENT_LINE: u32 = 0x2A2D2E;
-    pub const GUTTER: u32 = 0x181818;
-    pub const SCROLLBAR_THUMB: u32 = 0x5A5A5A;
-    pub const SCROLLBAR_THUMB_ACTIVE: u32 = 0x808080;
-
-    pub const SYNTAX_BLUE: u32 = 0x569CD6;
-    pub const SYNTAX_GREEN: u32 = 0x6A9955;
-    pub const SYNTAX_ORANGE: u32 = 0xCE9178;
-    pub const SYNTAX_YELLOW: u32 = 0xDCDCAA;
-    pub const SYNTAX_GOLD: u32 = 0xD7BA7D;
-    pub const SYNTAX_TEAL: u32 = 0x4EC9B0;
-    pub const SYNTAX_LIGHT_BLUE: u32 = 0x9CDCFE;
-    pub const SYNTAX_PURPLE: u32 = 0xC586C0;
-    pub const SYNTAX_NUMBER: u32 = 0xB5CEA8;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) enum ThemeId {
+    #[default]
+    Dark,
+    Light,
 }
 
-pub mod role {
-    use super::palette;
+impl ThemeId {
+    pub(crate) fn next(self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Dark,
+        }
+    }
 
-    pub const APP_BG: u32 = palette::CHROME;
-    pub const PANEL_BG: u32 = palette::PANEL;
-    pub const EDITOR_BG: u32 = palette::EDITOR;
-    pub const CONTROL_BG: u32 = palette::CONTROL;
-    pub const CONTROL_BG_HOVER: u32 = palette::CONTROL_HOVER;
-    pub const BORDER: u32 = palette::BORDER;
-    pub const TEXT: u32 = palette::TEXT;
-    pub const TEXT_SUBTLE: u32 = palette::TEXT_SUBTLE;
-    pub const TEXT_MUTED: u32 = palette::TEXT_MUTED;
-    pub const ACCENT: u32 = palette::ACCENT_BLUE;
-    pub const ERROR_TEXT: u32 = palette::ERROR_RED;
-    pub const SELECTION_BG: u32 = palette::SELECTION_BLUE;
-    pub const SEARCH_MATCH_BG: u32 = palette::SEARCH_MATCH;
-    pub const SEARCH_ACTIVE_MATCH_BG: u32 = palette::SEARCH_ACTIVE_MATCH;
-    pub const CARET: u32 = palette::TEXT;
-    pub const CURRENT_LINE_BG: u32 = palette::CURRENT_LINE;
-    pub const GUTTER_BG: u32 = palette::GUTTER;
-    pub const SCROLLBAR_THUMB: u32 = palette::SCROLLBAR_THUMB;
-    pub const SCROLLBAR_THUMB_ACTIVE: u32 = palette::SCROLLBAR_THUMB_ACTIVE;
+    pub(crate) fn theme(self) -> Theme {
+        match self {
+            Self::Dark => DARK,
+            Self::Light => LIGHT,
+        }
+    }
 }
 
-pub mod syntax {
-    use super::{palette, role};
-
-    pub const COMMENT: u32 = palette::SYNTAX_GREEN;
-    pub const STRING: u32 = palette::SYNTAX_ORANGE;
-    pub const CONSTANT: u32 = palette::SYNTAX_NUMBER;
-    pub const FUNCTION: u32 = palette::SYNTAX_YELLOW;
-    pub const KEYWORD: u32 = palette::SYNTAX_BLUE;
-    pub const OPERATOR: u32 = role::TEXT;
-    pub const TYPE: u32 = palette::SYNTAX_TEAL;
-    pub const TAG: u32 = palette::SYNTAX_BLUE;
-    pub const TITLE: u32 = palette::SYNTAX_BLUE;
-    pub const STRONG: u32 = palette::SYNTAX_BLUE;
-    pub const EMPHASIS: u32 = palette::SYNTAX_PURPLE;
-    pub const LITERAL: u32 = palette::SYNTAX_ORANGE;
-    pub const REFERENCE: u32 = palette::SYNTAX_LIGHT_BLUE;
-    pub const PROPERTY: u32 = palette::SYNTAX_LIGHT_BLUE;
-    pub const ESCAPE: u32 = palette::SYNTAX_GOLD;
-    pub const PUNCTUATION: u32 = role::TEXT_MUTED;
-    pub const LABEL: u32 = palette::SYNTAX_LIGHT_BLUE;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Theme {
+    pub(crate) id: ThemeId,
+    pub(crate) name: &'static str,
+    pub(crate) role: RoleColors,
+    pub(crate) syntax: SyntaxColors,
 }
+
+impl Theme {
+    pub(crate) fn style_key(self) -> u64 {
+        match self.id {
+            ThemeId::Dark => 1,
+            ThemeId::Light => 2,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RoleColors {
+    pub(crate) app_bg: u32,
+    pub(crate) panel_bg: u32,
+    pub(crate) editor_bg: u32,
+    pub(crate) control_bg: u32,
+    pub(crate) control_bg_hover: u32,
+    pub(crate) border: u32,
+    pub(crate) text: u32,
+    pub(crate) text_subtle: u32,
+    pub(crate) text_muted: u32,
+    pub(crate) accent: u32,
+    pub(crate) accent_text: u32,
+    pub(crate) error_text: u32,
+    pub(crate) selection_bg: u32,
+    pub(crate) search_match_bg: u32,
+    pub(crate) search_active_match_bg: u32,
+    pub(crate) caret: u32,
+    pub(crate) current_line_bg: u32,
+    pub(crate) gutter_bg: u32,
+    pub(crate) scrollbar_thumb: u32,
+    pub(crate) scrollbar_thumb_active: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum SyntaxRole {
+    Comment,
+    String,
+    Constant,
+    Function,
+    Keyword,
+    Operator,
+    Type,
+    Tag,
+    Title,
+    Strong,
+    Emphasis,
+    Literal,
+    Reference,
+    Property,
+    Escape,
+    Punctuation,
+    Label,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SyntaxColors {
+    pub(crate) comment: u32,
+    pub(crate) string: u32,
+    pub(crate) constant: u32,
+    pub(crate) function: u32,
+    pub(crate) keyword: u32,
+    pub(crate) operator: u32,
+    pub(crate) ty: u32,
+    pub(crate) tag: u32,
+    pub(crate) title: u32,
+    pub(crate) strong: u32,
+    pub(crate) emphasis: u32,
+    pub(crate) literal: u32,
+    pub(crate) reference: u32,
+    pub(crate) property: u32,
+    pub(crate) escape: u32,
+    pub(crate) punctuation: u32,
+    pub(crate) label: u32,
+}
+
+impl SyntaxColors {
+    pub(crate) fn color(self, role: SyntaxRole) -> u32 {
+        match role {
+            SyntaxRole::Comment => self.comment,
+            SyntaxRole::String => self.string,
+            SyntaxRole::Constant => self.constant,
+            SyntaxRole::Function => self.function,
+            SyntaxRole::Keyword => self.keyword,
+            SyntaxRole::Operator => self.operator,
+            SyntaxRole::Type => self.ty,
+            SyntaxRole::Tag => self.tag,
+            SyntaxRole::Title => self.title,
+            SyntaxRole::Strong => self.strong,
+            SyntaxRole::Emphasis => self.emphasis,
+            SyntaxRole::Literal => self.literal,
+            SyntaxRole::Reference => self.reference,
+            SyntaxRole::Property => self.property,
+            SyntaxRole::Escape => self.escape,
+            SyntaxRole::Punctuation => self.punctuation,
+            SyntaxRole::Label => self.label,
+        }
+    }
+}
+
+const DARK: Theme = Theme {
+    id: ThemeId::Dark,
+    name: "Dark",
+    role: RoleColors {
+        app_bg: 0x181818,
+        panel_bg: 0x252526,
+        editor_bg: 0x1F1F1F,
+        control_bg: 0x313131,
+        control_bg_hover: 0x3C3C3C,
+        border: 0x3C3C3C,
+        text: 0xCCCCCC,
+        text_subtle: 0xA6A6A6,
+        text_muted: 0x808080,
+        accent: 0x0078D4,
+        accent_text: 0xFFFFFF,
+        error_text: 0xF14C4C,
+        selection_bg: 0x264F78,
+        search_match_bg: 0x3A3D41,
+        search_active_match_bg: 0x6B4F1D,
+        caret: 0xCCCCCC,
+        current_line_bg: 0x2A2D2E,
+        gutter_bg: 0x181818,
+        scrollbar_thumb: 0x5A5A5A,
+        scrollbar_thumb_active: 0x808080,
+    },
+    syntax: SyntaxColors {
+        comment: 0x6A9955,
+        string: 0xCE9178,
+        constant: 0xB5CEA8,
+        function: 0xDCDCAA,
+        keyword: 0x569CD6,
+        operator: 0xCCCCCC,
+        ty: 0x4EC9B0,
+        tag: 0x569CD6,
+        title: 0x569CD6,
+        strong: 0x569CD6,
+        emphasis: 0xC586C0,
+        literal: 0xCE9178,
+        reference: 0x9CDCFE,
+        property: 0x9CDCFE,
+        escape: 0xD7BA7D,
+        punctuation: 0x808080,
+        label: 0x9CDCFE,
+    },
+};
+
+const LIGHT: Theme = Theme {
+    id: ThemeId::Light,
+    name: "Light",
+    role: RoleColors {
+        app_bg: 0xF3F3F3,
+        panel_bg: 0xF8F8F8,
+        editor_bg: 0xFFFFFF,
+        control_bg: 0xEDEDED,
+        control_bg_hover: 0xE2E2E2,
+        border: 0xD0D0D0,
+        text: 0x1F2328,
+        text_subtle: 0x4B5563,
+        text_muted: 0x6E7781,
+        accent: 0x0969DA,
+        accent_text: 0xFFFFFF,
+        error_text: 0xCF222E,
+        selection_bg: 0xADD6FF,
+        search_match_bg: 0xFFF2CC,
+        search_active_match_bg: 0xF4B400,
+        caret: 0x1F2328,
+        current_line_bg: 0xF6F8FA,
+        gutter_bg: 0xF6F8FA,
+        scrollbar_thumb: 0xB8B8B8,
+        scrollbar_thumb_active: 0x8C8C8C,
+    },
+    syntax: SyntaxColors {
+        comment: 0x008000,
+        string: 0xA31515,
+        constant: 0x098658,
+        function: 0x795E26,
+        keyword: 0x0000FF,
+        operator: 0x1F2328,
+        ty: 0x267F99,
+        tag: 0x800000,
+        title: 0x0000FF,
+        strong: 0x0000FF,
+        emphasis: 0xAF00DB,
+        literal: 0xA31515,
+        reference: 0x001080,
+        property: 0x001080,
+        escape: 0x811F3F,
+        punctuation: 0x6E7781,
+        label: 0x001080,
+    },
+};
 
 pub mod typography {
     use super::{font, Font, FontFallbacks};

@@ -13,7 +13,7 @@ use crate::{
     SelectRight, SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft,
     SelectWordRight, SwapRedoBranch, ToggleBlockComment, ToggleComment, ToggleFindCase,
     ToggleFindInSelection, ToggleFindRegex, ToggleFindWholeWord, ToggleLineNumberMode,
-    ToggleRecentFiles, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
+    ToggleRecentFiles, ToggleTheme, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
@@ -102,6 +102,9 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
     }));
     let root = root.on_action(cx.listener(|this, _: &ToggleRecentFiles, window, cx| {
         this.toggle_recent_files_panel(window, cx);
+    }));
+    let root = root.on_action(cx.listener(|this, _: &ToggleTheme, _window, cx| {
+        this.cycle_theme(cx);
     }));
 
     let root = root.on_action(cx.listener(|this, _: &MoveUp, window, cx| {

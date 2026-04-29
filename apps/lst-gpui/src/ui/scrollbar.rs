@@ -1,6 +1,6 @@
 use gpui::{fill, point, px, rgb, size, Bounds, Pixels, Window};
 
-use crate::ui::theme::{metrics, role};
+use crate::ui::theme::{metrics, Theme};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VerticalScrollbarLayout {
@@ -92,12 +92,13 @@ pub(crate) fn paint_vertical_scrollbar(
     active: bool,
     hovered: bool,
     scale: f32,
+    theme: Theme,
     window: &mut Window,
 ) {
     let color = if active || hovered {
-        role::SCROLLBAR_THUMB_ACTIVE
+        theme.role.scrollbar_thumb_active
     } else {
-        role::SCROLLBAR_THUMB
+        theme.role.scrollbar_thumb
     };
     let radius = metrics::px_for_scale(metrics::SCROLLBAR_THUMB_WIDTH / 2.0, scale);
     window.paint_quad(fill(layout.thumb_bounds, rgb(color)).corner_radii(radius));
@@ -193,12 +194,13 @@ pub(crate) fn paint_horizontal_scrollbar(
     active: bool,
     hovered: bool,
     scale: f32,
+    theme: Theme,
     window: &mut Window,
 ) {
     let color = if active || hovered {
-        role::SCROLLBAR_THUMB_ACTIVE
+        theme.role.scrollbar_thumb_active
     } else {
-        role::SCROLLBAR_THUMB
+        theme.role.scrollbar_thumb
     };
     let radius = metrics::px_for_scale(metrics::SCROLLBAR_THUMB_WIDTH / 2.0, scale);
     window.paint_quad(fill(layout.thumb_bounds, rgb(color)).corner_radii(radius));

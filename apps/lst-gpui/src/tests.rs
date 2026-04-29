@@ -4,7 +4,7 @@ use crate::ui::{
         horizontal_scrollbar_layout, vertical_scrollbar_layout, HorizontalScrollbarLayout,
         VerticalScrollbarLayout,
     },
-    theme::syntax as theme_syntax,
+    theme::{SyntaxRole, ThemeId},
 };
 use gpui::{
     point, px, Bounds, ClipboardItem, Entity, EntityInputHandler, Keystroke, Modifiers,
@@ -253,6 +253,22 @@ fn launch_args_accept_window_title() {
 #[test]
 fn primary_font_family_is_tx02() {
     assert_eq!(crate::ui::theme::typography::PRIMARY_FONT_FAMILY, "TX-02");
+}
+
+#[test]
+fn built_in_themes_cycle_between_dark_and_light() {
+    assert_eq!(ThemeId::Dark.next(), ThemeId::Light);
+    assert_eq!(ThemeId::Light.next(), ThemeId::Dark);
+
+    let dark = ThemeId::Dark.theme();
+    let light = ThemeId::Light.theme();
+    assert_eq!(ThemeId::default(), ThemeId::Dark);
+    assert_ne!(dark.role.editor_bg, light.role.editor_bg);
+    assert_ne!(dark.role.text, light.role.text);
+    assert_ne!(
+        dark.syntax.color(SyntaxRole::Keyword),
+        light.syntax.color(SyntaxRole::Keyword)
+    );
 }
 
 #[test]
@@ -1547,7 +1563,7 @@ fn rendered_wrapped_rows_fill_viewport_width_except_remainder(cx: &mut TestAppCo
         let bounds = app.active_viewport_bounds().expect("viewport bounds");
         let rows = app.active_painted_rows();
 
-        let char_width = crate::viewport::code_char_width(window, app.ui_scale());
+        let char_width = crate::viewport::code_char_width(window, app.ui_scale(), app.theme());
         let wrap_columns = app.active_wrap_columns(window);
         let content_width = bounds.size.width
             - crate::viewport::code_origin_pad(app.model.show_gutter(), app.ui_scale());
@@ -1602,11 +1618,12 @@ fn code_font_is_effectively_monospace_for_basic_ascii(cx: &mut TestAppContext) {
     cx.update_window_entity(&view, |app, window, _cx| {
         let font = crate::ui::theme::typography::primary_font();
         let font_size = app.ui_px(crate::ui::theme::metrics::CODE_FONT_SIZE);
+        let theme = app.theme();
         let style_for = |text: &str| {
             [gpui::TextRun {
                 len: text.len(),
                 font: font.clone(),
-                color: gpui::rgb(crate::ui::theme::role::TEXT).into(),
+                color: gpui::rgb(theme.role.text).into(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -1653,7 +1670,8 @@ fn exact_wrap_multiples_fill_every_visual_row(cx: &mut TestAppContext) {
         let rows = app.active_painted_rows();
 
         let wrap_columns = app.active_wrap_columns(window);
-        let char_width = crate::viewport::code_char_width(window, app.ui_scale()) / px(1.0);
+        let char_width =
+            crate::viewport::code_char_width(window, app.ui_scale(), app.theme()) / px(1.0);
         let content_width = bounds.size.width
             - crate::viewport::code_origin_pad(app.model.show_gutter(), app.ui_scale());
         let row_lengths: Vec<usize> = rows
@@ -2088,15 +2106,9 @@ fn rust_highlighting_keeps_multiline_comment_context() {
         "/* first line\nsecond line */\nlet x = 1;\n",
     );
 
-    assert!(lines[0]
-        .iter()
-        .any(|span| span.color == theme_syntax::COMMENT));
-    assert!(lines[1]
-        .iter()
-        .any(|span| span.color == theme_syntax::COMMENT));
-    assert!(lines[2]
-        .iter()
-        .all(|span| span.color != theme_syntax::COMMENT));
+    assert!(lines[0].iter().any(|span| span.role == SyntaxRole::Comment));
+    assert!(lines[1].iter().any(|span| span.role == SyntaxRole::Comment));
+    assert!(lines[2].iter().all(|span| span.role != SyntaxRole::Comment));
 }
 
 #[test]
@@ -2189,12 +2201,8 @@ fn python_highlighting_keeps_multiline_string_context() {
         "value = \"\"\"first\nsecond\"\"\"\nprint(value)\n",
     );
 
-    assert!(lines[0]
-        .iter()
-        .any(|span| span.color == theme_syntax::STRING));
-    assert!(lines[1]
-        .iter()
-        .any(|span| span.color == theme_syntax::STRING));
+    assert!(lines[0].iter().any(|span| span.role == SyntaxRole::String));
+    assert!(lines[1].iter().any(|span| span.role == SyntaxRole::String));
 }
 
 #[test]
@@ -2204,15 +2212,9 @@ fn javascript_highlighting_keeps_multiline_comment_context() {
         "/* first\nsecond */\nconst value = 1;\n",
     );
 
-    assert!(lines[0]
-        .iter()
-        .any(|span| span.color == theme_syntax::COMMENT));
-    assert!(lines[1]
-        .iter()
-        .any(|span| span.color == theme_syntax::COMMENT));
-    assert!(lines[2]
-        .iter()
-        .all(|span| span.color != theme_syntax::COMMENT));
+    assert!(lines[0].iter().any(|span| span.role == SyntaxRole::Comment));
+    assert!(lines[1].iter().any(|span| span.role == SyntaxRole::Comment));
+    assert!(lines[2].iter().all(|span| span.role != SyntaxRole::Comment));
 }
 
 #[cfg(feature = "internal-invariants")]
@@ -2299,6 +2301,25 @@ fn zoom_actions_update_window_scale(cx: &mut TestAppContext) {
     });
     assert_eq!(reset_level, 0);
     assert_eq!(reset_rem_size, default_rem_size);
+}
+
+#[gpui::test]
+fn toggle_theme_changes_only_runtime_theme(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+    let initial = app_snapshot(&view, cx);
+    assert_eq!(initial.theme_id, ThemeId::Dark);
+
+    cx.dispatch_action(ToggleTheme);
+    cx.run_until_parked();
+    let light = app_snapshot(&view, cx);
+    assert_eq!(light.theme_id, ThemeId::Light);
+    assert_eq!(light.model.text, initial.model.text);
+    assert_eq!(light.model.tab_ids, initial.model.tab_ids);
+    assert_eq!(light.focus_target, initial.focus_target);
+
+    cx.dispatch_action(ToggleTheme);
+    cx.run_until_parked();
+    assert_eq!(app_snapshot(&view, cx).theme_id, ThemeId::Dark);
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use crate::ui::theme::{metrics, role, typography};
+use crate::ui::theme::{metrics, typography, Theme};
 use gpui::{
     fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString,
     TextRun, Window,
@@ -39,6 +39,11 @@ pub(crate) struct ViewportCache {
 impl ViewportCache {
     pub(crate) fn clear_code_lines(&mut self) {
         self.code_lines.clear();
+    }
+
+    pub(crate) fn clear_shaped_lines(&mut self) {
+        self.code_lines.clear();
+        self.gutter_lines.clear();
     }
 }
 
@@ -108,6 +113,7 @@ pub(crate) struct ViewportPreparation<'a> {
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) char_width: Pixels,
     pub(crate) scale: f32,
+    pub(crate) theme: Theme,
 }
 
 pub(crate) struct ViewportPaintInput<'a> {
@@ -122,6 +128,7 @@ pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) paint_state: ViewportPaintState,
     pub(crate) scale: f32,
     pub(crate) horizontal_scroll: Pixels,
+    pub(crate) theme: Theme,
 }
 
 pub(crate) fn buffer_content_height(visual_rows: usize, scale: f32) -> Pixels {
@@ -187,6 +194,7 @@ fn text_runs_for_segment(
     segment_end_col: usize,
     spans: &[SyntaxSpan],
     base_run: &TextRun,
+    theme: Theme,
 ) -> (Vec<TextRun>, u64) {
     let segment_start = char_to_byte_index(line_text, segment_start_col);
     let segment_end = char_to_byte_index(line_text, segment_end_col);
@@ -200,12 +208,13 @@ fn text_runs_for_segment(
             local_spans.push(SyntaxSpan {
                 start: start - segment_start,
                 end: end - segment_start,
-                color: span.color,
+                role: span.role,
             });
         }
     }
 
     let mut hasher = DefaultHasher::new();
+    theme.style_key().hash(&mut hasher);
     local_spans.hash(&mut hasher);
     let style_key = hasher.finish();
 
@@ -220,7 +229,7 @@ fn text_runs_for_segment(
         }
         runs.push(TextRun {
             len: span.end - span.start,
-            color: rgb(span.color).into(),
+            color: rgb(theme.syntax.color(span.role)).into(),
             ..base_run.clone()
         });
         cursor = span.end;
@@ -251,7 +260,7 @@ pub(crate) fn code_origin_pad(show_gutter: bool, scale: f32) -> Pixels {
     }
 }
 
-pub(crate) fn code_char_width(window: &mut Window, scale: f32) -> Pixels {
+pub(crate) fn code_char_width(window: &mut Window, scale: f32, theme: Theme) -> Pixels {
     let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
     let font = typography::primary_font();
     let probe = SharedString::from("00000000");
@@ -261,7 +270,7 @@ pub(crate) fn code_char_width(window: &mut Window, scale: f32) -> Pixels {
         &[TextRun {
             len: probe.len(),
             font,
-            color: rgb(role::TEXT).into(),
+            color: rgb(theme.role.text).into(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -544,6 +553,7 @@ pub(crate) fn prepare_viewport_paint_state(
         bounds,
         char_width,
         scale,
+        theme,
     } = input;
     let row_height = metrics::px_for_scale(metrics::ROW_HEIGHT, scale);
     let viewport_height = if bounds.size.height > px(0.0) {
@@ -558,7 +568,7 @@ pub(crate) fn prepare_viewport_paint_state(
     let code_run = TextRun {
         len: 0,
         font: font.clone(),
-        color: rgb(role::TEXT).into(),
+        color: rgb(theme.role.text).into(),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -566,7 +576,7 @@ pub(crate) fn prepare_viewport_paint_state(
     let gutter_run = TextRun {
         len: 0,
         font,
-        color: rgb(role::TEXT_MUTED).into(),
+        color: rgb(theme.role.text_muted).into(),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -638,6 +648,7 @@ pub(crate) fn prepare_viewport_paint_state(
                 segment.end_col,
                 &highlight_spans,
                 &code_run,
+                theme,
             );
             let code_line = shape_cached_segment(
                 &mut cache.code_lines,
@@ -653,7 +664,7 @@ pub(crate) fn prepare_viewport_paint_state(
                     &mut cache.gutter_lines,
                     line_ix,
                     SharedString::from(gutter_mode.format(line_ix, cursor_line)),
-                    0,
+                    theme.style_key(),
                     &gutter_run,
                     font_size,
                     window,
@@ -754,6 +765,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         paint_state,
         scale,
         horizontal_scroll,
+        theme,
     } = input;
     let line_height = window.line_height();
     let row_height = metrics::px_for_scale(metrics::ROW_HEIGHT, scale);
@@ -773,9 +785,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         window.paint_quad(fill(
             row_bounds,
             if cursor_in_row {
-                rgb(role::CURRENT_LINE_BG)
+                rgb(theme.role.current_line_bg)
             } else {
-                rgb(role::EDITOR_BG)
+                rgb(theme.role.editor_bg)
             },
         ));
 
@@ -786,7 +798,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 code_origin_x,
                 row_height,
                 scale,
-                role::SEARCH_MATCH_BG,
+                theme.role.search_match_bg,
                 window,
             );
         }
@@ -798,7 +810,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 code_origin_x,
                 row_height,
                 scale,
-                role::SEARCH_ACTIVE_MATCH_BG,
+                theme.role.search_active_match_bg,
                 window,
             );
         }
@@ -809,7 +821,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             code_origin_x,
             row_height,
             scale,
-            role::SELECTION_BG,
+            theme.role.selection_bg,
             window,
         );
 
@@ -837,9 +849,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             window.paint_quad(fill(
                 Bounds::new(point(cursor_x, row.row_top), size(cursor_width, row_height)),
                 if vim_mode == vim::Mode::Normal {
-                    rgb(role::SELECTION_BG)
+                    rgb(theme.role.selection_bg)
                 } else {
-                    rgb(role::CARET)
+                    rgb(theme.role.caret)
                 },
             ));
         }
@@ -853,7 +865,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                         row_height,
                     ),
                 ),
-                rgb(role::GUTTER_BG),
+                rgb(theme.role.gutter_bg),
             ));
             if let Some(gutter_line) = row.gutter_line.as_ref() {
                 let gutter_x = gutter_origin_x + (gutter_width - gutter_line.width);
@@ -913,6 +925,37 @@ pub(crate) fn byte_index_to_char(text: &str, byte_index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::theme::{SyntaxRole, ThemeId};
+
+    fn base_run(theme: Theme) -> TextRun {
+        TextRun {
+            len: 0,
+            font: typography::primary_font(),
+            color: rgb(theme.role.text).into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }
+    }
+
+    #[test]
+    fn syntax_style_key_and_colors_change_with_theme() {
+        let dark = ThemeId::Dark.theme();
+        let light = ThemeId::Light.theme();
+        let spans = [SyntaxSpan {
+            start: 0,
+            end: 3,
+            role: SyntaxRole::Keyword,
+        }];
+
+        let (dark_runs, dark_key) =
+            text_runs_for_segment("let value", 0, 9, &spans, &base_run(dark), dark);
+        let (light_runs, light_key) =
+            text_runs_for_segment("let value", 0, 9, &spans, &base_run(light), light);
+
+        assert_ne!(dark_key, light_key);
+        assert_ne!(dark_runs[0].color, light_runs[0].color);
+    }
 
     #[test]
     fn wrap_columns_match_painted_code_width_with_gutter() {

@@ -4,11 +4,12 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::ui::theme::{metrics, role};
+use crate::ui::theme::{metrics, Theme};
 
 #[derive(IntoElement)]
 pub struct TabBar {
     id: gpui::ElementId,
+    theme: Theme,
     start_children: SmallVec<[AnyElement; 2]>,
     children: SmallVec<[AnyElement; 4]>,
     end_children: SmallVec<[AnyElement; 2]>,
@@ -16,9 +17,10 @@ pub struct TabBar {
 }
 
 impl TabBar {
-    pub fn new(id: impl Into<gpui::ElementId>) -> Self {
+    pub fn new(id: impl Into<gpui::ElementId>, theme: Theme) -> Self {
         Self {
             id: id.into(),
+            theme,
             start_children: SmallVec::new(),
             children: SmallVec::new(),
             end_children: SmallVec::new(),
@@ -73,9 +75,9 @@ impl RenderOnce for TabBar {
             .w_full()
             .h(metrics::px_for_rem(metrics::TAB_HEIGHT + 1.0, rem_size))
             .overflow_hidden()
-            .bg(rgb(role::PANEL_BG))
+            .bg(rgb(self.theme.role.panel_bg))
             .border_1()
-            .border_color(rgb(role::BORDER))
+            .border_color(rgb(self.theme.role.border))
             .children(
                 (!self.start_children.is_empty()).then_some(
                     div()
@@ -86,7 +88,7 @@ impl RenderOnce for TabBar {
                         .gap(metrics::px_for_rem(metrics::SHELL_GAP, rem_size))
                         .items_center()
                         .border_r_1()
-                        .border_color(rgb(role::BORDER))
+                        .border_color(rgb(self.theme.role.border))
                         .children(self.start_children)
                         .into_any_element(),
                 ),
@@ -109,7 +111,7 @@ impl RenderOnce for TabBar {
                         .gap(metrics::px_for_rem(metrics::SHELL_GAP, rem_size))
                         .items_center()
                         .border_l_1()
-                        .border_color(rgb(role::BORDER))
+                        .border_color(rgb(self.theme.role.border))
                         .children(self.end_children)
                         .into_any_element(),
                 ),

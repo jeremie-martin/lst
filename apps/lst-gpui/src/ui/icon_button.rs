@@ -3,13 +3,14 @@ use gpui::{
     Stateful, StatefulInteractiveElement, Styled,
 };
 
-use crate::ui::theme::{metrics, role};
+use crate::ui::theme::{metrics, Theme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconKind {
     Close,
     Plus,
     Recent,
+    Theme,
 }
 
 impl IconKind {
@@ -18,6 +19,7 @@ impl IconKind {
             Self::Close => "×",
             Self::Plus => "+",
             Self::Recent => "≡",
+            Self::Theme => "◐",
         }
     }
 }
@@ -26,14 +28,16 @@ impl IconKind {
 pub struct IconButton {
     div: Stateful<gpui::Div>,
     icon: IconKind,
+    theme: Theme,
     emphasized: bool,
 }
 
 impl IconButton {
-    pub fn new(id: impl Into<gpui::ElementId>, icon: IconKind) -> Self {
+    pub fn new(id: impl Into<gpui::ElementId>, icon: IconKind, theme: Theme) -> Self {
         Self {
             div: div().id(id.into()),
             icon,
+            theme,
             emphasized: false,
         }
     }
@@ -60,15 +64,16 @@ impl RenderOnce for IconButton {
     fn render(self, window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
         let rem_size = window.rem_size();
         let background = if self.emphasized {
-            rgb(role::CONTROL_BG)
+            rgb(self.theme.role.control_bg)
         } else {
-            rgb(role::PANEL_BG)
+            rgb(self.theme.role.panel_bg)
         };
         let hover = if self.emphasized {
-            rgb(role::CONTROL_BG_HOVER)
+            rgb(self.theme.role.control_bg_hover)
         } else {
-            rgb(role::CONTROL_BG)
+            rgb(self.theme.role.control_bg)
         };
+        let active_bg = self.theme.role.control_bg_hover;
 
         self.div
             .flex()
@@ -77,12 +82,12 @@ impl RenderOnce for IconButton {
             .rounded_sm()
             .bg(background)
             .hover(|style| style.bg(hover))
-            .active(|style| style.bg(rgb(role::CONTROL_BG_HOVER)))
+            .active(move |style| style.bg(rgb(active_bg)))
             .cursor(CursorStyle::PointingHand)
             .items_center()
             .justify_center()
             .text_size(metrics::px_for_rem(metrics::TAB_TEXT_SIZE, rem_size))
-            .text_color(rgb(role::TEXT_SUBTLE))
+            .text_color(rgb(self.theme.role.text_subtle))
             .child(self.icon.label())
     }
 }

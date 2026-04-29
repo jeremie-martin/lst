@@ -13,7 +13,7 @@ use lst_editor::selection::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::ui::theme::{metrics, role};
+use crate::ui::theme::{metrics, Theme, ThemeId};
 
 actions!(
     lst_gpui_input,
@@ -111,6 +111,7 @@ pub struct InputField {
     focus_handle: FocusHandle,
     text: InputText,
     placeholder: SharedString,
+    theme: Theme,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     selection_drag: Option<InputDragSelectionMode>,
@@ -366,6 +367,7 @@ impl InputField {
             focus_handle: cx.focus_handle(),
             text: InputText::new(),
             placeholder: placeholder.into(),
+            theme: ThemeId::default().theme(),
             last_layout: None,
             last_bounds: None,
             selection_drag: None,
@@ -375,6 +377,13 @@ impl InputField {
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if self.text.set_text(text) {
             self.last_layout = None;
+            cx.notify();
+        }
+    }
+
+    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+        if self.theme != theme {
+            self.theme = theme;
             cx.notify();
         }
     }
@@ -796,11 +805,12 @@ impl Element for TextElement {
         let content = input.text.content.clone();
         let selected_range = input.text.selected_range.clone();
         let cursor = input.text.cursor_offset();
+        let theme = input.theme;
 
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), rgb(role::TEXT_MUTED))
+            (input.placeholder.clone(), rgb(theme.role.text_muted))
         } else {
-            (content, rgb(role::TEXT))
+            (content, rgb(theme.role.text))
         };
 
         let run = TextRun {
@@ -855,7 +865,7 @@ impl Element for TextElement {
                             bounds.bottom() - bounds.top(),
                         ),
                     ),
-                    rgb(role::ACCENT),
+                    rgb(theme.role.accent),
                 )),
             )
         } else {
@@ -871,7 +881,7 @@ impl Element for TextElement {
                             bounds.bottom(),
                         ),
                     ),
-                    rgb(role::SELECTION_BG),
+                    rgb(theme.role.selection_bg),
                 )),
                 None,
             )
@@ -928,10 +938,11 @@ impl Render for InputField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let focused = self.focus_handle.is_focused(window);
+        let theme = self.theme;
         let border = if focused {
-            rgb(role::ACCENT)
+            rgb(theme.role.accent)
         } else {
-            rgb(role::BORDER)
+            rgb(theme.role.border)
         };
 
         div()
@@ -982,13 +993,13 @@ impl Render for InputField {
             ))
             .rounded_sm()
             .bg(if focused {
-                rgb(role::CONTROL_BG_HOVER)
+                rgb(theme.role.control_bg_hover)
             } else {
-                rgb(role::CONTROL_BG)
+                rgb(theme.role.control_bg)
             })
             .border_1()
             .border_color(border)
-            .hover(|style| style.bg(rgb(role::CONTROL_BG_HOVER)))
+            .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
             .cursor(CursorStyle::IBeam)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
