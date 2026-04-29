@@ -530,9 +530,17 @@ impl LstGpuiApp {
             });
         }
         if !results.opened.is_empty() {
+            let opened_paths = results
+                .opened
+                .iter()
+                .map(|(path, _, _)| path.clone())
+                .collect::<Vec<_>>();
             self.update_model(cx, true, |model| {
                 model.open_files_with_stamps(results.opened);
             });
+            for path in opened_paths {
+                self.recent_files.record(&path);
+            }
         }
     }
 
@@ -543,9 +551,11 @@ impl LstGpuiApp {
                 path,
                 stamp,
             } => {
+                let recent_path = path.clone();
                 self.update_model(cx, true, |model| {
                     model.save_finished_for_tab(tab_id, path, stamp);
                 });
+                self.recent_files.record(&recent_path);
                 self.finish_pending_after_save(tab_id, true, cx);
             }
             SaveFileResult::Failed {
@@ -581,9 +591,11 @@ impl LstGpuiApp {
                 path,
                 stamp,
             } => {
+                let recent_path = path.clone();
                 self.update_model(cx, true, |model| {
                     model.save_as_finished_for_tab(tab_id, path.clone(), stamp);
                 });
+                self.recent_files.record(&recent_path);
                 remove_previous_scratchpad_after_save_as(
                     previous_scratchpad_path,
                     &path,
@@ -624,9 +636,11 @@ impl LstGpuiApp {
                 revision,
                 stamp,
             } => {
+                let recent_path = path.clone();
                 self.update_model(cx, true, |model| {
                     model.autosave_finished_for_tab(tab_id, path, revision, stamp);
                 });
+                self.recent_files.record(&recent_path);
             }
             AutosaveCompletion::Failed {
                 tab_id: _,

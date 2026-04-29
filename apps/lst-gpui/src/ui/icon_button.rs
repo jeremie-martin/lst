@@ -9,6 +9,7 @@ use crate::ui::theme::{metrics, role};
 pub enum IconKind {
     Close,
     Plus,
+    Recent,
 }
 
 impl IconKind {
@@ -16,6 +17,7 @@ impl IconKind {
         match self {
             Self::Close => "×",
             Self::Plus => "+",
+            Self::Recent => "≡",
         }
     }
 }

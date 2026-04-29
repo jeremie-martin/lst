@@ -11,6 +11,7 @@ mod input_adapter;
 mod interactions;
 mod keymap;
 mod launch;
+mod recent;
 mod runtime;
 mod shell;
 mod syntax;
@@ -30,6 +31,12 @@ use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
     EditorModel, EditorTab as ModelEditorTab, FocusTarget, RevealIntent, TabId, UNTITLED_PREFIX,
 };
+#[cfg(not(test))]
+use recent::default_recent_files_path;
+use recent::{
+    normalize_recent_path, read_recent_preview, search_recent_content, RecentFiles,
+    RecentPreviewRead, RECENT_BATCH_SIZE,
+};
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
@@ -37,7 +44,7 @@ use runtime::clipboard::{ExitClipboard, SubprocessExitClipboard};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process,
     rc::Rc,
     sync::Arc,
@@ -132,6 +139,7 @@ actions!(
         DuplicateLine,
         ToggleComment,
         ToggleBlockComment,
+        ToggleRecentFiles,
         ZoomIn,
         ZoomOut,
         ZoomReset,
@@ -153,6 +161,13 @@ struct EditorScrollbarDrag {
 #[derive(Clone, Copy, Debug)]
 struct EditorHorizontalScrollbarDrag {
     grab_offset_x: Pixels,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RecentPreviewState {
+    Loading,
+    Loaded(String),
+    Failed(String),
 }
 
 struct EditorTabView {
@@ -192,6 +207,7 @@ struct LstGpuiApp {
     find_query_input: Entity<InputField>,
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
+    recent_query_input: Entity<InputField>,
     focus_target: FocusTarget,
     focus_last_applied: FocusTarget,
     pending_after_save: Option<PendingAfterSave>,
@@ -200,6 +216,15 @@ struct LstGpuiApp {
     autosave_inflight: HashSet<PathBuf>,
     autosave_started: bool,
     scratchpad_dir: Option<PathBuf>,
+    recent_files: RecentFiles,
+    recent_panel_visible: bool,
+    recent_query: String,
+    recent_visible_count: usize,
+    recent_previews: HashMap<PathBuf, RecentPreviewState>,
+    recent_preview_jobs: HashSet<PathBuf>,
+    recent_content_matches: HashSet<PathBuf>,
+    recent_content_search_inflight: HashSet<String>,
+    force_editor_focus: bool,
     zoom_level: i32,
     exit_clipboard: Arc<dyn ExitClipboard>,
     _shell_subscriptions: Vec<Subscription>,
@@ -210,8 +235,21 @@ impl LstGpuiApp {
         let find_query_input = cx.new(|cx| InputField::new(cx, "Find"));
         let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace"));
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line[:Column]"));
+        let recent_query_input = cx.new(|cx| InputField::new(cx, "Search recent files"));
+        #[cfg(test)]
+        let recent_files_path = launch.recent_files_path.clone();
+        #[cfg(not(test))]
+        let recent_files_path = default_recent_files_path();
         let scratchpad_dir = launch.scratchpad_dir.clone();
         let model = initial_model_from_launch(launch);
+        let mut recent_files = RecentFiles::load(recent_files_path);
+        for tab in model.tabs() {
+            if !tab.is_scratchpad() {
+                if let Some(path) = tab.path() {
+                    recent_files.record(path);
+                }
+            }
+        }
 
         let mut app = Self {
             focus_handle: cx.focus_handle(),
@@ -227,6 +265,7 @@ impl LstGpuiApp {
             find_query_input: find_query_input.clone(),
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
+            recent_query_input: recent_query_input.clone(),
             focus_target: FocusTarget::Editor,
             focus_last_applied: FocusTarget::Editor,
             pending_after_save: None,
@@ -235,6 +274,15 @@ impl LstGpuiApp {
             autosave_inflight: HashSet::new(),
             autosave_started: false,
             scratchpad_dir,
+            recent_files,
+            recent_panel_visible: false,
+            recent_query: String::new(),
+            recent_visible_count: RECENT_BATCH_SIZE,
+            recent_previews: HashMap::new(),
+            recent_preview_jobs: HashSet::new(),
+            recent_content_matches: HashSet::new(),
+            recent_content_search_inflight: HashSet::new(),
+            force_editor_focus: false,
             zoom_level: 0,
             exit_clipboard: Arc::new(SubprocessExitClipboard),
             _shell_subscriptions: Vec::new(),
@@ -256,6 +304,10 @@ impl LstGpuiApp {
                 this.handle_goto_line_input_event(event, cx)
             }),
         );
+        app._shell_subscriptions.push(cx.subscribe(
+            &recent_query_input,
+            |this, _, event: &InputFieldEvent, cx| this.handle_recent_query_input_event(event, cx),
+        ));
 
         app
     }
@@ -267,6 +319,10 @@ impl LstGpuiApp {
             find_query_input: self.find_query_input.read(cx).text(),
             find_replace_input: self.find_replace_input.read(cx).text(),
             goto_line_input: self.goto_line_input.read(cx).text(),
+            recent_query_input: self.recent_query_input.read(cx).text(),
+            recent_panel_visible: self.recent_panel_visible,
+            recent_paths: self.recent_files.entries().to_vec(),
+            recent_visible_paths: self.recent_visible_paths(),
             focus_target: self.focus_target,
             #[cfg(feature = "internal-invariants")]
             tab_view_ids: self
@@ -353,6 +409,21 @@ impl LstGpuiApp {
     }
 
     fn apply_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recent_panel_visible {
+            let handle = self.recent_query_input.read(cx).focus_handle();
+            if !handle.is_focused(window) {
+                window.focus(&handle);
+            }
+            return;
+        }
+
+        if self.force_editor_focus {
+            window.focus(&self.focus_handle);
+            self.focus_last_applied = FocusTarget::Editor;
+            self.force_editor_focus = false;
+            return;
+        }
+
         let target = self.focus_target;
         let just_changed = target != self.focus_last_applied;
         if matches!(target, FocusTarget::Editor) && !just_changed {
@@ -465,6 +536,225 @@ impl LstGpuiApp {
         let text = self.model.goto_line().unwrap_or_default().to_string();
         self.goto_line_input
             .update(cx, |input, cx| input.set_text(&text, cx));
+    }
+
+    pub(crate) fn toggle_recent_files_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.recent_panel_visible {
+            self.close_recent_files_panel(cx);
+            return;
+        }
+
+        self.recent_panel_visible = true;
+        self.recent_visible_count = RECENT_BATCH_SIZE;
+        let query = self.recent_query.clone();
+        self.recent_query_input
+            .update(cx, |input, cx| input.set_text(&query, cx));
+        let focus_handle = self.recent_query_input.read(cx).focus_handle();
+        window.focus(&focus_handle);
+        self.start_recent_content_search(cx);
+        self.ensure_recent_previews(cx);
+        cx.notify();
+    }
+
+    fn close_recent_files_panel(&mut self, cx: &mut Context<Self>) {
+        if self.recent_panel_visible {
+            self.recent_panel_visible = false;
+            self.force_editor_focus = true;
+            cx.notify();
+        }
+    }
+
+    fn handle_recent_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
+        match event {
+            InputFieldEvent::Changed(text) => {
+                self.recent_query = text.clone();
+                self.recent_visible_count = RECENT_BATCH_SIZE;
+                self.recent_content_matches.clear();
+                self.start_recent_content_search(cx);
+                self.ensure_recent_previews(cx);
+                cx.notify();
+            }
+            InputFieldEvent::Submitted => {
+                if let Some(path) = self.recent_visible_paths().into_iter().next() {
+                    self.open_recent_path(path, cx);
+                }
+            }
+            InputFieldEvent::Cancelled => self.close_recent_files_panel(cx),
+            InputFieldEvent::NextRequested | InputFieldEvent::PreviousRequested => {}
+        }
+    }
+
+    fn recent_visible_paths(&self) -> Vec<PathBuf> {
+        self.recent_filtered_paths()
+            .into_iter()
+            .take(self.recent_visible_count)
+            .collect()
+    }
+
+    fn recent_filtered_paths(&self) -> Vec<PathBuf> {
+        let query = self.recent_query.trim().to_lowercase();
+        if query.is_empty() {
+            return self.recent_files.entries().to_vec();
+        }
+
+        self.recent_files
+            .entries()
+            .iter()
+            .filter(|path| self.recent_path_or_content_matches(path, &query))
+            .cloned()
+            .collect()
+    }
+
+    fn recent_path_or_content_matches(&self, path: &Path, query: &str) -> bool {
+        recent_path_matches(path, query)
+            || self.recent_content_matches.contains(path)
+            || matches!(
+                self.recent_previews.get(path),
+                Some(RecentPreviewState::Loaded(preview))
+                    if preview.to_lowercase().contains(query)
+            )
+    }
+
+    fn load_more_recent_files(&mut self, cx: &mut Context<Self>) {
+        self.recent_visible_count = self.recent_visible_count.saturating_add(RECENT_BATCH_SIZE);
+        self.ensure_recent_previews(cx);
+        cx.notify();
+    }
+
+    fn ensure_recent_previews(&mut self, cx: &mut Context<Self>) {
+        if !self.recent_panel_visible {
+            return;
+        }
+
+        for path in self.recent_visible_paths() {
+            if self.recent_previews.contains_key(&path) || self.recent_preview_jobs.contains(&path)
+            {
+                continue;
+            }
+
+            self.recent_previews
+                .insert(path.clone(), RecentPreviewState::Loading);
+            self.recent_preview_jobs.insert(path.clone());
+            cx.spawn(async move |this, cx| {
+                let preview_path = path.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { read_recent_preview(&preview_path) })
+                    .await;
+                let _ = this.update(cx, |view, cx| view.finish_recent_preview(path, result, cx));
+            })
+            .detach();
+        }
+    }
+
+    fn start_recent_content_search(&mut self, cx: &mut Context<Self>) {
+        let query = self.recent_query.trim().to_lowercase();
+        if query.is_empty() || self.recent_content_search_inflight.contains(&query) {
+            return;
+        }
+
+        self.recent_content_search_inflight.insert(query.clone());
+        let paths = self.recent_files.entries().to_vec();
+        cx.spawn(async move |this, cx| {
+            let search_query = query.clone();
+            let matches = cx
+                .background_executor()
+                .spawn(async move { search_recent_content(paths, &search_query) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.finish_recent_content_search(query, matches, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn finish_recent_content_search(
+        &mut self,
+        query: String,
+        matches: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        self.recent_content_search_inflight.remove(&query);
+        if self.recent_query.trim().to_lowercase() != query {
+            return;
+        }
+
+        self.recent_content_matches = matches.into_iter().collect();
+        self.ensure_recent_previews(cx);
+        cx.notify();
+    }
+
+    fn finish_recent_preview(
+        &mut self,
+        path: PathBuf,
+        result: RecentPreviewRead,
+        cx: &mut Context<Self>,
+    ) {
+        self.recent_preview_jobs.remove(&path);
+        match result {
+            RecentPreviewRead::Loaded(preview) => {
+                self.recent_previews
+                    .insert(path, RecentPreviewState::Loaded(preview));
+            }
+            RecentPreviewRead::Missing => {
+                self.recent_previews.remove(&path);
+                self.recent_files.prune(&path);
+                self.ensure_recent_previews(cx);
+            }
+            RecentPreviewRead::Failed(message) => {
+                self.recent_previews
+                    .insert(path, RecentPreviewState::Failed(message));
+            }
+        }
+        cx.notify();
+    }
+
+    fn open_recent_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let path = normalize_recent_path(&path);
+        if self.activate_existing_tab_for_path(&path, cx) {
+            self.recent_files.record(&path);
+            self.close_recent_files_panel(cx);
+            return;
+        }
+
+        match runtime::read_file_with_stamp(&path) {
+            Ok((text, stamp)) => {
+                let opened_path = path.clone();
+                self.update_model(cx, true, |model| {
+                    model.open_files_with_stamps(vec![(opened_path, text, Some(stamp))]);
+                });
+                self.recent_files.record(&path);
+                self.close_recent_files_panel(cx);
+            }
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    self.recent_previews.remove(&path);
+                    self.recent_files.prune(&path);
+                    self.ensure_recent_previews(cx);
+                }
+                self.update_model(cx, true, |model| {
+                    model.open_file_failed(path, err.to_string());
+                });
+            }
+        }
+    }
+
+    fn activate_existing_tab_for_path(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
+        let Some(tab_id) = self.model.tabs().iter().find_map(|tab| {
+            let tab_path = tab.path()?;
+            (normalize_recent_path(tab_path) == path).then_some(tab.id())
+        }) else {
+            return false;
+        };
+
+        self.update_model(cx, true, |model| {
+            model.set_active_tab(tab_id);
+        });
+        true
     }
 
     fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
@@ -1014,6 +1304,10 @@ pub(crate) struct AppSnapshot {
     pub(crate) find_query_input: String,
     pub(crate) find_replace_input: String,
     pub(crate) goto_line_input: String,
+    pub(crate) recent_query_input: String,
+    pub(crate) recent_panel_visible: bool,
+    pub(crate) recent_paths: Vec<PathBuf>,
+    pub(crate) recent_visible_paths: Vec<PathBuf>,
     pub(crate) focus_target: FocusTarget,
     #[cfg(feature = "internal-invariants")]
     pub(crate) tab_view_ids: Vec<TabId>,
@@ -1122,6 +1416,15 @@ fn char_to_line_col(buffer: &Rope, char_offset: usize) -> (usize, usize) {
     let line = buffer.char_to_line(char_offset);
     let line_start = buffer.line_to_char(line);
     (line, char_offset - line_start)
+}
+
+fn recent_path_matches(path: &Path, query: &str) -> bool {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    file_name.contains(query) || path.to_string_lossy().to_lowercase().contains(query)
 }
 
 fn focus_trace_label(target: FocusTarget) -> &'static str {

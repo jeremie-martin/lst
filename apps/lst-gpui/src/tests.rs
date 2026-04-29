@@ -341,6 +341,335 @@ fn launch_model_without_files_creates_timestamped_scratchpad() {
 }
 
 #[gpui::test]
+fn launch_records_real_files_but_not_blank_startup_scratchpads(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-launch");
+    let recent_path = dir.join("recent");
+    let file = dir.join("note.txt");
+    std::fs::write(&file, "loaded").expect("write recent launch fixture");
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![file.clone()],
+            recent_files_path: Some(recent_path.clone()),
+            ..LaunchArgs::default()
+        },
+    );
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(
+        snapshot.recent_paths,
+        [crate::recent::normalize_recent_path(&file)]
+    );
+
+    let empty_recent_path = dir.join("empty-recent");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            recent_files_path: Some(empty_recent_path),
+            ..LaunchArgs::default()
+        },
+    );
+    let snapshot = app_snapshot(&view, cx);
+    assert!(snapshot.recent_paths.is_empty());
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn test_launch_without_recent_path_does_not_persist_recent_state(cx: &mut TestAppContext) {
+    let (view, _cx) = new_test_app(cx, LaunchArgs::default());
+
+    view.update(_cx, |app, _| {
+        assert!(!app.recent_files.is_persistent());
+    });
+}
+
+#[gpui::test]
+fn recent_files_view_searches_and_loads_more_paths(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-overlay");
+    let recent_path = dir.join("recent");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    for index in 0..65 {
+        let path = dir.join(format!("file-{index:02}.txt"));
+        std::fs::write(&path, format!("body {index}")).expect("write recent fixture");
+        recent.record(&path);
+    }
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.refresh().expect("render recent overlay");
+    let snapshot = app_snapshot(&view, cx);
+    assert!(snapshot.recent_panel_visible);
+    assert_eq!(
+        snapshot.recent_visible_paths.len(),
+        crate::recent::RECENT_BATCH_SIZE
+    );
+
+    view.update(cx, |app, cx| app.load_more_recent_files(cx));
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.recent_visible_paths.len(), 65);
+
+    cx.simulate_input("file-64");
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.recent_query_input, "file-64");
+    assert_eq!(
+        snapshot.recent_visible_paths,
+        [crate::recent::normalize_recent_path(
+            &dir.join("file-64.txt")
+        )]
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_search_keeps_focus_when_find_was_open(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-focus");
+    let recent_path = dir.join("recent");
+    let file = dir.join("note.txt");
+    std::fs::write(&file, "body").expect("write recent focus fixture");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    recent.record(&file);
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(FindOpen);
+    cx.refresh().expect("render find overlay");
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.refresh().expect("render recent view");
+    cx.run_until_parked();
+    cx.simulate_input("note");
+
+    let snapshot = app_snapshot(&view, cx);
+    assert!(snapshot.recent_panel_visible);
+    assert_eq!(snapshot.recent_query_input, "note");
+    assert_eq!(snapshot.find_query_input, "");
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_search_matches_file_content(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-content-search");
+    let recent_path = dir.join("recent");
+    let file = dir.join("plain-name.txt");
+    std::fs::write(&file, "alpha\nneedle in the body\nomega")
+        .expect("write recent content fixture");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    recent.record(&file);
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.refresh().expect("render recent view");
+    cx.run_until_parked();
+    cx.simulate_input("needle");
+    cx.run_until_parked();
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(
+        snapshot.recent_visible_paths,
+        [crate::recent::normalize_recent_path(&file)]
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_preview_prune_schedules_newly_visible_cards(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-prune-preview");
+    let recent_path = dir.join("recent");
+    let missing = dir.join("missing.txt");
+    let present = dir.join("present.txt");
+    std::fs::write(&present, "present preview").expect("write present recent fixture");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    recent.record(&present);
+    recent.record(&missing);
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.run_until_parked();
+
+    view.update(cx, |app, _| {
+        let present = crate::recent::normalize_recent_path(&present);
+        assert!(matches!(
+            app.recent_previews.get(&present),
+            Some(RecentPreviewState::Loaded(text)) if text.contains("present preview")
+        ));
+    });
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_file_card_click_opens_the_file(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-card-click");
+    let recent_path = dir.join("recent");
+    let file = dir.join("click-target.txt");
+    std::fs::write(&file, "clicked").expect("write recent card click fixture");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    recent.record(&file);
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+    refresh_and_flush_reveal(&view, cx, "initial editor before recent click");
+    let bounds = view
+        .update(cx, |app, _| app.active_viewport_bounds())
+        .expect("editor viewport bounds before recent click");
+
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.refresh().expect("render recent view before card click");
+    cx.simulate_click(
+        point(bounds.left() + px(36.0), bounds.top() + px(88.0)),
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+
+    let snapshot = app_snapshot(&view, cx);
+    assert!(!snapshot.recent_panel_visible);
+    assert_eq!(snapshot.model.active_path, Some(file.clone()));
+    assert_eq!(snapshot.model.text, "clicked");
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn open_recent_view_deselects_tabs_and_toggles_back(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-toggle");
+    let recent_path = dir.join("recent");
+    let file = dir.join("note.txt");
+    std::fs::write(&file, "note").expect("write recent toggle fixture");
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![file.clone()],
+            recent_files_path: Some(recent_path),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    let snapshot = app_snapshot(&view, cx);
+    assert!(snapshot.recent_panel_visible);
+    assert_eq!(snapshot.model.active_path, Some(file.clone()));
+
+    cx.dispatch_action(ToggleRecentFiles);
+    let snapshot = app_snapshot(&view, cx);
+    assert!(!snapshot.recent_panel_visible);
+    assert_eq!(snapshot.model.active_path, Some(file));
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn opening_recent_file_activates_existing_tab_or_opens_a_new_one(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-open");
+    let recent_path = dir.join("recent");
+    let one = dir.join("one.txt");
+    let two = dir.join("two.txt");
+    let closed = dir.join("closed.txt");
+    std::fs::write(&one, "one").expect("write one");
+    std::fs::write(&two, "two").expect("write two");
+    std::fs::write(&closed, "closed").expect("write closed");
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![one.clone(), two.clone()],
+            recent_files_path: Some(recent_path),
+            ..LaunchArgs::default()
+        },
+    );
+    let initial = app_snapshot(&view, cx);
+    assert_eq!(initial.model.active_path, Some(one.clone()));
+
+    view.update(cx, |app, cx| {
+        app.open_recent_path(crate::recent::normalize_recent_path(&two), cx);
+    });
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.active_path, Some(two.clone()));
+    assert_eq!(snapshot.model.tab_count, 2);
+
+    view.update(cx, |app, cx| {
+        app.open_recent_path(crate::recent::normalize_recent_path(&closed), cx);
+    });
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.active_path, Some(closed.clone()));
+    assert_eq!(snapshot.model.tab_count, 3);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn opening_missing_recent_file_prunes_it(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-missing");
+    let recent_path = dir.join("recent");
+    let missing = dir.join("missing.txt");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    recent.record(&missing);
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    view.update(cx, |app, cx| {
+        app.open_recent_path(crate::recent::normalize_recent_path(&missing), cx);
+    });
+    let snapshot = app_snapshot(&view, cx);
+
+    assert!(snapshot.recent_paths.is_empty());
+    assert!(snapshot
+        .model
+        .status
+        .contains(&format!("Failed to open {}", missing.display())));
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
 fn app_input_handler_updates_real_editor_model(cx: &mut TestAppContext) {
     let (view, cx) = new_test_app(cx, LaunchArgs::default());
 

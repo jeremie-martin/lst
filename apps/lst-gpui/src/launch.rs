@@ -5,6 +5,8 @@ pub(crate) struct LaunchArgs {
     pub(crate) files: Vec<PathBuf>,
     pub(crate) window_title: Option<String>,
     pub(crate) scratchpad_dir: Option<PathBuf>,
+    #[cfg(test)]
+    pub(crate) recent_files_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]

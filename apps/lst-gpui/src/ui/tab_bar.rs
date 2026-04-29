@@ -30,6 +30,11 @@ impl TabBar {
         self.scroll_handle = Some(scroll_handle.clone());
         self
     }
+
+    pub fn start_child(mut self, element: impl IntoElement) -> Self {
+        self.start_children.push(element.into_any_element());
+        self
+    }
 }
 
 impl ParentElement for TabBar {

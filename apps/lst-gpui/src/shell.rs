@@ -22,13 +22,13 @@ use crate::viewport::{
 };
 use crate::{
     code_char_width, ensure_wrap_layout, EditorHorizontalScrollbarDrag, EditorScrollbarDrag,
-    FocusTarget, LstGpuiApp,
+    FocusTarget, LstGpuiApp, RecentPreviewState,
 };
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = self.model.tab(ix).expect("rendered tab index must exist");
-        let active = ix == self.model.active_index();
+        let active = !self.recent_panel_visible && ix == self.model.active_index();
         let show_close = active || self.hovered_tab == Some(ix);
         let close_button: Option<IconButton> = show_close.then(|| {
             IconButton::new(("tab-close", ix), IconKind::Close)
@@ -50,6 +50,8 @@ impl LstGpuiApp {
                 cx.notify();
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
+                this.recent_panel_visible = false;
+                this.force_editor_focus = true;
                 this.set_focus(FocusTarget::Editor);
                 this.update_model(cx, true, |model| {
                     if let Some(id) = model.tab_id_at(ix) {
@@ -74,6 +76,12 @@ impl LstGpuiApp {
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
+        let recent_button = IconButton::new("recent-files-button", IconKind::Recent)
+            .emphasized(self.recent_panel_visible)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.toggle_recent_files_panel(window, cx);
+                cx.stop_propagation();
+            }));
         let mut items = (0..self.model.tab_count())
             .map(|ix| self.render_tab(ix, cx).into_any_element())
             .collect::<Vec<_>>();
@@ -98,6 +106,7 @@ impl LstGpuiApp {
         );
 
         TabBar::new("editor-tabs")
+            .start_child(recent_button)
             .track_scroll(&self.tab_bar_scroll)
             .children(items)
     }
@@ -232,6 +241,206 @@ impl LstGpuiApp {
                     .child("Line"),
             )
             .child(div().w(px(180.0)).child(self.goto_line_input.clone()))
+    }
+
+    fn render_recent_files_view(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let scale = self.ui_scale();
+        let filtered_paths = self.recent_filtered_paths();
+        let total = filtered_paths.len();
+        let visible_paths = filtered_paths
+            .into_iter()
+            .take(self.recent_visible_count)
+            .collect::<Vec<_>>();
+        let visible = visible_paths.len();
+        let has_more = total > visible;
+        let cards = visible_paths
+            .into_iter()
+            .enumerate()
+            .map(|(ix, path)| {
+                self.render_recent_file_card(ix, path, cx)
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        let count_label = if total == 1 {
+            "1 file".to_string()
+        } else {
+            format!("{visible}/{total} files")
+        };
+
+        div()
+            .id("recent-files-view")
+            .size_full()
+            .bg(rgb(role::PANEL_BG))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .gap_3()
+                    .px_3()
+                    .py_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .gap(metrics::px_for_scale(metrics::SHELL_GAP, scale))
+                            .child(div().w(px(360.0)).child(self.recent_query_input.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(metrics::px_for_scale(
+                                        metrics::INPUT_TEXT_SIZE,
+                                        scale,
+                                    ))
+                                    .text_color(rgb(role::TEXT_MUTED))
+                                    .child(count_label),
+                            )
+                            .child(
+                                IconButton::new("recent-files-close", IconKind::Close).on_click(
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.close_recent_files_panel(cx);
+                                        cx.stop_propagation();
+                                    }),
+                                ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("recent-files-scroll")
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap(metrics::px_for_scale(metrics::SHELL_GAP, scale))
+                                    .children(cards)
+                                    .when(total == 0, |grid| {
+                                        grid.child(
+                                            div()
+                                                .flex_none()
+                                                .text_size(metrics::px_for_scale(
+                                                    metrics::INPUT_TEXT_SIZE,
+                                                    scale,
+                                                ))
+                                                .text_color(rgb(role::TEXT_MUTED))
+                                                .child("No recent files"),
+                                        )
+                                    }),
+                            ),
+                    )
+                    .when(has_more, |panel| {
+                        panel.child(self.render_recent_load_more_button(cx))
+                    }),
+            )
+    }
+
+    fn render_recent_file_card(
+        &mut self,
+        ix: usize,
+        path: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let scale = self.ui_scale();
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("untitled")
+            .to_string();
+        let parent = path
+            .parent()
+            .map(|parent| parent.display().to_string())
+            .unwrap_or_default();
+        let (preview_text, preview_color) = match self.recent_previews.get(&path) {
+            Some(RecentPreviewState::Loaded(text)) => (text.clone(), role::TEXT_SUBTLE),
+            Some(RecentPreviewState::Failed(message)) => {
+                (format!("Preview unavailable: {message}"), role::ERROR_TEXT)
+            }
+            _ => ("Loading preview...".to_string(), role::TEXT_MUTED),
+        };
+
+        div()
+            .id(("recent-file-card", ix))
+            .flex()
+            .flex_col()
+            .flex_grow()
+            .flex_basis(px(260.0))
+            .min_w(px(220.0))
+            .max_w(px(420.0))
+            .h(px(156.0))
+            .gap_2()
+            .px_3()
+            .py_3()
+            .rounded_sm()
+            .bg(rgb(role::EDITOR_BG))
+            .border_1()
+            .border_color(rgb(role::BORDER))
+            .cursor(CursorStyle::PointingHand)
+            .hover(|style| style.bg(rgb(role::CONTROL_BG)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _window, cx| {
+                    this.open_recent_path(path.clone(), cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .truncate()
+                    .text_size(metrics::px_for_scale(metrics::TAB_TEXT_SIZE, scale))
+                    .line_height(metrics::px_for_scale(metrics::TAB_TEXT_LINE_HEIGHT, scale))
+                    .text_color(rgb(role::TEXT))
+                    .child(file_name),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .truncate()
+                    .text_size(metrics::px_for_scale(11.0, scale))
+                    .line_height(metrics::px_for_scale(15.0, scale))
+                    .text_color(rgb(role::TEXT_MUTED))
+                    .child(parent),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_hidden()
+                    .whitespace_normal()
+                    .line_clamp(6)
+                    .text_size(metrics::px_for_scale(11.0, scale))
+                    .line_height(metrics::px_for_scale(15.0, scale))
+                    .text_color(rgb(preview_color))
+                    .child(preview_text),
+            )
+    }
+
+    fn render_recent_load_more_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let scale = self.ui_scale();
+        div()
+            .id("recent-files-load-more")
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .px_3()
+            .py_2()
+            .rounded_sm()
+            .bg(rgb(role::CONTROL_BG))
+            .hover(|style| style.bg(rgb(role::CONTROL_BG_HOVER)))
+            .cursor(CursorStyle::PointingHand)
+            .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
+            .text_color(rgb(role::TEXT))
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.load_more_recent_files(cx);
+                cx.stop_propagation();
+            }))
+            .child("Load More")
     }
 
     fn render_editor_overlays(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -577,6 +786,11 @@ impl LstGpuiApp {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
+            if self.recent_panel_visible {
+                self.close_recent_files_panel(cx);
+                cx.stop_propagation();
+                return;
+            }
             if self.model.goto_line().is_some() {
                 self.update_model(cx, true, |model| {
                     model.close_goto_line_panel();
@@ -734,144 +948,168 @@ impl Render for LstGpuiApp {
                                         metrics::ROW_HEIGHT,
                                         self.ui_scale(),
                                     ))
-                                    .child(
-                                        div()
-                                            .id("buffer-scroll")
-                                            .absolute()
-                                            .left_0()
-                                            .top_0()
-                                            .size_full()
-                                            .overflow_x_scroll()
-                                            .overflow_y_scroll()
-                                            .track_scroll(&viewport_scroll)
-                                            .child(match total_content_width {
-                                                Some(width) => {
-                                                    div().h(total_content_height).w(width)
-                                                }
-                                                None => div().h(total_content_height).w_full(),
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("buffer-overlay")
-                                            .absolute()
-                                            .left_0()
-                                            .top_0()
-                                            .size_full()
-                                            .cursor(CursorStyle::IBeam)
-                                            .block_mouse_except_scroll()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(Self::on_mouse_down),
-                                            )
-                                            .on_mouse_down(
-                                                MouseButton::Middle,
-                                                cx.listener(Self::on_middle_mouse_down),
-                                            )
-                                            .on_mouse_up(
-                                                MouseButton::Left,
-                                                cx.listener(Self::on_mouse_up),
-                                            )
-                                            .on_mouse_up_out(
-                                                MouseButton::Left,
-                                                cx.listener(Self::on_mouse_up),
-                                            )
-                                            .on_mouse_move(cx.listener(Self::on_mouse_move))
+                                    .when(self.recent_panel_visible, |viewport| {
+                                        viewport.child(self.render_recent_files_view(cx))
+                                    })
+                                    .when(!self.recent_panel_visible, |viewport| {
+                                        viewport
                                             .child(
-                                                canvas(
-                                                    {
-                                                        let viewport_scroll =
-                                                            viewport_scroll.clone();
-                                                        move |bounds, window, cx| {
-                                                            let previous_wrap_columns =
-                                                                viewport_geometry
-                                                                    .borrow()
-                                                                    .painted_wrap_columns;
-                                                            let paint_state =
-                                                                prepare_viewport_paint_state(
-                                                                    ViewportPreparation {
-                                                                        buffer: &buffer,
-                                                                        lines: line_texts.as_ref(),
-                                                                        revision,
-                                                                        syntax_mode,
-                                                                        show_gutter,
-                                                                        gutter_mode,
-                                                                        cursor_line,
-                                                                        show_wrap,
-                                                                        viewport_scroll:
-                                                                            &viewport_scroll,
-                                                                        viewport_cache:
-                                                                            &viewport_cache,
-                                                                        viewport_geometry:
-                                                                            &viewport_geometry,
+                                                div()
+                                                    .id("buffer-scroll")
+                                                    .absolute()
+                                                    .left_0()
+                                                    .top_0()
+                                                    .size_full()
+                                                    .overflow_x_scroll()
+                                                    .overflow_y_scroll()
+                                                    .track_scroll(&viewport_scroll)
+                                                    .child(match total_content_width {
+                                                        Some(width) => {
+                                                            div().h(total_content_height).w(width)
+                                                        }
+                                                        None => {
+                                                            div().h(total_content_height).w_full()
+                                                        }
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("buffer-overlay")
+                                                    .absolute()
+                                                    .left_0()
+                                                    .top_0()
+                                                    .size_full()
+                                                    .cursor(CursorStyle::IBeam)
+                                                    .block_mouse_except_scroll()
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(Self::on_mouse_down),
+                                                    )
+                                                    .on_mouse_down(
+                                                        MouseButton::Middle,
+                                                        cx.listener(Self::on_middle_mouse_down),
+                                                    )
+                                                    .on_mouse_up(
+                                                        MouseButton::Left,
+                                                        cx.listener(Self::on_mouse_up),
+                                                    )
+                                                    .on_mouse_up_out(
+                                                        MouseButton::Left,
+                                                        cx.listener(Self::on_mouse_up),
+                                                    )
+                                                    .on_mouse_move(cx.listener(Self::on_mouse_move))
+                                                    .child(
+                                                        canvas(
+                                                            {
+                                                                let viewport_scroll =
+                                                                    viewport_scroll.clone();
+                                                                move |bounds, window, cx| {
+                                                                    let previous_wrap_columns =
+                                                                        viewport_geometry
+                                                                            .borrow()
+                                                                            .painted_wrap_columns;
+                                                                    let paint_state =
+                                                                        prepare_viewport_paint_state(
+                                                                            ViewportPreparation {
+                                                                                buffer: &buffer,
+                                                                                lines:
+                                                                                    line_texts
+                                                                                        .as_ref(),
+                                                                                revision,
+                                                                                syntax_mode,
+                                                                                show_gutter,
+                                                                                gutter_mode,
+                                                                                cursor_line,
+                                                                                show_wrap,
+                                                                                viewport_scroll:
+                                                                                    &viewport_scroll,
+                                                                                viewport_cache:
+                                                                                    &viewport_cache,
+                                                                                viewport_geometry:
+                                                                                    &viewport_geometry,
+                                                                                bounds,
+                                                                                char_width,
+                                                                                scale: ui_scale,
+                                                                            },
+                                                                            window,
+                                                                        );
+                                                                    if previous_wrap_columns
+                                                                        != viewport_geometry
+                                                                            .borrow()
+                                                                            .painted_wrap_columns
+                                                                    {
+                                                                        cx.notify(
+                                                                            prepare_entity
+                                                                                .entity_id(),
+                                                                        );
+                                                                    }
+                                                                    paint_state
+                                                                }
+                                                            },
+                                                            move |bounds, paint_state, window, cx| {
+                                                                window.handle_input(
+                                                                    &focus_handle,
+                                                                    ElementInputHandler::new(
                                                                         bounds,
-                                                                        char_width,
+                                                                        entity.clone(),
+                                                                    ),
+                                                                    cx,
+                                                                );
+                                                                let horizontal_scroll =
+                                                                    if show_wrap {
+                                                                        px(0.0)
+                                                                    } else {
+                                                                        scroll_left_for(
+                                                                            &viewport_scroll,
+                                                                        )
+                                                                    };
+                                                                paint_viewport(
+                                                                    ViewportPaintInput {
+                                                                        bounds,
+                                                                        show_gutter,
+                                                                        selection:
+                                                                            selection.clone(),
+                                                                        search_matches:
+                                                                            &search_matches,
+                                                                        active_search_match:
+                                                                            active_search_match
+                                                                                .as_ref(),
+                                                                        cursor_char,
+                                                                        vim_mode,
+                                                                        focused: focus_handle
+                                                                            .is_focused(window),
+                                                                        paint_state,
                                                                         scale: ui_scale,
+                                                                        horizontal_scroll,
                                                                     },
                                                                     window,
+                                                                    cx,
                                                                 );
-                                                            if previous_wrap_columns
-                                                                != viewport_geometry
-                                                                    .borrow()
-                                                                    .painted_wrap_columns
-                                                            {
-                                                                cx.notify(
-                                                                    prepare_entity.entity_id(),
-                                                                );
-                                                            }
-                                                            paint_state
-                                                        }
-                                                    },
-                                                    move |bounds, paint_state, window, cx| {
-                                                        window.handle_input(
-                                                            &focus_handle,
-                                                            ElementInputHandler::new(
-                                                                bounds,
-                                                                entity.clone(),
-                                                            ),
-                                                            cx,
-                                                        );
-                                                        let horizontal_scroll = if show_wrap {
-                                                            px(0.0)
-                                                        } else {
-                                                            scroll_left_for(&viewport_scroll)
-                                                        };
-                                                        paint_viewport(
-                                                            ViewportPaintInput {
-                                                                bounds,
-                                                                show_gutter,
-                                                                selection: selection.clone(),
-                                                                search_matches: &search_matches,
-                                                                active_search_match:
-                                                                    active_search_match.as_ref(),
-                                                                cursor_char,
-                                                                vim_mode,
-                                                                focused: focus_handle
-                                                                    .is_focused(window),
-                                                                paint_state,
-                                                                scale: ui_scale,
-                                                                horizontal_scroll,
                                                             },
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    },
+                                                        )
+                                                        .size_full(),
+                                                    ),
+                                            )
+                                            .child(self.render_editor_scrollbar(
+                                                scrollbar_scroll,
+                                                cx,
+                                            ))
+                                            .when(!show_wrap, |viewport| {
+                                                viewport.child(
+                                                    self.render_editor_horizontal_scrollbar(
+                                                        h_scrollbar_scroll,
+                                                        cx,
+                                                    ),
                                                 )
-                                                .size_full(),
-                                            ),
-                                    )
-                                    .child(self.render_editor_scrollbar(scrollbar_scroll, cx))
-                                    .when(!show_wrap, |viewport| {
-                                        viewport.child(self.render_editor_horizontal_scrollbar(
-                                            h_scrollbar_scroll,
-                                            cx,
-                                        ))
+                                            })
+                                            .when(
+                                                self.model.find().visible
+                                                    || self.model.goto_line().is_some(),
+                                                |viewport| {
+                                                    viewport.child(self.render_editor_overlays(cx))
+                                                },
+                                            )
                                     })
-                                    .when(
-                                        self.model.find().visible
-                                            || self.model.goto_line().is_some(),
-                                        |viewport| viewport.child(self.render_editor_overlays(cx)),
-                                    ),
                             ),
                     )
                     .child(self.render_status_bar()),
