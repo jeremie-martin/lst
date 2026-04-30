@@ -221,9 +221,10 @@ impl LstGpuiApp {
         drag.autoscroll_active = false;
 
         if let Some(target) = self.drag_autoscroll_target() {
+            let current_x = self.active_view().scroll.offset().x;
             self.active_view()
                 .scroll
-                .set_offset(point(px(0.0), -target));
+                .set_offset(point(current_x, -target));
             if let Some(position) = self.selection_drag.as_ref().map(|drag| drag.last_point) {
                 self.apply_drag_selection_at_point(position, cx);
             }
@@ -270,6 +271,16 @@ impl LstGpuiApp {
     #[cfg(test)]
     pub(crate) fn has_active_drag_selection_for_test(&self) -> bool {
         self.selection_drag.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn run_drag_autoscroll_once_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.run_drag_autoscroll(window, cx);
+        self.cancel_drag_selection();
     }
 }
 

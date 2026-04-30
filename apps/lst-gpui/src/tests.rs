@@ -1001,6 +1001,83 @@ fn editor_horizontal_scrollbar_drag_scrolls_without_text_selection(cx: &mut Test
 }
 
 #[gpui::test]
+fn drag_selection_autoscroll_preserves_horizontal_scroll(cx: &mut TestAppContext) {
+    let dir = temp_dir("selection-autoscroll-horizontal");
+    let path = dir.join("wide-long.txt");
+    let text = (0..200)
+        .map(|line| format!("{} {line}\n", "x".repeat(1000)))
+        .collect::<String>();
+    std::fs::write(&path, text).expect("write wide long fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.toggle_wrap());
+    });
+    cx.refresh().expect("first paint after wrap toggle");
+    cx.run_until_parked();
+    cx.refresh().expect("re-paint with content dimensions");
+    cx.run_until_parked();
+
+    let before_left = cx.update_window_entity(&view, |app, _window, _cx| {
+        let target_left = app.active_view().scroll.max_offset().width.min(px(160.0));
+        assert!(
+            target_left > px(0.0),
+            "fixture should expose horizontal overflow"
+        );
+        app.active_view()
+            .scroll
+            .set_offset(point(-target_left, app.active_view().scroll.offset().y));
+        target_left
+    });
+    cx.refresh().expect("paint horizontally scrolled editor");
+    cx.run_until_parked();
+
+    let (drag_point, before_top) = view.update(cx, |app, _cx| {
+        let bounds = app
+            .active_viewport_bounds()
+            .expect("viewport should have rendered bounds");
+        assert!(
+            app.active_view().scroll.max_offset().height > px(0.0),
+            "fixture should expose vertical overflow"
+        );
+        (
+            point(
+                bounds.left() + code_origin_pad(app.model.show_gutter(), app.ui_scale()) + px(8.0),
+                bounds.bottom() + px(8.0),
+            ),
+            crate::viewport::scroll_top_for(&app.active_view().scroll),
+        )
+    });
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.force_stale_drag_selection_for_test(drag_point);
+        app.run_drag_autoscroll_once_for_test(window, cx);
+    });
+
+    let (after_left, after_top) = view.update(cx, |app, _cx| {
+        (
+            crate::viewport::scroll_left_for(&app.active_view().scroll),
+            crate::viewport::scroll_top_for(&app.active_view().scroll),
+        )
+    });
+    assert!(
+        after_top > before_top,
+        "drag autoscroll should move vertically"
+    );
+    assert_eq!(
+        after_left, before_left,
+        "drag autoscroll should preserve horizontal scroll"
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
 fn editor_horizontal_scrollbar_track_click_pages_without_text_selection(cx: &mut TestAppContext) {
     let dir = temp_dir("h-scrollbar-track");
     let path = dir.join("wide.txt");
