@@ -1259,6 +1259,66 @@ fn clicking_horizontally_scrolled_text_hits_visible_column(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+fn ime_bounds_follow_horizontally_scrolled_text(cx: &mut TestAppContext) {
+    let dir = temp_dir("h-scroll-ime-bounds");
+    let path = dir.join("wide.txt");
+    let text = "x".repeat(2000);
+    std::fs::write(&path, text).expect("write wide fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.toggle_wrap());
+    });
+    cx.refresh().expect("first paint after wrap toggle");
+    cx.run_until_parked();
+    cx.refresh().expect("re-paint with content width");
+    cx.run_until_parked();
+
+    let cursor = 1500;
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| model.move_to_char(cursor, false, None));
+    });
+    refresh_and_flush_reveal(&view, cx, "horizontal-ime-bounds-reveal");
+
+    let (actual_left, expected_left) = cx.update_window_entity(&view, |app, window, cx| {
+        let bounds = app
+            .active_viewport_bounds()
+            .expect("viewport should have rendered bounds");
+        let rows = app.active_painted_rows();
+        let row = rows
+            .iter()
+            .find(|row| crate::viewport::row_contains_cursor(row, cursor))
+            .expect("cursor row should be painted");
+        let scroll_left = crate::viewport::scroll_left_for(&app.active_view().scroll);
+        assert!(
+            scroll_left > px(0.0),
+            "precondition: cursor reveal should create horizontal scroll"
+        );
+        let code_origin_x =
+            bounds.left() + code_origin_pad(app.model.show_gutter(), app.ui_scale());
+        let expected_left = code_origin_x
+            + crate::viewport::x_for_global_char(row, cursor).expect("cursor x should be shaped")
+            - scroll_left;
+        let ime_bounds = app
+            .bounds_for_range(cursor..cursor, bounds, window, cx)
+            .expect("IME bounds should be available for painted cursor");
+        (ime_bounds.left(), expected_left)
+    });
+
+    assert!(
+        (actual_left - expected_left).abs() <= px(0.5),
+        "IME bounds should include the same horizontal scroll offset as painting"
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
 fn toggling_wrap_back_on_resets_horizontal_scroll(cx: &mut TestAppContext) {
     let dir = temp_dir("h-scroll-reset");
     let path = dir.join("wide.txt");

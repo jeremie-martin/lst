@@ -1,11 +1,12 @@
 use gpui::{
-    point, Bounds, Context, EntityInputHandler, KeyDownEvent, Pixels, Point, UTF16Selection, Window,
+    point, px, Bounds, Context, EntityInputHandler, KeyDownEvent, Pixels, Point, UTF16Selection,
+    Window,
 };
 use lst_editor::vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey};
 use ropey::Rope;
 use std::{ops::Range, time::Instant};
 
-use crate::viewport::{code_origin_pad, row_contains_cursor, x_for_global_char};
+use crate::viewport::{code_origin_pad, row_contains_cursor, scroll_left_for, x_for_global_char};
 use crate::{elapsed_ms, ui::theme::metrics, LstGpuiApp};
 
 impl LstGpuiApp {
@@ -160,14 +161,21 @@ impl EntityInputHandler for LstGpuiApp {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let tab = self.active_tab();
-        let geometry = self.active_view().geometry.borrow();
+        let active_view = self.active_view();
+        let geometry = active_view.geometry.borrow();
         let range = utf16_range_to_char_range(tab.buffer(), &range_utf16);
         let row = geometry
             .rows
             .iter()
             .rfind(|row| row_contains_cursor(row, range.start))?;
-        let code_origin_x =
-            element_bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
+        let horizontal_scroll = if self.model.show_wrap() {
+            px(0.0)
+        } else {
+            scroll_left_for(&active_view.scroll)
+        };
+        let code_origin_x = element_bounds.left()
+            + code_origin_pad(self.model.show_gutter(), self.ui_scale())
+            - horizontal_scroll;
         let start_x =
             code_origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| gpui::px(0.0));
         let end_x = code_origin_x
