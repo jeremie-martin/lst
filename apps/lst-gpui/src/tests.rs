@@ -2146,52 +2146,157 @@ fn syntax_mode_maps_core_extensions() {
 }
 
 #[test]
-fn broad_highlighting_produces_spans_for_representative_languages() {
-    let cases = [
-        (
+fn injected_grammars_are_not_root_syntax_modes() {
+    assert_eq!(
+        SyntaxLanguage::ALL,
+        &[
+            SyntaxLanguage::Rust,
             SyntaxLanguage::Python,
-            "value = \"\"\"first\nsecond\"\"\"\nprint(value)\n",
-        ),
-        (
             SyntaxLanguage::JavaScript,
-            "/* first\nsecond */\nconst value = `template ${1}`;\n",
-        ),
-        (
             SyntaxLanguage::Jsx,
-            "const element = <div className=\"editor\">{value}</div>;\n",
-        ),
-        (
             SyntaxLanguage::TypeScript,
-            "interface Item { name: string }\nconst item: Item = { name: \"lst\" };\n",
-        ),
-        (
             SyntaxLanguage::Tsx,
-            "const element: JSX.Element = <div className=\"editor\">{value}</div>;\n",
-        ),
-        (
             SyntaxLanguage::Json,
-            "{\n  \"name\": \"lst\",\n  \"enabled\": true\n}\n",
-        ),
-        (SyntaxLanguage::Toml, "[package]\nname = \"lst\"\n"),
-        (SyntaxLanguage::Yaml, "name: lst\nenabled: true\n"),
-        (
+            SyntaxLanguage::Toml,
+            SyntaxLanguage::Yaml,
             SyntaxLanguage::Markdown,
-            "# Title\n\n```rust\nfn main() {}\n```\n",
-        ),
-        (
             SyntaxLanguage::Html,
-            "<style>.editor { color: red; }</style>\n",
-        ),
-        (SyntaxLanguage::Css, ".editor { color: red; }\n"),
+            SyntaxLanguage::Css,
+        ]
+    );
+    assert_eq!(
+        SyntaxLanguage::from_language(lst_editor::Language::Markdown),
+        Some(SyntaxLanguage::Markdown)
+    );
+}
+
+#[test]
+fn supported_syntax_languages_have_role_contracts() {
+    struct Contract {
+        language: SyntaxLanguage,
+        source: &'static str,
+        roles: &'static [SyntaxRole],
+    }
+
+    let contracts = [
+        Contract {
+            language: SyntaxLanguage::Rust,
+            source: "fn main() { let value = \"lst\"; }\n",
+            roles: &[
+                SyntaxRole::Keyword,
+                SyntaxRole::Function,
+                SyntaxRole::String,
+            ],
+        },
+        Contract {
+            language: SyntaxLanguage::Python,
+            source: "def main():\n    value = \"lst\"\n",
+            roles: &[
+                SyntaxRole::Keyword,
+                SyntaxRole::Function,
+                SyntaxRole::String,
+            ],
+        },
+        Contract {
+            language: SyntaxLanguage::JavaScript,
+            source: "function run() { const value = \"lst\"; return value; }\n",
+            roles: &[
+                SyntaxRole::Keyword,
+                SyntaxRole::Function,
+                SyntaxRole::String,
+            ],
+        },
+        Contract {
+            language: SyntaxLanguage::Jsx,
+            source: "const element = <div className=\"editor\">{value}</div>;\n",
+            roles: &[SyntaxRole::Tag, SyntaxRole::Property, SyntaxRole::String],
+        },
+        Contract {
+            language: SyntaxLanguage::TypeScript,
+            source: "interface Item { name: string }\nconst item: Item = { name: \"lst\" };\n",
+            roles: &[SyntaxRole::Keyword, SyntaxRole::Type],
+        },
+        Contract {
+            language: SyntaxLanguage::Tsx,
+            source: "const element: JSX.Element = <div className=\"editor\">{value}</div>;\n",
+            roles: &[SyntaxRole::Tag, SyntaxRole::Type, SyntaxRole::Property],
+        },
+        Contract {
+            language: SyntaxLanguage::Json,
+            source: "{\n  \"name\": \"lst\",\n  \"enabled\": true\n}\n",
+            roles: &[SyntaxRole::String, SyntaxRole::Constant],
+        },
+        Contract {
+            language: SyntaxLanguage::Toml,
+            source: "[package]\nname = \"lst\"\n",
+            roles: &[SyntaxRole::Property, SyntaxRole::String],
+        },
+        Contract {
+            language: SyntaxLanguage::Yaml,
+            source: "name: lst\nenabled: true\n",
+            roles: &[SyntaxRole::Property, SyntaxRole::Constant],
+        },
+        Contract {
+            language: SyntaxLanguage::Markdown,
+            source: "# Title\n",
+            roles: &[SyntaxRole::Title],
+        },
+        Contract {
+            language: SyntaxLanguage::Html,
+            source: "<a href=\"https://example.test\">link</a>\n",
+            roles: &[SyntaxRole::Tag, SyntaxRole::Property, SyntaxRole::String],
+        },
+        Contract {
+            language: SyntaxLanguage::Css,
+            source: ".editor::before { content: \"lst\"; }\n",
+            roles: &[SyntaxRole::Property, SyntaxRole::String],
+        },
     ];
 
-    for (language, source) in cases {
-        let lines = compute_syntax_highlights(language, source);
+    assert_eq!(contracts.len(), SyntaxLanguage::ALL.len());
+    for language in SyntaxLanguage::ALL {
         assert!(
-            lines.iter().flatten().next().is_some(),
-            "{language:?} should produce at least one syntax span"
+            contracts
+                .iter()
+                .any(|contract| contract.language == *language),
+            "{language:?} needs a syntax highlight contract"
         );
     }
+
+    for contract in contracts {
+        let lines = compute_syntax_highlights(contract.language, contract.source);
+        let roles: Vec<SyntaxRole> = lines.iter().flatten().map(|span| span.role).collect();
+        for role in contract.roles {
+            assert!(
+                roles.contains(role),
+                "{:?} should produce {role:?}; got {roles:?}",
+                contract.language
+            );
+        }
+    }
+}
+
+#[test]
+fn markdown_highlighting_includes_inline_markup() {
+    let lines = compute_syntax_highlights(
+        SyntaxLanguage::Markdown,
+        "**Correctness by construction.** Use `TabSet` and [docs](https://example.test).\n",
+    );
+
+    assert!(lines[0].iter().any(|span| span.role == SyntaxRole::Strong));
+    assert!(lines[0].iter().any(|span| span.role == SyntaxRole::Literal));
+    assert!(lines[0]
+        .iter()
+        .any(|span| span.role == SyntaxRole::Reference));
+}
+
+#[test]
+fn markdown_highlighting_includes_fenced_code_injections() {
+    let lines = compute_syntax_highlights(SyntaxLanguage::Markdown, "```rust\nfn main() {}\n```\n");
+    let roles: Vec<SyntaxRole> = lines.iter().flatten().map(|span| span.role).collect();
+
+    assert!(lines[1].iter().any(|span| span.role == SyntaxRole::Keyword));
+    assert!(roles.contains(&SyntaxRole::Literal), "{roles:?}");
 }
 
 #[test]
