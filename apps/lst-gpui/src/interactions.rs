@@ -1,5 +1,5 @@
 use gpui::{
-    point, px, Bounds, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Window,
+    px, Bounds, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Window,
 };
 use lst_editor::{
     selection::{
@@ -8,7 +8,7 @@ use lst_editor::{
     RevealIntent, Selection,
 };
 
-use crate::viewport::scroll_top_for;
+use crate::viewport::{scroll_to_top, scroll_top_for};
 use std::ops::Range;
 
 use crate::{ui::theme::metrics, FocusTarget, LstGpuiApp};
@@ -221,10 +221,7 @@ impl LstGpuiApp {
         drag.autoscroll_active = false;
 
         if let Some(target) = self.drag_autoscroll_target() {
-            let current_x = self.active_view().scroll.offset().x;
-            self.active_view()
-                .scroll
-                .set_offset(point(current_x, -target));
+            scroll_to_top(&self.active_view().scroll, target);
             if let Some(position) = self.selection_drag.as_ref().map(|drag| drag.last_point) {
                 self.apply_drag_selection_at_point(position, cx);
             }

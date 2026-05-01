@@ -147,6 +147,33 @@ pub(crate) fn scroll_left_for(scroll: &ScrollHandle) -> Pixels {
     (-scroll.offset().x).max(px(0.0))
 }
 
+pub(crate) fn max_scroll_top(scroll: &ScrollHandle) -> Pixels {
+    scroll.max_offset().height.max(px(0.0))
+}
+
+pub(crate) fn max_scroll_left(scroll: &ScrollHandle) -> Pixels {
+    scroll.max_offset().width.max(px(0.0))
+}
+
+/// Sets the vertical scroll position to `top` (non-negative "pixels from the
+/// top"), preserving the horizontal axis and clamping to `[0, max_offset]`.
+pub(crate) fn scroll_to_top(scroll: &ScrollHandle, top: Pixels) {
+    let top = top.max(px(0.0)).min(max_scroll_top(scroll));
+    let current_x = scroll.offset().x;
+    scroll.set_offset(gpui::point(current_x, -top));
+}
+
+/// Sets the horizontal scroll position to `left`, preserving the vertical axis.
+pub(crate) fn scroll_to_left(scroll: &ScrollHandle, left: Pixels) {
+    let left = left.max(px(0.0)).min(max_scroll_left(scroll));
+    let current_y = scroll.offset().y;
+    scroll.set_offset(gpui::point(-left, current_y));
+}
+
+pub(crate) fn reset_scroll(scroll: &ScrollHandle) {
+    scroll.set_offset(gpui::point(px(0.0), px(0.0)));
+}
+
 fn trim_display_line(line: &str) -> &str {
     line.strip_suffix('\r').unwrap_or(line)
 }
@@ -258,6 +285,16 @@ pub(crate) fn code_origin_pad(show_gutter: bool, scale: f32) -> Pixels {
     } else {
         metrics::px_for_scale(metrics::EDITOR_LEFT_PAD, scale)
     }
+}
+
+/// X coordinate (in window-space pixels) where the code area begins.
+pub(crate) fn code_origin_x(
+    element_left: Pixels,
+    show_gutter: bool,
+    scale: f32,
+    horizontal_scroll: Pixels,
+) -> Pixels {
+    element_left + code_origin_pad(show_gutter, scale) - horizontal_scroll
 }
 
 pub(crate) fn code_char_width(window: &mut Window, scale: f32, theme: Theme) -> Pixels {
@@ -774,7 +811,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         metrics::GUTTER_WIDTH - metrics::GUTTER_LEFT_PAD - 8.0,
         scale,
     );
-    let code_origin_x = bounds.left() + code_origin_pad(show_gutter, scale) - horizontal_scroll;
+    let code_origin_x = code_origin_x(bounds.left(), show_gutter, scale, horizontal_scroll);
 
     for row in paint_state.rows {
         let cursor_in_row = row_contains_cursor(&row, cursor_char);

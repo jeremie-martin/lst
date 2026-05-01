@@ -1,12 +1,11 @@
 use gpui::{
-    point, px, Bounds, Context, EntityInputHandler, KeyDownEvent, Pixels, Point, UTF16Selection,
-    Window,
+    point, Bounds, Context, EntityInputHandler, KeyDownEvent, Pixels, Point, UTF16Selection, Window,
 };
 use lst_editor::vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey};
 use ropey::Rope;
 use std::{ops::Range, time::Instant};
 
-use crate::viewport::{code_origin_pad, row_contains_cursor, scroll_left_for, x_for_global_char};
+use crate::viewport::{code_origin_x, row_contains_cursor, scroll_left_for, x_for_global_char};
 use crate::{elapsed_ms, ui::theme::metrics, LstGpuiApp};
 
 impl LstGpuiApp {
@@ -57,7 +56,7 @@ impl LstGpuiApp {
             return false;
         };
 
-        let wrap_columns = self.active_wrap_columns(window);
+        let wrap_columns = self.active_wrap_columns(window, cx);
         self.update_model(cx, true, |model| {
             model.handle_vim_key(key, mods, wrap_columns);
         });
@@ -168,17 +167,15 @@ impl EntityInputHandler for LstGpuiApp {
             .rows
             .iter()
             .rfind(|row| row_contains_cursor(row, range.start))?;
-        let horizontal_scroll = if self.model.show_wrap() {
-            px(0.0)
-        } else {
-            scroll_left_for(&active_view.scroll)
-        };
-        let code_origin_x = element_bounds.left()
-            + code_origin_pad(self.model.show_gutter(), self.ui_scale())
-            - horizontal_scroll;
+        let origin_x = code_origin_x(
+            element_bounds.left(),
+            self.model.show_gutter(),
+            self.ui_scale(),
+            scroll_left_for(&active_view.scroll),
+        );
         let start_x =
-            code_origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| gpui::px(0.0));
-        let end_x = code_origin_x
+            origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| gpui::px(0.0));
+        let end_x = origin_x
             + x_for_global_char(row, range.end.min(row.display_end_char))
                 .unwrap_or_else(|| gpui::px(0.0));
         Some(Bounds::from_corners(

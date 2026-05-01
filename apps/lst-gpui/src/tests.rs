@@ -397,7 +397,7 @@ fn test_launch_without_recent_path_does_not_persist_recent_state(cx: &mut TestAp
     let (view, _cx) = new_test_app(cx, LaunchArgs::default());
 
     view.update(_cx, |app, _| {
-        assert!(!app.recent_files.is_persistent());
+        assert!(!app.recent.is_persistent());
     });
 }
 
@@ -511,8 +511,9 @@ fn recent_files_keyboard_selection_moves_by_grid_rows(cx: &mut TestAppContext) {
     cx.dispatch_action(ToggleRecentFiles);
     cx.refresh().expect("render recent grid view");
     let expected = view.update(cx, |app, _| {
-        let visible_len = app.recent_visible_paths().len();
-        app.recent_row_selection_target(0, visible_len, true)
+        let visible_len = app.recent.page().visible.len();
+        app.recent
+            .row_selection_target(0, visible_len, true)
             .expect("rendered recent grid should have a next row")
     });
 
@@ -563,13 +564,13 @@ fn recent_files_keyboard_selection_scrolls_selected_card_into_view(cx: &mut Test
 
     let (selected_ix, card_bounds, viewport_bounds, scroll_offset) = view.update(cx, |app, _| {
         let selected_ix = app
-            .recent_selected_index()
+            .recent
+            .selected_index()
             .expect("keyboard selection should remain set");
         (
             selected_ix,
-            app.recent_card_bounds
-                .get(selected_ix)
-                .copied()
+            app.recent
+                .card_bounds_for(selected_ix)
                 .expect("selected recent card should have tracked bounds"),
             app.recent_scroll.bounds(),
             app.recent_scroll.offset(),
@@ -812,7 +813,7 @@ fn recent_content_search_reports_pending_until_results_finish(cx: &mut TestAppCo
             &crate::ui::InputFieldEvent::Changed("needle".to_string()),
             cx,
         );
-        assert!(app.recent_content_search_pending());
+        assert!(app.recent.content_search_pending());
     });
 
     cx.run_until_parked();
@@ -852,8 +853,8 @@ fn recent_preview_prune_schedules_newly_visible_cards(cx: &mut TestAppContext) {
     view.update(cx, |app, _| {
         let present = crate::recent::normalize_recent_path(&present);
         assert!(matches!(
-            app.recent_previews.get(&present),
-            Some(RecentPreviewState::Loaded(text)) if text.contains("present preview")
+            app.recent.preview(&present),
+            Some(crate::recent::RecentPreviewState::Loaded(text)) if text.contains("present preview")
         ));
     });
 
@@ -2008,12 +2009,12 @@ fn rendered_wrapped_rows_fill_viewport_width_except_remainder(cx: &mut TestAppCo
     cx.refresh().expect("render long line");
     cx.run_until_parked();
 
-    cx.update_window_entity(&view, |app, window, _cx| {
+    cx.update_window_entity(&view, |app, window, cx| {
         let bounds = app.active_viewport_bounds().expect("viewport bounds");
         let rows = app.active_painted_rows();
 
-        let char_width = crate::viewport::code_char_width(window, app.ui_scale(), app.theme());
-        let wrap_columns = app.active_wrap_columns(window);
+        let char_width = crate::viewport::code_char_width(window, app.ui_scale(), app.theme(cx));
+        let wrap_columns = app.active_wrap_columns(window, cx);
         let content_width = bounds.size.width
             - crate::viewport::code_origin_pad(app.model.show_gutter(), app.ui_scale());
         let row_lengths: Vec<usize> = rows
@@ -2064,10 +2065,10 @@ fn rendered_wrapped_rows_fill_viewport_width_except_remainder(cx: &mut TestAppCo
 fn code_font_is_effectively_monospace_for_basic_ascii(cx: &mut TestAppContext) {
     let (view, cx) = new_test_app(cx, LaunchArgs::default());
 
-    cx.update_window_entity(&view, |app, window, _cx| {
+    cx.update_window_entity(&view, |app, window, cx| {
         let font = crate::ui::theme::typography::primary_font();
         let font_size = app.ui_px(crate::ui::theme::metrics::CODE_FONT_SIZE);
-        let theme = app.theme();
+        let theme = app.theme(cx);
         let style_for = |text: &str| {
             [gpui::TextRun {
                 len: text.len(),
@@ -2107,20 +2108,20 @@ fn exact_wrap_multiples_fill_every_visual_row(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     cx.update_window_entity(&view, |app, window, cx| {
-        let wrap_columns = app.active_wrap_columns(window);
+        let wrap_columns = app.active_wrap_columns(window, cx);
         let text = "a".repeat(wrap_columns * 4);
         app.replace_text_in_range(None, &text, window, cx);
     });
     cx.refresh().expect("render exact wrap multiple");
     cx.run_until_parked();
 
-    cx.update_window_entity(&view, |app, window, _cx| {
+    cx.update_window_entity(&view, |app, window, cx| {
         let bounds = app.active_viewport_bounds().expect("viewport bounds");
         let rows = app.active_painted_rows();
 
-        let wrap_columns = app.active_wrap_columns(window);
+        let wrap_columns = app.active_wrap_columns(window, cx);
         let char_width =
-            crate::viewport::code_char_width(window, app.ui_scale(), app.theme()) / px(1.0);
+            crate::viewport::code_char_width(window, app.ui_scale(), app.theme(cx)) / px(1.0);
         let content_width = bounds.size.width
             - crate::viewport::code_origin_pad(app.model.show_gutter(), app.ui_scale());
         let row_lengths: Vec<usize> = rows

@@ -18,19 +18,20 @@ use crate::actions::attach_workspace_actions;
 use crate::syntax::syntax_mode_for_language;
 use crate::viewport::{
     buffer_content_height, paint_viewport, prepare_viewport_paint_state, scroll_left_for,
-    scroll_top_for, unwrapped_content_width, ViewportPaintInput, ViewportPreparation,
-    WrapLayoutInput,
+    scroll_to_left, scroll_to_top, scroll_top_for, unwrapped_content_width, ViewportPaintInput,
+    ViewportPreparation, WrapLayoutInput,
 };
+use crate::recent::RecentPreviewState;
 use crate::{
     code_char_width, ensure_wrap_layout, EditorHorizontalScrollbarDrag, EditorScrollbarDrag,
-    FocusTarget, LstGpuiApp, RecentPreviewState, RECENT_CARD_BASIS,
+    FocusTarget, LstGpuiApp, RECENT_CARD_BASIS,
 };
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme();
+        let theme = self.theme(cx);
         let tab = self.model.tab(ix).expect("rendered tab index must exist");
-        let active = !self.recent_panel_visible && ix == self.model.active_index();
+        let active = !self.recent.is_open() && ix == self.model.active_index();
         let show_close = active || self.hovered_tab == Some(ix);
         let close_button: Option<IconButton> = show_close.then(|| {
             IconButton::new(("tab-close", ix), IconKind::Close, theme)
@@ -78,9 +79,9 @@ impl LstGpuiApp {
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
-        let theme = self.theme();
+        let theme = self.theme(cx);
         let recent_button = IconButton::new("recent-files-button", IconKind::Recent, theme)
-            .emphasized(self.recent_panel_visible)
+            .emphasized(self.recent.is_open())
             .on_click(cx.listener(|this, _, window, cx| {
                 this.toggle_recent_files_panel(window, cx);
                 cx.stop_propagation();
@@ -116,7 +117,7 @@ impl LstGpuiApp {
 
     fn render_find_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
-        let theme = self.theme();
+        let theme = self.theme(cx);
         let find = self.model.find();
         let match_label = if find.matches.is_empty() {
             "0/0".to_string()
@@ -236,9 +237,9 @@ impl LstGpuiApp {
             ))
     }
 
-    fn render_goto_bar(&mut self) -> impl IntoElement {
+    fn render_goto_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
-        let theme = self.theme();
+        let theme = self.theme(cx);
         div()
             .flex_none()
             .flex()
@@ -262,24 +263,22 @@ impl LstGpuiApp {
 
     fn render_recent_files_view(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
-        let theme = self.theme();
-        let filtered_paths = self.recent_filtered_paths();
-        let total = filtered_paths.len();
-        let visible_paths = filtered_paths
-            .into_iter()
-            .take(self.recent_visible_count)
-            .collect::<Vec<_>>();
-        let visible = visible_paths.len();
+        let theme = self.theme(cx);
+        let page = self.recent.page();
+        let total = page.total;
+        let visible = page.visible.len();
         let has_more = total > visible;
-        let empty_message = self.recent_empty_message();
-        let content_search_pending = self.recent_content_search_pending();
+        let selected_index = page.selected_index;
+        let empty_message = page.empty_message;
+        let content_search_pending = self.recent.content_search_pending();
         let entity = cx.entity();
         let recent_scroll = self.recent_scroll.clone();
-        let cards = visible_paths
+        let cards = page
+            .visible
             .into_iter()
             .enumerate()
             .map(|(ix, path)| {
-                self.render_recent_file_card(ix, path, cx)
+                self.render_recent_file_card(ix, path, selected_index == Some(ix), cx)
                     .into_any_element()
             })
             .collect::<Vec<_>>();
@@ -381,7 +380,7 @@ impl LstGpuiApp {
                                                 })
                                                 .collect::<Vec<_>>();
                                             entity.update(cx, move |this, _| {
-                                                this.recent_card_bounds = card_bounds;
+                                                this.recent.set_card_bounds(card_bounds);
                                             });
                                         }
                                     })
@@ -414,11 +413,11 @@ impl LstGpuiApp {
         &mut self,
         ix: usize,
         path: std::path::PathBuf,
+        selected: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let scale = self.ui_scale();
-        let theme = self.theme();
-        let selected = self.recent_selected_path.as_ref() == Some(&path);
+        let theme = self.theme(cx);
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -428,7 +427,7 @@ impl LstGpuiApp {
             .parent()
             .map(|parent| parent.display().to_string())
             .unwrap_or_default();
-        let (preview_text, preview_color) = match self.recent_previews.get(&path) {
+        let (preview_text, preview_color) = match self.recent.preview(&path) {
             Some(RecentPreviewState::Loaded(text)) => (text.clone(), theme.role.text_subtle),
             Some(RecentPreviewState::Failed(message)) => (
                 format!("Preview unavailable: {message}"),
@@ -474,7 +473,6 @@ impl LstGpuiApp {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _window, cx| {
-                    this.recent_selected_path = Some(path.clone());
                     this.open_recent_path(path.clone(), cx);
                     cx.stop_propagation();
                 }),
@@ -526,7 +524,7 @@ impl LstGpuiApp {
 
     fn render_recent_load_more_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
-        let theme = self.theme();
+        let theme = self.theme(cx);
         div()
             .id("recent-files-load-more")
             .flex()
@@ -555,7 +553,7 @@ impl LstGpuiApp {
             overlays.push(self.render_find_bar(cx).into_any_element());
         }
         if self.model.goto_line().is_some() {
-            overlays.push(self.render_goto_bar().into_any_element());
+            overlays.push(self.render_goto_bar(cx).into_any_element());
         }
 
         div()
@@ -575,7 +573,7 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let scale = self.ui_scale();
-        let theme = self.theme();
+        let theme = self.theme(cx);
         let track_width = metrics::px_for_scale(metrics::SCROLLBAR_TRACK_WIDTH, scale);
         let has_overflow = viewport_scroll.max_offset().height > px(0.0);
         let prepare_scroll = viewport_scroll.clone();
@@ -635,8 +633,7 @@ impl LstGpuiApp {
                             } else {
                                 let target =
                                     scroll_top_for_track_click(&layout, event.position.y, current);
-                                let current_x = scroll_for_down.offset().x;
-                                scroll_for_down.set_offset(gpui::point(current_x, -target));
+                                scroll_to_top(&scroll_for_down, target);
                                 None
                             };
                             entity_for_down.update(cx, |this, _| {
@@ -664,8 +661,7 @@ impl LstGpuiApp {
                                         event.position.y,
                                         drag.grab_offset_y,
                                     );
-                                    let current_x = scroll_for_move.offset().x;
-                                    scroll_for_move.set_offset(gpui::point(current_x, -target));
+                                    scroll_to_top(&scroll_for_move, target);
                                     entity_for_move.update(cx, |this, _| {
                                         this.editor_scrollbar_hovered = true;
                                     });
@@ -719,7 +715,7 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let scale = self.ui_scale();
-        let theme = self.theme();
+        let theme = self.theme(cx);
         let track_height = metrics::px_for_scale(metrics::SCROLLBAR_TRACK_WIDTH, scale);
         let has_overflow = viewport_scroll.max_offset().width > px(0.0);
         let prepare_scroll = viewport_scroll.clone();
@@ -779,8 +775,7 @@ impl LstGpuiApp {
                             } else {
                                 let target =
                                     scroll_left_for_track_click(&layout, event.position.x, current);
-                                let current_y = scroll_for_down.offset().y;
-                                scroll_for_down.set_offset(gpui::point(-target, current_y));
+                                scroll_to_left(&scroll_for_down, target);
                                 None
                             };
                             entity_for_down.update(cx, |this, _| {
@@ -808,8 +803,7 @@ impl LstGpuiApp {
                                         event.position.x,
                                         drag.grab_offset_x,
                                     );
-                                    let current_y = scroll_for_move.offset().y;
-                                    scroll_for_move.set_offset(gpui::point(-target, current_y));
+                                    scroll_to_left(&scroll_for_move, target);
                                     entity_for_move.update(cx, |this, _| {
                                         this.editor_horizontal_scrollbar_hovered = true;
                                     });
@@ -863,7 +857,7 @@ impl LstGpuiApp {
 
     fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
-        let theme = self.theme();
+        let theme = self.theme(cx);
         div()
             .flex_none()
             .flex()
@@ -916,7 +910,7 @@ impl LstGpuiApp {
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.keystroke.key == "escape" {
-            if self.recent_panel_visible {
+            if self.recent.is_open() {
                 self.close_recent_files_panel(cx);
                 cx.stop_propagation();
                 return;
@@ -948,7 +942,7 @@ impl Render for LstGpuiApp {
         let show_gutter = self.model.show_gutter();
         let show_wrap = self.model.show_wrap();
         let gutter_mode = self.model.gutter_mode();
-        let theme = self.theme();
+        let theme = self.theme(cx);
         let (active_scroll, active_cache, active_geometry) = {
             let active_view = self.active_view();
             (
@@ -1079,10 +1073,10 @@ impl Render for LstGpuiApp {
                                         metrics::ROW_HEIGHT,
                                         self.ui_scale(),
                                     ))
-                                    .when(self.recent_panel_visible, |viewport| {
+                                    .when(self.recent.is_open(), |viewport| {
                                         viewport.child(self.render_recent_files_view(cx))
                                     })
-                                    .when(!self.recent_panel_visible, |viewport| {
+                                    .when(!self.recent.is_open(), |viewport| {
                                         viewport
                                             .child(
                                                 div()

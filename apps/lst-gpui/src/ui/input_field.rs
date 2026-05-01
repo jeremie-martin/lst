@@ -13,7 +13,7 @@ use lst_editor::selection::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::ui::theme::{metrics, Theme, ThemeId};
+use crate::ui::theme::{current_theme, metrics};
 
 actions!(
     lst_gpui_input,
@@ -122,7 +122,6 @@ pub struct InputField {
     focus_handle: FocusHandle,
     text: InputText,
     placeholder: SharedString,
-    theme: Theme,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     selection_drag: Option<InputDragSelectionMode>,
@@ -379,7 +378,6 @@ impl InputField {
             focus_handle: cx.focus_handle(),
             text: InputText::new(),
             placeholder: placeholder.into(),
-            theme: ThemeId::default().theme(),
             last_layout: None,
             last_bounds: None,
             selection_drag: None,
@@ -395,13 +393,6 @@ impl InputField {
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if self.text.set_text(text) {
             self.last_layout = None;
-            cx.notify();
-        }
-    }
-
-    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
-        if self.theme != theme {
-            self.theme = theme;
             cx.notify();
         }
     }
@@ -831,11 +822,11 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        let theme = current_theme(cx);
         let input = self.input.read(cx);
         let content = input.text.content.clone();
         let selected_range = input.text.selected_range.clone();
         let cursor = input.text.cursor_offset();
-        let theme = input.theme;
 
         let (display_text, text_color) = if content.is_empty() {
             (input.placeholder.clone(), rgb(theme.role.text_muted))
@@ -968,7 +959,7 @@ impl Render for InputField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let focused = self.focus_handle.is_focused(window);
-        let theme = self.theme;
+        let theme = current_theme(cx);
         let border = if focused {
             rgb(theme.role.accent)
         } else {
@@ -1044,6 +1035,7 @@ impl Render for InputField {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::theme::ThemeId;
     use gpui::{Keystroke, Modifiers, MouseMoveEvent, TestAppContext};
 
     fn has_binding<A: gpui::Action + 'static>(keystroke: &str) -> bool {
@@ -1178,6 +1170,7 @@ mod tests {
 
     #[gpui::test]
     fn hover_move_cancels_stale_input_drag_without_selecting(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(ThemeId::default()));
         let (view, cx) = cx.add_window_view(|_, cx| InputField::new(cx, "Find"));
 
         cx.update_window_entity(&view, |input, window, cx| {

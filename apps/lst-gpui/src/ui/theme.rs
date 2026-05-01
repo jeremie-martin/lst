@@ -1,4 +1,4 @@
-use gpui::{font, px, Font, FontFallbacks, Pixels};
+use gpui::{font, px, App, Font, FontFallbacks, Global, Pixels};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum ThemeId {
@@ -6,6 +6,8 @@ pub(crate) enum ThemeId {
     Dark,
     Light,
 }
+
+impl Global for ThemeId {}
 
 impl ThemeId {
     pub(crate) fn next(self) -> Self {
@@ -21,6 +23,17 @@ impl ThemeId {
             Self::Light => LIGHT,
         }
     }
+}
+
+/// The active theme, sourced from the single `ThemeId` global the app
+/// installs at startup. Render code should read through this rather than
+/// holding a per-widget copy that has to be re-synced on theme changes.
+pub(crate) fn current_theme(cx: &App) -> Theme {
+    cx.global::<ThemeId>().theme()
+}
+
+pub(crate) fn current_theme_id(cx: &App) -> ThemeId {
+    *cx.global::<ThemeId>()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

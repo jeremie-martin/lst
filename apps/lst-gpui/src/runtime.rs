@@ -539,7 +539,7 @@ impl LstGpuiApp {
                 model.open_files_with_stamps(results.opened);
             });
             for path in opened_paths {
-                self.recent_files.record(&path);
+                self.recent.record(&path);
             }
         }
     }
@@ -555,7 +555,7 @@ impl LstGpuiApp {
                 self.update_model(cx, true, |model| {
                     model.save_finished_for_tab(tab_id, path, stamp);
                 });
-                self.recent_files.record(&recent_path);
+                self.recent.record(&recent_path);
                 self.finish_pending_after_save(tab_id, true, cx);
             }
             SaveFileResult::Failed {
@@ -595,7 +595,7 @@ impl LstGpuiApp {
                 self.update_model(cx, true, |model| {
                     model.save_as_finished_for_tab(tab_id, path.clone(), stamp);
                 });
-                self.recent_files.record(&recent_path);
+                self.recent.record(&recent_path);
                 remove_previous_scratchpad_after_save_as(
                     previous_scratchpad_path,
                     &path,
@@ -640,7 +640,7 @@ impl LstGpuiApp {
                 self.update_model(cx, true, |model| {
                     model.autosave_finished_for_tab(tab_id, path, revision, stamp);
                 });
-                self.recent_files.record(&recent_path);
+                self.recent.record(&recent_path);
             }
             AutosaveCompletion::Failed {
                 tab_id: _,
