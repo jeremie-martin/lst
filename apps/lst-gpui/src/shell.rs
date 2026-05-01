@@ -15,13 +15,13 @@ use gpui::{
 };
 
 use crate::actions::attach_workspace_actions;
+use crate::recent::RecentPreviewState;
 use crate::syntax::syntax_mode_for_language;
 use crate::viewport::{
-    buffer_content_height, paint_viewport, prepare_viewport_paint_state, scroll_left_for,
-    scroll_to_left, scroll_to_top, scroll_top_for, unwrapped_content_width, ViewportPaintInput,
-    ViewportPreparation, WrapLayoutInput,
+    buffer_content_height, code_origin_pad, max_unwrapped_line_width, paint_viewport,
+    prepare_viewport_paint_state, scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for,
+    ViewportPaintInput, ViewportPreparation, WrapLayoutInput,
 };
-use crate::recent::RecentPreviewState;
 use crate::{
     code_char_width, ensure_wrap_layout, EditorHorizontalScrollbarDrag, EditorScrollbarDrag,
     FocusTarget, LstGpuiApp, RECENT_CARD_BASIS,
@@ -943,6 +943,7 @@ impl Render for LstGpuiApp {
         let show_wrap = self.model.show_wrap();
         let gutter_mode = self.model.gutter_mode();
         let theme = self.theme(cx);
+        let scale = self.ui_scale();
         let (active_scroll, active_cache, active_geometry) = {
             let active_view = self.active_view();
             (
@@ -955,10 +956,8 @@ impl Render for LstGpuiApp {
             .borrow()
             .bounds
             .map(|bounds| bounds.size.width)
-            .unwrap_or_else(|| {
-                metrics::px_for_scale(metrics::WINDOW_WIDTH - 48.0, self.ui_scale())
-            });
-        let char_width = code_char_width(window, self.ui_scale(), theme);
+            .unwrap_or_else(|| metrics::px_for_scale(metrics::WINDOW_WIDTH - 48.0, scale));
+        let char_width = code_char_width(window, scale, theme);
         let show_search_decorations = self.model.find().visible;
         let (
             revision,
@@ -973,7 +972,7 @@ impl Render for LstGpuiApp {
             (
                 active_tab.revision(),
                 syntax_mode_for_language(active_tab.language()),
-                active_tab.buffer_clone(),
+                active_tab.buffer().clone(),
                 active_tab.selected_range(),
                 if show_search_decorations {
                     self.model.find_match_ranges()
@@ -999,23 +998,23 @@ impl Render for LstGpuiApp {
                     char_width,
                     show_gutter,
                     show_wrap,
-                    scale: self.ui_scale(),
+                    scale,
                 },
             );
-            buffer_content_height(layout.total_rows, self.ui_scale())
+            buffer_content_height(layout.total_rows, scale)
         };
         let total_content_width = (!show_wrap).then(|| {
             let mut cache = active_cache.borrow_mut();
-            unwrapped_content_width(
+            let width = max_unwrapped_line_width(
                 &mut cache,
                 line_texts.as_ref(),
                 revision,
                 char_width,
-                show_gutter,
-                self.ui_scale(),
+                scale,
                 theme,
                 window,
-            )
+            );
+            code_origin_pad(show_gutter, scale) + width + char_width * 2.0
         });
         let viewport_scroll = active_scroll;
         let scrollbar_scroll = viewport_scroll.clone();

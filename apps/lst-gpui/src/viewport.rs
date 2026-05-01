@@ -322,20 +322,6 @@ pub(crate) fn code_char_width(window: &mut Window, scale: f32, theme: Theme) -> 
     }
 }
 
-pub(crate) fn unwrapped_content_width(
-    cache: &mut ViewportCache,
-    lines: &[String],
-    revision: u64,
-    char_width: Pixels,
-    show_gutter: bool,
-    scale: f32,
-    theme: Theme,
-    window: &mut Window,
-) -> Pixels {
-    let width = max_unwrapped_line_width(cache, lines, revision, char_width, scale, theme, window);
-    code_origin_pad(show_gutter, scale) + width + char_width * 2.0
-}
-
 pub(crate) fn x_for_display_char(
     line_text: &str,
     char_offset: usize,
@@ -357,7 +343,7 @@ pub(crate) fn x_for_display_char(
     shaped.x_for_index(byte)
 }
 
-fn max_unwrapped_line_width(
+pub(crate) fn max_unwrapped_line_width(
     cache: &mut ViewportCache,
     lines: &[String],
     revision: u64,

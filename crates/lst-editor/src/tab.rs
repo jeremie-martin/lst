@@ -306,20 +306,12 @@ impl EditorTab {
         self.is_scratchpad().then(|| self.path()).flatten()
     }
 
-    pub fn scratchpad_path_for_cleanup(&self) -> Option<PathBuf> {
-        self.scratchpad_path().cloned()
-    }
-
     pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
         self.origin.conflict_suppressed_for(stamp)
     }
 
     pub fn buffer(&self) -> &Rope {
         &self.buffer
-    }
-
-    pub fn buffer_clone(&self) -> Rope {
-        self.buffer.clone()
     }
 
     pub fn selection(&self) -> Selection {

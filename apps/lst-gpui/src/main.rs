@@ -727,7 +727,10 @@ impl LstGpuiApp {
         result: RecentPreviewRead,
         cx: &mut Context<Self>,
     ) {
-        if matches!(self.recent.apply_preview(path, result), ApplyPreviewOutcome::Pruned) {
+        if matches!(
+            self.recent.apply_preview(path, result),
+            ApplyPreviewOutcome::Pruned
+        ) {
             self.spawn_recent_previews(cx);
         }
         cx.notify();
@@ -1125,7 +1128,12 @@ impl LstGpuiApp {
         }
     }
 
-    fn try_reveal_active_cursor(&self, intent: RevealIntent, window: &mut Window, cx: &App) -> bool {
+    fn try_reveal_active_cursor(
+        &self,
+        intent: RevealIntent,
+        window: &mut Window,
+        cx: &App,
+    ) -> bool {
         let view = self.active_view();
         let viewport_bounds = {
             let geometry = view.geometry.borrow();
@@ -1223,7 +1231,12 @@ impl LstGpuiApp {
         }
     }
 
-    fn active_cursor_rendered_x(&self, char_width: Pixels, window: &mut Window, cx: &App) -> Pixels {
+    fn active_cursor_rendered_x(
+        &self,
+        char_width: Pixels,
+        window: &mut Window,
+        cx: &App,
+    ) -> Pixels {
         let tab = self.active_tab();
         let cursor = tab.cursor_char().min(tab.buffer().len_chars());
         let line = tab.buffer().char_to_line(cursor);
@@ -1264,14 +1277,13 @@ impl LstGpuiApp {
         const SCROLL_STALE_THRESHOLD: f32 = 0.5;
         let current_scroll_top = scroll_top_for(&active_view.scroll);
         let current_scroll_left = scroll_left_for(&active_view.scroll);
-        if self.selection_drag.is_none() {
-            if (current_scroll_top - geometry.scroll_top_at_paint).abs()
+        if self.selection_drag.is_none()
+            && ((current_scroll_top - geometry.scroll_top_at_paint).abs()
                 > px(SCROLL_STALE_THRESHOLD)
                 || (current_scroll_left - geometry.scroll_left_at_paint).abs()
-                    > px(SCROLL_STALE_THRESHOLD)
-            {
-                return self.active_tab().cursor_char();
-            }
+                    > px(SCROLL_STALE_THRESHOLD))
+        {
+            return self.active_tab().cursor_char();
         }
         let code_origin_x =
             bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());

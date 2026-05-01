@@ -271,10 +271,6 @@ impl EditorModel {
         EditorTab::empty(id, name)
     }
 
-    fn push_tab(&mut self, tab: EditorTab) -> usize {
-        self.tabs.push(tab)
-    }
-
     fn activate_tab(&mut self, index: usize) -> bool {
         if !self.tabs.activate(index) {
             return false;
@@ -2067,7 +2063,7 @@ impl EditorModel {
 
     pub fn new_tab(&mut self) {
         let tab = self.new_empty_tab();
-        let index = self.push_tab(tab);
+        let index = self.tabs.push(tab);
         self.activate_tab(index);
         self.status = "Created a new tab.".to_string();
         self.queue_focus(FocusTarget::Editor);
@@ -2076,7 +2072,7 @@ impl EditorModel {
     pub fn new_scratchpad_tab(&mut self, path: PathBuf, file_stamp: FileStamp) {
         let id = self.alloc_tab_id();
         let tab = EditorTab::scratchpad_with_stamp(id, path, file_stamp);
-        let index = self.push_tab(tab);
+        let index = self.tabs.push(tab);
         self.activate_tab(index);
         self.status = "Created a new scratchpad.".to_string();
         self.queue_focus(FocusTarget::Editor);

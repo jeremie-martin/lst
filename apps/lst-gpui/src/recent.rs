@@ -185,7 +185,11 @@ impl RecentView {
     /// filter. Returns `Some(generation)` if the preserved query is non-empty
     /// and the caller should schedule a debounced content search.
     pub(crate) fn open(&mut self) -> Option<u64> {
-        let prior_query = self.panel.as_ref().map(|p| p.query.clone()).unwrap_or_default();
+        let prior_query = self
+            .panel
+            .as_ref()
+            .map(|p| p.query.clone())
+            .unwrap_or_default();
         let mut panel = RecentPanel::fresh(prior_query);
         Self::reset_selection_in(&mut panel, &self.files);
         let pending_search = if panel.query.trim().is_empty() {
@@ -298,10 +302,14 @@ impl RecentView {
         let next = match movement {
             RecentSelectionMove::Previous => current.saturating_sub(1),
             RecentSelectionMove::Next => (current + 1).min(last),
-            RecentSelectionMove::RowPrevious => Self::row_target(&panel.card_bounds, current, visible_paths.len(), false)
-                .unwrap_or_else(|| current.saturating_sub(1)),
-            RecentSelectionMove::RowNext => Self::row_target(&panel.card_bounds, current, visible_paths.len(), true)
-                .unwrap_or_else(|| (current + 1).min(last)),
+            RecentSelectionMove::RowPrevious => {
+                Self::row_target(&panel.card_bounds, current, visible_paths.len(), false)
+                    .unwrap_or_else(|| current.saturating_sub(1))
+            }
+            RecentSelectionMove::RowNext => {
+                Self::row_target(&panel.card_bounds, current, visible_paths.len(), true)
+                    .unwrap_or_else(|| (current + 1).min(last))
+            }
         };
 
         panel.selection = visible_paths.get(next).cloned();
@@ -497,11 +505,10 @@ impl RecentView {
         let current_center_x = bounds_center_x(current_bounds);
         let mut best: Option<(usize, f32, f32)> = None;
 
-        for ix in 0..visible_len.min(bounds.len()) {
+        for (ix, other) in bounds.iter().copied().take(visible_len).enumerate() {
             if ix == current {
                 continue;
             }
-            let other = bounds[ix];
             let row_distance = if row_next {
                 other.top() - current_top
             } else {

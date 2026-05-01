@@ -49,7 +49,7 @@ impl EditorModel {
                 tab_id,
                 suggested_name: tab.display_name(),
                 body,
-                previous_scratchpad_path: tab.scratchpad_path_for_cleanup(),
+                previous_scratchpad_path: tab.scratchpad_path().cloned(),
             });
         }
     }
@@ -66,7 +66,7 @@ impl EditorModel {
             tab_id,
             suggested_name: tab.display_name(),
             body: tab.buffer_text(),
-            previous_scratchpad_path: tab.scratchpad_path_for_cleanup(),
+            previous_scratchpad_path: tab.scratchpad_path().cloned(),
         });
     }
 
