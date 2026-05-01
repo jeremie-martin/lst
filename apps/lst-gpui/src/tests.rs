@@ -475,7 +475,7 @@ fn recent_files_keyboard_selection_opens_selected_card(cx: &mut TestAppContext) 
     cx.refresh().expect("render recent keyboard view");
     assert_eq!(app_snapshot(&view, cx).recent_selected_index, Some(0));
 
-    cx.simulate_keystrokes("right");
+    cx.simulate_keystrokes("tab");
     assert_eq!(app_snapshot(&view, cx).recent_selected_index, Some(1));
 
     cx.simulate_keystrokes("enter");
@@ -556,7 +556,7 @@ fn recent_files_keyboard_selection_scrolls_selected_card_into_view(cx: &mut Test
     cx.refresh().expect("render recent scroll view");
 
     for _ in 0..(total - 1) {
-        cx.simulate_keystrokes("right");
+        cx.simulate_keystrokes("tab");
     }
     cx.refresh()
         .expect("render recent scroll view after keyboard selection");
@@ -624,7 +624,7 @@ fn recent_search_resets_selection_to_first_match(cx: &mut TestAppContext) {
 
     cx.dispatch_action(ToggleRecentFiles);
     cx.refresh().expect("render recent query-selection view");
-    cx.simulate_keystrokes("right");
+    cx.simulate_keystrokes("tab");
     assert_eq!(app_snapshot(&view, cx).recent_selected_index, Some(1));
 
     cx.simulate_input("alpha");
@@ -634,6 +634,42 @@ fn recent_search_resets_selection_to_first_match(cx: &mut TestAppContext) {
         snapshot.recent_visible_paths,
         [crate::recent::normalize_recent_path(&alpha)]
     );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_search_keeps_horizontal_arrows_for_text_editing(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-horizontal-input");
+    let recent_path = dir.join("recent");
+    let one = dir.join("one.txt");
+    let two = dir.join("two.txt");
+    std::fs::write(&one, "one").expect("write one recent fixture");
+    std::fs::write(&two, "two").expect("write two recent fixture");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    recent.record(&one);
+    recent.record(&two);
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.refresh().expect("render recent horizontal-input view");
+    assert_eq!(app_snapshot(&view, cx).recent_selected_index, Some(0));
+
+    cx.simulate_keystrokes("right");
+    assert_eq!(app_snapshot(&view, cx).recent_selected_index, Some(0));
+
+    cx.simulate_input("abc");
+    cx.simulate_keystrokes("left");
+    cx.simulate_input("X");
+    assert_eq!(app_snapshot(&view, cx).recent_query_input, "abXc");
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
 }
@@ -742,6 +778,46 @@ fn recent_search_matches_file_content(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     let snapshot = app_snapshot(&view, cx);
+    assert_eq!(
+        snapshot.recent_visible_paths,
+        [crate::recent::normalize_recent_path(&file)]
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_content_search_reports_pending_until_results_finish(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-content-search-status");
+    let recent_path = dir.join("recent");
+    let file = dir.join("plain-name.txt");
+    std::fs::write(&file, "alpha\nneedle in the body\nomega")
+        .expect("write recent content status fixture");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    recent.record(&file);
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.refresh().expect("render recent content status view");
+    view.update(cx, |app, cx| {
+        app.handle_recent_query_input_event(
+            &crate::ui::InputFieldEvent::Changed("needle".to_string()),
+            cx,
+        );
+        assert!(app.recent_content_search_pending());
+    });
+
+    cx.run_until_parked();
+    let snapshot = app_snapshot(&view, cx);
+    assert!(!snapshot.recent_content_search_pending);
     assert_eq!(
         snapshot.recent_visible_paths,
         [crate::recent::normalize_recent_path(&file)]

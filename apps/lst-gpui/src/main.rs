@@ -242,6 +242,7 @@ struct LstGpuiApp {
     recent_preview_jobs: HashSet<PathBuf>,
     recent_content_matches: HashSet<PathBuf>,
     recent_content_search_inflight: HashSet<String>,
+    recent_content_search_pending: bool,
     recent_content_search_generation: u64,
     recent_selected_path: Option<PathBuf>,
     recent_card_bounds: Vec<Bounds<Pixels>>,
@@ -258,7 +259,7 @@ impl LstGpuiApp {
         let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace"));
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line[:Column]"));
         let recent_query_input =
-            cx.new(|cx| InputField::new(cx, "Search recent files").with_arrow_navigation());
+            cx.new(|cx| InputField::new(cx, "Search recent files").with_vertical_navigation());
         #[cfg(test)]
         let recent_files_path = launch.recent_files_path.clone();
         #[cfg(not(test))]
@@ -306,6 +307,7 @@ impl LstGpuiApp {
             recent_preview_jobs: HashSet::new(),
             recent_content_matches: HashSet::new(),
             recent_content_search_inflight: HashSet::new(),
+            recent_content_search_pending: false,
             recent_content_search_generation: 0,
             recent_selected_path: None,
             recent_card_bounds: Vec::new(),
@@ -354,6 +356,7 @@ impl LstGpuiApp {
             recent_visible_paths: self.recent_visible_paths(),
             recent_selected_index: self.recent_selected_index(),
             recent_empty_message: self.recent_empty_message(),
+            recent_content_search_pending: self.recent_content_search_pending(),
             focus_target: self.focus_target,
             #[cfg(feature = "internal-invariants")]
             tab_view_ids: self
@@ -632,6 +635,7 @@ impl LstGpuiApp {
         if self.recent_panel_visible {
             self.recent_panel_visible = false;
             self.recent_selected_path = None;
+            self.recent_content_search_pending = false;
             self.force_editor_focus = true;
             cx.notify();
         }
@@ -661,12 +665,6 @@ impl LstGpuiApp {
                 self.move_recent_selection(RecentSelectionMove::Previous, cx);
             }
             InputFieldEvent::Navigate(navigation) => match navigation {
-                InputFieldNavigation::Left => {
-                    self.move_recent_selection(RecentSelectionMove::Previous, cx);
-                }
-                InputFieldNavigation::Right => {
-                    self.move_recent_selection(RecentSelectionMove::Next, cx);
-                }
                 InputFieldNavigation::Up => {
                     self.move_recent_selection(RecentSelectionMove::RowPrevious, cx);
                 }
@@ -852,6 +850,10 @@ impl LstGpuiApp {
         }
     }
 
+    fn recent_content_search_pending(&self) -> bool {
+        !self.recent_query.trim().is_empty() && self.recent_content_search_pending
+    }
+
     fn load_more_recent_files(&mut self, cx: &mut Context<Self>) {
         self.recent_visible_count = self.recent_visible_count.saturating_add(RECENT_BATCH_SIZE);
         self.ensure_recent_selection();
@@ -890,6 +892,7 @@ impl LstGpuiApp {
         self.recent_content_search_generation =
             self.recent_content_search_generation.saturating_add(1);
         let generation = self.recent_content_search_generation;
+        self.recent_content_search_pending = !query.is_empty();
         if query.is_empty() {
             return;
         }
@@ -942,6 +945,7 @@ impl LstGpuiApp {
             return;
         }
 
+        self.recent_content_search_pending = false;
         self.recent_content_matches = matches.into_iter().collect();
         self.ensure_recent_selection();
         self.ensure_recent_previews(cx);
@@ -1574,6 +1578,7 @@ pub(crate) struct AppSnapshot {
     pub(crate) recent_visible_paths: Vec<PathBuf>,
     pub(crate) recent_selected_index: Option<usize>,
     pub(crate) recent_empty_message: Option<String>,
+    pub(crate) recent_content_search_pending: bool,
     pub(crate) focus_target: FocusTarget,
     #[cfg(feature = "internal-invariants")]
     pub(crate) tab_view_ids: Vec<TabId>,

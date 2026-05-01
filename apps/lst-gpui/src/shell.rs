@@ -272,6 +272,7 @@ impl LstGpuiApp {
         let visible = visible_paths.len();
         let has_more = total > visible;
         let empty_message = self.recent_empty_message();
+        let content_search_pending = self.recent_content_search_pending();
         let entity = cx.entity();
         let recent_scroll = self.recent_scroll.clone();
         let cards = visible_paths
@@ -311,6 +312,17 @@ impl LstGpuiApp {
                             .flex_none()
                             .items_center()
                             .gap(metrics::px_for_scale(metrics::SHELL_GAP, scale))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_size(metrics::px_for_scale(metrics::TAB_TEXT_SIZE, scale))
+                                    .line_height(metrics::px_for_scale(
+                                        metrics::TAB_TEXT_LINE_HEIGHT,
+                                        scale,
+                                    ))
+                                    .text_color(rgb(theme.role.text))
+                                    .child("Recent Files"),
+                            )
                             .child(div().w(px(360.0)).child(self.recent_query_input.clone()))
                             .child(
                                 div()
@@ -324,6 +336,18 @@ impl LstGpuiApp {
                                     .text_color(rgb(theme.role.text_muted))
                                     .child(count_label),
                             )
+                            .when(content_search_pending, |row| {
+                                row.child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(metrics::px_for_scale(
+                                            metrics::INPUT_TEXT_SIZE,
+                                            scale,
+                                        ))
+                                        .text_color(rgb(theme.role.text_subtle))
+                                        .child("Searching contents..."),
+                                )
+                            })
                             .child(
                                 IconButton::new("recent-files-close", IconKind::Close, theme)
                                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -430,6 +454,7 @@ impl LstGpuiApp {
 
         div()
             .id(("recent-file-card", ix))
+            .relative()
             .flex()
             .flex_col()
             .flex_grow()
@@ -484,6 +509,19 @@ impl LstGpuiApp {
                     .text_color(rgb(preview_color))
                     .child(preview_text),
             )
+            .children(
+                selected.then_some(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(3.0))
+                        .rounded_sm()
+                        .bg(rgb(theme.role.accent))
+                        .into_any_element(),
+                ),
+            )
     }
 
     fn render_recent_load_more_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -507,7 +545,7 @@ impl LstGpuiApp {
                 this.load_more_recent_files(cx);
                 cx.stop_propagation();
             }))
-            .child("Load More")
+            .child("Load more")
     }
 
     fn render_editor_overlays(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

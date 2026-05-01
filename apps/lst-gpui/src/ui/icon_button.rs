@@ -18,7 +18,7 @@ impl IconKind {
         match self {
             Self::Close => "×",
             Self::Plus => "+",
-            Self::Recent => "≡",
+            Self::Recent => "↺",
             Self::Theme => "◐",
         }
     }

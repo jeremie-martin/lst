@@ -51,8 +51,6 @@ actions!(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputFieldNavigation {
-    Left,
-    Right,
     Up,
     Down,
 }
@@ -128,7 +126,7 @@ pub struct InputField {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     selection_drag: Option<InputDragSelectionMode>,
-    arrow_navigation: bool,
+    vertical_navigation: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -385,12 +383,12 @@ impl InputField {
             last_layout: None,
             last_bounds: None,
             selection_drag: None,
-            arrow_navigation: false,
+            vertical_navigation: false,
         }
     }
 
-    pub fn with_arrow_navigation(mut self) -> Self {
-        self.arrow_navigation = true;
+    pub fn with_vertical_navigation(mut self) -> Self {
+        self.vertical_navigation = true;
         self
     }
 
@@ -450,18 +448,10 @@ impl InputField {
     }
 
     fn left(&mut self, _: &FieldLeft, _: &mut Window, cx: &mut Context<Self>) {
-        if self.arrow_navigation {
-            cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Left));
-            return;
-        }
         self.move_text(TextMovement::PreviousGrapheme, false, cx);
     }
 
     fn right(&mut self, _: &FieldRight, _: &mut Window, cx: &mut Context<Self>) {
-        if self.arrow_navigation {
-            cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Right));
-            return;
-        }
         self.move_text(TextMovement::NextGrapheme, false, cx);
     }
 
@@ -597,13 +587,13 @@ impl InputField {
     }
 
     fn up(&mut self, _: &FieldUp, _: &mut Window, cx: &mut Context<Self>) {
-        if self.arrow_navigation {
+        if self.vertical_navigation {
             cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Up));
         }
     }
 
     fn down(&mut self, _: &FieldDown, _: &mut Window, cx: &mut Context<Self>) {
-        if self.arrow_navigation {
+        if self.vertical_navigation {
             cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Down));
         }
     }
