@@ -1,5 +1,5 @@
 use crate::tab::{EditorTab, TabId};
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 pub(crate) struct TabSet {
     tabs: Vec<EditorTab>,
@@ -46,9 +46,11 @@ impl TabSet {
         true
     }
 
-    pub(crate) fn push(&mut self, tab: EditorTab) {
+    pub(crate) fn push(&mut self, tab: EditorTab) -> usize {
+        let index = self.tabs.len();
         self.next_tab_id = self.next_tab_id.max(tab.id().get().saturating_add(1));
         self.tabs.push(tab);
+        index
     }
 
     pub(crate) fn replace_only(&mut self, tab: EditorTab) {
@@ -58,13 +60,18 @@ impl TabSet {
         self.active = 0;
     }
 
-    pub(crate) fn remove(&mut self, index: usize) -> EditorTab {
+    pub(crate) fn remove(&mut self, index: usize) -> bool {
         assert!(self.tabs.len() > 1, "TabSet cannot remove its last tab");
-        let removed = self.tabs.remove(index);
-        if self.active >= self.tabs.len() {
+        let removed_active = index == self.active;
+        self.tabs.remove(index);
+        if removed_active {
+            self.active = self.active.min(self.tabs.len() - 1);
+        } else if index < self.active {
+            self.active -= 1;
+        } else if self.active >= self.tabs.len() {
             self.active = self.tabs.len() - 1;
         }
-        removed
+        removed_active
     }
 
     // The active tab moves with its content so reorder feels like dragging
@@ -103,12 +110,6 @@ impl Deref for TabSet {
 
     fn deref(&self) -> &Self::Target {
         &self.tabs
-    }
-}
-
-impl DerefMut for TabSet {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.tabs
     }
 }
 
@@ -173,5 +174,23 @@ mod tests {
         assert!(!set.reorder(0, 0));
         assert!(!set.reorder(0, 9));
         assert!(!set.reorder(9, 0));
+    }
+
+    #[test]
+    fn remove_inactive_tab_before_active_keeps_same_tab_active() {
+        let mut set = build(2, &["a", "b", "c"]);
+        assert!(!set.remove(0));
+        assert_eq!(names(&set), vec!["b", "c"]);
+        assert_eq!(set.active().name_hint, "c");
+        assert_eq!(set.active_index(), 1);
+    }
+
+    #[test]
+    fn remove_active_tab_selects_neighbor() {
+        let mut set = build(2, &["a", "b", "c"]);
+        assert!(set.remove(2));
+        assert_eq!(names(&set), vec!["a", "b"]);
+        assert_eq!(set.active().name_hint, "b");
+        assert_eq!(set.active_index(), 1);
     }
 }

@@ -551,6 +551,29 @@ fn closing_inactive_tab_does_not_request_editor_focus() {
 }
 
 #[test]
+fn closing_inactive_tab_before_active_keeps_active_vim_state() {
+    let mut model = model_with_tabs(
+        vec![
+            EditorTab::from_text(TabId::from_raw(1), "one".into(), None, "one"),
+            EditorTab::from_text(TabId::from_raw(2), "two".into(), None, "two"),
+            EditorTab::from_text(TabId::from_raw(3), "three".into(), None, "three"),
+        ],
+        "Ready.".into(),
+    );
+    model.set_active_tab(TabId::from_raw(3));
+    enter_vim_normal(&mut model);
+    vim_press_chars(&mut model, "v");
+    assert_eq!(model.snapshot().vim_mode, VimMode::Visual);
+
+    assert!(model.close_clean_tab(TabId::from_raw(1)));
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.active_tab_id, TabId::from_raw(3));
+    assert_eq!(snapshot.active, 1);
+    assert_eq!(snapshot.vim_mode, VimMode::Visual);
+}
+
+#[test]
 fn movement_and_selection_are_behavioral_commands() {
     let mut model = model_with_tabs(
         vec![EditorTab::from_text(

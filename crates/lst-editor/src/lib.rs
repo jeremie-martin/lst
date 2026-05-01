@@ -271,19 +271,23 @@ impl EditorModel {
         EditorTab::empty(id, name)
     }
 
-    fn push_tab(&mut self, tab: EditorTab) {
-        self.tabs.push(tab);
+    fn push_tab(&mut self, tab: EditorTab) -> usize {
+        self.tabs.push(tab)
     }
 
     fn activate_tab(&mut self, index: usize) -> bool {
         if !self.tabs.activate(index) {
             return false;
         }
+        self.active_tab_changed();
+        self.status = format!("Switched to {}.", self.active_tab().display_name());
+        true
+    }
+
+    fn active_tab_changed(&mut self) {
         self.vim.on_tab_switch();
         self.active_tab_mut().preferred_column = None;
         self.sync_find_with_active_document();
-        self.status = format!("Switched to {}.", self.active_tab().display_name());
-        true
     }
 
     pub fn move_to_char(&mut self, offset: usize, select: bool, preferred_column: Option<usize>) {
@@ -665,18 +669,14 @@ impl EditorModel {
         if self.tabs.len() == 1 {
             let tab = self.new_empty_tab();
             self.tabs.replace_only(tab);
-            self.activate_tab(0);
+            self.active_tab_changed();
             self.queue_focus(FocusTarget::Editor);
             self.status = "Closed tab.".to_string();
             return true;
         }
 
-        let active = self.active_index();
-        let should_refocus = should_refocus_editor_after_tab_close(active, index);
-        let next_active = next_active_after_tab_close(self.tabs.len(), active, index);
-        self.tabs.remove(index);
-        self.activate_tab(next_active);
-        if should_refocus {
+        if self.tabs.remove(index) {
+            self.active_tab_changed();
             self.queue_focus(FocusTarget::Editor);
         }
         self.status = "Closed tab.".to_string();
@@ -2067,9 +2067,8 @@ impl EditorModel {
 
     pub fn new_tab(&mut self) {
         let tab = self.new_empty_tab();
-        self.push_tab(tab);
-        let last = self.tabs.len().saturating_sub(1);
-        self.activate_tab(last);
+        let index = self.push_tab(tab);
+        self.activate_tab(index);
         self.status = "Created a new tab.".to_string();
         self.queue_focus(FocusTarget::Editor);
     }
@@ -2077,9 +2076,8 @@ impl EditorModel {
     pub fn new_scratchpad_tab(&mut self, path: PathBuf, file_stamp: FileStamp) {
         let id = self.alloc_tab_id();
         let tab = EditorTab::scratchpad_with_stamp(id, path, file_stamp);
-        self.push_tab(tab);
-        let last = self.tabs.len().saturating_sub(1);
-        self.activate_tab(last);
+        let index = self.push_tab(tab);
+        self.activate_tab(index);
         self.status = "Created a new scratchpad.".to_string();
         self.queue_focus(FocusTarget::Editor);
     }
@@ -2591,27 +2589,6 @@ impl EditorModel {
             self.status = "No saved redo branches.".to_string();
         }
     }
-}
-
-fn next_active_after_tab_close(len: usize, active_index: usize, closed_index: usize) -> usize {
-    debug_assert!(len > 0);
-    debug_assert!(closed_index < len);
-    debug_assert!(active_index < len);
-
-    if len == 1 {
-        return 0;
-    }
-    if closed_index < active_index {
-        active_index - 1
-    } else if closed_index == active_index {
-        active_index.min(len - 2)
-    } else {
-        active_index
-    }
-}
-
-fn should_refocus_editor_after_tab_close(active_index: usize, closed_index: usize) -> bool {
-    active_index == closed_index
 }
 
 fn single_char(text: &str) -> Option<char> {

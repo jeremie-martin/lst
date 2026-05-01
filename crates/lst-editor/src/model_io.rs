@@ -7,15 +7,19 @@ impl EditorModel {
     }
 
     pub fn open_files_with_stamps(&mut self, files: Vec<(PathBuf, String, Option<FileStamp>)>) {
-        let start_len = self.tabs.len();
+        let mut opened = 0;
+        let mut last_opened = None;
         for (path, text, file_stamp) in files {
             let id = self.alloc_tab_id();
-            self.tabs
-                .push(EditorTab::from_path_with_stamp(id, path, &text, file_stamp));
+            last_opened = Some(
+                self.tabs
+                    .push(EditorTab::from_path_with_stamp(id, path, &text, file_stamp)),
+            );
+            opened += 1;
         }
-        if self.tabs.len() > start_len {
-            self.activate_tab(self.tabs.len() - 1);
-            self.status = format!("Opened {} tab(s).", self.tabs.len() - start_len);
+        if let Some(index) = last_opened {
+            self.activate_tab(index);
+            self.status = format!("Opened {opened} tab(s).");
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
