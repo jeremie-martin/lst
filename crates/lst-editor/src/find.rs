@@ -3,7 +3,6 @@ use crate::selection::{cell_partition_by_byte, cells_of_str};
 use crate::TabId;
 use regex::{Regex, RegexBuilder};
 use std::ops::Range;
-use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchPos {
@@ -55,7 +54,6 @@ pub struct FindState {
     pub scope: FindScope,
     pub error: Option<String>,
     indexed_revision: Option<u64>,
-    dirty_since: Option<Instant>,
 }
 
 impl FindState {
@@ -73,7 +71,6 @@ impl FindState {
             scope: FindScope::Document,
             error: None,
             indexed_revision: None,
-            dirty_since: None,
         }
     }
 
@@ -82,7 +79,6 @@ impl FindState {
         self.active = None;
         self.error = None;
         self.indexed_revision = None;
-        self.dirty_since = None;
     }
 
     // Single source of truth for query interpretation — keeps
@@ -221,25 +217,12 @@ impl FindState {
         true
     }
 
-    pub fn mark_dirty(&mut self) {
-        self.mark_dirty_at(Instant::now());
-    }
-
-    pub fn mark_dirty_at(&mut self, when: Instant) {
-        self.dirty_since = Some(when);
-    }
-
     pub fn finish_reindex(&mut self, revision: u64) {
         self.indexed_revision = Some(revision);
-        self.dirty_since = None;
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        self.dirty_since.is_some()
     }
 
     pub fn is_stale(&self, revision: u64) -> bool {
-        !self.query.is_empty() && (self.is_dirty() || self.indexed_revision != Some(revision))
+        !self.query.is_empty() && self.indexed_revision != Some(revision)
     }
 }
 

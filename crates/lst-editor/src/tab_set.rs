@@ -68,8 +68,6 @@ impl TabSet {
             self.active = self.active.min(self.tabs.len() - 1);
         } else if index < self.active {
             self.active -= 1;
-        } else if self.active >= self.tabs.len() {
-            self.active = self.tabs.len() - 1;
         }
         removed_active
     }

@@ -56,10 +56,6 @@ impl InteractiveElement for IconButton {
 
 impl StatefulInteractiveElement for IconButton {}
 
-impl ParentElement for IconButton {
-    fn extend(&mut self, _elements: impl IntoIterator<Item = gpui::AnyElement>) {}
-}
-
 impl RenderOnce for IconButton {
     fn render(self, window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
         let rem_size = window.rem_size();

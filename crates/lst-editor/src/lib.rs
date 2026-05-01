@@ -412,10 +412,6 @@ impl EditorModel {
         self.active_tab().cursor_position()
     }
 
-    fn active_tab_revision(&self) -> u64 {
-        self.active_tab().revision()
-    }
-
     fn reindex_find_matches(&mut self) {
         if self.find.query.is_empty() {
             self.find.clear_results();
@@ -484,7 +480,7 @@ impl EditorModel {
     }
 
     fn ensure_find_matches_current(&mut self) {
-        if self.find.is_stale(self.active_tab_revision()) {
+        if self.find.is_stale(self.active_tab().revision()) {
             self.reindex_find_matches();
         }
     }

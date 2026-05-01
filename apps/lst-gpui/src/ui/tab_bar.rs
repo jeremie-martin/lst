@@ -12,7 +12,6 @@ pub struct TabBar {
     theme: Theme,
     start_children: SmallVec<[AnyElement; 2]>,
     children: SmallVec<[AnyElement; 4]>,
-    end_children: SmallVec<[AnyElement; 2]>,
     scroll_handle: Option<ScrollHandle>,
 }
 
@@ -23,7 +22,6 @@ impl TabBar {
             theme,
             start_children: SmallVec::new(),
             children: SmallVec::new(),
-            end_children: SmallVec::new(),
             scroll_handle: None,
         }
     }
@@ -100,21 +98,6 @@ impl RenderOnce for TabBar {
                     .h_full()
                     .overflow_hidden()
                     .child(tabs_scroll),
-            )
-            .children(
-                (!self.end_children.is_empty()).then_some(
-                    div()
-                        .flex_none()
-                        .flex()
-                        .h_full()
-                        .px(metrics::px_for_rem(metrics::SHELL_EDGE_PAD, rem_size))
-                        .gap(metrics::px_for_rem(metrics::SHELL_GAP, rem_size))
-                        .items_center()
-                        .border_l_1()
-                        .border_color(rgb(self.theme.role.border))
-                        .children(self.end_children)
-                        .into_any_element(),
-                ),
             )
     }
 }
