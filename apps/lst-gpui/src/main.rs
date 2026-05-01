@@ -23,7 +23,7 @@ mod viewport;
 use crate::ui::{
     input_keybindings,
     theme::{metrics, Theme, ThemeId},
-    InputField, InputFieldEvent,
+    InputField, InputFieldEvent, InputFieldNavigation,
 };
 #[cfg(test)]
 pub(crate) use input_adapter::{char_range_to_utf16_range, utf16_range_to_char_range_in_text};
@@ -52,7 +52,7 @@ use std::{
     process,
     rc::Rc,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_language, CachedSyntaxHighlights,
@@ -65,6 +65,10 @@ use viewport::{
     scroll_left_for, scroll_top_for, visual_row_for_char, x_for_display_char, ViewportCache,
     ViewportGeometry, WrapLayoutInput,
 };
+
+pub(crate) const RECENT_CARD_BASIS: f32 = 260.0;
+#[cfg(not(test))]
+const RECENT_CONTENT_SEARCH_DEBOUNCE_MS: u64 = 200;
 
 actions!(
     lst_gpui,
@@ -175,6 +179,14 @@ enum RecentPreviewState {
     Failed(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecentSelectionMove {
+    Previous,
+    Next,
+    RowPrevious,
+    RowNext,
+}
+
 struct EditorTabView {
     revision: u64,
     scroll: ScrollHandle,
@@ -203,6 +215,7 @@ struct LstGpuiApp {
     model: EditorModel,
     tab_views: HashMap<TabId, EditorTabView>,
     tab_bar_scroll: ScrollHandle,
+    recent_scroll: ScrollHandle,
     hovered_tab: Option<usize>,
     selection_drag: Option<ActiveDragSelection>,
     editor_scrollbar_drag: Option<EditorScrollbarDrag>,
@@ -229,6 +242,9 @@ struct LstGpuiApp {
     recent_preview_jobs: HashSet<PathBuf>,
     recent_content_matches: HashSet<PathBuf>,
     recent_content_search_inflight: HashSet<String>,
+    recent_content_search_generation: u64,
+    recent_selected_path: Option<PathBuf>,
+    recent_card_bounds: Vec<Bounds<Pixels>>,
     force_editor_focus: bool,
     zoom_level: i32,
     theme_id: ThemeId,
@@ -241,7 +257,8 @@ impl LstGpuiApp {
         let find_query_input = cx.new(|cx| InputField::new(cx, "Find"));
         let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace"));
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line[:Column]"));
-        let recent_query_input = cx.new(|cx| InputField::new(cx, "Search recent files"));
+        let recent_query_input =
+            cx.new(|cx| InputField::new(cx, "Search recent files").with_arrow_navigation());
         #[cfg(test)]
         let recent_files_path = launch.recent_files_path.clone();
         #[cfg(not(test))]
@@ -262,6 +279,7 @@ impl LstGpuiApp {
             model,
             tab_views: HashMap::new(),
             tab_bar_scroll: ScrollHandle::new(),
+            recent_scroll: ScrollHandle::new(),
             hovered_tab: None,
             selection_drag: None,
             editor_scrollbar_drag: None,
@@ -288,6 +306,9 @@ impl LstGpuiApp {
             recent_preview_jobs: HashSet::new(),
             recent_content_matches: HashSet::new(),
             recent_content_search_inflight: HashSet::new(),
+            recent_content_search_generation: 0,
+            recent_selected_path: None,
+            recent_card_bounds: Vec::new(),
             force_editor_focus: false,
             zoom_level: 0,
             theme_id: ThemeId::default(),
@@ -331,6 +352,8 @@ impl LstGpuiApp {
             recent_panel_visible: self.recent_panel_visible,
             recent_paths: self.recent_files.entries().to_vec(),
             recent_visible_paths: self.recent_visible_paths(),
+            recent_selected_index: self.recent_selected_index(),
+            recent_empty_message: self.recent_empty_message(),
             focus_target: self.focus_target,
             #[cfg(feature = "internal-invariants")]
             tab_view_ids: self
@@ -592,12 +615,15 @@ impl LstGpuiApp {
 
         self.recent_panel_visible = true;
         self.recent_visible_count = RECENT_BATCH_SIZE;
+        self.recent_scroll.set_offset(point(px(0.0), px(0.0)));
+        self.recent_card_bounds.clear();
+        self.reset_recent_selection();
         let query = self.recent_query.clone();
         self.recent_query_input
             .update(cx, |input, cx| input.set_text(&query, cx));
         let focus_handle = self.recent_query_input.read(cx).focus_handle();
         window.focus(&focus_handle);
-        self.start_recent_content_search(cx);
+        self.schedule_recent_content_search(cx);
         self.ensure_recent_previews(cx);
         cx.notify();
     }
@@ -605,6 +631,7 @@ impl LstGpuiApp {
     fn close_recent_files_panel(&mut self, cx: &mut Context<Self>) {
         if self.recent_panel_visible {
             self.recent_panel_visible = false;
+            self.recent_selected_path = None;
             self.force_editor_focus = true;
             cx.notify();
         }
@@ -616,18 +643,169 @@ impl LstGpuiApp {
                 self.recent_query = text.clone();
                 self.recent_visible_count = RECENT_BATCH_SIZE;
                 self.recent_content_matches.clear();
-                self.start_recent_content_search(cx);
+                self.reset_recent_selection();
+                self.schedule_recent_content_search(cx);
                 self.ensure_recent_previews(cx);
                 cx.notify();
             }
             InputFieldEvent::Submitted => {
-                if let Some(path) = self.recent_visible_paths().into_iter().next() {
+                if let Some(path) = self.recent_selected_path() {
                     self.open_recent_path(path, cx);
                 }
             }
             InputFieldEvent::Cancelled => self.close_recent_files_panel(cx),
-            InputFieldEvent::NextRequested | InputFieldEvent::PreviousRequested => {}
+            InputFieldEvent::NextRequested => {
+                self.move_recent_selection(RecentSelectionMove::Next, cx);
+            }
+            InputFieldEvent::PreviousRequested => {
+                self.move_recent_selection(RecentSelectionMove::Previous, cx);
+            }
+            InputFieldEvent::Navigate(navigation) => match navigation {
+                InputFieldNavigation::Left => {
+                    self.move_recent_selection(RecentSelectionMove::Previous, cx);
+                }
+                InputFieldNavigation::Right => {
+                    self.move_recent_selection(RecentSelectionMove::Next, cx);
+                }
+                InputFieldNavigation::Up => {
+                    self.move_recent_selection(RecentSelectionMove::RowPrevious, cx);
+                }
+                InputFieldNavigation::Down => {
+                    self.move_recent_selection(RecentSelectionMove::RowNext, cx);
+                }
+            },
         }
+    }
+
+    fn reset_recent_selection(&mut self) {
+        self.recent_selected_path = self.recent_visible_paths().into_iter().next();
+        self.recent_card_bounds.clear();
+        self.recent_scroll.set_offset(point(px(0.0), px(0.0)));
+    }
+
+    fn ensure_recent_selection(&mut self) {
+        let visible_paths = self.recent_visible_paths();
+        if visible_paths.is_empty() {
+            self.recent_selected_path = None;
+            return;
+        }
+
+        if self
+            .recent_selected_path
+            .as_ref()
+            .is_some_and(|selected| visible_paths.iter().any(|path| path == selected))
+        {
+            return;
+        }
+
+        self.recent_selected_path = visible_paths.into_iter().next();
+        self.recent_scroll.set_offset(point(px(0.0), px(0.0)));
+    }
+
+    fn recent_selected_path(&mut self) -> Option<PathBuf> {
+        self.ensure_recent_selection();
+        self.recent_selected_path.clone()
+    }
+
+    #[cfg(test)]
+    fn recent_selected_index(&self) -> Option<usize> {
+        let selected = self.recent_selected_path.as_ref()?;
+        self.recent_visible_paths()
+            .iter()
+            .position(|path| path == selected)
+    }
+
+    fn move_recent_selection(&mut self, movement: RecentSelectionMove, cx: &mut Context<Self>) {
+        let visible_paths = self.recent_visible_paths();
+        if visible_paths.is_empty() {
+            self.recent_selected_path = None;
+            cx.notify();
+            return;
+        }
+
+        let current = self
+            .recent_selected_path
+            .as_ref()
+            .and_then(|selected| visible_paths.iter().position(|path| path == selected))
+            .unwrap_or(0);
+        let last = visible_paths.len() - 1;
+        let next = match movement {
+            RecentSelectionMove::Previous => current.saturating_sub(1),
+            RecentSelectionMove::Next => (current + 1).min(last),
+            RecentSelectionMove::RowPrevious => self
+                .recent_row_selection_target(current, visible_paths.len(), false)
+                .unwrap_or_else(|| current.saturating_sub(1)),
+            RecentSelectionMove::RowNext => self
+                .recent_row_selection_target(current, visible_paths.len(), true)
+                .unwrap_or_else(|| (current + 1).min(last)),
+        };
+
+        self.recent_selected_path = visible_paths.get(next).cloned();
+        self.scroll_recent_selection_into_view(next);
+        cx.notify();
+    }
+
+    fn recent_row_selection_target(
+        &self,
+        current: usize,
+        visible_len: usize,
+        row_next: bool,
+    ) -> Option<usize> {
+        let current_bounds = *self.recent_card_bounds.get(current)?;
+        let current_top = current_bounds.top();
+        let current_center_x = bounds_center_x(current_bounds);
+        let mut best: Option<(usize, f32, f32)> = None;
+
+        for ix in 0..visible_len.min(self.recent_card_bounds.len()) {
+            if ix == current {
+                continue;
+            }
+            let bounds = self.recent_card_bounds[ix];
+            let row_distance = if row_next {
+                bounds.top() - current_top
+            } else {
+                current_top - bounds.top()
+            };
+            if row_distance <= px(0.5) {
+                continue;
+            }
+
+            let row_distance = row_distance / px(1.0);
+            let x_distance = (bounds_center_x(bounds) - current_center_x).abs();
+            if best.is_none_or(|(_, best_row, best_x)| {
+                row_distance < best_row || (row_distance == best_row && x_distance < best_x)
+            }) {
+                best = Some((ix, row_distance, x_distance));
+            }
+        }
+
+        best.map(|(ix, _, _)| ix)
+    }
+
+    fn scroll_recent_selection_into_view(&self, index: usize) {
+        let Some(bounds) = self.recent_card_bounds.get(index).copied() else {
+            return;
+        };
+
+        let viewport = self.recent_scroll.bounds();
+        if viewport.size.height <= px(0.0) {
+            return;
+        }
+
+        let mut offset = self.recent_scroll.offset();
+        if bounds.top() + offset.y < viewport.top() {
+            offset.y = viewport.top() - bounds.top();
+        } else if bounds.bottom() + offset.y > viewport.bottom() {
+            offset.y = viewport.bottom() - bounds.bottom();
+        }
+
+        let min_offset_y = -self.recent_scroll.max_offset().height.max(px(0.0));
+        if offset.y > px(0.0) {
+            offset.y = px(0.0);
+        } else if offset.y < min_offset_y {
+            offset.y = min_offset_y;
+        }
+        self.recent_scroll.set_offset(offset);
     }
 
     fn recent_visible_paths(&self) -> Vec<PathBuf> {
@@ -661,8 +839,22 @@ impl LstGpuiApp {
             )
     }
 
+    fn recent_empty_message(&self) -> Option<String> {
+        if !self.recent_filtered_paths().is_empty() {
+            return None;
+        }
+
+        let query = self.recent_query.trim();
+        if query.is_empty() || self.recent_files.entries().is_empty() {
+            Some("No recent files".to_string())
+        } else {
+            Some(format!("No matches for \"{query}\""))
+        }
+    }
+
     fn load_more_recent_files(&mut self, cx: &mut Context<Self>) {
         self.recent_visible_count = self.recent_visible_count.saturating_add(RECENT_BATCH_SIZE);
+        self.ensure_recent_selection();
         self.ensure_recent_previews(cx);
         cx.notify();
     }
@@ -693,9 +885,34 @@ impl LstGpuiApp {
         }
     }
 
-    fn start_recent_content_search(&mut self, cx: &mut Context<Self>) {
+    fn schedule_recent_content_search(&mut self, cx: &mut Context<Self>) {
         let query = self.recent_query.trim().to_lowercase();
-        if query.is_empty() || self.recent_content_search_inflight.contains(&query) {
+        self.recent_content_search_generation =
+            self.recent_content_search_generation.saturating_add(1);
+        let generation = self.recent_content_search_generation;
+        if query.is_empty() {
+            return;
+        }
+
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(recent_content_search_debounce())
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if !view.recent_panel_visible
+                    || view.recent_content_search_generation != generation
+                    || view.recent_query.trim().to_lowercase() != query
+                {
+                    return;
+                }
+                view.start_recent_content_search(query, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn start_recent_content_search(&mut self, query: String, cx: &mut Context<Self>) {
+        if self.recent_content_search_inflight.contains(&query) {
             return;
         }
 
@@ -726,6 +943,7 @@ impl LstGpuiApp {
         }
 
         self.recent_content_matches = matches.into_iter().collect();
+        self.ensure_recent_selection();
         self.ensure_recent_previews(cx);
         cx.notify();
     }
@@ -745,6 +963,7 @@ impl LstGpuiApp {
             RecentPreviewRead::Missing => {
                 self.recent_previews.remove(&path);
                 self.recent_files.prune(&path);
+                self.ensure_recent_selection();
                 self.ensure_recent_previews(cx);
             }
             RecentPreviewRead::Failed(message) => {
@@ -821,6 +1040,7 @@ impl LstGpuiApp {
                 }
             }
             InputFieldEvent::PreviousRequested => {}
+            InputFieldEvent::Navigate(_) => {}
         }
     }
 
@@ -842,6 +1062,7 @@ impl LstGpuiApp {
                 self.set_focus(FocusTarget::FindQuery);
                 cx.notify();
             }
+            InputFieldEvent::Navigate(_) => {}
         }
     }
 
@@ -859,6 +1080,7 @@ impl LstGpuiApp {
                 self.update_model(cx, true, EditorModel::close_goto_line_panel);
             }
             InputFieldEvent::NextRequested | InputFieldEvent::PreviousRequested => {}
+            InputFieldEvent::Navigate(_) => {}
         }
     }
 
@@ -1350,6 +1572,8 @@ pub(crate) struct AppSnapshot {
     pub(crate) recent_panel_visible: bool,
     pub(crate) recent_paths: Vec<PathBuf>,
     pub(crate) recent_visible_paths: Vec<PathBuf>,
+    pub(crate) recent_selected_index: Option<usize>,
+    pub(crate) recent_empty_message: Option<String>,
     pub(crate) focus_target: FocusTarget,
     #[cfg(feature = "internal-invariants")]
     pub(crate) tab_view_ids: Vec<TabId>,
@@ -1468,6 +1692,21 @@ fn recent_path_matches(path: &Path, query: &str) -> bool {
         .unwrap_or_default()
         .to_lowercase();
     file_name.contains(query) || path.to_string_lossy().to_lowercase().contains(query)
+}
+
+fn bounds_center_x(bounds: Bounds<Pixels>) -> f32 {
+    bounds.left() / px(1.0) + (bounds.size.width / px(1.0)) / 2.0
+}
+
+fn recent_content_search_debounce() -> Duration {
+    #[cfg(test)]
+    {
+        Duration::from_millis(0)
+    }
+    #[cfg(not(test))]
+    {
+        Duration::from_millis(RECENT_CONTENT_SEARCH_DEBOUNCE_MS)
+    }
 }
 
 fn focus_trace_label(target: FocusTarget) -> &'static str {

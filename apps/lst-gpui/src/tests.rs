@@ -7,7 +7,7 @@ use crate::ui::{
     theme::{SyntaxRole, ThemeId},
 };
 use gpui::{
-    point, px, Bounds, ClipboardItem, Entity, EntityInputHandler, Keystroke, Modifiers,
+    point, px, size, Bounds, ClipboardItem, Entity, EntityInputHandler, Keystroke, Modifiers,
     MouseButton, TestAppContext, VisualContext as _, VisualTestContext,
 };
 use lst_editor::Selection;
@@ -442,6 +442,242 @@ fn recent_files_view_searches_and_loads_more_paths(cx: &mut TestAppContext) {
         [crate::recent::normalize_recent_path(
             &dir.join("file-64.txt")
         )]
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_files_keyboard_selection_opens_selected_card(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-keyboard-open");
+    let recent_path = dir.join("recent");
+    let one = dir.join("one.txt");
+    let two = dir.join("two.txt");
+    let three = dir.join("three.txt");
+    std::fs::write(&one, "one").expect("write one recent fixture");
+    std::fs::write(&two, "two").expect("write two recent fixture");
+    std::fs::write(&three, "three").expect("write three recent fixture");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    recent.record(&one);
+    recent.record(&two);
+    recent.record(&three);
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.refresh().expect("render recent keyboard view");
+    assert_eq!(app_snapshot(&view, cx).recent_selected_index, Some(0));
+
+    cx.simulate_keystrokes("right");
+    assert_eq!(app_snapshot(&view, cx).recent_selected_index, Some(1));
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let snapshot = app_snapshot(&view, cx);
+    assert!(!snapshot.recent_panel_visible);
+    assert_eq!(snapshot.model.active_path, Some(two));
+    assert_eq!(snapshot.model.text, "two");
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_files_keyboard_selection_moves_by_grid_rows(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-keyboard-grid");
+    let recent_path = dir.join("recent");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    for index in 0..8 {
+        let path = dir.join(format!("file-{index}.txt"));
+        std::fs::write(&path, format!("body {index}")).expect("write recent grid fixture");
+        recent.record(&path);
+    }
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.refresh().expect("render recent grid view");
+    let expected = view.update(cx, |app, _| {
+        let visible_len = app.recent_visible_paths().len();
+        app.recent_row_selection_target(0, visible_len, true)
+            .expect("rendered recent grid should have a next row")
+    });
+
+    cx.simulate_keystrokes("down");
+    assert_eq!(
+        app_snapshot(&view, cx).recent_selected_index,
+        Some(expected)
+    );
+
+    cx.simulate_keystrokes("up");
+    assert_eq!(app_snapshot(&view, cx).recent_selected_index, Some(0));
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_files_keyboard_selection_scrolls_selected_card_into_view(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-keyboard-scroll");
+    let recent_path = dir.join("recent");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    let total = crate::recent::RECENT_BATCH_SIZE * 2;
+    for index in 0..total {
+        let path = dir.join(format!("file-{index:02}.txt"));
+        std::fs::write(&path, format!("body {index}")).expect("write recent scroll fixture");
+        recent.record(&path);
+    }
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.simulate_resize(size(px(900.0), px(600.0)));
+    cx.refresh().expect("render resized recent scroll window");
+    cx.dispatch_action(ToggleRecentFiles);
+    view.update(cx, |app, cx| app.load_more_recent_files(cx));
+    cx.refresh().expect("render recent scroll view");
+
+    for _ in 0..(total - 1) {
+        cx.simulate_keystrokes("right");
+    }
+    cx.refresh()
+        .expect("render recent scroll view after keyboard selection");
+
+    let (selected_ix, card_bounds, viewport_bounds, scroll_offset) = view.update(cx, |app, _| {
+        let selected_ix = app
+            .recent_selected_index()
+            .expect("keyboard selection should remain set");
+        (
+            selected_ix,
+            app.recent_card_bounds
+                .get(selected_ix)
+                .copied()
+                .expect("selected recent card should have tracked bounds"),
+            app.recent_scroll.bounds(),
+            app.recent_scroll.offset(),
+        )
+    });
+    assert_eq!(selected_ix, total - 1);
+    assert!(
+        scroll_offset.y < px(0.0),
+        "selecting a far card should scroll the recent panel; offset={:?}, card={:?}, viewport={:?}",
+        scroll_offset,
+        card_bounds,
+        viewport_bounds
+    );
+    assert!(
+        card_bounds.top() + scroll_offset.y >= viewport_bounds.top() - px(0.5),
+        "selected recent card top should be visible; offset={:?}, card={:?}, viewport={:?}",
+        scroll_offset,
+        card_bounds,
+        viewport_bounds
+    );
+    assert!(
+        card_bounds.bottom() + scroll_offset.y <= viewport_bounds.bottom() + px(0.5),
+        "selected recent card bottom should be visible; offset={:?}, card={:?}, viewport={:?}",
+        scroll_offset,
+        card_bounds,
+        viewport_bounds
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_search_resets_selection_to_first_match(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-query-selection");
+    let recent_path = dir.join("recent");
+    let alpha = dir.join("alpha.txt");
+    let beta = dir.join("beta.txt");
+    std::fs::write(&alpha, "alpha").expect("write alpha recent fixture");
+    std::fs::write(&beta, "beta").expect("write beta recent fixture");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    recent.record(&alpha);
+    recent.record(&beta);
+
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.refresh().expect("render recent query-selection view");
+    cx.simulate_keystrokes("right");
+    assert_eq!(app_snapshot(&view, cx).recent_selected_index, Some(1));
+
+    cx.simulate_input("alpha");
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.recent_selected_index, Some(0));
+    assert_eq!(
+        snapshot.recent_visible_paths,
+        [crate::recent::normalize_recent_path(&alpha)]
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn recent_files_empty_states_distinguish_history_from_query_miss(cx: &mut TestAppContext) {
+    let dir = temp_dir("recent-empty-states");
+    let recent_path = dir.join("recent");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path.clone()),
+            scratchpad_dir: Some(dir.join("scratchpads-empty")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    assert_eq!(
+        app_snapshot(&view, cx).recent_empty_message,
+        Some("No recent files".to_string())
+    );
+
+    let file = dir.join("note.txt");
+    std::fs::write(&file, "body").expect("write recent empty-state fixture");
+    let mut recent = crate::recent::RecentFiles::load(Some(recent_path.clone()));
+    recent.record(&file);
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            recent_files_path: Some(recent_path),
+            scratchpad_dir: Some(dir.join("scratchpads-miss")),
+            ..LaunchArgs::default()
+        },
+    );
+
+    cx.dispatch_action(ToggleRecentFiles);
+    cx.simulate_input("missing");
+    cx.run_until_parked();
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.recent_selected_index, None);
+    assert_eq!(
+        snapshot.recent_empty_message,
+        Some("No matches for \"missing\"".to_string())
     );
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
@@ -2643,6 +2879,18 @@ fn find_shortcuts_stay_available_from_workspace_context() {
     assert!(has_binding_in_context::<GotoLineOpen>(
         "ctrl-g",
         "Workspace"
+    ));
+}
+
+#[test]
+fn recent_files_shortcut_is_registered_from_workspace_context() {
+    assert!(has_binding_context_containing::<ToggleRecentFiles>(
+        "ctrl-r",
+        &["Workspace", "!", "InlineInput"]
+    ));
+    assert!(has_binding_context_containing::<ToggleRecentFiles>(
+        "cmd-r",
+        &["Workspace", "!", "InlineInput"]
     ));
 }
 

@@ -44,8 +44,18 @@ actions!(
         FieldCancel,
         FieldNext,
         FieldPrevious,
+        FieldUp,
+        FieldDown,
     ]
 );
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputFieldNavigation {
+    Left,
+    Right,
+    Up,
+    Down,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputFieldEvent {
@@ -54,6 +64,7 @@ pub enum InputFieldEvent {
     Cancelled,
     NextRequested,
     PreviousRequested,
+    Navigate(InputFieldNavigation),
 }
 
 pub fn input_keybindings() -> Vec<KeyBinding> {
@@ -104,6 +115,8 @@ pub fn input_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("escape", FieldCancel, Some("InlineInput")),
         KeyBinding::new("tab", FieldNext, Some("InlineInput")),
         KeyBinding::new("shift-tab", FieldPrevious, Some("InlineInput")),
+        KeyBinding::new("up", FieldUp, Some("InlineInput")),
+        KeyBinding::new("down", FieldDown, Some("InlineInput")),
     ]
 }
 
@@ -115,6 +128,7 @@ pub struct InputField {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     selection_drag: Option<InputDragSelectionMode>,
+    arrow_navigation: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -371,7 +385,13 @@ impl InputField {
             last_layout: None,
             last_bounds: None,
             selection_drag: None,
+            arrow_navigation: false,
         }
+    }
+
+    pub fn with_arrow_navigation(mut self) -> Self {
+        self.arrow_navigation = true;
+        self
     }
 
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -430,10 +450,18 @@ impl InputField {
     }
 
     fn left(&mut self, _: &FieldLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.arrow_navigation {
+            cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Left));
+            return;
+        }
         self.move_text(TextMovement::PreviousGrapheme, false, cx);
     }
 
     fn right(&mut self, _: &FieldRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.arrow_navigation {
+            cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Right));
+            return;
+        }
         self.move_text(TextMovement::NextGrapheme, false, cx);
     }
 
@@ -566,6 +594,18 @@ impl InputField {
 
     fn previous(&mut self, _: &FieldPrevious, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputFieldEvent::PreviousRequested);
+    }
+
+    fn up(&mut self, _: &FieldUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.arrow_navigation {
+            cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Up));
+        }
+    }
+
+    fn down(&mut self, _: &FieldDown, _: &mut Window, cx: &mut Context<Self>) {
+        if self.arrow_navigation {
+            cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Down));
+        }
     }
 
     fn on_mouse_down(
@@ -974,6 +1014,8 @@ impl Render for InputField {
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::next))
             .on_action(cx.listener(Self::previous))
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
             .relative()
             .flex()
             .w_full()

@@ -8,9 +8,10 @@ use crate::ui::{
     IconButton, IconKind, Tab as UiTab, TabBar,
 };
 use gpui::{
-    canvas, div, prelude::*, px, rgb, AnyElement, Context, CursorStyle, ElementInputHandler,
-    InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window,
+    canvas, div, prelude::*, px, rgb, AnyElement, App, Bounds, Context, CursorStyle,
+    ElementInputHandler, InteractiveElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, Window,
 };
 
 use crate::actions::attach_workspace_actions;
@@ -22,7 +23,7 @@ use crate::viewport::{
 };
 use crate::{
     code_char_width, ensure_wrap_layout, EditorHorizontalScrollbarDrag, EditorScrollbarDrag,
-    FocusTarget, LstGpuiApp, RecentPreviewState,
+    FocusTarget, LstGpuiApp, RecentPreviewState, RECENT_CARD_BASIS,
 };
 
 impl LstGpuiApp {
@@ -51,7 +52,7 @@ impl LstGpuiApp {
                 cx.notify();
             }))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.recent_panel_visible = false;
+                this.close_recent_files_panel(cx);
                 this.force_editor_focus = true;
                 this.set_focus(FocusTarget::Editor);
                 this.update_model(cx, true, |model| {
@@ -270,6 +271,9 @@ impl LstGpuiApp {
             .collect::<Vec<_>>();
         let visible = visible_paths.len();
         let has_more = total > visible;
+        let empty_message = self.recent_empty_message();
+        let entity = cx.entity();
+        let recent_scroll = self.recent_scroll.clone();
         let cards = visible_paths
             .into_iter()
             .enumerate()
@@ -278,7 +282,9 @@ impl LstGpuiApp {
                     .into_any_element()
             })
             .collect::<Vec<_>>();
-        let count_label = if total == 1 {
+        let count_label = if total == 0 {
+            "0 files".to_string()
+        } else if total == 1 {
             "1 file".to_string()
         } else {
             format!("{visible}/{total} files")
@@ -286,6 +292,9 @@ impl LstGpuiApp {
 
         div()
             .id("recent-files-view")
+            .absolute()
+            .left_0()
+            .top_0()
             .size_full()
             .bg(rgb(theme.role.panel_bg))
             .child(
@@ -329,13 +338,35 @@ impl LstGpuiApp {
                             .flex_1()
                             .min_h(px(0.0))
                             .overflow_y_scroll()
+                            .track_scroll(&self.recent_scroll)
                             .child(
                                 div()
+                                    .on_children_prepainted({
+                                        let entity = entity.clone();
+                                        let recent_scroll = recent_scroll.clone();
+                                        move |bounds: Vec<Bounds<Pixels>>,
+                                              _window: &mut Window,
+                                              cx: &mut App| {
+                                            let scroll_offset = recent_scroll.offset();
+                                            let card_bounds = bounds
+                                                .into_iter()
+                                                .take(visible)
+                                                .map(|mut bounds| {
+                                                    bounds.origin -= scroll_offset;
+                                                    bounds
+                                                })
+                                                .collect::<Vec<_>>();
+                                            entity.update(cx, move |this, _| {
+                                                this.recent_card_bounds = card_bounds;
+                                            });
+                                        }
+                                    })
+                                    .id("recent-files-grid")
                                     .flex()
                                     .flex_wrap()
                                     .gap(metrics::px_for_scale(metrics::SHELL_GAP, scale))
                                     .children(cards)
-                                    .when(total == 0, |grid| {
+                                    .when_some(empty_message, |grid, message| {
                                         grid.child(
                                             div()
                                                 .flex_none()
@@ -344,7 +375,7 @@ impl LstGpuiApp {
                                                     scale,
                                                 ))
                                                 .text_color(rgb(theme.role.text_muted))
-                                                .child("No recent files"),
+                                                .child(message),
                                         )
                                     }),
                             ),
@@ -363,6 +394,7 @@ impl LstGpuiApp {
     ) -> impl IntoElement {
         let scale = self.ui_scale();
         let theme = self.theme();
+        let selected = self.recent_selected_path.as_ref() == Some(&path);
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -380,13 +412,28 @@ impl LstGpuiApp {
             ),
             _ => ("Loading preview...".to_string(), theme.role.text_muted),
         };
+        let background = if selected {
+            theme.role.control_bg
+        } else {
+            theme.role.editor_bg
+        };
+        let hover_background = if selected {
+            theme.role.control_bg_hover
+        } else {
+            theme.role.control_bg
+        };
+        let border = if selected {
+            theme.role.accent
+        } else {
+            theme.role.border
+        };
 
         div()
             .id(("recent-file-card", ix))
             .flex()
             .flex_col()
             .flex_grow()
-            .flex_basis(px(260.0))
+            .flex_basis(px(RECENT_CARD_BASIS))
             .min_w(px(220.0))
             .max_w(px(420.0))
             .h(px(156.0))
@@ -394,14 +441,15 @@ impl LstGpuiApp {
             .px_3()
             .py_3()
             .rounded_sm()
-            .bg(rgb(theme.role.editor_bg))
+            .bg(rgb(background))
             .border_1()
-            .border_color(rgb(theme.role.border))
+            .border_color(rgb(border))
             .cursor(CursorStyle::PointingHand)
-            .hover(move |style| style.bg(rgb(theme.role.control_bg)))
+            .hover(move |style| style.bg(rgb(hover_background)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _window, cx| {
+                    this.recent_selected_path = Some(path.clone());
                     this.open_recent_path(path.clone(), cx);
                     cx.stop_propagation();
                 }),

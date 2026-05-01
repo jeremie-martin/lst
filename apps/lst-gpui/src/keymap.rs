@@ -11,8 +11,8 @@ use crate::{
     SelectDown, SelectLeft, SelectLine, SelectLineEnd, SelectLineStart, SelectPageDown,
     SelectPageUp, SelectParagraph, SelectRight, SelectSmartHome, SelectSubwordLeft,
     SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight, SwapRedoBranch,
-    ToggleBlockComment, ToggleComment, ToggleLineNumberMode, ToggleWrap, Undo, ZoomIn, ZoomOut,
-    ZoomReset,
+    ToggleBlockComment, ToggleComment, ToggleLineNumberMode, ToggleRecentFiles, ToggleWrap, Undo,
+    ZoomIn, ZoomOut, ZoomReset,
 };
 
 const EDITOR_CONTEXT: &str = "Editor && !InlineInput";
@@ -23,6 +23,16 @@ pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-n", NewTab, Some("Workspace && !InlineInput")),
         KeyBinding::new("ctrl-o", OpenFile, Some("Workspace && !InlineInput")),
         KeyBinding::new("cmd-o", OpenFile, Some("Workspace && !InlineInput")),
+        KeyBinding::new(
+            "ctrl-r",
+            ToggleRecentFiles,
+            Some("Workspace && !InlineInput"),
+        ),
+        KeyBinding::new(
+            "cmd-r",
+            ToggleRecentFiles,
+            Some("Workspace && !InlineInput"),
+        ),
         KeyBinding::new("ctrl-s", SaveFile, Some("Workspace && !InlineInput")),
         KeyBinding::new("cmd-s", SaveFile, Some("Workspace && !InlineInput")),
         KeyBinding::new(
