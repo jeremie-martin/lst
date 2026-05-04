@@ -5,14 +5,15 @@ observable behavior over feature volume.
 
 ## Current Architecture
 
-- `lst-editor`: framework-neutral editor model, document primitives, effects,
-  snapshots, and Vim state
+- `lst-editor`: framework-neutral editor model, document primitives, text
+  transactions, undo/redo snapshot history, observable snapshots, effects, and
+  Vim state
 - `lst-gpui`: rendering, widgets, input adaptation, dialogs, clipboard, file
   I/O, benchmark wiring, and desktop integration
 
 Product behavior should move into `lst-editor` when it can be tested through
-model APIs, effects, snapshots, or document-level contracts. GPUI should adapt
-desktop events to those contracts and render observable state.
+model APIs, transactions, effects, snapshots, or document-level contracts. GPUI
+should adapt desktop events to those contracts and render observable state.
 
 ## Near-Term Priorities
 
@@ -22,13 +23,18 @@ desktop events to those contracts and render observable state.
 - Cursor blink and other small viewport polish
 - Trim-trailing-whitespace and ensure-final-newline save options
 - Tab reordering and recently closed tab recovery
-- Jump list and last edit location
+- Jump list and GPUI multi-cursor creation gestures
 - User-configurable keybindings
 - User-facing language picker for the existing model-level override
 
 ## Codebase Shape
 
 - Keep model mutation behind explicit `EditorModel` APIs.
+- Keep text mutation behind `EditRequest` / `TextChangeSet` transactions and
+  `EditHistory` snapshot boundaries; focused request builders such as `text_input`,
+  `multi_selection`, `line_edit`, and `vim_edit` should return transactions
+  instead of mutating `EditorModel` directly. Multi-change batches must choose
+  their primary change explicitly through `TextChangeSet::new`.
 - Keep clipboard, filesystem, dialogs, focus, and rendering at the GPUI boundary.
 - Split modules by real behavior responsibility, not by speculative layering.
 - Avoid new traits or crates unless they remove production complexity.

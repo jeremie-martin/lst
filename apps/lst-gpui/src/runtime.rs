@@ -991,7 +991,7 @@ fn prompt_file_conflict_decision(title: &str) -> FileConflictDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lst_editor::TabId;
+    use lst_editor::{EditorModel, TabId, UndoBoundary};
     use std::{
         collections::HashSet,
         sync::atomic::{AtomicUsize, Ordering},
@@ -1299,10 +1299,10 @@ mod tests {
             0
         ));
 
-        let mut stale = tab;
-        stale.replace_char_range(0..0, "new ");
+        let mut stale_model = EditorModel::from_tab(tab, "Ready.".to_string());
+        stale_model.replace_text(Some(0..0), "new ".into(), UndoBoundary::Break);
         assert!(!can_start_autosave_job(
-            &[stale],
+            stale_model.tabs(),
             &HashSet::new(),
             TabId::from_raw(1),
             &path,
@@ -1362,18 +1362,20 @@ mod tests {
         let dir = temp_dir("autosave-stale");
         let path = dir.join("note.txt");
         fs::write(&path, "old").expect("write autosave destination");
-        let mut tab = tab_for_path(path.clone(), "old");
-        tab.replace_char_range(0..0, "current ");
+        let tab = tab_for_path(path.clone(), "old");
+        let mut model = EditorModel::from_tab(tab, "Ready.".to_string());
+        let expected_stamp = model.active_tab().file_stamp();
+        model.replace_text(Some(0..0), "current ".into(), UndoBoundary::Break);
         let job = AutosaveJob {
-            tab_id: tab.id(),
+            tab_id: model.active_tab_id(),
             path: path.clone(),
             body: "stale".to_string(),
             revision: 0,
-            expected_stamp: tab.file_stamp(),
+            expected_stamp,
         };
 
         let temp_path = write_autosave_temp_file(&job).expect("write autosave temp file");
-        let completion = autosave_completion(&[tab], job, Ok(temp_path.clone()));
+        let completion = autosave_completion(model.tabs(), job, Ok(temp_path.clone()));
 
         assert_eq!(completion, None);
         assert!(!temp_path.exists());

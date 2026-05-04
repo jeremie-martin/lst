@@ -135,8 +135,8 @@ mod tests {
         set
     }
 
-    fn names(set: &TabSet) -> Vec<&str> {
-        set.iter().map(|tab| tab.name_hint.as_str()).collect()
+    fn names(set: &TabSet) -> Vec<String> {
+        set.iter().map(EditorTab::display_name).collect()
     }
 
     #[test]
@@ -179,7 +179,7 @@ mod tests {
         let mut set = build(2, &["a", "b", "c"]);
         assert!(!set.remove(0));
         assert_eq!(names(&set), vec!["b", "c"]);
-        assert_eq!(set.active().name_hint, "c");
+        assert_eq!(set.active().display_name(), "c");
         assert_eq!(set.active_index(), 1);
     }
 
@@ -188,7 +188,7 @@ mod tests {
         let mut set = build(2, &["a", "b", "c"]);
         assert!(set.remove(2));
         assert_eq!(names(&set), vec!["a", "b"]);
-        assert_eq!(set.active().name_hint, "b");
+        assert_eq!(set.active().display_name(), "b");
         assert_eq!(set.active_index(), 1);
     }
 }

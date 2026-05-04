@@ -73,6 +73,152 @@ impl Selection {
     }
 }
 
+/// Programmatic multi-cursor selection state for the editor model.
+///
+/// A `SelectionSet` is always non-empty, sorted by selected range, and
+/// non-overlapping. One selection is primary; commands that intentionally
+/// collapse multi-cursor state use that primary selection as the surviving
+/// cursor. This type is part of the model API so tests and host applications
+/// can exercise multi-cursor behavior before the GPUI gesture surface exists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectionSet {
+    selections: Vec<Selection>,
+    primary: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectionSetError {
+    Empty,
+    InvalidPrimary,
+    Unordered,
+    Overlapping,
+}
+
+impl SelectionSet {
+    pub fn single(selection: Selection) -> Self {
+        Self {
+            selections: vec![selection],
+            primary: 0,
+        }
+    }
+
+    /// Builds a selection set after validating ordering, overlap, and primary
+    /// index. Use `from_selections_coalescing_cursors` internally when an edit
+    /// can legitimately produce duplicate collapsed cursors.
+    pub fn from_selections(
+        selections: Vec<Selection>,
+        primary: usize,
+    ) -> Result<Self, SelectionSetError> {
+        validate_selection_set(&selections, primary)?;
+        Ok(Self {
+            selections,
+            primary,
+        })
+    }
+
+    pub fn primary(&self) -> Selection {
+        self.selections[self.primary]
+    }
+
+    pub fn as_slice(&self) -> &[Selection] {
+        &self.selections
+    }
+
+    pub fn primary_index(&self) -> usize {
+        self.primary
+    }
+
+    pub fn is_single(&self) -> bool {
+        self.selections.len() == 1
+    }
+
+    pub(crate) fn has_multiple(&self) -> bool {
+        self.selections.len() > 1
+    }
+
+    pub(crate) fn from_selections_coalescing_cursors(
+        selections: Vec<Selection>,
+        primary: usize,
+    ) -> Result<Self, SelectionSetError> {
+        validate_primary(&selections, primary)?;
+
+        let mut coalesced = Vec::with_capacity(selections.len());
+        let mut coalesced_primary = None;
+        for (index, selection) in selections.into_iter().enumerate() {
+            let duplicate_cursor = !selection.has_selection()
+                && coalesced.last().is_some_and(|last: &Selection| {
+                    !last.has_selection() && last.cursor() == selection.cursor()
+                });
+            if duplicate_cursor {
+                if index == primary {
+                    coalesced_primary = coalesced.len().checked_sub(1);
+                }
+                continue;
+            }
+
+            if index == primary {
+                coalesced_primary = Some(coalesced.len());
+            }
+            coalesced.push(selection);
+        }
+
+        let primary = coalesced_primary.unwrap_or(0);
+        Self::from_selections(coalesced, primary)
+    }
+
+    pub(crate) fn set_single(&mut self, selection: Selection) {
+        self.selections.clear();
+        self.selections.push(selection);
+        self.primary = 0;
+    }
+
+    pub(crate) fn clamped_to_len(&self, len: usize) -> Self {
+        let selections: Vec<Selection> = self
+            .selections
+            .iter()
+            .map(|selection| clamped_selection(*selection, len))
+            .collect();
+        Self::from_selections_coalescing_cursors(selections, self.primary)
+            .expect("clamping a valid selection set preserves selection-set invariants")
+    }
+}
+
+fn validate_primary(selections: &[Selection], primary: usize) -> Result<(), SelectionSetError> {
+    if selections.is_empty() {
+        return Err(SelectionSetError::Empty);
+    }
+    if primary >= selections.len() {
+        return Err(SelectionSetError::InvalidPrimary);
+    }
+    Ok(())
+}
+
+fn validate_selection_set(
+    selections: &[Selection],
+    primary: usize,
+) -> Result<(), SelectionSetError> {
+    validate_primary(selections, primary)?;
+
+    let mut previous: Option<Range<usize>> = None;
+    for selection in selections {
+        let range = selection.range();
+        if let Some(previous) = previous {
+            if (range.start, range.end) < (previous.start, previous.end) {
+                return Err(SelectionSetError::Unordered);
+            }
+            if previous.end > range.start || previous == range {
+                return Err(SelectionSetError::Overlapping);
+            }
+        }
+        previous = Some(range);
+    }
+    Ok(())
+}
+
+fn clamped_selection(selection: Selection, len: usize) -> Selection {
+    Selection::new(selection.anchor().min(len), selection.head().min(len))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TokenClass {
     Whitespace,
@@ -647,6 +793,14 @@ pub(crate) fn line_display_text(buffer: &Rope, line_ix: usize) -> String {
     line
 }
 
+pub(crate) fn display_line_char_len(buffer: &Rope, line_ix: usize) -> usize {
+    buffer
+        .line(line_ix.min(buffer.len_lines().saturating_sub(1)))
+        .chars()
+        .take_while(|ch| *ch != '\n' && *ch != '\r')
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -930,5 +1084,94 @@ mod tests {
         let (selection, reversed) = drag_selection_range(6..10, 0..5);
         assert_eq!(selection, 0..10);
         assert!(reversed);
+    }
+
+    #[test]
+    fn selection_set_rejects_invalid_shapes() {
+        assert_eq!(
+            SelectionSet::from_selections(Vec::new(), 0).unwrap_err(),
+            SelectionSetError::Empty
+        );
+        assert_eq!(
+            SelectionSet::from_selections(vec![Selection::collapsed(0)], 1).unwrap_err(),
+            SelectionSetError::InvalidPrimary
+        );
+        assert_eq!(
+            SelectionSet::from_selections(
+                vec![Selection::collapsed(4), Selection::collapsed(2)],
+                0,
+            )
+            .unwrap_err(),
+            SelectionSetError::Unordered
+        );
+        assert_eq!(
+            SelectionSet::from_selections(
+                vec![
+                    Selection::from_range(1..4, false),
+                    Selection::from_range(3..5, false),
+                ],
+                0,
+            )
+            .unwrap_err(),
+            SelectionSetError::Overlapping
+        );
+        assert_eq!(
+            SelectionSet::from_selections(
+                vec![Selection::collapsed(2), Selection::collapsed(2)],
+                0,
+            )
+            .unwrap_err(),
+            SelectionSetError::Overlapping
+        );
+    }
+
+    #[test]
+    fn selection_set_preserves_primary_index_for_valid_ordered_ranges() {
+        let set = SelectionSet::from_selections(
+            vec![
+                Selection::collapsed(1),
+                Selection::from_range(3..5, false),
+                Selection::collapsed(7),
+            ],
+            1,
+        )
+        .expect("valid ordered non-overlapping selections");
+
+        assert_eq!(set.primary(), Selection::from_range(3..5, false));
+        assert_eq!(set.primary_index(), 1);
+    }
+
+    #[test]
+    fn selection_set_coalesces_duplicate_batch_cursors_and_preserves_primary() {
+        let set = SelectionSet::from_selections_coalescing_cursors(
+            vec![
+                Selection::collapsed(1),
+                Selection::collapsed(1),
+                Selection::collapsed(3),
+            ],
+            1,
+        )
+        .expect("duplicate collapsed cursors are coalesced");
+
+        assert_eq!(
+            set.as_slice(),
+            &[Selection::collapsed(1), Selection::collapsed(3)]
+        );
+        assert_eq!(set.primary_index(), 0);
+        assert_eq!(set.primary(), Selection::collapsed(1));
+    }
+
+    #[test]
+    fn selection_set_clamping_coalesces_duplicate_cursors() {
+        let set = SelectionSet::from_selections(
+            vec![Selection::collapsed(2), Selection::collapsed(4)],
+            1,
+        )
+        .expect("valid cursors");
+
+        let clamped = set.clamped_to_len(1);
+
+        assert_eq!(clamped.as_slice(), &[Selection::collapsed(1)]);
+        assert_eq!(clamped.primary_index(), 0);
     }
 }

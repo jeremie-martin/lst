@@ -959,21 +959,13 @@ impl Render for LstGpuiApp {
             .unwrap_or_else(|| metrics::px_for_scale(metrics::WINDOW_WIDTH - 48.0, scale));
         let char_width = code_char_width(window, scale, theme);
         let show_search_decorations = self.model.find().visible;
-        let (
-            revision,
-            syntax_mode,
-            buffer,
-            selection,
-            search_matches,
-            active_search_match,
-            cursor_char,
-        ) = {
+        let (revision, syntax_mode, buffer, selection_set, search_matches, active_search_match) = {
             let active_tab = self.model.active_tab();
             (
                 active_tab.revision(),
                 syntax_mode_for_language(active_tab.language()),
                 active_tab.buffer().clone(),
-                active_tab.selected_range(),
+                active_tab.selection_set().clone(),
                 if show_search_decorations {
                     self.model.find_match_ranges()
                 } else {
@@ -982,7 +974,6 @@ impl Render for LstGpuiApp {
                 show_search_decorations
                     .then(|| self.model.active_find_match_range())
                     .flatten(),
-                active_tab.cursor_char(),
             )
         };
         let cursor_line = self.model.active_tab().cursor_position().line;
@@ -1192,14 +1183,13 @@ impl Render for LstGpuiApp {
                                                                     ViewportPaintInput {
                                                                         bounds,
                                                                         show_gutter,
-                                                                        selection:
-                                                                            selection.clone(),
+                                                                        selection_set:
+                                                                            selection_set.clone(),
                                                                         search_matches:
                                                                             &search_matches,
                                                                         active_search_match:
                                                                             active_search_match
                                                                                 .as_ref(),
-                                                                        cursor_char,
                                                                         vim_mode,
                                                                         focused: focus_handle
                                                                             .is_focused(window),

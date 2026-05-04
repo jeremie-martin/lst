@@ -7,7 +7,7 @@ use lst_editor::wrap::{
     build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, wrap_segments, WrapLayout,
     WrappedSegment,
 };
-use lst_editor::{vim, EditorTab, GutterMode};
+use lst_editor::{vim, EditorTab, GutterMode, SelectionSet};
 use ropey::Rope;
 use std::{
     cell::RefCell,
@@ -119,10 +119,9 @@ pub(crate) struct ViewportPreparation<'a> {
 pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) show_gutter: bool,
-    pub(crate) selection: Range<usize>,
+    pub(crate) selection_set: SelectionSet,
     pub(crate) search_matches: &'a [Range<usize>],
     pub(crate) active_search_match: Option<&'a Range<usize>>,
-    pub(crate) cursor_char: usize,
     pub(crate) vim_mode: vim::Mode,
     pub(crate) focused: bool,
     pub(crate) paint_state: ViewportPaintState,
@@ -775,14 +774,30 @@ fn search_matches_for_row<'a>(
     &search_matches[first..last]
 }
 
+fn selection_heads(selection_set: &SelectionSet) -> Vec<usize> {
+    selection_set
+        .as_slice()
+        .iter()
+        .map(|selection| selection.head())
+        .collect()
+}
+
+fn collapsed_cursors(selection_set: &SelectionSet) -> Vec<usize> {
+    selection_set
+        .as_slice()
+        .iter()
+        .filter(|selection| !selection.has_selection())
+        .map(|selection| selection.cursor())
+        .collect()
+}
+
 pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window, cx: &mut App) {
     let ViewportPaintInput {
         bounds,
         show_gutter,
-        selection,
+        selection_set,
         search_matches,
         active_search_match,
-        cursor_char,
         vim_mode,
         focused,
         paint_state,
@@ -798,16 +813,20 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         scale,
     );
     let code_origin_x = code_origin_x(bounds.left(), show_gutter, scale, horizontal_scroll);
+    let selection_heads = selection_heads(&selection_set);
+    let cursors = collapsed_cursors(&selection_set);
 
     for row in paint_state.rows {
-        let cursor_in_row = row_contains_cursor(&row, cursor_char);
+        let selection_head_in_row = selection_heads
+            .iter()
+            .any(|head| row_contains_cursor(&row, *head));
         let row_bounds = Bounds::new(
             point(bounds.left(), row.row_top),
             size(bounds.size.width, row_height),
         );
         window.paint_quad(fill(
             row_bounds,
-            if cursor_in_row {
+            if selection_head_in_row {
                 rgb(theme.role.current_line_bg)
             } else {
                 rgb(theme.role.editor_bg)
@@ -838,45 +857,54 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             );
         }
 
-        paint_range_background(
-            &row,
-            &selection,
-            code_origin_x,
-            row_height,
-            scale,
-            theme.role.selection_bg,
-            window,
-        );
+        for selection in selection_set.as_slice() {
+            paint_range_background(
+                &row,
+                &selection.range(),
+                code_origin_x,
+                row_height,
+                scale,
+                theme.role.selection_bg,
+                window,
+            );
+        }
 
         if let Some(code_line) = row.code_line.as_ref() {
             let _ = code_line.paint(point(code_origin_x, row.row_top), line_height, window, cx);
         }
 
-        if focused && selection.start == selection.end && cursor_in_row {
-            let cursor_x = code_origin_x
-                + x_for_global_char(&row, cursor_char.min(row.display_end_char))
-                    .unwrap_or_else(|| px(0.0));
-            let cursor_width = if vim_mode == vim::Mode::Normal {
-                let next_x = code_origin_x
-                    + x_for_global_char(
-                        &row,
-                        (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)),
-                    )
-                    .unwrap_or_else(|| {
-                        cursor_x + metrics::px_for_scale(metrics::CODE_FONT_SIZE * 0.55, scale)
-                    });
-                (next_x - cursor_x).max(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale))
-            } else {
-                metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)
-            };
-            window.paint_quad(fill(
-                Bounds::new(point(cursor_x, row.row_top), size(cursor_width, row_height)),
-                if vim_mode == vim::Mode::Normal {
-                    rgb(theme.role.selection_bg)
+        if focused {
+            for cursor_char in cursors
+                .iter()
+                .copied()
+                .filter(|cursor| row_contains_cursor(&row, *cursor))
+            {
+                let cursor_x = code_origin_x
+                    + x_for_global_char(&row, cursor_char.min(row.display_end_char))
+                        .unwrap_or_else(|| px(0.0));
+                let cursor_width = if vim_mode == vim::Mode::Normal {
+                    let next_x = code_origin_x
+                        + x_for_global_char(
+                            &row,
+                            (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)),
+                        )
+                        .unwrap_or_else(|| {
+                            cursor_x + metrics::px_for_scale(metrics::CODE_FONT_SIZE * 0.55, scale)
+                        });
+                    (next_x - cursor_x)
+                        .max(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale))
                 } else {
-                    rgb(theme.role.caret)
-                },
-            ));
+                    metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)
+                };
+                window.paint_quad(fill(
+                    Bounds::new(point(cursor_x, row.row_top), size(cursor_width, row_height)),
+                    if vim_mode == vim::Mode::Normal {
+                        rgb(theme.role.selection_bg)
+                    } else {
+                        rgb(theme.role.caret)
+                    },
+                ));
+            }
         }
 
         if show_gutter {
@@ -949,6 +977,7 @@ pub(crate) fn byte_index_to_char(text: &str, byte_index: usize) -> usize {
 mod tests {
     use super::*;
     use crate::ui::theme::{SyntaxRole, ThemeId};
+    use lst_editor::Selection;
 
     fn base_run(theme: Theme) -> TextRun {
         TextRun {
@@ -1046,5 +1075,13 @@ mod tests {
         };
 
         assert_eq!(search_matches_for_row(&matches, &row), &matches[2..3]);
+    }
+
+    #[test]
+    fn selection_heads_include_non_collapsed_selection_heads_for_row_highlighting() {
+        let selection_set = SelectionSet::single(Selection::from_range(2..8, false));
+
+        assert_eq!(selection_heads(&selection_set), vec![8]);
+        assert!(collapsed_cursors(&selection_set).is_empty());
     }
 }

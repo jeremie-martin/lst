@@ -1,7 +1,13 @@
-use crate::position::Position;
-use crate::selection::{cell_partition_by_byte, cells_of_str};
-use crate::TabId;
+use crate::{
+    document::{position_to_char, EditKind, UndoBoundary},
+    position::Position,
+    selection::{cell_partition_by_byte, cells_of_str, line_display_text},
+    tab::EditorTab,
+    transaction::{EditRequest, SelectionAfter, TextChange, TextChangeSet},
+    TabId,
+};
 use regex::{Regex, RegexBuilder};
+use ropey::Rope;
 use std::ops::Range;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +15,26 @@ pub struct MatchPos {
     pub line: usize,
     pub col: usize,
     pub char_len: usize,
+}
+
+impl MatchPos {
+    pub(crate) fn char_range_in(self, buffer: &Rope) -> Range<usize> {
+        let start = position_to_char(
+            buffer,
+            Position {
+                line: self.line,
+                column: self.col,
+            },
+        );
+        let end = position_to_char(
+            buffer,
+            Position {
+                line: self.line,
+                column: self.col + self.char_len,
+            },
+        );
+        start..end
+    }
 }
 
 // `Selection` freezes a char range captured at toggle-on. Edits before
@@ -230,6 +256,92 @@ impl Default for FindState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub(crate) fn replace_one_request(tab: &EditorTab, find: &FindState) -> Option<EditRequest> {
+    let (start, end) = find.current_match_range()?;
+    let regex = find.use_regex.then(|| find.build_regex().ok()).flatten();
+    let template = find.replacement.clone();
+    let buffer = tab.buffer();
+    let range = position_to_char(buffer, start)..position_to_char(buffer, end);
+    let replacement = regex.map_or(template.clone(), |re| {
+        let line_start = buffer.char_to_byte(buffer.line_to_char(start.line));
+        let match_start = buffer.char_to_byte(range.start);
+        expand_match_replacement(
+            &re,
+            &line_display_text(buffer, start.line),
+            match_start - line_start,
+            &template,
+        )
+    });
+    Some(EditRequest::single(
+        EditKind::Other,
+        UndoBoundary::Break,
+        range,
+        replacement,
+    ))
+}
+
+pub(crate) fn replace_all_request(
+    tab: &EditorTab,
+    find: &FindState,
+    cursor: Position,
+) -> Option<EditRequest> {
+    if find.query.is_empty() || find.matches.is_empty() {
+        return None;
+    }
+
+    let regex = find.use_regex.then(|| find.build_regex().ok()).flatten();
+    if find.use_regex && regex.is_none() {
+        return None;
+    }
+
+    let buffer = tab.buffer();
+    let mut changes = Vec::new();
+    for m in find.matches.iter().copied() {
+        let range = m.char_range_in(buffer);
+        let replacement = regex.as_ref().map_or_else(
+            || find.replacement.clone(),
+            |re| {
+                let line_start = buffer.char_to_byte(buffer.line_to_char(m.line));
+                let match_start = buffer.char_to_byte(range.start);
+                expand_match_replacement(
+                    re,
+                    &line_display_text(buffer, m.line),
+                    match_start - line_start,
+                    &find.replacement,
+                )
+            },
+        );
+        if buffer.slice(range.clone()) != replacement.as_str() {
+            changes.push(TextChange::replace(range, replacement));
+        }
+    }
+    if changes.is_empty() {
+        return None;
+    }
+
+    let changes = TextChangeSet::new(changes, 0);
+    Some(
+        EditRequest::other_break(changes)
+            .with_selection_after(SelectionAfter::CursorPosition(cursor)),
+    )
+}
+
+fn expand_match_replacement(
+    regex: &Regex,
+    line: &str,
+    byte_start_in_line: usize,
+    template: &str,
+) -> String {
+    if let Some(caps) = regex.captures_at(line, byte_start_in_line) {
+        if caps.get(0).is_some_and(|m| m.start() == byte_start_in_line) {
+            let mut buf = String::new();
+            caps.expand(template, &mut buf);
+            return buf;
+        }
+    }
+    template.to_string()
 }
 
 #[cfg(test)]

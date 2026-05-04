@@ -4,8 +4,8 @@ use lst_editor::{
         Key as VimKey, Mode as VimMode, Modifiers as VimModifiers, NamedKey as VimNamedKey,
         TextSnapshot as VimTextSnapshot, VimCommand, VimState,
     },
-    EditorEffect, EditorModel, EditorTab, FileStamp, FocusTarget, RevealIntent, Selection, TabId,
-    UndoBoundary,
+    EditorEffect, EditorModel, EditorTab, FileStamp, FocusTarget, RevealIntent, Selection,
+    SelectionSet, TabId, UndoBoundary,
 };
 
 mod common;
@@ -18,6 +18,29 @@ fn enter_vim_normal(model: &mut EditorModel) {
 
 fn dummy_stamp() -> FileStamp {
     FileStamp::from_raw(0, None)
+}
+
+fn model_with_text(text: &str) -> EditorModel {
+    model_with_tabs(
+        vec![EditorTab::from_text(
+            TabId::from_raw(1),
+            "example".into(),
+            None,
+            text,
+        )],
+        "Ready.".into(),
+    )
+}
+
+fn set_selection_set(model: &mut EditorModel, selections: Vec<Selection>, primary: usize) {
+    model.set_selection_set(
+        SelectionSet::from_selections(selections, primary).expect("valid selection set"),
+    );
+}
+
+fn assert_selection_set(set: &SelectionSet, selections: &[Selection], primary: usize) {
+    assert_eq!(set.as_slice(), selections);
+    assert_eq!(set.primary_index(), primary);
 }
 
 #[test]
@@ -70,6 +93,27 @@ fn text_edit_is_real_document_behavior() {
     assert_eq!(model.snapshot().text, "");
     model.redo();
     assert_eq!(model.snapshot().text, "abcdef");
+}
+
+#[test]
+fn no_op_text_commands_do_not_dirty_or_record_undo() {
+    let mut model = EditorModel::empty();
+    model.drain_effects();
+    let before = model.snapshot();
+
+    model.delete_line();
+
+    let after_delete = model.snapshot();
+    assert_eq!(after_delete.text, before.text);
+    assert_eq!(after_delete.active_revision, before.active_revision);
+    assert_eq!(after_delete.tab_modified, before.tab_modified);
+    assert_eq!(model.drain_effects(), Vec::<EditorEffect>::new());
+
+    model.undo();
+    let after_undo = model.snapshot();
+    assert_eq!(after_undo.text, before.text);
+    assert_eq!(after_undo.active_revision, before.active_revision);
+    assert_eq!(after_undo.tab_modified, before.tab_modified);
 }
 
 #[test]
@@ -267,6 +311,196 @@ fn inserting_text_refreshes_active_find_results() {
     let snapshot = model.snapshot();
     assert_eq!(snapshot.text, "aa");
     assert_eq!(snapshot.find_matches, 2);
+}
+
+#[test]
+fn multi_cursor_insert_applies_one_transaction_and_preserves_primary() {
+    let mut model = model_with_text("abc def");
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(0), Selection::collapsed(4)],
+        1,
+    );
+
+    model.insert_text(">".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, ">abc >def");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[Selection::collapsed(1), Selection::collapsed(6)],
+        1,
+    );
+
+    model.undo();
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "abc def");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[Selection::collapsed(0), Selection::collapsed(4)],
+        1,
+    );
+}
+
+#[test]
+fn multi_cursor_insert_records_last_edit_at_middle_primary_selection() {
+    let mut model = model_with_text("ab cd ef");
+    enter_vim_normal(&mut model);
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(0),
+            Selection::collapsed(3),
+            Selection::collapsed(6),
+        ],
+        1,
+    );
+
+    model.insert_text(">".into());
+    model.handle_vim_key(VimKey::Character("g".into()), VimModifiers::default(), 80);
+    model.handle_vim_key(VimKey::Character("i".into()), VimModifiers::default(), 80);
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, ">ab >cd >ef");
+    assert_eq!(snapshot.vim_mode, VimMode::Insert);
+    assert_eq!(snapshot.cursor_position, Position { line: 0, column: 5 });
+}
+
+#[test]
+fn multi_cursor_backspace_deletes_each_cursor_previous_grapheme() {
+    let mut model = model_with_text("ab cd ef");
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(2),
+            Selection::from_range(3..5, false),
+            Selection::collapsed(8),
+        ],
+        2,
+    );
+
+    model.backspace();
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "a  e");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[
+            Selection::collapsed(1),
+            Selection::collapsed(2),
+            Selection::collapsed(4),
+        ],
+        2,
+    );
+}
+
+#[test]
+fn multi_cursor_delete_forward_deletes_each_cursor_next_grapheme() {
+    let mut model = model_with_text("ab cd");
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(0), Selection::collapsed(3)],
+        0,
+    );
+
+    model.delete_forward();
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "b d");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[Selection::collapsed(0), Selection::collapsed(2)],
+        0,
+    );
+
+    model.undo();
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "ab cd");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[Selection::collapsed(0), Selection::collapsed(3)],
+        0,
+    );
+
+    model.redo();
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "b d");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[Selection::collapsed(0), Selection::collapsed(2)],
+        0,
+    );
+}
+
+#[test]
+fn multi_cursor_delete_word_deletes_each_cursor_word_range() {
+    let mut model = model_with_text("alpha beta gamma");
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(0), Selection::collapsed(6)],
+        1,
+    );
+
+    model.delete_word(false);
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "  gamma");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[Selection::collapsed(0), Selection::collapsed(1)],
+        1,
+    );
+}
+
+#[test]
+fn multi_cursor_backspace_merges_overlapping_delete_ranges() {
+    let mut model = model_with_text("ab");
+    set_selection_set(
+        &mut model,
+        vec![Selection::from_range(0..1, false), Selection::collapsed(1)],
+        1,
+    );
+
+    model.backspace();
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "b");
+    assert_selection_set(&snapshot.selection_set, &[Selection::collapsed(0)], 0);
+}
+
+#[test]
+fn multi_cursor_paste_replaces_each_selection() {
+    let mut model = model_with_text("ab cd");
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(0), Selection::collapsed(3)],
+        1,
+    );
+
+    model.paste_text("X".into());
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "Xab Xcd");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[Selection::collapsed(1), Selection::collapsed(5)],
+        1,
+    );
+}
+
+#[test]
+fn multi_cursor_plain_movement_collapses_to_primary_cursor() {
+    let mut model = model_with_text("abc def");
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(0), Selection::collapsed(4)],
+        1,
+    );
+
+    model.move_horizontal_by(1, false);
+
+    let snapshot = model.snapshot();
+    assert_selection_set(&snapshot.selection_set, &[Selection::collapsed(5)], 0);
 }
 
 #[test]
@@ -2162,13 +2396,6 @@ fn save_effects_can_target_inactive_tabs_by_id() {
     let first_path = std::path::PathBuf::from("/tmp/first.txt");
     let second_path = std::path::PathBuf::from("/tmp/second.txt");
     let second_id = TabId::from_raw(2);
-    let mut second = EditorTab::from_text(
-        second_id,
-        "second.txt".into(),
-        Some(second_path.clone()),
-        "second",
-    );
-    second.replace_char_range(0..0, "edited ");
     let mut model = model_with_tabs(
         vec![
             EditorTab::from_text(
@@ -2177,10 +2404,19 @@ fn save_effects_can_target_inactive_tabs_by_id() {
                 Some(first_path),
                 "first",
             ),
-            second,
+            EditorTab::from_text(
+                second_id,
+                "second.txt".into(),
+                Some(second_path.clone()),
+                "second",
+            ),
         ],
         "Ready.".into(),
     );
+    model.set_active_tab(second_id);
+    model.replace_text(Some(0..0), "edited ".into(), UndoBoundary::Break);
+    model.set_active_tab(TabId::from_raw(1));
+    model.drain_effects();
 
     model.request_save_tab(second_id);
 
@@ -2199,24 +2435,28 @@ fn save_effects_can_target_inactive_tabs_by_id() {
 fn save_finished_for_tab_does_not_clear_the_active_tab_by_accident() {
     let first_path = std::path::PathBuf::from("/tmp/first.txt");
     let second_path = std::path::PathBuf::from("/tmp/second.txt");
-    let mut first = EditorTab::from_text(
-        TabId::from_raw(1),
-        "first.txt".into(),
-        Some(first_path),
-        "first",
+    let first_id = TabId::from_raw(1);
+    let second_id = TabId::from_raw(2);
+    let mut model = model_with_tabs(
+        vec![
+            EditorTab::from_text(first_id, "first.txt".into(), Some(first_path), "first"),
+            EditorTab::from_text(
+                second_id,
+                "second.txt".into(),
+                Some(second_path.clone()),
+                "second",
+            ),
+        ],
+        "Ready.".into(),
     );
-    let mut second = EditorTab::from_text(
-        TabId::from_raw(2),
-        "second.txt".into(),
-        Some(second_path.clone()),
-        "second",
-    );
-    first.replace_char_range(0..0, "edited ");
-    second.replace_char_range(0..0, "saved ");
-    let mut model = model_with_tabs(vec![first, second], "Ready.".into());
+    model.replace_text(Some(0..0), "edited ".into(), UndoBoundary::Break);
+    model.set_active_tab(second_id);
+    model.replace_text(Some(0..0), "saved ".into(), UndoBoundary::Break);
+    model.set_active_tab(first_id);
+    model.drain_effects();
 
     model.save_finished_for_tab(
-        TabId::from_raw(2),
+        second_id,
         second_path,
         lst_editor::FileStamp::from_raw(10, Some(20)),
     );

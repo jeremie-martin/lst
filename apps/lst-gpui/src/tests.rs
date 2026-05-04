@@ -12,7 +12,7 @@ use gpui::{
 };
 use lst_editor::Selection;
 #[cfg(feature = "internal-invariants")]
-use lst_editor::{EditorModel, EditorTab, TabId};
+use lst_editor::{EditorModel, EditorTab, TabId, UndoBoundary};
 #[cfg(feature = "internal-invariants")]
 use std::collections::HashMap;
 use std::{
@@ -2530,10 +2530,11 @@ fn autosave_revision_requires_a_unique_matching_tab() {
         0
     ));
 
-    let mut stale_tab = tab_from_path(path.clone(), "fn main() {}\n");
-    stale_tab.replace_char_range(0..0, "// ");
+    let stale_tab = tab_from_path(path.clone(), "fn main() {}\n");
+    let mut stale_model = EditorModel::from_tab(stale_tab, "Ready.".to_string());
+    stale_model.replace_text(Some(0..0), "// ".into(), UndoBoundary::Break);
     assert!(!autosave_revision_is_current(
-        &[stale_tab],
+        stale_model.tabs(),
         TabId::from_raw(1),
         &path,
         0
@@ -2794,12 +2795,12 @@ fn syntax_highlight_result_requires_matching_active_revision_and_language() {
         rust_key
     ));
 
-    let mut stale_tab = tab_from_path(PathBuf::from("/tmp/example.rs"), "fn main() {}\n");
+    let stale_tab = tab_from_path(PathBuf::from("/tmp/example.rs"), "fn main() {}\n");
     let stale_tab_id = stale_tab.id();
     let stale_view = EditorTabView::new(&stale_tab);
     let stale_cache = stale_view.cache.clone();
-    stale_tab.replace_char_range(0..0, "// ");
-    let stale_model = EditorModel::from_tab(stale_tab, "Ready.".to_string());
+    let mut stale_model = EditorModel::from_tab(stale_tab, "Ready.".to_string());
+    stale_model.replace_text(Some(0..0), "// ".into(), UndoBoundary::Break);
     let mut stale_store: HashMap<TabId, EditorTabView> = HashMap::new();
     stale_store.insert(stale_tab_id, stale_view);
     assert!(!syntax_highlight_result_is_current(
