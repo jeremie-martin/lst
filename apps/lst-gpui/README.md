@@ -28,10 +28,10 @@ DISPLAY=:1 ../../target/release/examples/bench_editor_x11 --scenario all --repet
 
 Use the runner defaults for real baseline work.
 
-Run the opt-in real-display behavior smoke test with:
+Run the opt-in real-display behavior suite with:
 
 ```sh
-DISPLAY=:1 cargo test -p lst-gpui --test real_x11_smoke -- --ignored --nocapture
+DISPLAY=:1 cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
 ```
 
 ## Verification

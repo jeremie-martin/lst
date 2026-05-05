@@ -7,7 +7,7 @@
 
 mod support;
 
-use support::{EditorTestExt, ScratchpadSession, TestResult};
+use support::{EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
@@ -21,10 +21,11 @@ fn ctrl_d_adds_occurrences_and_literal_input_replaces_them() -> TestResult {
     // occurrences. Typing "qux" replaces every selection through the
     // multi-cursor edit path, so the autosave file ends up as
     // "qux bar qux baz qux".
-    let mut session = ScratchpadSession::new("multi-cursor-ctrl-d")?;
-    let (mut editor, path) = session.open("scratch")?;
+    support::run_x11_test("multi-cursor-ctrl-d", |session| {
+        let (mut editor, path) = session.open("scratch")?;
 
-    editor.send_keys("foo bar foo baz foo<esc>0i<C-d><C-d><C-d>qux")?;
-    editor.save_then_expect_file(&path, "qux bar qux baz qux")?;
-    Ok(())
+        editor.keys("foo bar foo baz foo<esc>0i<C-d><C-d><C-d>qux")?;
+        editor.save_then_expect_file(&path, "qux bar qux baz qux")?;
+        Ok(())
+    })
 }

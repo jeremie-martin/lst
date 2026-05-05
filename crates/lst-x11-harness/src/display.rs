@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::env;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::os::fd::AsRawFd;
 
 use x11rb::connection::Connection as _;
 use x11rb::protocol::damage::ConnectionExt as _;
@@ -28,12 +29,14 @@ pub struct Display {
     pub(crate) atoms: Atoms,
     pub(crate) keycodes: Keycodes,
     pub(crate) session_env: SessionEnv,
+    _lock: SessionLock,
 }
 
 impl Display {
     /// Resolve the X session, connect, query DAMAGE/XTEST/XKB extensions,
     /// and verify `xclip` is on `PATH`.
     pub fn from_env() -> Result<Self> {
+        let lock = SessionLock::acquire()?;
         clipboard::require_xclip()?;
         let session_env = resolve_session_env()?;
         apply_session_env(&session_env);
@@ -52,7 +55,40 @@ impl Display {
             atoms,
             keycodes,
             session_env,
+            _lock: lock,
         })
+    }
+}
+
+struct SessionLock {
+    file: File,
+}
+
+impl SessionLock {
+    fn acquire() -> Result<Self> {
+        let path = env::temp_dir().join("lst-x11-harness.lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)?;
+        // SAFETY: `file` is an open lock-file descriptor we keep alive inside
+        // `SessionLock`; `flock` only mutates kernel lock state for that fd.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc == 0 {
+            Ok(Self { file })
+        } else {
+            Err(std::io::Error::last_os_error().into())
+        }
+    }
+}
+
+impl Drop for SessionLock {
+    fn drop(&mut self) {
+        // SAFETY: the descriptor is still owned by `self.file`; unlocking is
+        // best-effort because the kernel will also release it on close.
+        let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
     }
 }
 

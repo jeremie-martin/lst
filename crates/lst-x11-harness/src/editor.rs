@@ -382,7 +382,7 @@ impl<'a> Editor<'a> {
             let damage_id = self.damage.damage();
             let window_id = self.window.id;
             let child = child_mut(&mut self.child)?;
-            damage_wait::wait_quiet(
+            damage_wait::wait_for_damage_then_quiet(
                 conn,
                 damage_id,
                 window_id,
@@ -583,7 +583,7 @@ fn wait_file_text_impl(
     opts: FileWaitOpts,
 ) -> Result<FileWaitOutcome> {
     let deadline = Instant::now() + opts.timeout;
-    let mut last_text = fs::read_to_string(path).unwrap_or_default();
+    let mut last_text = read_optional_text(path)?;
     let mut last_change = Instant::now();
     let mut last_save: Option<Instant> = None;
     let mut damage_events = 0u64;
@@ -607,17 +607,18 @@ fn wait_file_text_impl(
         }
         conn.flush()?;
 
-        let current = fs::read_to_string(path).unwrap_or_default();
+        let current = read_optional_text(path)?;
         if current != last_text {
             last_text = current;
             last_change = Instant::now();
         }
 
-        if last_text == expected && last_change.elapsed() >= opts.stable_for {
+        if last_text.as_deref() == Some(expected) && last_change.elapsed() >= opts.stable_for {
+            let text = last_text.as_ref().expect("matched expected text above");
             return Ok(FileWaitOutcome {
                 stats: FileStats {
-                    bytes: last_text.len() as u64,
-                    lines: last_text.lines().count(),
+                    bytes: text.len() as u64,
+                    lines: text.lines().count(),
                 },
                 damage_events,
                 save_retries,
@@ -640,17 +641,44 @@ fn wait_file_text_impl(
         }
 
         if Instant::now() >= deadline {
+            let observed = match &last_text {
+                Some(text) => format!(
+                    "{} bytes, preview {:?}",
+                    text.len(),
+                    preview_text(text, 120)
+                ),
+                None => "missing file".to_string(),
+            };
             return Err(io::Error::other(format!(
-                "timed out waiting for {} to reach {} bytes; last observed {} bytes",
+                "timed out waiting for {} to equal {} bytes; last observed {observed}",
                 path.display(),
                 expected.len(),
-                last_text.len()
             ))
             .into());
         }
 
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+fn read_optional_text(path: &Path) -> Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn preview_text(text: &str, max_chars: usize) -> String {
+    let mut preview = String::new();
+    for (index, ch) in text.chars().enumerate() {
+        if index == max_chars {
+            preview.push_str("...");
+            break;
+        }
+        preview.push(ch);
+    }
+    preview
 }
 
 fn wait_file_stable_impl(
@@ -660,7 +688,7 @@ fn wait_file_stable_impl(
     timeout: Duration,
 ) -> Result<FileStats> {
     let deadline = Instant::now() + timeout;
-    let mut last_text = fs::read_to_string(path).unwrap_or_default();
+    let mut last_text = read_optional_text(path)?;
     let mut last_change = Instant::now();
 
     loop {
@@ -670,21 +698,31 @@ fn wait_file_stable_impl(
             ))
             .into());
         }
-        let current = fs::read_to_string(path).unwrap_or_default();
+        let current = read_optional_text(path)?;
         if current != last_text {
             last_text = current;
             last_change = Instant::now();
         }
-        if !last_text.is_empty() && last_change.elapsed() >= stable_for {
-            return Ok(FileStats {
-                bytes: last_text.len() as u64,
-                lines: last_text.lines().count(),
-            });
+        if let Some(text) = &last_text {
+            if !text.is_empty() && last_change.elapsed() >= stable_for {
+                return Ok(FileStats {
+                    bytes: text.len() as u64,
+                    lines: text.lines().count(),
+                });
+            }
         }
         if Instant::now() >= deadline {
+            let observed = match &last_text {
+                Some(text) => format!(
+                    "{} bytes, preview {:?}",
+                    text.len(),
+                    preview_text(text, 120)
+                ),
+                None => "missing file".to_string(),
+            };
             return Err(io::Error::other(format!(
-                "timed out waiting for {} to stabilize",
-                path.display()
+                "timed out waiting for {} to stabilize; last observed {observed}",
+                path.display(),
             ))
             .into());
         }

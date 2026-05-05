@@ -20,6 +20,45 @@ pub(crate) fn wait_quiet(
     quiet_for: Duration,
     timeout: Duration,
 ) -> Result<u64> {
+    wait_impl(
+        conn,
+        damage_id,
+        window,
+        child,
+        quiet_for,
+        timeout,
+        RequireDamage::No,
+    )
+}
+
+pub(crate) fn wait_for_damage_then_quiet(
+    conn: &RustConnection,
+    damage_id: damage::Damage,
+    window: Window,
+    child: &mut Child,
+    quiet_for: Duration,
+    timeout: Duration,
+) -> Result<u64> {
+    wait_impl(
+        conn,
+        damage_id,
+        window,
+        child,
+        quiet_for,
+        timeout,
+        RequireDamage::Yes,
+    )
+}
+
+fn wait_impl(
+    conn: &RustConnection,
+    damage_id: damage::Damage,
+    window: Window,
+    child: &mut Child,
+    quiet_for: Duration,
+    timeout: Duration,
+    require_damage: RequireDamage,
+) -> Result<u64> {
     let deadline = Instant::now() + timeout;
     let mut last_damage = Instant::now();
     let mut damage_events = 0u64;
@@ -43,12 +82,35 @@ pub(crate) fn wait_quiet(
         }
         conn.flush()?;
 
-        if last_damage.elapsed() >= quiet_for {
+        if require_damage.satisfied_by(damage_events) && last_damage.elapsed() >= quiet_for {
             return Ok(damage_events);
         }
         if Instant::now() >= deadline {
-            return Err(io::Error::other("timed out waiting for redraw quiet period").into());
+            let detail = if damage_events == 0 {
+                " without observing any matching damage events"
+            } else {
+                ""
+            };
+            return Err(io::Error::other(format!(
+                "timed out waiting for redraw quiet period{detail}"
+            ))
+            .into());
         }
         thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RequireDamage {
+    No,
+    Yes,
+}
+
+impl RequireDamage {
+    fn satisfied_by(self, damage_events: u64) -> bool {
+        match self {
+            Self::No => true,
+            Self::Yes => damage_events > 0,
+        }
     }
 }

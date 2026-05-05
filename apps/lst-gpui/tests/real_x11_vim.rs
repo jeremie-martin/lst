@@ -9,19 +9,20 @@ mod support;
 
 use std::thread;
 
-use support::{secs, EditorTestExt, ScratchpadSession, TestResult};
+use support::{secs, EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
 fn vim_top_line_delete_round_trips_to_autosaved_file() -> TestResult {
     // Type three lines in Insert, leave Insert, jump to top, delete first
     // line. Standard vim semantics: result is "B\nC\n".
-    let mut session = ScratchpadSession::new("vim-top-line-delete")?;
-    let (mut editor, path) = session.open("scratch")?;
+    support::run_x11_test("vim-top-line-delete", |session| {
+        let (mut editor, path) = session.open("scratch")?;
 
-    editor.send_keys("A<enter>B<enter>C<enter><esc>ggdd")?;
-    editor.save_then_expect_file(&path, "B\nC\n")?;
-    Ok(())
+        editor.keys("A<enter>B<enter>C<enter><esc>ggdd")?;
+        editor.save_then_expect_file(&path, "B\nC\n")?;
+        Ok(())
+    })
 }
 
 #[test]
@@ -30,12 +31,13 @@ fn vim_visual_line_indent_indents_block_by_one_unit() -> TestResult {
     // Type three lines, escape to Normal, return to top of buffer, enter
     // Visual-line over all three lines, indent. Scratchpads are saved as
     // `.md`, so the active indent unit is two spaces.
-    let mut session = ScratchpadSession::new("vim-visual-indent")?;
-    let (mut editor, path) = session.open("scratch")?;
+    support::run_x11_test("vim-visual-indent", |session| {
+        let (mut editor, path) = session.open("scratch")?;
 
-    editor.send_keys("alpha<enter>beta<enter>gamma<esc>gg0Vjj><esc>")?;
-    editor.save_then_expect_file(&path, "  alpha\n  beta\n  gamma")?;
-    Ok(())
+        editor.keys("alpha<enter>beta<enter>gamma<esc>gg0Vjj><esc>")?;
+        editor.save_then_expect_file(&path, "  alpha\n  beta\n  gamma")?;
+        Ok(())
+    })
 }
 
 #[test]
@@ -43,12 +45,13 @@ fn vim_visual_line_indent_indents_block_by_one_unit() -> TestResult {
 fn vim_surround_inner_word_with_parentheses() -> TestResult {
     // ysiw)  → "you-surround inner-word with )". With "hello" as the only
     // word in the buffer, the result is "(hello)".
-    let mut session = ScratchpadSession::new("vim-surround-iw")?;
-    let (mut editor, path) = session.open("scratch")?;
+    support::run_x11_test("vim-surround-iw", |session| {
+        let (mut editor, path) = session.open("scratch")?;
 
-    editor.send_keys("hello<esc>0ysiw)")?;
-    editor.save_then_expect_file(&path, "(hello)")?;
-    Ok(())
+        editor.keys("hello<esc>0ysiw)")?;
+        editor.save_then_expect_file(&path, "(hello)")?;
+        Ok(())
+    })
 }
 
 #[test]
@@ -73,20 +76,21 @@ fn vim_compound_commands_survive_long_pauses_between_keystrokes() -> TestResult 
     // events again) or the editor has grown a real timeout it shouldn't
     // have. Investigate the regression — do not "fix" the test by
     // shortening the pauses.
-    let mut session = ScratchpadSession::new("vim-slow-paced")?;
-    let (mut editor, path) = session.open("scratch")?;
+    support::run_x11_test("vim-slow-paced", |session| {
+        let (mut editor, path) = session.open("scratch")?;
 
-    editor.send_keys("first<enter>second<enter>third<esc>")?;
-    thread::sleep(secs(1));
-    editor.send_keys("g")?;
-    thread::sleep(secs(1));
-    editor.send_keys("g")?;
-    thread::sleep(secs(1));
-    editor.send_keys("dd")?;
-    // No trailing newline — we typed "first<enter>second<enter>third" with
-    // no final <enter>, so the buffer is "first\nsecond\nthird" and `dd`
-    // on line 1 leaves the lines below intact, exactly as a real user
-    // would observe.
-    editor.save_then_expect_file(&path, "second\nthird")?;
-    Ok(())
+        editor.keys("first<enter>second<enter>third<esc>")?;
+        thread::sleep(secs(1));
+        editor.keys("g")?;
+        thread::sleep(secs(1));
+        editor.keys("g")?;
+        thread::sleep(secs(1));
+        editor.keys("dd")?;
+        // No trailing newline — we typed "first<enter>second<enter>third" with
+        // no final <enter>, so the buffer is "first\nsecond\nthird" and `dd`
+        // on line 1 leaves the lines below intact, exactly as a real user
+        // would observe.
+        editor.save_then_expect_file(&path, "second\nthird")?;
+        Ok(())
+    })
 }

@@ -4,8 +4,8 @@
 //! owns a private temp directory and the X11 [`Display`] connection;
 //! [`ScratchpadSession::open`] spawns the editor against a child scratchpad
 //! directory, focuses the window, and returns a ready-to-drive
-//! `(Editor, autosave_path)` pair. The session deletes its temp tree on
-//! drop so a panicking test still cleans up.
+//! `(Editor, autosave_path)` pair. Use [`run_x11_test`] so successful tests
+//! clean their temp tree and failed tests preserve it for inspection.
 //!
 //! To keep different suites from racing for keyboard focus and the global
 //! pointer, run with `--test-threads=1`. `cargo test --tests` uses
@@ -17,9 +17,9 @@
 use std::env;
 use std::error::Error;
 use std::ffi::OsStr;
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lst_x11_harness::{Display, Editor, FileWaitOpts, Key, KeyChord, SpawnOpts};
@@ -41,6 +41,8 @@ pub struct ScratchpadSession {
     display: Display,
     binary: PathBuf,
     root: PathBuf,
+    artifacts: PathBuf,
+    drop_handled: bool,
 }
 
 impl ScratchpadSession {
@@ -48,10 +50,15 @@ impl ScratchpadSession {
         let display = Display::from_env()?;
         let binary = editor_binary()?;
         let root = temp_dir(&format!("lst-real-x11-{label}"))?;
+        let artifacts = root.join("artifacts");
+        fs::create_dir_all(&artifacts)?;
+        env::set_var("LST_X11_ARTIFACT_DIR", &artifacts);
         Ok(Self {
             display,
             binary,
             root,
+            artifacts,
+            drop_handled: false,
         })
     }
 
@@ -64,12 +71,13 @@ impl ScratchpadSession {
         fs::create_dir_all(&dir)?;
         let title = unique_title(name);
         let args: [&OsStr; 2] = [OsStr::new("--scratchpad-dir"), dir.as_os_str()];
+        let (stdout, stderr) = self.log_stdio(name)?;
         let mut editor = self.display.spawn_editor(SpawnOpts {
             binary: &self.binary,
             args: &args,
             title: &title,
-            stderr: Stdio::inherit(),
-            stdout: Stdio::null(),
+            stderr,
+            stdout,
             extra_env: &[],
         })?;
         let path = wait_for_single_file(&dir, SCRATCHPAD_DISCOVERY)?;
@@ -83,12 +91,13 @@ impl ScratchpadSession {
     pub fn open_file(&mut self, name: &str, file: &Path) -> SupportResult<Editor<'_>> {
         let title = unique_title(name);
         let args: [&OsStr; 1] = [file.as_os_str()];
+        let (stdout, stderr) = self.log_stdio(name)?;
         let mut editor = self.display.spawn_editor(SpawnOpts {
             binary: &self.binary,
             args: &args,
             title: &title,
-            stderr: Stdio::inherit(),
-            stdout: Stdio::null(),
+            stderr,
+            stdout,
             extra_env: &[],
         })?;
         editor.click_center()?;
@@ -99,28 +108,76 @@ impl ScratchpadSession {
     pub fn root(&self) -> &Path {
         &self.root
     }
+
+    pub fn artifacts(&self) -> &Path {
+        &self.artifacts
+    }
+
+    pub fn seed_file(&self, name: &str, contents: &str) -> SupportResult<PathBuf> {
+        let path = self.root.join(name);
+        fs::write(&path, contents)?;
+        Ok(path)
+    }
+
+    fn cleanup(&mut self) -> SupportResult<()> {
+        if env::var_os("LST_X11_KEEP_TEMP").is_some() {
+            self.preserve("LST_X11_KEEP_TEMP");
+            return Ok(());
+        }
+        match fs::remove_dir_all(&self.root) {
+            Ok(()) => {
+                self.drop_handled = true;
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.drop_handled = true;
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn preserve(&mut self, reason: &str) {
+        eprintln!(
+            "support: preserving temp dir after {reason}: {}",
+            self.root.display()
+        );
+        self.drop_handled = true;
+    }
+
+    fn log_stdio(&self, name: &str) -> SupportResult<(Stdio, Stdio)> {
+        let stdout = File::create(self.artifacts.join(format!("{name}-stdout.log")))?;
+        let stderr = File::create(self.artifacts.join(format!("{name}-stderr.log")))?;
+        Ok((Stdio::from(stdout), Stdio::from(stderr)))
+    }
 }
 
 impl Drop for ScratchpadSession {
     fn drop(&mut self) {
-        // Preserve artifacts when a panic is unwinding so the file the
-        // editor was last writing to is still on disk for inspection. On
-        // success, the test calls `cleanup()` explicitly. Setting
-        // `LST_X11_KEEP_TEMP=1` also preserves them unconditionally.
-        if std::thread::panicking() || env::var_os("LST_X11_KEEP_TEMP").is_some() {
-            eprintln!(
-                "support: preserving temp dir for inspection: {}",
-                self.root.display()
-            );
+        if self.drop_handled {
             return;
         }
-        if let Err(error) = fs::remove_dir_all(&self.root) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "support: failed to remove temp dir {}: {error}",
-                    self.root.display()
-                );
-            }
+        if std::thread::panicking() {
+            self.preserve("panic");
+        } else if env::var_os("LST_X11_KEEP_TEMP").is_some() {
+            self.preserve("LST_X11_KEEP_TEMP");
+        } else {
+            self.preserve("test failure or missing explicit cleanup");
+        }
+    }
+}
+
+pub fn run_x11_test(
+    label: &str,
+    test: impl FnOnce(&mut ScratchpadSession) -> TestResult,
+) -> TestResult {
+    let mut session = ScratchpadSession::new(label)?;
+    let result = test(&mut session);
+    match result {
+        Ok(()) => session.cleanup(),
+        Err(error) => {
+            session.preserve("error");
+            Err(error)
         }
     }
 }
@@ -129,29 +186,106 @@ impl Drop for ScratchpadSession {
 /// (autosave semantics, the Ctrl+S save chord, default wait windows)
 /// lives here, not in the harness.
 pub trait EditorTestExt {
+    /// Drive a vim-style key sequence through the harness and capture a window
+    /// artifact if the sequence fails.
+    fn keys(&mut self, sequence: &str) -> SupportResult<()>;
+
+    /// Press `Ctrl+S`.
+    fn save(&mut self) -> SupportResult<()>;
+
+    /// Assert the path's content matches `expected` without first saving.
+    fn expect_file(&mut self, path: &Path, expected: &str) -> SupportResult<()>;
+
     /// Press `Ctrl+S` and assert the autosave path's content matches
     /// `expected` (10s timeout, 200ms stability window).
     fn save_then_expect_file(&mut self, path: &Path, expected: &str) -> SupportResult<()>;
+
+    /// Wait for the editor process to exit successfully.
+    fn wait_for_successful_exit(&mut self, timeout: Duration) -> SupportResult<()>;
 
     /// Convenience: `quit(QUIT_TIMEOUT)`.
     fn quit_default(self) -> SupportResult<()>;
 }
 
 impl EditorTestExt for Editor<'_> {
-    fn save_then_expect_file(&mut self, path: &Path, expected: &str) -> SupportResult<()> {
+    fn keys(&mut self, sequence: &str) -> SupportResult<()> {
+        let result = self.send_keys(sequence);
+        with_window_artifact(self, "send-keys", result)
+    }
+
+    fn save(&mut self) -> SupportResult<()> {
         self.press(KeyChord::Ctrl(Key::Char('s')))?;
-        self.wait_file_text(
-            path,
-            expected,
-            FileWaitOpts::new(FILE_WAIT_TIMEOUT, FILE_STABLE),
-        )?;
         Ok(())
     }
 
-    fn quit_default(self) -> SupportResult<()> {
-        self.quit(QUIT_TIMEOUT)?;
+    fn expect_file(&mut self, path: &Path, expected: &str) -> SupportResult<()> {
+        let result = self.wait_file_text(
+            path,
+            expected,
+            FileWaitOpts::new(FILE_WAIT_TIMEOUT, FILE_STABLE),
+        );
+        with_window_artifact(self, "expect-file", result)?;
         Ok(())
     }
+
+    fn save_then_expect_file(&mut self, path: &Path, expected: &str) -> SupportResult<()> {
+        self.save()?;
+        self.expect_file(path, expected)
+    }
+
+    fn wait_for_successful_exit(&mut self, timeout: Duration) -> SupportResult<()> {
+        let status = self.wait_for_exit(timeout)?;
+        require_success(status)
+    }
+
+    fn quit_default(self) -> SupportResult<()> {
+        let status = self.quit(QUIT_TIMEOUT)?;
+        require_success(status)
+    }
+}
+
+fn require_success(status: ExitStatus) -> SupportResult<()> {
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("editor exited with non-success status: {status}").into())
+    }
+}
+
+fn with_window_artifact<T>(
+    editor: &mut Editor<'_>,
+    label: &str,
+    result: lst_x11_harness::Result<T>,
+) -> SupportResult<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            let artifact = capture_window_artifact(editor, label);
+            let suffix = artifact
+                .as_ref()
+                .map(|path| format!("; window artifact: {}", path.display()))
+                .unwrap_or_default();
+            Err(format!("{error}{suffix}").into())
+        }
+    }
+}
+
+fn capture_window_artifact(editor: &Editor<'_>, label: &str) -> Option<PathBuf> {
+    let dir = env::var_os("LST_X11_ARTIFACT_DIR").map(PathBuf::from)?;
+    if fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+    let path = dir.join(format!("{label}-{}.xwd", unique_id()));
+    let window_id = editor.window_id().to_string();
+    let path_text = path.to_string_lossy().into_owned();
+    let status = std::process::Command::new("xwd")
+        .args(["-silent", "-id", &window_id, "-out", &path_text])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .ok()?;
+    status.success().then_some(path)
 }
 
 pub fn editor_binary() -> SupportResult<PathBuf> {

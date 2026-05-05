@@ -70,11 +70,11 @@ Run the full smoke suite from a real X11 session:
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario all --repetitions 1 --priming 0
 ```
 
-There is also an opt-in real-display behavior smoke test for scratchpad cleanup
-and real X11 clipboard persistence:
+There is also an opt-in real-display behavior suite for scratchpad cleanup,
+clipboard, vim, multi-cursor, modifier, and whole-editor workflow coverage:
 
 ```bash
-DISPLAY=:1 cargo test -p lst-gpui --test real_x11_smoke -- --ignored --nocapture
+DISPLAY=:1 cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
 ```
 
 For stable baseline work, use the runner default of one priming run and seven
