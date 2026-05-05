@@ -110,20 +110,12 @@ impl FindState {
     // Single source of truth for query interpretation — keeps
     // `compute_matches_in_text` and the replace paths in lock-step.
     pub fn build_regex(&self) -> Result<Regex, regex::Error> {
-        let ignore_case = !self.case_sensitive && !self.query.chars().any(|c| c.is_uppercase());
-        let core = if self.use_regex {
-            self.query.clone()
-        } else {
-            regex::escape(&self.query)
-        };
-        let pattern = if self.whole_word {
-            format!(r"(?:\b(?:{core})\b)")
-        } else {
-            core
-        };
-        RegexBuilder::new(&pattern)
-            .case_insensitive(ignore_case)
-            .build()
+        build_query_regex(
+            &self.query,
+            self.case_sensitive,
+            self.whole_word,
+            self.use_regex,
+        )
     }
 
     pub fn compute_matches_in_text(&mut self, text: &str) {
@@ -256,6 +248,32 @@ impl Default for FindState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Builds a regex for `query` honouring case / whole-word / regex
+/// toggles plus the smart-case fallback (lowercase queries are
+/// case-insensitive). Shared between the find panel and cursor-add
+/// gestures so flag semantics stay consistent across surfaces.
+pub(crate) fn build_query_regex(
+    query: &str,
+    case_sensitive: bool,
+    whole_word: bool,
+    use_regex: bool,
+) -> Result<Regex, regex::Error> {
+    let ignore_case = !case_sensitive && !query.chars().any(|c| c.is_uppercase());
+    let core = if use_regex {
+        query.to_string()
+    } else {
+        regex::escape(query)
+    };
+    let pattern = if whole_word {
+        format!(r"(?:\b(?:{core})\b)")
+    } else {
+        core
+    };
+    RegexBuilder::new(&pattern)
+        .case_insensitive(ignore_case)
+        .build()
 }
 
 pub(crate) fn replace_one_request(tab: &EditorTab, find: &FindState) -> Option<EditRequest> {

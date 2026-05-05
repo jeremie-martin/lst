@@ -1,16 +1,17 @@
 use gpui::{Context, Div, InteractiveElement, Window};
 
 use crate::{
-    Backspace, CloseActiveTab, CopySelection, CutSelection, DeleteForward, DeleteLine,
-    DeleteWordBackward, DeleteWordForward, DuplicateLine, FindNext, FindOpen, FindOpenReplace,
-    FindPrev, GotoLineOpen, InsertNewline, InsertTab, LstGpuiApp, MoveDocumentEnd,
-    MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd, MoveLineStart, MoveLineUp,
-    MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft, MoveSubwordRight,
-    MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab, NextTab, OpenFile,
-    OutdentSelection, PasteClipboard, PrevTab, Quit, Redo, ReplaceAll, ReplaceOne, SaveFile,
-    SaveFileAs, SelectAll, SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft,
-    SelectLine, SelectLineEnd, SelectLineStart, SelectPageDown, SelectPageUp, SelectParagraph,
-    SelectRight, SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft,
+    AddCursorAbove, AddCursorBelow, Backspace, CloseActiveTab, CopySelection, CutSelection,
+    DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward, DuplicateLine, FindNext,
+    FindOpen, FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline, InsertTab, LstGpuiApp,
+    MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd,
+    MoveLineStart, MoveLineUp, MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft,
+    MoveSubwordRight, MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab,
+    NextTab, OpenFile, OutdentSelection, PasteClipboard, PrevTab, Quit, Redo, ReplaceAll,
+    ReplaceOne, SaveFile, SaveFileAs, SelectAll, SelectAllOccurrences, SelectDocumentEnd,
+    SelectDocumentStart, SelectDown, SelectLeft, SelectLine, SelectLineEnd, SelectLineStart,
+    SelectNextOccurrence, SelectPageDown, SelectPageUp, SelectParagraph, SelectRight,
+    SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft,
     SelectWordRight, SwapRedoBranch, ToggleBlockComment, ToggleComment, ToggleFindCase,
     ToggleFindInSelection, ToggleFindRegex, ToggleFindWholeWord, ToggleLineNumberMode,
     ToggleRecentFiles, ToggleTheme, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
@@ -73,6 +74,10 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         InsertTab => |model| model.insert_tab_at_cursor();
         OutdentSelection => |model| model.outdent_at_cursor();
         SelectAll => |model| model.select_all();
+        SelectNextOccurrence => |model| model.select_next_occurrence();
+        SelectAllOccurrences => |model| model.select_all_occurrences();
+        AddCursorAbove => |model| model.add_cursor_above();
+        AddCursorBelow => |model| model.add_cursor_below();
         SelectLine => |model| model.select_current_line();
         SelectParagraph => |model| model.select_current_paragraph();
         Undo => |model| model.undo();

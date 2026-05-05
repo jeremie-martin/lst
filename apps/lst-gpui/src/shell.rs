@@ -929,6 +929,21 @@ impl LstGpuiApp {
                 cx.stop_propagation();
                 return;
             }
+
+            // Collapse multi-cursor before handing Esc to Vim. Single-cursor
+            // selections (including Vim Visual) fall through so Vim's own
+            // escape handler can transition modes. Two presses on a
+            // multi-cursor set first collapse extents, then drop secondaries.
+            if !self.model.selection_set().is_single() {
+                let mut collapsed = false;
+                self.update_model(cx, true, |model| {
+                    collapsed = model.collapse_to_primary();
+                });
+                if collapsed {
+                    cx.stop_propagation();
+                    return;
+                }
+            }
         }
 
         let _ = self.maybe_handle_vim_key(event, window, cx);
@@ -977,6 +992,19 @@ impl Render for LstGpuiApp {
             )
         };
         let cursor_line = self.model.active_tab().cursor_position().line;
+        let cursor_lines: Vec<usize> = {
+            let tab = self.model.active_tab();
+            let buffer = tab.buffer();
+            let mut lines: Vec<usize> = tab
+                .selection_set()
+                .as_slice()
+                .iter()
+                .map(|selection| buffer.char_to_line(selection.head().min(buffer.len_chars())))
+                .collect();
+            lines.sort_unstable();
+            lines.dedup();
+            lines
+        };
         let line_texts = self.model.active_tab_lines();
         let total_content_height = {
             let mut cache = active_cache.borrow_mut();
@@ -1135,6 +1163,8 @@ impl Render for LstGpuiApp {
                                                                                 show_gutter,
                                                                                 gutter_mode,
                                                                                 cursor_line,
+                                                                                cursor_lines:
+                                                                                    &cursor_lines,
                                                                                 show_wrap,
                                                                                 viewport_scroll:
                                                                                     &viewport_scroll,

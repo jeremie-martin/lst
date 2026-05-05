@@ -136,6 +136,41 @@ impl SelectionSet {
         self.selections.len() > 1
     }
 
+    pub(crate) fn with_added_selection(&self, selection: Selection) -> Self {
+        self.with_added_selections([selection])
+    }
+
+    /// Returns a set with `additions` merged in. The most recently added
+    /// selection becomes primary; on overlap with an existing selection the
+    /// addition is silently dropped and the original set is returned, so
+    /// callers can safely ignore "no change" results. Duplicate collapsed
+    /// cursors are coalesced.
+    pub(crate) fn with_added_selections<I>(&self, additions: I) -> Self
+    where
+        I: IntoIterator<Item = Selection>,
+    {
+        let mut selections: Vec<(Selection, SelectionOrigin)> = self
+            .selections
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, selection)| {
+                let origin = if index == self.primary {
+                    SelectionOrigin::ExistingPrimary
+                } else {
+                    SelectionOrigin::Existing
+                };
+                (selection, origin)
+            })
+            .collect();
+        selections.extend(
+            additions
+                .into_iter()
+                .map(|selection| (selection, SelectionOrigin::Added)),
+        );
+        Self::from_unordered_intent(selections).unwrap_or_else(|| self.clone())
+    }
+
     pub(crate) fn from_selections_coalescing_cursors(
         selections: Vec<Selection>,
         primary: usize,
@@ -166,10 +201,65 @@ impl SelectionSet {
         Self::from_selections(coalesced, primary)
     }
 
+    fn from_unordered_intent(mut selections: Vec<(Selection, SelectionOrigin)>) -> Option<Self> {
+        if selections.is_empty() {
+            return None;
+        }
+        selections.sort_by_key(|(selection, origin)| {
+            let range = selection.range();
+            (range.start, range.end, origin.sort_key())
+        });
+
+        let added_index = selections
+            .iter()
+            .rposition(|(_, origin)| *origin == SelectionOrigin::Added);
+        if let Some(added_index) = added_index {
+            if selection_overlaps_neighbor(&selections, added_index) {
+                return None;
+            }
+        }
+
+        let primary = added_index
+            .or_else(|| {
+                selections
+                    .iter()
+                    .position(|(_, origin)| *origin == SelectionOrigin::ExistingPrimary)
+            })
+            .unwrap_or(0);
+        let selections: Vec<Selection> = selections
+            .into_iter()
+            .map(|(selection, _)| selection)
+            .collect();
+        Self::from_selections_coalescing_cursors(selections, primary).ok()
+    }
+
     pub(crate) fn set_single(&mut self, selection: Selection) {
         self.selections.clear();
         self.selections.push(selection);
         self.primary = 0;
+    }
+
+    /// Returns a set with the selection at `index` removed. Returns `None`
+    /// when the removal would empty the set (single-selection case) or the
+    /// index is out of range. When the primary is removed, the next
+    /// selection takes over (or the previous one if removing the last).
+    pub(crate) fn with_removed_at(&self, index: usize) -> Option<Self> {
+        if index >= self.selections.len() || self.selections.len() <= 1 {
+            return None;
+        }
+        let mut selections = self.selections.clone();
+        selections.remove(index);
+        let primary = if self.primary == index {
+            index.min(selections.len() - 1)
+        } else if self.primary > index {
+            self.primary - 1
+        } else {
+            self.primary
+        };
+        Some(Self {
+            selections,
+            primary,
+        })
     }
 
     pub(crate) fn clamped_to_len(&self, len: usize) -> Self {
@@ -181,6 +271,52 @@ impl SelectionSet {
         Self::from_selections_coalescing_cursors(selections, self.primary)
             .expect("clamping a valid selection set preserves selection-set invariants")
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionOrigin {
+    Existing,
+    ExistingPrimary,
+    Added,
+}
+
+impl SelectionOrigin {
+    fn sort_key(self) -> u8 {
+        match self {
+            Self::Existing => 0,
+            Self::ExistingPrimary => 1,
+            Self::Added => 2,
+        }
+    }
+}
+
+fn selection_overlaps_neighbor(selections: &[(Selection, SelectionOrigin)], index: usize) -> bool {
+    let selection = selections[index].0;
+    let range = selection.range();
+    if index > 0 {
+        let previous = selections[index - 1].0;
+        let previous_range = previous.range();
+        if previous_range.end > range.start || previous_range == range {
+            if selection_duplicate_collapsed_cursor(selection, previous) {
+                return false;
+            }
+            return true;
+        }
+    }
+    if let Some((next, _)) = selections.get(index + 1) {
+        let next_range = next.range();
+        if range.end > next_range.start || range == next_range {
+            if selection_duplicate_collapsed_cursor(selection, *next) {
+                return false;
+            }
+            return true;
+        }
+    }
+    false
+}
+
+fn selection_duplicate_collapsed_cursor(left: Selection, right: Selection) -> bool {
+    !left.has_selection() && !right.has_selection() && left.cursor() == right.cursor()
 }
 
 fn validate_primary(selections: &[Selection], primary: usize) -> Result<(), SelectionSetError> {
@@ -799,6 +935,11 @@ pub(crate) fn display_line_char_len(buffer: &Rope, line_ix: usize) -> usize {
         .chars()
         .take_while(|ch| *ch != '\n' && *ch != '\r')
         .count()
+}
+
+pub(crate) fn char_at_line_column(buffer: &Rope, line_ix: usize, column: usize) -> usize {
+    let line = line_ix.min(buffer.len_lines().saturating_sub(1));
+    buffer.line_to_char(line) + column.min(display_line_char_len(buffer, line))
 }
 
 #[cfg(test)]

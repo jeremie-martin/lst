@@ -51,11 +51,16 @@ impl GutterMode {
         }
     }
 
-    pub fn format(self, line_ix: usize, cursor_line: usize) -> String {
+    /// Formats the gutter label for `line_ix`. `cursor_line` anchors
+    /// Relative mode (distance is measured from the primary cursor's
+    /// line); `cursor_lines` lists every line that hosts a cursor head
+    /// (sorted, may contain just `cursor_line`) so Hybrid mode can mark
+    /// each multi-cursor row with its absolute number.
+    pub fn format(self, line_ix: usize, cursor_line: usize, cursor_lines: &[usize]) -> String {
         match self {
             Self::Absolute => format!("{:>3}", line_ix + 1),
             Self::Relative => format!("{:>3}", line_ix.abs_diff(cursor_line)),
-            Self::Hybrid if line_ix == cursor_line => format!("{:>3}", line_ix + 1),
+            Self::Hybrid if cursor_lines.contains(&line_ix) => format!("{:>3}", line_ix + 1),
             Self::Hybrid => format!("{:>3}", line_ix.abs_diff(cursor_line)),
         }
     }
@@ -69,9 +74,10 @@ use crate::{
     find::{FindScope, FindState, MatchPos},
     position::Position,
     selection::{
-        display_line_char_len as buffer_display_line_char_len, line_range_at_char,
-        next_grapheme_boundary, next_subword_boundary, next_word_boundary, paragraph_range_at_char,
-        previous_grapheme_boundary, previous_subword_boundary, previous_word_boundary,
+        char_at_line_column, display_line_char_len as buffer_display_line_char_len,
+        line_range_at_char, next_grapheme_boundary, next_subword_boundary, next_word_boundary,
+        paragraph_range_at_char, previous_grapheme_boundary, previous_subword_boundary,
+        previous_word_boundary, word_range_at_char,
     },
     tab_set::TabSet,
     transaction::{EditOutcome, EditRequest},
@@ -615,6 +621,12 @@ impl EditorModel {
         true
     }
 
+    /// Programmatic replacement entry point. Multi-cursor distributes the same
+    /// `text` to every selection; auto-pair semantics are intentionally NOT
+    /// applied here (callers like `paste_text`, `insert_newline`, and
+    /// `insert_tab_at_cursor` want literal insertion). Keyboard input goes
+    /// through `apply_text_input` instead, which dispatches multi-cursor
+    /// auto-pair handlers before falling through to the same plain replacement.
     pub fn replace_text(
         &mut self,
         range: Option<Range<usize>>,
@@ -1098,17 +1110,49 @@ impl EditorModel {
     }
 
     fn insert_newline(&mut self) {
-        let (newline, indent) = {
+        let newline = preferred_newline_for_active_tab(self.active_tab());
+
+        // Multi-cursor: each cursor inherits its own line's indent.
+        // `replacement_request_by_index` returns `None` during IME
+        // composition or for single-selection sets, so the
+        // `if let Some(request)` falls through to single-cursor in those
+        // cases without us re-checking those conditions here.
+        let replacements: Vec<String> = {
             let tab = self.active_tab();
-            let line = tab
-                .buffer()
-                .char_to_line(tab.cursor_char().min(tab.len_chars()));
-            (
-                preferred_newline_for_active_tab(tab),
-                line_indent_prefix(tab.buffer(), line),
-            )
+            let buffer = tab.buffer();
+            let len_chars = tab.len_chars();
+            tab.selection_set()
+                .as_slice()
+                .iter()
+                .map(|selection| {
+                    // Sample indent from the selection's range start —
+                    // that's where the newline lands after the selection
+                    // is deleted, regardless of cursor direction. Using
+                    // `cursor()` would pull the wrong line for reverse-
+                    // direction selections.
+                    let line = buffer.char_to_line(selection.range().start.min(len_chars));
+                    format!("{newline}{}", line_indent_prefix(buffer, line))
+                })
+                .collect()
         };
-        self.replace_text(None, format!("{newline}{indent}"), UndoBoundary::Break);
+        let request = multi_selection::replacement_request_by_index(
+            self.active_tab(),
+            |index| replacements[index].clone(),
+            UndoBoundary::Break,
+        );
+        if let Some(request) = request {
+            self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+            return;
+        }
+
+        // Primary's range start is the active selection's range start; the
+        // pre-built `replacements[primary]` already carries the right
+        // newline + indent for the single-cursor / IME path.
+        let primary_replacement = replacements
+            .get(self.active_tab().selection_set().primary_index())
+            .cloned()
+            .unwrap_or_else(|| newline.to_string());
+        self.replace_text(None, primary_replacement, UndoBoundary::Break);
     }
 
     fn selection_or_current_line(&self) -> (Range<usize>, String, bool) {
@@ -1124,12 +1168,20 @@ impl EditorModel {
     }
 
     pub fn copy_selection(&mut self) {
+        if let Some(text) = multi_selection::selected_text_joined(self.active_tab()) {
+            if text.is_empty() {
+                return;
+            }
+            self.queue_clipboard_copy(text);
+            self.status = "Copied selections.".to_string();
+            return;
+        }
+
         let (_range, text, whole_line) = self.selection_or_current_line();
         if text.is_empty() {
             return;
         }
-        self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
-        self.queue_effect(EditorEffect::WritePrimary(text));
+        self.queue_clipboard_copy(text);
         self.status = if whole_line {
             "Copied line.".to_string()
         } else {
@@ -1138,18 +1190,35 @@ impl EditorModel {
     }
 
     pub fn cut_selection(&mut self) {
+        if let Some(text) = multi_selection::selected_text_joined(self.active_tab()) {
+            if text.is_empty() {
+                return;
+            }
+            self.queue_clipboard_copy(text);
+            let deleted =
+                self.apply_multi_selection_delete(UndoBoundary::Break, |_tab, _cursor| None);
+            if deleted {
+                self.status = "Cut selections.".to_string();
+            }
+            return;
+        }
+
         let (range, text, whole_line) = self.selection_or_current_line();
         if text.is_empty() {
             return;
         }
-        self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
-        self.queue_effect(EditorEffect::WritePrimary(text));
+        self.queue_clipboard_copy(text);
         self.apply_single_text_edit(EditKind::Delete, UndoBoundary::Break, range, "");
         self.status = if whole_line {
             "Cut line.".to_string()
         } else {
             "Cut selection.".to_string()
         };
+    }
+
+    fn queue_clipboard_copy(&mut self, text: String) {
+        self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
+        self.queue_effect(EditorEffect::WritePrimary(text));
     }
 
     fn vim_snapshot(&mut self) -> vim::TextSnapshot {
@@ -1635,9 +1704,6 @@ impl EditorModel {
         text: String,
         boundary: UndoBoundary,
     ) {
-        if range.is_none() && self.apply_multi_selection_replacement(text.clone(), boundary) {
-            return;
-        }
         match text_input::edit_action(self.active_tab(), range, text, boundary) {
             text_input::TextInputAction::MoveCursor(new_cursor) => {
                 self.assign_selection(Selection::collapsed(new_cursor));
@@ -1888,6 +1954,177 @@ impl EditorModel {
         self.active_tab().selection_set()
     }
 
+    /// Collapses multi-cursor / extended-selection state toward a single
+    /// caret. Stage 1: any selection with extent collapses to its head,
+    /// keeping every cursor; otherwise, stage 2 drops every secondary
+    /// cursor and keeps only the primary. Two presses of Esc therefore
+    /// always reach a single collapsed cursor.
+    pub fn collapse_to_primary(&mut self) -> bool {
+        let set = self.active_tab().selection_set();
+        let any_extent = set.as_slice().iter().any(Selection::has_selection);
+        if any_extent {
+            let collapsed: Vec<Selection> = set
+                .as_slice()
+                .iter()
+                .map(|selection| Selection::collapsed(selection.cursor()))
+                .collect();
+            let primary = set.primary_index();
+            let next = SelectionSet::from_selections_coalescing_cursors(collapsed, primary)
+                .expect("collapsing each selection to a caret preserves invariants");
+            self.active_tab_mut().set_selection_set(next);
+            self.queue_reveal(RevealIntent::NearestEdge);
+            return true;
+        }
+        if set.has_multiple() {
+            let primary = set.primary();
+            self.active_tab_mut()
+                .set_selection_set(SelectionSet::single(primary));
+            self.queue_reveal(RevealIntent::NearestEdge);
+            return true;
+        }
+        false
+    }
+
+    pub fn add_cursor_at_char(&mut self, offset: usize) {
+        let offset = offset.min(self.active_tab().len_chars());
+        self.add_selection_to_active_set(Selection::collapsed(offset));
+    }
+
+    /// Removes the selection whose range contains (or whose cursor sits at)
+    /// `offset`. Returns `true` when a removal happened. Refuses to remove
+    /// when the set has a single selection so the model invariant
+    /// "non-empty `SelectionSet`" is preserved — alt-click on the only
+    /// cursor is a no-op rather than a collapse.
+    pub fn remove_cursor_at_char(&mut self, offset: usize) -> bool {
+        let offset = offset.min(self.active_tab().len_chars());
+        let set = self.active_tab().selection_set();
+        if !set.has_multiple() {
+            return false;
+        }
+        let index = set.as_slice().iter().position(|selection| {
+            let range = selection.range();
+            selection.cursor() == offset || (range.start <= offset && offset < range.end)
+        });
+        let Some(index) = index else {
+            return false;
+        };
+        let Some(after) = set.with_removed_at(index) else {
+            return false;
+        };
+        self.active_tab_mut().set_selection_set(after);
+        self.queue_reveal(RevealIntent::NearestEdge);
+        true
+    }
+
+    pub fn add_selection_range(&mut self, range: Range<usize>, reversed: bool) {
+        let len = self.active_tab().len_chars();
+        let range = range.start.min(len)..range.end.min(len);
+        self.add_selection_to_active_set(Selection::from_range(range, reversed));
+    }
+
+    fn add_selection_to_active_set(&mut self, selection: Selection) {
+        let before = self.active_tab().selection_set().clone();
+        let after = before.with_added_selection(selection);
+        if after != before {
+            self.active_tab_mut().set_selection_set(after);
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    pub fn add_cursor_above(&mut self) {
+        self.add_cursor_on_adjacent_line(-1);
+    }
+
+    pub fn add_cursor_below(&mut self) {
+        self.add_cursor_on_adjacent_line(1);
+    }
+
+    fn add_cursor_on_adjacent_line(&mut self, delta: isize) {
+        let (additions, preferred_column) = {
+            let tab = self.active_tab();
+            let use_primary_preferred_column = !tab.selection_set().has_multiple();
+            let primary_preferred = tab
+                .preferred_column()
+                .unwrap_or_else(|| tab.cursor_position().column);
+            let last_line = tab.line_count().saturating_sub(1);
+            let additions: Vec<Selection> = tab
+                .selection_set()
+                .as_slice()
+                .iter()
+                .filter_map(|selection| {
+                    let position = char_to_position(tab.buffer(), selection.cursor());
+                    let target_line = if delta.is_negative() {
+                        position.line.checked_sub(delta.unsigned_abs())?
+                    } else {
+                        (position.line + delta as usize <= last_line)
+                            .then_some(position.line + delta as usize)?
+                    };
+                    let column = if use_primary_preferred_column {
+                        primary_preferred
+                    } else {
+                        position.column
+                    };
+                    let target = char_at_line_column(tab.buffer(), target_line, column);
+                    Some(Selection::collapsed(target))
+                })
+                .collect();
+            (
+                additions,
+                use_primary_preferred_column.then_some(primary_preferred),
+            )
+        };
+        if additions.is_empty() {
+            return;
+        }
+
+        let before = self.active_tab().selection_set().clone();
+        let after = before.with_added_selections(additions);
+        if after != before {
+            let tab = self.active_tab_mut();
+            tab.set_selection_set(after);
+            tab.set_preferred_column(preferred_column);
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    pub fn set_rectangular_column_selection(&mut self, anchor: usize, head: usize) {
+        let Some(selection_set) =
+            multi_selection::rectangular_selection_set(self.active_tab(), anchor, head)
+        else {
+            return;
+        };
+        if *self.active_tab().selection_set() != selection_set {
+            self.active_tab_mut().set_selection_set(selection_set);
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    pub fn select_next_occurrence(&mut self) {
+        let tab = self.active_tab();
+        if !tab.selection().has_selection() {
+            let range = word_range_at_char(tab.buffer(), tab.cursor_char());
+            if range.start == range.end {
+                return;
+            }
+            self.assign_selection(Selection::from_range(range, false));
+            self.queue_reveal(RevealIntent::NearestEdge);
+            return;
+        }
+        if let Some(selection) = multi_selection::next_occurrence_addition(tab, &self.find) {
+            self.add_selection_to_active_set(selection);
+        }
+    }
+
+    pub fn select_all_occurrences(&mut self) {
+        let Some(selection_set) =
+            multi_selection::all_occurrences_set(self.active_tab(), &self.find)
+        else {
+            return;
+        };
+        self.active_tab_mut().set_selection_set(selection_set);
+        self.queue_reveal(RevealIntent::NearestEdge);
+    }
+
     pub fn select_current_line(&mut self) {
         let tab = self.active_tab();
         let range = line_range_at_char(tab.buffer(), tab.cursor_char());
@@ -2029,7 +2266,13 @@ impl EditorModel {
     }
 
     pub fn paste_text(&mut self, text: String) {
-        self.replace_text(None, text.clone(), UndoBoundary::Break);
+        if let Some(request) =
+            multi_selection::paste_request(self.active_tab(), text.clone(), UndoBoundary::Break)
+        {
+            self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        } else {
+            self.replace_text(None, text.clone(), UndoBoundary::Break);
+        }
         self.status = format!("Pasted {} line(s).", text.lines().count());
     }
 
@@ -2277,12 +2520,22 @@ mod tests {
 
     #[test]
     fn gutter_mode_renders_each_kind() {
-        assert_eq!(GutterMode::Absolute.format(4, 7), "  5");
-        assert_eq!(GutterMode::Relative.format(4, 7), "  3");
-        assert_eq!(GutterMode::Relative.format(7, 4), "  3");
+        assert_eq!(GutterMode::Absolute.format(4, 7, &[7]), "  5");
+        assert_eq!(GutterMode::Relative.format(4, 7, &[7]), "  3");
+        assert_eq!(GutterMode::Relative.format(7, 4, &[4]), "  3");
         // Hybrid: cursor row shows the absolute number, others show distance.
-        assert_eq!(GutterMode::Hybrid.format(7, 7), "  8");
-        assert_eq!(GutterMode::Hybrid.format(2, 7), "  5");
+        assert_eq!(GutterMode::Hybrid.format(7, 7, &[7]), "  8");
+        assert_eq!(GutterMode::Hybrid.format(2, 7, &[7]), "  5");
+    }
+
+    #[test]
+    fn hybrid_gutter_mode_marks_every_multi_cursor_line() {
+        // With cursors on lines 2 and 5, Hybrid shows the absolute number
+        // on each cursor row and the distance-from-primary elsewhere.
+        let cursor_lines = [2usize, 5];
+        assert_eq!(GutterMode::Hybrid.format(2, 5, &cursor_lines), "  3");
+        assert_eq!(GutterMode::Hybrid.format(5, 5, &cursor_lines), "  6");
+        assert_eq!(GutterMode::Hybrid.format(4, 5, &cursor_lines), "  1");
     }
 
     #[test]

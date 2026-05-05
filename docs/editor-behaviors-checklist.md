@@ -5,7 +5,7 @@ implement. Use this as an audit checklist for the GPUI editor.
 
 Status legend: `[ ]` not implemented · `[~]` partial · `[x]` done
 
-Status last refreshed: 2026-05-04.
+Status last refreshed: 2026-05-05 (after multi-cursor easy-wins clusters).
 
 References use `path::symbol` rather than `path:line` so they survive
 reorganization. Grep for the symbol to navigate.
@@ -42,8 +42,138 @@ reorganization. Grep for the symbol to navigate.
 - [ ] **Column / block selection** (Alt+drag)
 - [x] **Select all** (`crates/lst-editor/src/tab.rs::EditorTab::select_all`)
 - [ ] **Expand selection to enclosing scope** (smart select)
-- [~] **Multi-cursor** — model-level `SelectionSet` is validated as non-empty, ordered, and non-overlapping, and batch outputs coalesce duplicate collapsed cursors while preserving the primary selection. Current model policy: literal text replacement, paste, backspace, delete-forward, and word delete apply to all selections; auto-pair/dedent/overtype remain single-cursor text-input policy; plain movement collapses to the primary cursor; line/Vim/find operations remain primary-selection commands. GPUI now paints multiple selections/cursors, while creation gestures are still future work (`crates/lst-editor/src/selection.rs::SelectionSet`, `::from_selections_coalescing_cursors`; `crates/lst-editor/src/multi_selection.rs::replacement_request`, `::delete_request`; `crates/lst-editor/src/transaction.rs::SelectionAfter::Exact`, `::TextChangeSet::new`; `crates/lst-editor/src/lib.rs::set_selection_set`; `apps/lst-gpui/src/viewport.rs::ViewportPaintInput`)
+- [~] **Multi-cursor / multi-selection** — see the dedicated [Multi-Cursor & Multi-Selection](#multi-cursor--multi-selection) section for the full breakdown. Model foundation, multi-cursor text input (insert / delete / auto-pair / surround / overtype / smart-Enter-per-cursor / paste-distribute / cut-copy round-trip / column-mode), atomic batch edits, undo restoration, IME isolation, find-flag-aware Ctrl-D / Ctrl-Shift-L, Alt-click toggle on/off, Ctrl-Alt-Up/Down, Esc collapse, multi-cursor-aware status bar and gutter, and a head caret on every selection are all wired. Plain motion, line / Vim / find-scope / indent / comment / line-edit ops still collapse to the primary; remaining creation-gesture polish (Ctrl-U history, Ctrl-K Ctrl-D skip, Shift-Alt-I, dedicated F2-style word-occurrence binding) and per-cursor goal column / anchor-direction survival are open.
 - [x] **Select line / select paragraph** — triple-click selects the line and quad-click the paragraph; Vim `V` and text objects cover both; non-Vim keyboard actions `SelectLine` (`ctrl/cmd-l`) and `SelectParagraph` (`ctrl/cmd-shift-p`) call `EditorModel::select_current_line` / `::select_current_paragraph` (`apps/lst-gpui/src/interactions.rs::on_mouse_down`; `crates/lst-editor/src/lib.rs::select_current_line`, `::select_current_paragraph`; `apps/lst-gpui/src/keymap.rs` `SelectLine` / `SelectParagraph` bindings)
+
+## Multi-Cursor & Multi-Selection
+
+State-of-the-art multi-cursor (VSCode-grade) is more than painting N carets.
+The model-level foundation already enforces a normalized `SelectionSet`
+(non-empty, ordered, non-overlapping) and batch text operations route through
+`TextChangeSet` so multi-selection edits commit atomically
+(`crates/lst-editor/src/selection.rs::SelectionSet`,
+`::from_selections_coalescing_cursors`;
+`crates/lst-editor/src/transaction.rs::TextChangeSet`;
+`crates/lst-editor/src/multi_selection.rs::replacement_request`,
+`::delete_request`;
+`crates/lst-editor/src/lib.rs::set_selection_set`;
+`apps/lst-gpui/src/viewport.rs::ViewportPaintInput`).
+
+Today, the multi-cursor *text-input* path is broad — literal insert,
+backspace, delete-forward, word-delete, auto-pair / surround / overtype /
+auto-dedent, IME-aware short-circuit, smart-Enter-per-cursor, paste (with
+line-count distribution), and cut / copy round-tripping all iterate the
+selection set through a single `TextChangeSet`. Cursor-add gestures
+(Alt-click with toggle, Ctrl-Alt-Up/Down, Ctrl-D and Ctrl-Shift-L with
+find-flag awareness) and Esc-collapse round out the *interaction* path.
+The collapse-to-primary boundaries lie elsewhere: every plain motion
+(`tab.move_to` / `select_to` route through `SelectionSet::set_single`),
+every line- / Vim- / find-scope- / indent- / comment- / line-edit op, and
+column-mode is still bound to plain Alt-drag rather than the canonical
+Shift-Alt-drag. The items below break down the full surface area this
+section is meant to drive to completion.
+
+### Cursor Set Invariants
+
+- [x] **Normalized after every change** — sorted by position, no overlaps, never empty; duplicate collapsed cursors coalesce (`crates/lst-editor/src/selection.rs::SelectionSet`, `::from_selections_coalescing_cursors`)
+- [x] **Atomic batch edits** — every multi-cursor text op compiles to a single `TextChangeSet` so positions stay consistent across all cursors (`crates/lst-editor/src/transaction.rs::TextChangeSet`, `::SelectionAfter::Exact`)
+- [x] **Stable primary identity** — the primary cursor survives normalization and batch edits
+- [ ] **Per-cursor goal column** — each cursor remembers its own preferred column across vertical motion (today only the primary cursor has `preferred_column`)
+- [~] **Per-cursor anchor / head direction** — `Selection` carries distinct `anchor` / `head` and `is_reversed`, but every multi-cursor batch edit lands each cursor as `Selection::collapsed(...)` (`crates/lst-editor/src/multi_selection.rs::replacement_request`, `::delete_request`), so reverse-direction selections do not survive an edit
+- [x] **Single undo step per multi-cursor op** — `HistorySnapshot { text, selection: SelectionSet }`; `apply_edit_request` records exactly one snapshot per `EditRequest`, so multi-cursor edits collapse to one undo entry and undo restores the full `SelectionSet` (`crates/lst-editor/src/history.rs::HistorySnapshot`; `crates/lst-editor/src/tab.rs::apply_edit_request`)
+
+### Cursor Creation Gestures
+
+- [x] **Alt-click adds / removes** a cursor at the click point (toggle on existing) — single Alt-click on a point already covered by a multi-cursor selection drops that cursor via `SelectionSet::with_removed_at`; otherwise the existing add path runs. Refuses to empty the set (single-selection sets are a no-op) (`apps/lst-gpui/src/interactions.rs::on_mouse_down`; `crates/lst-editor/src/lib.rs::remove_cursor_at_char`; `crates/lst-editor/src/selection.rs::SelectionSet::with_removed_at`)
+- [x] **Ctrl-Alt-Up / Ctrl-Alt-Down** add a cursor on the adjacent line at the active visual column (`apps/lst-gpui/src/keymap.rs` `ctrl-alt-up`/`down` → `AddCursorAbove`/`Below`; `crates/lst-editor/src/lib.rs::add_cursor_above`, `::add_cursor_below`, `::add_cursor_on_adjacent_line`)
+- [x] **Ctrl-D adds next occurrence** of the current word/selection — `multi_selection::occurrence_ranges` builds a regex via `find::build_query_regex` so the find panel's case / whole-word / smart-case flags apply. The selection itself is always treated literally (find's regex flag is intentionally ignored — there is no independent pattern to interpret) (`apps/lst-gpui/src/keymap.rs` `ctrl-d` → `SelectNextOccurrence`; `crates/lst-editor/src/lib.rs::select_next_occurrence`; `crates/lst-editor/src/multi_selection.rs::next_occurrence_addition`, `::occurrence_ranges`; `crates/lst-editor/src/find.rs::build_query_regex`)
+- [ ] **Ctrl-K Ctrl-D skips the current match** and adds the next
+- [x] **Ctrl-Shift-L selects all occurrences** of the current selection — same `find::build_query_regex` wiring as Ctrl-D, so case / whole-word / smart-case flags apply to file-wide cursor adds (`crates/lst-editor/src/lib.rs::select_all_occurrences`; `crates/lst-editor/src/multi_selection.rs::all_occurrences_set`)
+- [~] **Select all occurrences of word under cursor** (file-wide, e.g. Ctrl-F2) — Ctrl-Shift-L with no selection falls back to `word_range_at_char` and now honours find flags via `build_query_regex`; no dedicated F2-style binding yet (`crates/lst-editor/src/multi_selection.rs::occurrence_query`)
+- [ ] **Add cursor at end of every line in selection** (Shift-Alt-I)
+- [ ] **Ctrl-U pops the last-added cursor** (cursor-history stack — important for undoing overshoot of Ctrl-D)
+- [x] **Esc collapses** — clear non-empty selections first, then drop secondary cursors. Routes through `shell.rs::on_key_down` (after panel-dismiss handling, before vim escape) so two presses always reach a single collapsed cursor; nothing-to-collapse falls through to vim escape (`apps/lst-gpui/src/shell.rs::on_key_down`; `crates/lst-editor/src/lib.rs::collapse_to_primary`)
+- [x] **Click without modifier collapses** to a single cursor at the click point — `on_mouse_down` without alt routes through `move_to_char` / `set_selection`, both of which call `SelectionSet::set_single` (`apps/lst-gpui/src/interactions.rs::on_mouse_down`; `crates/lst-editor/src/selection.rs::SelectionSet::set_single`)
+
+### Per-Cursor Movement
+
+- [ ] **All horizontal motions per cursor** — char, word, subword, line-boundary, smart Home
+- [ ] **All vertical motions per cursor** — line, page, half-page, document edges
+- [ ] **Shift-extend per cursor** — every cursor's head moves independently
+- [ ] **Smart-expand / smart-shrink per cursor** — once smart-select lands, it must apply per cursor
+
+### Per-Cursor Editing
+
+- [x] **Literal text insert** applies at every cursor (`crates/lst-editor/src/multi_selection.rs::replacement_request`)
+- [x] **Backspace / delete-forward** apply at every cursor (`crates/lst-editor/src/multi_selection.rs::delete_request`)
+- [x] **Word delete** applies at every cursor
+- [x] **Auto-pair brackets / quotes** apply at every cursor — `multi_edit_action` builds a `multi_request` with `auto_pair_insert_edit` per selection; all-or-nothing (defers if any selection rejects) (`crates/lst-editor/src/text_input.rs::multi_edit_action`, `::auto_pair_insert_edit`)
+- [x] **Auto-pair surround** wraps every non-empty selection — same `multi_request` machinery using `auto_pair_surround_edit` per selection (`crates/lst-editor/src/text_input.rs::multi_edit_action`, `::auto_pair_surround_edit`)
+- [x] **Auto-dedent on close bracket** applies at every cursor — per-selection `auto_dedent_close_brace_range` participates in the same `multi_request` (`crates/lst-editor/src/text_input.rs::multi_edit_action`, `::auto_dedent_close_brace_range`)
+- [x] **Overtype mode** applies at every cursor — `auto_pair_overtype_cursor` per selection with `MultiSelectionAfter::AbsoluteCursor` for caret placement (`crates/lst-editor/src/text_input.rs::multi_edit_action`, `::auto_pair_overtype_cursor`)
+- [x] **Smart Enter / auto-indent** applies at every cursor — `insert_newline` builds per-cursor newline + indent strings via `multi_selection::replacement_request_by_index`, computing `line_indent_prefix` from each cursor's own line so differently-indented cursors all get the right prefix (`crates/lst-editor/src/lib.rs::insert_newline`; `crates/lst-editor/src/multi_selection.rs::replacement_request_by_index`)
+- [ ] **Indent / outdent** coalesces by line (two cursors on one line do not double-indent)
+- [ ] **Toggle line / block comment** coalesces by line
+- [ ] **Move line up / down** coalesces contiguous cursor clusters
+- [ ] **Duplicate line / selection** applies per cursor
+- [ ] **Delete line** coalesces by line
+- [ ] **Join lines** applies per cursor cluster
+- [ ] **Transpose / case conversion / sort** applies per cursor
+- [ ] **Snippet tabstops** produce one cursor per `$N`; Tab walks tabstops in lockstep
+
+### Clipboard Semantics
+
+- [x] **Paste broadcasts** the clipboard to every cursor when there is a single fragment
+- [x] **Paste distributes by line count** — if the clipboard has exactly N lines and there are N cursors, paste one line per cursor; otherwise broadcast (the canonical VSCode round-trip) (`crates/lst-editor/src/multi_selection.rs::paste_request`, `::clipboard_lines_for_distribution`)
+- [x] **Cut / copy collects per cursor** — one fragment per cursor in document order, joined by `\n`; cut also routes through `apply_multi_selection_delete` to remove every selection (`crates/lst-editor/src/multi_selection.rs::selected_text_joined`; `crates/lst-editor/src/lib.rs::copy_selection`, `::cut_selection`)
+- [x] **Copy → paste round-trip identity** — `selected_text_joined` emits an empty fragment for cursor-only selections instead of filtering them, so the clipboard always has exactly one line per selection. Pasting back into the same set rides `paste_request`'s line-count equality branch and reproduces the original layout (`crates/lst-editor/src/multi_selection.rs::selected_text_joined`, `::paste_request`)
+
+### Search & Replace Integration
+
+- [ ] **Find scope honours multi-selection** — `FindScope::Selection` covers every active selection, not just the primary
+- [ ] **Replace-all in selection** respects the multi-selection set
+- [x] **Cursor-add gestures read find flags** — Ctrl-D / Ctrl-Shift-L call into `find::build_query_regex` with the active `FindState`'s case / whole-word / smart-case flags (`use_regex` is intentionally not honoured — the selection is always treated literally)
+
+### Mouse Gestures
+
+- [x] **Alt-click toggle** — add a cursor, or remove if one already exists at that point (see [Cursor Creation Gestures](#cursor-creation-gestures) for the full reference)
+- [~] **Alt-drag** adds an additional selection without disturbing existing ones — Alt-drag currently starts `DragSelectionMode::Column`, producing a rectangular selection rather than a free-form additive range (`apps/lst-gpui/src/interactions.rs::on_mouse_down`, `::apply_drag_selection_at_point`)
+- [ ] **Shift-Alt-drag** column / box selection (one cursor per line of the rectangle)
+- [ ] **Middle-click drag** as alternate column-select (platform-dependent)
+- [ ] **Drag extends only the cursor under the mouse**, leaving the rest intact
+
+### Visual Feedback
+
+- [x] **All selections painted** (`apps/lst-gpui/src/viewport.rs::ViewportPaintInput`)
+- [x] **All cursors painted** — `paint_viewport` iterates `paint_cursors`, which emits one `PaintCursor` per selection. Collapsed cursors take the wide block-cursor in Vim Normal; selections-with-extent get a thin caret on their head over the range fill (`apps/lst-gpui/src/viewport.rs::paint_cursors`, `::paint_viewport`)
+- [ ] **All cursors blink in phase** (depends on cursor-blink work under [Rendering & Viewport](#rendering--viewport))
+- [ ] **Primary-cursor distinction** — subtle visual differentiation (used as the reveal-on-scroll target)
+- [~] **Reveal targets the primary** (or last-moved) cursor on movement — reveal uses `tab.cursor_char()` (primary head); adequate while motions collapse to primary, but no notion of "last-moved" once per-cursor motion lands (`apps/lst-gpui/src/main.rs::active_cursor_visual_row`, `::try_reveal_active_cursor`)
+- [ ] **Off-screen-cursor indicator** — gutter/edge marker when cursors exist outside the viewport
+- [x] **Gutter marker for cursor-bearing lines** — `ViewportPreparation::cursor_lines` lists every line whose selection head lives on it (sorted, deduped). Hybrid mode shows the absolute number on every cursor row instead of just the primary; Relative still anchors on the primary cursor's line (`apps/lst-gpui/src/viewport.rs::ViewportPreparation`; `crates/lst-editor/src/lib.rs::GutterMode::format`; `apps/lst-gpui/src/shell.rs` cursor_lines computation)
+- [x] **Status-bar metrics** — `selection_summary` reports `N cursors · Sel M · K lines` whenever the selection set has multiple selections; falls back to the single-selection `Sel M` summary otherwise (`apps/lst-gpui/src/main.rs::selection_summary`, `::status_details`)
+
+### Column / Box Selection
+
+This block subsumes the standalone "Column / block selection" line under
+[Selection](#selection).
+
+- [~] **Shift-Alt-drag** creates a rectangular selection — the rectangle exists, but it is currently bound to plain Alt-drag, not Shift-Alt-drag; the spec gesture as such is not wired (`apps/lst-gpui/src/interactions.rs::on_mouse_down`; `crates/lst-editor/src/lib.rs::set_rectangular_column_selection`; `crates/lst-editor/src/multi_selection.rs::rectangular_selection_set`)
+- [ ] **Ctrl-Shift-Alt-arrow** extends column selection by row / column
+- [x] **Defined short-line policy** — `rectangular_selection_set` clamps via `char_at_line_column`, so lines shorter than `start_column` collapse to a cursor at line end and duplicates coalesce through `from_selections_coalescing_cursors` (`crates/lst-editor/src/multi_selection.rs::rectangular_selection_set`; `crates/lst-editor/src/selection.rs::char_at_line_column`)
+- [x] **Insert in column mode** inserts at every column-aligned position — column selections are ordinary `SelectionSet`s, so multi-selection replacement applies directly (`crates/lst-editor/src/lib.rs::replace_text`; `crates/lst-editor/src/multi_selection.rs::replacement_request`)
+- [x] **Backspace in column mode** deletes the column — `delete_selected_or_previous` detects `selection_set().has_multiple()` and routes to `apply_multi_selection_delete` regardless of whether the set was built by Alt-click or column drag (`crates/lst-editor/src/lib.rs::delete_selected_or_previous`; `crates/lst-editor/src/multi_selection.rs::delete_request`)
+
+### IME, Composition, Macros
+
+- [x] **IME composition routes to primary only** — `replace_and_mark_text` builds an `EditRequest::single` via `marked_text_request`, and `multi_selection::replacement_request` short-circuits when `tab.marked_range().is_some()` so secondary cursors stay inert during composition (`apps/lst-gpui/src/input_adapter.rs::replace_and_mark_text_in_range`; `crates/lst-editor/src/text_input.rs::marked_text_request`; `crates/lst-editor/src/multi_selection.rs::replacement_request`)
+- [ ] **Macro recording policy defined** — single-cursor only, or whole multi-cursor op as one step (pick one)
+
+### Performance
+
+- [x] **No per-cursor LSP / lint / tokenize calls** — vacuously true today (no LSP/lint pipeline exists); tree-sitter highlighting is per-line and revision-keyed, not per-cursor (`apps/lst-gpui/src/viewport.rs::line_syntax_spans`). Revisit when LSP lands.
+- [~] **Batched render** — one draw pass for all carets, one for all selection rects — `paint_viewport` runs per-row inner loops over `selection_set.as_slice()` (selection backgrounds) and `cursors` (caret quads); fine at typical caret counts but not document-batched (`apps/lst-gpui/src/viewport.rs::paint_viewport`)
+- [ ] **Stays responsive at 1k cursors**; warn or cap at very large counts
 
 ## Editing Primitives
 
@@ -145,9 +275,9 @@ Items most often overlooked in custom editors:
 
 ## Summary
 
-- **Done:** 74
-- **Partial:** 2
-- **Missing:** 19
+- **Done:** 107
+- **Partial:** 9
+- **Missing:** 45
 
 **Strong foundation:** Vim state machine (operators, text objects, surround,
 indent, jump-to-last-edit), viewport with scroll margin, soft wrap with
@@ -160,11 +290,14 @@ wrap, scrollbar overlays for both axes, horizontal-scroll reveal,
 keyboard-driven tab reorder.
 
 **Biggest gaps to close for "idiomatic" feel:**
-1. Cursor blink respecting OS setting
-2. Trim-trailing-whitespace / ensure-final-newline on save
-3. Recently-closed-tab reopen
-4. Jump list / navigation history
-5. Multi-cursor and column/block selection
-6. User-configurable keybindings (config file)
-7. User-facing language picker / manual override UI (model API exists)
-8. Paste-preserves-indentation, transpose, clipboard history
+1. Multi-cursor per-cursor motion — every motion currently funnels through `tab.move_to` / `select_to` (`SelectionSet::set_single`), dropping all non-primary cursors (see [Multi-Cursor & Multi-Selection](#per-cursor-movement))
+2. Multi-cursor line- / Vim- / find-scope- / indent- / comment- / duplicate- / move-line ops still primary-only (see [Per-Cursor Editing](#per-cursor-editing) and [Search & Replace Integration](#search--replace-integration))
+3. Multi-cursor creation polish — Ctrl-U history, Ctrl-K Ctrl-D skip, Shift-Alt-I, dedicated F2-style word-occurrence binding
+4. Column / block selection on the canonical Shift-Alt-drag gesture (the rectangle exists; the spec gesture doesn't)
+5. Cursor blink respecting OS setting
+6. Trim-trailing-whitespace / ensure-final-newline on save
+7. Recently-closed-tab reopen
+8. Jump list / navigation history
+9. User-configurable keybindings (config file)
+10. User-facing language picker / manual override UI (model API exists)
+11. Paste-preserves-indentation, transpose, clipboard history

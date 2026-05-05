@@ -126,6 +126,10 @@ actions!(
         InsertTab,
         OutdentSelection,
         SelectAll,
+        SelectNextOccurrence,
+        SelectAllOccurrences,
+        AddCursorAbove,
+        AddCursorBelow,
         SelectLine,
         SelectParagraph,
         Undo,
@@ -953,9 +957,33 @@ impl LstGpuiApp {
     }
 
     fn selection_summary(&self) -> Option<String> {
-        let selected = self.active_tab().selected_range();
-        (selected.start != selected.end)
-            .then(|| format!("Sel {}", selected.end.saturating_sub(selected.start)))
+        let tab = self.active_tab();
+        let set = tab.selection_set();
+        if !set.is_single() {
+            let buffer = tab.buffer();
+            let (total_chars, total_lines) = set.as_slice().iter().fold(
+                (0usize, 0usize),
+                |(chars, lines), selection| {
+                    let range = selection.range();
+                    if range.start == range.end {
+                        return (chars, lines);
+                    }
+                    let start_line = buffer.char_to_line(range.start);
+                    let end_line = buffer.char_to_line(range.end - 1);
+                    (chars + range.len(), lines + (end_line - start_line + 1))
+                },
+            );
+            let mut parts = vec![format!("{} cursors", set.as_slice().len())];
+            if total_chars > 0 {
+                parts.push(format!("Sel {total_chars}"));
+                if total_lines > 1 {
+                    parts.push(format!("{total_lines} lines"));
+                }
+            }
+            return Some(parts.join(" · "));
+        }
+        let selected = tab.selected_range();
+        (selected.start != selected.end).then(|| format!("Sel {}", selected.len()))
     }
 
     fn painted_wrap_columns(&self) -> Option<usize> {

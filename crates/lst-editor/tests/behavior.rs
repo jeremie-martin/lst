@@ -2664,6 +2664,364 @@ fn direct_cursor_and_selection_commands_are_model_behavior() {
 }
 
 #[test]
+fn add_cursor_above_and_below_clamp_to_line_columns() {
+    let mut model = make_model("abcd\nef\nghij");
+
+    model.move_to_char(3, false, None);
+    model.add_cursor_below();
+    assert_selection_set(
+        model.selection_set(),
+        &[Selection::collapsed(3), Selection::collapsed(7)],
+        1,
+    );
+
+    model.add_cursor_above();
+    assert_selection_set(
+        model.selection_set(),
+        &[
+            Selection::collapsed(2),
+            Selection::collapsed(3),
+            Selection::collapsed(7),
+        ],
+        0,
+    );
+}
+
+#[test]
+fn add_cursor_below_preserves_each_existing_cursor_column() {
+    let mut model = make_model("aa\nbb\ncc");
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(0), Selection::collapsed(4)],
+        1,
+    );
+
+    model.add_cursor_below();
+
+    assert_selection_set(
+        model.selection_set(),
+        &[
+            Selection::collapsed(0),
+            Selection::collapsed(3),
+            Selection::collapsed(4),
+            Selection::collapsed(7),
+        ],
+        3,
+    );
+}
+
+#[test]
+fn rectangular_column_selection_clamps_each_line_independently() {
+    let mut model = make_model("abcd\nef\nghij");
+
+    model.set_rectangular_column_selection(1, 10);
+
+    assert_selection_set(
+        model.selection_set(),
+        &[
+            Selection::from_range(1..2, false),
+            Selection::from_range(6..7, false),
+            Selection::from_range(9..10, false),
+        ],
+        2,
+    );
+}
+
+#[test]
+fn rectangular_column_drag_with_same_column_creates_cursors() {
+    let mut model = make_model("abcd\nef\nghij");
+
+    model.set_rectangular_column_selection(2, 10);
+
+    assert_selection_set(
+        model.selection_set(),
+        &[
+            Selection::collapsed(2),
+            Selection::collapsed(7),
+            Selection::collapsed(10),
+        ],
+        2,
+    );
+}
+
+#[test]
+fn occurrence_commands_select_next_and_all_literal_matches() {
+    let mut model = make_model("foo bar foo foo");
+
+    model.move_to_char(0, false, None);
+    model.select_next_occurrence();
+    assert_selection_set(
+        model.selection_set(),
+        &[Selection::from_range(0..3, false)],
+        0,
+    );
+
+    model.select_next_occurrence();
+    assert_selection_set(
+        model.selection_set(),
+        &[
+            Selection::from_range(0..3, false),
+            Selection::from_range(8..11, false),
+        ],
+        1,
+    );
+
+    model.select_all_occurrences();
+    assert_selection_set(
+        model.selection_set(),
+        &[
+            Selection::from_range(0..3, false),
+            Selection::from_range(8..11, false),
+            Selection::from_range(12..15, false),
+        ],
+        1,
+    );
+}
+
+#[test]
+fn occurrence_selection_uses_non_overlapping_matches() {
+    let mut model = make_model("aaaa");
+    model.set_selection(Selection::from_range(0..2, false));
+
+    model.select_all_occurrences();
+
+    assert_selection_set(
+        model.selection_set(),
+        &[
+            Selection::from_range(0..2, false),
+            Selection::from_range(2..4, false),
+        ],
+        0,
+    );
+}
+
+#[test]
+fn occurrence_selection_preserves_utf8_char_offsets() {
+    let mut model = make_model("é x é x é");
+    model.set_selection(Selection::from_range(0..1, false));
+
+    model.select_all_occurrences();
+
+    assert_selection_set(
+        model.selection_set(),
+        &[
+            Selection::from_range(0..1, false),
+            Selection::from_range(4..5, false),
+            Selection::from_range(8..9, false),
+        ],
+        0,
+    );
+}
+
+#[test]
+fn multi_cursor_auto_pair_surround_overtype_and_dedent_are_batched() {
+    let mut pair = make_model("ab\ncd");
+    set_selection_set(
+        &mut pair,
+        vec![Selection::collapsed(0), Selection::collapsed(3)],
+        1,
+    );
+    pair.replace_text_from_input(None, "(".into());
+    assert_eq!(pair.snapshot().text, "()ab\n()cd");
+    assert_selection_set(
+        pair.selection_set(),
+        &[Selection::collapsed(1), Selection::collapsed(6)],
+        1,
+    );
+
+    let mut surround = make_model("one two");
+    set_selection_set(
+        &mut surround,
+        vec![
+            Selection::from_range(0..3, false),
+            Selection::from_range(4..7, false),
+        ],
+        1,
+    );
+    surround.replace_text_from_input(None, "\"".into());
+    assert_eq!(surround.snapshot().text, "\"one\" \"two\"");
+    assert_selection_set(
+        surround.selection_set(),
+        &[
+            Selection::from_range(1..4, false),
+            Selection::from_range(7..10, false),
+        ],
+        1,
+    );
+
+    let mut overtype = make_model("()\n()");
+    set_selection_set(
+        &mut overtype,
+        vec![Selection::collapsed(1), Selection::collapsed(4)],
+        1,
+    );
+    overtype.replace_text_from_input(None, ")".into());
+    assert_eq!(overtype.snapshot().text, "()\n()");
+    assert_selection_set(
+        overtype.selection_set(),
+        &[Selection::collapsed(2), Selection::collapsed(5)],
+        1,
+    );
+
+    let mut dedent = make_model("    \n    ");
+    set_selection_set(
+        &mut dedent,
+        vec![Selection::collapsed(4), Selection::collapsed(9)],
+        1,
+    );
+    dedent.replace_text_from_input(None, "}".into());
+    assert_eq!(dedent.snapshot().text, "}\n}");
+    assert_selection_set(
+        dedent.selection_set(),
+        &[Selection::collapsed(1), Selection::collapsed(3)],
+        1,
+    );
+}
+
+#[test]
+fn multi_cursor_paste_distributes_matching_clipboard_lines() {
+    let mut model = make_model("A\nB\nC");
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(0),
+            Selection::collapsed(2),
+            Selection::collapsed(4),
+        ],
+        2,
+    );
+
+    model.paste_text("x\ny\nz".into());
+
+    assert_eq!(model.snapshot().text, "xA\nyB\nzC");
+    assert_selection_set(
+        model.selection_set(),
+        &[
+            Selection::collapsed(1),
+            Selection::collapsed(4),
+            Selection::collapsed(7),
+        ],
+        2,
+    );
+}
+
+#[test]
+fn multi_cursor_paste_distributes_trailing_newline_clipboard_lines() {
+    let mut model = make_model("A\nB");
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(0), Selection::collapsed(2)],
+        1,
+    );
+
+    model.paste_text("x\ny\n".into());
+
+    assert_eq!(model.snapshot().text, "xA\nyB");
+    assert_selection_set(
+        model.selection_set(),
+        &[Selection::collapsed(1), Selection::collapsed(4)],
+        1,
+    );
+}
+
+#[test]
+fn single_line_clipboard_with_trailing_newline_pastes_at_each_cursor() {
+    let mut model = make_model("A\nB");
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(0), Selection::collapsed(2)],
+        1,
+    );
+
+    model.paste_text("x\n".into());
+
+    assert_eq!(model.snapshot().text, "x\nA\nx\nB");
+    assert_selection_set(
+        model.selection_set(),
+        &[Selection::collapsed(2), Selection::collapsed(6)],
+        1,
+    );
+}
+
+#[test]
+fn multi_selection_copy_cut_and_undo_restore_selection_sets() {
+    let mut model = make_model("red green blue");
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::from_range(0..3, false),
+            Selection::from_range(4..9, false),
+            Selection::from_range(10..14, false),
+        ],
+        1,
+    );
+
+    model.copy_selection();
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("red\ngreen\nblue".into()),
+            EditorEffect::WritePrimary("red\ngreen\nblue".into()),
+        ]
+    );
+
+    let before = model.selection_set().clone();
+    model.cut_selection();
+    assert_eq!(model.snapshot().text, "  ");
+    assert_eq!(
+        model.drain_effects(),
+        vec![
+            EditorEffect::WriteClipboard("red\ngreen\nblue".into()),
+            EditorEffect::WritePrimary("red\ngreen\nblue".into()),
+            EditorEffect::Reveal(RevealIntent::NearestEdge),
+        ]
+    );
+
+    model.undo();
+    assert_eq!(model.snapshot().text, "red green blue");
+    assert_eq!(model.selection_set(), &before);
+
+    model.redo();
+    assert_eq!(model.snapshot().text, "  ");
+}
+
+#[test]
+fn entering_vim_normal_collapses_multi_cursor_to_primary() {
+    let mut model = make_model("abc\ndef\nghi");
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(1),
+            Selection::collapsed(5),
+            Selection::collapsed(9),
+        ],
+        2,
+    );
+
+    // Vim normal mode clamps the cursor onto a character, so the exact char
+    // may shift; the multi-cursor invariant we care about is collapse.
+    model.handle_vim_escape();
+
+    assert!(model.selection_set().is_single());
+}
+
+#[test]
+fn navigation_collapses_multi_cursor_to_primary() {
+    let mut model = make_model("abcdef");
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(1), Selection::collapsed(4)],
+        1,
+    );
+
+    model.move_horizontal_collapsed(false);
+
+    let set = model.selection_set();
+    assert!(set.is_single());
+    assert_eq!(set.primary(), Selection::collapsed(5));
+}
+
+#[test]
 fn ime_marked_text_replacement_remains_model_behavior() {
     let mut model = EditorModel::empty();
 
@@ -3405,4 +3763,261 @@ fn double_click_on_combining_mark_selects_full_grapheme() {
     assert_eq!(word_range_at_char(&buffer, 2), 0..6);
     assert_eq!(word_range_at_char(&buffer, 3), 0..6);
     assert_eq!(word_range_at_char(&buffer, 5), 0..6);
+}
+
+// --- Cluster 1: selection-set hygiene ----------------------------------------
+
+#[test]
+fn collapse_to_primary_collapses_extents_then_drops_secondaries() {
+    let mut model = model_with_text("alpha bravo charlie delta");
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::from_range(0..5, false),
+            Selection::from_range(6..11, false),
+            Selection::from_range(12..19, false),
+        ],
+        1,
+    );
+
+    // First press collapses every selection to its head while keeping all
+    // three cursors. Primary stays the second selection.
+    assert!(model.collapse_to_primary());
+    assert_selection_set(
+        model.selection_set(),
+        &[
+            Selection::collapsed(5),
+            Selection::collapsed(11),
+            Selection::collapsed(19),
+        ],
+        1,
+    );
+
+    // Second press drops the secondaries, leaving only the primary.
+    assert!(model.collapse_to_primary());
+    assert_selection_set(model.selection_set(), &[Selection::collapsed(11)], 0);
+
+    // Third press is a no-op (single collapsed cursor) — returns false.
+    assert!(!model.collapse_to_primary());
+}
+
+#[test]
+fn remove_cursor_at_char_drops_targeted_secondary_and_keeps_set_valid() {
+    let mut model = model_with_text("alpha bravo charlie");
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(0),
+            Selection::collapsed(6),
+            Selection::collapsed(12),
+        ],
+        1,
+    );
+
+    // Removing the primary's cursor: the next selection inherits primary.
+    assert!(model.remove_cursor_at_char(6));
+    assert_selection_set(
+        model.selection_set(),
+        &[Selection::collapsed(0), Selection::collapsed(12)],
+        1,
+    );
+
+    // Single-selection set refuses removal — preserves the non-empty
+    // SelectionSet invariant.
+    assert!(model.remove_cursor_at_char(0));
+    assert_eq!(model.selection_set().as_slice().len(), 1);
+    assert!(!model.remove_cursor_at_char(12));
+    assert_eq!(model.selection_set().as_slice().len(), 1);
+}
+
+#[test]
+fn remove_cursor_at_char_finds_selection_via_extent_overlap() {
+    let mut model = model_with_text("alpha bravo charlie delta");
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(0),
+            Selection::from_range(6..11, false),
+        ],
+        1,
+    );
+
+    // A click at offset 8 falls inside the second selection's range — that
+    // selection is dropped.
+    assert!(model.remove_cursor_at_char(8));
+    assert_selection_set(model.selection_set(), &[Selection::collapsed(0)], 0);
+}
+
+#[test]
+fn remove_cursor_at_char_rebases_primary_when_tail_is_removed() {
+    let mut model = model_with_text("alpha bravo charlie");
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(0),
+            Selection::collapsed(6),
+            Selection::collapsed(12),
+        ],
+        2,
+    );
+
+    // Removing the tail-primary forces primary to fall back to the
+    // previous selection — exercises `with_removed_at`'s
+    // `index.min(len-1)` rebase path.
+    assert!(model.remove_cursor_at_char(12));
+    assert_selection_set(
+        model.selection_set(),
+        &[Selection::collapsed(0), Selection::collapsed(6)],
+        1,
+    );
+}
+
+#[test]
+fn cut_copy_round_trip_preserves_cursor_only_selections() {
+    use lst_editor::selection::SelectionSet as PublicSelectionSet;
+
+    // Simulate the "selected_text_joined → paste-distribute" pipeline by
+    // copying an N-selection set (one selection has extent, another is a
+    // bare cursor) and pasting it back. The bare cursor must contribute an
+    // empty fragment so the line count matches the cursor count.
+    let mut model = model_with_text("alpha bravo charlie");
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::from_range(0..5, false),
+            Selection::collapsed(6),
+            Selection::from_range(12..19, false),
+        ],
+        0,
+    );
+
+    model.copy_selection();
+    let clipboard = model
+        .drain_effects()
+        .into_iter()
+        .find_map(|effect| match effect {
+            EditorEffect::WriteClipboard(text) => Some(text),
+            _ => None,
+        })
+        .expect("WriteClipboard effect emitted");
+
+    // Three lines: extent 1, empty for the bare cursor, extent 2.
+    assert_eq!(clipboard, "alpha\n\ncharlie");
+
+    // Pasting back into the same set distributes line-by-line, so the
+    // buffer reproduces its original layout.
+    model.paste_text(clipboard);
+    assert_eq!(model.snapshot().text, "alpha bravo charlie");
+    let _ = model.drain_effects();
+    let _: &PublicSelectionSet = model.selection_set();
+}
+
+// --- Cluster 2: find-flag-aware Ctrl-D / Ctrl-Shift-L ------------------------
+
+#[test]
+fn select_all_occurrences_honours_find_panel_case_sensitive_flag() {
+    let mut model = model_with_text("Foo foo FOO");
+    // Select the literal "Foo" — without flags, smart-case kicks in (the
+    // query has uppercase) and only "Foo" matches.
+    model.set_selection(Selection::from_range(0..3, false));
+    model.select_all_occurrences();
+    assert_eq!(model.selection_set().as_slice().len(), 1);
+
+    // Reset to a single literal "foo" range; smart-case treats lowercase as
+    // case-insensitive, so all three variants match.
+    model.set_selection(Selection::from_range(4..7, false));
+    model.select_all_occurrences();
+    assert_eq!(model.selection_set().as_slice().len(), 3);
+}
+
+#[test]
+fn select_all_occurrences_honours_whole_word_flag() {
+    let mut model = model_with_text("foo foobar foo_bar foo");
+    model.toggle_find_whole_word();
+    // Select literal "foo".
+    model.set_selection(Selection::from_range(0..3, false));
+    model.select_all_occurrences();
+    // Whole-word rejects "foobar" and "foo_bar"; only the bare "foo" tokens
+    // at offsets 0 and 19 match.
+    assert_eq!(model.selection_set().as_slice().len(), 2);
+}
+
+// --- Cluster 4: smart Enter per cursor --------------------------------------
+
+#[test]
+fn insert_newline_inherits_each_cursors_own_indent() {
+    // Two lines with different indents; cursors at the end of each.
+    let text = "    alpha\n        beta";
+    let mut model = model_with_text(text);
+    let alpha_end = "    alpha".chars().count();
+    let beta_end = text.chars().count();
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(alpha_end),
+            Selection::collapsed(beta_end),
+        ],
+        0,
+    );
+
+    model.insert_newline_at_cursor();
+
+    // Line 1's cursor inherits 4-space indent; line 2's inherits 8-space.
+    assert_eq!(
+        model.snapshot().text,
+        "    alpha\n    \n        beta\n        "
+    );
+}
+
+#[test]
+fn paste_request_broadcast_when_clipboard_line_count_does_not_match() {
+    // Three cursors, clipboard has two lines → distribute branch must fail
+    // and fall through to broadcast (every cursor receives the full text).
+    let mut model = model_with_text("aaa bbb ccc");
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(0),
+            Selection::collapsed(4),
+            Selection::collapsed(8),
+        ],
+        0,
+    );
+
+    model.paste_text("X\nY".to_string());
+
+    assert_eq!(model.snapshot().text, "X\nYaaa X\nYbbb X\nYccc");
+}
+
+#[test]
+fn insert_newline_with_reverse_selection_uses_range_start_indent() {
+    // Reverse-direction selection on line 1 (8-space indent) covers
+    // "charlie". The selection's head sits at the *anchor end* offset
+    // when reversed, so pulling indent from `cursor()` would land on the
+    // wrong line in some configurations. The replacement always lands at
+    // `range.start`, so indent must be sampled from that line.
+    //
+    // Paired with a forward selection on line 0 (4-space indent) to
+    // exercise the multi-cursor branch.
+    let text = "    alpha\n        charlie";
+    let mut model = model_with_text(text);
+    let line1_start = text.find("charlie").expect("fixture has charlie");
+    let line1_charlie_end = line1_start + "charlie".len();
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::from_range(4..9, false), // "alpha" on line 0 (forward)
+            // Reverse: head at line1_start, anchor at line1_charlie_end.
+            Selection::from_range(line1_start..line1_charlie_end, true),
+        ],
+        0,
+    );
+
+    model.insert_newline_at_cursor();
+
+    // Selection 1 (4..9) replaces "alpha" with "\n    " (NL + line 0's
+    // 4-space indent). Selection 2 (line1_start..line1_charlie_end)
+    // replaces "charlie" with "\n        " (NL + line 1's 8-space indent).
+    // Both indents are sampled from `range.start`'s line, not the cursor.
+    assert_eq!(model.snapshot().text, "    \n    \n        \n        ");
 }

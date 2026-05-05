@@ -68,7 +68,10 @@ impl TextChangeSet {
             .expect("text changes must be non-empty, sorted, and disjoint")
     }
 
-    fn try_new(changes: Vec<TextChange>, primary: usize) -> Option<Self> {
+    /// Returns `None` when `changes` is empty, when ranges overlap or are
+    /// out of order, or when `primary` is out of range. Reversed ranges are
+    /// silently normalized.
+    pub(crate) fn try_new(changes: Vec<TextChange>, primary: usize) -> Option<Self> {
         let changes: Vec<TextChange> = changes
             .into_iter()
             .map(TextChange::with_ordered_range)

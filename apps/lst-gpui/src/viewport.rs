@@ -106,6 +106,7 @@ pub(crate) struct ViewportPreparation<'a> {
     pub(crate) show_gutter: bool,
     pub(crate) gutter_mode: GutterMode,
     pub(crate) cursor_line: usize,
+    pub(crate) cursor_lines: &'a [usize],
     pub(crate) show_wrap: bool,
     pub(crate) viewport_scroll: &'a ScrollHandle,
     pub(crate) viewport_cache: &'a Rc<RefCell<ViewportCache>>,
@@ -568,6 +569,7 @@ pub(crate) fn prepare_viewport_paint_state(
         show_gutter,
         gutter_mode,
         cursor_line,
+        cursor_lines,
         show_wrap,
         viewport_scroll,
         viewport_cache,
@@ -685,7 +687,7 @@ pub(crate) fn prepare_viewport_paint_state(
                 shape_cached_line(
                     &mut cache.gutter_lines,
                     line_ix,
-                    SharedString::from(gutter_mode.format(line_ix, cursor_line)),
+                    SharedString::from(gutter_mode.format(line_ix, cursor_line, cursor_lines)),
                     theme.style_key(),
                     &gutter_run,
                     font_size,
@@ -774,20 +776,22 @@ fn search_matches_for_row<'a>(
     &search_matches[first..last]
 }
 
-fn selection_heads(selection_set: &SelectionSet) -> Vec<usize> {
-    selection_set
-        .as_slice()
-        .iter()
-        .map(|selection| selection.head())
-        .collect()
+// One entry per selection. Collapsed cursors take the wide block-cursor in
+// Vim Normal; selections with extent get a thin caret on their head over
+// the existing range fill.
+struct PaintCursor {
+    char: usize,
+    collapsed: bool,
 }
 
-fn collapsed_cursors(selection_set: &SelectionSet) -> Vec<usize> {
+fn paint_cursors(selection_set: &SelectionSet) -> Vec<PaintCursor> {
     selection_set
         .as_slice()
         .iter()
-        .filter(|selection| !selection.has_selection())
-        .map(|selection| selection.cursor())
+        .map(|selection| PaintCursor {
+            char: selection.cursor(),
+            collapsed: !selection.has_selection(),
+        })
         .collect()
 }
 
@@ -813,13 +817,12 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         scale,
     );
     let code_origin_x = code_origin_x(bounds.left(), show_gutter, scale, horizontal_scroll);
-    let selection_heads = selection_heads(&selection_set);
-    let cursors = collapsed_cursors(&selection_set);
+    let cursors = paint_cursors(&selection_set);
 
     for row in paint_state.rows {
-        let selection_head_in_row = selection_heads
+        let selection_head_in_row = cursors
             .iter()
-            .any(|head| row_contains_cursor(&row, *head));
+            .any(|cursor| row_contains_cursor(&row, cursor.char));
         let row_bounds = Bounds::new(
             point(bounds.left(), row.row_top),
             size(bounds.size.width, row_height),
@@ -874,15 +877,16 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         }
 
         if focused {
-            for cursor_char in cursors
+            for cursor in cursors
                 .iter()
-                .copied()
-                .filter(|cursor| row_contains_cursor(&row, *cursor))
+                .filter(|cursor| row_contains_cursor(&row, cursor.char))
             {
+                let cursor_char = cursor.char;
+                let block_cursor = vim_mode == vim::Mode::Normal && cursor.collapsed;
                 let cursor_x = code_origin_x
                     + x_for_global_char(&row, cursor_char.min(row.display_end_char))
                         .unwrap_or_else(|| px(0.0));
-                let cursor_width = if vim_mode == vim::Mode::Normal {
+                let cursor_width = if block_cursor {
                     let next_x = code_origin_x
                         + x_for_global_char(
                             &row,
@@ -898,7 +902,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 };
                 window.paint_quad(fill(
                     Bounds::new(point(cursor_x, row.row_top), size(cursor_width, row_height)),
-                    if vim_mode == vim::Mode::Normal {
+                    if block_cursor {
                         rgb(theme.role.selection_bg)
                     } else {
                         rgb(theme.role.caret)
@@ -1078,10 +1082,24 @@ mod tests {
     }
 
     #[test]
-    fn selection_heads_include_non_collapsed_selection_heads_for_row_highlighting() {
-        let selection_set = SelectionSet::single(Selection::from_range(2..8, false));
+    fn paint_cursors_emits_one_entry_per_selection_with_collapsed_flag() {
+        let primary = Selection::collapsed(4);
+        let extended = Selection::from_range(7..12, false);
+        let set = SelectionSet::from_selections(vec![primary, extended], 0)
+            .expect("ordered non-overlapping selections");
 
-        assert_eq!(selection_heads(&selection_set), vec![8]);
-        assert!(collapsed_cursors(&selection_set).is_empty());
+        let cursors = paint_cursors(&set);
+        assert_eq!(cursors.len(), 2);
+        assert_eq!((cursors[0].char, cursors[0].collapsed), (4, true));
+        assert_eq!((cursors[1].char, cursors[1].collapsed), (12, false));
+    }
+
+    #[test]
+    fn paint_cursors_marks_extended_selection_head_as_non_collapsed() {
+        let selection_set = SelectionSet::single(Selection::from_range(2..8, false));
+        let cursors = paint_cursors(&selection_set);
+        assert_eq!(cursors.len(), 1);
+        assert_eq!(cursors[0].char, 8);
+        assert!(!cursors[0].collapsed);
     }
 }

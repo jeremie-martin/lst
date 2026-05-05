@@ -8,11 +8,11 @@ use crate::ui::{
 };
 use gpui::{
     point, px, size, Bounds, ClipboardItem, Entity, EntityInputHandler, Keystroke, Modifiers,
-    MouseButton, TestAppContext, VisualContext as _, VisualTestContext,
+    MouseButton, Pixels, Point, TestAppContext, VisualContext as _, VisualTestContext,
 };
-use lst_editor::Selection;
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorModel, EditorTab, TabId, UndoBoundary};
+use lst_editor::{Selection, SelectionSet};
 #[cfg(feature = "internal-invariants")]
 use std::collections::HashMap;
 use std::{
@@ -114,6 +114,36 @@ fn new_test_app_capturing(
 
 fn app_snapshot(view: &Entity<LstGpuiApp>, cx: &mut VisualTestContext) -> AppSnapshot {
     view.update(cx, |app, cx| app.snapshot(cx))
+}
+
+fn alt_modifiers() -> Modifiers {
+    Modifiers {
+        alt: true,
+        ..Modifiers::default()
+    }
+}
+
+fn assert_selection_set(set: &SelectionSet, selections: &[Selection], primary: usize) {
+    assert_eq!(set.as_slice(), selections);
+    assert_eq!(set.primary_index(), primary);
+}
+
+fn point_for_char(app: &LstGpuiApp, char_index: usize) -> Point<Pixels> {
+    let bounds = app
+        .active_viewport_bounds()
+        .expect("viewport should have rendered bounds");
+    let rows = app.active_painted_rows();
+    let row = rows
+        .iter()
+        .find(|row| crate::viewport::row_contains_cursor(row, char_index))
+        .expect("target char should be painted");
+    let code_origin_x = bounds.left() + code_origin_pad(app.model.show_gutter(), app.ui_scale());
+    let x = code_origin_x
+        + crate::viewport::x_for_global_char(row, char_index)
+            .expect("target char x should be shaped")
+        - crate::viewport::scroll_left_for(&app.active_view().scroll);
+    let y = row.row_top + app.ui_px(crate::ui::theme::metrics::ROW_HEIGHT) / 2.0;
+    point(x, y)
 }
 
 #[cfg(feature = "internal-invariants")]
@@ -1014,6 +1044,51 @@ fn app_input_handler_updates_real_editor_model(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn occurrence_keybindings_drive_selection_changes(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "foo bar foo foo", window, cx);
+    });
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| {
+            model.move_to_char(0, false, None);
+        });
+    });
+
+    cx.simulate_keystrokes("ctrl-d");
+    let snapshot = app_snapshot(&view, cx);
+    assert_selection_set(
+        &snapshot.model.selection_set,
+        &[Selection::from_range(0..3, false)],
+        0,
+    );
+
+    cx.simulate_keystrokes("ctrl-d");
+    let snapshot = app_snapshot(&view, cx);
+    assert_selection_set(
+        &snapshot.model.selection_set,
+        &[
+            Selection::from_range(0..3, false),
+            Selection::from_range(8..11, false),
+        ],
+        1,
+    );
+
+    cx.simulate_keystrokes("ctrl-shift-l");
+    let snapshot = app_snapshot(&view, cx);
+    assert_selection_set(
+        &snapshot.model.selection_set,
+        &[
+            Selection::from_range(0..3, false),
+            Selection::from_range(8..11, false),
+            Selection::from_range(12..15, false),
+        ],
+        1,
+    );
+}
+
+#[gpui::test]
 fn typing_at_wrapped_line_end_keeps_cursor_visible(cx: &mut TestAppContext) {
     let dir = temp_dir("wrapped-reveal");
     let path = dir.join("long.txt");
@@ -1163,6 +1238,167 @@ fn mouse_selection_updates_gpui_primary_selection(cx: &mut TestAppContext) {
     assert_eq!(
         cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text())),
         Some("hello".to_string())
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn alt_click_then_typing_edits_each_cursor(cx: &mut TestAppContext) {
+    let dir = temp_dir("alt-click-multi");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "a\nb").expect("write alt click fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.refresh().expect("render editor before alt click");
+    cx.run_until_parked();
+
+    let click = view.update(cx, |app, _cx| point_for_char(app, 2));
+    cx.simulate_mouse_down(click, MouseButton::Left, alt_modifiers());
+    cx.simulate_mouse_up(click, MouseButton::Left, alt_modifiers());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.replace_text_in_range(None, "x", window, cx);
+    });
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.text, "xa\nxb");
+    assert_selection_set(
+        &snapshot.model.selection_set,
+        &[Selection::collapsed(1), Selection::collapsed(4)],
+        1,
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn alt_click_on_existing_secondary_cursor_toggles_it_off(cx: &mut TestAppContext) {
+    let dir = temp_dir("alt-click-toggle-off");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "a\nb").expect("write alt-click toggle fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.refresh().expect("render editor before alt click");
+    cx.run_until_parked();
+
+    let click = view.update(cx, |app, _cx| point_for_char(app, 2));
+    cx.simulate_mouse_down(click, MouseButton::Left, alt_modifiers());
+    cx.simulate_mouse_up(click, MouseButton::Left, alt_modifiers());
+
+    // Confirm we now have two cursors before toggling.
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.selection_set.as_slice().len(), 2);
+
+    // Alt-click on the same point removes the secondary cursor.
+    cx.simulate_mouse_down(click, MouseButton::Left, alt_modifiers());
+    cx.simulate_mouse_up(click, MouseButton::Left, alt_modifiers());
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.selection_set.as_slice().len(), 1);
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn escape_collapses_multi_cursor_to_primary(cx: &mut TestAppContext) {
+    let dir = temp_dir("escape-collapse");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "alpha bravo charlie").expect("write escape fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.refresh().expect("render editor before escape");
+    cx.run_until_parked();
+
+    // Build a 3-cursor set with extents on the model directly.
+    view.update(cx, |app, cx| {
+        app.update_model(cx, true, |model| {
+            model.set_selection_set(
+                SelectionSet::from_selections(
+                    vec![
+                        Selection::from_range(0..5, false),
+                        Selection::from_range(6..11, false),
+                        Selection::from_range(12..19, false),
+                    ],
+                    1,
+                )
+                .expect("valid set"),
+            );
+        });
+    });
+    cx.run_until_parked();
+
+    // First Esc: collapse extents but keep all three cursors.
+    cx.simulate_keystrokes("escape");
+    let snapshot = app_snapshot(&view, cx);
+    assert_selection_set(
+        &snapshot.model.selection_set,
+        &[
+            Selection::collapsed(5),
+            Selection::collapsed(11),
+            Selection::collapsed(19),
+        ],
+        1,
+    );
+
+    // Second Esc: drop secondaries, keep only the primary.
+    cx.simulate_keystrokes("escape");
+    let snapshot = app_snapshot(&view, cx);
+    assert_selection_set(
+        &snapshot.model.selection_set,
+        &[Selection::collapsed(11)],
+        0,
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove test temp dir");
+}
+
+#[gpui::test]
+fn alt_drag_creates_column_cursors(cx: &mut TestAppContext) {
+    let dir = temp_dir("alt-drag-column");
+    let path = dir.join("note.txt");
+    std::fs::write(&path, "aa\nbb\ncc").expect("write alt drag fixture");
+    let (view, cx) = new_test_app(
+        cx,
+        LaunchArgs {
+            files: vec![path],
+            ..LaunchArgs::default()
+        },
+    );
+    cx.refresh().expect("render editor before alt drag");
+    cx.run_until_parked();
+
+    let (start, end) = view.update(cx, |app, _cx| {
+        (point_for_char(app, 0), point_for_char(app, 6))
+    });
+    cx.simulate_mouse_down(start, MouseButton::Left, alt_modifiers());
+    cx.simulate_mouse_move(end, MouseButton::Left, alt_modifiers());
+    cx.simulate_mouse_up(end, MouseButton::Left, alt_modifiers());
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_selection_set(
+        &snapshot.model.selection_set,
+        &[
+            Selection::collapsed(0),
+            Selection::collapsed(3),
+            Selection::collapsed(6),
+        ],
+        2,
     );
 
     std::fs::remove_dir_all(dir).expect("remove test temp dir");
@@ -2918,6 +3154,18 @@ fn standard_movement_keybindings_are_registered() {
     assert!(has_binding::<DeleteWordBackward>("alt-backspace"));
     assert!(has_binding::<DeleteWordForward>("ctrl-delete"));
     assert!(has_binding::<DeleteWordForward>("alt-delete"));
+}
+
+#[test]
+fn multi_cursor_keybindings_are_registered() {
+    assert!(has_binding::<SelectNextOccurrence>("ctrl-d"));
+    assert!(has_binding::<SelectNextOccurrence>("cmd-d"));
+    assert!(has_binding::<SelectAllOccurrences>("ctrl-shift-l"));
+    assert!(has_binding::<SelectAllOccurrences>("cmd-shift-l"));
+    assert!(has_binding::<AddCursorAbove>("ctrl-alt-up"));
+    assert!(has_binding::<AddCursorAbove>("cmd-alt-up"));
+    assert!(has_binding::<AddCursorBelow>("ctrl-alt-down"));
+    assert!(has_binding::<AddCursorBelow>("cmd-alt-down"));
 }
 
 #[test]
