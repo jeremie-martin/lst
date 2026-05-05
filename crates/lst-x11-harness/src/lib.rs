@@ -12,11 +12,16 @@ mod editor;
 mod x11;
 
 pub mod clipboard;
+pub mod state_trace;
 
 pub use clipboard::Selection;
 pub use display::Display;
 pub use editor::{
-    Editor, FileStats, FileWaitOpts, FileWaitOutcome, Key, KeyChord, SpawnOpts, WheelDir,
+    ChordMods, Editor, FileStats, FileWaitOpts, FileWaitOutcome, Key, KeyChord, SpawnOpts, WheelDir,
+};
+pub use state_trace::{
+    StateTraceReader, StateTraceRecord, TraceCursor, TraceFind, TraceRange, TraceRow,
+    TraceViewport, STATE_TRACE_SCHEMA_VERSION,
 };
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;

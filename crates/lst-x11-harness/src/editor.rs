@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,6 +14,7 @@ use x11rb::rust_connection::RustConnection;
 use x11rb::NONE;
 
 use crate::display::Display;
+use crate::state_trace::{StateTraceReader, StateTraceRecord};
 use crate::x11::damage as damage_wait;
 use crate::x11::input::{
     self, BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_WHEEL_DOWN, BUTTON_WHEEL_UP, POINTER_SETTLE,
@@ -54,6 +55,8 @@ pub enum Key {
     Right,
     Up,
     Down,
+    PageUp,
+    PageDown,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -79,6 +82,16 @@ pub struct SpawnOpts<'a> {
     /// bench wire its `LST_BENCH_TRACE_FILE` without baking the name into
     /// the harness.
     pub extra_env: &'a [(&'a OsStr, &'a OsStr)],
+    /// Path the editor's stderr is being captured to (typically a file the
+    /// caller passes into `stderr` as `Stdio::from(File)`). When set, harness
+    /// errors include the last N non-empty lines of this file so a panicking
+    /// editor surfaces its trail without forcing callers to dig through
+    /// per-test artifact directories.
+    pub stderr_log_path: Option<&'a Path>,
+    /// Path the editor will append state-trace JSONL records to. When set,
+    /// the harness exports `LST_X11_STATE_TRACE_FILE` to the editor and
+    /// constructs a [`StateTraceReader`] on the returned [`Editor`].
+    pub state_trace_path: Option<&'a Path>,
 }
 
 impl<'a> SpawnOpts<'a> {
@@ -90,6 +103,8 @@ impl<'a> SpawnOpts<'a> {
             stderr: Stdio::inherit(),
             stdout: Stdio::null(),
             extra_env: &[],
+            stderr_log_path: None,
+            state_trace_path: None,
         }
     }
 
@@ -110,6 +125,16 @@ impl<'a> SpawnOpts<'a> {
 
     pub fn with_stdout(mut self, stdout: Stdio) -> Self {
         self.stdout = stdout;
+        self
+    }
+
+    pub fn with_stderr_log_path(mut self, path: &'a Path) -> Self {
+        self.stderr_log_path = Some(path);
+        self
+    }
+
+    pub fn with_state_trace_path(mut self, path: &'a Path) -> Self {
+        self.state_trace_path = Some(path);
         self
     }
 }
@@ -161,7 +186,11 @@ pub struct Editor<'a> {
     child: Option<Child>,
     window: WindowInfo,
     damage: damage::DamageWrapper<&'a RustConnection>,
+    stderr_log_path: Option<PathBuf>,
+    state_trace: Option<StateTraceReader>,
 }
+
+const STDERR_TAIL_LINES: usize = 20;
 
 impl Display {
     /// Spawn the editor binary, find its window by `_NET_WM_PID` + title,
@@ -169,6 +198,8 @@ impl Display {
     /// damage attachment terminate the spawned child before returning.
     pub fn spawn_editor<'a>(&'a mut self, opts: SpawnOpts<'_>) -> Result<Editor<'a>> {
         let title = opts.title;
+        let stderr_log_path = opts.stderr_log_path.map(PathBuf::from);
+        let state_trace = opts.state_trace_path.map(StateTraceReader::new);
         let mut child = build_command(self, opts).spawn()?;
         let pid = child.id();
 
@@ -209,6 +240,8 @@ impl Display {
             child: Some(child),
             window: info,
             damage,
+            stderr_log_path,
+            state_trace,
         })
     }
 }
@@ -227,6 +260,9 @@ fn build_command(display: &Display, opts: SpawnOpts<'_>) -> Command {
     }
     if let Some(dbus) = &display.session_env.dbus_session_bus_address {
         command.env("DBUS_SESSION_BUS_ADDRESS", dbus);
+    }
+    if let Some(state_trace_path) = opts.state_trace_path {
+        command.env("LST_X11_STATE_TRACE_FILE", state_trace_path);
     }
     for (key, value) in opts.extra_env {
         command.env(key, value);
@@ -299,6 +335,147 @@ impl<'a> Editor<'a> {
         )?;
         thread::sleep(POINTER_SETTLE);
         input::click_button(&self.display.conn, self.display.root, BUTTON_MIDDLE)
+    }
+
+    /// Single left click at the given (line, col) text position. Resolves
+    /// pixels via the latest state-trace record's viewport geometry. Errors
+    /// when the line is not in the painted-rows window — caller must
+    /// scroll-into-view first, or the viewport must have painted at least
+    /// once.
+    pub fn click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
+        self.mouse_click_at_text(
+            line,
+            col,
+            ChordMods::default(),
+            BUTTON_LEFT,
+            1,
+            "click_at_text",
+        )
+    }
+
+    pub fn shift_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
+        self.mouse_click_at_text(
+            line,
+            col,
+            ChordMods::SHIFT,
+            BUTTON_LEFT,
+            1,
+            "shift_click_at_text",
+        )
+    }
+
+    pub fn alt_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
+        self.mouse_click_at_text(
+            line,
+            col,
+            ChordMods::ALT,
+            BUTTON_LEFT,
+            1,
+            "alt_click_at_text",
+        )
+    }
+
+    pub fn double_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
+        self.mouse_click_at_text(
+            line,
+            col,
+            ChordMods::default(),
+            BUTTON_LEFT,
+            2,
+            "double_click_at_text",
+        )
+    }
+
+    pub fn triple_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
+        self.mouse_click_at_text(
+            line,
+            col,
+            ChordMods::default(),
+            BUTTON_LEFT,
+            3,
+            "triple_click_at_text",
+        )
+    }
+
+    pub fn quad_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
+        self.mouse_click_at_text(
+            line,
+            col,
+            ChordMods::default(),
+            BUTTON_LEFT,
+            4,
+            "quad_click_at_text",
+        )
+    }
+
+    pub fn middle_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
+        self.mouse_click_at_text(
+            line,
+            col,
+            ChordMods::default(),
+            BUTTON_MIDDLE,
+            1,
+            "middle_click_at_text",
+        )
+    }
+
+    /// Press at `from`, drag to `to` with optional held modifiers, release.
+    /// Both endpoints must currently be in the painted-rows window.
+    pub fn drag_text(
+        &mut self,
+        from: (usize, usize),
+        to: (usize, usize),
+        mods: ChordMods,
+    ) -> Result<()> {
+        let result: Result<()> = (|| {
+            let state = self.read_state()?;
+            let (from_x, from_y) = resolve_text_pixels(&state, from.0, from.1, "drag_text from")?;
+            let (to_x, to_y) = resolve_text_pixels(&state, to.0, to.1, "drag_text to")?;
+            let conn = &self.display.conn;
+            let root = self.display.root;
+            let kc = &self.display.keycodes;
+            input::move_pointer_to_window_point(conn, root, &self.window, from_x, from_y)?;
+            thread::sleep(POINTER_SETTLE);
+            input::press_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
+            input::button_press(conn, root, BUTTON_LEFT)?;
+            conn.flush()?;
+            // Move with the button held. The X server processes motion
+            // asynchronously, so settle briefly before the release.
+            input::move_pointer_to_window_point(conn, root, &self.window, to_x, to_y)?;
+            conn.flush()?;
+            thread::sleep(POINTER_SETTLE);
+            input::button_release(conn, root, BUTTON_LEFT)?;
+            input::release_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
+            conn.flush()?;
+            Ok(())
+        })();
+        self.attach_stderr_context(result, "drag_text")
+    }
+
+    fn mouse_click_at_text(
+        &mut self,
+        line: usize,
+        col: usize,
+        mods: ChordMods,
+        button: u8,
+        click_count: usize,
+        label: &str,
+    ) -> Result<()> {
+        let result: Result<()> = (|| {
+            let state = self.read_state()?;
+            let (x, y) = resolve_text_pixels(&state, line, col, label)?;
+            let conn = &self.display.conn;
+            let root = self.display.root;
+            let kc = &self.display.keycodes;
+            input::move_pointer_to_window_point(conn, root, &self.window, x, y)?;
+            thread::sleep(POINTER_SETTLE);
+            input::press_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
+            input::multi_click_button(conn, root, button, click_count)?;
+            input::release_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
+            conn.flush()?;
+            Ok(())
+        })();
+        self.attach_stderr_context(result, label)
     }
 
     pub fn wheel_burst(&mut self, dir: WheelDir, count: usize, total: Duration) -> Result<()> {
@@ -375,22 +552,53 @@ impl<'a> Editor<'a> {
     /// frame loop can batch several synthesized keystrokes into a single
     /// frame and only the cursor's first move is observed.
     pub fn send_keys(&mut self, sequence: &str) -> Result<()> {
-        let tokens = parse_keys(sequence)?;
-        for token in tokens {
-            let (code, base_shift) = resolve_key(&self.display.keycodes, token.key)?;
-            input::chord(
-                &self.display.conn,
-                self.display.root,
-                &self.display.keycodes,
-                code,
-                token.ctrl,
-                token.alt,
-                base_shift || token.shift,
-            )?;
-            // Settle: wait until the editor has painted in response. Short
-            // quiet window because we just want one frame of evidence; not
-            // a fully-idle UI. Uses a generous timeout so a slow paint
-            // doesn't fail an otherwise good test.
+        let result: Result<()> = (|| {
+            let tokens = parse_keys(sequence)?;
+            for token in tokens {
+                self.dispatch_token(&token)?;
+                // Settle: wait until the editor has painted in response. Short
+                // quiet window because we just want one frame of evidence; not
+                // a fully-idle UI. Uses a generous timeout so a slow paint
+                // doesn't fail an otherwise good test.
+                let conn = &self.display.conn;
+                let damage_id = self.damage.damage();
+                let window_id = self.window.id;
+                let child = child_mut(&mut self.child)?;
+                damage_wait::wait_for_damage_then_quiet(
+                    conn,
+                    damage_id,
+                    window_id,
+                    child,
+                    SEND_KEYS_QUIET,
+                    SEND_KEYS_TIMEOUT,
+                )?;
+            }
+            Ok(())
+        })();
+        self.attach_stderr_context(result, "send_keys")
+    }
+
+    /// Hold `mods` continuously while tapping each key in `sequence`. The
+    /// editor sees one `mods-down → tap → tap → ... → mods-up` event train
+    /// per call, so chord-prefix bindings (e.g. `Ctrl+K Ctrl+D`) dispatch
+    /// correctly. `sequence` is parsed via the same vim-style notation as
+    /// `send_keys`, but each piece must be a single key without its own
+    /// `Ctrl-`/`Alt-` modifier (Shift is allowed for inner auto-shift).
+    /// Settles on a single damage-then-quiet at the end of the held span.
+    pub fn with_chord_held(&mut self, mods: ChordMods, sequence: &str) -> Result<()> {
+        let result: Result<()> = (|| {
+            if mods.is_empty() {
+                return Err(io::Error::other(
+                    "with_chord_held requires at least one modifier; pass send_keys for a plain sequence",
+                )
+                .into());
+            }
+            let inner = parse_held_inner(sequence, sequence)?;
+            if inner.is_empty() {
+                return Err(io::Error::other("with_chord_held sequence cannot be empty").into());
+            }
+            let token = KeyToken::Held(KeyChordHeld { mods, inner });
+            self.dispatch_token(&token)?;
             let conn = &self.display.conn;
             let damage_id = self.damage.damage();
             let window_id = self.window.id;
@@ -403,16 +611,137 @@ impl<'a> Editor<'a> {
                 SEND_KEYS_QUIET,
                 SEND_KEYS_TIMEOUT,
             )?;
+            Ok(())
+        })();
+        self.attach_stderr_context(result, "with_chord_held")
+    }
+
+    /// Synthesize the X events for one parsed token without settling. Shared
+    /// by `send_keys`, `send_keys_expect_quiet`, and `with_chord_held`.
+    fn dispatch_token(&self, token: &KeyToken) -> Result<()> {
+        match token {
+            KeyToken::Single(s) => {
+                let (code, base_shift) = resolve_key(&self.display.keycodes, s.key)?;
+                input::chord(
+                    &self.display.conn,
+                    self.display.root,
+                    &self.display.keycodes,
+                    code,
+                    s.ctrl,
+                    s.alt,
+                    base_shift || s.shift,
+                )
+            }
+            KeyToken::Held(h) => {
+                let conn = &self.display.conn;
+                let root = self.display.root;
+                let kc = &self.display.keycodes;
+                input::press_modifiers(conn, root, kc, h.mods.ctrl, h.mods.alt, h.mods.shift)?;
+                for inner in &h.inner {
+                    let (code, base_shift) = resolve_key(kc, inner.key)?;
+                    let need_inner_shift = (base_shift || inner.shift) && !h.mods.shift;
+                    if need_inner_shift {
+                        input::press_modifiers(conn, root, kc, false, false, true)?;
+                    }
+                    input::tap_key(conn, root, code)?;
+                    if need_inner_shift {
+                        input::release_modifiers(conn, root, kc, false, false, true)?;
+                    }
+                }
+                input::release_modifiers(conn, root, kc, h.mods.ctrl, h.mods.alt, h.mods.shift)?;
+                conn.flush()?;
+                Ok(())
+            }
         }
-        Ok(())
+    }
+
+    /// Drive a vim-style key sequence through the harness and assert that
+    /// **no** matching DAMAGE event arrives within `deadline`. Use this for
+    /// legitimate no-op assertions where `send_keys`'s "every key paints"
+    /// invariant would otherwise produce a false timeout: Ctrl+D on a buffer
+    /// without a current occurrence, Ctrl+S on an unmodified file, the first
+    /// half of a vim compound that is still pending, and similar.
+    ///
+    /// Drains any pre-existing damage events first so a paint from the
+    /// previous operation cannot bleed into this assertion. Then synthesizes
+    /// every key without a per-key paint wait. Finally polls for `deadline`,
+    /// returning `Ok(())` if the window expires cleanly and an error if any
+    /// matching damage arrives or the editor exits.
+    pub fn send_keys_expect_quiet(&mut self, sequence: &str, deadline: Duration) -> Result<()> {
+        let result: Result<()> = (|| {
+            let tokens = parse_keys(sequence)?;
+            damage_wait::drain_pending(&self.display.conn, self.damage.damage(), self.window.id)?;
+            for token in &tokens {
+                self.dispatch_token(token)?;
+            }
+            let conn = &self.display.conn;
+            let damage_id = self.damage.damage();
+            let window_id = self.window.id;
+            let child = child_mut(&mut self.child)?;
+            damage_wait::expect_no_damage(conn, damage_id, window_id, child, deadline)
+        })();
+        self.attach_stderr_context(result, "send_keys_expect_quiet")
     }
 
     pub fn wait_quiet(&mut self, quiet: Duration, timeout: Duration) -> Result<u64> {
-        let conn = &self.display.conn;
-        let damage_id = self.damage.damage();
-        let window_id = self.window.id;
-        let child = child_mut(&mut self.child)?;
-        damage_wait::wait_quiet(conn, damage_id, window_id, child, quiet, timeout)
+        let result = (|| {
+            let conn = &self.display.conn;
+            let damage_id = self.damage.damage();
+            let window_id = self.window.id;
+            let child = child_mut(&mut self.child)?;
+            damage_wait::wait_quiet(conn, damage_id, window_id, child, quiet, timeout)
+        })();
+        self.attach_stderr_context(result, "wait_quiet")
+    }
+
+    /// Drain any new state-trace records and return the most recent one.
+    /// The harness already settles damage-then-quiet after each `send_keys`
+    /// keystroke, so the latest record reflects the last settled state.
+    /// Errors when no state-trace path was configured at spawn time, or
+    /// when the editor has not emitted any record yet.
+    pub fn read_state(&mut self) -> Result<StateTraceRecord> {
+        let result = match self.state_trace.as_mut() {
+            Some(reader) => reader.latest(),
+            None => Err(io::Error::other(
+                "state trace not configured; pass `SpawnOpts::state_trace_path` at spawn time",
+            )
+            .into()),
+        };
+        self.attach_stderr_context(result, "read_state")
+    }
+
+    /// Convenience wrapper: read the latest state and run a predicate. On
+    /// failure the error includes a pretty-printed dump of the offending
+    /// record so test diagnostics surface what was actually observed
+    /// instead of the bare predicate name.
+    pub fn expect_state(
+        &mut self,
+        label: &str,
+        predicate: impl FnOnce(&StateTraceRecord) -> bool,
+    ) -> Result<StateTraceRecord> {
+        let record = self.read_state()?;
+        if predicate(&record) {
+            Ok(record)
+        } else {
+            let pretty = serde_json::to_string_pretty(&record).unwrap_or_else(|_| {
+                "<state-trace record could not be re-serialized for diagnostics>".to_string()
+            });
+            Err(format!("expect_state {label}: predicate returned false\n{pretty}").into())
+        }
+    }
+
+    /// Drain new records since the last call. Returns them in append order.
+    /// Useful for asserting state across a multi-key span (e.g. one record
+    /// per keystroke). Empty `Vec` when nothing new is available.
+    pub fn drain_state_records(&mut self) -> Result<Vec<StateTraceRecord>> {
+        let result = match self.state_trace.as_mut() {
+            Some(reader) => reader.read_new_records(),
+            None => Err(io::Error::other(
+                "state trace not configured; pass `SpawnOpts::state_trace_path` at spawn time",
+            )
+            .into()),
+        };
+        self.attach_stderr_context(result, "drain_state_records")
     }
 
     pub fn wait_file_text(
@@ -421,21 +750,24 @@ impl<'a> Editor<'a> {
         expected: &str,
         opts: FileWaitOpts,
     ) -> Result<FileWaitOutcome> {
-        let display = self.display;
-        let damage_id = self.damage.damage();
-        let window_id = self.window.id;
-        let child = child_mut(&mut self.child)?;
-        wait_file_text_impl(
-            &display.conn,
-            damage_id,
-            window_id,
-            display.root,
-            &display.keycodes,
-            child,
-            path,
-            expected,
-            opts,
-        )
+        let result = (|| {
+            let display = self.display;
+            let damage_id = self.damage.damage();
+            let window_id = self.window.id;
+            let child = child_mut(&mut self.child)?;
+            wait_file_text_impl(
+                &display.conn,
+                damage_id,
+                window_id,
+                display.root,
+                &display.keycodes,
+                child,
+                path,
+                expected,
+                opts,
+            )
+        })();
+        self.attach_stderr_context(result, "wait_file_text")
     }
 
     pub fn wait_file_stable(
@@ -444,13 +776,19 @@ impl<'a> Editor<'a> {
         stable_for: Duration,
         timeout: Duration,
     ) -> Result<FileStats> {
-        let child = child_mut(&mut self.child)?;
-        wait_file_stable_impl(child, path, stable_for, timeout)
+        let result = (|| {
+            let child = child_mut(&mut self.child)?;
+            wait_file_stable_impl(child, path, stable_for, timeout)
+        })();
+        self.attach_stderr_context(result, "wait_file_stable")
     }
 
     pub fn wait_for_exit(&mut self, timeout: Duration) -> Result<ExitStatus> {
-        let child = child_mut(&mut self.child)?;
-        wait_child(child, timeout)
+        let result = (|| {
+            let child = child_mut(&mut self.child)?;
+            wait_child(child, timeout)
+        })();
+        self.attach_stderr_context(result, "wait_for_exit")
     }
 
     /// Send `Ctrl+Q` and wait for the editor to exit. Consumes `self`; on
@@ -458,19 +796,76 @@ impl<'a> Editor<'a> {
     /// On timeout the child is force-terminated before the error is
     /// returned, so callers cannot leak the editor process.
     pub fn quit(mut self, timeout: Duration) -> Result<ExitStatus> {
-        self.press(KeyChord::Ctrl(Key::Char('q')))?;
-        let mut child = self
-            .child
-            .take()
-            .expect("child still present at quit entry");
-        match wait_child(&mut child, timeout) {
-            Ok(status) => Ok(status),
-            Err(error) => {
-                terminate(&mut child);
-                Err(error)
+        let result = (|| -> Result<ExitStatus> {
+            self.press(KeyChord::Ctrl(Key::Char('q')))?;
+            let mut child = self
+                .child
+                .take()
+                .expect("child still present at quit entry");
+            match wait_child(&mut child, timeout) {
+                Ok(status) => Ok(status),
+                Err(error) => {
+                    terminate(&mut child);
+                    Err(error)
+                }
             }
-        }
+        })();
+        self.attach_stderr_context(result, "quit")
     }
+
+    /// Attach the tail of the captured stderr log to an error message so
+    /// timeouts and unexpected exits surface the editor's own trail without
+    /// forcing callers to dig through artifact directories. No-op when no
+    /// stderr log path was configured at spawn time, or when the log is
+    /// empty / unreadable.
+    fn attach_stderr_context<T>(&self, result: Result<T>, label: &str) -> Result<T> {
+        let Err(error) = result else {
+            return result;
+        };
+        let Some(path) = self.stderr_log_path.as_ref() else {
+            return Err(error);
+        };
+        let tail = tail_log(path, STDERR_TAIL_LINES);
+        if tail.is_empty() {
+            return Err(error);
+        }
+        Err(format!(
+            "{error}\n--- editor stderr tail ({label}, last {} non-empty lines from {}) ---\n{tail}",
+            STDERR_TAIL_LINES,
+            path.display(),
+        )
+        .into())
+    }
+}
+
+fn resolve_text_pixels(
+    state: &StateTraceRecord,
+    line: usize,
+    col: usize,
+    label: &str,
+) -> Result<(i32, i32)> {
+    state
+        .viewport
+        .text_to_window_local(line, col)
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "{label}: line {line} col {col} not in painted viewport (rows: {}); scroll-into-view first or wait for first paint",
+                state.viewport.rows.len(),
+            ))
+            .into()
+        })
+}
+
+fn tail_log(path: &Path, max_lines: usize) -> String {
+    let Ok(text) = fs::read_to_string(path) else {
+        return String::new();
+    };
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
 }
 
 fn child_mut(child: &mut Option<Child>) -> Result<&mut Child> {
@@ -504,13 +899,84 @@ fn resolve_key(kc: &Keycodes, key: Key) -> Result<(Keycode, bool)> {
         Key::Right => Ok((kc.right, false)),
         Key::Up => Ok((kc.up, false)),
         Key::Down => Ok((kc.down, false)),
+        Key::PageUp => Ok((kc.page_up, false)),
+        Key::PageDown => Ok((kc.page_down, false)),
     }
 }
 
+/// Modifier set held continuously across a chord-hold span. Used both by
+/// the parser (`<C-{k d}>`) and the programmatic [`Editor::with_chord_held`]
+/// API. Pub-fields because there is no invariant beyond "at least one of
+/// ctrl/alt/shift is set" (enforced at use time).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ChordMods {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
+impl ChordMods {
+    pub const CTRL: Self = Self {
+        ctrl: true,
+        alt: false,
+        shift: false,
+    };
+    pub const ALT: Self = Self {
+        ctrl: false,
+        alt: true,
+        shift: false,
+    };
+    pub const SHIFT: Self = Self {
+        ctrl: false,
+        alt: false,
+        shift: true,
+    };
+
+    pub fn is_empty(self) -> bool {
+        !self.ctrl && !self.alt && !self.shift
+    }
+
+    pub fn with_ctrl(mut self) -> Self {
+        self.ctrl = true;
+        self
+    }
+    pub fn with_alt(mut self) -> Self {
+        self.alt = true;
+        self
+    }
+    pub fn with_shift(mut self) -> Self {
+        self.shift = true;
+        self
+    }
+}
+
+#[derive(Clone, Debug)]
+enum KeyToken {
+    Single(KeyChordSingle),
+    Held(KeyChordHeld),
+}
+
 #[derive(Clone, Copy, Debug)]
-struct KeyToken {
+struct KeyChordSingle {
     ctrl: bool,
     alt: bool,
+    shift: bool,
+    key: Key,
+}
+
+#[derive(Clone, Debug)]
+struct KeyChordHeld {
+    /// Outer modifier set, held continuously across `inner`. Always
+    /// non-empty (parser rejects empty held sets).
+    mods: ChordMods,
+    /// Inner keys, tapped in order while `mods` is held.
+    inner: Vec<HeldInnerKey>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HeldInnerKey {
+    /// Inner-only shift, on top of any shift in the held outer mods.
+    /// Lets `<C-{A b}>` mean "Ctrl held, then Shift+A then b."
     shift: bool,
     key: Key,
 }
@@ -521,25 +987,33 @@ fn parse_keys(input: &str) -> Result<Vec<KeyToken>> {
     while let Some(ch) = chars.next() {
         if ch == '<' {
             let mut spec = String::new();
+            let mut depth = 0usize;
             let mut closed = false;
             for c in chars.by_ref() {
-                if c == '>' {
+                if c == '{' {
+                    depth += 1;
+                    spec.push(c);
+                } else if c == '}' {
+                    depth = depth.saturating_sub(1);
+                    spec.push(c);
+                } else if c == '>' && depth == 0 {
                     closed = true;
                     break;
+                } else {
+                    spec.push(c);
                 }
-                spec.push(c);
             }
             if !closed {
                 return Err(io::Error::other(format!("unterminated key escape '<{spec}'")).into());
             }
             tokens.push(parse_escape(&spec)?);
         } else {
-            tokens.push(KeyToken {
+            tokens.push(KeyToken::Single(KeyChordSingle {
                 ctrl: false,
                 alt: false,
                 shift: false,
                 key: Key::Char(ch),
-            });
+            }));
         }
     }
     Ok(tokens)
@@ -549,6 +1023,14 @@ fn parse_escape(spec: &str) -> Result<KeyToken> {
     if spec.is_empty() {
         return Err(io::Error::other("empty key escape '<>'").into());
     }
+    if let Some(brace_idx) = spec.find('{') {
+        return parse_held_escape(spec, brace_idx);
+    }
+    let single = parse_single_escape(spec)?;
+    Ok(KeyToken::Single(single))
+}
+
+fn parse_single_escape(spec: &str) -> Result<KeyChordSingle> {
     let lowered = spec.to_ascii_lowercase();
     let mut ctrl = false;
     let mut alt = false;
@@ -577,12 +1059,100 @@ fn parse_escape(spec: &str) -> Result<KeyToken> {
         parse_special_name(tail)
             .ok_or_else(|| io::Error::other(format!("unknown key escape '<{spec}>'")))?
     };
-    Ok(KeyToken {
+    Ok(KeyChordSingle {
         ctrl,
         alt,
         shift,
         key,
     })
+}
+
+fn parse_held_escape(spec: &str, brace_idx: usize) -> Result<KeyToken> {
+    let prefix = &spec[..brace_idx];
+    let body = &spec[brace_idx..];
+    if !body.ends_with('}') {
+        return Err(
+            io::Error::other(format!("chord-hold escape must end with '}}': '<{spec}>'")).into(),
+        );
+    }
+    let inner_raw = &body[1..body.len() - 1];
+
+    let lowered_prefix = prefix.to_ascii_lowercase();
+    let mut mods = ChordMods::default();
+    let mut tail = lowered_prefix.as_str();
+    loop {
+        if let Some(rest) = strip_modifier(tail, &["c-", "ctrl-"]) {
+            mods.ctrl = true;
+            tail = rest;
+        } else if let Some(rest) = strip_modifier(tail, &["a-", "alt-"]) {
+            mods.alt = true;
+            tail = rest;
+        } else if let Some(rest) = strip_modifier(tail, &["s-", "shift-"]) {
+            mods.shift = true;
+            tail = rest;
+        } else {
+            break;
+        }
+    }
+    if !tail.is_empty() {
+        return Err(io::Error::other(format!(
+            "unexpected text before chord-hold body in '<{spec}>'"
+        ))
+        .into());
+    }
+    if mods.is_empty() {
+        return Err(io::Error::other(format!(
+            "chord-hold requires at least one held modifier: '<{spec}>'"
+        ))
+        .into());
+    }
+
+    let inner = parse_held_inner(inner_raw, spec)?;
+    if inner.is_empty() {
+        return Err(
+            io::Error::other(format!("chord-hold body cannot be empty: '<{spec}>'")).into(),
+        );
+    }
+    Ok(KeyToken::Held(KeyChordHeld { mods, inner }))
+}
+
+fn parse_held_inner(inner_raw: &str, spec: &str) -> Result<Vec<HeldInnerKey>> {
+    let mut inner = Vec::new();
+    for piece in inner_raw.split_whitespace() {
+        let parsed = parse_keys(piece).map_err(|err| {
+            io::Error::other(format!(
+                "invalid inner piece {piece:?} in '<{spec}>': {err}"
+            ))
+        })?;
+        if parsed.len() != 1 {
+            return Err(io::Error::other(format!(
+                "each inner piece in chord-hold must be exactly one key (got {} from {piece:?}): '<{spec}>'",
+                parsed.len()
+            ))
+            .into());
+        }
+        match parsed.into_iter().next().unwrap() {
+            KeyToken::Single(s) => {
+                if s.ctrl || s.alt {
+                    return Err(io::Error::other(format!(
+                        "inner key in chord-hold cannot carry ctrl/alt; held modifiers go on the outer prefix: '<{spec}>'"
+                    ))
+                    .into());
+                }
+                inner.push(HeldInnerKey {
+                    shift: s.shift,
+                    key: s.key,
+                });
+            }
+            KeyToken::Held(_) => {
+                return Err(io::Error::other(format!(
+                    "nested chord-hold not supported: '<{spec}>'"
+                ))
+                .into());
+            }
+        }
+    }
+    Ok(inner)
 }
 
 fn strip_modifier<'a>(tail: &'a str, prefixes: &[&str]) -> Option<&'a str> {
@@ -603,6 +1173,8 @@ fn parse_special_name(name: &str) -> Option<Key> {
         "right" => Key::Right,
         "up" => Key::Up,
         "down" => Key::Down,
+        "pageup" | "pgup" | "prior" => Key::PageUp,
+        "pagedown" | "pgdn" | "next" => Key::PageDown,
         "lt" => Key::Char('<'),
         _ => return None,
     })
@@ -819,29 +1391,54 @@ fn terminate(child: &mut Child) {
 mod tests {
     use super::*;
 
-    fn token(ctrl: bool, alt: bool, shift: bool, key: Key) -> KeyToken {
-        KeyToken {
+    fn single(ctrl: bool, alt: bool, shift: bool, key: Key) -> KeyToken {
+        KeyToken::Single(KeyChordSingle {
             ctrl,
             alt,
             shift,
             key,
-        }
+        })
     }
 
     fn assert_keys(input: &str, expected: &[KeyToken]) {
         let parsed = parse_keys(input).unwrap();
         assert_eq!(parsed.len(), expected.len(), "{input:?} → {parsed:?}");
         for (got, want) in parsed.iter().zip(expected) {
-            assert_eq!(got.ctrl, want.ctrl, "{input:?}");
-            assert_eq!(got.alt, want.alt, "{input:?}");
-            assert_eq!(got.shift, want.shift, "{input:?}");
-            assert!(
-                matches!((got.key, want.key),
-                    (Key::Char(a), Key::Char(b)) if a == b)
-                    || std::mem::discriminant(&got.key) == std::mem::discriminant(&want.key),
-                "{input:?}: {got:?} vs {want:?}",
-            );
+            match (got, want) {
+                (KeyToken::Single(a), KeyToken::Single(b)) => {
+                    assert_eq!(a.ctrl, b.ctrl, "{input:?}");
+                    assert_eq!(a.alt, b.alt, "{input:?}");
+                    assert_eq!(a.shift, b.shift, "{input:?}");
+                    assert!(
+                        matches!((a.key, b.key), (Key::Char(x), Key::Char(y)) if x == y)
+                            || std::mem::discriminant(&a.key) == std::mem::discriminant(&b.key),
+                        "{input:?}: {got:?} vs {want:?}",
+                    );
+                }
+                (KeyToken::Held(a), KeyToken::Held(b)) => {
+                    assert_eq!(a.mods, b.mods, "{input:?}");
+                    assert_eq!(a.inner.len(), b.inner.len(), "{input:?}");
+                    for (ai, bi) in a.inner.iter().zip(b.inner.iter()) {
+                        assert_eq!(ai.shift, bi.shift, "{input:?}");
+                        assert!(
+                            matches!((ai.key, bi.key), (Key::Char(x), Key::Char(y)) if x == y)
+                                || std::mem::discriminant(&ai.key)
+                                    == std::mem::discriminant(&bi.key),
+                            "{input:?}: inner {ai:?} vs {bi:?}",
+                        );
+                    }
+                }
+                _ => panic!("token kind mismatch: {input:?}: {got:?} vs {want:?}"),
+            }
         }
+    }
+
+    fn held(mods: ChordMods, inner: Vec<HeldInnerKey>) -> KeyToken {
+        KeyToken::Held(KeyChordHeld { mods, inner })
+    }
+
+    fn inner(shift: bool, key: Key) -> HeldInnerKey {
+        HeldInnerKey { shift, key }
     }
 
     #[test]
@@ -849,17 +1446,17 @@ mod tests {
         assert_keys(
             "A<enter>B<enter>C<enter><esc>ggdd",
             &[
-                token(false, false, false, Key::Char('A')),
-                token(false, false, false, Key::Enter),
-                token(false, false, false, Key::Char('B')),
-                token(false, false, false, Key::Enter),
-                token(false, false, false, Key::Char('C')),
-                token(false, false, false, Key::Enter),
-                token(false, false, false, Key::Escape),
-                token(false, false, false, Key::Char('g')),
-                token(false, false, false, Key::Char('g')),
-                token(false, false, false, Key::Char('d')),
-                token(false, false, false, Key::Char('d')),
+                single(false, false, false, Key::Char('A')),
+                single(false, false, false, Key::Enter),
+                single(false, false, false, Key::Char('B')),
+                single(false, false, false, Key::Enter),
+                single(false, false, false, Key::Char('C')),
+                single(false, false, false, Key::Enter),
+                single(false, false, false, Key::Escape),
+                single(false, false, false, Key::Char('g')),
+                single(false, false, false, Key::Char('g')),
+                single(false, false, false, Key::Char('d')),
+                single(false, false, false, Key::Char('d')),
             ],
         );
     }
@@ -869,10 +1466,10 @@ mod tests {
         assert_keys(
             "<C-s><S-tab><C-S-l><ctrl-shift-a>",
             &[
-                token(true, false, false, Key::Char('s')),
-                token(false, false, true, Key::Tab),
-                token(true, false, true, Key::Char('l')),
-                token(true, false, true, Key::Char('a')),
+                single(true, false, false, Key::Char('s')),
+                single(false, false, true, Key::Tab),
+                single(true, false, true, Key::Char('l')),
+                single(true, false, true, Key::Char('a')),
             ],
         );
     }
@@ -882,12 +1479,12 @@ mod tests {
         assert_keys(
             "<C-A-down><alt-up><S-left><delete><home><end>",
             &[
-                token(true, true, false, Key::Down),
-                token(false, true, false, Key::Up),
-                token(false, false, true, Key::Left),
-                token(false, false, false, Key::Delete),
-                token(false, false, false, Key::Home),
-                token(false, false, false, Key::End),
+                single(true, true, false, Key::Down),
+                single(false, true, false, Key::Up),
+                single(false, false, true, Key::Left),
+                single(false, false, false, Key::Delete),
+                single(false, false, false, Key::Home),
+                single(false, false, false, Key::End),
             ],
         );
     }
@@ -897,10 +1494,10 @@ mod tests {
         assert_keys(
             "<Esc><ESCAPE><Cr><RETURN>",
             &[
-                token(false, false, false, Key::Escape),
-                token(false, false, false, Key::Escape),
-                token(false, false, false, Key::Enter),
-                token(false, false, false, Key::Enter),
+                single(false, false, false, Key::Escape),
+                single(false, false, false, Key::Escape),
+                single(false, false, false, Key::Enter),
+                single(false, false, false, Key::Enter),
             ],
         );
     }
@@ -910,8 +1507,8 @@ mod tests {
         assert_keys(
             "<lt>3",
             &[
-                token(false, false, false, Key::Char('<')),
-                token(false, false, false, Key::Char('3')),
+                single(false, false, false, Key::Char('<')),
+                single(false, false, false, Key::Char('3')),
             ],
         );
     }
@@ -924,5 +1521,128 @@ mod tests {
     #[test]
     fn unknown_special_key_is_an_error() {
         assert!(parse_keys("<bogus>").is_err());
+    }
+
+    #[test]
+    fn page_up_and_page_down_have_canonical_and_short_names() {
+        assert_keys(
+            "<pageup><pgup><pagedown><pgdn>",
+            &[
+                single(false, false, false, Key::PageUp),
+                single(false, false, false, Key::PageUp),
+                single(false, false, false, Key::PageDown),
+                single(false, false, false, Key::PageDown),
+            ],
+        );
+    }
+
+    #[test]
+    fn chord_hold_short_form_with_two_inner_keys() {
+        assert_keys(
+            "<C-{k d}>",
+            &[held(
+                ChordMods::CTRL,
+                vec![inner(false, Key::Char('k')), inner(false, Key::Char('d'))],
+            )],
+        );
+    }
+
+    #[test]
+    fn chord_hold_verbose_form_matches_short_form() {
+        assert_keys(
+            "<ctrl-{k d}>",
+            &[held(
+                ChordMods::CTRL,
+                vec![inner(false, Key::Char('k')), inner(false, Key::Char('d'))],
+            )],
+        );
+    }
+
+    #[test]
+    fn chord_hold_with_specials_inside_braces() {
+        assert_keys(
+            "<C-{<up> <down>}>",
+            &[held(
+                ChordMods::CTRL,
+                vec![inner(false, Key::Up), inner(false, Key::Down)],
+            )],
+        );
+    }
+
+    #[test]
+    fn chord_hold_inner_uppercase_picks_up_inner_shift_via_resolve() {
+        // Inside a brace group, bare uppercase letters survive case-preserving
+        // because `parse_keys` recurses on each whitespace piece. The shift
+        // flag stays false at parse time; it's resolved later via `lookup_char`.
+        assert_keys(
+            "<C-{A b}>",
+            &[held(
+                ChordMods::CTRL,
+                vec![inner(false, Key::Char('A')), inner(false, Key::Char('b'))],
+            )],
+        );
+    }
+
+    #[test]
+    fn chord_hold_inner_explicit_shift_is_allowed() {
+        assert_keys(
+            "<C-{<S-tab> b}>",
+            &[held(
+                ChordMods::CTRL,
+                vec![inner(true, Key::Tab), inner(false, Key::Char('b'))],
+            )],
+        );
+    }
+
+    #[test]
+    fn chord_hold_combined_with_singles() {
+        assert_keys(
+            "a<C-{k d}>z",
+            &[
+                single(false, false, false, Key::Char('a')),
+                held(
+                    ChordMods::CTRL,
+                    vec![inner(false, Key::Char('k')), inner(false, Key::Char('d'))],
+                ),
+                single(false, false, false, Key::Char('z')),
+            ],
+        );
+    }
+
+    #[test]
+    fn chord_hold_requires_outer_modifier() {
+        assert!(parse_keys("<{k d}>").is_err());
+    }
+
+    #[test]
+    fn chord_hold_inner_cannot_carry_ctrl() {
+        assert!(parse_keys("<C-{<C-k> d}>").is_err());
+    }
+
+    #[test]
+    fn chord_hold_inner_cannot_carry_alt() {
+        assert!(parse_keys("<C-{<A-k> d}>").is_err());
+    }
+
+    #[test]
+    fn chord_hold_rejects_nested_braces() {
+        assert!(parse_keys("<C-{<A-{x y}> d}>").is_err());
+    }
+
+    #[test]
+    fn chord_hold_empty_body_is_an_error() {
+        assert!(parse_keys("<C-{}>").is_err());
+    }
+
+    #[test]
+    fn chord_hold_unterminated_is_an_error() {
+        assert!(parse_keys("<C-{k d>").is_err());
+    }
+
+    #[test]
+    fn chord_hold_multi_char_piece_is_an_error() {
+        // "kd" inside the braces would parse as two tokens; we require one
+        // key per whitespace-separated piece for unambiguity.
+        assert!(parse_keys("<C-{kd}>").is_err());
     }
 }

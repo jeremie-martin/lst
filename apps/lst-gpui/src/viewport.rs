@@ -80,6 +80,15 @@ pub(crate) struct ViewportGeometry {
     /// Lets the reveal handler translate logical columns to pixels without
     /// requiring a `&mut Window` to re-shape a probe line.
     pub(crate) painted_char_width: Pixels,
+    /// Vertical pitch between consecutive painted rows. Captured at paint
+    /// time so the state-trace channel and other consumers can convert
+    /// (line, col) → pixels without `window.line_height()`.
+    pub(crate) painted_row_height: Pixels,
+    /// Window-local x where the first code character of an unwrapped line
+    /// is painted (i.e., `bounds.left() + gutter_pad - horizontal_scroll`).
+    /// Captured at paint time so consumers can convert (col) → window x via
+    /// `code_origin_x_at_paint + col * painted_char_width`.
+    pub(crate) code_origin_x_at_paint: Pixels,
 }
 
 #[derive(Clone)]
@@ -721,6 +730,8 @@ pub(crate) fn prepare_viewport_paint_state(
         scroll_left_at_paint: scroll_left,
         painted_wrap_columns: show_wrap.then_some(layout.wrap_columns),
         painted_char_width: char_width,
+        painted_row_height: row_height,
+        code_origin_x_at_paint: code_origin_x(bounds.left(), show_gutter, scale, scroll_left),
     };
 
     ViewportPaintState { rows }

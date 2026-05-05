@@ -114,3 +114,60 @@ impl RequireDamage {
         }
     }
 }
+
+/// Drain any pending damage events without waiting. Used to clear the slate
+/// before an "expect no damage" assertion so prior unrelated paints do not
+/// pollute the observation.
+pub(crate) fn drain_pending(
+    conn: &RustConnection,
+    damage_id: damage::Damage,
+    window: Window,
+) -> Result<u64> {
+    let mut count = 0u64;
+    while let Some(event) = conn.poll_for_event()? {
+        if let Event::DamageNotify(notify) = event {
+            if notify.damage == damage_id && notify.drawable == window {
+                count += 1;
+                conn.damage_subtract(damage_id, NONE, NONE)?;
+            }
+        }
+    }
+    conn.flush()?;
+    Ok(count)
+}
+
+/// Assert that no matching damage event arrives within `deadline`. Returns
+/// `Ok(())` when the window expires with zero events. Returns an error if any
+/// matching `DamageNotify` arrives, or if the editor exits during the wait.
+pub(crate) fn expect_no_damage(
+    conn: &RustConnection,
+    damage_id: damage::Damage,
+    window: Window,
+    child: &mut Child,
+    deadline: Duration,
+) -> Result<()> {
+    let end = Instant::now() + deadline;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Err(io::Error::other(format!(
+                "editor exited while expecting no damage: {status}"
+            ))
+            .into());
+        }
+        while let Some(event) = conn.poll_for_event()? {
+            if let Event::DamageNotify(notify) = event {
+                if notify.damage == damage_id && notify.drawable == window {
+                    conn.damage_subtract(damage_id, NONE, NONE)?;
+                    return Err(
+                        io::Error::other("expected no damage but observed a DamageNotify").into(),
+                    );
+                }
+            }
+        }
+        conn.flush()?;
+        if Instant::now() >= end {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}

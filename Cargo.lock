@@ -3053,6 +3053,8 @@ dependencies = [
  "lst-x11-harness",
  "rfd",
  "ropey",
+ "serde",
+ "serde_json",
  "smallvec",
  "time",
  "tree-sitter",
@@ -3076,6 +3078,8 @@ name = "lst-x11-harness"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "serde",
+ "serde_json",
  "x11rb",
 ]
 

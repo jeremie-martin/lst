@@ -49,8 +49,44 @@ pub(crate) fn move_pointer_to_window_center(
 }
 
 pub(crate) fn click_button(conn: &RustConnection, root: Window, button: u8) -> Result<()> {
+    button_press(conn, root, button)?;
+    button_release(conn, root, button)?;
+    conn.flush()?;
+    Ok(())
+}
+
+pub(crate) fn button_press(conn: &RustConnection, root: Window, button: u8) -> Result<()> {
     conn.xtest_fake_input(xproto::BUTTON_PRESS_EVENT, button, 0, root, 0, 0, 0)?;
+    Ok(())
+}
+
+pub(crate) fn button_release(conn: &RustConnection, root: Window, button: u8) -> Result<()> {
     conn.xtest_fake_input(xproto::BUTTON_RELEASE_EVENT, button, 0, root, 0, 0, 0)?;
+    Ok(())
+}
+
+/// Click `button` `count` times in quick succession. GPUI's input adapter
+/// detects double / triple / quadruple clicks by comparing X event
+/// timestamps; X servers stamp at queue time with millisecond resolution,
+/// so a microsecond-tight burst can hand back identical timestamps and
+/// fail the click-count promotion. Sleep a single millisecond between
+/// pairs — well inside the typical click-interval threshold (~200ms) but
+/// long enough to guarantee distinct timestamps on every reasonable
+/// server clock.
+pub(crate) fn multi_click_button(
+    conn: &RustConnection,
+    root: Window,
+    button: u8,
+    count: usize,
+) -> Result<()> {
+    for index in 0..count {
+        if index > 0 {
+            conn.flush()?;
+            thread::sleep(Duration::from_millis(1));
+        }
+        button_press(conn, root, button)?;
+        button_release(conn, root, button)?;
+    }
     conn.flush()?;
     Ok(())
 }
@@ -65,7 +101,7 @@ pub(crate) fn key_release(conn: &RustConnection, root: Window, code: Keycode) ->
     Ok(())
 }
 
-/// Press `code` with optional `Ctrl` and `Shift` modifiers held. Modifiers
+/// Press `code` with optional `Ctrl`/`Alt`/`Shift` modifiers held. Modifiers
 /// are pressed before the key and released after, so the X server sees a
 /// well-formed chord regardless of what the host's actual keyboard state is.
 pub(crate) fn chord(
@@ -73,6 +109,24 @@ pub(crate) fn chord(
     root: Window,
     kc: &Keycodes,
     code: Keycode,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+) -> Result<()> {
+    press_modifiers(conn, root, kc, ctrl, alt, shift)?;
+    tap_key(conn, root, code)?;
+    release_modifiers(conn, root, kc, ctrl, alt, shift)?;
+    conn.flush()?;
+    Ok(())
+}
+
+/// Press the requested modifier keys without flushing. Pair with
+/// [`release_modifiers`] to keep modifiers held across multiple key taps
+/// (chord-hold), or modifier-bearing mouse clicks.
+pub(crate) fn press_modifiers(
+    conn: &RustConnection,
+    root: Window,
+    kc: &Keycodes,
     ctrl: bool,
     alt: bool,
     shift: bool,
@@ -86,8 +140,19 @@ pub(crate) fn chord(
     if shift {
         key_press(conn, root, kc.shift_l)?;
     }
-    key_press(conn, root, code)?;
-    key_release(conn, root, code)?;
+    Ok(())
+}
+
+/// Release the requested modifier keys in reverse order. Pair with
+/// [`press_modifiers`].
+pub(crate) fn release_modifiers(
+    conn: &RustConnection,
+    root: Window,
+    kc: &Keycodes,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+) -> Result<()> {
     if shift {
         key_release(conn, root, kc.shift_l)?;
     }
@@ -97,7 +162,15 @@ pub(crate) fn chord(
     if ctrl {
         key_release(conn, root, kc.control_l)?;
     }
-    conn.flush()?;
+    Ok(())
+}
+
+/// Press and release a single keycode without flushing. Used inside
+/// chord-hold spans where the caller wants to control the surrounding
+/// modifier state explicitly.
+pub(crate) fn tap_key(conn: &RustConnection, root: Window, code: Keycode) -> Result<()> {
+    key_press(conn, root, code)?;
+    key_release(conn, root, code)?;
     Ok(())
 }
 

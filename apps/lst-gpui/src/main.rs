@@ -14,6 +14,7 @@ mod launch;
 mod recent;
 mod runtime;
 mod shell;
+mod state_trace;
 mod syntax;
 #[cfg(test)]
 mod tests;
@@ -33,7 +34,8 @@ use interactions::ActiveDragSelection;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
-    EditorModel, EditorTab as ModelEditorTab, FocusTarget, RevealIntent, TabId, UNTITLED_PREFIX,
+    find::FindScope, EditorModel, EditorTab as ModelEditorTab, FocusTarget, RevealIntent, TabId,
+    UNTITLED_PREFIX,
 };
 #[cfg(not(test))]
 use recent::default_recent_files_path;
@@ -45,6 +47,10 @@ use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
 use runtime::clipboard::{ExitClipboard, SubprocessExitClipboard};
+use state_trace::{
+    StateTraceEmitter, StateTraceRecord, TraceCursor, TraceFind, TraceRange, TraceRow,
+    TraceViewport, STATE_TRACE_SCHEMA_VERSION,
+};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -227,6 +233,7 @@ struct LstGpuiApp {
     force_editor_focus: bool,
     zoom_level: i32,
     exit_clipboard: Arc<dyn ExitClipboard>,
+    state_trace: StateTraceEmitter,
     _shell_subscriptions: Vec<Subscription>,
 }
 
@@ -280,6 +287,7 @@ impl LstGpuiApp {
             force_editor_focus: false,
             zoom_level: 0,
             exit_clipboard: Arc::new(SubprocessExitClipboard),
+            state_trace: StateTraceEmitter::from_env(),
             _shell_subscriptions: Vec::new(),
         };
         cx.set_global(ThemeId::default());
@@ -519,8 +527,129 @@ impl LstGpuiApp {
             self.sync_goto_input(cx);
         }
         self.handle_model_effects(effects, cx);
+        self.emit_state_trace();
         if notify_after_update {
             cx.notify();
+        }
+    }
+
+    /// Append one record to the state-trace channel when one is configured.
+    /// No-op in production. Re-entrant calls (during effect handling) are
+    /// dropped by `StateTraceEmitter::try_emit`'s internal guard.
+    fn emit_state_trace(&self) {
+        self.state_trace
+            .try_emit(|seq| self.build_state_trace_record(seq));
+    }
+
+    fn build_state_trace_record(&self, seq: u64) -> StateTraceRecord {
+        let tab = self.active_tab();
+        let buffer = tab.buffer();
+        let selection_set = tab.selection_set();
+        let cursors = selection_set
+            .as_slice()
+            .iter()
+            .map(|sel| {
+                let (anchor_line, anchor_col) = char_to_line_col(buffer, sel.anchor());
+                let (head_line, head_col) = char_to_line_col(buffer, sel.head());
+                TraceCursor {
+                    anchor_char: sel.anchor(),
+                    head_char: sel.head(),
+                    anchor_line,
+                    anchor_col,
+                    head_line,
+                    head_col,
+                }
+            })
+            .collect::<Vec<_>>();
+        let marked_range = tab.marked_range().map(|r| TraceRange {
+            start: r.start,
+            end: r.end,
+        });
+        let find = self.model.find();
+        let find_record = TraceFind {
+            visible: find.visible,
+            show_replace: find.show_replace,
+            query: find.query.clone(),
+            case_sensitive: find.case_sensitive,
+            whole_word: find.whole_word,
+            use_regex: find.use_regex,
+            scope: match find.scope {
+                FindScope::Document => "document",
+                FindScope::Selection { .. } => "selection",
+            },
+            match_count: find.matches.len(),
+            active_index: find.active,
+        };
+        let status_bar = match self.selection_summary() {
+            Some(sel) => format!("{} | {sel}", self.status_details()),
+            None => self.status_details(),
+        };
+        let viewport = self.build_state_trace_viewport();
+        StateTraceRecord {
+            schema_version: STATE_TRACE_SCHEMA_VERSION,
+            seq,
+            revision: tab.revision(),
+            active_tab_index: self.model.active_index(),
+            active_tab_id: tab.id().get(),
+            active_tab_path: tab.path().map(|p| p.to_string_lossy().into_owned()),
+            active_tab_modified: tab.modified(),
+            line_count: tab.line_count(),
+            cursors,
+            primary_cursor_index: selection_set.primary_index(),
+            marked_range,
+            vim_mode: self.model.vim_mode().label().to_string(),
+            vim_pending: self.model.vim_pending_display(),
+            find: find_record,
+            goto_line_input: self.model.goto_line().map(ToOwned::to_owned),
+            recent_panel_open: self.recent.is_open(),
+            recent_panel_query: self
+                .recent
+                .is_open()
+                .then(|| self.recent.query().to_string()),
+            status_bar,
+            viewport,
+        }
+    }
+
+    fn build_state_trace_viewport(&self) -> TraceViewport {
+        // `tab_views` is populated by `sync_tab_views` which runs in
+        // `update_model` before the trace emit, so a present view is the
+        // common path. Absence (briefly between tab switches) yields an
+        // empty geometry rather than a panic.
+        let Some(view) = self.tab_views.get(&self.model.active_tab_id()) else {
+            return TraceViewport::default();
+        };
+        let geometry = view.geometry.borrow();
+        let (origin, size) = match geometry.bounds {
+            Some(bounds) => (
+                Some((f32::from(bounds.origin.x), f32::from(bounds.origin.y))),
+                Some((f32::from(bounds.size.width), f32::from(bounds.size.height))),
+            ),
+            None => (None, None),
+        };
+        // PaintedRow doesn't carry the logical line index — wrapped
+        // segments share a logical line — so recover it via the rope.
+        let buffer = self.active_tab().buffer();
+        let len_chars = buffer.len_chars();
+        let rows = geometry
+            .rows
+            .iter()
+            .map(|row| TraceRow {
+                logical_line: buffer.char_to_line(row.line_start_char.min(len_chars)),
+                top_px: f32::from(row.row_top),
+                line_start_char: row.line_start_char,
+                display_end_char: row.display_end_char,
+            })
+            .collect::<Vec<_>>();
+        TraceViewport {
+            bounds_origin_px: origin,
+            bounds_size_px: size,
+            char_width_px: f32::from(geometry.painted_char_width),
+            line_height_px: f32::from(geometry.painted_row_height),
+            scroll_top_px: f32::from(geometry.scroll_top_at_paint),
+            scroll_left_px: f32::from(geometry.scroll_left_at_paint),
+            code_origin_x_px: f32::from(geometry.code_origin_x_at_paint),
+            rows,
         }
     }
 
@@ -961,18 +1090,18 @@ impl LstGpuiApp {
         let set = tab.selection_set();
         if !set.is_single() {
             let buffer = tab.buffer();
-            let (total_chars, total_lines) = set.as_slice().iter().fold(
-                (0usize, 0usize),
-                |(chars, lines), selection| {
-                    let range = selection.range();
-                    if range.start == range.end {
-                        return (chars, lines);
-                    }
-                    let start_line = buffer.char_to_line(range.start);
-                    let end_line = buffer.char_to_line(range.end - 1);
-                    (chars + range.len(), lines + (end_line - start_line + 1))
-                },
-            );
+            let (total_chars, total_lines) =
+                set.as_slice()
+                    .iter()
+                    .fold((0usize, 0usize), |(chars, lines), selection| {
+                        let range = selection.range();
+                        if range.start == range.end {
+                            return (chars, lines);
+                        }
+                        let start_line = buffer.char_to_line(range.start);
+                        let end_line = buffer.char_to_line(range.end - 1);
+                        (chars + range.len(), lines + (end_line - start_line + 1))
+                    });
             let mut parts = vec![format!("{} cursors", set.as_slice().len())];
             if total_chars > 0 {
                 parts.push(format!("Sel {total_chars}"));

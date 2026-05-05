@@ -3835,10 +3835,7 @@ fn remove_cursor_at_char_finds_selection_via_extent_overlap() {
     let mut model = model_with_text("alpha bravo charlie delta");
     set_selection_set(
         &mut model,
-        vec![
-            Selection::collapsed(0),
-            Selection::from_range(6..11, false),
-        ],
+        vec![Selection::collapsed(0), Selection::from_range(6..11, false)],
         1,
     );
 

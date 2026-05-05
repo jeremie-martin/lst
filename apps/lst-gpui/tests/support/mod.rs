@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use lst_x11_harness::{Display, Editor, FileWaitOpts, Key, KeyChord, SpawnOpts};
+use lst_x11_harness::{Display, Editor, FileWaitOpts, Key, KeyChord, SpawnOpts, StateTraceRecord};
 
 pub type TestResult = Result<(), Box<dyn Error + Send + Sync>>;
 pub type SupportResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -71,6 +71,8 @@ impl ScratchpadSession {
         fs::create_dir_all(&dir)?;
         let title = unique_title(name);
         let args: [&OsStr; 2] = [OsStr::new("--scratchpad-dir"), dir.as_os_str()];
+        let stderr_log_path = self.stderr_log_path(name);
+        let state_trace_path = self.state_trace_path(name);
         let (stdout, stderr) = self.log_stdio(name)?;
         let mut editor = self.display.spawn_editor(SpawnOpts {
             binary: &self.binary,
@@ -79,6 +81,8 @@ impl ScratchpadSession {
             stderr,
             stdout,
             extra_env: &[],
+            stderr_log_path: Some(&stderr_log_path),
+            state_trace_path: Some(&state_trace_path),
         })?;
         let path = wait_for_single_file(&dir, SCRATCHPAD_DISCOVERY)?;
         editor.click_center()?;
@@ -91,6 +95,8 @@ impl ScratchpadSession {
     pub fn open_file(&mut self, name: &str, file: &Path) -> SupportResult<Editor<'_>> {
         let title = unique_title(name);
         let args: [&OsStr; 1] = [file.as_os_str()];
+        let stderr_log_path = self.stderr_log_path(name);
+        let state_trace_path = self.state_trace_path(name);
         let (stdout, stderr) = self.log_stdio(name)?;
         let mut editor = self.display.spawn_editor(SpawnOpts {
             binary: &self.binary,
@@ -99,6 +105,8 @@ impl ScratchpadSession {
             stderr,
             stdout,
             extra_env: &[],
+            stderr_log_path: Some(&stderr_log_path),
+            state_trace_path: Some(&state_trace_path),
         })?;
         editor.click_center()?;
         editor.wait_quiet(FOCUS_QUIET, FOCUS_TIMEOUT)?;
@@ -147,8 +155,16 @@ impl ScratchpadSession {
 
     fn log_stdio(&self, name: &str) -> SupportResult<(Stdio, Stdio)> {
         let stdout = File::create(self.artifacts.join(format!("{name}-stdout.log")))?;
-        let stderr = File::create(self.artifacts.join(format!("{name}-stderr.log")))?;
+        let stderr = File::create(self.stderr_log_path(name))?;
         Ok((Stdio::from(stdout), Stdio::from(stderr)))
+    }
+
+    fn stderr_log_path(&self, name: &str) -> PathBuf {
+        self.artifacts.join(format!("{name}-stderr.log"))
+    }
+
+    fn state_trace_path(&self, name: &str) -> PathBuf {
+        self.artifacts.join(format!("{name}-state-trace.jsonl"))
     }
 }
 
@@ -205,6 +221,26 @@ pub trait EditorTestExt {
 
     /// Convenience: `quit(QUIT_TIMEOUT)`.
     fn quit_default(self) -> SupportResult<()>;
+
+    /// Drain the state trace and assert the latest record's vim mode label
+    /// matches `mode` (e.g. `"NORMAL"`, `"INSERT"`, `"VISUAL"`, `"V-LINE"`).
+    fn expect_vim_mode(&mut self, mode: &str) -> SupportResult<StateTraceRecord>;
+
+    /// Drain the state trace and assert the latest record has exactly
+    /// `cursors.len()` cursors at the given (line, col) head positions in
+    /// document order. Useful for proving a multi-cursor creation gesture
+    /// landed correctly without typing-and-inspecting-the-file.
+    fn expect_cursor_heads(
+        &mut self,
+        cursors: &[(usize, usize)],
+    ) -> SupportResult<StateTraceRecord>;
+
+    /// Assert the find panel is visible with the given query and match count.
+    fn expect_find_state(
+        &mut self,
+        query: &str,
+        match_count: usize,
+    ) -> SupportResult<StateTraceRecord>;
 }
 
 impl EditorTestExt for Editor<'_> {
@@ -241,6 +277,60 @@ impl EditorTestExt for Editor<'_> {
     fn quit_default(self) -> SupportResult<()> {
         let status = self.quit(QUIT_TIMEOUT)?;
         require_success(status)
+    }
+
+    fn expect_vim_mode(&mut self, mode: &str) -> SupportResult<StateTraceRecord> {
+        let record = self.read_state()?;
+        if record.vim_mode == mode {
+            Ok(record)
+        } else {
+            Err(format!(
+                "expect_vim_mode: expected {mode:?}, got {:?} (record seq {}, revision {})",
+                record.vim_mode, record.seq, record.revision
+            )
+            .into())
+        }
+    }
+
+    fn expect_cursor_heads(
+        &mut self,
+        cursors: &[(usize, usize)],
+    ) -> SupportResult<StateTraceRecord> {
+        let record = self.read_state()?;
+        let actual: Vec<(usize, usize)> = record
+            .cursors
+            .iter()
+            .map(|c| (c.head_line, c.head_col))
+            .collect();
+        if actual.as_slice() == cursors {
+            Ok(record)
+        } else {
+            Err(format!(
+                "expect_cursor_heads: expected {cursors:?}, got {actual:?} (seq {}, revision {})",
+                record.seq, record.revision
+            )
+            .into())
+        }
+    }
+
+    fn expect_find_state(
+        &mut self,
+        query: &str,
+        match_count: usize,
+    ) -> SupportResult<StateTraceRecord> {
+        let record = self.read_state()?;
+        let ok = record.find.visible
+            && record.find.query == query
+            && record.find.match_count == match_count;
+        if ok {
+            Ok(record)
+        } else {
+            Err(format!(
+                "expect_find_state: expected visible, query {query:?}, count {match_count}; got visible={}, query={:?}, count={} (seq {})",
+                record.find.visible, record.find.query, record.find.match_count, record.seq
+            )
+            .into())
+        }
     }
 }
 

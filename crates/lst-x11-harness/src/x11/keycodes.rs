@@ -23,6 +23,8 @@ const KEYSYM_UP: u32 = 0xff52;
 const KEYSYM_RIGHT: u32 = 0xff53;
 const KEYSYM_DOWN: u32 = 0xff54;
 const KEYSYM_END: u32 = 0xff57;
+const KEYSYM_PAGE_UP: u32 = 0xff55;
+const KEYSYM_PAGE_DOWN: u32 = 0xff56;
 
 pub(crate) struct Keycodes {
     pub(crate) control_l: Keycode,
@@ -40,6 +42,8 @@ pub(crate) struct Keycodes {
     pub(crate) right: Keycode,
     pub(crate) up: Keycode,
     pub(crate) down: Keycode,
+    pub(crate) page_up: Keycode,
+    pub(crate) page_down: Keycode,
     /// Printable ASCII (`0x20..=0x7E`) → (keycode, needs_shift). The full
     /// table is populated at startup so callers don't have to extend the
     /// harness every time they want to type a digit or punctuation char.
@@ -80,6 +84,8 @@ impl Keycodes {
             right: require(&reply, setup.min_keycode, KEYSYM_RIGHT, active_group)?,
             up: require(&reply, setup.min_keycode, KEYSYM_UP, active_group)?,
             down: require(&reply, setup.min_keycode, KEYSYM_DOWN, active_group)?,
+            page_up: require(&reply, setup.min_keycode, KEYSYM_PAGE_UP, active_group)?,
+            page_down: require(&reply, setup.min_keycode, KEYSYM_PAGE_DOWN, active_group)?,
             chars,
         })
     }

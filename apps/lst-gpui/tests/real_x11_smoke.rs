@@ -72,8 +72,12 @@ fn primary_selection_round_trips_via_middle_click() -> TestResult {
             return Ok(());
         }
 
+        // Pin the click to the top-left of the empty scratchpad's text
+        // area via the text-coordinate API. This is robust to font /
+        // gutter / padding changes; the older pixel-magic `(160, 170)`
+        // version drifted when those changed.
         write_clipboard_text(Selection::Primary, PRIMARY_TEXT)?;
-        editor.middle_click_at(160, 170)?;
+        editor.middle_click_at_text(0, 0)?;
         editor.save_then_expect_file(&path, PRIMARY_TEXT)?;
         Ok(())
     })

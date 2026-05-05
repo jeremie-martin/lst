@@ -200,3 +200,155 @@ fn shift_alt_i_adds_cursor_at_end_of_each_selected_line() -> TestResult {
         Ok(())
     })
 }
+
+// Sibling state-only siblings of the conflated create+edit tests above.
+// Each one stops just before the literal input that the original test
+// uses to *observe* the cursor set, and asserts the cursor set directly
+// through the state-trace channel. When a regression breaks cursor
+// creation, this test fails — and it fails *for* the cursor regression,
+// not because the multi-cursor edit path also happens to be broken.
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_alt_down_adds_three_cursors_aligned_on_column_zero() -> TestResult {
+    support::run_x11_test("multi-cursor-ctrl-alt-down-state", |session| {
+        let path = session.seed_file("columns-state.txt", "alpha\nbeta\ngamma")?;
+        let mut editor = session.open_file("columns-state", &path)?;
+
+        editor.keys("<C-home><C-A-down><C-A-down>")?;
+        let record = editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
+        assert_eq!(record.primary_cursor_index, 0);
+        assert!(
+            record.cursors.iter().all(|c| c.is_collapsed()),
+            "all cursors should be collapsed (no selection): {:?}",
+            record.cursors
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn right_motion_advances_every_cursor_independently() -> TestResult {
+    support::run_x11_test("multi-cursor-right-motion-state", |session| {
+        let path = session.seed_file("right-motion-state.txt", "alpha\nbeta\ngamma")?;
+        let mut editor = session.open_file("right-motion-state", &path)?;
+
+        editor.keys("<C-home><C-A-down><C-A-down><right><right>")?;
+        editor.expect_cursor_heads(&[(0, 2), (1, 2), (2, 2)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_d_grows_selection_set_to_three_occurrences_of_foo() -> TestResult {
+    support::run_x11_test("multi-cursor-ctrl-d-state", |session| {
+        let (mut editor, _path) = session.open("scratch")?;
+
+        editor.keys("foo bar foo baz foo<esc>0i<C-d><C-d><C-d>")?;
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 3, "{:?}", record.cursors);
+        for (idx, cursor) in record.cursors.iter().enumerate() {
+            let span =
+                cursor.head_char.max(cursor.anchor_char) - cursor.head_char.min(cursor.anchor_char);
+            assert_eq!(
+                span, 3,
+                "cursor #{idx} should cover 3 chars (\"foo\"); got {cursor:?}"
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_shift_l_creates_one_selection_per_occurrence_via_state() -> TestResult {
+    support::run_x11_test("multi-cursor-ctrl-shift-l-state", |session| {
+        let (mut editor, _path) = session.open("scratch")?;
+
+        editor.keys("foo bar foo<enter>foo baz<esc>gg0i<C-S-l>")?;
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 3, "{:?}", record.cursors);
+        for cursor in &record.cursors {
+            let span =
+                cursor.head_char.max(cursor.anchor_char) - cursor.head_char.min(cursor.anchor_char);
+            assert_eq!(span, 3, "{cursor:?} should select 3 chars (\"foo\")");
+        }
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn escape_collapses_selections_then_drops_secondary_cursors_via_state() -> TestResult {
+    support::run_x11_test("multi-cursor-escape-state", |session| {
+        let (mut editor, _path) = session.open("scratch")?;
+
+        editor.keys("foo foo foo<esc>0i<C-S-l>")?;
+        let with_selections = editor.read_state()?;
+        assert_eq!(with_selections.cursors.len(), 3, "{with_selections:?}");
+        assert!(
+            !with_selections.cursors.iter().all(|c| c.is_collapsed()),
+            "selections should be non-empty before first Esc"
+        );
+
+        editor.keys("<esc>")?;
+        let after_first_esc = editor.read_state()?;
+        assert_eq!(
+            after_first_esc.cursors.len(),
+            3,
+            "first Esc should keep 3 cursors but collapse selections: {after_first_esc:?}"
+        );
+        assert!(
+            after_first_esc.cursors.iter().all(|c| c.is_collapsed()),
+            "first Esc should collapse selections: {after_first_esc:?}"
+        );
+
+        editor.keys("<esc>")?;
+        let after_second_esc = editor.read_state()?;
+        assert_eq!(
+            after_second_esc.cursors.len(),
+            1,
+            "second Esc should drop secondary cursors: {after_second_esc:?}"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn paste_distribute_preserves_cursor_count_after_insertion() -> TestResult {
+    support::run_x11_test("multi-cursor-paste-state", |session| {
+        let path = session.seed_file("paste-state.txt", "A\nB\nC")?;
+        let mut editor = session.open_file("paste-state", &path)?;
+
+        write_clipboard_text(Selection::Clipboard, "red\ngreen\nblue")?;
+        editor.keys("<C-home><C-A-down><C-A-down><C-v>")?;
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 3, "{record:?}");
+        // Heads should land at the end of each pasted fragment.
+        let head_cols: Vec<usize> = record.cursors.iter().map(|c| c.head_col).collect();
+        assert_eq!(head_cols, vec![3, 5, 4], "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn smart_enter_per_cursor_indent_lands_each_cursor_at_inherited_column() -> TestResult {
+    support::run_x11_test("multi-cursor-smart-enter-state", |session| {
+        let path = session.seed_file("smart-enter-state.txt", "    alpha!\n        be")?;
+        let mut editor = session.open_file("smart-enter-state", &path)?;
+
+        editor.keys("<C-home><end><C-A-down><enter>")?;
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 2, "{record:?}");
+        // Cursor 0 was on the 4-space-indented line and should land at col 4
+        // on the new line below it; cursor 1 on the 8-space-indented line
+        // should land at col 8.
+        let head_cols: Vec<usize> = record.cursors.iter().map(|c| c.head_col).collect();
+        assert_eq!(head_cols, vec![4, 8], "{record:?}");
+        Ok(())
+    })
+}
