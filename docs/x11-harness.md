@@ -69,6 +69,50 @@ is ahead of the current implementation. A failure in an ignored X11 test is not
 automatically a harness failure; first decide whether it is a valid spec failure,
 a test bug, or a harness synchronization problem.
 
+### Nextest Profiles
+
+The repository also includes `.config/nextest.toml` profiles for CI and repeated
+runs. Use these on the dedicated X11 test machine when `cargo-nextest` is
+available.
+
+Fast implemented-behavior lane:
+
+```sh
+cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
+```
+
+Repeated stress lane:
+
+```sh
+cargo nextest run --profile x11-stress -p lst-gpui --tests --run-ignored only --stress-count 5
+```
+
+Non-blocking TDD-spec report lane:
+
+```sh
+cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
+```
+
+The GitHub Actions workflow in `.github/workflows/real-x11.yml` wires these
+profiles into a manual CI job for a self-hosted Linux runner labelled `x11`.
+That runner must expose a real X11 `DISPLAY`, have `xclip` on `PATH`, and be
+dedicated enough that global keyboard focus and pointer movement are safe during
+the run. The workflow installs `cargo-nextest` if needed, runs the blocking
+implemented-behavior lane once, runs the stress lane with the requested
+iteration count, optionally runs the non-blocking TDD lane, and uploads the
+nextest JUnit reports.
+
+The `x11` and `x11-stress` profiles exclude the current ahead-of-implementation
+TDD specs so they can be used as blocking gates. The `x11-tdd` profile runs
+those executable specs separately; CI should publish its report, but it does not
+need to block while the accepted behavior is still being implemented.
+
+All three profiles run tests serially, disable retries, continue after failures,
+and write JUnit output under `target/nextest/<profile>/junit.xml`. Prefer
+`--stress-count` over retries for flake discovery: repeated successes and
+failures are the signal we want, while retrying only failures can hide
+nondeterminism.
+
 ---
 
 ## Canonical Test Shapes
@@ -236,9 +280,10 @@ through the framework-neutral model tests.
 
 ## Known Gaps / Things To Watch
 
-1. **The full ignored suite can fail by design.** Some tests are executable
+1. **The raw full ignored suite can fail by design.** Some tests are executable
    specs for behavior not implemented yet. Keep their comments clear enough that
-   failures are interpretable.
+   failures are interpretable. The nextest `x11` profile excludes those current
+   TDD specs for a blocking lane; `x11-tdd` runs them as a separate report lane.
 
 2. **Trace discipline matters.** The trace is powerful enough to become an
    implementation inspection tool by accident. Keep behavior tests focused on
@@ -273,6 +318,8 @@ through the framework-neutral model tests.
   asserted cleanly through files, clipboard, or existing trace fields.
 - Keep common patterns in `apps/lst-gpui/tests/support/mod.rs` so behavior tests
   remain short and uniform.
+- Run the `x11-stress` nextest profile repeatedly on the dedicated X11 machine
+  before trusting broad behavior changes.
 - Treat flakes as harness or synchronization bugs until proven otherwise. Do not
   paper over them with arbitrary sleeps.
 

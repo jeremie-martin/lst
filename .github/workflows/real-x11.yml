@@ -1,0 +1,84 @@
+name: Real X11
+
+on:
+  workflow_dispatch:
+    inputs:
+      display:
+        description: X11 display exposed to the self-hosted runner.
+        required: true
+        default: ":0"
+      stress_count:
+        description: Number of full implemented-behavior stress iterations.
+        required: true
+        default: "5"
+      run_tdd_specs:
+        description: Also run the non-blocking ahead-of-implementation specs.
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  real-x11:
+    name: Real X11 nextest
+    runs-on: [self-hosted, linux, x11]
+    timeout-minutes: 120
+    env:
+      DISPLAY: ${{ inputs.display }}
+      RUST_BACKTRACE: "1"
+      STRESS_COUNT: ${{ inputs.stress_count }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check runner prerequisites
+        run: |
+          set -eu
+          test -n "${DISPLAY:-}"
+          command -v cargo
+          command -v rustc
+          command -v curl
+          command -v tar
+          command -v xclip
+          case "$STRESS_COUNT" in
+            ''|*[!0-9]*)
+              echo "stress_count must be a positive integer, got '$STRESS_COUNT'" >&2
+              exit 2
+              ;;
+            0)
+              echo "stress_count must be greater than zero" >&2
+              exit 2
+              ;;
+          esac
+
+      - name: Install cargo-nextest
+        run: |
+          set -eu
+          if ! cargo nextest --version >/dev/null 2>&1; then
+            curl -LsSf https://get.nexte.st/latest/linux \
+              | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          fi
+          cargo nextest --version
+
+      - name: List implemented real-X11 tests
+        run: cargo nextest list --profile x11 -p lst-gpui --tests --run-ignored only
+
+      - name: Run implemented real-X11 tests once
+        run: cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
+
+      - name: Stress implemented real-X11 tests
+        run: >
+          cargo nextest run --profile x11-stress -p lst-gpui --tests
+          --run-ignored only --stress-count "$STRESS_COUNT"
+
+      - name: Run ahead-of-implementation specs
+        if: ${{ inputs.run_tdd_specs }}
+        continue-on-error: true
+        run: cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
+
+      - name: Upload nextest reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-real-x11
+          path: target/nextest/**/junit.xml
+          if-no-files-found: ignore

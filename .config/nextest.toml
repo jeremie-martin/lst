@@ -1,0 +1,83 @@
+[nextest-version]
+required = "0.9.115"
+recommended = "0.9.133"
+
+[profile.default]
+retries = 0
+
+[profile.x11]
+default-filter = '''
+package(lst-gpui)
+& kind(test)
+& binary(~real_x11_)
+& not (
+    test(=ctrl_k_ctrl_d_skip_via_held_modifier_grows_selection_set)
+    | test(=ctrl_k_ctrl_d_skips_current_occurrence_and_adds_the_next)
+    | test(=ctrl_u_pops_last_added_occurrence_cursor)
+    | test(=duplicate_line_applies_to_every_cursor_line)
+    | test(=right_motion_advances_every_cursor_independently)
+    | test(=right_motion_moves_every_cursor_before_literal_input)
+    | test(=shift_alt_i_adds_cursor_at_end_of_each_selected_line)
+    | test(=vertical_motion_per_cursor_preferred_column)
+)
+'''
+test-threads = 1
+retries = 0
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 2, grace-period = "10s" }
+status-level = "pass"
+final-status-level = "fail"
+
+[profile.x11.junit]
+path = "junit.xml"
+report-name = "lst-x11"
+store-success-output = false
+store-failure-output = true
+
+[profile.x11-stress]
+inherits = "x11"
+default-filter = '''
+package(lst-gpui)
+& kind(test)
+& binary(~real_x11_)
+& not (
+    test(=ctrl_k_ctrl_d_skip_via_held_modifier_grows_selection_set)
+    | test(=ctrl_k_ctrl_d_skips_current_occurrence_and_adds_the_next)
+    | test(=ctrl_u_pops_last_added_occurrence_cursor)
+    | test(=duplicate_line_applies_to_every_cursor_line)
+    | test(=right_motion_advances_every_cursor_independently)
+    | test(=right_motion_moves_every_cursor_before_literal_input)
+    | test(=shift_alt_i_adds_cursor_at_end_of_each_selected_line)
+    | test(=vertical_motion_per_cursor_preferred_column)
+)
+'''
+
+[profile.x11-stress.junit]
+path = "junit.xml"
+report-name = "lst-x11-stress"
+store-success-output = false
+store-failure-output = true
+
+[profile.x11-tdd]
+inherits = "x11"
+default-filter = '''
+package(lst-gpui)
+& kind(test)
+& binary(~real_x11_)
+& (
+    test(=ctrl_k_ctrl_d_skip_via_held_modifier_grows_selection_set)
+    | test(=ctrl_k_ctrl_d_skips_current_occurrence_and_adds_the_next)
+    | test(=ctrl_u_pops_last_added_occurrence_cursor)
+    | test(=duplicate_line_applies_to_every_cursor_line)
+    | test(=right_motion_advances_every_cursor_independently)
+    | test(=right_motion_moves_every_cursor_before_literal_input)
+    | test(=shift_alt_i_adds_cursor_at_end_of_each_selected_line)
+    | test(=vertical_motion_per_cursor_preferred_column)
+)
+'''
+
+[profile.x11-tdd.junit]
+path = "junit.xml"
+report-name = "lst-x11-tdd"
+store-success-output = false
+store-failure-output = true
