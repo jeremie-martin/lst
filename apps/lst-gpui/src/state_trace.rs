@@ -113,6 +113,7 @@ pub(crate) struct StateTraceRecord {
     pub goto_line_input: Option<String>,
     pub recent_panel_open: bool,
     pub recent_panel_query: Option<String>,
+    pub focused_input: &'static str,
     pub status_bar: String,
     pub viewport: TraceViewport,
 }
@@ -148,6 +149,7 @@ pub(crate) struct TraceFind {
 
 #[derive(Serialize, Default)]
 pub(crate) struct TraceViewport {
+    pub scale_factor: f32,
     pub bounds_origin_px: Option<(f32, f32)>,
     pub bounds_size_px: Option<(f32, f32)>,
     pub char_width_px: f32,
@@ -209,6 +211,7 @@ mod tests {
             goto_line_input: None,
             recent_panel_open: false,
             recent_panel_query: None,
+            focused_input: "editor",
             status_bar: "INSERT | Ln 1 | Col 4".to_string(),
             viewport: TraceViewport::default(),
         };
@@ -217,5 +220,6 @@ mod tests {
         assert!(line.contains("\"schema_version\":1"));
         assert!(line.contains("\"seq\":7"));
         assert!(line.contains("\"head_char\":3"));
+        assert!(line.contains("\"focused_input\":\"editor\""));
     }
 }

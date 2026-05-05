@@ -34,6 +34,8 @@ pub struct StateTraceRecord {
     pub goto_line_input: Option<String>,
     pub recent_panel_open: bool,
     pub recent_panel_query: Option<String>,
+    #[serde(default)]
+    pub focused_input: String,
     pub status_bar: String,
     pub viewport: TraceViewport,
 }
@@ -83,6 +85,8 @@ pub struct TraceFind {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TraceViewport {
+    #[serde(default)]
+    pub scale_factor: f32,
     pub bounds_origin_px: Option<(f32, f32)>,
     pub bounds_size_px: Option<(f32, f32)>,
     pub char_width_px: f32,
@@ -149,7 +153,12 @@ impl TraceViewport {
             + (col_in_row as f32) * self.char_width_px
             + self.char_width_px * 0.5;
         let y = row.top_px + self.line_height_px * 0.5;
-        Some((x.round() as i32, y.round() as i32))
+        let scale = if self.scale_factor > 0.0 {
+            self.scale_factor
+        } else {
+            1.0
+        };
+        Some(((x * scale).round() as i32, (y * scale).round() as i32))
     }
 }
 
@@ -169,6 +178,7 @@ pub struct StateTraceReader {
     path: PathBuf,
     offset: u64,
     buffered_partial: Vec<u8>,
+    last_record: Option<StateTraceRecord>,
 }
 
 impl StateTraceReader {
@@ -177,11 +187,16 @@ impl StateTraceReader {
             path: path.into(),
             offset: 0,
             buffered_partial: Vec::new(),
+            last_record: None,
         }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn last_observed(&self) -> Option<&StateTraceRecord> {
+        self.last_record.as_ref()
     }
 
     /// Drain all records appended since the previous call. Tolerates a
@@ -234,17 +249,25 @@ impl StateTraceReader {
         if line_start < combined.len() {
             self.buffered_partial = combined[line_start..].to_vec();
         }
+        if let Some(record) = records.last() {
+            self.last_record = Some(record.clone());
+        }
         Ok(records)
     }
 
-    /// Drain the stream and return the most recent record. Returns an error
-    /// when no record has been observed yet — tests that call this should
-    /// have driven at least one settled state through the editor first.
+    /// Drain the stream and return the most recent observed record. When no
+    /// new record was appended since the previous read, returns the last
+    /// record already observed by this reader.
+    ///
+    /// Returns an error only when no record has ever been observed — tests
+    /// that call this should have driven at least one settled state through
+    /// the editor first.
     pub fn latest(&mut self) -> Result<StateTraceRecord> {
         let records = self.read_new_records()?;
         records
             .into_iter()
             .next_back()
+            .or_else(|| self.last_record.clone())
             .ok_or_else(|| {
                 format!(
                     "no state-trace records available at {}; either the editor has not emitted yet or LST_X11_STATE_TRACE_FILE was not wired into spawn",
@@ -311,6 +334,24 @@ mod tests {
         let third = reader.read_new_records().unwrap();
         assert_eq!(third.len(), 1);
         assert_eq!(third[0].seq, 2);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn latest_reuses_last_observed_record_when_no_new_lines_arrive() {
+        let path = temp_trace_path("latest-cache");
+        let _ = fs::remove_file(&path);
+        let mut file = fs::File::create(&path).unwrap();
+        writeln!(file, "{}", sample_record_line(0)).unwrap();
+        drop(file);
+
+        let mut reader = StateTraceReader::new(&path);
+        let first = reader.latest().unwrap();
+        assert_eq!(first.seq, 0);
+
+        let second = reader.latest().unwrap();
+        assert_eq!(second.seq, 0);
 
         let _ = fs::remove_file(&path);
     }

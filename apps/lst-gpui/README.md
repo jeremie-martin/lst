@@ -31,8 +31,11 @@ Use the runner defaults for real baseline work.
 Run the opt-in real-display behavior suite with:
 
 ```sh
-DISPLAY=:1 cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
+DISPLAY=:1 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
 ```
+
+Use `--profile x11-stress --stress-count 3` for repeated flake detection and
+`--profile x11-tdd` for accepted specs that are ahead of the implementation.
 
 ## Verification
 

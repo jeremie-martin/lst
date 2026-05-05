@@ -6,7 +6,7 @@
 //! toward in-process behavioral tests; these need a real Xorg session and
 //! `xclip` on PATH. Run with
 //!
-//!     cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
+//!     cargo nextest run --profile x11 -p lst-gpui --test real_x11_smoke --run-ignored only
 
 mod support;
 

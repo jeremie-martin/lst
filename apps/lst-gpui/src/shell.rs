@@ -1189,6 +1189,12 @@ impl Render for LstGpuiApp {
                                                                                 .entity_id(),
                                                                         );
                                                                     }
+                                                                    prepare_entity.update(
+                                                                        cx,
+                                                                        |this, _| {
+                                                                            this.emit_state_trace(window);
+                                                                        },
+                                                                    );
                                                                     paint_state
                                                                 }
                                                             },

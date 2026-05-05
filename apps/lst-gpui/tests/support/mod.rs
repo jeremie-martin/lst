@@ -7,10 +7,9 @@
 //! `(Editor, autosave_path)` pair. Use [`run_x11_test`] so successful tests
 //! clean their temp tree and failed tests preserve it for inspection.
 //!
-//! To keep different suites from racing for keyboard focus and the global
-//! pointer, run with `--test-threads=1`. `cargo test --tests` uses
-//! `LST_X11_WINDOW_TIMEOUT_MS` for the window-discovery timeout (default
-//! 30s).
+//! The nextest `x11` profiles run these tests serially so separate suites do
+//! not race for keyboard focus or the global pointer. The harness uses
+//! `LST_X11_WINDOW_TIMEOUT_MS` for the window-discovery timeout (default 30s).
 
 #![allow(dead_code)]
 
@@ -87,6 +86,7 @@ impl ScratchpadSession {
         let path = wait_for_single_file(&dir, SCRATCHPAD_DISCOVERY)?;
         editor.click_center()?;
         editor.wait_quiet(FOCUS_QUIET, FOCUS_TIMEOUT)?;
+        editor.wait_text_viewport(FOCUS_TIMEOUT)?;
         Ok((editor, path))
     }
 
@@ -110,6 +110,7 @@ impl ScratchpadSession {
         })?;
         editor.click_center()?;
         editor.wait_quiet(FOCUS_QUIET, FOCUS_TIMEOUT)?;
+        editor.wait_text_viewport(FOCUS_TIMEOUT)?;
         Ok(editor)
     }
 
@@ -280,37 +281,21 @@ impl EditorTestExt for Editor<'_> {
     }
 
     fn expect_vim_mode(&mut self, mode: &str) -> SupportResult<StateTraceRecord> {
-        let record = self.read_state()?;
-        if record.vim_mode == mode {
-            Ok(record)
-        } else {
-            Err(format!(
-                "expect_vim_mode: expected {mode:?}, got {:?} (record seq {}, revision {})",
-                record.vim_mode, record.seq, record.revision
-            )
-            .into())
-        }
+        self.wait_state("vim mode", FOCUS_TIMEOUT, |record| record.vim_mode == mode)
     }
 
     fn expect_cursor_heads(
         &mut self,
         cursors: &[(usize, usize)],
     ) -> SupportResult<StateTraceRecord> {
-        let record = self.read_state()?;
-        let actual: Vec<(usize, usize)> = record
-            .cursors
-            .iter()
-            .map(|c| (c.head_line, c.head_col))
-            .collect();
-        if actual.as_slice() == cursors {
-            Ok(record)
-        } else {
-            Err(format!(
-                "expect_cursor_heads: expected {cursors:?}, got {actual:?} (seq {}, revision {})",
-                record.seq, record.revision
-            )
-            .into())
-        }
+        self.wait_state("cursor heads", FOCUS_TIMEOUT, |record| {
+            let actual: Vec<(usize, usize)> = record
+                .cursors
+                .iter()
+                .map(|c| (c.head_line, c.head_col))
+                .collect();
+            actual.as_slice() == cursors
+        })
     }
 
     fn expect_find_state(
@@ -318,19 +303,11 @@ impl EditorTestExt for Editor<'_> {
         query: &str,
         match_count: usize,
     ) -> SupportResult<StateTraceRecord> {
-        let record = self.read_state()?;
-        let ok = record.find.visible
-            && record.find.query == query
-            && record.find.match_count == match_count;
-        if ok {
-            Ok(record)
-        } else {
-            Err(format!(
-                "expect_find_state: expected visible, query {query:?}, count {match_count}; got visible={}, query={:?}, count={} (seq {})",
-                record.find.visible, record.find.query, record.find.match_count, record.seq
-            )
-            .into())
-        }
+        self.wait_state("find state", FOCUS_TIMEOUT, |record| {
+            record.find.visible
+                && record.find.query == query
+                && record.find.match_count == match_count
+        })
     }
 }
 

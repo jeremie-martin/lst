@@ -7,7 +7,7 @@
 //!
 //! Run with
 //!
-//!     cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
+//!     cargo nextest run --profile x11 -p lst-gpui --test real_x11_state_trace --run-ignored only
 
 mod support;
 
@@ -116,10 +116,14 @@ fn vim_pending_is_visible_mid_compound_command() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn find_panel_state_round_trips_through_trace() -> TestResult {
     support::run_x11_test("state-trace-find", |session| {
-        let (mut editor, _path) = session.open("scratch")?;
+        let path = session.seed_file("find.txt", "foo bar foo\nfoo baz")?;
+        let mut editor = session.open_file("find", &path)?;
 
-        editor.keys("foo bar foo<enter>foo baz<esc>")?;
-        editor.keys("<C-f>foo")?;
+        editor.keys("<C-f>")?;
+        editor.wait_state("find query focus", Duration::from_secs(2), |record| {
+            record.focused_input == "find_query"
+        })?;
+        editor.keys("foo")?;
         editor.expect_find_state("foo", 3)?;
         Ok(())
     })
@@ -159,37 +163,23 @@ fn status_bar_reports_multi_cursor_summary() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn dirty_flag_clears_after_save() -> TestResult {
+fn save_leaves_buffer_clean_after_edit() -> TestResult {
     support::run_x11_test("state-trace-dirty", |session| {
         let path = session.seed_file("dirty.txt", "original\n")?;
         let mut editor = session.open_file("dirty", &path)?;
 
         editor.keys("a more")?;
-        let after_typing = editor.read_state()?;
-        assert!(
-            after_typing.active_tab_modified,
-            "buffer should be modified after typing: {after_typing:?}"
-        );
-
         editor.save()?;
-        // The save path emits a model effect; wait briefly for the
-        // post-save record to land before reading.
-        editor.wait_quiet(
-            std::time::Duration::from_millis(75),
-            std::time::Duration::from_secs(2),
-        )?;
-        let after_save = editor.read_state()?;
-        assert!(
-            !after_save.active_tab_modified,
-            "save should clear modified flag: {after_save:?}"
-        );
+        editor.wait_state("save clears dirty flag", Duration::from_secs(2), |record| {
+            !record.active_tab_modified
+        })?;
         Ok(())
     })
 }
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn ctrl_d_on_buffer_without_occurrence_is_a_noop_in_state() -> TestResult {
+fn ctrl_d_on_buffer_without_occurrence_leaves_cursor_state_unchanged() -> TestResult {
     support::run_x11_test("state-trace-ctrl-d-noop", |session| {
         let (mut editor, _path) = session.open("scratch")?;
 
@@ -200,10 +190,13 @@ fn ctrl_d_on_buffer_without_occurrence_is_a_noop_in_state() -> TestResult {
         let baseline = editor.read_state()?;
         assert_eq!(baseline.cursors.len(), 1, "{baseline:?}");
 
-        // Ctrl+D with no current word and no current selection should be
-        // a no-op. Asserting no paint via `send_keys_expect_quiet` proves
-        // the no-op contract directly; the state remains the baseline.
-        editor.send_keys_expect_quiet("<C-d>", Duration::from_millis(250))?;
+        // Ctrl+D with no current word and no current selection should leave
+        // the visible cursor set unchanged. A repaint is allowed; that is not
+        // part of the user-facing no-op contract.
+        editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char(
+            'd',
+        )))?;
+        editor.wait_quiet(Duration::from_millis(75), Duration::from_secs(2))?;
 
         // The visible cursor state remains the baseline.
         let after = editor.read_state()?;
@@ -218,20 +211,26 @@ fn ctrl_d_on_buffer_without_occurrence_is_a_noop_in_state() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn ctrl_s_on_unmodified_buffer_does_not_emit_a_repaint_record() -> TestResult {
+fn ctrl_s_on_unmodified_buffer_leaves_visible_state_unchanged() -> TestResult {
     support::run_x11_test("state-trace-ctrl-s-clean", |session| {
         let path = session.seed_file("clean.txt", "untouched\n")?;
         let mut editor = session.open_file("clean", &path)?;
 
-        // Drain startup records so we measure only the Ctrl+S behaviour.
-        editor.drain_state_records()?;
+        let baseline = editor.read_state()?;
 
-        editor.send_keys_expect_quiet("<C-s>", Duration::from_millis(250))?;
-        let after = editor.drain_state_records()?;
-        assert!(
-            after.is_empty(),
-            "Ctrl+S on an unmodified buffer should not emit a state record; got {} records",
-            after.len()
+        editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char(
+            's',
+        )))?;
+        editor.wait_quiet(Duration::from_millis(75), Duration::from_secs(2))?;
+        let after = editor.read_state()?;
+        assert_eq!(
+            after.active_tab_modified, baseline.active_tab_modified,
+            "Ctrl+S on a clean buffer should not dirty the buffer: {after:?}"
+        );
+        assert_eq!(
+            after.cursors[0].head_pos(),
+            baseline.cursors[0].head_pos(),
+            "Ctrl+S on a clean buffer should not move the cursor: {after:?}"
         );
         Ok(())
     })

@@ -527,7 +527,6 @@ impl LstGpuiApp {
             self.sync_goto_input(cx);
         }
         self.handle_model_effects(effects, cx);
-        self.emit_state_trace();
         if notify_after_update {
             cx.notify();
         }
@@ -536,12 +535,12 @@ impl LstGpuiApp {
     /// Append one record to the state-trace channel when one is configured.
     /// No-op in production. Re-entrant calls (during effect handling) are
     /// dropped by `StateTraceEmitter::try_emit`'s internal guard.
-    fn emit_state_trace(&self) {
+    fn emit_state_trace(&self, window: &Window) {
         self.state_trace
-            .try_emit(|seq| self.build_state_trace_record(seq));
+            .try_emit(|seq| self.build_state_trace_record(seq, window));
     }
 
-    fn build_state_trace_record(&self, seq: u64) -> StateTraceRecord {
+    fn build_state_trace_record(&self, seq: u64, window: &Window) -> StateTraceRecord {
         let tab = self.active_tab();
         let buffer = tab.buffer();
         let selection_set = tab.selection_set();
@@ -584,7 +583,7 @@ impl LstGpuiApp {
             Some(sel) => format!("{} | {sel}", self.status_details()),
             None => self.status_details(),
         };
-        let viewport = self.build_state_trace_viewport();
+        let viewport = self.build_state_trace_viewport(window);
         StateTraceRecord {
             schema_version: STATE_TRACE_SCHEMA_VERSION,
             seq,
@@ -606,12 +605,21 @@ impl LstGpuiApp {
                 .recent
                 .is_open()
                 .then(|| self.recent.query().to_string()),
+            focused_input: self.state_trace_focus_label(),
             status_bar,
             viewport,
         }
     }
 
-    fn build_state_trace_viewport(&self) -> TraceViewport {
+    fn state_trace_focus_label(&self) -> &'static str {
+        if self.recent.is_open() {
+            "recent_query"
+        } else {
+            focus_trace_label(self.focus_last_applied)
+        }
+    }
+
+    fn build_state_trace_viewport(&self, window: &Window) -> TraceViewport {
         // `tab_views` is populated by `sync_tab_views` which runs in
         // `update_model` before the trace emit, so a present view is the
         // common path. Absence (briefly between tab switches) yields an
@@ -642,6 +650,7 @@ impl LstGpuiApp {
             })
             .collect::<Vec<_>>();
         TraceViewport {
+            scale_factor: window.scale_factor(),
             bounds_origin_px: origin,
             bounds_size_px: size,
             char_width_px: f32::from(geometry.painted_char_width),

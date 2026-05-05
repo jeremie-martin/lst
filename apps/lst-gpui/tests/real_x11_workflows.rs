@@ -3,7 +3,7 @@
 //!
 //! Run with
 //!
-//!     cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
+//!     cargo nextest run --profile x11 -p lst-gpui --test real_x11_workflows --run-ignored only
 
 mod support;
 

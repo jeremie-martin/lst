@@ -42,7 +42,7 @@ positions, visible modes/panels/status text, or viewport-observable geometry.
 - [x] **Double-click word** - double-click selects the word under the pointer. X11: `real_x11_mouse.rs`.
 - [x] **Triple-click line** - triple-click selects the clicked line. X11: `real_x11_mouse.rs`.
 - [x] **Quad-click paragraph** - quad-click selects the paragraph under the pointer. X11: `real_x11_mouse.rs`.
-- [x] **Shift-click extends** - shift-click extends from the existing caret/anchor to the clicked position. X11: `real_x11_mouse.rs`.
+- [ ] **Shift-click extends** - shift-click extends from the existing caret/anchor to the clicked position. X11 TDD: `real_x11_mouse.rs`.
 - [ ] **Column / block selection** - a rectangular selection gesture creates one selection or cursor per touched line.
 - [x] **Select all** - `Ctrl-A` selects the full buffer, and typing replaces it. X11: `real_x11_modifiers.rs`.
 - [ ] **Expand selection to enclosing scope** - smart selection expands to syntactic or textual enclosing scopes.
@@ -68,7 +68,7 @@ mechanics.
 
 ### Cursor Creation Gestures
 
-- [x] **Alt-click toggles cursor** - Alt-click adds a cursor at the clicked text position, and Alt-clicking an existing cursor removes it without emptying the set. X11: `real_x11_mouse.rs`.
+- [ ] **Alt-click toggles cursor** - Alt-click adds a cursor at the clicked text position, and Alt-clicking an existing cursor removes it without emptying the set. X11 TDD: `real_x11_mouse.rs`.
 - [x] **Ctrl-Alt-Up / Ctrl-Alt-Down** - adds adjacent-line cursors at the active visual column. X11: `real_x11_multi_cursor.rs`.
 - [x] **Ctrl-D adds next occurrence** - selects the current word/selection if needed, then adds the next occurrence on repeated presses. X11: `real_x11_multi_cursor.rs`.
 - [ ] **Ctrl-K Ctrl-D skips current match** - skips the current occurrence and adds the next one. X11 TDD: `real_x11_multi_cursor.rs`, `real_x11_chord_hold.rs`.
@@ -120,7 +120,7 @@ mechanics.
 
 ### Mouse Gestures
 
-- [x] **Alt-click toggle** - add/remove cursor at a clicked text position. X11: `real_x11_mouse.rs`.
+- [ ] **Alt-click toggle** - add/remove cursor at a clicked text position. X11 TDD: `real_x11_mouse.rs`.
 - [~] **Alt-drag additive selection** - additive free-form range selection is not complete.
 - [ ] **Shift-Alt-drag column selection** - creates a rectangular cursor/selection set. X11 TDD target.
 - [ ] **Middle-click drag column selection** - optional platform-dependent column selection gesture.
@@ -220,6 +220,7 @@ mechanics.
 ## File & Buffer
 
 - [x] **Dirty indicator** - modified buffers show a visible dirty state. X11: `real_x11_state_trace.rs`.
+- [ ] **Clean save is state-preserving** - `Ctrl-S` on an unmodified buffer leaves dirty state, cursor position, and visible selection state unchanged. X11 TDD: `real_x11_state_trace.rs`.
 - [x] **Reload on external change prompt** - external changes reload clean buffers or prompt on conflicts.
 - [x] **Auto-save** - scratchpad and autosave workflows persist edits. X11: `real_x11_smoke.rs`, `real_x11_workflows.rs`.
 - [ ] **Recover from crash via swap/journal** - unsaved work can be recovered after a crash.
@@ -251,9 +252,9 @@ mechanics.
 
 ## Summary
 
-- **Done:** 107
+- **Done:** 104
 - **Partial:** 9
-- **Missing:** 46
+- **Missing:** 50
 
 **Strong foundation:** Vim editing workflows, viewport motion and scroll
 margin, soft wrap, undo/redo, autosave, find/replace, mouse selection,

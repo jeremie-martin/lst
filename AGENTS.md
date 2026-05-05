@@ -26,7 +26,7 @@ The active editor is the GPUI implementation in `apps/lst-gpui`. The repository 
 - `cargo clippy --all-targets --all-features` — lint all targets.
 - `cargo fmt --all` — format the workspace.
 - `cargo build --release -p lst-gpui --bin lst --example bench_editor_x11` — build the benchmark runner with the release app.
-- `cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture` — run all real-display tests (requires `DISPLAY`, an X11 server, and `xclip` on `PATH`). `--test-threads=1` is required because every test grabs keyboard focus and moves the global pointer through XTEST; running them in parallel would have them fighting over input. The `lst-x11-harness` crate waits up to 30s for each editor window to be mapped (override with `LST_X11_WINDOW_TIMEOUT_MS=N`); set `LST_X11_KEEP_TEMP=1` to preserve scratchpad contents on disk for debugging.
+- `cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only` — run the blocking real-display behavior lane (requires `DISPLAY`, a real X11 server, and `xclip` on `PATH`). Real-display profiles run serially because every test grabs keyboard focus and moves the global pointer through XTEST. Use `cargo nextest run --profile x11-stress -p lst-gpui --tests --run-ignored only --stress-count 3` for repeated flake detection, and `cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only` for ahead-of-implementation specs. The `lst-x11-harness` crate waits up to 30s for each editor window to be mapped (override with `LST_X11_WINDOW_TIMEOUT_MS=N`); set `LST_X11_KEEP_TEMP=1` to preserve scratchpad contents on disk for debugging.
 
 Run `cargo test --all-features` and `cargo clippy --all-targets --all-features` before submitting behavior or architecture changes.
 

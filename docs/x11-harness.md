@@ -26,7 +26,7 @@ Allowed behavior assertions:
 - clipboard and PRIMARY contents
 - cursor heads and selection ranges
 - visible Vim mode, pending input, status text, and dirty state
-- visible find/goto/recent-panel state
+- visible find/goto/recent-panel state and focused input
 - viewport rows and text-coordinate geometry needed to click or drag text
 
 Avoid behavior assertions on implementation mechanics:
@@ -46,16 +46,24 @@ product behavior tests should go through behavior-named helpers such as
 
 ## Running Tests
 
-Run all real-display tests with:
+Use the nextest profiles for real-display work. They are the canonical local
+and dedicated-machine entry points:
 
 ```sh
-cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
+cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
+cargo nextest run --profile x11-stress -p lst-gpui --tests --run-ignored only --stress-count 3
+cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
 ```
 
-`--test-threads=1` is required. Every test grabs keyboard focus and moves the
-global pointer through XTEST. The harness also takes a cross-process display
-lock, so accidental parallel runs serialize, but serial execution is clearer and
-avoids wasted workers.
+The `x11` profile is the blocking implemented-behavior lane. `x11-stress` runs
+that same set repeatedly for flake detection. `x11-tdd` runs accepted
+ahead-of-implementation specs as a separate report lane; failures there are
+expected until the implementation catches up.
+
+The profiles run serially. Every test grabs keyboard focus and moves the global
+pointer through XTEST. The harness also takes a cross-process display lock, so
+accidental parallel runs serialize, but serial execution is clearer and avoids
+wasted workers.
 
 Useful environment variables:
 
@@ -64,54 +72,10 @@ Useful environment variables:
 - `LST_X11_KEEP_TEMP=1` preserves scratchpad temp directories even on success.
 - `LST_GPUI_BIN=/path/to/lst` runs a specific editor binary.
 
-The full ignored run intentionally includes TDD specs for accepted behavior that
-is ahead of the current implementation. A failure in an ignored X11 test is not
-automatically a harness failure; first decide whether it is a valid spec failure,
-a test bug, or a harness synchronization problem.
-
-### Nextest Profiles
-
-The repository also includes `.config/nextest.toml` profiles for CI and repeated
-runs. Use these on the dedicated X11 test machine when `cargo-nextest` is
-available.
-
-Fast implemented-behavior lane:
-
-```sh
-cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
-```
-
-Repeated stress lane:
-
-```sh
-cargo nextest run --profile x11-stress -p lst-gpui --tests --run-ignored only --stress-count 5
-```
-
-Non-blocking TDD-spec report lane:
-
-```sh
-cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
-```
-
-The GitHub Actions workflow in `.github/workflows/real-x11.yml` wires these
-profiles into a manual CI job for a self-hosted Linux runner labelled `x11`.
-That runner must expose a real X11 `DISPLAY`, have `xclip` on `PATH`, and be
-dedicated enough that global keyboard focus and pointer movement are safe during
-the run. The workflow installs `cargo-nextest` if needed, runs the blocking
-implemented-behavior lane once, runs the stress lane with the requested
-iteration count, optionally runs the non-blocking TDD lane, and uploads the
-nextest JUnit reports.
-
-The `x11` and `x11-stress` profiles exclude the current ahead-of-implementation
-TDD specs so they can be used as blocking gates. The `x11-tdd` profile runs
-those executable specs separately; CI should publish its report, but it does not
-need to block while the accepted behavior is still being implemented.
-
-All three profiles run tests serially, disable retries, continue after failures,
-and write JUnit output under `target/nextest/<profile>/junit.xml`. Prefer
-`--stress-count` over retries for flake discovery: repeated successes and
-failures are the signal we want, while retrying only failures can hide
-nondeterminism.
+All three profiles disable retries, continue after failures, and write JUnit
+output under `target/nextest/<profile>/junit.xml`. Prefer `--stress-count` over
+retries for flake discovery: repeated successes and failures are the signal we
+want, while retrying only failures can hide nondeterminism.
 
 ---
 
@@ -181,14 +145,17 @@ Prefer text-coordinate helpers over fixed pixels:
 - `drag_text((line, col), (line, col), mods)`
 
 These resolve coordinates from the latest state trace and are robust against
-font, gutter, and padding changes. They require the target text row to be in the
-painted viewport.
+font, gutter, and padding changes. `ScratchpadSession::open` and `open_file`
+wait for the first painted viewport snapshot, and the text-coordinate helpers
+wait for the requested target row/column to be present before synthesizing the
+mouse gesture.
 
 ### Explicit No-Op
 
-`Editor::send_keys` expects every key to paint. For deliberate no-op behavior,
-use `send_keys_expect_quiet(...)` and assert that state remains unchanged in a
-user-visible way.
+For product behavior, assert that visible state remains unchanged. Do not assert
+that no repaint occurred unless the test is specifically about the harness or
+rendering contract. `Editor::send_keys_expect_quiet(...)` is a low-level helper
+for that narrow case because `Editor::send_keys` expects each key to paint.
 
 ---
 
@@ -216,13 +183,19 @@ lookup today.
 Every effectful action is fire-and-forget at the X11 layer. Callers synchronize
 on paint events and observable outcomes.
 
+- `ScratchpadSession::open` and `open_file` return only after the editor window
+  is focused and a painted text viewport snapshot is available.
 - `Editor::send_keys` waits for at least one matching DAMAGE event, then waits
   for that damage stream to quiesce after each key before sending the next key.
 - `Editor::wait_quiet`, `wait_file_text`, `wait_file_stable`, and
   `wait_for_exit` are explicit synchronization primitives for larger units of
   work.
-- State reads are meaningful after the action that produced the state has
-  settled.
+- `Editor::wait_state(label, timeout, predicate)` waits on user-visible state
+  from the trace.
+- `Editor::read_state` returns the latest observed state snapshot, including a
+  cached snapshot when no newer record has landed since the previous read.
+- `Editor::drain_state_records` is for trace-stream tests that intentionally
+  inspect record order or multiple records from one action span.
 
 The harness must not add guessed sleeps between keystrokes. Fixed input delays
 either hide slow-frame races or break compound commands that have no wall-clock
@@ -231,6 +204,10 @@ guard this.
 
 The one intentional pointer delay is `POINTER_SETTLE` between pointer motion and
 click/release, because the X server processes pointer motion asynchronously.
+
+The state trace is emitted from the paint path after viewport geometry is
+available. Product tests should treat each record as an observable UI snapshot,
+not as a model transaction log.
 
 ---
 
@@ -265,8 +242,8 @@ The real-display suite currently has broad coverage across:
 - keyboard modifiers and undo/redo
 - Vim mode transitions and compound commands
 - find and goto panel state
-- mouse click, double-click, triple-click, quad-click, shift-click, Alt-click,
-  drag selection, and middle-click paste
+- mouse click, double-click, triple-click, quad-click, drag selection, middle-click
+  paste, and TDD specs for shift-click / Alt-click gaps
 - cursor movement and subword motion
 - multi-cursor creation, text input, deletion, paste distribution, copy
   collection, Escape collapse, smart Enter, and TDD specs for remaining gaps

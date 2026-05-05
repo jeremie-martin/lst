@@ -27,6 +27,8 @@ const WINDOW_DISCOVERY_TIMEOUT_DEFAULT: Duration = Duration::from_secs(30);
 const TERMINATE_GRACE: Duration = Duration::from_secs(2);
 const SEND_KEYS_QUIET: Duration = Duration::from_millis(20);
 const SEND_KEYS_TIMEOUT: Duration = Duration::from_secs(2);
+const STATE_POLL: Duration = Duration::from_millis(10);
+const TEXT_VIEWPORT_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn window_discovery_timeout() -> Duration {
     // GPUI's X11 backend is reasonably fast, but on hosts where the window
@@ -428,7 +430,13 @@ impl<'a> Editor<'a> {
         mods: ChordMods,
     ) -> Result<()> {
         let result: Result<()> = (|| {
-            let state = self.read_state()?;
+            let state = self.wait_state("drag_text viewport", TEXT_VIEWPORT_TIMEOUT, |state| {
+                state
+                    .viewport
+                    .text_to_window_local(from.0, from.1)
+                    .is_some()
+                    && state.viewport.text_to_window_local(to.0, to.1).is_some()
+            })?;
             let (from_x, from_y) = resolve_text_pixels(&state, from.0, from.1, "drag_text from")?;
             let (to_x, to_y) = resolve_text_pixels(&state, to.0, to.1, "drag_text to")?;
             let conn = &self.display.conn;
@@ -437,6 +445,10 @@ impl<'a> Editor<'a> {
             input::move_pointer_to_window_point(conn, root, &self.window, from_x, from_y)?;
             thread::sleep(POINTER_SETTLE);
             input::press_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
+            if !mods.is_empty() {
+                conn.flush()?;
+                thread::sleep(POINTER_SETTLE);
+            }
             input::button_press(conn, root, BUTTON_LEFT)?;
             conn.flush()?;
             // Move with the button held. The X server processes motion
@@ -447,6 +459,17 @@ impl<'a> Editor<'a> {
             input::button_release(conn, root, BUTTON_LEFT)?;
             input::release_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
             conn.flush()?;
+            let damage_id = self.damage.damage();
+            let window_id = self.window.id;
+            let child = child_mut(&mut self.child)?;
+            damage_wait::wait_for_damage_then_quiet(
+                conn,
+                damage_id,
+                window_id,
+                child,
+                SEND_KEYS_QUIET,
+                SEND_KEYS_TIMEOUT,
+            )?;
             Ok(())
         })();
         self.attach_stderr_context(result, "drag_text")
@@ -462,7 +485,9 @@ impl<'a> Editor<'a> {
         label: &str,
     ) -> Result<()> {
         let result: Result<()> = (|| {
-            let state = self.read_state()?;
+            let state = self.wait_state(label, TEXT_VIEWPORT_TIMEOUT, |state| {
+                state.viewport.text_to_window_local(line, col).is_some()
+            })?;
             let (x, y) = resolve_text_pixels(&state, line, col, label)?;
             let conn = &self.display.conn;
             let root = self.display.root;
@@ -470,9 +495,24 @@ impl<'a> Editor<'a> {
             input::move_pointer_to_window_point(conn, root, &self.window, x, y)?;
             thread::sleep(POINTER_SETTLE);
             input::press_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
+            if !mods.is_empty() {
+                conn.flush()?;
+                thread::sleep(POINTER_SETTLE);
+            }
             input::multi_click_button(conn, root, button, click_count)?;
             input::release_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
             conn.flush()?;
+            let damage_id = self.damage.damage();
+            let window_id = self.window.id;
+            let child = child_mut(&mut self.child)?;
+            damage_wait::wait_for_damage_then_quiet(
+                conn,
+                damage_id,
+                window_id,
+                child,
+                SEND_KEYS_QUIET,
+                SEND_KEYS_TIMEOUT,
+            )?;
             Ok(())
         })();
         self.attach_stderr_context(result, label)
@@ -694,9 +734,69 @@ impl<'a> Editor<'a> {
         self.attach_stderr_context(result, "wait_quiet")
     }
 
+    pub fn wait_state(
+        &mut self,
+        label: &str,
+        timeout: Duration,
+        predicate: impl Fn(&StateTraceRecord) -> bool,
+    ) -> Result<StateTraceRecord> {
+        let result = (|| {
+            let deadline = Instant::now() + timeout;
+            let mut latest = None;
+            loop {
+                if let Some(status) = child_mut(&mut self.child)?.try_wait()? {
+                    return Err(io::Error::other(format!(
+                        "editor exited while waiting for state {label}: {status}"
+                    ))
+                    .into());
+                }
+
+                let reader = self.state_trace.as_mut().ok_or_else(|| {
+                    io::Error::other(
+                        "state trace not configured; pass `SpawnOpts::state_trace_path` at spawn time",
+                    )
+                })?;
+                let records = reader.read_new_records()?;
+                for record in records {
+                    latest = Some(record.clone());
+                    if predicate(&record) {
+                        return Ok(record);
+                    }
+                }
+                if let Some(record) = reader.last_observed().cloned() {
+                    latest = Some(record.clone());
+                    if predicate(&record) {
+                        return Ok(record);
+                    }
+                }
+
+                if Instant::now() >= deadline {
+                    let detail = latest
+                        .as_ref()
+                        .and_then(|record| serde_json::to_string_pretty(record).ok())
+                        .unwrap_or_else(|| "<no state-trace record observed>".to_string());
+                    return Err(io::Error::other(format!(
+                        "timed out waiting for state {label}\n{detail}"
+                    ))
+                    .into());
+                }
+                thread::sleep(STATE_POLL);
+            }
+        })();
+        self.attach_stderr_context(result, "wait_state")
+    }
+
+    pub fn wait_text_viewport(&mut self, timeout: Duration) -> Result<StateTraceRecord> {
+        self.wait_state(
+            "text viewport geometry",
+            timeout,
+            viewport_geometry_is_ready,
+        )
+    }
+
     /// Drain any new state-trace records and return the most recent one.
-    /// The harness already settles damage-then-quiet after each `send_keys`
-    /// keystroke, so the latest record reflects the last settled state.
+    /// When no new record was appended since the previous read, returns the
+    /// most recent record this reader has already observed.
     /// Errors when no state-trace path was configured at spawn time, or
     /// when the editor has not emitted any record yet.
     pub fn read_state(&mut self) -> Result<StateTraceRecord> {
@@ -854,6 +954,12 @@ fn resolve_text_pixels(
             ))
             .into()
         })
+}
+
+fn viewport_geometry_is_ready(record: &StateTraceRecord) -> bool {
+    !record.viewport.rows.is_empty()
+        && record.viewport.char_width_px > 0.0
+        && record.viewport.line_height_px > 0.0
 }
 
 fn tail_log(path: &Path, max_lines: usize) -> String {
