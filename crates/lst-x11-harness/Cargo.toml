@@ -1,0 +1,10 @@
+[package]
+name = "lst-x11-harness"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+libc = "0.2"
+x11rb = { version = "0.13.2", features = ["damage", "xkb", "xtest"] }

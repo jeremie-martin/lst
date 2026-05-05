@@ -10,9 +10,10 @@ The active editor is the GPUI implementation in `apps/lst-gpui`. The repository 
 
 - `crates/lst-editor`: framework-neutral editor model, document primitives, effects, snapshots, language behavior, and Vim state machine. Behavior should move here whenever it can be tested through model APIs, effects, snapshots, or document-level contracts.
 - `apps/lst-gpui`: GPUI desktop app, rendering, input adaptation, runtime file/clipboard/display effects, and app-private UI widgets under `src/ui`. Should mostly adapt desktop events to `lst-editor` contracts and render observable state.
+- `crates/lst-x11-harness`: in-process X11 driver for spawning the editor binary and synthesizing real keyboard/mouse input under `DISPLAY`. Used by smoke tests today; the `bench_editor_x11` example will migrate onto it. Outside `default-members` because it has no purpose without an X server.
 - `apps/lst-gpui/examples/bench_editor_x11.rs`: real-display X11 benchmark runner.
 - `crates/lst-editor/tests`: editor behavior integration tests.
-- `apps/lst-gpui/src/tests.rs` and `apps/lst-gpui/tests`: app and real-display smoke tests.
+- `apps/lst-gpui/src/tests.rs` and `apps/lst-gpui/tests`: app tests plus the real-display test suites (`real_x11_*.rs`) on top of `lst-x11-harness`. Shared fixture lives in `apps/lst-gpui/tests/support/mod.rs` (`ScratchpadSession`, `EditorTestExt::save_then_expect_file`, etc.) — new real-display tests should reuse it. See `docs/x11-harness.md` for the canonical test shape, the synchronization model, and the current list of harness gaps to be aware of when writing new tests.
 - `docs`: testing philosophy, behavior checklist, roadmap, performance workflow.
 
 ## Build, Test, and Development Commands
@@ -25,6 +26,7 @@ The active editor is the GPUI implementation in `apps/lst-gpui`. The repository 
 - `cargo clippy --all-targets --all-features` — lint all targets.
 - `cargo fmt --all` — format the workspace.
 - `cargo build --release -p lst-gpui --bin lst --example bench_editor_x11` — build the benchmark runner with the release app.
+- `cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture` — run all real-display tests (requires `DISPLAY`, an X11 server, and `xclip` on `PATH`). `--test-threads=1` is required because every test grabs keyboard focus and moves the global pointer through XTEST; running them in parallel would have them fighting over input. The `lst-x11-harness` crate waits up to 30s for each editor window to be mapped (override with `LST_X11_WINDOW_TIMEOUT_MS=N`); set `LST_X11_KEEP_TEMP=1` to preserve scratchpad contents on disk for debugging.
 
 Run `cargo test --all-features` and `cargo clippy --all-targets --all-features` before submitting behavior or architecture changes.
 

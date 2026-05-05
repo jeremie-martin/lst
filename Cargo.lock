@@ -3050,6 +3050,7 @@ dependencies = [
  "gpui",
  "libc",
  "lst-editor",
+ "lst-x11-harness",
  "rfd",
  "ropey",
  "smallvec",
@@ -3067,6 +3068,14 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "unicode-segmentation",
+ "x11rb",
+]
+
+[[package]]
+name = "lst-x11-harness"
+version = "0.1.0"
+dependencies = [
+ "libc",
  "x11rb",
 ]
 

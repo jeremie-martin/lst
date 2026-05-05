@@ -2,6 +2,7 @@
 members = [
     "apps/lst-gpui",
     "crates/lst-editor",
+    "crates/lst-x11-harness",
 ]
 default-members = [
     "apps/lst-gpui",

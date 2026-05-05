@@ -37,4 +37,5 @@ unicode-segmentation = "1.12"
 [dev-dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["test-support", "x11"] }
 libc = "0.2"
+lst-x11-harness = { path = "../../crates/lst-x11-harness" }
 x11rb = { version = "0.13.2", features = ["damage", "xtest"] }
