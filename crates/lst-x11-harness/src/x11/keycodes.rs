@@ -10,20 +10,36 @@ use crate::Result;
 
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
 const KEYSYM_SHIFT_L: u32 = 0xffe1;
+const KEYSYM_ALT_L: u32 = 0xffe9;
 const KEYSYM_TAB: u32 = 0xff09;
 const KEYSYM_SPACE: u32 = 0x20;
 const KEYSYM_RETURN: u32 = 0xff0d;
 const KEYSYM_ESCAPE: u32 = 0xff1b;
 const KEYSYM_BACKSPACE: u32 = 0xff08;
+const KEYSYM_DELETE: u32 = 0xffff;
+const KEYSYM_HOME: u32 = 0xff50;
+const KEYSYM_LEFT: u32 = 0xff51;
+const KEYSYM_UP: u32 = 0xff52;
+const KEYSYM_RIGHT: u32 = 0xff53;
+const KEYSYM_DOWN: u32 = 0xff54;
+const KEYSYM_END: u32 = 0xff57;
 
 pub(crate) struct Keycodes {
     pub(crate) control_l: Keycode,
     pub(crate) shift_l: Keycode,
+    pub(crate) alt_l: Keycode,
     pub(crate) tab: Keycode,
     pub(crate) space: Keycode,
     pub(crate) enter: Keycode,
     pub(crate) escape: Keycode,
     pub(crate) backspace: Keycode,
+    pub(crate) delete: Keycode,
+    pub(crate) home: Keycode,
+    pub(crate) end: Keycode,
+    pub(crate) left: Keycode,
+    pub(crate) right: Keycode,
+    pub(crate) up: Keycode,
+    pub(crate) down: Keycode,
     /// Printable ASCII (`0x20..=0x7E`) → (keycode, needs_shift). The full
     /// table is populated at startup so callers don't have to extend the
     /// harness every time they want to type a digit or punctuation char.
@@ -51,11 +67,19 @@ impl Keycodes {
         Ok(Self {
             control_l: require(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
             shift_l: require(&reply, setup.min_keycode, KEYSYM_SHIFT_L, active_group)?,
+            alt_l: require(&reply, setup.min_keycode, KEYSYM_ALT_L, active_group)?,
             tab: require(&reply, setup.min_keycode, KEYSYM_TAB, active_group)?,
             space: require(&reply, setup.min_keycode, KEYSYM_SPACE, active_group)?,
             enter: require(&reply, setup.min_keycode, KEYSYM_RETURN, active_group)?,
             escape: require(&reply, setup.min_keycode, KEYSYM_ESCAPE, active_group)?,
             backspace: require(&reply, setup.min_keycode, KEYSYM_BACKSPACE, active_group)?,
+            delete: require(&reply, setup.min_keycode, KEYSYM_DELETE, active_group)?,
+            home: require(&reply, setup.min_keycode, KEYSYM_HOME, active_group)?,
+            end: require(&reply, setup.min_keycode, KEYSYM_END, active_group)?,
+            left: require(&reply, setup.min_keycode, KEYSYM_LEFT, active_group)?,
+            right: require(&reply, setup.min_keycode, KEYSYM_RIGHT, active_group)?,
+            up: require(&reply, setup.min_keycode, KEYSYM_UP, active_group)?,
+            down: require(&reply, setup.min_keycode, KEYSYM_DOWN, active_group)?,
             chars,
         })
     }

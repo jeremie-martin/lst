@@ -46,6 +46,11 @@ To run:
 cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
 ```
 
+The multi-cursor suite includes TDD expectations for behavior that the
+checklist still marks incomplete, so the full ignored run can fail until
+those production behaviors land. Use a test filter when you specifically
+want only the currently-green real-display subset.
+
 `--test-threads=1` is still the intended mode — every test grabs
 keyboard focus and moves the global pointer through XTEST. The harness
 also takes a cross-process lock around each `Display`, so accidental
@@ -99,14 +104,18 @@ route the click to the previous pointer location.
   existing test.
 - **Full printable ASCII typing** via level-aware XKB lookup
   (uppercase auto-shifts, digits and punctuation work without per-char
-  extensions), plus `Tab` / `Enter` / `Escape` / `Backspace`, plus
-  modifier chords (`<C-x>`, `<S-x>`, `<C-S-x>`, `<ctrl-shift-x>`).
-- **14 tests across 5 files exercising different flavors:** literal
+  extensions), plus `Tab` / `Enter` / `Escape` / `Backspace` /
+  `Delete` / `Home` / `End` / arrow keys, plus modifier chords
+  (`<C-x>`, `<A-x>`, `<S-x>`, `<C-A-S-x>`,
+  `<ctrl-alt-shift-x>`).
+- **27 tests across 5 files exercising different flavors:** literal
   type, vim modes (Normal/Insert/Visual-line), vim compound commands
-  with arbitrary pauses, multi-cursor `Ctrl+D`, Ctrl+A/Z/Y,
-  file-open, scratchpad-open with autosave, middle-click PRIMARY
-  paste, Ctrl+V clipboard paste, goto-line focus return,
-  edit-save-quit-reopen, clipboard-on-quit.
+  with arbitrary pauses, multi-cursor occurrence creation, adjacent-line
+  cursor creation, per-cursor text input, clipboard distribution and
+  collection, checklist-gap TDD specs, Ctrl+A/Z/Y, file-open,
+  scratchpad-open with autosave, middle-click PRIMARY paste, Ctrl+V
+  clipboard paste, goto-line focus return, edit-save-quit-reopen,
+  clipboard-on-quit.
 - **Failure artifacts are preserved.** `run_x11_test` preserves temp
   dirs on ordinary `?` failures, captures editor stdout/stderr under
   `artifacts/`, and `editor.keys`/`expect_file` attempt an `.xwd`

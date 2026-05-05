@@ -74,10 +74,14 @@ pub(crate) fn chord(
     kc: &Keycodes,
     code: Keycode,
     ctrl: bool,
+    alt: bool,
     shift: bool,
 ) -> Result<()> {
     if ctrl {
         key_press(conn, root, kc.control_l)?;
+    }
+    if alt {
+        key_press(conn, root, kc.alt_l)?;
     }
     if shift {
         key_press(conn, root, kc.shift_l)?;
@@ -86,6 +90,9 @@ pub(crate) fn chord(
     key_release(conn, root, code)?;
     if shift {
         key_release(conn, root, kc.shift_l)?;
+    }
+    if alt {
+        key_release(conn, root, kc.alt_l)?;
     }
     if ctrl {
         key_release(conn, root, kc.control_l)?;

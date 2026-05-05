@@ -47,6 +47,13 @@ pub enum Key {
     Enter,
     Escape,
     Backspace,
+    Delete,
+    Home,
+    End,
+    Left,
+    Right,
+    Up,
+    Down,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -314,6 +321,7 @@ impl<'a> Editor<'a> {
             &self.display.keycodes,
             code,
             ctrl,
+            false,
             shift,
         )
     }
@@ -335,6 +343,7 @@ impl<'a> Editor<'a> {
                 &self.display.keycodes,
                 code,
                 false,
+                false,
                 shift,
             )?;
         }
@@ -346,11 +355,14 @@ impl<'a> Editor<'a> {
     /// chords:
     ///
     /// - Special keys: `<enter>` / `<cr>` / `<return>`, `<esc>` / `<escape>`,
-    ///   `<tab>`, `<space>`, `<bs>` / `<backspace>`, `<lt>` (literal `<`).
-    /// - Modifier chords: `<C-x>` for Ctrl+x, `<S-x>` for Shift+x,
-    ///   `<C-S-x>` for Ctrl+Shift+x. The verbose forms `<ctrl-x>` /
-    ///   `<shift-x>` are accepted too. Inside a chord the key may be a
-    ///   single character or a special name, e.g. `<C-enter>`.
+    ///   `<tab>`, `<space>`, `<bs>` / `<backspace>`, `<del>` / `<delete>`,
+    ///   `<home>`, `<end>`, `<left>`, `<right>`, `<up>`, `<down>`, `<lt>`
+    ///   (literal `<`).
+    /// - Modifier chords: `<C-x>` for Ctrl+x, `<A-x>` for Alt+x, `<S-x>` for
+    ///   Shift+x, `<C-A-S-x>` for Ctrl+Alt+Shift+x. The verbose forms
+    ///   `<ctrl-x>`, `<alt-x>`, and `<shift-x>` are accepted too. Inside a
+    ///   chord the key may be a single character or a special name, e.g.
+    ///   `<C-A-down>`.
     ///
     /// Names are case-insensitive: `<Esc>`, `<ESC>`, and `<esc>` all match.
     /// Uppercase letters outside escapes auto-shift, so `A` and `<S-a>` are
@@ -372,6 +384,7 @@ impl<'a> Editor<'a> {
                 &self.display.keycodes,
                 code,
                 token.ctrl,
+                token.alt,
                 base_shift || token.shift,
             )?;
             // Settle: wait until the editor has painted in response. Short
@@ -484,12 +497,20 @@ fn resolve_key(kc: &Keycodes, key: Key) -> Result<(Keycode, bool)> {
         Key::Enter => Ok((kc.enter, false)),
         Key::Escape => Ok((kc.escape, false)),
         Key::Backspace => Ok((kc.backspace, false)),
+        Key::Delete => Ok((kc.delete, false)),
+        Key::Home => Ok((kc.home, false)),
+        Key::End => Ok((kc.end, false)),
+        Key::Left => Ok((kc.left, false)),
+        Key::Right => Ok((kc.right, false)),
+        Key::Up => Ok((kc.up, false)),
+        Key::Down => Ok((kc.down, false)),
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 struct KeyToken {
     ctrl: bool,
+    alt: bool,
     shift: bool,
     key: Key,
 }
@@ -515,6 +536,7 @@ fn parse_keys(input: &str) -> Result<Vec<KeyToken>> {
         } else {
             tokens.push(KeyToken {
                 ctrl: false,
+                alt: false,
                 shift: false,
                 key: Key::Char(ch),
             });
@@ -529,11 +551,15 @@ fn parse_escape(spec: &str) -> Result<KeyToken> {
     }
     let lowered = spec.to_ascii_lowercase();
     let mut ctrl = false;
+    let mut alt = false;
     let mut shift = false;
     let mut tail = lowered.as_str();
     loop {
         if let Some(rest) = strip_modifier(tail, &["c-", "ctrl-"]) {
             ctrl = true;
+            tail = rest;
+        } else if let Some(rest) = strip_modifier(tail, &["a-", "alt-"]) {
+            alt = true;
             tail = rest;
         } else if let Some(rest) = strip_modifier(tail, &["s-", "shift-"]) {
             shift = true;
@@ -551,7 +577,12 @@ fn parse_escape(spec: &str) -> Result<KeyToken> {
         parse_special_name(tail)
             .ok_or_else(|| io::Error::other(format!("unknown key escape '<{spec}>'")))?
     };
-    Ok(KeyToken { ctrl, shift, key })
+    Ok(KeyToken {
+        ctrl,
+        alt,
+        shift,
+        key,
+    })
 }
 
 fn strip_modifier<'a>(tail: &'a str, prefixes: &[&str]) -> Option<&'a str> {
@@ -565,6 +596,13 @@ fn parse_special_name(name: &str) -> Option<Key> {
         "tab" => Key::Tab,
         "space" => Key::Space,
         "bs" | "backspace" => Key::Backspace,
+        "del" | "delete" => Key::Delete,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "left" => Key::Left,
+        "right" => Key::Right,
+        "up" => Key::Up,
+        "down" => Key::Down,
         "lt" => Key::Char('<'),
         _ => return None,
     })
@@ -634,7 +672,7 @@ fn wait_file_text_impl(
                 let (s_code, _) = kc
                     .lookup_char('s')
                     .ok_or_else(|| io::Error::other("missing keycode for 's' (save retry)"))?;
-                input::chord(conn, root, kc, s_code, true, false)?;
+                input::chord(conn, root, kc, s_code, true, false, false)?;
                 last_save = Some(Instant::now());
                 save_retries += 1;
             }
@@ -781,8 +819,13 @@ fn terminate(child: &mut Child) {
 mod tests {
     use super::*;
 
-    fn token(ctrl: bool, shift: bool, key: Key) -> KeyToken {
-        KeyToken { ctrl, shift, key }
+    fn token(ctrl: bool, alt: bool, shift: bool, key: Key) -> KeyToken {
+        KeyToken {
+            ctrl,
+            alt,
+            shift,
+            key,
+        }
     }
 
     fn assert_keys(input: &str, expected: &[KeyToken]) {
@@ -790,6 +833,7 @@ mod tests {
         assert_eq!(parsed.len(), expected.len(), "{input:?} → {parsed:?}");
         for (got, want) in parsed.iter().zip(expected) {
             assert_eq!(got.ctrl, want.ctrl, "{input:?}");
+            assert_eq!(got.alt, want.alt, "{input:?}");
             assert_eq!(got.shift, want.shift, "{input:?}");
             assert!(
                 matches!((got.key, want.key),
@@ -805,17 +849,17 @@ mod tests {
         assert_keys(
             "A<enter>B<enter>C<enter><esc>ggdd",
             &[
-                token(false, false, Key::Char('A')),
-                token(false, false, Key::Enter),
-                token(false, false, Key::Char('B')),
-                token(false, false, Key::Enter),
-                token(false, false, Key::Char('C')),
-                token(false, false, Key::Enter),
-                token(false, false, Key::Escape),
-                token(false, false, Key::Char('g')),
-                token(false, false, Key::Char('g')),
-                token(false, false, Key::Char('d')),
-                token(false, false, Key::Char('d')),
+                token(false, false, false, Key::Char('A')),
+                token(false, false, false, Key::Enter),
+                token(false, false, false, Key::Char('B')),
+                token(false, false, false, Key::Enter),
+                token(false, false, false, Key::Char('C')),
+                token(false, false, false, Key::Enter),
+                token(false, false, false, Key::Escape),
+                token(false, false, false, Key::Char('g')),
+                token(false, false, false, Key::Char('g')),
+                token(false, false, false, Key::Char('d')),
+                token(false, false, false, Key::Char('d')),
             ],
         );
     }
@@ -825,10 +869,25 @@ mod tests {
         assert_keys(
             "<C-s><S-tab><C-S-l><ctrl-shift-a>",
             &[
-                token(true, false, Key::Char('s')),
-                token(false, true, Key::Tab),
-                token(true, true, Key::Char('l')),
-                token(true, true, Key::Char('a')),
+                token(true, false, false, Key::Char('s')),
+                token(false, false, true, Key::Tab),
+                token(true, false, true, Key::Char('l')),
+                token(true, false, true, Key::Char('a')),
+            ],
+        );
+    }
+
+    #[test]
+    fn alt_and_navigation_chord_escapes() {
+        assert_keys(
+            "<C-A-down><alt-up><S-left><delete><home><end>",
+            &[
+                token(true, true, false, Key::Down),
+                token(false, true, false, Key::Up),
+                token(false, false, true, Key::Left),
+                token(false, false, false, Key::Delete),
+                token(false, false, false, Key::Home),
+                token(false, false, false, Key::End),
             ],
         );
     }
@@ -838,10 +897,10 @@ mod tests {
         assert_keys(
             "<Esc><ESCAPE><Cr><RETURN>",
             &[
-                token(false, false, Key::Escape),
-                token(false, false, Key::Escape),
-                token(false, false, Key::Enter),
-                token(false, false, Key::Enter),
+                token(false, false, false, Key::Escape),
+                token(false, false, false, Key::Escape),
+                token(false, false, false, Key::Enter),
+                token(false, false, false, Key::Enter),
             ],
         );
     }
@@ -851,8 +910,8 @@ mod tests {
         assert_keys(
             "<lt>3",
             &[
-                token(false, false, Key::Char('<')),
-                token(false, false, Key::Char('3')),
+                token(false, false, false, Key::Char('<')),
+                token(false, false, false, Key::Char('3')),
             ],
         );
     }
