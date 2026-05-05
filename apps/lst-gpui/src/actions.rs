@@ -1,20 +1,21 @@
 use gpui::{Context, Div, InteractiveElement, Window};
 
 use crate::{
-    AddCursorAbove, AddCursorBelow, Backspace, CloseActiveTab, CopySelection, CutSelection,
-    DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward, DuplicateLine, FindNext,
-    FindOpen, FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline, InsertTab, LstGpuiApp,
-    MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd,
+    AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, Backspace, CloseActiveTab, CopySelection,
+    CutSelection, DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward, DuplicateLine,
+    FindNext, FindOpen, FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline, InsertTab,
+    LstGpuiApp, MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd,
     MoveLineStart, MoveLineUp, MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft,
     MoveSubwordRight, MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab,
-    NextTab, OpenFile, OutdentSelection, PasteClipboard, PrevTab, Quit, Redo, ReplaceAll,
-    ReplaceOne, SaveFile, SaveFileAs, SelectAll, SelectAllOccurrences, SelectDocumentEnd,
-    SelectDocumentStart, SelectDown, SelectLeft, SelectLine, SelectLineEnd, SelectLineStart,
-    SelectNextOccurrence, SelectPageDown, SelectPageUp, SelectParagraph, SelectRight,
-    SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft,
-    SelectWordRight, SwapRedoBranch, ToggleBlockComment, ToggleComment, ToggleFindCase,
-    ToggleFindInSelection, ToggleFindRegex, ToggleFindWholeWord, ToggleLineNumberMode,
-    ToggleRecentFiles, ToggleTheme, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
+    NextTab, OpenFile, OutdentSelection, PasteClipboard, PopSelectionCursor, PrevTab, Quit, Redo,
+    ReplaceAll, ReplaceOne, SaveFile, SaveFileAs, SelectAll, SelectAllOccurrences,
+    SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectFindMatches, SelectLeft, SelectLine,
+    SelectLineEnd, SelectLineStart, SelectNextOccurrence, SelectPageDown, SelectPageUp,
+    SelectParagraph, SelectRight, SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp,
+    SelectWordLeft, SelectWordRight, SkipNextOccurrence, SwapRedoBranch, ToggleBlockComment,
+    ToggleComment, ToggleFindCase, ToggleFindInSelection, ToggleFindRegex, ToggleFindWholeWord,
+    ToggleLineNumberMode, ToggleRecentFiles, ToggleTheme, ToggleWrap, Undo, ZoomIn, ZoomOut,
+    ZoomReset,
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
@@ -44,20 +45,20 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         CopySelection => |model| model.copy_selection();
         CutSelection => |model| model.cut_selection();
         PasteClipboard => |model| model.request_paste();
-        MoveLeft => |model| model.move_horizontal_collapsed(true);
-        MoveRight => |model| model.move_horizontal_collapsed(false);
+        MoveLeft => |model| model.move_horizontal_collapsed_per_cursor(true);
+        MoveRight => |model| model.move_horizontal_collapsed_per_cursor(false);
         MoveWordLeft => |model| model.move_word(true, false);
         MoveWordRight => |model| model.move_word(false, false);
         MoveSubwordLeft => |model| model.move_subword(true, false);
         MoveSubwordRight => |model| model.move_subword(false, false);
         MoveDocumentStart => |model| model.move_document_boundary(false, false);
         MoveDocumentEnd => |model| model.move_document_boundary(true, false);
-        SelectLeft => |model| model.move_horizontal_by(-1, true);
-        SelectRight => |model| model.move_horizontal_by(1, true);
+        SelectLeft => |model| model.move_horizontal_per_cursor_by(-1, true);
+        SelectRight => |model| model.move_horizontal_per_cursor_by(1, true);
         SelectWordLeft => |model| model.move_word(true, true);
         SelectWordRight => |model| model.move_word(false, true);
-        SelectSubwordLeft => |model| model.move_subword(true, true);
-        SelectSubwordRight => |model| model.move_subword(false, true);
+        SelectSubwordLeft => |model| model.smart_shrink_selection();
+        SelectSubwordRight => |model| model.smart_expand_selection();
         SelectDocumentStart => |model| model.move_document_boundary(false, true);
         SelectDocumentEnd => |model| model.move_document_boundary(true, true);
         MoveSmartHome => |model| model.smart_home(false);
@@ -76,8 +77,12 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         SelectAll => |model| model.select_all();
         SelectNextOccurrence => |model| model.select_next_occurrence();
         SelectAllOccurrences => |model| model.select_all_occurrences();
-        AddCursorAbove => |model| model.add_cursor_above();
-        AddCursorBelow => |model| model.add_cursor_below();
+        SelectFindMatches => |model| model.select_all_find_matches();
+        SkipNextOccurrence => |model| model.skip_next_occurrence();
+        PopSelectionCursor => |model| model.pop_primary_selection_cursor();
+        AddCursorAbove => |model| model.add_cursor_above_with_goal_column();
+        AddCursorBelow => |model| model.add_cursor_below_with_goal_column();
+        AddCursorsToLineEnds => |model| model.add_cursors_to_selected_line_ends();
         SelectLine => |model| model.select_current_line();
         SelectParagraph => |model| model.select_current_paragraph();
         Undo => |model| model.undo();

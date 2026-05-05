@@ -173,12 +173,54 @@ pub struct EditorTab {
     buffer: Rope,
     modified: bool,
     selection: SelectionSet,
-    preferred_column: Option<usize>,
+    cursor_columns: CursorColumns,
     revision: u64,
     line_cache: Option<CachedLines>,
     history: EditHistory,
     last_edit_position: Option<usize>,
     marked_range: Option<Range<usize>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct CursorColumns {
+    movement_goals: Option<Vec<usize>>,
+    visible_goals: Option<Vec<usize>>,
+}
+
+impl CursorColumns {
+    fn goal_for(&self, selection_index: usize) -> Option<usize> {
+        self.movement_goals
+            .as_ref()
+            .and_then(|columns| columns.get(selection_index))
+            .copied()
+    }
+
+    fn visible_for(&self, selection_index: usize) -> Option<usize> {
+        self.visible_goals
+            .as_ref()
+            .and_then(|columns| columns.get(selection_index))
+            .copied()
+    }
+
+    fn set_all_movement_goals(&mut self, len: usize, column: Option<usize>) {
+        self.movement_goals = column.map(|column| vec![column; len]);
+        self.visible_goals = None;
+    }
+
+    fn set_selection_columns(
+        &mut self,
+        len: usize,
+        movement_goals: Option<Vec<usize>>,
+        visible_goals: Option<Vec<usize>>,
+    ) {
+        self.movement_goals = movement_goals.filter(|columns| columns.len() == len);
+        self.visible_goals = visible_goals.filter(|columns| columns.len() == len);
+    }
+
+    fn clear(&mut self) {
+        self.movement_goals = None;
+        self.visible_goals = None;
+    }
 }
 
 impl EditorTab {
@@ -248,7 +290,7 @@ impl EditorTab {
             buffer: Rope::from_str(text),
             modified: false,
             selection: SelectionSet::single(Selection::collapsed(0)),
-            preferred_column: None,
+            cursor_columns: CursorColumns::default(),
             revision: 0,
             line_cache: None,
             history: EditHistory::new(),
@@ -320,15 +362,36 @@ impl EditorTab {
     }
 
     pub(crate) fn preferred_column(&self) -> Option<usize> {
-        self.preferred_column
+        self.cursor_columns.goal_for(self.selection.primary_index())
+    }
+
+    pub(crate) fn preferred_column_for_selection(&self, selection_index: usize) -> Option<usize> {
+        self.cursor_columns.goal_for(selection_index)
+    }
+
+    pub fn visible_column_for_selection(&self, selection_index: usize) -> Option<usize> {
+        self.cursor_columns.visible_for(selection_index)
     }
 
     pub(crate) fn set_preferred_column(&mut self, preferred_column: Option<usize>) {
-        self.preferred_column = preferred_column;
+        self.cursor_columns
+            .set_all_movement_goals(self.selection.as_slice().len(), preferred_column);
+    }
+
+    pub(crate) fn set_selection_columns(
+        &mut self,
+        movement_goals: Option<Vec<usize>>,
+        visible_goals: Option<Vec<usize>>,
+    ) {
+        self.cursor_columns.set_selection_columns(
+            self.selection.as_slice().len(),
+            movement_goals,
+            visible_goals,
+        );
     }
 
     pub(crate) fn clear_preferred_column(&mut self) {
-        self.preferred_column = None;
+        self.cursor_columns.clear();
     }
 
     pub fn modified(&self) -> bool {
@@ -444,13 +507,13 @@ impl EditorTab {
         let anchor = selection.anchor().min(len);
         let head = selection.head().min(len);
         self.selection.set_single(Selection::new(anchor, head));
-        self.preferred_column = None;
+        self.cursor_columns.clear();
         self.marked_range = None;
     }
 
     pub(crate) fn set_selection_set(&mut self, selection_set: SelectionSet) {
         self.selection = selection_set.clamped_to_len(self.len_chars());
-        self.preferred_column = None;
+        self.cursor_columns.clear();
         self.marked_range = None;
     }
 
@@ -523,7 +586,7 @@ impl EditorTab {
             &self.buffer,
         );
         self.selection = selection;
-        self.preferred_column = None;
+        self.cursor_columns.clear();
         self.marked_range =
             marked_range_after_edit(marked_range_after, primary_inserted_range, self.len_chars());
         if changes_text {
@@ -547,7 +610,7 @@ impl EditorTab {
         self.buffer = Rope::from_str(text);
         self.move_to(0);
         self.modified = false;
-        self.preferred_column = None;
+        self.cursor_columns.clear();
         self.marked_range = None;
         self.history.clear();
         self.refresh_language();
@@ -636,7 +699,7 @@ impl EditorTab {
     fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
         self.buffer = Rope::from_str(&snapshot.text);
         self.selection = snapshot.selection;
-        self.preferred_column = None;
+        self.cursor_columns.clear();
         self.marked_range = None;
         self.touch_content();
     }

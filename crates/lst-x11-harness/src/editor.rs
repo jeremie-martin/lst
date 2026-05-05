@@ -438,6 +438,8 @@ impl<'a> Editor<'a> {
                     .is_some()
                     && state.viewport.text_to_window_local(to.0, to.1).is_some()
             })?;
+            let before_seq = state.seq;
+            let before_cursors = state_cursor_signature(&state);
             let (from_x, from_y) = resolve_text_pixels(&state, from.0, from.1, "drag_text from")?;
             let (to_x, to_y) = resolve_text_pixels(&state, to.0, to.1, "drag_text to")?;
             let conn = &self.display.conn;
@@ -471,6 +473,12 @@ impl<'a> Editor<'a> {
                 SEND_KEYS_QUIET,
                 SEND_KEYS_TIMEOUT,
             )?;
+            self.wait_state("drag_text selection", TEXT_VIEWPORT_TIMEOUT, |state| {
+                state.seq > before_seq
+                    && state_cursor_signature(state) != before_cursors
+                    && (state.cursors.len() > 1
+                        || state.cursors.iter().any(|cursor| !cursor.is_collapsed()))
+            })?;
             Ok(())
         })();
         self.attach_stderr_context(result, "drag_text")
@@ -489,6 +497,16 @@ impl<'a> Editor<'a> {
             let state = self.wait_state(label, TEXT_VIEWPORT_TIMEOUT, |state| {
                 state.viewport.text_to_window_local(line, col).is_some()
             })?;
+            let before_seq = state.seq;
+            let before_cursors = state_cursor_signature(&state);
+            let clicked_row = state
+                .viewport
+                .first_row_for_line(line)
+                .map(|row| (row.line_start_char, row.display_end_char));
+            let quad_min_end = state
+                .viewport
+                .first_row_for_line(line + 1)
+                .map(|row| row.display_end_char);
             let (x, y) = resolve_text_pixels(&state, line, col, label)?;
             let conn = &self.display.conn;
             let root = self.display.root;
@@ -514,6 +532,22 @@ impl<'a> Editor<'a> {
                 SEND_KEYS_QUIET,
                 SEND_KEYS_TIMEOUT,
             )?;
+            if click_count > 1 {
+                self.wait_state(label, TEXT_VIEWPORT_TIMEOUT, |state| {
+                    state.seq > before_seq
+                        && multi_click_selection_reached(
+                            state,
+                            clicked_row,
+                            quad_min_end,
+                            click_count,
+                        )
+                })?;
+            } else if mouse_click_expects_state_change(&state, line, col, mods, button, click_count)
+            {
+                self.wait_state(label, TEXT_VIEWPORT_TIMEOUT, |state| {
+                    state.seq > before_seq && state_cursor_signature(state) != before_cursors
+                })?;
+            }
             Ok(())
         })();
         self.attach_stderr_context(result, label)
@@ -595,7 +629,15 @@ impl<'a> Editor<'a> {
     pub fn send_keys(&mut self, sequence: &str) -> Result<()> {
         let result: Result<()> = (|| {
             let tokens = parse_keys(sequence)?;
+            let mut observed_state = self
+                .state_trace
+                .as_mut()
+                .and_then(|reader| reader.latest().ok());
             for token in tokens {
+                let before_state = observed_state.clone();
+                let wait_for_state_change = before_state
+                    .as_ref()
+                    .is_some_and(|state| key_token_expects_state_change(&token, state));
                 self.dispatch_token(&token)?;
                 // Settle: wait until the editor has painted in response. Short
                 // quiet window because we just want one frame of evidence; not
@@ -613,6 +655,13 @@ impl<'a> Editor<'a> {
                     SEND_KEYS_QUIET,
                     SEND_KEYS_TIMEOUT,
                 )?;
+                if wait_for_state_change {
+                    let before_state = before_state.expect("checked above");
+                    observed_state =
+                        Some(self.wait_state_change_after_without_consuming(&before_state)?);
+                } else {
+                    observed_state = self.peek_latest_context_after(before_state.as_ref())?;
+                }
             }
             Ok(())
         })();
@@ -787,6 +836,71 @@ impl<'a> Editor<'a> {
         self.attach_stderr_context(result, "wait_state")
     }
 
+    fn wait_state_change_after_without_consuming(
+        &mut self,
+        before: &StateTraceRecord,
+    ) -> Result<StateTraceRecord> {
+        let deadline = Instant::now() + SEND_KEYS_TIMEOUT;
+        let mut latest = None;
+        loop {
+            if let Some(status) = child_mut(&mut self.child)?.try_wait()? {
+                return Err(io::Error::other(format!(
+                    "editor exited while waiting for send_keys state change: {status}"
+                ))
+                .into());
+            }
+
+            let reader = self.state_trace.as_mut().ok_or_else(|| {
+                io::Error::other(
+                    "state trace not configured; pass `SpawnOpts::state_trace_path` at spawn time",
+                )
+            })?;
+            for record in reader.peek_new_records()? {
+                latest = Some(record.clone());
+                if state_key_context_changed_after(before, &record) {
+                    return Ok(record);
+                }
+            }
+
+            if Instant::now() >= deadline {
+                let detail = latest
+                    .as_ref()
+                    .and_then(|record| serde_json::to_string_pretty(record).ok())
+                    .unwrap_or_else(|| "<no state-trace record observed>".to_string());
+                return Err(io::Error::other(format!(
+                    "timed out waiting for send_keys state change\n{detail}"
+                ))
+                .into());
+            }
+            thread::sleep(STATE_POLL);
+        }
+    }
+
+    fn peek_latest_context_after(
+        &mut self,
+        before: Option<&StateTraceRecord>,
+    ) -> Result<Option<StateTraceRecord>> {
+        let Some(reader) = self.state_trace.as_mut() else {
+            return Ok(None);
+        };
+        let min_seq = before.map(|state| state.seq);
+        let records = reader.peek_new_records()?;
+        let is_candidate = |record: &StateTraceRecord| {
+            min_seq.is_none_or(|seq| record.seq > seq)
+                && before.is_none_or(|before| state_key_context_changed_after(before, record))
+        };
+        Ok(records
+            .iter()
+            .rfind(|record| is_candidate(record))
+            .cloned()
+            .or_else(|| {
+                reader
+                    .last_observed()
+                    .filter(|record| is_candidate(record))
+                    .cloned()
+            }))
+    }
+
     pub fn wait_text_viewport(&mut self, timeout: Duration) -> Result<StateTraceRecord> {
         self.wait_state(
             "text viewport geometry",
@@ -954,7 +1068,142 @@ fn resolve_text_pixels(
                 state.viewport.rows.len(),
             ))
             .into()
+    })
+}
+
+fn mouse_click_expects_state_change(
+    state: &StateTraceRecord,
+    line: usize,
+    col: usize,
+    mods: ChordMods,
+    button: u8,
+    click_count: usize,
+) -> bool {
+    if !mods.is_empty() || button != BUTTON_LEFT || click_count > 1 {
+        return true;
+    }
+    !matches!(
+        state.cursors.as_slice(),
+        [cursor]
+            if cursor.is_collapsed() && cursor.head_line == line && cursor.head_col == col
+    )
+}
+
+fn multi_click_selection_reached(
+    state: &StateTraceRecord,
+    clicked_row: Option<(usize, usize)>,
+    quad_min_end: Option<usize>,
+    click_count: usize,
+) -> bool {
+    let Some((lo, hi)) = single_selection_range(state) else {
+        return false;
+    };
+    if click_count == 2 {
+        return true;
+    }
+    let Some((row_start, row_end)) = clicked_row else {
+        return false;
+    };
+    if click_count == 3 {
+        return lo <= row_start && hi >= row_end;
+    }
+    let min_end = quad_min_end.unwrap_or(row_end + 1);
+    lo <= row_start && hi >= min_end
+}
+
+fn single_selection_range(state: &StateTraceRecord) -> Option<(usize, usize)> {
+    let [cursor] = state.cursors.as_slice() else {
+        return None;
+    };
+    (!cursor.is_collapsed()).then_some((
+        cursor.anchor_char.min(cursor.head_char),
+        cursor.anchor_char.max(cursor.head_char),
+    ))
+}
+
+fn key_token_expects_state_change(token: &KeyToken, state: &StateTraceRecord) -> bool {
+    match token {
+        KeyToken::Single(chord) if plain_insert_text_key_changes_state(chord, state) => true,
+        KeyToken::Single(chord) if vim_key_context_changes_state(chord, state) => true,
+        KeyToken::Single(KeyChordSingle {
+            ctrl: true,
+            alt: false,
+            key: Key::Char('v'),
+            ..
+        }) => true,
+        KeyToken::Single(KeyChordSingle {
+            ctrl: true,
+            alt: false,
+            shift: false,
+            key: Key::Home,
+        }) => !matches!(
+            state.cursors.as_slice(),
+            [cursor] if cursor.is_collapsed() && cursor.head_char == 0
+        ),
+        KeyToken::Single(KeyChordSingle {
+            ctrl: true,
+            alt: false,
+            shift: false,
+            key: Key::End,
+        }) => state
+            .viewport
+            .first_row_for_line(state.line_count.saturating_sub(1))
+            .is_some_and(|row| {
+                !matches!(
+                    state.cursors.as_slice(),
+                    [cursor] if cursor.is_collapsed() && cursor.head_char == row.display_end_char
+                )
+            }),
+        _ => false,
+    }
+}
+
+fn vim_key_context_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> bool {
+    if chord.ctrl || chord.alt || state.focused_input != "editor" {
+        return false;
+    }
+    match chord.key {
+        Key::Escape => !state.vim_pending.is_empty() || state.vim_mode != "NORMAL",
+        Key::Char('g' | 'd' | 'y' | 'c' | 'z') => state.vim_mode == "NORMAL",
+        Key::Char('v') => state.vim_mode == "NORMAL",
+        _ => false,
+    }
+}
+
+fn plain_insert_text_key_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> bool {
+    if chord.ctrl || chord.alt || state.focused_input != "editor" || state.vim_mode != "INSERT" {
+        return false;
+    }
+    matches!(chord.key, Key::Char(_) | Key::Space | Key::Tab | Key::Enter)
+}
+
+fn state_key_context_changed_after(before: &StateTraceRecord, after: &StateTraceRecord) -> bool {
+    after.seq > before.seq
+        && (after.revision != before.revision
+            || state_cursor_signature(after) != state_cursor_signature(before)
+            || after.focused_input != before.focused_input
+            || after.vim_mode != before.vim_mode
+            || after.vim_pending != before.vim_pending
+            || after.find.visible != before.find.visible
+            || after.find.query != before.find.query
+            || after.goto_line_input != before.goto_line_input
+            || after.recent_panel_open != before.recent_panel_open
+            || after.recent_panel_query != before.recent_panel_query)
+}
+
+fn state_cursor_signature(record: &StateTraceRecord) -> Vec<(usize, usize, usize, usize)> {
+    record
+        .cursors
+        .iter()
+        .map(|cursor| {
+            (
+                cursor.anchor_char,
+                cursor.head_char,
+                cursor.anchor_line,
+                cursor.head_line,
+            )
         })
+        .collect()
 }
 
 fn viewport_geometry_is_ready(record: &StateTraceRecord) -> bool {

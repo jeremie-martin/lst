@@ -203,56 +203,88 @@ impl StateTraceReader {
     /// partially-written trailing line — bytes after the last `\n` are
     /// stashed and re-tried on the next call.
     pub fn read_new_records(&mut self) -> Result<Vec<StateTraceRecord>> {
+        let (records, offset, buffered_partial) =
+            self.read_records_since(self.offset, &self.buffered_partial)?;
+        self.offset = offset;
+        self.buffered_partial = buffered_partial;
+        if let Some(record) = records.last() {
+            self.last_record = Some(record.clone());
+        }
+        Ok(records)
+    }
+
+    /// Read records appended since the previous committed read without
+    /// advancing this reader. Internal harness waits use this to observe
+    /// settled state while leaving the records available to tests that
+    /// explicitly drain the stream.
+    pub fn peek_new_records(&self) -> Result<Vec<StateTraceRecord>> {
+        let (records, _, _) = self.read_records_since(self.offset, &self.buffered_partial)?;
+        Ok(records)
+    }
+
+    fn read_records_since(
+        &self,
+        mut offset: u64,
+        buffered_partial: &[u8],
+    ) -> Result<(Vec<StateTraceRecord>, u64, Vec<u8>)> {
         let mut file = match OpenOptions::new().read(true).open(&self.path) {
             Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok((Vec::new(), offset, Vec::new()));
+            }
             Err(error) => return Err(error.into()),
         };
         let metadata = file.metadata()?;
         let size = metadata.len();
-        if size < self.offset {
+        let mut initial_partial = buffered_partial.to_vec();
+        if size < offset {
             // File was truncated (e.g. a new editor run started). Restart
             // from the top.
-            self.offset = 0;
-            self.buffered_partial.clear();
+            offset = 0;
+            initial_partial.clear();
         }
-        if size == self.offset && self.buffered_partial.is_empty() {
-            return Ok(Vec::new());
+        if size == offset && initial_partial.is_empty() {
+            return Ok((Vec::new(), offset, Vec::new()));
         }
-        file.seek(SeekFrom::Start(self.offset))?;
-        let mut new_bytes = Vec::with_capacity((size - self.offset) as usize);
+        file.seek(SeekFrom::Start(offset))?;
+        let mut new_bytes = Vec::with_capacity((size - offset) as usize);
         file.read_to_end(&mut new_bytes)?;
-        self.offset = size;
 
-        let mut combined = std::mem::take(&mut self.buffered_partial);
+        let mut combined = initial_partial;
         combined.extend_from_slice(&new_bytes);
 
         let mut records = Vec::new();
+        let mut next_partial = Vec::new();
         let mut line_start = 0usize;
         for (idx, byte) in combined.iter().enumerate() {
             if *byte == b'\n' {
                 let line = &combined[line_start..idx];
                 if !line.is_empty() {
-                    let record: StateTraceRecord = serde_json::from_slice(line).map_err(|err| {
-                        format!(
-                            "state-trace parse error at offset {} in {}: {err}; line: {}",
-                            line_start,
-                            self.path.display(),
-                            String::from_utf8_lossy(line),
-                        )
-                    })?;
-                    records.push(record);
+                    if !line.starts_with(b"{") {
+                        line_start = idx + 1;
+                        continue;
+                    }
+                    match parse_record_line(line) {
+                        Ok(Some(record)) => records.push(record),
+                        Ok(None) => {}
+                        Err(err) => {
+                            return Err(format!(
+                                "state-trace parse error at offset {} in {}: {err}; line: {}",
+                                line_start,
+                                self.path.display(),
+                                String::from_utf8_lossy(line),
+                            )
+                            .into());
+                        }
+                    }
                 }
                 line_start = idx + 1;
             }
         }
         if line_start < combined.len() {
-            self.buffered_partial = combined[line_start..].to_vec();
+            next_partial = combined[line_start..].to_vec();
         }
-        if let Some(record) = records.last() {
-            self.last_record = Some(record.clone());
-        }
-        Ok(records)
+        Ok((records, size, next_partial))
     }
 
     /// Drain the stream and return the most recent observed record. When no
@@ -275,6 +307,28 @@ impl StateTraceReader {
                 )
                 .into()
             })
+    }
+}
+
+fn parse_record_line(
+    line: &[u8],
+) -> std::result::Result<Option<StateTraceRecord>, serde_json::Error> {
+    match serde_json::from_slice(line) {
+        Ok(record) => Ok(Some(record)),
+        Err(err) => {
+            let marker = br#"{"schema_version""#;
+            let starts = line
+                .windows(marker.len())
+                .enumerate()
+                .filter_map(|(index, window)| (window == marker).then_some(index))
+                .collect::<Vec<_>>();
+            for start in starts.into_iter().skip(1).rev() {
+                if let Ok(record) = serde_json::from_slice(&line[start..]) {
+                    return Ok(Some(record));
+                }
+            }
+            Err(err)
+        }
     }
 }
 

@@ -88,10 +88,11 @@ impl StateTraceEmitter {
 }
 
 fn append_record(path: &PathBuf, record: &StateTraceRecord) -> io::Result<()> {
-    let line = serde_json::to_string(record)
+    let mut line = serde_json::to_vec(record)
         .map_err(|err| io::Error::other(format!("serialize state trace: {err}")))?;
+    line.push(b'\n');
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(file, "{line}")
+    file.write_all(&line)
 }
 
 #[derive(Serialize)]

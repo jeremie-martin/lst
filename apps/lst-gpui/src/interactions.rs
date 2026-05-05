@@ -48,21 +48,28 @@ impl LstGpuiApp {
     ) {
         self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);
+        if !event.modifiers.alt
+            && !event.modifiers.shift
+            && event.click_count == 1
+            && self.point_below_painted_rows(event.position)
+        {
+            self.cancel_drag_selection();
+            cx.notify();
+            return;
+        }
         let index = self.active_char_index_for_point(event.position);
         if event.modifiers.alt {
             // Single Alt-click on a point already covered by a multi-cursor
             // selection toggles that cursor off. Drops through to the add
             // paths below when there's nothing to remove.
-            if event.click_count == 1 {
-                let mut removed = false;
-                self.update_model(cx, true, |model| {
-                    removed = model.remove_cursor_at_char(index);
-                });
-                if removed {
-                    self.cancel_drag_selection();
-                    cx.notify();
-                    return;
-                }
+            let mut removed = false;
+            self.update_model(cx, true, |model| {
+                removed = model.remove_cursor_at_char(index);
+            });
+            if removed {
+                self.cancel_drag_selection();
+                cx.notify();
+                return;
             }
 
             if let Some((_mode, range)) =
@@ -81,6 +88,16 @@ impl LstGpuiApp {
                 model.add_cursor_at_char(index);
             });
             self.schedule_drag_autoscroll(window, cx);
+            cx.notify();
+            return;
+        }
+
+        if event.modifiers.shift && event.click_count == 1 {
+            self.cancel_drag_selection();
+            self.update_model(cx, true, |model| {
+                model.move_to_char(index, true, None);
+            });
+            self.sync_primary_selection(cx);
             cx.notify();
             return;
         }

@@ -134,8 +134,12 @@ actions!(
         SelectAll,
         SelectNextOccurrence,
         SelectAllOccurrences,
+        SelectFindMatches,
+        SkipNextOccurrence,
+        PopSelectionCursor,
         AddCursorAbove,
         AddCursorBelow,
+        AddCursorsToLineEnds,
         SelectLine,
         SelectParagraph,
         Undo,
@@ -547,9 +551,15 @@ impl LstGpuiApp {
         let cursors = selection_set
             .as_slice()
             .iter()
-            .map(|sel| {
+            .enumerate()
+            .map(|(index, sel)| {
                 let (anchor_line, anchor_col) = char_to_line_col(buffer, sel.anchor());
                 let (head_line, head_col) = char_to_line_col(buffer, sel.head());
+                let visible_col = (!sel.has_selection())
+                    .then(|| tab.visible_column_for_selection(index))
+                    .flatten();
+                let anchor_col = visible_col.unwrap_or(anchor_col);
+                let head_col = visible_col.unwrap_or(head_col);
                 TraceCursor {
                     anchor_char: sel.anchor(),
                     head_char: sel.head(),
@@ -1427,6 +1437,15 @@ impl LstGpuiApp {
         }
     }
 
+    fn point_below_painted_rows(&self, point: Point<Pixels>) -> bool {
+        let active_view = self.active_view();
+        let geometry = active_view.geometry.borrow();
+        let Some(last_row) = geometry.rows.last() else {
+            return false;
+        };
+        point.y >= last_row.row_top + self.ui_px(metrics::ROW_HEIGHT)
+    }
+
     fn active_char_index_for_point(&self, point: Point<Pixels>) -> usize {
         let active_view = self.active_view();
         let geometry = active_view.geometry.borrow();
@@ -1454,19 +1473,19 @@ impl LstGpuiApp {
         let code_origin_x =
             bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
 
+        let row_height = self.ui_px(metrics::ROW_HEIGHT);
         let row = if geometry.rows.is_empty() {
             return 0;
         } else if point.y <= geometry.rows[0].row_top {
             &geometry.rows[0]
+        } else if let Some(row) = geometry
+            .rows
+            .iter()
+            .find(|row| point.y >= row.row_top && point.y < row.row_top + row_height)
+        {
+            row
         } else {
-            geometry
-                .rows
-                .iter()
-                .find(|row| {
-                    point.y >= row.row_top
-                        && point.y < row.row_top + self.ui_px(metrics::ROW_HEIGHT)
-                })
-                .unwrap_or_else(|| geometry.rows.last().expect("checked above"))
+            geometry.rows.last().expect("checked above")
         };
 
         let x = if point.x >= code_origin_x {
@@ -1476,7 +1495,8 @@ impl LstGpuiApp {
         };
 
         if let Some(code_line) = row.code_line.as_ref() {
-            let byte_index = code_line.closest_index_for_x(x);
+            let hit_x = (x - geometry.painted_char_width * 0.5).max(px(0.0));
+            let byte_index = code_line.closest_index_for_x(hit_x);
             let line_char = byte_index_to_char(code_line.text.as_ref(), byte_index);
             (row.line_start_char + line_char).min(row.display_end_char)
         } else {
