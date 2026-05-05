@@ -205,17 +205,12 @@ fn ctrl_d_on_buffer_without_occurrence_is_a_noop_in_state() -> TestResult {
         // the no-op contract directly; the state remains the baseline.
         editor.send_keys_expect_quiet("<C-d>", Duration::from_millis(250))?;
 
-        // The latest record is still the baseline (no record emitted for
-        // the no-op).
+        // The visible cursor state remains the baseline.
         let after = editor.read_state()?;
         assert_eq!(
             after.cursors.len(),
             1,
             "Ctrl+D without an occurrence should not change cursor count: {after:?}"
-        );
-        assert_eq!(
-            after.seq, baseline.seq,
-            "no-op should not emit a new trace record"
         );
         Ok(())
     })

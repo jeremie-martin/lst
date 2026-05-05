@@ -1,20 +1,81 @@
 # X11 Harness
 
-In-process driver for end-to-end testing of the lst editor through real
-X11 input. Spawn the editor against `DISPLAY`, drive it with synthesized
-keyboard/mouse events, assert on autosaved file contents and clipboard
-state. Lives in `crates/lst-x11-harness`; test fixture in
-`apps/lst-gpui/tests/support/mod.rs`; concrete test suites in
+In-process driver for end-to-end testing of `lst` through real X11 input.
+Tests spawn the editor against `DISPLAY`, drive it with synthesized keyboard
+and mouse events, and assert on user-visible outcomes: saved file contents,
+clipboard contents, cursor/selection state, panels, status text, and viewport
+geometry.
+
+The harness lives in `crates/lst-x11-harness`; the shared test fixture lives in
+`apps/lst-gpui/tests/support/mod.rs`; concrete suites live in
 `apps/lst-gpui/tests/real_x11_*.rs`.
 
-This document is the canonical reference for the harness — what it's
-good for today, where the foundations are solid, and what remains to be
-hardened before it can be the project's load-bearing test
-infrastructure.
+This document is the canonical reference for writing and maintaining those
+tests.
 
 ---
 
-## Canonical test shape
+## Black-Box Rule
+
+Real-display tests are black-box behavior tests. They may use the state trace,
+but only as a test-only observation channel for user-facing state.
+
+Allowed behavior assertions:
+
+- saved file contents
+- clipboard and PRIMARY contents
+- cursor heads and selection ranges
+- visible Vim mode, pending input, status text, and dirty state
+- visible find/goto/recent-panel state
+- viewport rows and text-coordinate geometry needed to click or drag text
+
+Avoid behavior assertions on implementation mechanics:
+
+- model IDs
+- revision counters
+- transaction shape
+- cache state
+- normalization internals
+- which production function handled an input
+
+State-trace schema details may be tested in harness/state-trace self-tests, but
+product behavior tests should go through behavior-named helpers such as
+`expect_cursor_heads` and `expect_find_state` whenever practical.
+
+---
+
+## Running Tests
+
+Run all real-display tests with:
+
+```sh
+cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
+```
+
+`--test-threads=1` is required. Every test grabs keyboard focus and moves the
+global pointer through XTEST. The harness also takes a cross-process display
+lock, so accidental parallel runs serialize, but serial execution is clearer and
+avoids wasted workers.
+
+Useful environment variables:
+
+- `LST_X11_WINDOW_TIMEOUT_MS=N` sets the window-discovery timeout in
+  milliseconds. The default is 30000.
+- `LST_X11_KEEP_TEMP=1` preserves scratchpad temp directories even on success.
+- `LST_GPUI_BIN=/path/to/lst` runs a specific editor binary.
+
+The full ignored run intentionally includes TDD specs for accepted behavior that
+is ahead of the current implementation. A failure in an ignored X11 test is not
+automatically a harness failure; first decide whether it is a valid spec failure,
+a test bug, or a harness synchronization problem.
+
+---
+
+## Canonical Test Shapes
+
+### Text Outcome
+
+Use saved file contents when the behavior is a text transformation.
 
 ```rust
 mod support;
@@ -23,202 +84,209 @@ use support::{EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn descriptive_name_for_the_observed_behavior() -> TestResult {
-    support::run_x11_test("label-for-the-temp-dir", |session| {
+fn descriptive_text_behavior() -> TestResult {
+    support::run_x11_test("label", |session| {
         let (mut editor, path) = session.open("scratch")?;
 
-        editor.keys("…input sequence…")?;
-        editor.save_then_expect_file(&path, "…expected file content…")?;
+        editor.keys("input<enter>sequence")?;
+        editor.save_then_expect_file(&path, "expected\ntext")?;
         Ok(())
     })
 }
 ```
 
-That shape is the benchmark: one wrapper, one session, inputs through
-`editor.keys(...)`, and assertions through files or clipboard state.
-`run_x11_test` cleans the temp tree only after `Ok(())`; ordinary `?`
-failures preserve scratch files and per-editor logs under
-`artifacts/`.
+### State Outcome
 
-To run:
+Use the trace for user-visible state that cannot be proven cleanly through a
+file or clipboard.
 
+```rust
+mod support;
+
+use support::{EditorTestExt, TestResult};
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn descriptive_cursor_behavior() -> TestResult {
+    support::run_x11_test("label", |session| {
+        let path = session.seed_file("file.txt", "alpha\nbeta\ngamma")?;
+        let mut editor = session.open_file("file", &path)?;
+
+        editor.keys("<C-home><C-A-down><C-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
+        Ok(())
+    })
+}
 ```
-cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
-```
 
-The multi-cursor suite includes TDD expectations for behavior that the
-checklist still marks incomplete, so the full ignored run can fail until
-those production behaviors land. Use a test filter when you specifically
-want only the currently-green real-display subset.
+### Clipboard Outcome
 
-`--test-threads=1` is still the intended mode — every test grabs
-keyboard focus and moves the global pointer through XTEST. The harness
-also takes a cross-process lock around each `Display`, so accidental
-parallel runs serialize instead of racing, but serial test execution is
-clearer and avoids wasting threads.
+Use `lst_x11_harness::clipboard` helpers for CLIPBOARD and PRIMARY behavior.
 
-Useful env knobs: `LST_X11_WINDOW_TIMEOUT_MS=N` (default 30000) tunes
-the "how long to wait for the editor's window to become viewable"
-budget; `LST_X11_KEEP_TEMP=1` preserves all scratchpad temp dirs even
-on successful tests.
+### Mouse Outcome
 
----
+Prefer text-coordinate helpers over fixed pixels:
 
-## Synchronization model (load-bearing)
+- `click_at_text(line, col)`
+- `shift_click_at_text(line, col)`
+- `alt_click_at_text(line, col)`
+- `double_click_at_text(line, col)`
+- `triple_click_at_text(line, col)`
+- `quad_click_at_text(line, col)`
+- `middle_click_at_text(line, col)`
+- `drag_text((line, col), (line, col), mods)`
 
-Every effectful action is fire-and-forget at the X11 layer. Callers
-synchronize on **paint events**:
+These resolve coordinates from the latest state trace and are robust against
+font, gutter, and padding changes. They require the target text row to be in the
+painted viewport.
 
-- `Editor::send_keys` waits for at least one matching DAMAGE event and
-  then for that damage stream to quiesce after *each* keystroke before
-  sending the next one. That gives proof that the editor processed and
-  painted the key before the next key lands.
-- `Editor::wait_quiet`, `wait_file_text`, `wait_file_stable`,
-  `wait_for_exit` are the explicit synchronization primitives for
-  larger units of work.
+### Explicit No-Op
 
-Critically, the harness **never throttles based on guessed delays**.
-Inserting a fixed sleep between events would either be too short
-(losing chord events on slow paint) or too long (breaking vim compound
-commands like `gg`, `dd`, `ciw`, which have no wall-clock timeout). A
-slow-paced test (`vim_compound_commands_survive_long_pauses_between_keystrokes`
-in `real_x11_vim.rs`) guards this property — do not "fix" failures
-there by reintroducing throttle constants.
-
-The single retained internal sleep is `POINTER_SETTLE` (50ms) between
-pointer motion and a click, because the X server processes motion
-asynchronously and clicking before the motion has been delivered can
-route the click to the previous pointer location.
+`Editor::send_keys` expects every key to paint. For deliberate no-op behavior,
+use `send_keys_expect_quiet(...)` and assert that state remains unchanged in a
+user-visible way.
 
 ---
 
-## Status: what's solid
+## Input Model
 
-- **Principled synchronization.** `send_keys` now requires damage after
-  each input before waiting for quiet. Validated by the slow-paced
-  compound-command test and by the multi-cursor `Ctrl+D Ctrl+D Ctrl+D`
-  test.
-- **Small, consistent API.** `run_x11_test` →
-  `ScratchpadSession::open`/`open_file` → `editor.keys(...)` →
-  `editor.save_then_expect_file(...)` is the shape across every
-  existing test.
-- **Full printable ASCII typing** via level-aware XKB lookup
-  (uppercase auto-shifts, digits and punctuation work without per-char
-  extensions), plus `Tab` / `Enter` / `Escape` / `Backspace` /
-  `Delete` / `Home` / `End` / arrow keys, plus modifier chords
-  (`<C-x>`, `<A-x>`, `<S-x>`, `<C-A-S-x>`,
-  `<ctrl-alt-shift-x>`).
-- **27 tests across 5 files exercising different flavors:** literal
-  type, vim modes (Normal/Insert/Visual-line), vim compound commands
-  with arbitrary pauses, multi-cursor occurrence creation, adjacent-line
-  cursor creation, per-cursor text input, clipboard distribution and
-  collection, checklist-gap TDD specs, Ctrl+A/Z/Y, file-open,
-  scratchpad-open with autosave, middle-click PRIMARY paste, Ctrl+V
-  clipboard paste, goto-line focus return, edit-save-quit-reopen,
-  clipboard-on-quit.
-- **Failure artifacts are preserved.** `run_x11_test` preserves temp
-  dirs on ordinary `?` failures, captures editor stdout/stderr under
-  `artifacts/`, and `editor.keys`/`expect_file` attempt an `.xwd`
-  window capture when those helpers fail.
-- **Normal exits are asserted.** `quit_default` and
-  `wait_for_successful_exit` fail if the child exits non-zero.
-- **Missing files no longer equal empty files.** `wait_file_text`
-  requires the target file to exist even when expected content is `""`,
-  which avoids false positives for expected-empty assertions.
-- **Real bugs already caught by the harness:** `Editor::quit` was
-  leaking the child process on timeout; the window-discovery default
-  was too tight under focus-stealing window managers (lwm
-  specifically).
+`editor.keys(...)` accepts Vim-style notation:
+
+- literal printable ASCII characters
+- special keys: `<enter>`, `<esc>`, `<tab>`, `<space>`, `<bs>`, `<delete>`,
+  `<home>`, `<end>`, `<left>`, `<right>`, `<up>`, `<down>`, `<pageup>`,
+  `<pagedown>`, `<lt>`
+- modifier chords: `<C-x>`, `<A-x>`, `<S-x>`, `<C-A-S-x>`, plus verbose
+  `<ctrl-x>`, `<alt-x>`, `<shift-x>`
+- held-modifier spans: `<C-{k d}>`, used for gestures where the real user keeps
+  a modifier held across multiple key taps
+
+Names are case-insensitive. Uppercase literal characters are typed through
+Shift automatically. Non-ASCII printable input is not supported by the key
+lookup today.
 
 ---
 
-## Known gaps / things to watch
+## Synchronization Model
 
-These are **explicit limitations** of the harness as it stands today.
-Anyone writing a new test should know about them; anyone hardening the
-harness should treat this list as the work-list.
+Every effectful action is fire-and-forget at the X11 layer. Callers synchronize
+on paint events and observable outcomes.
 
-1. **Sample size is still small.** 14 tests tells us the
-   harness *can* be reliable; it does not yet tell us it *will be* at
-   the 50–100 test scale. Reach the 30–50 test mark across the
-   editor-behaviors checklist and watch for new flake patterns
-   before declaring "rock solid."
+- `Editor::send_keys` waits for at least one matching DAMAGE event, then waits
+  for that damage stream to quiesce after each key before sending the next key.
+- `Editor::wait_quiet`, `wait_file_text`, `wait_file_stable`, and
+  `wait_for_exit` are explicit synchronization primitives for larger units of
+  work.
+- State reads are meaningful after the action that produced the state has
+  settled.
 
-2. **No way to observe non-file state.** Every assertion today goes
-   through the autosave file or the X clipboard. That covers most of
-   the editor-behaviors checklist but not all of it: vim mode,
-   find-panel state, cursor position, selection extents, line-number
-   gutter content, status-bar string. As tests grow into those areas
-   we'll need an introspection mechanism — likely an out-of-band
-   sentinel file the editor writes when in test mode, or a richer
-   trace channel similar to `LST_BENCH_TRACE_FILE`.
+The harness must not add guessed sleeps between keystrokes. Fixed input delays
+either hide slow-frame races or break compound commands that have no wall-clock
+timeout, such as Vim `gg`, `dd`, and `ciw`. The slow-paced Vim test exists to
+guard this.
 
-3. **Modal-panel coverage is thin.** Goto-line now has one real-display
-   workflow test, but find/replace and recent-files still change
-   keyboard focus without real X11 coverage. There may be focus-routing
-   or panel-dismiss races we don't know about.
-
-4. **Fixed-pixel mouse coordinates only.** `Editor::middle_click_at(160,
-   170)` and friends require the test author to know absolute pixel
-   coordinates inside the window. Tests like "double-click the word
-   `foo` on line 3" need a text-to-pixel coordinate API we don't
-   have. Pure-keyboard tests cover most of the checklist; this only
-   matters for explicitly mouse-driven behavior.
-
-5. **`send_keys` throws on unmapped characters.** Anything outside
-   ASCII printable (e.g. `é`, `→`, smart quotes) will hit a runtime
-   error from the keymap lookup. Documented; fine for English-only
-   source code; will need attention if non-ASCII inputs ever land in
-   tests.
-
-6. **Window discovery is environment-sensitive.** lwm's focus-stealing
-   prevention occasionally takes 10s+ to map a freshly-spawned
-   window. Default timeout is 30s, configurable via
-   `LST_X11_WINDOW_TIMEOUT_MS`. CI machines with different WMs may
-   need their own tuning.
-
-7. **`send_keys` assumes a key should paint.** That is intentional for
-   end-to-end behavior tests: if a synthesized key does not produce a
-   paint, the helper fails instead of silently advancing. Tests for
-   deliberate no-op keys should use lower-level `press` plus an
-   explicit observable assertion.
+The one intentional pointer delay is `POINTER_SETTLE` between pointer motion and
+click/release, because the X server processes pointer motion asynchronously.
 
 ---
 
-## Hardening roadmap
+## Artifacts And Cleanup
 
-Two concrete rounds before this is the project's load-bearing test
-foundation:
+Use `support::run_x11_test`. It owns one `ScratchpadSession`, one X11 display
+connection, and one temp tree per test.
 
-1. **Drive the test count up to ~30–50 across the editor-behaviors
-   checklist**, picking tests that exercise different feature surfaces:
-   find-replace, indent/outdent, undo/redo branches, vim text objects,
-   paragraph operations, selection extension, modal panels. Watch for
-   new flake patterns at that scale; fix the underlying cause rather
-   than papering over individual tests.
-2. **Add a non-file observation channel** for state files cannot prove:
-   vim mode, cursor position, selection ranges, active tab, find panel
-   state, status text. Keep it read-only and test-only.
+On success:
 
-After both: the harness is the project's foundation.
+- temp directories are removed unless `LST_X11_KEEP_TEMP=1` is set
+
+On failure:
+
+- scratch files are preserved
+- editor stdout/stderr are captured under `artifacts/`
+- helper failures try to capture an `.xwd` window image
+- errors include the tail of captured stderr when available
+
+Normal editor exits are asserted with `quit_default` or
+`wait_for_successful_exit`; non-zero exit status is a test failure.
 
 ---
 
-## Implementation notes
+## Current Coverage
 
-- `crates/lst-x11-harness` is `publish = false` and lives in workspace
-  `members` but **not** `default-members`, so default `cargo build` /
-  `cargo test` cost is unchanged.
-- The harness owns its own X11 connection (`Display::from_env`) and
-  enforces "one editor per Display" via `&mut Display` on
-  `spawn_editor`. The returned `Editor<'a>` borrows the Display
-  immutably for its lifetime; trying to spawn a second concurrent
-  editor through the same Display is a borrow-check error, not a
-  runtime race.
-- `Display::from_env` holds an exclusive lock file under the system temp
-  dir for the lifetime of the display. That protects the global pointer
-  and keyboard focus when someone accidentally omits `--test-threads=1`.
-- The bench example at `apps/lst-gpui/examples/bench_editor_x11.rs`
-  has its own copy of the X11 primitives and is unchanged by the
-  harness work. Migrating it onto the harness is a separate piece of
-  work, deliberately deferred so the bench stays stable.
+The real-display suite currently has broad coverage across:
+
+- scratchpad open/close/save/quit workflows
+- file edit/save/reopen workflows
+- CLIPBOARD and PRIMARY paste/copy behavior
+- keyboard modifiers and undo/redo
+- Vim mode transitions and compound commands
+- find and goto panel state
+- mouse click, double-click, triple-click, quad-click, shift-click, Alt-click,
+  drag selection, and middle-click paste
+- cursor movement and subword motion
+- multi-cursor creation, text input, deletion, paste distribution, copy
+  collection, Escape collapse, smart Enter, and TDD specs for remaining gaps
+- chord-hold event trains for held-modifier gestures
+
+This is the project's load-bearing end-to-end test path. When adding a new
+behavior test, prefer extending this suite unless the behavior is better covered
+through the framework-neutral model tests.
+
+---
+
+## Known Gaps / Things To Watch
+
+1. **The full ignored suite can fail by design.** Some tests are executable
+   specs for behavior not implemented yet. Keep their comments clear enough that
+   failures are interpretable.
+
+2. **Trace discipline matters.** The trace is powerful enough to become an
+   implementation inspection tool by accident. Keep behavior tests focused on
+   user-visible state and move schema/mechanics assertions into trace self-tests.
+
+3. **Modal-panel coverage is still thinner than core editing coverage.** Find
+   has state coverage and goto has workflow coverage, but replace, recent files,
+   and other focus-changing panels need more real-display scenarios.
+
+4. **Visual pixel correctness is not covered.** The trace can expose viewport
+   geometry and text-coordinate rows; it is not a general screenshot oracle for
+   colors, antialiasing, or exact painted pixels.
+
+5. **Non-ASCII input is unsupported in `send_keys`.** Tests that need input such
+   as `é`, arrows, or smart quotes need a deliberate harness extension.
+
+6. **Window discovery is environment-sensitive.** Some window managers take a
+   long time to map a new editor window. Tune `LST_X11_WINDOW_TIMEOUT_MS` for
+   slow CI or local environments.
+
+7. **Text-coordinate mouse helpers require visible rows.** If the target line is
+   not in the painted viewport, scroll or move there first.
+
+---
+
+## Hardening Roadmap
+
+- Keep growing checklist coverage with real-display tests, especially modal
+  panels, find/replace workflows, multi-cursor movement/editing, column
+  selection, and viewport behavior.
+- Add trace fields only when they represent user-visible state that cannot be
+  asserted cleanly through files, clipboard, or existing trace fields.
+- Keep common patterns in `apps/lst-gpui/tests/support/mod.rs` so behavior tests
+  remain short and uniform.
+- Treat flakes as harness or synchronization bugs until proven otherwise. Do not
+  paper over them with arbitrary sleeps.
+
+---
+
+## Implementation Notes
+
+- `crates/lst-x11-harness` is `publish = false` and is outside default workspace
+  members, so default build/test cost stays low.
+- `Display::from_env` resolves the X session, verifies required X extensions and
+  `xclip`, pins keyboard layout for deterministic key lookup, and holds a
+  cross-process session lock.
+- `Display::spawn_editor` takes `&mut Display`; the returned `Editor` borrows
+  the display for its lifetime, so one session cannot accidentally drive two
+  editors concurrently.
+- The benchmark example still has separate X11-driving code. Migrating it onto
+  the harness is useful but separate from behavior-test hardening.

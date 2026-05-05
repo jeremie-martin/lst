@@ -217,7 +217,6 @@ fn ctrl_alt_down_adds_three_cursors_aligned_on_column_zero() -> TestResult {
 
         editor.keys("<C-home><C-A-down><C-A-down>")?;
         let record = editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
-        assert_eq!(record.primary_cursor_index, 0);
         assert!(
             record.cursors.iter().all(|c| c.is_collapsed()),
             "all cursors should be collapsed (no selection): {:?}",
