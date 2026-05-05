@@ -1,6 +1,7 @@
 //! Real-display tests for the multi-cursor surface. These assertions follow
 //! `docs/editor-behaviors-checklist.md` as the behavior spec; some are
-//! intentionally ahead of the current implementation.
+//! intentionally ahead of the current implementation. The spec target is
+//! VS Code's default Linux behavior.
 //!
 //! Run with
 //!
@@ -18,19 +19,16 @@ use support::{secs, EditorTestExt, TestResult};
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
 fn ctrl_d_adds_occurrences_and_literal_input_replaces_them() -> TestResult {
-    // Type "foo bar foo baz foo" in Insert, drop to Normal, return to the
-    // first character, re-enter Insert at column 0, then add the next two
-    // occurrences with Ctrl+D and replace them all by typing "qux".
-    //
-    // The first Ctrl+D selects "foo" at the cursor (word-under-cursor
-    // fallback). The next two Ctrl+D's add the second and third
-    // occurrences. Typing "qux" replaces every selection through the
-    // multi-cursor edit path, so the autosave file ends up as
-    // "qux bar qux baz qux".
     support::run_x11_test("multi-cursor-ctrl-d", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let path = session.seed_file("ctrl-d.txt", "foo bar foo baz foo")?;
+        let mut editor = session.open_file("ctrl-d", &path)?;
 
-        editor.keys("foo bar foo baz foo<esc>0i<C-d><C-d><C-d>qux")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-d><C-d><C-d>")?;
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 3, "{:?}", record.cursors);
+
+        editor.keys("qux")?;
         editor.save_then_expect_file(&path, "qux bar qux baz qux")?;
         Ok(())
     })
@@ -40,9 +38,15 @@ fn ctrl_d_adds_occurrences_and_literal_input_replaces_them() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn ctrl_shift_l_selects_all_occurrences_and_replaces_them() -> TestResult {
     support::run_x11_test("multi-cursor-ctrl-shift-l", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let path = session.seed_file("ctrl-shift-l.txt", "foo bar foo\nfoo baz")?;
+        let mut editor = session.open_file("ctrl-shift-l", &path)?;
 
-        editor.keys("foo bar foo<enter>foo baz<esc>gg0i<C-S-l>qux")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-S-l>")?;
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 3, "{:?}", record.cursors);
+
+        editor.keys("qux")?;
         editor.save_then_expect_file(&path, "qux bar qux\nqux baz")?;
         Ok(())
     })
@@ -50,12 +54,66 @@ fn ctrl_shift_l_selects_all_occurrences_and_replaces_them() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn ctrl_alt_down_adds_adjacent_line_cursors_for_literal_input() -> TestResult {
-    support::run_x11_test("multi-cursor-ctrl-alt-down", |session| {
+fn ctrl_f2_selects_all_occurrences_of_current_word() -> TestResult {
+    support::run_x11_test("multi-cursor-ctrl-f2", |session| {
+        let path = session.seed_file("ctrl-f2.txt", "foo bar foo\nfoo baz")?;
+        let mut editor = session.open_file("ctrl-f2", &path)?;
+
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-f2>")?;
+        let record = editor.wait_state("Ctrl-F2 selections", secs(5), |record| {
+            record.cursors.len() == 3
+                && record.cursors.iter().all(|cursor| {
+                    cursor.head_char.max(cursor.anchor_char)
+                        - cursor.head_char.min(cursor.anchor_char)
+                        == 3
+                })
+        })?;
+        assert_eq!(record.cursors.len(), 3, "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn alt_enter_selects_all_current_find_matches() -> TestResult {
+    support::run_x11_test("multi-cursor-find-alt-enter", |session| {
+        let path = session.seed_file("find-alt-enter.txt", "foo bar foo\nfoo baz")?;
+        let mut editor = session.open_file("find-alt-enter", &path)?;
+
+        editor.keys("<C-f>")?;
+        editor.wait_state("find query focus", secs(2), |record| {
+            record.focused_input == "find_query"
+        })?;
+        editor.keys("foo")?;
+        editor.expect_find_state("foo", 3)?;
+
+        editor.keys("<A-enter>")?;
+        let record = editor.wait_state("Alt-Enter find selections", secs(5), |record| {
+            record.cursors.len() == 3
+                && record.cursors.iter().all(|cursor| {
+                    cursor.head_char.max(cursor.anchor_char)
+                        - cursor.head_char.min(cursor.anchor_char)
+                        == 3
+                })
+        })?;
+        assert_eq!(record.cursors.len(), 3, "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn shift_alt_down_adds_adjacent_line_cursors_for_literal_input() -> TestResult {
+    support::run_x11_test("multi-cursor-shift-alt-down", |session| {
         let path = session.seed_file("columns.txt", "alpha\nbeta\ngamma")?;
         let mut editor = session.open_file("columns", &path)?;
 
-        editor.keys("<C-home><C-A-down><C-A-down>X")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<S-A-down><S-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
+
+        editor.keys("X")?;
         editor.save_then_expect_file(&path, "Xalpha\nXbeta\nXgamma")?;
         Ok(())
     })
@@ -65,9 +123,14 @@ fn ctrl_alt_down_adds_adjacent_line_cursors_for_literal_input() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn backspace_deletes_before_every_cursor_added_by_adjacent_line_commands() -> TestResult {
     support::run_x11_test("multi-cursor-backspace", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let path = session.seed_file("backspace.txt", "alpha\nbravo\ngamma")?;
+        let mut editor = session.open_file("backspace", &path)?;
 
-        editor.keys("alpha<enter>bravo<enter>gamma<esc>gg0i<end><C-A-down><C-A-down><bs>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<end><S-A-down><S-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 5), (1, 5), (2, 5)])?;
+
+        editor.keys("<bs>")?;
         editor.save_then_expect_file(&path, "alph\nbrav\ngamm")?;
         Ok(())
     })
@@ -80,7 +143,11 @@ fn delete_forward_deletes_after_every_cursor_added_by_adjacent_line_commands() -
         let path = session.seed_file("delete-forward.txt", "alpha\nbravo\ncharlie")?;
         let mut editor = session.open_file("delete-forward", &path)?;
 
-        editor.keys("<C-home><C-A-down><C-A-down><delete>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<S-A-down><S-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
+
+        editor.keys("<delete>")?;
         editor.save_then_expect_file(&path, "lpha\nravo\nharlie")?;
         Ok(())
     })
@@ -94,7 +161,11 @@ fn paste_distributes_clipboard_lines_to_matching_cursor_count() -> TestResult {
         let mut editor = session.open_file("paste", &path)?;
 
         write_clipboard_text(Selection::Clipboard, "red\ngreen\nblue")?;
-        editor.keys("<C-home><C-A-down><C-A-down><C-v>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<S-A-down><S-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
+
+        editor.keys("<C-v>")?;
         editor.save_then_expect_file(&path, "redA\ngreenB\nblueC")?;
         Ok(())
     })
@@ -104,9 +175,11 @@ fn paste_distributes_clipboard_lines_to_matching_cursor_count() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn copy_collects_multi_selection_fragments_in_document_order() -> TestResult {
     support::run_x11_test("multi-cursor-copy-fragments", |session| {
-        let (mut editor, _path) = session.open("scratch")?;
+        let path = session.seed_file("copy-fragments.txt", "foo bar foo baz foo")?;
+        let mut editor = session.open_file("copy-fragments", &path)?;
 
-        editor.keys("foo bar foo baz foo<esc>0i<C-S-l>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-S-l>")?;
         editor.press(KeyChord::Ctrl(Key::Char('c')))?;
         wait_clipboard_text(Selection::Clipboard, "foo\nfoo\nfoo", secs(10))?;
         Ok(())
@@ -120,7 +193,11 @@ fn smart_enter_inherits_each_cursor_line_indent() -> TestResult {
         let path = session.seed_file("smart-enter.txt", "    alpha!\n        be")?;
         let mut editor = session.open_file("smart-enter", &path)?;
 
-        editor.keys("<C-home><end><C-A-down><enter>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<end><S-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 10), (1, 10)])?;
+
+        editor.keys("<enter>")?;
         editor.save_then_expect_file(&path, "    alpha!\n    \n        be\n        ")?;
         Ok(())
     })
@@ -130,9 +207,15 @@ fn smart_enter_inherits_each_cursor_line_indent() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn escape_collapses_non_empty_multi_selections_to_cursors_before_input() -> TestResult {
     support::run_x11_test("multi-cursor-escape-collapse", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let path = session.seed_file("escape-collapse.txt", "foo foo foo")?;
+        let mut editor = session.open_file("escape-collapse", &path)?;
 
-        editor.keys("foo foo foo<esc>0i<C-S-l><esc>X")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-S-l>")?;
+        let with_selections = editor.read_state()?;
+        assert_eq!(with_selections.cursors.len(), 3, "{with_selections:?}");
+
+        editor.keys("<esc>X")?;
         editor.save_then_expect_file(&path, "fooX fooX fooX")?;
         Ok(())
     })
@@ -145,7 +228,11 @@ fn right_motion_moves_every_cursor_before_literal_input() -> TestResult {
         let path = session.seed_file("right-motion.txt", "alpha\nbeta\ngamma")?;
         let mut editor = session.open_file("right-motion", &path)?;
 
-        editor.keys("<C-home><C-A-down><C-A-down><right><right>X")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<S-A-down><S-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
+
+        editor.keys("<right><right>X")?;
         editor.save_then_expect_file(&path, "alXpha\nbeXta\ngaXmma")?;
         Ok(())
     })
@@ -158,7 +245,11 @@ fn duplicate_line_applies_to_every_cursor_line() -> TestResult {
         let path = session.seed_file("duplicate-line.txt", "alpha\nbeta\ngamma")?;
         let mut editor = session.open_file("duplicate-line", &path)?;
 
-        editor.keys("<C-home><C-A-down><C-S-d>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<S-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 0), (1, 0)])?;
+
+        editor.keys("<C-S-A-down>")?;
         editor.save_then_expect_file(&path, "alpha\nalpha\nbeta\nbeta\ngamma")?;
         Ok(())
     })
@@ -168,9 +259,15 @@ fn duplicate_line_applies_to_every_cursor_line() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn ctrl_k_ctrl_d_skips_current_occurrence_and_adds_the_next() -> TestResult {
     support::run_x11_test("multi-cursor-ctrl-k-ctrl-d", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let path = session.seed_file("ctrl-k-ctrl-d.txt", "foo foo foo")?;
+        let mut editor = session.open_file("ctrl-k-ctrl-d", &path)?;
 
-        editor.keys("foo foo foo<esc>0i<C-d><C-d><C-k><C-d>bar")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-d><C-d><C-k><C-d>")?;
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 2, "{record:?}");
+
+        editor.keys("bar")?;
         editor.save_then_expect_file(&path, "bar foo bar")?;
         Ok(())
     })
@@ -180,9 +277,15 @@ fn ctrl_k_ctrl_d_skips_current_occurrence_and_adds_the_next() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn ctrl_u_pops_last_added_occurrence_cursor() -> TestResult {
     support::run_x11_test("multi-cursor-ctrl-u-pop", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let path = session.seed_file("ctrl-u-pop.txt", "foo foo foo")?;
+        let mut editor = session.open_file("ctrl-u-pop", &path)?;
 
-        editor.keys("foo foo foo<esc>0i<C-d><C-d><C-d><C-u>bar")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-d><C-d><C-d><C-u>")?;
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 2, "{record:?}");
+
+        editor.keys("bar")?;
         editor.save_then_expect_file(&path, "bar bar foo")?;
         Ok(())
     })
@@ -210,12 +313,13 @@ fn shift_alt_i_adds_cursor_at_end_of_each_selected_line() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn ctrl_alt_down_adds_three_cursors_aligned_on_column_zero() -> TestResult {
-    support::run_x11_test("multi-cursor-ctrl-alt-down-state", |session| {
+fn shift_alt_down_adds_three_cursors_aligned_on_column_zero() -> TestResult {
+    support::run_x11_test("multi-cursor-shift-alt-down-state", |session| {
         let path = session.seed_file("columns-state.txt", "alpha\nbeta\ngamma")?;
         let mut editor = session.open_file("columns-state", &path)?;
 
-        editor.keys("<C-home><C-A-down><C-A-down>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<S-A-down><S-A-down>")?;
         let record = editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
         assert!(
             record.cursors.iter().all(|c| c.is_collapsed()),
@@ -233,7 +337,11 @@ fn right_motion_advances_every_cursor_independently() -> TestResult {
         let path = session.seed_file("right-motion-state.txt", "alpha\nbeta\ngamma")?;
         let mut editor = session.open_file("right-motion-state", &path)?;
 
-        editor.keys("<C-home><C-A-down><C-A-down><right><right>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<S-A-down><S-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
+
+        editor.keys("<right><right>")?;
         editor.expect_cursor_heads(&[(0, 2), (1, 2), (2, 2)])?;
         Ok(())
     })
@@ -243,9 +351,11 @@ fn right_motion_advances_every_cursor_independently() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn ctrl_d_grows_selection_set_to_three_occurrences_of_foo() -> TestResult {
     support::run_x11_test("multi-cursor-ctrl-d-state", |session| {
-        let (mut editor, _path) = session.open("scratch")?;
+        let path = session.seed_file("ctrl-d-state.txt", "foo bar foo baz foo")?;
+        let mut editor = session.open_file("ctrl-d-state", &path)?;
 
-        editor.keys("foo bar foo baz foo<esc>0i<C-d><C-d><C-d>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-d><C-d><C-d>")?;
         let record = editor.read_state()?;
         assert_eq!(record.cursors.len(), 3, "{:?}", record.cursors);
         for (idx, cursor) in record.cursors.iter().enumerate() {
@@ -264,9 +374,11 @@ fn ctrl_d_grows_selection_set_to_three_occurrences_of_foo() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn ctrl_shift_l_creates_one_selection_per_occurrence_via_state() -> TestResult {
     support::run_x11_test("multi-cursor-ctrl-shift-l-state", |session| {
-        let (mut editor, _path) = session.open("scratch")?;
+        let path = session.seed_file("ctrl-shift-l-state.txt", "foo bar foo\nfoo baz")?;
+        let mut editor = session.open_file("ctrl-shift-l-state", &path)?;
 
-        editor.keys("foo bar foo<enter>foo baz<esc>gg0i<C-S-l>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-S-l>")?;
         let record = editor.read_state()?;
         assert_eq!(record.cursors.len(), 3, "{:?}", record.cursors);
         for cursor in &record.cursors {
@@ -282,9 +394,11 @@ fn ctrl_shift_l_creates_one_selection_per_occurrence_via_state() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn escape_collapses_selections_then_drops_secondary_cursors_via_state() -> TestResult {
     support::run_x11_test("multi-cursor-escape-state", |session| {
-        let (mut editor, _path) = session.open("scratch")?;
+        let path = session.seed_file("escape-state.txt", "foo foo foo")?;
+        let mut editor = session.open_file("escape-state", &path)?;
 
-        editor.keys("foo foo foo<esc>0i<C-S-l>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-S-l>")?;
         let with_selections = editor.read_state()?;
         assert_eq!(with_selections.cursors.len(), 3, "{with_selections:?}");
         assert!(
@@ -323,7 +437,11 @@ fn paste_distribute_preserves_cursor_count_after_insertion() -> TestResult {
         let mut editor = session.open_file("paste-state", &path)?;
 
         write_clipboard_text(Selection::Clipboard, "red\ngreen\nblue")?;
-        editor.keys("<C-home><C-A-down><C-A-down><C-v>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<S-A-down><S-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
+
+        editor.keys("<C-v>")?;
         let record = editor.read_state()?;
         assert_eq!(record.cursors.len(), 3, "{record:?}");
         // Heads should land at the end of each pasted fragment.
@@ -340,7 +458,11 @@ fn smart_enter_per_cursor_indent_lands_each_cursor_at_inherited_column() -> Test
         let path = session.seed_file("smart-enter-state.txt", "    alpha!\n        be")?;
         let mut editor = session.open_file("smart-enter-state", &path)?;
 
-        editor.keys("<C-home><end><C-A-down><enter>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<end><S-A-down>")?;
+        editor.expect_cursor_heads(&[(0, 10), (1, 10)])?;
+
+        editor.keys("<enter>")?;
         let record = editor.read_state()?;
         assert_eq!(record.cursors.len(), 2, "{record:?}");
         // Cursor 0 was on the 4-space-indented line and should land at col 4

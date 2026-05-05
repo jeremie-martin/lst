@@ -164,13 +164,13 @@ fn vertical_motion_per_cursor_preferred_column() -> TestResult {
         let path = session.seed_file("preferred.txt", "abcdefghij\nshort\nabcdefghij\n")?;
         let mut editor = session.open_file("preferred", &path)?;
 
-        // Place primary at (0, 8). Add a cursor at (2, 8) via Ctrl-Alt-Down
-        // twice so we have two cursors in a tall column.
+        // Place primary at (0, 8). Add cursors below via VS Code's Linux
+        // Shift-Alt-Down gesture so we have a tall cursor column.
         editor.keys("<C-home>")?;
         for _ in 0..8 {
             editor.keys("<right>")?;
         }
-        editor.keys("<C-A-down><C-A-down>")?;
+        editor.keys("<S-A-down><S-A-down>")?;
         // Move down once: the middle line is short, so both cursors clamp
         // to its end (col 5). Move up twice: each cursor should restore
         // to col 8 thanks to its own preferred-column memory.

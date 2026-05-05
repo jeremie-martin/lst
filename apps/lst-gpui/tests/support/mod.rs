@@ -223,6 +223,11 @@ pub trait EditorTestExt {
     /// Convenience: `quit(QUIT_TIMEOUT)`.
     fn quit_default(self) -> SupportResult<()>;
 
+    /// Move the visible editor cursor to the start of the document and
+    /// assert the setup state. Use this when a behavior spec needs a stable
+    /// starting point before the actual gesture under test.
+    fn place_cursor_at_document_start(&mut self) -> SupportResult<StateTraceRecord>;
+
     /// Drain the state trace and assert the latest record's vim mode label
     /// matches `mode` (e.g. `"NORMAL"`, `"INSERT"`, `"VISUAL"`, `"V-LINE"`).
     fn expect_vim_mode(&mut self, mode: &str) -> SupportResult<StateTraceRecord>;
@@ -278,6 +283,11 @@ impl EditorTestExt for Editor<'_> {
     fn quit_default(self) -> SupportResult<()> {
         let status = self.quit(QUIT_TIMEOUT)?;
         require_success(status)
+    }
+
+    fn place_cursor_at_document_start(&mut self) -> SupportResult<StateTraceRecord> {
+        self.keys("<C-home>")?;
+        self.expect_cursor_heads(&[(0, 0)])
     }
 
     fn expect_vim_mode(&mut self, mode: &str) -> SupportResult<StateTraceRecord> {

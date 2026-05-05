@@ -58,7 +58,10 @@ cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
 The `x11` profile is the blocking implemented-behavior lane. `x11-stress` runs
 that same set repeatedly for flake detection. `x11-tdd` runs accepted
 ahead-of-implementation specs as a separate report lane; failures there are
-expected until the implementation catches up.
+expected until the implementation catches up. Broad multi-cursor specs that are
+intentionally ahead of implementation live in
+`apps/lst-gpui/tests/real_x11_multi_cursor_spec.rs`, which is included only in
+the `x11-tdd` profile.
 
 The profiles run serially. Every test grabs keyboard focus and moves the global
 pointer through XTEST. The harness also takes a cross-process display lock, so
@@ -120,7 +123,8 @@ fn descriptive_cursor_behavior() -> TestResult {
         let path = session.seed_file("file.txt", "alpha\nbeta\ngamma")?;
         let mut editor = session.open_file("file", &path)?;
 
-        editor.keys("<C-home><C-A-down><C-A-down>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<S-A-down><S-A-down>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
         Ok(())
     })
@@ -165,7 +169,7 @@ for that narrow case because `Editor::send_keys` expects each key to paint.
 
 - literal printable ASCII characters
 - special keys: `<enter>`, `<esc>`, `<tab>`, `<space>`, `<bs>`, `<delete>`,
-  `<home>`, `<end>`, `<left>`, `<right>`, `<up>`, `<down>`, `<pageup>`,
+  `<f2>`, `<home>`, `<end>`, `<left>`, `<right>`, `<up>`, `<down>`, `<pageup>`,
   `<pagedown>`, `<lt>`
 - modifier chords: `<C-x>`, `<A-x>`, `<S-x>`, `<C-A-S-x>`, plus verbose
   `<ctrl-x>`, `<alt-x>`, `<shift-x>`
@@ -245,8 +249,10 @@ The real-display suite currently has broad coverage across:
 - mouse click, double-click, triple-click, quad-click, drag selection, middle-click
   paste, and TDD specs for shift-click / Alt-click gaps
 - cursor movement and subword motion
-- multi-cursor creation, text input, deletion, paste distribution, copy
-  collection, Escape collapse, smart Enter, and TDD specs for remaining gaps
+- multi-cursor creation, text input, deletion, paste distribution, copy/cut
+  collection, Escape collapse, smart Enter, per-cursor motion/selection, line
+  operation coalescing, find/occurrence gestures, column drag, and TDD specs for
+  remaining gaps
 - chord-hold event trains for held-modifier gestures
 
 This is the project's load-bearing end-to-end test path. When adding a new

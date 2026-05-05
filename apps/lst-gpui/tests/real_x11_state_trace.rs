@@ -147,10 +147,11 @@ fn goto_line_panel_input_visible_before_submit() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn status_bar_reports_multi_cursor_summary() -> TestResult {
     support::run_x11_test("state-trace-status-bar", |session| {
-        let path = session.seed_file("status.txt", "alpha\nbeta\ngamma")?;
+        let path = session.seed_file("status.txt", "foo foo foo")?;
         let mut editor = session.open_file("status", &path)?;
 
-        editor.keys("<C-home><C-A-down><C-A-down>")?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-S-l><esc>")?;
         let record = editor.read_state()?;
         assert!(
             record.status_bar.contains("3 cursors"),
