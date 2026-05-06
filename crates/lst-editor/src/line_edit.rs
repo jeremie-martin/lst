@@ -370,7 +370,7 @@ pub(crate) fn toggle_block_comment_request(
     Some(EditRequest::other_at_position(changes, cursor))
 }
 
-fn outdent_prefix_len(tab: &EditorTab, line: usize, unit: &str) -> usize {
+pub(crate) fn outdent_prefix_len(tab: &EditorTab, line: usize, unit: &str) -> usize {
     let line_text = line_display_text(tab.buffer(), line);
     if unit.starts_with('\t') {
         usize::from(line_text.starts_with('\t'))

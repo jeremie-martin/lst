@@ -1,5 +1,6 @@
 use gpui::{
-    point, Bounds, Context, EntityInputHandler, KeyDownEvent, Pixels, Point, UTF16Selection, Window,
+    point, Bounds, Context, EntityInputHandler, KeyDownEvent, Modifiers, ModifiersChangedEvent,
+    Pixels, Point, UTF16Selection, Window,
 };
 use lst_editor::vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey};
 use ropey::Rope;
@@ -8,7 +9,256 @@ use std::{ops::Range, time::Instant};
 use crate::viewport::{code_origin_x, row_contains_cursor, scroll_left_for, x_for_global_char};
 use crate::{elapsed_ms, ui::theme::metrics, LstGpuiApp};
 
+const X11_SYNTHETIC_MODIFIER_CHORD_WINDOW_MS: u128 = 500;
+
 impl LstGpuiApp {
+    pub(crate) fn note_key_down_for_text_input(&mut self, event: &KeyDownEvent) {
+        if is_shift_key(event.keystroke.key.as_str()) || event.keystroke.modifiers.shift {
+            self.physical_shift_down = true;
+        }
+    }
+
+    pub(crate) fn note_key_up_for_text_input(&mut self, key: &str) {
+        if is_shift_key(key) {
+            self.physical_shift_down = false;
+        }
+    }
+
+    pub(crate) fn note_modifiers_changed_for_text_input(&mut self, event: &ModifiersChangedEvent) {
+        if modifiers_active(event.modifiers) {
+            self.modifier_chord_accumulated =
+                merge_modifiers(self.modifier_chord_accumulated, event.modifiers);
+            self.recent_modifier_chord = None;
+        } else if modifiers_active(self.modifier_chord_accumulated) {
+            self.recent_modifier_chord = Some((self.modifier_chord_accumulated, Instant::now()));
+            self.modifier_chord_accumulated = Modifiers::default();
+        }
+        self.physical_shift_down = event.modifiers.shift;
+    }
+
+    pub(crate) fn maybe_handle_recent_modifier_key_action(
+        &mut self,
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.editor_input_is_focused() {
+            return false;
+        }
+
+        let modifiers = self.effective_modifier_chord(event.keystroke.modifiers);
+        if !modifiers_active(modifiers) {
+            return false;
+        }
+
+        let key = event.keystroke.key.to_ascii_lowercase();
+        let handled = if modifiers.control && modifiers.shift && modifiers.alt {
+            match key.as_str() {
+                "down" | "up" => {
+                    self.update_model(cx, true, |model| {
+                        model.duplicate_line();
+                    });
+                    true
+                }
+                _ => false,
+            }
+        } else if modifiers.control && modifiers.shift && !modifiers.alt {
+            match key.as_str() {
+                "left" => {
+                    self.update_model(cx, true, |model| {
+                        model.move_word(true, true);
+                    });
+                    true
+                }
+                "right" => {
+                    self.update_model(cx, true, |model| {
+                        model.move_word(false, true);
+                    });
+                    true
+                }
+                "l" => {
+                    self.update_model(cx, true, |model| {
+                        model.select_all_occurrences();
+                    });
+                    true
+                }
+                _ => false,
+            }
+        } else if modifiers.control && !modifiers.shift && !modifiers.alt {
+            match key.as_str() {
+                "a" => {
+                    self.update_model(cx, true, |model| {
+                        model.select_all();
+                    });
+                    true
+                }
+                "d" => {
+                    let skip = self.x11_ctrl_k_pending;
+                    self.x11_ctrl_k_pending = false;
+                    self.update_model(cx, true, |model| {
+                        if skip {
+                            model.skip_next_occurrence();
+                        } else {
+                            model.select_next_occurrence();
+                        }
+                    });
+                    true
+                }
+                "g" => {
+                    self.x11_ctrl_k_pending = false;
+                    self.update_model(cx, true, |model| {
+                        model.toggle_goto_line_panel();
+                    });
+                    true
+                }
+                "k" => {
+                    self.x11_ctrl_k_pending = true;
+                    cx.notify();
+                    true
+                }
+                _ => {
+                    self.x11_ctrl_k_pending = false;
+                    false
+                }
+            }
+        } else if modifiers.shift && !modifiers.control && !modifiers.alt {
+            match key.as_str() {
+                "left" => {
+                    self.update_model(cx, true, |model| {
+                        model.move_horizontal_by(-1, true);
+                    });
+                    true
+                }
+                "right" => {
+                    self.update_model(cx, true, |model| {
+                        model.move_horizontal_by(1, true);
+                    });
+                    true
+                }
+                "tab" => {
+                    self.update_model(cx, true, |model| {
+                        model.outdent_at_cursor();
+                    });
+                    true
+                }
+                _ => false,
+            }
+        } else if modifiers.alt && modifiers.shift && !modifiers.control {
+            match key.as_str() {
+                "up" => {
+                    self.update_model(cx, true, |model| {
+                        model.add_cursor_above();
+                    });
+                    true
+                }
+                "down" => {
+                    self.update_model(cx, true, |model| {
+                        model.add_cursor_below();
+                    });
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+
+        if handled {
+            self.recent_modifier_chord = None;
+            self.modifier_chord_accumulated = Modifiers::default();
+            cx.stop_propagation();
+        } else if !modifiers.shift || modifiers.control || modifiers.alt || modifiers.platform {
+            self.recent_modifier_chord = None;
+            self.modifier_chord_accumulated = Modifiers::default();
+            self.x11_ctrl_k_pending = false;
+        }
+        handled
+    }
+
+    pub(crate) fn maybe_handle_unmodified_key_action(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.editor_input_is_focused() {
+            return false;
+        }
+
+        if modifiers_active(event.keystroke.modifiers) {
+            return false;
+        }
+
+        match event.keystroke.key.as_str() {
+            "pageup" | "pagedown" => {
+                let down = event.keystroke.key == "pagedown";
+                let wrap_columns = self.active_wrap_columns(window, cx);
+                self.update_model(cx, true, |model| {
+                    if down {
+                        model.page_down(false, wrap_columns);
+                    } else {
+                        model.page_up(false, wrap_columns);
+                    }
+                });
+                cx.stop_propagation();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn maybe_handle_shifted_printable_input(
+        &mut self,
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.editor_input_is_focused() {
+            return false;
+        }
+
+        if self.model.vim_mode() != vim::Mode::Insert {
+            return false;
+        }
+        let modifiers = event.keystroke.modifiers;
+        let effective_modifiers = self.effective_modifier_chord(modifiers);
+        let synthetic_shift_symbol = effective_modifiers.shift
+            && !effective_modifiers.control
+            && !effective_modifiers.alt
+            && !effective_modifiers.platform;
+        if (!modifiers.shift && !self.physical_shift_down && !synthetic_shift_symbol)
+            || modifiers.control
+            || modifiers.alt
+            || modifiers.platform
+            || is_shift_key(event.keystroke.key.as_str())
+        {
+            return false;
+        }
+
+        let key = event.keystroke.key.as_str();
+        if event
+            .keystroke
+            .key_char
+            .as_deref()
+            .is_some_and(|key_char| key_char != key)
+        {
+            return false;
+        }
+        let Some(ch) = shifted_ascii_fallback(key) else {
+            return false;
+        };
+        if synthetic_shift_symbol {
+            self.recent_modifier_chord = None;
+            self.modifier_chord_accumulated = Modifiers::default();
+        }
+
+        let apply_started = Instant::now();
+        self.update_model(cx, true, |model| {
+            model.replace_text_from_input(None, ch.to_string());
+        });
+        self.record_operation("text_input", None, elapsed_ms(apply_started));
+        cx.stop_propagation();
+        true
+    }
+
     pub(crate) fn maybe_handle_vim_key(
         &mut self,
         event: &KeyDownEvent,
@@ -16,7 +266,20 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) -> bool {
         let mods = gpui_modifiers_to_vim(event.keystroke.modifiers);
-        let key = gpui_key_to_vim(event);
+        let mut key = gpui_key_to_vim(event);
+        let effective_modifiers = self.effective_modifier_chord(event.keystroke.modifiers);
+        if self.model.vim_mode() != vim::Mode::Insert
+            && effective_modifiers.shift
+            && !effective_modifiers.control
+            && !effective_modifiers.alt
+            && !effective_modifiers.platform
+        {
+            if let Some(ch) = shifted_ascii_fallback(event.keystroke.key.as_str()) {
+                key = Some(VimKey::Character(ch.to_string()));
+                self.recent_modifier_chord = None;
+                self.modifier_chord_accumulated = Modifiers::default();
+            }
+        }
         let plain_vim_key = !event.keystroke.modifiers.control
             && !event.keystroke.modifiers.alt
             && !event.keystroke.modifiers.platform;
@@ -63,6 +326,44 @@ impl LstGpuiApp {
         cx.stop_propagation();
         true
     }
+}
+
+fn shifted_ascii_fallback(key: &str) -> Option<char> {
+    let mut chars = key.chars();
+    if let Some(ch) = chars.next() {
+        if chars.next().is_none() && ch.is_ascii_lowercase() {
+            return Some(ch.to_ascii_uppercase());
+        }
+    }
+
+    match key {
+        "1" => Some('!'),
+        "2" => Some('@'),
+        "3" => Some('#'),
+        "4" => Some('$'),
+        "5" => Some('%'),
+        "6" => Some('^'),
+        "7" => Some('&'),
+        "8" => Some('*'),
+        "9" => Some('('),
+        "0" => Some(')'),
+        "-" => Some('_'),
+        "=" => Some('+'),
+        "[" => Some('{'),
+        "]" => Some('}'),
+        "\\" => Some('|'),
+        ";" => Some(':'),
+        "'" => Some('"'),
+        "," => Some('<'),
+        "." => Some('>'),
+        "/" => Some('?'),
+        "`" => Some('~'),
+        _ => None,
+    }
+}
+
+fn is_shift_key(key: &str) -> bool {
+    matches!(key, "shift" | "shift_l" | "shift_r")
 }
 
 impl EntityInputHandler for LstGpuiApp {
@@ -122,8 +423,9 @@ impl EntityInputHandler for LstGpuiApp {
                 .as_ref()
                 .map(|range| utf16_range_to_char_range(tab.buffer(), range))
         };
+        let text = self.text_input_with_shift_fallback(text);
         self.update_model(cx, true, |model| {
-            model.replace_text_from_input(range, text.to_string());
+            model.replace_text_from_input(range, text);
         });
         self.record_operation("text_input", None, elapsed_ms(apply_started));
     }
@@ -196,6 +498,108 @@ impl EntityInputHandler for LstGpuiApp {
         let char_index = self.active_char_index_for_point(point);
         Some(char_to_utf16(self.active_tab().buffer(), char_index))
     }
+}
+
+impl LstGpuiApp {
+    fn text_input_with_shift_fallback(&mut self, text: &str) -> String {
+        if let Some(ch) = shifted_ascii_fallback(text) {
+            if self.physical_shift_down || self.consume_recent_shift_symbol_chord() {
+                return ch.to_string();
+            }
+        }
+        text.to_string()
+    }
+
+    fn consume_recent_shift_symbol_chord(&mut self) -> bool {
+        if !self.recent_shift_symbol_chord() {
+            return false;
+        }
+        self.recent_modifier_chord = None;
+        self.modifier_chord_accumulated = Modifiers::default();
+        true
+    }
+
+    fn recent_shift_symbol_chord(&self) -> bool {
+        self.effective_modifier_chord(Modifiers::default())
+            .shift_only()
+    }
+
+    fn effective_modifier_chord(&self, event_modifiers: Modifiers) -> Modifiers {
+        let mut modifiers = event_modifiers;
+        if let Some(recent) = self.recent_modifier_chord() {
+            modifiers = merge_modifiers(modifiers, recent);
+        }
+        modifiers = merge_modifiers(modifiers, self.modifier_chord_accumulated);
+        merge_modifiers(modifiers, x11_current_modifiers())
+    }
+
+    fn recent_modifier_chord(&self) -> Option<Modifiers> {
+        self.recent_modifier_chord
+            .filter(|(_, released_at)| {
+                released_at.elapsed().as_millis() <= X11_SYNTHETIC_MODIFIER_CHORD_WINDOW_MS
+            })
+            .map(|(modifiers, _)| modifiers)
+    }
+
+    fn editor_input_is_focused(&self) -> bool {
+        !self.recent.is_open() && self.focus_last_applied == crate::FocusTarget::Editor
+    }
+}
+
+trait ModifierExt {
+    fn shift_only(self) -> bool;
+}
+
+impl ModifierExt for Modifiers {
+    fn shift_only(self) -> bool {
+        self.shift && !self.control && !self.alt && !self.platform
+    }
+}
+
+fn modifiers_active(modifiers: Modifiers) -> bool {
+    modifiers.control || modifiers.alt || modifiers.shift || modifiers.platform
+}
+
+fn merge_modifiers(lhs: Modifiers, rhs: Modifiers) -> Modifiers {
+    Modifiers {
+        control: lhs.control || rhs.control,
+        alt: lhs.alt || rhs.alt,
+        shift: lhs.shift || rhs.shift,
+        platform: lhs.platform || rhs.platform,
+        function: lhs.function || rhs.function,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn x11_current_modifiers() -> Modifiers {
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::{ConnectionExt as _, KeyButMask};
+
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+        return Modifiers::default();
+    };
+    let Some(screen) = conn.setup().roots.get(screen_num) else {
+        return Modifiers::default();
+    };
+    let Ok(cookie) = conn.query_pointer(screen.root) else {
+        return Modifiers::default();
+    };
+    let Ok(reply) = cookie.reply() else {
+        return Modifiers::default();
+    };
+
+    Modifiers {
+        control: reply.mask.contains(KeyButMask::CONTROL),
+        alt: reply.mask.contains(KeyButMask::MOD1),
+        shift: reply.mask.contains(KeyButMask::SHIFT),
+        platform: reply.mask.contains(KeyButMask::MOD4),
+        function: false,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn x11_current_modifiers() -> Modifiers {
+    Modifiers::default()
 }
 
 fn gpui_modifiers_to_vim(modifiers: gpui::Modifiers) -> VimModifiers {

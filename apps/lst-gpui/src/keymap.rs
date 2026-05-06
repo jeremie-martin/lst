@@ -12,8 +12,8 @@ use crate::{
     SelectDown, SelectFindMatches, SelectLeft, SelectLine, SelectLineEnd, SelectLineStart,
     SelectNextOccurrence, SelectPageDown, SelectPageUp, SelectParagraph, SelectRight,
     SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft,
-    SelectWordRight, SkipNextOccurrence, SwapRedoBranch, ToggleBlockComment, ToggleComment,
-    ToggleLineNumberMode, ToggleRecentFiles, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
+    SelectWordRight, SwapRedoBranch, ToggleBlockComment, ToggleComment, ToggleLineNumberMode,
+    ToggleRecentFiles, ToggleWrap, Undo, ZoomIn, ZoomOut, ZoomReset,
 };
 
 const EDITOR_CONTEXT: &str = "Editor && !InlineInput";
@@ -108,10 +108,6 @@ pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-k", DeleteLine, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-shift-d", DuplicateLine, Some(EDITOR_CONTEXT)),
         KeyBinding::new("cmd-shift-d", DuplicateLine, Some(EDITOR_CONTEXT)),
-        KeyBinding::new("ctrl-shift-alt-down", DuplicateLine, Some(EDITOR_CONTEXT)),
-        KeyBinding::new("ctrl-alt-shift-down", DuplicateLine, Some(EDITOR_CONTEXT)),
-        KeyBinding::new("ctrl-shift-alt-up", DuplicateLine, Some(EDITOR_CONTEXT)),
-        KeyBinding::new("ctrl-alt-shift-up", DuplicateLine, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-/", ToggleComment, Some(EDITOR_CONTEXT)),
         KeyBinding::new("cmd-/", ToggleComment, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-shift-/", ToggleBlockComment, Some(EDITOR_CONTEXT)),
@@ -169,7 +165,6 @@ pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-a", SelectAll, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-d", SelectNextOccurrence, Some(EDITOR_CONTEXT)),
         KeyBinding::new("cmd-d", SelectNextOccurrence, Some(EDITOR_CONTEXT)),
-        KeyBinding::new("ctrl-k ctrl-d", SkipNextOccurrence, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-u", PopSelectionCursor, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-shift-l", SelectAllOccurrences, Some(EDITOR_CONTEXT)),
         KeyBinding::new("cmd-shift-l", SelectAllOccurrences, Some(EDITOR_CONTEXT)),

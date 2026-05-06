@@ -308,12 +308,33 @@ fn occurrence_query(tab: &EditorTab) -> Option<(String, Range<usize>)> {
     let range = if tab.selection().has_selection() {
         tab.selection().range()
     } else {
-        word_range_at_char(tab.buffer(), tab.cursor_char())
+        occurrence_word_range_at_cursor(tab)
     };
     if range.start == range.end {
         return None;
     }
     Some((tab.buffer().slice(range.clone()).to_string(), range))
+}
+
+fn occurrence_word_range_at_cursor(tab: &EditorTab) -> Range<usize> {
+    let buffer = tab.buffer();
+    let mut range = word_range_at_char(buffer, tab.cursor_char());
+    if range.start == range.end || !range_is_whitespace(buffer, &range) {
+        return range;
+    }
+
+    let mut next = range.end;
+    while next < buffer.len_chars() && buffer.char(next).is_whitespace() {
+        next += 1;
+    }
+    if next < buffer.len_chars() {
+        range = word_range_at_char(buffer, next);
+    }
+    range
+}
+
+fn range_is_whitespace(buffer: &ropey::Rope, range: &Range<usize>) -> bool {
+    range.start < range.end && buffer.slice(range.clone()).chars().all(char::is_whitespace)
 }
 
 fn occurrence_ranges(text: &str, query: &str, find: &FindState) -> Vec<Range<usize>> {

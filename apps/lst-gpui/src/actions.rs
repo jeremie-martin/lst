@@ -25,6 +25,7 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
                 let $root = $root.on_action(cx.listener(
                     |this, _: &$action, _: &mut Window, cx| {
                         this.update_model(cx, true, $update);
+                        cx.stop_propagation();
                     },
                 ));
             )*
@@ -75,7 +76,6 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         InsertTab => |model| model.insert_tab_at_cursor();
         OutdentSelection => |model| model.outdent_at_cursor();
         SelectAll => |model| model.select_all();
-        SelectNextOccurrence => |model| model.select_next_occurrence();
         SelectAllOccurrences => |model| model.select_all_occurrences();
         SelectFindMatches => |model| model.select_all_find_matches();
         SkipNextOccurrence => |model| model.skip_next_occurrence();
@@ -109,54 +109,82 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
 
     let root = root.on_action(cx.listener(|this, _: &NewTab, _window, cx| {
         this.request_new_tab(cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &ToggleRecentFiles, window, cx| {
         this.toggle_recent_files_panel(window, cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &ToggleTheme, _window, cx| {
         this.cycle_theme(cx);
+        cx.stop_propagation();
+    }));
+    let root = root.on_action(cx.listener(|this, _: &SelectNextOccurrence, _window, cx| {
+        let skip = this.x11_ctrl_k_pending;
+        this.x11_ctrl_k_pending = false;
+        this.update_model(cx, true, |model| {
+            if skip {
+                model.skip_next_occurrence();
+            } else {
+                model.select_next_occurrence();
+            }
+        });
+        cx.stop_propagation();
     }));
 
     let root = root.on_action(cx.listener(|this, _: &MoveUp, window, cx| {
         this.move_vertical(-1, false, window, cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &MoveDown, window, cx| {
         this.move_vertical(1, false, window, cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &MovePageUp, window, cx| {
         this.move_page(false, false, window, cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &MovePageDown, window, cx| {
         this.move_page(true, false, window, cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &SelectUp, window, cx| {
         this.move_vertical(-1, true, window, cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &SelectDown, window, cx| {
         this.move_vertical(1, true, window, cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &SelectPageUp, window, cx| {
         this.move_page(false, true, window, cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &SelectPageDown, window, cx| {
         this.move_page(true, true, window, cx);
+        cx.stop_propagation();
     }));
 
     let root = root.on_action(cx.listener(|this, _: &CloseActiveTab, _window, cx| {
         this.request_close_active_tab(cx);
+        cx.stop_propagation();
     }));
 
     let root = root.on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
         this.zoom_in(window, cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
         this.zoom_out(window, cx);
+        cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &ZoomReset, window, cx| {
         this.zoom_reset(window, cx);
+        cx.stop_propagation();
     }));
 
     root.on_action(cx.listener(|this, _: &Quit, _window, cx| {
         this.request_quit(cx);
+        cx.stop_propagation();
     }))
 }

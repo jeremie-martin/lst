@@ -16,6 +16,7 @@ use crate::Result;
 /// to the target window can route the click to the previous pointer location.
 pub(crate) const POINTER_SETTLE: Duration = Duration::from_millis(50);
 const BUTTON_HOLD: Duration = Duration::from_millis(5);
+pub(crate) const KEY_PHASE_SETTLE: Duration = Duration::from_millis(5);
 
 pub(crate) const BUTTON_LEFT: u8 = 1;
 pub(crate) const BUTTON_MIDDLE: u8 = 2;
@@ -124,9 +125,18 @@ pub(crate) fn chord(
     alt: bool,
     shift: bool,
 ) -> Result<()> {
-    press_modifiers(conn, root, kc, ctrl, alt, shift)?;
+    let has_modifiers = ctrl || alt || shift;
+    if has_modifiers {
+        press_modifiers(conn, root, kc, ctrl, alt, shift)?;
+        conn.flush()?;
+        thread::sleep(KEY_PHASE_SETTLE);
+    }
     tap_key(conn, root, code)?;
-    release_modifiers(conn, root, kc, ctrl, alt, shift)?;
+    if has_modifiers {
+        conn.flush()?;
+        thread::sleep(KEY_PHASE_SETTLE);
+        release_modifiers(conn, root, kc, ctrl, alt, shift)?;
+    }
     conn.flush()?;
     Ok(())
 }

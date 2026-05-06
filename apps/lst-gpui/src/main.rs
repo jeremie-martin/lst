@@ -1,7 +1,7 @@
 use gpui::{
     actions, prelude::*, px, size, App, Application, Bounds, ClipboardItem, Context, Entity,
-    FocusHandle, Focusable, Pixels, Point, ScrollHandle, Subscription, Window, WindowBounds,
-    WindowOptions,
+    FocusHandle, Focusable, Modifiers, Pixels, Point, ScrollHandle, Subscription, Window,
+    WindowBounds, WindowOptions,
 };
 
 mod actions;
@@ -235,6 +235,10 @@ struct LstGpuiApp {
     scratchpad_dir: Option<PathBuf>,
     recent: RecentView,
     force_editor_focus: bool,
+    physical_shift_down: bool,
+    modifier_chord_accumulated: Modifiers,
+    recent_modifier_chord: Option<(Modifiers, Instant)>,
+    x11_ctrl_k_pending: bool,
     zoom_level: i32,
     exit_clipboard: Arc<dyn ExitClipboard>,
     state_trace: StateTraceEmitter,
@@ -289,6 +293,10 @@ impl LstGpuiApp {
             scratchpad_dir,
             recent,
             force_editor_focus: false,
+            physical_shift_down: false,
+            modifier_chord_accumulated: Modifiers::default(),
+            recent_modifier_chord: None,
+            x11_ctrl_k_pending: false,
             zoom_level: 0,
             exit_clipboard: Arc::new(SubprocessExitClipboard),
             state_trace: StateTraceEmitter::from_env(),

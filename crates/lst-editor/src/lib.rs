@@ -528,7 +528,7 @@ impl EditorModel {
             return;
         };
         let trimmed = text.trim();
-        let (line_text, column_text) = match trimmed.split_once(':') {
+        let (line_text, column_text) = match trimmed.split_once([':', ';']) {
             Some((line, column)) => (line.trim(), Some(column.trim()).filter(|s| !s.is_empty())),
             None => (trimmed, None),
         };
@@ -660,13 +660,107 @@ impl EditorModel {
         if tab.has_selection() {
             return Some(tab.selected_range());
         }
-        let cursor = tab.cursor_char();
-        let target = if backward {
-            previous_word_boundary(tab.buffer(), cursor)
-        } else {
-            next_word_boundary(tab.buffer(), cursor)
+        delete_word_range_at(tab, tab.cursor_char(), backward)
+    }
+
+    fn outdent_selection_set_request(&self) -> Option<EditRequest> {
+        let tab = self.active_tab();
+        let lines = selection_set_touched_lines(tab);
+        if lines.is_empty() {
+            return None;
+        }
+
+        let unit = tab.language_config().indent.indent_unit();
+        let mut removed_by_line = Vec::with_capacity(lines.len());
+        let mut changes = Vec::new();
+        for line in lines {
+            let removed = line_edit::outdent_prefix_len(tab, line, &unit);
+            removed_by_line.push((line, removed));
+            if removed > 0 {
+                let line_start = tab.buffer().line_to_char(line);
+                changes.push(TextChange::delete(line_start..line_start + removed));
+            }
+        }
+        if changes.is_empty() {
+            return None;
+        }
+
+        let selections_after = tab
+            .selection_set()
+            .as_slice()
+            .iter()
+            .map(|selection| {
+                let anchor = map_outdented_endpoint(tab, selection.anchor(), &removed_by_line);
+                let head = map_outdented_endpoint(tab, selection.head(), &removed_by_line);
+                Selection::new(anchor, head)
+            })
+            .collect::<Vec<_>>();
+        let selection_after = SelectionSet::from_selections_coalescing_cursors(
+            selections_after,
+            tab.selection_set().primary_index(),
+        )
+        .expect("line outdent preserves a valid selection set");
+
+        Some(
+            EditRequest::other_break(TextChangeSet::new(changes, 0))
+                .with_selection_after(SelectionAfter::Exact(selection_after)),
+        )
+    }
+
+    fn delete_selected_or_word(&mut self, backward: bool) -> bool {
+        if self.active_tab().selection_set().has_multiple() {
+            return self.apply_multi_selection_delete(UndoBoundary::Break, |tab, cursor| {
+                delete_word_range_at(tab, cursor, backward)
+            });
+        }
+        let Some(range) = Self::delete_selection_or_word_range(self.active_tab(), backward) else {
+            return false;
         };
-        (target != cursor).then_some(target.min(cursor)..target.max(cursor))
+        self.apply_single_text_edit(EditKind::Delete, UndoBoundary::Break, range, "");
+        true
+    }
+
+    fn insert_newline(&mut self) {
+        let newline = preferred_newline_for_active_tab(self.active_tab());
+
+        // Multi-cursor: each cursor inherits its own line's indent.
+        // `replacement_request_by_index` returns `None` during IME
+        // composition or for single-selection sets, so the
+        // `if let Some(request)` falls through to single-cursor in those
+        // cases without us re-checking those conditions here.
+        let replacements: Vec<String> = {
+            let tab = self.active_tab();
+            let buffer = tab.buffer();
+            let len_chars = tab.len_chars();
+            tab.selection_set()
+                .as_slice()
+                .iter()
+                .map(|selection| {
+                    // Sample indent from the selection's range start —
+                    // that's where the newline lands after the selection
+                    // is deleted, regardless of cursor direction. Using
+                    // `cursor()` would pull the wrong line for reverse-
+                    // direction selections.
+                    let line = buffer.char_to_line(selection.range().start.min(len_chars));
+                    format!("{newline}{}", line_indent_prefix(buffer, line))
+                })
+                .collect()
+        };
+        let request = multi_selection::replacement_request_by_index(
+            self.active_tab(),
+            |index| replacements[index].clone(),
+            UndoBoundary::Break,
+        );
+        if let Some(request) = request {
+            self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+            return;
+        }
+
+        let primary_replacement = replacements
+            .get(self.active_tab().selection_set().primary_index())
+            .cloned()
+            .unwrap_or_else(|| newline.to_string());
+        self.replace_text(None, primary_replacement, UndoBoundary::Break);
     }
 
     fn apply_selection_motion<F>(&mut self, preferred_column: Option<usize>, mut motion: F) -> bool
@@ -1243,70 +1337,6 @@ impl EditorModel {
         };
         self.apply_single_text_edit(EditKind::Delete, UndoBoundary::Merge, range, "");
         true
-    }
-
-    fn delete_selected_or_word(&mut self, backward: bool) -> bool {
-        if self.active_tab().selection_set().has_multiple() {
-            return self.apply_multi_selection_delete(UndoBoundary::Break, |tab, cursor| {
-                let target = if backward {
-                    previous_word_boundary(tab.buffer(), cursor)
-                } else {
-                    next_word_boundary(tab.buffer(), cursor)
-                };
-                (target != cursor).then_some(target.min(cursor)..target.max(cursor))
-            });
-        }
-        let Some(range) = Self::delete_selection_or_word_range(self.active_tab(), backward) else {
-            return false;
-        };
-        self.apply_single_text_edit(EditKind::Delete, UndoBoundary::Break, range, "");
-        true
-    }
-
-    fn insert_newline(&mut self) {
-        let newline = preferred_newline_for_active_tab(self.active_tab());
-
-        // Multi-cursor: each cursor inherits its own line's indent.
-        // `replacement_request_by_index` returns `None` during IME
-        // composition or for single-selection sets, so the
-        // `if let Some(request)` falls through to single-cursor in those
-        // cases without us re-checking those conditions here.
-        let replacements: Vec<String> = {
-            let tab = self.active_tab();
-            let buffer = tab.buffer();
-            let len_chars = tab.len_chars();
-            tab.selection_set()
-                .as_slice()
-                .iter()
-                .map(|selection| {
-                    // Sample indent from the selection's range start —
-                    // that's where the newline lands after the selection
-                    // is deleted, regardless of cursor direction. Using
-                    // `cursor()` would pull the wrong line for reverse-
-                    // direction selections.
-                    let line = buffer.char_to_line(selection.range().start.min(len_chars));
-                    format!("{newline}{}", line_indent_prefix(buffer, line))
-                })
-                .collect()
-        };
-        let request = multi_selection::replacement_request_by_index(
-            self.active_tab(),
-            |index| replacements[index].clone(),
-            UndoBoundary::Break,
-        );
-        if let Some(request) = request {
-            self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-            return;
-        }
-
-        // Primary's range start is the active selection's range start; the
-        // pre-built `replacements[primary]` already carries the right
-        // newline + indent for the single-cursor / IME path.
-        let primary_replacement = replacements
-            .get(self.active_tab().selection_set().primary_index())
-            .cloned()
-            .unwrap_or_else(|| newline.to_string());
-        self.replace_text(None, primary_replacement, UndoBoundary::Break);
     }
 
     fn selection_or_current_line(&self) -> (Range<usize>, String, bool) {
@@ -2212,9 +2242,19 @@ impl EditorModel {
     fn add_cursor_on_adjacent_line(&mut self, delta: isize) {
         let (additions, preferred_column) = {
             let tab = self.active_tab();
-            let preferred_column = tab.preferred_column().or_else(|| {
-                (!tab.selection_set().has_multiple()).then(|| tab.cursor_position().column)
-            });
+            let current_position = tab.cursor_position();
+            let current_line_end = display_line_char_len(tab, current_position.line);
+            let line_end_sticky = tab.preferred_column() == Some(usize::MAX)
+                || (!tab.selection_set().has_multiple()
+                    && current_line_end > 0
+                    && current_position.column == current_line_end);
+            let preferred_column = if line_end_sticky {
+                Some(usize::MAX)
+            } else {
+                tab.preferred_column().or_else(|| {
+                    (!tab.selection_set().has_multiple()).then_some(current_position.column)
+                })
+            };
             let last_line = tab.line_count().saturating_sub(1);
             let additions: Vec<Selection> = tab
                 .selection_set()
@@ -2228,7 +2268,11 @@ impl EditorModel {
                         (position.line + delta as usize <= last_line)
                             .then_some(position.line + delta as usize)?
                     };
-                    let column = preferred_column.unwrap_or(position.column);
+                    let column = if preferred_column == Some(usize::MAX) {
+                        display_line_char_len(tab, target_line)
+                    } else {
+                        preferred_column.unwrap_or(position.column)
+                    };
                     let target = char_at_line_column(tab.buffer(), target_line, column);
                     Some(Selection::collapsed(target))
                 })
@@ -2418,9 +2462,8 @@ impl EditorModel {
 
     pub fn outdent_at_cursor(&mut self) {
         if self.active_tab().selection_set().has_multiple() {
-            let lines = selection_set_touched_lines(self.active_tab());
-            if lines.len() == 1 {
-                self.outdent_selected_lines(lines[0], lines[0]);
+            if let Some(request) = self.outdent_selection_set_request() {
+                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
                 return;
             }
         }
@@ -2720,6 +2763,154 @@ fn soft_tab_backspace_range_at(tab: &EditorTab, cursor: usize) -> Option<Range<u
         return None;
     }
     Some((cursor - unit)..cursor)
+}
+
+fn delete_word_range_at(tab: &EditorTab, cursor: usize, backward: bool) -> Option<Range<usize>> {
+    if backward {
+        delete_word_backward_range(tab.buffer(), cursor)
+    } else {
+        delete_word_forward_range(tab.buffer(), cursor)
+    }
+}
+
+fn delete_word_backward_range(buffer: &ropey::Rope, cursor: usize) -> Option<Range<usize>> {
+    let cursor = cursor.min(buffer.len_chars());
+    if cursor == 0 {
+        return None;
+    }
+
+    let line = buffer.char_to_line(cursor);
+    let line_start = buffer.line_to_char(line);
+    if cursor == line_start {
+        let start = previous_line_break_start(buffer, cursor)?;
+        return Some(start..cursor);
+    }
+
+    if buffer.char(cursor - 1).is_whitespace() {
+        let mut start = cursor;
+        while start > line_start && buffer.char(start - 1).is_whitespace() {
+            start -= 1;
+        }
+        return (start < cursor).then_some(start..cursor);
+    }
+
+    let target = previous_word_boundary(buffer, cursor);
+    (target != cursor).then_some(target..cursor)
+}
+
+fn delete_word_forward_range(buffer: &ropey::Rope, cursor: usize) -> Option<Range<usize>> {
+    let cursor = cursor.min(buffer.len_chars());
+    if cursor >= buffer.len_chars() {
+        return None;
+    }
+
+    let line = buffer.char_to_line(cursor);
+    let line_start = buffer.line_to_char(line);
+    let line_end = line_start + buffer_display_line_char_len(buffer, line);
+    if cursor >= line_end {
+        let end = next_line_join_whitespace_end(buffer, cursor)?;
+        return (end > cursor).then_some(cursor..end);
+    }
+
+    if buffer.char(cursor).is_whitespace() {
+        let mut end = cursor;
+        while end < line_end && buffer.char(end).is_whitespace() {
+            end += 1;
+        }
+        if end > cursor {
+            if end - cursor == 1 {
+                let target = next_word_boundary(buffer, cursor);
+                return (target != cursor).then_some(cursor..target);
+            }
+            return Some(cursor..end);
+        }
+    }
+
+    let target = next_word_boundary(buffer, cursor);
+    (target != cursor).then_some(cursor..target)
+}
+
+fn previous_line_break_start(buffer: &ropey::Rope, cursor: usize) -> Option<usize> {
+    if cursor == 0 {
+        return None;
+    }
+    let mut start = cursor - 1;
+    if buffer.char(start) == '\n' && start > 0 && buffer.char(start - 1) == '\r' {
+        start -= 1;
+    }
+    Some(start)
+}
+
+fn next_line_join_whitespace_end(buffer: &ropey::Rope, cursor: usize) -> Option<usize> {
+    let len = buffer.len_chars();
+    let mut end = cursor;
+    if end >= len {
+        return None;
+    }
+
+    match buffer.char(end) {
+        '\r' => {
+            end += 1;
+            if end < len && buffer.char(end) == '\n' {
+                end += 1;
+            }
+        }
+        '\n' => {
+            end += 1;
+        }
+        ch if ch.is_whitespace() => {
+            while end < len {
+                let ch = buffer.char(end);
+                if ch.is_whitespace() && ch != '\n' && ch != '\r' {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            return Some(end);
+        }
+        _ => return None,
+    }
+
+    while end < len {
+        let ch = buffer.char(end);
+        if ch.is_whitespace() && ch != '\n' && ch != '\r' {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    Some(end)
+}
+
+fn map_outdented_endpoint(
+    tab: &EditorTab,
+    offset: usize,
+    removed_by_line: &[(usize, usize)],
+) -> usize {
+    let buffer = tab.buffer();
+    let len = tab.len_chars();
+    let offset = offset.min(len);
+    let position = char_to_position(buffer, offset);
+    let removed_before: usize = removed_by_line
+        .iter()
+        .take_while(|(line, _)| *line < position.line)
+        .map(|(_, removed)| *removed)
+        .sum();
+    let removed_on_line = removed_by_line
+        .iter()
+        .find(|(line, _)| *line == position.line)
+        .map(|(_, removed)| *removed)
+        .unwrap_or(0);
+    let new_line_start = buffer
+        .line_to_char(position.line)
+        .saturating_sub(removed_before);
+    let new_line_len = display_line_char_len(tab, position.line).saturating_sub(removed_on_line);
+    let new_column = position
+        .column
+        .saturating_sub(removed_on_line)
+        .min(new_line_len);
+    new_line_start + new_column
 }
 
 /// Returns `(first, last, spans_multiple_lines)` for the active selection,

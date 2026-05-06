@@ -25,6 +25,7 @@ pub(crate) enum DragSelectionMode {
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveDragSelection {
     mode: DragSelectionMode,
+    anchor_point: Point<Pixels>,
     last_point: Point<Pixels>,
     autoscroll_active: bool,
 }
@@ -33,6 +34,7 @@ impl ActiveDragSelection {
     fn new(mode: DragSelectionMode, last_point: Point<Pixels>) -> Self {
         Self {
             mode,
+            anchor_point: last_point,
             last_point,
             autoscroll_active: false,
         }
@@ -234,6 +236,7 @@ impl LstGpuiApp {
                 });
             }
             Some(DragSelectionMode::Column(anchor)) => {
+                let index = self.column_drag_head_index(anchor, index, position);
                 self.update_model(cx, true, |model| {
                     model.set_rectangular_column_selection(anchor, index);
                 });
@@ -254,6 +257,34 @@ impl LstGpuiApp {
         }
         self.queue_cursor_reveal(RevealIntent::NearestEdge);
         true
+    }
+
+    fn column_drag_head_index(
+        &self,
+        anchor: usize,
+        index: usize,
+        position: Point<Pixels>,
+    ) -> usize {
+        let Some(drag) = self.selection_drag.as_ref() else {
+            return index;
+        };
+        let char_width = self.active_view().geometry.borrow().painted_char_width;
+        if char_width <= px(0.0) || (position.x - drag.anchor_point.x).abs() > char_width * 0.5 {
+            return index;
+        }
+
+        let buffer = self.active_tab().buffer();
+        let len = buffer.len_chars();
+        let anchor = anchor.min(len);
+        let anchor_line = buffer.char_to_line(anchor);
+        let anchor_col = anchor.saturating_sub(buffer.line_to_char(anchor_line));
+        let target_line = buffer.char_to_line(index.min(len));
+        let target_line_len = buffer
+            .line(target_line)
+            .chars()
+            .take_while(|ch| *ch != '\n' && *ch != '\r')
+            .count();
+        buffer.line_to_char(target_line) + anchor_col.min(target_line_len)
     }
 
     fn schedule_drag_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
