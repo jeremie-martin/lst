@@ -64,8 +64,7 @@ X11 coverage is split deliberately: common multi-cursor workflows live in
 `real_x11_multi_cursor.rs`, mouse-driven cursor behavior lives in
 `real_x11_mouse.rs`, and edge-case multi-cursor specifications live in
 `real_x11_multi_cursor_spec.rs`. Accepted green specs run in the blocking `x11`
-profile; `x11-tdd` currently inherits that blocking lane and can be narrowed on
-a branch that carries future accepted red specs.
+profile; under-review specs run in `x11-tdd` until accepted and promoted.
 
 ### Cursor Set Behavior
 
@@ -106,7 +105,7 @@ a branch that carries future accepted red specs.
 - [x] **Auto-dedent on close bracket** - close-bracket dedent applies at every cursor where applicable.
 - [x] **Overtype mode** - overtype applies at every cursor.
 - [x] **Smart Enter / auto-indent** - Enter inserts a correctly indented line at every cursor. X11: `real_x11_multi_cursor.rs`.
-- [~] **Indent / outdent coalesces by line** - multiple cursors on one line indent/outdent that line once through covered commands; `Shift-Tab` multi-cursor coverage is still needed. X11: `real_x11_multi_cursor_spec.rs`.
+- [~] **Indent / outdent coalesces by line** - multiple cursors on one line indent/outdent that line once through covered commands; `Shift-Tab` multi-cursor semantics are under review. X11: `real_x11_multi_cursor_spec.rs`; X11 TDD: `real_x11_multi_cursor_tdd.rs`.
 - [x] **Toggle line / block comment coalesces by line** - multiple cursors on one line toggle that line once. X11: `real_x11_multi_cursor_spec.rs`.
 - [x] **Move line up / down coalesces clusters** - adjacent cursor-bearing line groups move as stable clusters. X11: `real_x11_multi_cursor_spec.rs`.
 - [x] **Duplicate line / selection applies per cursor** - duplicate affects every cursor line or selection once. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.

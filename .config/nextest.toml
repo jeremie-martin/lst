@@ -10,6 +10,7 @@ default-filter = '''
 package(lst-gpui)
 & kind(test)
 & binary(~real_x11_)
+& not binary(=real_x11_multi_cursor_tdd)
 '''
 test-threads = 1
 retries = 0
@@ -35,6 +36,11 @@ store-failure-output = true
 
 [profile.x11-tdd]
 inherits = "x11"
+default-filter = '''
+package(lst-gpui)
+& kind(test)
+& binary(=real_x11_multi_cursor_tdd)
+'''
 
 [profile.x11-tdd.junit]
 path = "junit.xml"

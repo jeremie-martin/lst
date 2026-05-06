@@ -55,13 +55,14 @@ cargo nextest run --profile x11-stress -p lst-gpui --tests --run-ignored only --
 cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
 ```
 
-The `x11` profile is the blocking implemented-behavior lane. `x11-stress` runs
-that same set repeatedly for flake detection. `x11-tdd` currently inherits the
-blocking lane so the command remains green when there are no accepted red specs.
-If a future behavior is specified ahead of implementation, narrow `x11-tdd` to
-that accepted red set on the branch carrying the spec, then promote it to `x11`
-as soon as it passes. Broad multi-cursor edge-case specs live in
-`apps/lst-gpui/tests/real_x11_multi_cursor_spec.rs` and run in `x11`.
+The `x11` profile is the blocking accepted-behavior lane. `x11-stress` runs that
+same set repeatedly for flake detection. `x11-tdd` runs under-review executable
+specs while behavior is being discussed or implemented. Passing/failing is
+diagnostic there; the point is to capture the intended product behavior before
+changing implementation. Once accepted and green, move those specs into the
+blocking `x11` suite. Broad accepted multi-cursor edge-case specs live in
+`apps/lst-gpui/tests/real_x11_multi_cursor_spec.rs`; under-review multi-cursor
+specs live in `apps/lst-gpui/tests/real_x11_multi_cursor_tdd.rs`.
 
 The profiles run serially. Every test grabs keyboard focus and moves the global
 pointer through XTEST. The harness also takes a cross-process display lock, so
@@ -264,9 +265,10 @@ through the framework-neutral model tests.
 
 1. **Only the explicit TDD profile may contain accepted red specs.** The
    blocking `x11` and `x11-stress` profiles should contain every accepted green
-   real-display contract. If a future behavior is specified before it is
-   implemented, put it in `x11-tdd` with comments clear enough that failures are
-   interpretable, then promote it to `x11` as soon as it passes.
+   real-display contract. If behavior is still under discussion or ahead of
+   implementation, put it in `x11-tdd` with comments clear enough that failures
+   are interpretable, then promote it to `x11` as soon as it is accepted and
+   green.
 
 2. **Trace discipline matters.** The trace is powerful enough to become an
    implementation inspection tool by accident. Keep behavior tests focused on
