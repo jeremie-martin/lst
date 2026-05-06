@@ -47,3 +47,17 @@ path = "junit.xml"
 report-name = "lst-x11-tdd"
 store-success-output = false
 store-failure-output = true
+
+[profile.x11-regression]
+inherits = "x11"
+default-filter = '''
+package(lst-gpui)
+& kind(test)
+& binary(=real_x11_regressions)
+'''
+
+[profile.x11-regression.junit]
+path = "junit.xml"
+report-name = "lst-x11-regression"
+store-success-output = false
+store-failure-output = true

@@ -12,18 +12,6 @@ use crate::{elapsed_ms, ui::theme::metrics, LstGpuiApp};
 const X11_SYNTHETIC_MODIFIER_CHORD_WINDOW_MS: u128 = 500;
 
 impl LstGpuiApp {
-    pub(crate) fn note_key_down_for_text_input(&mut self, event: &KeyDownEvent) {
-        if is_shift_key(event.keystroke.key.as_str()) || event.keystroke.modifiers.shift {
-            self.physical_shift_down = true;
-        }
-    }
-
-    pub(crate) fn note_key_up_for_text_input(&mut self, key: &str) {
-        if is_shift_key(key) {
-            self.physical_shift_down = false;
-        }
-    }
-
     pub(crate) fn note_modifiers_changed_for_text_input(&mut self, event: &ModifiersChangedEvent) {
         if modifiers_active(event.modifiers) {
             self.modifier_chord_accumulated =
@@ -33,7 +21,6 @@ impl LstGpuiApp {
             self.recent_modifier_chord = Some((self.modifier_chord_accumulated, Instant::now()));
             self.modifier_chord_accumulated = Modifiers::default();
         }
-        self.physical_shift_down = event.modifiers.shift;
     }
 
     pub(crate) fn maybe_handle_recent_modifier_key_action(
@@ -51,7 +38,19 @@ impl LstGpuiApp {
         }
 
         let key = event.keystroke.key.to_ascii_lowercase();
-        let handled = if modifiers.control && modifiers.shift && modifiers.alt {
+        if self.model.vim_mode() != vim::Mode::Insert
+            && vim_owns_modifier_chord(key.as_str(), modifiers)
+        {
+            self.x11_ctrl_k_pending = false;
+            return false;
+        }
+
+        let mut preserves_ctrl_k_pending = false;
+        let handled = if modifiers.control
+            && modifiers.shift
+            && modifiers.alt
+            && !modifiers.platform
+        {
             match key.as_str() {
                 "down" | "up" => {
                     self.update_model(cx, true, |model| {
@@ -61,7 +60,7 @@ impl LstGpuiApp {
                 }
                 _ => false,
             }
-        } else if modifiers.control && modifiers.shift && !modifiers.alt {
+        } else if modifiers.control && modifiers.shift && !modifiers.alt && !modifiers.platform {
             match key.as_str() {
                 "left" => {
                     self.update_model(cx, true, |model| {
@@ -83,7 +82,7 @@ impl LstGpuiApp {
                 }
                 _ => false,
             }
-        } else if modifiers.control && !modifiers.shift && !modifiers.alt {
+        } else if modifiers.control && !modifiers.shift && !modifiers.alt && !modifiers.platform {
             match key.as_str() {
                 "a" => {
                     self.update_model(cx, true, |model| {
@@ -112,6 +111,7 @@ impl LstGpuiApp {
                 }
                 "k" => {
                     self.x11_ctrl_k_pending = true;
+                    preserves_ctrl_k_pending = true;
                     cx.notify();
                     true
                 }
@@ -120,7 +120,7 @@ impl LstGpuiApp {
                     false
                 }
             }
-        } else if modifiers.shift && !modifiers.control && !modifiers.alt {
+        } else if modifiers.shift && !modifiers.control && !modifiers.alt && !modifiers.platform {
             match key.as_str() {
                 "left" => {
                     self.update_model(cx, true, |model| {
@@ -142,7 +142,23 @@ impl LstGpuiApp {
                 }
                 _ => false,
             }
-        } else if modifiers.alt && modifiers.shift && !modifiers.control {
+        } else if modifiers.platform && modifiers.shift && !modifiers.control && !modifiers.alt {
+            match key.as_str() {
+                "left" | "home" => {
+                    self.update_model(cx, true, |model| {
+                        model.move_line_boundary(false, true);
+                    });
+                    true
+                }
+                "right" | "end" => {
+                    self.update_model(cx, true, |model| {
+                        model.move_line_boundary(true, true);
+                    });
+                    true
+                }
+                _ => false,
+            }
+        } else if modifiers.alt && modifiers.shift && !modifiers.control && !modifiers.platform {
             match key.as_str() {
                 "up" => {
                     self.update_model(cx, true, |model| {
@@ -165,6 +181,9 @@ impl LstGpuiApp {
         if handled {
             self.recent_modifier_chord = None;
             self.modifier_chord_accumulated = Modifiers::default();
+            if !preserves_ctrl_k_pending {
+                self.x11_ctrl_k_pending = false;
+            }
             cx.stop_propagation();
         } else if !modifiers.shift || modifiers.control || modifiers.alt || modifiers.platform {
             self.recent_modifier_chord = None;
@@ -192,6 +211,7 @@ impl LstGpuiApp {
             "pageup" | "pagedown" => {
                 let down = event.keystroke.key == "pagedown";
                 let wrap_columns = self.active_wrap_columns(window, cx);
+                self.x11_ctrl_k_pending = false;
                 self.update_model(cx, true, |model| {
                     if down {
                         model.page_down(false, wrap_columns);
@@ -206,83 +226,18 @@ impl LstGpuiApp {
         }
     }
 
-    pub(crate) fn maybe_handle_shifted_printable_input(
-        &mut self,
-        event: &KeyDownEvent,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if !self.editor_input_is_focused() {
-            return false;
-        }
-
-        if self.model.vim_mode() != vim::Mode::Insert {
-            return false;
-        }
-        let modifiers = event.keystroke.modifiers;
-        let effective_modifiers = self.effective_modifier_chord(modifiers);
-        let synthetic_shift_symbol = effective_modifiers.shift
-            && !effective_modifiers.control
-            && !effective_modifiers.alt
-            && !effective_modifiers.platform;
-        if (!modifiers.shift && !self.physical_shift_down && !synthetic_shift_symbol)
-            || modifiers.control
-            || modifiers.alt
-            || modifiers.platform
-            || is_shift_key(event.keystroke.key.as_str())
-        {
-            return false;
-        }
-
-        let key = event.keystroke.key.as_str();
-        if event
-            .keystroke
-            .key_char
-            .as_deref()
-            .is_some_and(|key_char| key_char != key)
-        {
-            return false;
-        }
-        let Some(ch) = shifted_ascii_fallback(key) else {
-            return false;
-        };
-        if synthetic_shift_symbol {
-            self.recent_modifier_chord = None;
-            self.modifier_chord_accumulated = Modifiers::default();
-        }
-
-        let apply_started = Instant::now();
-        self.update_model(cx, true, |model| {
-            model.replace_text_from_input(None, ch.to_string());
-        });
-        self.record_operation("text_input", None, elapsed_ms(apply_started));
-        cx.stop_propagation();
-        true
-    }
-
     pub(crate) fn maybe_handle_vim_key(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let mods = gpui_modifiers_to_vim(event.keystroke.modifiers);
-        let mut key = gpui_key_to_vim(event);
         let effective_modifiers = self.effective_modifier_chord(event.keystroke.modifiers);
-        if self.model.vim_mode() != vim::Mode::Insert
-            && effective_modifiers.shift
-            && !effective_modifiers.control
+        let mods = gpui_modifiers_to_vim(effective_modifiers);
+        let key = gpui_key_to_vim(event);
+        let plain_vim_key = !effective_modifiers.control
             && !effective_modifiers.alt
-            && !effective_modifiers.platform
-        {
-            if let Some(ch) = shifted_ascii_fallback(event.keystroke.key.as_str()) {
-                key = Some(VimKey::Character(ch.to_string()));
-                self.recent_modifier_chord = None;
-                self.modifier_chord_accumulated = Modifiers::default();
-            }
-        }
-        let plain_vim_key = !event.keystroke.modifiers.control
-            && !event.keystroke.modifiers.alt
-            && !event.keystroke.modifiers.platform;
+            && !effective_modifiers.platform;
         let redo_key = key.as_ref().is_some_and(|key| {
             matches!(key, VimKey::Character(value) if value == "r") && mods.command()
         });
@@ -296,6 +251,7 @@ impl LstGpuiApp {
         });
 
         if event.keystroke.key == "escape" {
+            self.x11_ctrl_k_pending = false;
             self.update_model(cx, true, |model| {
                 model.handle_vim_escape();
             });
@@ -320,50 +276,13 @@ impl LstGpuiApp {
         };
 
         let wrap_columns = self.active_wrap_columns(window, cx);
+        self.x11_ctrl_k_pending = false;
         self.update_model(cx, true, |model| {
             model.handle_vim_key(key, mods, wrap_columns);
         });
         cx.stop_propagation();
         true
     }
-}
-
-fn shifted_ascii_fallback(key: &str) -> Option<char> {
-    let mut chars = key.chars();
-    if let Some(ch) = chars.next() {
-        if chars.next().is_none() && ch.is_ascii_lowercase() {
-            return Some(ch.to_ascii_uppercase());
-        }
-    }
-
-    match key {
-        "1" => Some('!'),
-        "2" => Some('@'),
-        "3" => Some('#'),
-        "4" => Some('$'),
-        "5" => Some('%'),
-        "6" => Some('^'),
-        "7" => Some('&'),
-        "8" => Some('*'),
-        "9" => Some('('),
-        "0" => Some(')'),
-        "-" => Some('_'),
-        "=" => Some('+'),
-        "[" => Some('{'),
-        "]" => Some('}'),
-        "\\" => Some('|'),
-        ";" => Some(':'),
-        "'" => Some('"'),
-        "," => Some('<'),
-        "." => Some('>'),
-        "/" => Some('?'),
-        "`" => Some('~'),
-        _ => None,
-    }
-}
-
-fn is_shift_key(key: &str) -> bool {
-    matches!(key, "shift" | "shift_l" | "shift_r")
 }
 
 impl EntityInputHandler for LstGpuiApp {
@@ -404,6 +323,7 @@ impl EntityInputHandler for LstGpuiApp {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.x11_ctrl_k_pending = false;
         self.update_model(cx, true, |model| {
             model.clear_marked_text();
         });
@@ -423,9 +343,9 @@ impl EntityInputHandler for LstGpuiApp {
                 .as_ref()
                 .map(|range| utf16_range_to_char_range(tab.buffer(), range))
         };
-        let text = self.text_input_with_shift_fallback(text);
+        self.x11_ctrl_k_pending = false;
         self.update_model(cx, true, |model| {
-            model.replace_text_from_input(range, text);
+            model.replace_text_from_input(range, text.to_string());
         });
         self.record_operation("text_input", None, elapsed_ms(apply_started));
     }
@@ -448,6 +368,7 @@ impl EntityInputHandler for LstGpuiApp {
         let selected_range = new_selected_range_utf16
             .as_ref()
             .map(|range| utf16_range_to_char_range_in_text(new_text, range));
+        self.x11_ctrl_k_pending = false;
         self.update_model(cx, true, |model| {
             model.replace_and_mark_text(range, new_text.to_string(), selected_range);
         });
@@ -501,29 +422,6 @@ impl EntityInputHandler for LstGpuiApp {
 }
 
 impl LstGpuiApp {
-    fn text_input_with_shift_fallback(&mut self, text: &str) -> String {
-        if let Some(ch) = shifted_ascii_fallback(text) {
-            if self.physical_shift_down || self.consume_recent_shift_symbol_chord() {
-                return ch.to_string();
-            }
-        }
-        text.to_string()
-    }
-
-    fn consume_recent_shift_symbol_chord(&mut self) -> bool {
-        if !self.recent_shift_symbol_chord() {
-            return false;
-        }
-        self.recent_modifier_chord = None;
-        self.modifier_chord_accumulated = Modifiers::default();
-        true
-    }
-
-    fn recent_shift_symbol_chord(&self) -> bool {
-        self.effective_modifier_chord(Modifiers::default())
-            .shift_only()
-    }
-
     fn effective_modifier_chord(&self, event_modifiers: Modifiers) -> Modifiers {
         let mut modifiers = event_modifiers;
         if let Some(recent) = self.recent_modifier_chord() {
@@ -546,14 +444,12 @@ impl LstGpuiApp {
     }
 }
 
-trait ModifierExt {
-    fn shift_only(self) -> bool;
-}
-
-impl ModifierExt for Modifiers {
-    fn shift_only(self) -> bool {
-        self.shift && !self.control && !self.alt && !self.platform
-    }
+fn vim_owns_modifier_chord(key: &str, modifiers: Modifiers) -> bool {
+    modifiers.control
+        && !modifiers.shift
+        && !modifiers.alt
+        && !modifiers.platform
+        && matches!(key, "d" | "u" | "f" | "b")
 }
 
 fn modifiers_active(modifiers: Modifiers) -> bool {

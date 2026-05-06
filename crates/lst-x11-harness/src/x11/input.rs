@@ -16,12 +16,27 @@ use crate::Result;
 /// to the target window can route the click to the previous pointer location.
 pub(crate) const POINTER_SETTLE: Duration = Duration::from_millis(50);
 const BUTTON_HOLD: Duration = Duration::from_millis(5);
+const KEY_HOLD: Duration = Duration::from_millis(5);
 pub(crate) const KEY_PHASE_SETTLE: Duration = Duration::from_millis(5);
 
 pub(crate) const BUTTON_LEFT: u8 = 1;
 pub(crate) const BUTTON_MIDDLE: u8 = 2;
 pub(crate) const BUTTON_WHEEL_UP: u8 = 4;
 pub(crate) const BUTTON_WHEEL_DOWN: u8 = 5;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ModifierState {
+    pub(crate) ctrl: bool,
+    pub(crate) alt: bool,
+    pub(crate) shift: bool,
+    pub(crate) platform: bool,
+}
+
+impl ModifierState {
+    fn any(self) -> bool {
+        self.ctrl || self.alt || self.shift || self.platform
+    }
+}
 
 pub(crate) fn move_pointer_to_window_point(
     conn: &RustConnection,
@@ -125,9 +140,41 @@ pub(crate) fn chord(
     alt: bool,
     shift: bool,
 ) -> Result<()> {
-    let has_modifiers = ctrl || alt || shift;
+    chord_with_modifiers(
+        conn,
+        root,
+        kc,
+        code,
+        ModifierState {
+            ctrl,
+            alt,
+            shift,
+            platform: false,
+        },
+    )
+}
+
+pub(crate) fn chord_with_modifiers(
+    conn: &RustConnection,
+    root: Window,
+    kc: &Keycodes,
+    code: Keycode,
+    modifiers: ModifierState,
+) -> Result<()> {
+    let has_modifiers = modifiers.any();
+    if modifiers.platform {
+        conn.xtest_grab_control(true)?.check()?;
+    }
     if has_modifiers {
-        press_modifiers(conn, root, kc, ctrl, alt, shift)?;
+        press_modifiers_with_platform(
+            conn,
+            root,
+            kc,
+            modifiers.ctrl,
+            modifiers.alt,
+            modifiers.shift,
+            modifiers.platform,
+        )?;
         conn.flush()?;
         thread::sleep(KEY_PHASE_SETTLE);
     }
@@ -135,9 +182,20 @@ pub(crate) fn chord(
     if has_modifiers {
         conn.flush()?;
         thread::sleep(KEY_PHASE_SETTLE);
-        release_modifiers(conn, root, kc, ctrl, alt, shift)?;
+        release_modifiers_with_platform(
+            conn,
+            root,
+            kc,
+            modifiers.ctrl,
+            modifiers.alt,
+            modifiers.shift,
+            modifiers.platform,
+        )?;
     }
     conn.flush()?;
+    if modifiers.platform {
+        conn.xtest_grab_control(false)?.check()?;
+    }
     Ok(())
 }
 
@@ -152,11 +210,26 @@ pub(crate) fn press_modifiers(
     alt: bool,
     shift: bool,
 ) -> Result<()> {
+    press_modifiers_with_platform(conn, root, kc, ctrl, alt, shift, false)
+}
+
+pub(crate) fn press_modifiers_with_platform(
+    conn: &RustConnection,
+    root: Window,
+    kc: &Keycodes,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    platform: bool,
+) -> Result<()> {
     if ctrl {
         key_press(conn, root, kc.control_l)?;
     }
     if alt {
         key_press(conn, root, kc.alt_l)?;
+    }
+    if platform {
+        key_press(conn, root, kc.super_l)?;
     }
     if shift {
         key_press(conn, root, kc.shift_l)?;
@@ -174,8 +247,23 @@ pub(crate) fn release_modifiers(
     alt: bool,
     shift: bool,
 ) -> Result<()> {
+    release_modifiers_with_platform(conn, root, kc, ctrl, alt, shift, false)
+}
+
+pub(crate) fn release_modifiers_with_platform(
+    conn: &RustConnection,
+    root: Window,
+    kc: &Keycodes,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    platform: bool,
+) -> Result<()> {
     if shift {
         key_release(conn, root, kc.shift_l)?;
+    }
+    if platform {
+        key_release(conn, root, kc.super_l)?;
     }
     if alt {
         key_release(conn, root, kc.alt_l)?;
@@ -191,6 +279,8 @@ pub(crate) fn release_modifiers(
 /// modifier state explicitly.
 pub(crate) fn tap_key(conn: &RustConnection, root: Window, code: Keycode) -> Result<()> {
     key_press(conn, root, code)?;
+    conn.flush()?;
+    thread::sleep(KEY_HOLD);
     key_release(conn, root, code)?;
     Ok(())
 }

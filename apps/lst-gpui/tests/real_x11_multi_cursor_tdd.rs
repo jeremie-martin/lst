@@ -542,6 +542,7 @@ fn shift_tab_column_mode_outdents_only_lines_with_removable_indent() -> TestResu
                 ctrl: false,
                 alt: true,
                 shift: true,
+                platform: false,
             },
         )?;
         editor.expect_cursor_heads(&[(0, 6), (1, 4), (2, 6)])?;

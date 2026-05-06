@@ -15,6 +15,10 @@ use crate::clipboard;
 use crate::x11::{Atoms, Keycodes};
 use crate::Result;
 
+const HARNESS_LAYOUT_ENV: &str = "LST_X11_HARNESS_LAYOUT";
+const HARNESS_VARIANT_ENV: &str = "LST_X11_HARNESS_VARIANT";
+const HARNESS_OPTIONS_ENV: &str = "LST_X11_HARNESS_OPTIONS";
+
 #[derive(Clone, Debug)]
 pub(crate) struct SessionEnv {
     pub(crate) display: String,
@@ -39,15 +43,17 @@ pub struct Display {
 
 impl Display {
     /// Resolve the X session, connect, query DAMAGE/XTEST/XKB extensions,
-    /// and verify `xclip` is on `PATH`. Pins the keyboard layout to US for
-    /// the harness's lifetime so character → keycode lookups are deterministic
+    /// and verify `xclip` is on `PATH`. Pins the keyboard layout for the
+    /// harness's lifetime so character → keycode lookups are deterministic
     /// across developer machines, and restores the prior layout on drop.
+    /// Defaults to US; layout regression tests can override this with
+    /// `LST_X11_HARNESS_LAYOUT`.
     pub fn from_env() -> Result<Self> {
         let lock = SessionLock::acquire()?;
         clipboard::require_xclip()?;
         let session_env = resolve_session_env()?;
         apply_session_env(&session_env);
-        let layout = LayoutGuard::pin_us(&session_env)?;
+        let layout = LayoutGuard::pin_target(&session_env)?;
 
         let (conn, screen_num) = x11rb::connect(Some(session_env.display.as_str()))?;
         conn.damage_query_version(1, 1)?.reply()?;
@@ -184,14 +190,10 @@ struct LayoutGuard {
 }
 
 impl LayoutGuard {
-    fn pin_us(env: &SessionEnv) -> Result<Self> {
+    fn pin_target(env: &SessionEnv) -> Result<Self> {
         require_setxkbmap()?;
         let original = LayoutSnapshot::query(env)?;
-        let target = LayoutSnapshot {
-            layout: "us".to_string(),
-            variant: None,
-            options: None,
-        };
+        let target = requested_layout_snapshot()?;
         let needs_restore = original != target;
         if needs_restore {
             target.apply(env)?;
@@ -202,6 +204,26 @@ impl LayoutGuard {
             needs_restore,
         })
     }
+}
+
+fn requested_layout_snapshot() -> Result<LayoutSnapshot> {
+    let layout = env::var(HARNESS_LAYOUT_ENV).unwrap_or_else(|_| "us".to_string());
+    let layout = layout.trim();
+    if layout.is_empty() {
+        return Err(format!("{HARNESS_LAYOUT_ENV} must not be empty").into());
+    }
+    Ok(LayoutSnapshot {
+        layout: layout.to_string(),
+        variant: non_empty_env(HARNESS_VARIANT_ENV),
+        options: non_empty_env(HARNESS_OPTIONS_ENV),
+    })
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 impl Drop for LayoutGuard {

@@ -11,6 +11,7 @@ use crate::Result;
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
 const KEYSYM_SHIFT_L: u32 = 0xffe1;
 const KEYSYM_ALT_L: u32 = 0xffe9;
+const KEYSYM_SUPER_L: u32 = 0xffeb;
 const KEYSYM_TAB: u32 = 0xff09;
 const KEYSYM_SPACE: u32 = 0x20;
 const KEYSYM_RETURN: u32 = 0xff0d;
@@ -31,6 +32,7 @@ pub(crate) struct Keycodes {
     pub(crate) control_l: Keycode,
     pub(crate) shift_l: Keycode,
     pub(crate) alt_l: Keycode,
+    pub(crate) super_l: Keycode,
     pub(crate) tab: Keycode,
     pub(crate) space: Keycode,
     pub(crate) enter: Keycode,
@@ -74,6 +76,7 @@ impl Keycodes {
             control_l: require(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
             shift_l: require(&reply, setup.min_keycode, KEYSYM_SHIFT_L, active_group)?,
             alt_l: require(&reply, setup.min_keycode, KEYSYM_ALT_L, active_group)?,
+            super_l: require(&reply, setup.min_keycode, KEYSYM_SUPER_L, active_group)?,
             tab: require(&reply, setup.min_keycode, KEYSYM_TAB, active_group)?,
             space: require(&reply, setup.min_keycode, KEYSYM_SPACE, active_group)?,
             enter: require(&reply, setup.min_keycode, KEYSYM_RETURN, active_group)?,

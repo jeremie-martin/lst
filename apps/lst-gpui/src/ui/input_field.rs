@@ -3,9 +3,9 @@ use std::ops::Range;
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, rgb, size, App, Bounds, ClipboardItem,
     Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding, KeyDownEvent, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
+    EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
+    SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
 };
 use lst_editor::selection::{
     drag_selection_range, next_subword_boundary_in_text, next_word_boundary_in_text,
@@ -126,7 +126,6 @@ pub struct InputField {
     last_bounds: Option<Bounds<Pixels>>,
     selection_drag: Option<InputDragSelectionMode>,
     vertical_navigation: bool,
-    pending_shifted_input: Option<char>,
 }
 
 #[derive(Clone, Debug)]
@@ -383,30 +382,12 @@ impl InputField {
             last_bounds: None,
             selection_drag: None,
             vertical_navigation: false,
-            pending_shifted_input: None,
         }
     }
 
     pub fn with_vertical_navigation(mut self) -> Self {
         self.vertical_navigation = true;
         self
-    }
-
-    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, _: &mut Context<Self>) {
-        if event.keystroke.modifiers.shift {
-            self.pending_shifted_input = shifted_ascii_fallback(event.keystroke.key.as_str());
-        }
-    }
-
-    fn text_with_shift_fallback(&mut self, text: &str) -> String {
-        let Some(shifted) = self.pending_shifted_input.take() else {
-            return text.to_string();
-        };
-        if shifted_ascii_fallback(text).is_some_and(|candidate| candidate == shifted) {
-            shifted.to_string()
-        } else {
-            text.to_string()
-        }
     }
 
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -730,8 +711,7 @@ impl EntityInputHandler for InputField {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let new_text = self.text_with_shift_fallback(new_text);
-        self.text.replace_text(range_utf16.as_ref(), &new_text);
+        self.text.replace_text(range_utf16.as_ref(), new_text);
         self.last_layout = None;
         self.emit_changed(cx);
         cx.notify();
@@ -1048,42 +1028,7 @@ impl Render for InputField {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .on_key_down(cx.listener(Self::on_key_down))
             .child(TextElement { input: entity })
-    }
-}
-
-fn shifted_ascii_fallback(key: &str) -> Option<char> {
-    let mut chars = key.chars();
-    if let Some(ch) = chars.next() {
-        if chars.next().is_none() && ch.is_ascii_lowercase() {
-            return Some(ch.to_ascii_uppercase());
-        }
-    }
-
-    match key {
-        "1" => Some('!'),
-        "2" => Some('@'),
-        "3" => Some('#'),
-        "4" => Some('$'),
-        "5" => Some('%'),
-        "6" => Some('^'),
-        "7" => Some('&'),
-        "8" => Some('*'),
-        "9" => Some('('),
-        "0" => Some(')'),
-        "-" => Some('_'),
-        "=" => Some('+'),
-        "[" => Some('{'),
-        "]" => Some('}'),
-        "\\" => Some('|'),
-        ";" => Some(':'),
-        "'" => Some('"'),
-        "," => Some('<'),
-        "." => Some('>'),
-        "/" => Some('?'),
-        "`" => Some('~'),
-        _ => None,
     }
 }
 

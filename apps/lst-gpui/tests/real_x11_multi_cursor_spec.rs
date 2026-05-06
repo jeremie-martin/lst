@@ -306,6 +306,7 @@ fn shift_alt_drag_creates_column_cursor_set() -> TestResult {
                 ctrl: false,
                 alt: true,
                 shift: true,
+                platform: false,
             },
         )?;
         editor.expect_cursor_heads(&[(0, 2), (1, 2), (2, 2)])?;
@@ -327,6 +328,7 @@ fn column_selection_inserts_text_on_each_touched_line() -> TestResult {
                 ctrl: false,
                 alt: true,
                 shift: true,
+                platform: false,
             },
         )?;
         editor.keys("X")?;
@@ -349,6 +351,7 @@ fn column_selection_backspace_deletes_before_each_touched_line() -> TestResult {
                 ctrl: false,
                 alt: true,
                 shift: true,
+                platform: false,
             },
         )?;
         editor.keys("<bs>")?;

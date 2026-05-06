@@ -9,9 +9,9 @@ use crate::ui::{
 };
 use gpui::{
     canvas, div, prelude::*, px, rgb, AnyElement, App, Bounds, Context, CursorStyle,
-    ElementInputHandler, InteractiveElement, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window,
+    ElementInputHandler, InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Window,
 };
 
 use crate::actions::attach_workspace_actions;
@@ -909,9 +909,8 @@ impl LstGpuiApp {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        self.note_key_down_for_text_input(event);
-
         if event.keystroke.key == "escape" {
+            self.x11_ctrl_k_pending = false;
             if self.recent.is_open() {
                 self.close_recent_files_panel(cx);
                 cx.stop_propagation();
@@ -956,15 +955,7 @@ impl LstGpuiApp {
             return;
         }
 
-        if self.maybe_handle_shifted_printable_input(event, cx) {
-            return;
-        }
-
         let _ = self.maybe_handle_vim_key(event, window, cx);
-    }
-
-    fn on_key_up(&mut self, event: &KeyUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.note_key_up_for_text_input(event.keystroke.key.as_str());
     }
 
     fn on_modifiers_changed(
@@ -1099,7 +1090,6 @@ impl Render for LstGpuiApp {
                             .track_focus(&self.focus_handle)
                             .key_context("Editor")
                             .on_key_down(cx.listener(Self::on_key_down))
-                            .on_key_up(cx.listener(Self::on_key_up))
                             .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
                             .child(
                                 div()

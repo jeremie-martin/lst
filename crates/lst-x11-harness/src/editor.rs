@@ -447,7 +447,15 @@ impl<'a> Editor<'a> {
             let kc = &self.display.keycodes;
             input::move_pointer_to_window_point(conn, root, &self.window, from_x, from_y)?;
             thread::sleep(POINTER_SETTLE);
-            input::press_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
+            input::press_modifiers_with_platform(
+                conn,
+                root,
+                kc,
+                mods.ctrl,
+                mods.alt,
+                mods.shift,
+                mods.platform,
+            )?;
             if !mods.is_empty() {
                 conn.flush()?;
                 thread::sleep(POINTER_SETTLE);
@@ -460,7 +468,15 @@ impl<'a> Editor<'a> {
             conn.flush()?;
             thread::sleep(POINTER_SETTLE);
             input::button_release(conn, root, BUTTON_LEFT)?;
-            input::release_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
+            input::release_modifiers_with_platform(
+                conn,
+                root,
+                kc,
+                mods.ctrl,
+                mods.alt,
+                mods.shift,
+                mods.platform,
+            )?;
             conn.flush()?;
             let damage_id = self.damage.damage();
             let window_id = self.window.id;
@@ -513,13 +529,29 @@ impl<'a> Editor<'a> {
             let kc = &self.display.keycodes;
             input::move_pointer_to_window_point(conn, root, &self.window, x, y)?;
             thread::sleep(POINTER_SETTLE);
-            input::press_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
+            input::press_modifiers_with_platform(
+                conn,
+                root,
+                kc,
+                mods.ctrl,
+                mods.alt,
+                mods.shift,
+                mods.platform,
+            )?;
             if !mods.is_empty() {
                 conn.flush()?;
                 thread::sleep(POINTER_SETTLE);
             }
             input::multi_click_button(conn, root, button, click_count)?;
-            input::release_modifiers(conn, root, kc, mods.ctrl, mods.alt, mods.shift)?;
+            input::release_modifiers_with_platform(
+                conn,
+                root,
+                kc,
+                mods.ctrl,
+                mods.alt,
+                mods.shift,
+                mods.platform,
+            )?;
             conn.flush()?;
             let damage_id = self.damage.damage();
             let window_id = self.window.id;
@@ -620,12 +652,10 @@ impl<'a> Editor<'a> {
     /// Uppercase letters outside escapes auto-shift, so `A` and `<S-a>` are
     /// equivalent.
     ///
-    /// After each key, waits for a brief damage-quiet period before sending
-    /// the next one. That mirrors human typing: each keystroke drives a
-    /// paint, and the next stroke only arrives after the editor has
-    /// observed and rendered the previous one. Without this, GPUI's
-    /// frame loop can batch several synthesized keystrokes into a single
-    /// frame and only the cursor's first move is observed.
+    /// After each non-text key, waits for a brief damage-quiet period before
+    /// sending the next one. Plain text is allowed to settle without requiring
+    /// per-character damage because GPUI's X11 text path can commit printable
+    /// input after a following event.
     pub fn send_keys(&mut self, sequence: &str) -> Result<()> {
         let result: Result<()> = (|| {
             let tokens = parse_keys(sequence)?;
@@ -644,6 +674,20 @@ impl<'a> Editor<'a> {
                 // a fully-idle UI. Uses a generous timeout so a slow paint
                 // doesn't fail an otherwise good test.
                 if let Err(error) = self.wait_after_dispatched_key(wait_for_state_change) {
+                    if wait_for_state_change {
+                        if let Some(before) = before_state.as_ref() {
+                            if let Some(changed) = self.peek_latest_context_after(Some(before))? {
+                                observed_state = Some(changed);
+                                continue;
+                            }
+                            if let Ok(changed) =
+                                self.wait_state_change_after_without_consuming(before)
+                            {
+                                observed_state = Some(changed);
+                                continue;
+                            }
+                        }
+                    }
                     if !wait_for_state_change || !retryable_after_no_damage(&token) {
                         return Err(error);
                     }
@@ -710,7 +754,8 @@ impl<'a> Editor<'a> {
     /// per call, so chord-prefix bindings (e.g. `Ctrl+K Ctrl+D`) dispatch
     /// correctly. `sequence` is parsed via the same vim-style notation as
     /// `send_keys`, but each piece must be a single key without its own
-    /// `Ctrl-`/`Alt-` modifier (Shift is allowed for inner auto-shift).
+    /// `Ctrl-`/`Alt-`/`platform` modifier (Shift is allowed for inner
+    /// auto-shift).
     /// Settles on a single damage-then-quiet at the end of the held span.
     pub fn with_chord_held(&mut self, mods: ChordMods, sequence: &str) -> Result<()> {
         let result: Result<()> = (|| {
@@ -743,6 +788,52 @@ impl<'a> Editor<'a> {
         self.attach_stderr_context(result, "with_chord_held")
     }
 
+    /// Press and release `mods`, then tap `key` immediately afterward. This
+    /// drives real X11 events for the class of synthetic delivery races where
+    /// the application observes a key press just after the modifier release and
+    /// must decide whether a recent modifier chord is still relevant.
+    pub fn key_after_released_modifiers(&mut self, mods: ChordMods, key: Key) -> Result<()> {
+        let result: Result<()> = (|| {
+            if mods.is_empty() {
+                return Err(io::Error::other(
+                    "key_after_released_modifiers requires at least one modifier",
+                )
+                .into());
+            }
+            let conn = &self.display.conn;
+            let root = self.display.root;
+            let kc = &self.display.keycodes;
+            input::press_modifiers_with_platform(
+                conn,
+                root,
+                kc,
+                mods.ctrl,
+                mods.alt,
+                mods.shift,
+                mods.platform,
+            )?;
+            conn.flush()?;
+            thread::sleep(input::KEY_PHASE_SETTLE);
+            input::release_modifiers_with_platform(
+                conn,
+                root,
+                kc,
+                mods.ctrl,
+                mods.alt,
+                mods.shift,
+                mods.platform,
+            )?;
+            conn.flush()?;
+            thread::sleep(input::KEY_PHASE_SETTLE);
+
+            let (code, base_shift) = resolve_key(kc, key)?;
+            input::chord(conn, root, kc, code, false, false, base_shift)?;
+            self.wait_after_dispatched_key(false)?;
+            Ok(())
+        })();
+        self.attach_stderr_context(result, "key_after_released_modifiers")
+    }
+
     /// Synthesize the X events for one parsed token without settling. Shared
     /// by `send_keys`, `send_keys_expect_quiet`, and `with_chord_held`.
     fn dispatch_token(&self, token: &KeyToken) -> Result<()> {
@@ -750,21 +841,32 @@ impl<'a> Editor<'a> {
             KeyToken::Single(s) => {
                 let chord = dispatchable_single_chord(s);
                 let (code, base_shift) = resolve_key(&self.display.keycodes, chord.key)?;
-                input::chord(
+                input::chord_with_modifiers(
                     &self.display.conn,
                     self.display.root,
                     &self.display.keycodes,
                     code,
-                    chord.ctrl,
-                    chord.alt,
-                    base_shift || chord.shift,
+                    input::ModifierState {
+                        ctrl: chord.ctrl,
+                        alt: chord.alt,
+                        shift: base_shift || chord.shift,
+                        platform: chord.platform,
+                    },
                 )
             }
             KeyToken::Held(h) => {
                 let conn = &self.display.conn;
                 let root = self.display.root;
                 let kc = &self.display.keycodes;
-                input::press_modifiers(conn, root, kc, h.mods.ctrl, h.mods.alt, h.mods.shift)?;
+                input::press_modifiers_with_platform(
+                    conn,
+                    root,
+                    kc,
+                    h.mods.ctrl,
+                    h.mods.alt,
+                    h.mods.shift,
+                    h.mods.platform,
+                )?;
                 conn.flush()?;
                 thread::sleep(input::KEY_PHASE_SETTLE);
                 for inner in &h.inner {
@@ -784,7 +886,15 @@ impl<'a> Editor<'a> {
                         thread::sleep(input::KEY_PHASE_SETTLE);
                     }
                 }
-                input::release_modifiers(conn, root, kc, h.mods.ctrl, h.mods.alt, h.mods.shift)?;
+                input::release_modifiers_with_platform(
+                    conn,
+                    root,
+                    kc,
+                    h.mods.ctrl,
+                    h.mods.alt,
+                    h.mods.shift,
+                    h.mods.platform,
+                )?;
                 conn.flush()?;
                 Ok(())
             }
@@ -817,6 +927,22 @@ impl<'a> Editor<'a> {
             damage_wait::expect_no_damage(conn, damage_id, window_id, child, deadline)
         })();
         self.attach_stderr_context(result, "send_keys_expect_quiet")
+    }
+
+    /// Drive a sequence and wait for the window to settle after each token
+    /// without requiring either damage or a state-trace change. Use this for
+    /// regression checks whose assertion is an external observable, such as a
+    /// file remaining unchanged after a shortcut that should be ignored.
+    pub fn send_keys_settle(&mut self, sequence: &str) -> Result<()> {
+        let result: Result<()> = (|| {
+            let tokens = parse_keys(sequence)?;
+            for token in &tokens {
+                self.dispatch_token(token)?;
+                self.wait_after_dispatched_key(false)?;
+            }
+            Ok(())
+        })();
+        self.attach_stderr_context(result, "send_keys_settle")
     }
 
     pub fn wait_quiet(&mut self, quiet: Duration, timeout: Duration) -> Result<u64> {
@@ -1109,6 +1235,7 @@ fn dispatchable_single_chord(chord: &KeyChordSingle) -> KeyChordSingle {
             ctrl: true,
             alt: false,
             shift: true,
+            platform: false,
             key: Key::Char('d'),
         };
     }
@@ -1185,7 +1312,10 @@ fn single_selection_range(state: &StateTraceRecord) -> Option<(usize, usize)> {
 
 fn key_token_expects_state_change(token: &KeyToken, state: &StateTraceRecord) -> bool {
     match token {
-        KeyToken::Single(chord) if plain_insert_text_key_changes_state(chord, state) => true,
+        // GPUI's X11 text path can commit printable input after a following
+        // event, so the harness must not block after each individual
+        // character waiting for a repaint that may intentionally be batched.
+        KeyToken::Single(chord) if plain_insert_text_key_changes_state(chord, state) => false,
         KeyToken::Single(chord) if vim_key_context_changes_state(chord, state) => true,
         KeyToken::Single(chord) if editor_chord_changes_state(chord, state) => true,
         KeyToken::Single(chord) if page_key_changes_state(chord, state) => true,
@@ -1201,6 +1331,7 @@ fn key_token_expects_state_change(token: &KeyToken, state: &StateTraceRecord) ->
             alt: false,
             shift: false,
             key: Key::Home,
+            ..
         }) => !matches!(
             state.cursors.as_slice(),
             [cursor] if cursor.is_collapsed() && cursor.head_char == 0
@@ -1210,6 +1341,7 @@ fn key_token_expects_state_change(token: &KeyToken, state: &StateTraceRecord) ->
             alt: false,
             shift: false,
             key: Key::End,
+            ..
         }) => state
             .viewport
             .first_row_for_line(state.line_count.saturating_sub(1))
@@ -1231,6 +1363,7 @@ fn retryable_after_no_damage(token: &KeyToken) -> bool {
             alt: false,
             shift: false,
             key: Key::PageUp | Key::PageDown,
+            ..
         })
     )
 }
@@ -1243,12 +1376,13 @@ fn retryable_after_state_timeout(token: &KeyToken) -> bool {
             alt: false,
             shift: false,
             key: Key::Char('g' | 'd'),
+            ..
         })
     )
 }
 
 fn page_key_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> bool {
-    if chord.ctrl || chord.alt || chord.shift || state.focused_input != "editor" {
+    if chord.ctrl || chord.alt || chord.shift || chord.platform || state.focused_input != "editor" {
         return false;
     }
     match chord.key {
@@ -1268,7 +1402,7 @@ fn page_key_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> b
 }
 
 fn plain_navigation_key_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> bool {
-    if chord.ctrl || chord.alt || chord.shift || state.focused_input != "editor" {
+    if chord.ctrl || chord.alt || chord.shift || chord.platform || state.focused_input != "editor" {
         return false;
     }
     match chord.key {
@@ -1307,35 +1441,48 @@ fn editor_chord_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) 
             alt: false,
             shift: true,
             key: Key::Char('l'),
+            platform: false,
         }
         | KeyChordSingle {
             ctrl: true,
             alt: false,
             shift: false,
             key: Key::Char('d' | 'u' | 'g'),
+            platform: false,
         }
         | KeyChordSingle {
             ctrl: true,
             alt: true,
             shift: true,
             key: Key::Up | Key::Down,
+            platform: false,
         }
         | KeyChordSingle {
             ctrl: false,
             alt: true,
             shift: true,
             key: Key::Char('i'),
+            platform: false,
         }
         | KeyChordSingle {
             ctrl: true,
             alt: false,
             shift: true,
             key: Key::Left | Key::Right | Key::Home | Key::End,
+            platform: false,
         }
         | KeyChordSingle {
             ctrl: false,
             alt: false,
             shift: true,
+            platform: true,
+            key: Key::Left | Key::Right | Key::Home | Key::End,
+        }
+        | KeyChordSingle {
+            ctrl: false,
+            alt: false,
+            shift: true,
+            platform: false,
             key: Key::Left | Key::Right | Key::Home | Key::End | Key::Tab,
         } => true,
         KeyChordSingle {
@@ -1343,12 +1490,14 @@ fn editor_chord_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) 
             alt: true,
             shift: true,
             key: Key::Up | Key::Down,
+            platform: false,
         }
         | KeyChordSingle {
             ctrl: true,
             alt: true,
             shift: false,
             key: Key::Up | Key::Down,
+            platform: false,
         } => adjacent_cursor_chord_changes_state(chord, state),
         _ => false,
     }
@@ -1388,7 +1537,7 @@ fn adjacent_cursor_chord_changes_state(chord: &KeyChordSingle, state: &StateTrac
 }
 
 fn vim_key_context_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> bool {
-    if chord.ctrl || chord.alt || state.focused_input != "editor" {
+    if chord.ctrl || chord.alt || chord.platform || state.focused_input != "editor" {
         return false;
     }
     match chord.key {
@@ -1400,7 +1549,7 @@ fn vim_key_context_changes_state(chord: &KeyChordSingle, state: &StateTraceRecor
 }
 
 fn plain_insert_text_key_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> bool {
-    if chord.ctrl || chord.alt {
+    if chord.ctrl || chord.alt || chord.platform {
         return false;
     }
     if state.focused_input == "editor" && state.vim_mode != "INSERT" {
@@ -1496,12 +1645,13 @@ fn resolve_key(kc: &Keycodes, key: Key) -> Result<(Keycode, bool)> {
 /// Modifier set held continuously across a chord-hold span. Used both by
 /// the parser (`<C-{k d}>`) and the programmatic [`Editor::with_chord_held`]
 /// API. Pub-fields because there is no invariant beyond "at least one of
-/// ctrl/alt/shift is set" (enforced at use time).
+/// ctrl/alt/shift/platform is set" (enforced at use time).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ChordMods {
     pub ctrl: bool,
     pub alt: bool,
     pub shift: bool,
+    pub platform: bool,
 }
 
 impl ChordMods {
@@ -1509,20 +1659,29 @@ impl ChordMods {
         ctrl: true,
         alt: false,
         shift: false,
+        platform: false,
     };
     pub const ALT: Self = Self {
         ctrl: false,
         alt: true,
         shift: false,
+        platform: false,
     };
     pub const SHIFT: Self = Self {
         ctrl: false,
         alt: false,
         shift: true,
+        platform: false,
+    };
+    pub const PLATFORM: Self = Self {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        platform: true,
     };
 
     pub fn is_empty(self) -> bool {
-        !self.ctrl && !self.alt && !self.shift
+        !self.ctrl && !self.alt && !self.shift && !self.platform
     }
 
     pub fn with_ctrl(mut self) -> Self {
@@ -1535,6 +1694,10 @@ impl ChordMods {
     }
     pub fn with_shift(mut self) -> Self {
         self.shift = true;
+        self
+    }
+    pub fn with_platform(mut self) -> Self {
+        self.platform = true;
         self
     }
 }
@@ -1550,6 +1713,7 @@ struct KeyChordSingle {
     ctrl: bool,
     alt: bool,
     shift: bool,
+    platform: bool,
     key: Key,
 }
 
@@ -1601,6 +1765,7 @@ fn parse_keys(input: &str) -> Result<Vec<KeyToken>> {
                 ctrl: false,
                 alt: false,
                 shift: false,
+                platform: false,
                 key: Key::Char(ch),
             }));
         }
@@ -1624,6 +1789,7 @@ fn parse_single_escape(spec: &str) -> Result<KeyChordSingle> {
     let mut ctrl = false;
     let mut alt = false;
     let mut shift = false;
+    let mut platform = false;
     let mut tail = lowered.as_str();
     loop {
         if let Some(rest) = strip_modifier(tail, &["c-", "ctrl-"]) {
@@ -1634,6 +1800,9 @@ fn parse_single_escape(spec: &str) -> Result<KeyChordSingle> {
             tail = rest;
         } else if let Some(rest) = strip_modifier(tail, &["s-", "shift-"]) {
             shift = true;
+            tail = rest;
+        } else if let Some(rest) = strip_modifier(tail, &["cmd-", "super-", "platform-"]) {
+            platform = true;
             tail = rest;
         } else {
             break;
@@ -1652,6 +1821,7 @@ fn parse_single_escape(spec: &str) -> Result<KeyChordSingle> {
         ctrl,
         alt,
         shift,
+        platform,
         key,
     })
 }
@@ -1678,6 +1848,9 @@ fn parse_held_escape(spec: &str, brace_idx: usize) -> Result<KeyToken> {
             tail = rest;
         } else if let Some(rest) = strip_modifier(tail, &["s-", "shift-"]) {
             mods.shift = true;
+            tail = rest;
+        } else if let Some(rest) = strip_modifier(tail, &["cmd-", "super-", "platform-"]) {
+            mods.platform = true;
             tail = rest;
         } else {
             break;
@@ -1982,10 +2155,21 @@ mod tests {
     use super::*;
 
     fn single(ctrl: bool, alt: bool, shift: bool, key: Key) -> KeyToken {
+        single_with_platform(ctrl, alt, shift, false, key)
+    }
+
+    fn single_with_platform(
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        platform: bool,
+        key: Key,
+    ) -> KeyToken {
         KeyToken::Single(KeyChordSingle {
             ctrl,
             alt,
             shift,
+            platform,
             key,
         })
     }
@@ -1999,6 +2183,7 @@ mod tests {
                     assert_eq!(a.ctrl, b.ctrl, "{input:?}");
                     assert_eq!(a.alt, b.alt, "{input:?}");
                     assert_eq!(a.shift, b.shift, "{input:?}");
+                    assert_eq!(a.platform, b.platform, "{input:?}");
                     assert!(
                         matches!((a.key, b.key), (Key::Char(x), Key::Char(y)) if x == y)
                             || std::mem::discriminant(&a.key) == std::mem::discriminant(&b.key),
@@ -2075,6 +2260,18 @@ mod tests {
                 single(false, false, false, Key::Delete),
                 single(false, false, false, Key::Home),
                 single(false, false, false, Key::End),
+            ],
+        );
+    }
+
+    #[test]
+    fn platform_chord_escapes() {
+        assert_keys(
+            "<cmd-S-left><super-right><platform-home>",
+            &[
+                single_with_platform(false, false, true, true, Key::Left),
+                single_with_platform(false, false, false, true, Key::Right),
+                single_with_platform(false, false, false, true, Key::Home),
             ],
         );
     }
