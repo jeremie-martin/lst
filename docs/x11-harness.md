@@ -56,12 +56,12 @@ cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
 ```
 
 The `x11` profile is the blocking implemented-behavior lane. `x11-stress` runs
-that same set repeatedly for flake detection. `x11-tdd` runs accepted
-ahead-of-implementation specs as a separate report lane; failures there are
-expected until the implementation catches up. Broad multi-cursor specs that are
-intentionally ahead of implementation live in
-`apps/lst-gpui/tests/real_x11_multi_cursor_spec.rs`, which is included only in
-the `x11-tdd` profile.
+that same set repeatedly for flake detection. `x11-tdd` currently inherits the
+blocking lane so the command remains green when there are no accepted red specs.
+If a future behavior is specified ahead of implementation, narrow `x11-tdd` to
+that accepted red set on the branch carrying the spec, then promote it to `x11`
+as soon as it passes. Broad multi-cursor edge-case specs live in
+`apps/lst-gpui/tests/real_x11_multi_cursor_spec.rs` and run in `x11`.
 
 The profiles run serially. Every test grabs keyboard focus and moves the global
 pointer through XTEST. The harness also takes a cross-process display lock, so
@@ -247,12 +247,11 @@ The real-display suite currently has broad coverage across:
 - Vim mode transitions and compound commands
 - find and goto panel state
 - mouse click, double-click, triple-click, quad-click, drag selection, middle-click
-  paste, and TDD specs for shift-click / Alt-click gaps
+  paste, shift-click, and Alt-click cursor toggles
 - cursor movement and subword motion
 - multi-cursor creation, text input, deletion, paste distribution, copy/cut
   collection, Escape collapse, smart Enter, per-cursor motion/selection, line
-  operation coalescing, find/occurrence gestures, column drag, and TDD specs for
-  remaining gaps
+  operation coalescing, find/occurrence gestures, and column drag
 - chord-hold event trains for held-modifier gestures
 
 This is the project's load-bearing end-to-end test path. When adding a new
@@ -263,10 +262,11 @@ through the framework-neutral model tests.
 
 ## Known Gaps / Things To Watch
 
-1. **The raw full ignored suite can fail by design.** Some tests are executable
-   specs for behavior not implemented yet. Keep their comments clear enough that
-   failures are interpretable. The nextest `x11` profile excludes those current
-   TDD specs for a blocking lane; `x11-tdd` runs them as a separate report lane.
+1. **Only the explicit TDD profile may contain accepted red specs.** The
+   blocking `x11` and `x11-stress` profiles should contain every accepted green
+   real-display contract. If a future behavior is specified before it is
+   implemented, put it in `x11-tdd` with comments clear enough that failures are
+   interpretable, then promote it to `x11` as soon as it passes.
 
 2. **Trace discipline matters.** The trace is powerful enough to become an
    implementation inspection tool by accident. Keep behavior tests focused on

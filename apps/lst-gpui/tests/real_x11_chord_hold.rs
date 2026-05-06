@@ -35,12 +35,8 @@ fn ctrl_held_across_two_keystrokes_dispatches_each_chord_separately() -> TestRes
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
 fn ctrl_k_ctrl_d_skip_via_held_modifier_grows_selection_set() -> TestResult {
-    // TDD spec for the production-side `Ctrl+K Ctrl+D` skip-and-add
-    // gesture (checklist gap "Ctrl-K Ctrl-D skips the current match and
-    // adds the next"). The test sends the chord-hold form so when the
-    // editor's keymap learns to dispatch a held-Ctrl two-key prefix, it
-    // sees the right XTEST event train. Currently expected to fail
-    // because the prefix dispatcher does not exist yet.
+    // Sends the chord-hold form so the editor sees the same held-Ctrl
+    // two-key prefix event train that XTEST produces.
     support::run_x11_test("chord-hold-ctrl-k-ctrl-d", |session| {
         let (mut editor, path) = session.open("scratch")?;
 

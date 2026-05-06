@@ -6,7 +6,7 @@ items must not depend on production implementation details.
 
 Status legend: `[ ]` missing · `[~]` partial · `[x]` done
 
-Status last refreshed: 2026-05-05 (spec-first X11 pass).
+Status last refreshed: 2026-05-06 (multi-cursor X11 promotion pass).
 
 Real-display tests under `apps/lst-gpui/tests/real_x11_*.rs` are the executable
 reference for this checklist. When an item links tests, those tests should assert
@@ -42,8 +42,8 @@ positions, visible modes/panels/status text, or viewport-observable geometry.
 - [x] **Double-click word** - double-click selects the word under the pointer. X11: `real_x11_mouse.rs`.
 - [x] **Triple-click line** - triple-click selects the clicked line. X11: `real_x11_mouse.rs`.
 - [x] **Quad-click paragraph** - quad-click selects the paragraph under the pointer. X11: `real_x11_mouse.rs`.
-- [ ] **Shift-click extends** - shift-click extends from the existing caret/anchor to the clicked position. X11 TDD: `real_x11_mouse.rs`.
-- [ ] **Column / block selection** - a rectangular selection gesture creates one selection or cursor per touched line.
+- [x] **Shift-click extends** - shift-click extends from the existing caret/anchor to the clicked position. X11: `real_x11_mouse.rs`.
+- [x] **Column / block selection** - a rectangular selection gesture creates one selection or cursor per touched line. X11: `real_x11_multi_cursor_spec.rs`.
 - [x] **Select all** - `Ctrl-A` selects the full buffer, and typing replaces it. X11: `real_x11_modifiers.rs`.
 - [ ] **Expand selection to enclosing scope** - smart selection expands to syntactic or textual enclosing scopes.
 - [~] **Multi-cursor / multi-selection** - see the dedicated section below.
@@ -60,39 +60,41 @@ Alt-click for mouse cursors, `Shift-Alt-Up/Down` for cursor above/below,
 `Ctrl-D`, `Ctrl-K Ctrl-D`, `Ctrl-U`, `Shift-Alt-I`, `Ctrl-Shift-L`, `Ctrl-F2`,
 and `Alt-Enter` in the find control.
 
-X11 coverage is split deliberately: implemented behavior lives in
+X11 coverage is split deliberately: common multi-cursor workflows live in
 `real_x11_multi_cursor.rs`, mouse-driven cursor behavior lives in
-`real_x11_mouse.rs`, and broad ahead-of-implementation specifications live in
-`real_x11_multi_cursor_spec.rs` under the `x11-tdd` nextest profile.
+`real_x11_mouse.rs`, and edge-case multi-cursor specifications live in
+`real_x11_multi_cursor_spec.rs`. Accepted green specs run in the blocking `x11`
+profile; `x11-tdd` currently inherits that blocking lane and can be narrowed on
+a branch that carries future accepted red specs.
 
 ### Cursor Set Behavior
 
 - [x] **Coherent cursor set** - after each user action, cursors remain ordered, non-overlapping, and never empty from the user's perspective.
 - [x] **Atomic multi-cursor edit** - one multi-cursor text action applies to all active cursors together, with no intermediate partial result visible.
 - [x] **Stable primary cursor** - the primary cursor remains the reference for user-visible operations that need one primary target.
-- [ ] **Per-cursor goal column** - each cursor remembers its own intended column across vertical motion. X11 TDD: `real_x11_motion.rs`.
+- [x] **Per-cursor goal column** - each cursor remembers its own intended column across vertical motion. X11: `real_x11_motion.rs`.
 - [~] **Per-cursor anchor/head direction** - non-empty selections expose separate anchors and heads, but direction survival after edits is not complete.
 - [x] **Single undo step per multi-cursor op** - undo restores the text and visible cursor set from before the multi-cursor action.
 
 ### Cursor Creation Gestures
 
-- [ ] **Alt-click toggles cursor** - Alt-click adds a cursor at the clicked text position, and Alt-clicking an existing cursor removes it without emptying the set. X11 TDD: `real_x11_mouse.rs`.
-- [ ] **Shift-Alt-Up / Shift-Alt-Down** - Linux default VS Code gesture adds adjacent-line cursors at the active visual column, clamps on short lines, and stops at document boundaries without duplicates. X11 TDD: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
-- [x] **Ctrl-D adds next occurrence** - selects the current word/selection if needed, then adds the next occurrence on repeated presses. X11: `real_x11_multi_cursor.rs`; explicit-selection X11 TDD: `real_x11_multi_cursor_spec.rs`.
-- [ ] **Ctrl-K Ctrl-D skips current match** - skips the current occurrence and adds the next one. X11 TDD: `real_x11_multi_cursor.rs`, `real_x11_chord_hold.rs`.
-- [x] **Ctrl-Shift-L selects all occurrences** - creates one selection per occurrence of the current word/selection. X11: `real_x11_multi_cursor.rs`; explicit-selection X11 TDD: `real_x11_multi_cursor_spec.rs`.
-- [ ] **Ctrl-F2 selects all occurrences of current word** - creates one selection per occurrence of the word under the cursor without requiring an existing selection. X11 TDD: `real_x11_multi_cursor.rs`.
-- [ ] **Shift-Alt-I adds line-end cursors** - adds a cursor at the end of every selected line. X11 TDD: `real_x11_multi_cursor.rs`.
-- [ ] **Ctrl-U pops last-added cursor** - removes the most recently added cursor from the current multi-cursor set. X11 TDD: `real_x11_multi_cursor.rs`.
+- [x] **Alt-click toggles cursor** - Alt-click adds a cursor at the clicked text position, and Alt-clicking an existing cursor removes it without emptying the set. X11: `real_x11_mouse.rs`.
+- [x] **Shift-Alt-Up / Shift-Alt-Down** - Linux default VS Code gesture adds adjacent-line cursors at the active visual column, clamps on short lines, and stops at document boundaries without duplicates. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
+- [x] **Ctrl-D adds next occurrence** - selects the current word/selection if needed, then adds the next occurrence on repeated presses. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
+- [x] **Ctrl-K Ctrl-D skips current match** - skips the current occurrence and adds the next one. X11: `real_x11_multi_cursor.rs`, `real_x11_chord_hold.rs`.
+- [x] **Ctrl-Shift-L selects all occurrences** - creates one selection per occurrence of the current word/selection. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
+- [x] **Ctrl-F2 selects all occurrences of current word** - creates one selection per occurrence of the word under the cursor without requiring an existing selection. X11: `real_x11_multi_cursor.rs`.
+- [x] **Shift-Alt-I adds line-end cursors** - adds a cursor at the end of every selected line. X11: `real_x11_multi_cursor.rs`.
+- [x] **Ctrl-U pops last-added cursor** - removes the most recently added cursor from the current multi-cursor set. X11: `real_x11_multi_cursor.rs`.
 - [x] **Esc collapses in stages** - first `Esc` collapses non-empty selections to cursors, second `Esc` drops secondary cursors. X11: `real_x11_multi_cursor.rs`.
 - [x] **Plain click collapses** - an unmodified click leaves a single cursor at the clicked position.
 
 ### Per-Cursor Movement
 
-- [ ] **Horizontal motions per cursor** - character, word, subword, line-boundary, and smart-home motions move every cursor independently. X11 TDD: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
+- [~] **Horizontal motions per cursor** - character and word motions move every cursor independently; subword, line-boundary, and smart-home need explicit X11 coverage. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
 - [ ] **Vertical motions per cursor** - line, page, half-page, and document-edge motions move every cursor independently.
-- [ ] **Shift-extend per cursor** - shift-modified motion extends each cursor's selection independently. X11 TDD: `real_x11_multi_cursor_spec.rs`.
-- [ ] **Shift-Alt-Right / Shift-Alt-Left smart expand/shrink per cursor** - smart selection applies to every cursor once smart selection exists. X11 TDD: `real_x11_multi_cursor_spec.rs`.
+- [~] **Shift-extend per cursor** - shift-modified character motion extends each cursor's selection independently; broader shifted motions need explicit X11 coverage. X11: `real_x11_multi_cursor_spec.rs`.
+- [~] **Shift-Alt-Right / Shift-Alt-Left smart expand/shrink per cursor** - smart selection applies to every cursor for the covered textual pair cases; richer syntax-aware expansion remains open. X11: `real_x11_multi_cursor_spec.rs`.
 
 ### Per-Cursor Editing
 
@@ -104,18 +106,18 @@ X11 coverage is split deliberately: implemented behavior lives in
 - [x] **Auto-dedent on close bracket** - close-bracket dedent applies at every cursor where applicable.
 - [x] **Overtype mode** - overtype applies at every cursor.
 - [x] **Smart Enter / auto-indent** - Enter inserts a correctly indented line at every cursor. X11: `real_x11_multi_cursor.rs`.
-- [ ] **Indent / outdent coalesces by line** - multiple cursors on one line indent that line once. X11 TDD: `real_x11_multi_cursor_spec.rs`.
-- [ ] **Toggle line / block comment coalesces by line** - multiple cursors on one line toggle that line once. X11 TDD: `real_x11_multi_cursor_spec.rs`.
-- [ ] **Move line up / down coalesces clusters** - adjacent cursor-bearing line groups move as stable clusters. X11 TDD: `real_x11_multi_cursor_spec.rs`.
-- [ ] **Duplicate line / selection applies per cursor** - duplicate affects every cursor line or selection once. X11 TDD: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
-- [ ] **Delete line coalesces by line** - multiple cursors on one line delete that line once. X11 TDD: `real_x11_multi_cursor_spec.rs`.
+- [~] **Indent / outdent coalesces by line** - multiple cursors on one line indent/outdent that line once through covered commands; `Shift-Tab` multi-cursor coverage is still needed. X11: `real_x11_multi_cursor_spec.rs`.
+- [x] **Toggle line / block comment coalesces by line** - multiple cursors on one line toggle that line once. X11: `real_x11_multi_cursor_spec.rs`.
+- [x] **Move line up / down coalesces clusters** - adjacent cursor-bearing line groups move as stable clusters. X11: `real_x11_multi_cursor_spec.rs`.
+- [x] **Duplicate line / selection applies per cursor** - duplicate affects every cursor line or selection once. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
+- [x] **Delete line coalesces by line** - multiple cursors on one line delete that line once. X11: `real_x11_multi_cursor_spec.rs`.
 - [ ] **Join lines applies per cursor cluster** - join handles adjacent cursor groups without double edits.
 - [ ] **Transpose / case conversion / sort applies per cursor** - text transformations operate per cursor or per selection.
 - [ ] **Snippet tabstops** - snippets create one cursor per tabstop and Tab advances tabstops in lockstep.
 
 ### Clipboard Semantics
 
-- [x] **Paste broadcasts single fragment** - a one-fragment clipboard is inserted at every cursor. X11 TDD: `real_x11_multi_cursor_spec.rs`.
+- [x] **Paste broadcasts single fragment** - a one-fragment clipboard is inserted at every cursor. X11: `real_x11_multi_cursor_spec.rs`.
 - [x] **Paste distributes matching line count** - if the clipboard has exactly one line per cursor, each cursor receives its corresponding line. X11: `real_x11_multi_cursor.rs`.
 - [x] **Cut / copy collects per cursor** - selected fragments are collected in document order and joined by newlines. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
 - [x] **Copy-paste round-trip identity** - copying from multiple selections and pasting back into the same cursor set reproduces the selected layout.
@@ -124,14 +126,14 @@ X11 coverage is split deliberately: implemented behavior lives in
 
 - [ ] **Find scope honors multi-selection** - find-in-selection searches all active selections, not only one selection.
 - [ ] **Replace-all in selection honors multi-selection** - replace-all affects matches inside every active selection.
-- [ ] **Alt-Enter selects all current find matches** - from the find control, `Alt-Enter` creates one selection for every current match. X11 TDD: `real_x11_multi_cursor.rs`.
+- [x] **Alt-Enter selects all current find matches** - from the find control, `Alt-Enter` creates one selection for every current match. X11: `real_x11_multi_cursor.rs`.
 - [x] **Cursor-add gestures read find flags** - occurrence selection respects case, whole-word, and smart-case find settings.
 
 ### Mouse Gestures
 
-- [ ] **Alt-click toggle** - add/remove cursor at a clicked text position. X11 TDD: `real_x11_mouse.rs`.
+- [x] **Alt-click toggle** - add/remove cursor at a clicked text position. X11: `real_x11_mouse.rs`.
 - [~] **Alt-drag additive selection** - additive free-form range selection is not complete.
-- [ ] **Shift-Alt-drag column selection** - creates a rectangular cursor/selection set. X11 TDD: `real_x11_multi_cursor_spec.rs`.
+- [x] **Shift-Alt-drag column selection** - creates a rectangular cursor/selection set. X11: `real_x11_multi_cursor_spec.rs`.
 - [ ] **Middle-click drag column selection** - optional platform-dependent column selection gesture.
 - [ ] **Drag extends only target cursor** - dragging one multi-cursor selection leaves the others intact.
 
@@ -148,11 +150,11 @@ X11 coverage is split deliberately: implemented behavior lives in
 
 ### Column / Block Selection
 
-- [~] **Shift-Alt-drag creates rectangular selection** - rectangular selection exists, but the canonical gesture is not complete. X11 TDD: `real_x11_multi_cursor_spec.rs`.
+- [x] **Shift-Alt-drag creates rectangular selection** - rectangular selection creates the expected per-line cursor set. X11: `real_x11_multi_cursor_spec.rs`.
 - [ ] **Keyboard column selection policy** - VS Code documents column-selection commands but no Linux default shortcut; decide whether `lst` exposes an explicit Linux binding.
 - [x] **Defined short-line policy** - short lines clamp to their line end and duplicate cursor positions coalesce.
-- [x] **Insert in column mode** - insertion applies at every column-aligned cursor. X11 TDD: `real_x11_multi_cursor_spec.rs`.
-- [x] **Backspace in column mode** - deletion applies at every column-aligned cursor. X11 TDD: `real_x11_multi_cursor_spec.rs`.
+- [x] **Insert in column mode** - insertion applies at every column-aligned cursor. X11: `real_x11_multi_cursor_spec.rs`.
+- [x] **Backspace in column mode** - deletion applies at every column-aligned cursor. X11: `real_x11_multi_cursor_spec.rs`.
 
 ### Advanced Interaction
 
@@ -172,7 +174,7 @@ X11 coverage is split deliberately: implemented behavior lives in
 - [x] **Auto-dedent on close bracket** - typing a closer on a whitespace-only line dedents when the language expects it.
 - [x] **Indent/outdent selection** - Tab and Shift-Tab indent or outdent all touched lines; Vim indent commands follow the same user-visible behavior. X11: `real_x11_vim.rs`.
 - [x] **Move line up/down** - line move commands swap the current line or selected block with neighboring lines.
-- [x] **Duplicate line/selection** - duplicate command duplicates the selected text, or the active line if there is no selection. X11 TDD for multi-cursor: `real_x11_multi_cursor.rs`.
+- [x] **Duplicate line/selection** - duplicate command duplicates the selected text, or the active line if there is no selection. X11: `real_x11_multi_cursor.rs`.
 - [x] **Delete line** - delete-line removes the active line or selected line block.
 - [x] **Join lines with single-space collapse** - join removes line breaks and collapses surrounding whitespace appropriately.
 - [ ] **Transpose** - transpose adjacent characters or selected units.
@@ -229,7 +231,7 @@ X11 coverage is split deliberately: implemented behavior lives in
 ## File & Buffer
 
 - [x] **Dirty indicator** - modified buffers show a visible dirty state. X11: `real_x11_state_trace.rs`.
-- [ ] **Clean save is state-preserving** - `Ctrl-S` on an unmodified buffer leaves dirty state, cursor position, and visible selection state unchanged. X11 TDD: `real_x11_state_trace.rs`.
+- [x] **Clean save is state-preserving** - `Ctrl-S` on an unmodified buffer leaves dirty state, cursor position, and visible selection state unchanged. X11: `real_x11_state_trace.rs`.
 - [x] **Reload on external change prompt** - external changes reload clean buffers or prompt on conflicts.
 - [x] **Auto-save** - scratchpad and autosave workflows persist edits. X11: `real_x11_smoke.rs`, `real_x11_workflows.rs`.
 - [ ] **Recover from crash via swap/journal** - unsaved work can be recovered after a crash.

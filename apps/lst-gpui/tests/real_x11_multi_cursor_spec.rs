@@ -1,7 +1,6 @@
-//! Spec-first real-display tests for the multi-cursor and multi-selection
-//! surface that is still being built out. These tests intentionally describe
-//! the target behavior before the implementation exists. They are included in
-//! the `x11-tdd` nextest profile, not the blocking `x11` profile.
+//! Real-display specs for multi-cursor and multi-selection edge cases. These
+//! tests describe accepted product behavior and run in the blocking `x11`
+//! profile.
 //!
 //! The target keyboard behavior is VS Code's default Linux behavior.
 

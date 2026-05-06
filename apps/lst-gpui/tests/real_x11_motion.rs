@@ -154,12 +154,8 @@ fn page_down_at_eof_lands_on_last_line() -> TestResult {
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
 fn vertical_motion_per_cursor_preferred_column() -> TestResult {
-    // TDD spec: each cursor should remember its own preferred column
-    // across vertical motion. Today only the primary cursor has
-    // `preferred_column` (see editor-behaviors-checklist.md "Per-cursor
-    // goal column"), so this test is expected to fail until that gap is
-    // closed. Keep it ignored-passing today by writing the assertion
-    // exactly as a fixed implementation would behave.
+    // Each cursor should remember its own preferred column across vertical
+    // motion.
     support::run_x11_test("motion-per-cursor-preferred-col", |session| {
         let path = session.seed_file("preferred.txt", "abcdefghij\nshort\nabcdefghij\n")?;
         let mut editor = session.open_file("preferred", &path)?;

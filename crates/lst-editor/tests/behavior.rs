@@ -489,7 +489,7 @@ fn multi_cursor_paste_replaces_each_selection() {
 }
 
 #[test]
-fn multi_cursor_plain_movement_collapses_to_primary_cursor() {
+fn multi_cursor_plain_movement_moves_each_cursor() {
     let mut model = model_with_text("abc def");
     set_selection_set(
         &mut model,
@@ -500,7 +500,11 @@ fn multi_cursor_plain_movement_collapses_to_primary_cursor() {
     model.move_horizontal_by(1, false);
 
     let snapshot = model.snapshot();
-    assert_selection_set(&snapshot.selection_set, &[Selection::collapsed(5)], 0);
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[Selection::collapsed(1), Selection::collapsed(5)],
+        1,
+    );
 }
 
 #[test]
@@ -2678,11 +2682,7 @@ fn add_cursor_above_and_below_clamp_to_line_columns() {
     model.add_cursor_above();
     assert_selection_set(
         model.selection_set(),
-        &[
-            Selection::collapsed(2),
-            Selection::collapsed(3),
-            Selection::collapsed(7),
-        ],
+        &[Selection::collapsed(3), Selection::collapsed(7)],
         0,
     );
 }
@@ -3006,7 +3006,7 @@ fn entering_vim_normal_collapses_multi_cursor_to_primary() {
 }
 
 #[test]
-fn navigation_collapses_multi_cursor_to_primary() {
+fn navigation_moves_each_cursor_independently() {
     let mut model = make_model("abcdef");
     set_selection_set(
         &mut model,
@@ -3016,9 +3016,11 @@ fn navigation_collapses_multi_cursor_to_primary() {
 
     model.move_horizontal_collapsed(false);
 
-    let set = model.selection_set();
-    assert!(set.is_single());
-    assert_eq!(set.primary(), Selection::collapsed(5));
+    assert_selection_set(
+        model.selection_set(),
+        &[Selection::collapsed(2), Selection::collapsed(5)],
+        1,
+    );
 }
 
 #[test]

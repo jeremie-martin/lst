@@ -794,15 +794,6 @@ impl EditorModel {
     }
 
     pub fn move_horizontal_collapsed(&mut self, backward: bool) {
-        if self.active_tab().selection_set().has_multiple() {
-            let primary = self.active_tab().selection_set().primary();
-            self.active_tab_mut()
-                .set_selection_set(SelectionSet::single(primary));
-        }
-        self.move_horizontal_collapsed_per_cursor(backward);
-    }
-
-    pub fn move_horizontal_collapsed_per_cursor(&mut self, backward: bool) {
         let selection = self.active_tab().selected_range();
         if selection.start != selection.end {
             let target = if backward {
@@ -1999,17 +1990,6 @@ impl EditorModel {
     }
 
     pub fn move_horizontal_by(&mut self, delta: isize, select: bool) {
-        if self.active_tab().selection_set().has_multiple() && !select {
-            let primary = self.active_tab().selection_set().primary();
-            self.active_tab_mut()
-                .set_selection_set(SelectionSet::single(primary));
-        }
-        if self.move_horizontal(delta, select) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn move_horizontal_per_cursor_by(&mut self, delta: isize, select: bool) {
         if self.move_horizontal(delta, select) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
@@ -2222,33 +2202,19 @@ impl EditorModel {
     }
 
     pub fn add_cursor_above(&mut self) {
-        self.add_cursor_on_adjacent_line(-1, false);
+        self.add_cursor_on_adjacent_line(-1);
     }
 
     pub fn add_cursor_below(&mut self) {
-        self.add_cursor_on_adjacent_line(1, false);
+        self.add_cursor_on_adjacent_line(1);
     }
 
-    pub fn add_cursor_above_with_goal_column(&mut self) {
-        self.add_cursor_on_adjacent_line(-1, true);
-    }
-
-    pub fn add_cursor_below_with_goal_column(&mut self) {
-        self.add_cursor_on_adjacent_line(1, true);
-    }
-
-    fn add_cursor_on_adjacent_line(&mut self, delta: isize, preserve_goal_column: bool) {
+    fn add_cursor_on_adjacent_line(&mut self, delta: isize) {
         let (additions, preferred_column) = {
             let tab = self.active_tab();
-            let preferred_column = if preserve_goal_column {
-                tab.preferred_column().or_else(|| {
-                    (!tab.selection_set().has_multiple()).then(|| tab.cursor_position().column)
-                })
-            } else if tab.selection_set().has_multiple() {
-                None
-            } else {
-                Some(tab.cursor_position().column)
-            };
+            let preferred_column = tab.preferred_column().or_else(|| {
+                (!tab.selection_set().has_multiple()).then(|| tab.cursor_position().column)
+            });
             let last_line = tab.line_count().saturating_sub(1);
             let additions: Vec<Selection> = tab
                 .selection_set()
@@ -2278,9 +2244,7 @@ impl EditorModel {
         if after != before {
             let tab = self.active_tab_mut();
             tab.set_selection_set(after);
-            if preserve_goal_column {
-                tab.set_preferred_column(preferred_column);
-            }
+            tab.set_preferred_column(preferred_column);
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
