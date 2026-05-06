@@ -599,6 +599,7 @@ impl<'a> Editor<'a> {
             KeyChord::Ctrl(k) => (k, true),
         };
         let (code, shift) = resolve_key(&self.display.keycodes, key)?;
+        self.focus_for_keyboard()?;
         input::chord(
             &self.display.conn,
             self.display.root,
@@ -621,6 +622,7 @@ impl<'a> Editor<'a> {
                 .keycodes
                 .lookup_char(ch)
                 .ok_or_else(|| io::Error::other(format!("unsupported text char: {ch:?}")))?;
+            self.focus_for_keyboard()?;
             input::chord(
                 &self.display.conn,
                 self.display.root,
@@ -668,6 +670,7 @@ impl<'a> Editor<'a> {
                 let wait_for_state_change = before_state
                     .as_ref()
                     .is_some_and(|state| key_token_expects_state_change(&token, state));
+                self.focus_for_keyboard()?;
                 self.dispatch_token(&token)?;
                 // Settle: wait until the editor has painted in response. Short
                 // quiet window because we just want one frame of evidence; not
@@ -770,6 +773,7 @@ impl<'a> Editor<'a> {
                 return Err(io::Error::other("with_chord_held sequence cannot be empty").into());
             }
             let token = KeyToken::Held(KeyChordHeld { mods, inner });
+            self.focus_for_keyboard()?;
             self.dispatch_token(&token)?;
             let conn = &self.display.conn;
             let damage_id = self.damage.damage();
@@ -800,6 +804,7 @@ impl<'a> Editor<'a> {
                 )
                 .into());
             }
+            self.focus_for_keyboard()?;
             let conn = &self.display.conn;
             let root = self.display.root;
             let kc = &self.display.keycodes;
@@ -918,6 +923,7 @@ impl<'a> Editor<'a> {
             let tokens = parse_keys(sequence)?;
             damage_wait::drain_pending(&self.display.conn, self.damage.damage(), self.window.id)?;
             for token in &tokens {
+                self.focus_for_keyboard()?;
                 self.dispatch_token(token)?;
             }
             let conn = &self.display.conn;
@@ -937,6 +943,7 @@ impl<'a> Editor<'a> {
         let result: Result<()> = (|| {
             let tokens = parse_keys(sequence)?;
             for token in &tokens {
+                self.focus_for_keyboard()?;
                 self.dispatch_token(token)?;
                 self.wait_after_dispatched_key(false)?;
             }

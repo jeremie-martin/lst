@@ -16,8 +16,8 @@ use crate::Result;
 /// to the target window can route the click to the previous pointer location.
 pub(crate) const POINTER_SETTLE: Duration = Duration::from_millis(50);
 const BUTTON_HOLD: Duration = Duration::from_millis(5);
-const KEY_HOLD: Duration = Duration::from_millis(5);
-pub(crate) const KEY_PHASE_SETTLE: Duration = Duration::from_millis(5);
+const KEY_HOLD: Duration = Duration::from_millis(20);
+pub(crate) const KEY_PHASE_SETTLE: Duration = Duration::from_millis(20);
 
 pub(crate) const BUTTON_LEFT: u8 = 1;
 pub(crate) const BUTTON_MIDDLE: u8 = 2;
