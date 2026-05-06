@@ -64,7 +64,9 @@ X11 coverage is split deliberately: common multi-cursor workflows live in
 `real_x11_multi_cursor.rs`, mouse-driven cursor behavior lives in
 `real_x11_mouse.rs`, and edge-case multi-cursor specifications live in
 `real_x11_multi_cursor_spec.rs`. Accepted green specs run in the blocking `x11`
-profile; under-review specs run in `x11-tdd` until accepted and promoted.
+profile; under-review specs run in `x11-tdd` until accepted and promoted. The
+current under-review pass targets editor keybindings only; Vim-mode
+multi-cursor policy is intentionally separate.
 
 ### Cursor Set Behavior
 
@@ -90,18 +92,18 @@ profile; under-review specs run in `x11-tdd` until accepted and promoted.
 
 ### Per-Cursor Movement
 
-- [~] **Horizontal motions per cursor** - character and word motions move every cursor independently; subword, line-boundary, and smart-home need explicit X11 coverage. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
-- [ ] **Vertical motions per cursor** - line, page, half-page, and document-edge motions move every cursor independently.
-- [~] **Shift-extend per cursor** - shift-modified character motion extends each cursor's selection independently; broader shifted motions need explicit X11 coverage. X11: `real_x11_multi_cursor_spec.rs`.
+- [~] **Horizontal motions per cursor** - character and word motions move every cursor independently; line-boundary, smart-home, and duplicate vertical target coalescing are under review. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`; X11 TDD: `real_x11_multi_cursor_tdd.rs`.
+- [ ] **Vertical motions per cursor** - line, page, half-page, and document-edge motions move every cursor independently. X11 TDD: `real_x11_multi_cursor_tdd.rs` covers line-down duplicate-target coalescing.
+- [~] **Shift-extend per cursor** - shift-modified character motion extends each cursor's selection independently; broader shifted motions are under review. X11: `real_x11_multi_cursor_spec.rs`; X11 TDD: `real_x11_multi_cursor_tdd.rs`.
 - [~] **Shift-Alt-Right / Shift-Alt-Left smart expand/shrink per cursor** - smart selection applies to every cursor for the covered textual pair cases; richer syntax-aware expansion remains open. X11: `real_x11_multi_cursor_spec.rs`.
 
 ### Per-Cursor Editing
 
 - [x] **Literal text insert** - typed text applies at every cursor. X11: `real_x11_multi_cursor.rs`.
-- [x] **Backspace / delete-forward** - deletion applies at every cursor. X11: `real_x11_multi_cursor.rs`.
-- [x] **Word delete** - word deletion applies at every cursor.
-- [x] **Auto-pair brackets / quotes** - pair insertion applies at every cursor.
-- [x] **Auto-pair surround** - typing an opener around multiple non-empty selections wraps every selection.
+- [x] **Backspace / delete-forward** - deletion applies at every cursor, with line-boundary join behavior under review. X11: `real_x11_multi_cursor.rs`; X11 TDD: `real_x11_multi_cursor_tdd.rs`.
+- [~] **Word delete** - word deletion applies at every cursor; VS Code-style full-word, whitespace, separator, line-boundary, and undo semantics are under review. X11 TDD: `real_x11_multi_cursor_tdd.rs`.
+- [x] **Auto-pair brackets / quotes** - pair insertion applies at every cursor. X11 TDD: `real_x11_multi_cursor_tdd.rs`.
+- [x] **Auto-pair surround** - typing an opener around multiple non-empty selections wraps every selection. X11 TDD: `real_x11_multi_cursor_tdd.rs`.
 - [x] **Auto-dedent on close bracket** - close-bracket dedent applies at every cursor where applicable.
 - [x] **Overtype mode** - overtype applies at every cursor.
 - [x] **Smart Enter / auto-indent** - Enter inserts a correctly indented line at every cursor. X11: `real_x11_multi_cursor.rs`.
@@ -110,14 +112,14 @@ profile; under-review specs run in `x11-tdd` until accepted and promoted.
 - [x] **Move line up / down coalesces clusters** - adjacent cursor-bearing line groups move as stable clusters. X11: `real_x11_multi_cursor_spec.rs`.
 - [x] **Duplicate line / selection applies per cursor** - duplicate affects every cursor line or selection once. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
 - [x] **Delete line coalesces by line** - multiple cursors on one line delete that line once. X11: `real_x11_multi_cursor_spec.rs`.
-- [ ] **Join lines applies per cursor cluster** - join handles adjacent cursor groups without double edits.
+- [ ] **Join lines applies per cursor cluster** - join handles adjacent cursor groups without double edits. Vim-mode multi-cursor join behavior is out of scope until the Vim multi-cursor policy is decided.
 - [ ] **Transpose / case conversion / sort applies per cursor** - text transformations operate per cursor or per selection.
 - [ ] **Snippet tabstops** - snippets create one cursor per tabstop and Tab advances tabstops in lockstep.
 
 ### Clipboard Semantics
 
-- [x] **Paste broadcasts single fragment** - a one-fragment clipboard is inserted at every cursor. X11: `real_x11_multi_cursor_spec.rs`.
-- [x] **Paste distributes matching line count** - if the clipboard has exactly one line per cursor, each cursor receives its corresponding line. X11: `real_x11_multi_cursor.rs`.
+- [x] **Paste broadcasts single fragment** - a one-fragment clipboard is inserted at every cursor; mismatched multiline clipboards broadcast the whole text at every cursor. X11: `real_x11_multi_cursor_spec.rs`; X11 TDD: `real_x11_multi_cursor_tdd.rs`.
+- [x] **Paste distributes matching line count** - if a multiline clipboard has exactly one line per cursor, each cursor receives its corresponding line. X11: `real_x11_multi_cursor.rs`; X11 TDD: `real_x11_multi_cursor_tdd.rs`.
 - [x] **Cut / copy collects per cursor** - selected fragments are collected in document order and joined by newlines. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`.
 - [x] **Copy-paste round-trip identity** - copying from multiple selections and pasting back into the same cursor set reproduces the selected layout.
 

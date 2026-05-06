@@ -62,7 +62,10 @@ diagnostic there; the point is to capture the intended product behavior before
 changing implementation. Once accepted and green, move those specs into the
 blocking `x11` suite. Broad accepted multi-cursor edge-case specs live in
 `apps/lst-gpui/tests/real_x11_multi_cursor_spec.rs`; under-review multi-cursor
-specs live in `apps/lst-gpui/tests/real_x11_multi_cursor_tdd.rs`.
+specs live in `apps/lst-gpui/tests/real_x11_multi_cursor_tdd.rs`. The current
+multi-cursor TDD pass covers editor-keybinding movement, selection extension,
+VS Code-style word deletion, line-boundary deletion, auto-pairing, paste, and
+undo behavior; Vim-mode multi-cursor policy is deliberately outside that pass.
 
 The profiles run serially. Every test grabs keyboard focus and moves the global
 pointer through XTEST. The harness also takes a cross-process display lock, so
@@ -253,6 +256,9 @@ The real-display suite currently has broad coverage across:
 - multi-cursor creation, text input, deletion, paste distribution, copy/cut
   collection, Escape collapse, smart Enter, per-cursor motion/selection, line
   operation coalescing, find/occurrence gestures, and column drag
+- under-review multi-cursor TDD specs for broader editor-keybinding movement,
+  selection extension, VS Code-style word/line-boundary deletion, auto-pair,
+  paste, and undo behavior
 - chord-hold event trains for held-modifier gestures
 
 This is the project's load-bearing end-to-end test path. When adding a new
@@ -269,6 +275,10 @@ through the framework-neutral model tests.
    implementation, put it in `x11-tdd` with comments clear enough that failures
    are interpretable, then promote it to `x11` as soon as it is accepted and
    green.
+
+   The current multi-cursor TDD file intentionally excludes Vim-mode
+   multi-cursor behavior. Decide that product policy before adding Vim Normal
+   mode multi-cursor specs.
 
 2. **Trace discipline matters.** The trace is powerful enough to become an
    implementation inspection tool by accident. Keep behavior tests focused on
