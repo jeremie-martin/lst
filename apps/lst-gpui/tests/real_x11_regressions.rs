@@ -8,9 +8,7 @@
 
 mod support;
 
-use std::{env, ffi::OsString};
-
-use lst_x11_harness::{ChordMods, Key};
+use lst_x11_harness::{ChordMods, Key, KeyChord};
 
 use support::{secs, EditorTestExt, TestResult};
 
@@ -55,45 +53,6 @@ fn platform_shift_tab_does_not_run_shift_only_outdent() -> TestResult {
 }
 
 #[test]
-#[ignore = "requires a real X11 display plus xclip and setxkbmap"]
-fn recent_shift_state_does_not_rewrite_committed_ascii_punctuation() -> TestResult {
-    let _layout = HarnessLayoutGuard::set_layout("us");
-    support::run_x11_test("regression-recent-shift-hyphen", |session| {
-        let (mut editor, path) = session.open("scratch")?;
-
-        editor.key_after_released_modifiers(ChordMods::SHIFT, Key::Char('-'))?;
-        editor.save_then_expect_file(&path, "-")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip and setxkbmap"]
-fn azerty_shift_digit_preserves_committed_digit() -> TestResult {
-    let _layout = HarnessLayoutGuard::set_layout("fr");
-    support::run_x11_test("regression-azerty-shift-digit", |session| {
-        let (mut editor, path) = session.open("scratch")?;
-
-        editor.send_keys_settle("7")?;
-        editor.save_then_expect_file(&path, "7")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip and setxkbmap"]
-fn qwertz_shift_digit_preserves_committed_slash() -> TestResult {
-    let _layout = HarnessLayoutGuard::set_layout("de");
-    support::run_x11_test("regression-qwertz-shift-slash", |session| {
-        let (mut editor, path) = session.open("scratch")?;
-
-        editor.send_keys_settle("/")?;
-        editor.save_then_expect_file(&path, "/")?;
-        Ok(())
-    })
-}
-
-#[test]
 #[ignore = "requires a real X11 display plus xclip"]
 fn ctrl_k_prefix_is_cleared_by_unrelated_selection_shortcut() -> TestResult {
     support::run_x11_test("regression-ctrl-k-stale-prefix", |session| {
@@ -118,24 +77,16 @@ fn ctrl_k_prefix_is_cleared_by_unrelated_selection_shortcut() -> TestResult {
     })
 }
 
-struct HarnessLayoutGuard {
-    original: Option<OsString>,
-}
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn consumed_ctrl_action_does_not_leave_recent_ctrl_for_next_text_key() -> TestResult {
+    support::run_x11_test("regression-consumed-action-stale-ctrl", |session| {
+        let (mut editor, path) = session.open("scratch")?;
 
-impl HarnessLayoutGuard {
-    fn set_layout(layout: &str) -> Self {
-        let original = env::var_os("LST_X11_HARNESS_LAYOUT");
-        env::set_var("LST_X11_HARNESS_LAYOUT", layout);
-        Self { original }
-    }
-}
-
-impl Drop for HarnessLayoutGuard {
-    fn drop(&mut self) {
-        if let Some(original) = self.original.take() {
-            env::set_var("LST_X11_HARNESS_LAYOUT", original);
-        } else {
-            env::remove_var("LST_X11_HARNESS_LAYOUT");
-        }
-    }
+        editor.keys("foo foo")?;
+        editor.press(KeyChord::Ctrl(Key::Char('s')))?;
+        editor.keys("d")?;
+        editor.save_then_expect_file(&path, "foo food")?;
+        Ok(())
+    })
 }

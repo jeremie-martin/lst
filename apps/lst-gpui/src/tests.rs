@@ -1044,6 +1044,27 @@ fn app_input_handler_updates_real_editor_model(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn committed_text_is_inserted_verbatim_even_after_recent_shift(cx: &mut TestAppContext) {
+    let (view, cx) = new_test_app(cx, LaunchArgs::default());
+
+    cx.update_window_entity(&view, |app, window, cx| {
+        app.recent_modifier_chord = Some((
+            Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+            std::time::Instant::now(),
+        ));
+        app.replace_text_in_range(None, "/7?)", window, cx);
+    });
+    cx.run_until_parked();
+
+    let snapshot = app_snapshot(&view, cx);
+    assert_eq!(snapshot.model.text, "/7?)");
+    assert_tab_views_match_model(&snapshot);
+}
+
+#[gpui::test]
 fn occurrence_keybindings_drive_selection_changes(cx: &mut TestAppContext) {
     let (view, cx) = new_test_app(cx, LaunchArgs::default());
 

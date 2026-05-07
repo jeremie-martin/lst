@@ -12,6 +12,17 @@ use crate::{elapsed_ms, ui::theme::metrics, LstGpuiApp};
 const X11_SYNTHETIC_MODIFIER_CHORD_WINDOW_MS: u128 = 500;
 
 impl LstGpuiApp {
+    pub(crate) fn clear_x11_modifier_chord_state(&mut self) {
+        self.recent_modifier_chord = None;
+        self.modifier_chord_accumulated = Modifiers::default();
+        self.x11_ctrl_k_pending = false;
+    }
+
+    fn clear_recent_x11_modifier_chord(&mut self) {
+        self.recent_modifier_chord = None;
+        self.modifier_chord_accumulated = Modifiers::default();
+    }
+
     pub(crate) fn note_modifiers_changed_for_text_input(&mut self, event: &ModifiersChangedEvent) {
         if modifiers_active(event.modifiers) {
             self.modifier_chord_accumulated =
@@ -347,6 +358,9 @@ impl EntityInputHandler for LstGpuiApp {
         self.update_model(cx, true, |model| {
             model.replace_text_from_input(range, text.to_string());
         });
+        if !text.is_empty() {
+            self.clear_recent_x11_modifier_chord();
+        }
         self.record_operation("text_input", None, elapsed_ms(apply_started));
     }
 
@@ -372,6 +386,9 @@ impl EntityInputHandler for LstGpuiApp {
         self.update_model(cx, true, |model| {
             model.replace_and_mark_text(range, new_text.to_string(), selected_range);
         });
+        if !new_text.is_empty() {
+            self.clear_recent_x11_modifier_chord();
+        }
         self.record_operation("ime_text_input", None, elapsed_ms(apply_started));
     }
 
