@@ -8,27 +8,27 @@ The active editor is the GPUI implementation in `apps/lst-gpui`. The repository 
 
 ## Project Structure
 
-- `crates/lst-editor`: framework-neutral editor model, document primitives, effects, snapshots, language behavior, and Vim state machine. Behavior should move here whenever it can be tested through model APIs, effects, snapshots, or document-level contracts.
+- `crates/lst-editor`: framework-neutral editor model, document primitives, effects, snapshots, language behavior, and Vim state machine. Keep it lean: behavior belongs here when it is editor-domain logic, but accepted product behavior should be specified through X11 whenever it can be driven through the real app.
 - `apps/lst-gpui`: GPUI desktop app, rendering, input adaptation, runtime file/clipboard/display effects, and app-private UI widgets under `src/ui`. Should mostly adapt desktop events to `lst-editor` contracts and render observable state.
-- `crates/lst-x11-harness`: in-process X11 driver for spawning the editor binary and synthesizing real keyboard/mouse input under `DISPLAY`. Used by smoke tests today; the `bench_editor_x11` example will migrate onto it. Outside `default-members` because it has no purpose without an X server.
+- `crates/lst-x11-harness`: in-process X11 driver for spawning the editor binary and synthesizing real keyboard/mouse input under `DISPLAY`. This is the canonical behavior-spec harness for accepted editor behavior. Outside `default-members` because it has no purpose without an X server.
 - `apps/lst-gpui/examples/bench_editor_x11.rs`: real-display X11 benchmark runner.
-- `crates/lst-editor/tests`: editor behavior integration tests.
-- `apps/lst-gpui/src/tests.rs` and `apps/lst-gpui/tests`: app tests plus the real-display test suites (`real_x11_*.rs`) on top of `lst-x11-harness`. Shared fixture lives in `apps/lst-gpui/tests/support/mod.rs` (`ScratchpadSession`, `EditorTestExt::save_then_expect_file`, etc.) — new real-display tests should reuse it. See `docs/x11-harness.md` for the canonical test shape, the synchronization model, and the current list of harness gaps to be aware of when writing new tests.
+- `crates/lst-editor/tests`: small public-model sanity and domain-contract tests. Do not grow this into a duplicate behavior suite when X11 can cover the same user-visible path.
+- `apps/lst-gpui/src/tests.rs` and `apps/lst-gpui/tests`: app tests plus the real-display test suites (`real_x11_*.rs`) on top of `lst-x11-harness`. Shared fixture lives in `apps/lst-gpui/tests/support/mod.rs` (`ScratchpadSession`, `EditorTestExt::save_then_expect_file`, etc.) — new accepted editor behavior should normally be added here. See `docs/x11-harness.md` for the canonical test shape, the synchronization model, and the current list of harness gaps to be aware of when writing new tests.
 - `docs`: testing philosophy, behavior checklist, roadmap, performance workflow.
 
 ## Build, Test, and Development Commands
 
 - `cargo build --release -p lst-gpui` — build the active editor binary.
 - `cargo run -p lst-gpui -- path/to/file.rs` — run the editor locally.
-- `cargo test` — default workspace refactor gate (behavioral contracts only).
-- `cargo test --all-features` — full feature-enabled suite.
-- `cargo test -p lst-editor --features internal-invariants` — deeper Vim/editor invariant checks.
+- `cargo test` — fast compile/domain sanity check.
+- `cargo test --all-features` — full non-X11 sanity suite.
+- `cargo test -p lst-editor --features internal-invariants` — optional deep private invariant checks.
 - `cargo clippy --all-targets --all-features` — lint all targets.
 - `cargo fmt --all` — format the workspace.
 - `cargo build --release -p lst-gpui --bin lst --example bench_editor_x11` — build the benchmark runner with the release app.
-- `cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only` — run the blocking real-display behavior lane (requires `DISPLAY`, a real X11 server, and `xclip` on `PATH`). Real-display profiles run serially because every test grabs keyboard focus and moves the global pointer through XTEST. Use `cargo nextest run --profile x11-stress -p lst-gpui --tests --run-ignored only --stress-count 3` for repeated flake detection, and `cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only` for ahead-of-implementation specs. The `lst-x11-harness` crate waits up to 30s for each editor window to be mapped (override with `LST_X11_WINDOW_TIMEOUT_MS=N`); set `LST_X11_KEEP_TEMP=1` to preserve scratchpad contents on disk for debugging.
+- `DISPLAY=:0 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only` — run the blocking real-display behavior lane (requires a real X11 server and `xclip` on `PATH`). Real-display profiles run serially because every test grabs keyboard focus and moves the global pointer through XTEST. Use `DISPLAY=:0 cargo nextest run --profile x11-stress -p lst-gpui --tests --run-ignored only --stress-count 3` for repeated flake detection, and `DISPLAY=:0 cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only` for the focused TDD-named real-display subset. The `lst-x11-harness` crate waits up to 30s for each editor window to be mapped (override with `LST_X11_WINDOW_TIMEOUT_MS=N`); set `LST_X11_KEEP_TEMP=1` to preserve scratchpad contents on disk for debugging.
 
-Run `cargo test --all-features` and `cargo clippy --all-targets --all-features` before submitting behavior or architecture changes.
+Run `cargo test --all-features`, `cargo clippy --all-targets --all-features`, and the blocking X11 lane before submitting behavior or architecture changes.
 
 ## Correctness By Construction
 
@@ -51,9 +51,9 @@ Full writeup in `docs/testing-philosophy.md`. The short version:
 - **Assert on observable outcomes** (outputs, state changes, text content), not on call counts or internal method invocations.
 - **If a test requires excessive faking or setup, the production code is wrong.** Restructure the code so the obvious test works. "Hard to test" is a design signal, not a reason to write a cleverer test.
 - **One minimal fake per boundary**, shared across tests. Prefer a `NullX` trait implementation over a dynamic mock framework.
-- **The default `cargo test` suite is a blind refactor gate** biased toward behavioral contracts. Implementation-sensitive checks live behind `--features internal-invariants` or explicit package selection so they don't block healthy internal rewrites.
+- **X11 is the behavior gate.** `cargo test` is useful fast feedback, but accepted editor behavior is specified through the real app under `apps/lst-gpui/tests/real_x11_*.rs`. Unit/model tests should stay small and should not duplicate X11 coverage.
 
-Name tests after observable behavior, e.g. `save_preserves_explicit_language_override` or `search_matches_for_row_slices_to_visible_char_range`. Any logic change must include tests.
+Name tests after observable behavior, e.g. `save_preserves_explicit_language_override` or `search_matches_for_row_slices_to_visible_char_range`. Any user-visible logic change should include or update X11 coverage unless the behavior cannot be driven through the app.
 
 ## Coding Style & Naming
 

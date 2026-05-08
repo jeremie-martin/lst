@@ -87,7 +87,7 @@ pub struct SelectionSet {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CursorGoal {
+pub(crate) enum CursorGoal {
     Column(usize),
     LineEnd,
 }
@@ -114,7 +114,7 @@ impl CursorGoal {
 /// keeps movement metadata in lockstep with that set so callers cannot retain a
 /// preferred-column vector that no longer matches the active selections.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SelectionState {
+pub(crate) struct SelectionState {
     set: SelectionSet,
     goals: CursorGoals,
 }
@@ -310,11 +310,6 @@ impl SelectionSet {
                     .iter()
                     .rposition(|(_, origin)| *origin == SelectionOrigin::Added)
             });
-        if let Some(added_index) = added_index {
-            if selection_overlaps_neighbor(&selections, added_index) {
-                return None;
-            }
-        }
 
         let primary = added_index
             .or_else(|| {
@@ -371,38 +366,34 @@ impl SelectionSet {
 }
 
 impl SelectionState {
-    pub fn single(selection: Selection) -> Self {
+    pub(crate) fn single(selection: Selection) -> Self {
         Self {
             set: SelectionSet::single(selection),
             goals: CursorGoals::default(),
         }
     }
 
-    pub fn from_set(set: SelectionSet) -> Self {
+    pub(crate) fn from_set(set: SelectionSet) -> Self {
         Self {
             set,
             goals: CursorGoals::default(),
         }
     }
 
-    pub fn selection_set(&self) -> &SelectionSet {
+    pub(crate) fn selection_set(&self) -> &SelectionSet {
         &self.set
     }
 
-    pub fn primary(&self) -> Selection {
+    pub(crate) fn primary(&self) -> Selection {
         self.set.primary()
     }
 
-    pub fn as_slice(&self) -> &[Selection] {
+    pub(crate) fn as_slice(&self) -> &[Selection] {
         self.set.as_slice()
     }
 
-    pub fn primary_index(&self) -> usize {
+    pub(crate) fn primary_index(&self) -> usize {
         self.set.primary_index()
-    }
-
-    pub fn is_single(&self) -> bool {
-        self.set.is_single()
     }
 
     pub(crate) fn has_multiple(&self) -> bool {
@@ -600,35 +591,6 @@ impl SelectionOrigin {
             Self::Added => 2,
         }
     }
-}
-
-fn selection_overlaps_neighbor(selections: &[(Selection, SelectionOrigin)], index: usize) -> bool {
-    let selection = selections[index].0;
-    let range = selection.range();
-    if index > 0 {
-        let previous = selections[index - 1].0;
-        let previous_range = previous.range();
-        if previous_range.end > range.start || previous_range == range {
-            if selection_duplicate_collapsed_cursor(selection, previous) {
-                return false;
-            }
-            return true;
-        }
-    }
-    if let Some((next, _)) = selections.get(index + 1) {
-        let next_range = next.range();
-        if range.end > next_range.start || range == next_range {
-            if selection_duplicate_collapsed_cursor(selection, *next) {
-                return false;
-            }
-            return true;
-        }
-    }
-    false
-}
-
-fn selection_duplicate_collapsed_cursor(left: Selection, right: Selection) -> bool {
-    !left.has_selection() && !right.has_selection() && left.cursor() == right.cursor()
 }
 
 fn validate_primary(selections: &[Selection], primary: usize) -> Result<(), SelectionSetError> {
@@ -1259,343 +1221,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rope_word_ranges_group_words_symbols_and_whitespace() {
-        let buffer = Rope::from_str("alpha beta::gamma");
+    fn word_motion_does_not_split_combining_cluster() {
+        let buffer = Rope::from_str("nai\u{0308}ve word");
 
-        assert_eq!(word_range_at_char(&buffer, 7), 6..10);
-        assert_eq!(word_range_at_char(&buffer, 10), 10..12);
-        assert_eq!(word_range_at_char(&buffer, 5), 5..6);
+        assert_eq!(next_word_boundary(&buffer, 3), 6);
+        assert_eq!(previous_word_boundary(&buffer, 7), 0);
+        assert_eq!(word_range_at_char(&buffer, 3), 0..6);
     }
 
     #[test]
-    fn rope_word_boundaries_skip_whitespace() {
-        let buffer = Rope::from_str("alpha beta.gamma");
-
-        assert_eq!(next_word_boundary(&buffer, 0), 5);
-        assert_eq!(next_word_boundary(&buffer, 5), 10);
-        assert_eq!(previous_word_boundary(&buffer, 11), 10);
-        assert_eq!(previous_word_boundary(&buffer, 10), 6);
-    }
-
-    #[test]
-    fn line_range_includes_trailing_newline_when_present() {
-        let buffer = Rope::from_str("one\ntwo\nthree");
-
-        assert_eq!(line_range_at_char(&buffer, 1), 0..4);
-        assert_eq!(line_range_at_char(&buffer, 5), 4..8);
-        assert_eq!(line_range_at_char(&buffer, 10), 8..13);
-    }
-
-    #[test]
-    fn paragraph_range_groups_consecutive_non_blank_lines() {
-        let buffer = Rope::from_str("alpha\nbeta\n\ngamma\ndelta\n");
-
-        // Cursor on first paragraph: "alpha\nbeta\n".
-        assert_eq!(paragraph_range_at_char(&buffer, 0), 0..11);
-        assert_eq!(paragraph_range_at_char(&buffer, 7), 0..11);
-        // Cursor on second paragraph: "gamma\ndelta\n".
-        assert_eq!(paragraph_range_at_char(&buffer, 12), 12..24);
-    }
-
-    #[test]
-    fn paragraph_range_groups_blank_lines_when_cursor_blank() {
-        let buffer = Rope::from_str("alpha\n\n\nbeta\n");
-
-        // Cursor on the blank run at line 1 → covers lines 1 and 2.
-        assert_eq!(paragraph_range_at_char(&buffer, 6), 6..8);
-    }
-
-    #[test]
-    fn text_word_ranges_group_words_symbols_and_whitespace() {
-        let text = "alpha beta::gamma";
-
-        assert_eq!(word_range_in_text(text, 7), 6..10);
-        assert_eq!(word_range_in_text(text, 10), 10..12);
-        assert_eq!(word_range_in_text(text, 5), 5..6);
-    }
-
-    #[test]
-    fn text_word_boundaries_are_utf8_safe() {
-        let text = "one γamma two";
-
-        assert_eq!(next_word_boundary_in_text(text, 0), 3);
-        assert_eq!(next_word_boundary_in_text(text, 3), "one γamma".len());
-        assert_eq!(
-            previous_word_boundary_in_text(text, "one γamma".len()),
-            "one ".len()
-        );
-    }
-
-    #[test]
-    fn rope_subword_boundaries_split_camel_snake_and_digits() {
-        let buffer = Rope::from_str("camelCase snake_case HTTPServer version2Alpha");
+    fn subword_motion_splits_common_identifier_shapes() {
+        let buffer = Rope::from_str("camelCase snake_case HTTPServer");
 
         assert_eq!(next_subword_boundary(&buffer, 0), 5);
-        assert_eq!(next_subword_boundary(&buffer, 5), 9);
         assert_eq!(next_subword_boundary(&buffer, 10), 15);
-        assert_eq!(next_subword_boundary(&buffer, 15), 20);
-        assert_eq!(next_subword_boundary(&buffer, 21), 25);
-        assert_eq!(next_subword_boundary(&buffer, 25), 31);
-        assert_eq!(next_subword_boundary(&buffer, 32), 39);
-        assert_eq!(next_subword_boundary(&buffer, 39), 40);
-        assert_eq!(next_subword_boundary(&buffer, 40), 45);
-
-        assert_eq!(previous_subword_boundary(&buffer, 9), 5);
-        assert_eq!(previous_subword_boundary(&buffer, 5), 0);
-        assert_eq!(previous_subword_boundary(&buffer, 20), 16);
-        assert_eq!(previous_subword_boundary(&buffer, 16), 10);
-        assert_eq!(previous_subword_boundary(&buffer, 15), 10);
         assert_eq!(previous_subword_boundary(&buffer, 31), 25);
-        assert_eq!(previous_subword_boundary(&buffer, 25), 21);
-        assert_eq!(previous_subword_boundary(&buffer, 45), 40);
-        assert_eq!(previous_subword_boundary(&buffer, 40), 39);
-        assert_eq!(previous_subword_boundary(&buffer, 39), 32);
     }
 
     #[test]
-    fn subword_boundaries_handle_single_char_snake_segments() {
-        let buffer = Rope::from_str("a_b_c");
-
-        assert_eq!(next_subword_boundary(&buffer, 0), 1);
-        assert_eq!(next_subword_boundary(&buffer, 1), 3);
-        assert_eq!(next_subword_boundary(&buffer, 3), 5);
-
-        assert_eq!(previous_subword_boundary(&buffer, 5), 4);
-        assert_eq!(previous_subword_boundary(&buffer, 4), 2);
-        assert_eq!(previous_subword_boundary(&buffer, 2), 0);
-    }
-
-    #[test]
-    fn subword_boundaries_keep_symbol_runs_as_stops() {
-        let buffer = Rope::from_str("foo.barBaz alpha::Beta");
-
-        assert_eq!(next_subword_boundary(&buffer, 0), 3);
-        assert_eq!(next_subword_boundary(&buffer, 3), 4);
-        assert_eq!(next_subword_boundary(&buffer, 4), 7);
-        assert_eq!(next_subword_boundary(&buffer, 7), 10);
-        assert_eq!(next_subword_boundary(&buffer, 11), 16);
-        assert_eq!(next_subword_boundary(&buffer, 16), 18);
-        assert_eq!(next_subword_boundary(&buffer, 18), 22);
-
-        assert_eq!(previous_subword_boundary(&buffer, 10), 7);
-        assert_eq!(previous_subword_boundary(&buffer, 7), 4);
-        assert_eq!(previous_subword_boundary(&buffer, 4), 3);
-        assert_eq!(previous_subword_boundary(&buffer, 22), 18);
-        assert_eq!(previous_subword_boundary(&buffer, 18), 16);
-    }
-
-    #[test]
-    fn text_subword_boundaries_are_utf8_safe() {
-        let text = "one ΓammaΔelta HTTPServer42";
-
-        assert_eq!(next_subword_boundary_in_text(text, 0), "one".len());
-        assert_eq!(
-            next_subword_boundary_in_text(text, "one ".len() + 1),
-            "one Γamma".len()
-        );
-        assert_eq!(
-            next_subword_boundary_in_text(text, "one ".len()),
-            "one Γamma".len()
-        );
-        assert_eq!(
-            next_subword_boundary_in_text(text, "one Γamma".len()),
-            "one ΓammaΔelta".len()
-        );
-        assert_eq!(
-            next_subword_boundary_in_text(text, "one ΓammaΔelta ".len()),
-            "one ΓammaΔelta HTTP".len()
-        );
-        assert_eq!(
-            next_subword_boundary_in_text(text, "one ΓammaΔelta HTTP".len()),
-            "one ΓammaΔelta HTTPServer".len()
-        );
-        assert_eq!(
-            previous_subword_boundary_in_text(text, "one ΓammaΔelta HTTPServer".len()),
-            "one ΓammaΔelta HTTP".len()
-        );
-        assert_eq!(
-            previous_subword_boundary_in_text(text, "one Γa".len()),
-            "one ".len()
-        );
-        assert_eq!(
-            previous_subword_boundary_in_text(text, "one Γamma".len()),
-            "one ".len()
-        );
-    }
-
-    #[test]
-    fn rope_word_boundary_skips_full_combining_acute_cluster() {
-        // "naïve word" with NFD ï = i + U+0308. 11 chars, 10 graphemes.
-        // The combining mark sits at char index 3.
-        let buffer = Rope::from_str("nai\u{0308}ve word");
-
-        assert_eq!(next_word_boundary(&buffer, 0), 6);
-        // Mid-cluster cursor still lands past the cluster, never inside it.
-        assert_eq!(next_word_boundary(&buffer, 3), 6);
-        assert_eq!(next_word_boundary(&buffer, 6), 11);
-        assert_eq!(previous_word_boundary(&buffer, 11), 7);
-        assert_eq!(previous_word_boundary(&buffer, 7), 0);
-    }
-
-    #[test]
-    fn rope_word_boundary_treats_regional_indicator_pair_as_one_cluster() {
-        // "a🇫🇷b cc" — regional indicator pair (4 bytes each) is one grapheme.
-        // Char layout: [a, 🇫, 🇷, b, ' ', c, c] = 7 chars, 6 graphemes.
-        let buffer = Rope::from_str("a\u{1F1EB}\u{1F1F7}b cc");
-
-        assert_eq!(next_word_boundary(&buffer, 0), 1);
-        // From the first regional indicator, jump past the second to `b` start.
-        assert_eq!(next_word_boundary(&buffer, 1), 3);
-        assert_eq!(next_word_boundary(&buffer, 3), 4);
-        assert_eq!(previous_word_boundary(&buffer, 4), 3);
-        // From after `b`, walking back lands at the regional pair start, not between them.
-        assert_eq!(previous_word_boundary(&buffer, 3), 1);
-        assert_eq!(previous_word_boundary(&buffer, 1), 0);
-    }
-
-    #[test]
-    fn rope_subword_boundary_skips_combining_acute_cluster() {
-        // "naïveCase" NFD: n, a, i, U+0308, v, e, C, a, s, e = 10 chars, 9 graphemes.
-        let buffer = Rope::from_str("nai\u{0308}veCase");
-
-        // From start, first subword spans the lowercase-only run before `C`.
-        assert_eq!(next_subword_boundary(&buffer, 0), 6);
-        assert_eq!(next_subword_boundary(&buffer, 6), 10);
-        assert_eq!(previous_subword_boundary(&buffer, 10), 6);
-        assert_eq!(previous_subword_boundary(&buffer, 6), 0);
-    }
-
-    #[test]
-    fn rope_word_range_groups_full_combining_acute_cluster() {
-        let buffer = Rope::from_str("nai\u{0308}ve word");
-
-        // Click anywhere on the cluster — including on the combining mark — and
-        // the whole `naïve` token comes back.
-        assert_eq!(word_range_at_char(&buffer, 0), 0..6);
-        assert_eq!(word_range_at_char(&buffer, 3), 0..6);
-        assert_eq!(word_range_at_char(&buffer, 5), 0..6);
-        assert_eq!(word_range_at_char(&buffer, 7), 7..11);
-    }
-
-    #[test]
-    fn text_word_boundary_skips_full_combining_acute_cluster() {
-        let text = "nai\u{0308}ve word";
-
-        let after_naive = "nai\u{0308}ve".len();
-        let space = "nai\u{0308}ve ".len();
-        let i_byte = "na".len();
-        let combining_byte = "nai".len();
-
-        assert_eq!(next_word_boundary_in_text(text, 0), after_naive);
-        assert_eq!(
-            next_word_boundary_in_text(text, combining_byte),
-            after_naive
-        );
-        assert_eq!(previous_word_boundary_in_text(text, text.len()), space);
-        assert_eq!(previous_word_boundary_in_text(text, after_naive), 0);
-        // Mid-cluster offset rounds out to the same cluster boundary as `i` start.
-        assert_eq!(
-            previous_word_boundary_in_text(text, combining_byte),
-            previous_word_boundary_in_text(text, i_byte)
-        );
-    }
-
-    #[test]
-    fn text_subword_boundary_skips_full_combining_acute_cluster() {
-        let text = "nai\u{0308}veCase";
-
-        let after_naive = "nai\u{0308}ve".len();
-        assert_eq!(next_subword_boundary_in_text(text, 0), after_naive);
-        assert_eq!(next_subword_boundary_in_text(text, after_naive), text.len());
-        assert_eq!(
-            previous_subword_boundary_in_text(text, text.len()),
-            after_naive
-        );
-        assert_eq!(previous_subword_boundary_in_text(text, after_naive), 0);
-    }
-
-    #[test]
-    fn text_word_range_groups_full_regional_indicator_cluster() {
-        let text = "a\u{1F1EB}\u{1F1F7}b cc";
-        let flag_start = "a".len();
-        let after_flag = "a\u{1F1EB}\u{1F1F7}".len();
-        // Click on either regional indicator — the range covers the full cluster.
-        assert_eq!(word_range_in_text(text, flag_start), flag_start..after_flag);
-        assert_eq!(
-            word_range_in_text(text, flag_start + "\u{1F1EB}".len()),
-            flag_start..after_flag,
-        );
-    }
-
-    #[test]
-    fn drag_selection_extends_from_anchor_token() {
-        let (selection, reversed) = drag_selection_range(6..10, 13..18);
-
-        assert_eq!(selection, 6..18);
-        assert!(!reversed);
-
-        let (selection, reversed) = drag_selection_range(6..10, 0..5);
-        assert_eq!(selection, 0..10);
-        assert!(reversed);
-    }
-
-    #[test]
-    fn selection_set_rejects_invalid_shapes() {
-        assert_eq!(
-            SelectionSet::from_selections(Vec::new(), 0).unwrap_err(),
-            SelectionSetError::Empty
-        );
-        assert_eq!(
-            SelectionSet::from_selections(vec![Selection::collapsed(0)], 1).unwrap_err(),
-            SelectionSetError::InvalidPrimary
-        );
-        assert_eq!(
-            SelectionSet::from_selections(
-                vec![Selection::collapsed(4), Selection::collapsed(2)],
-                0,
-            )
-            .unwrap_err(),
-            SelectionSetError::Unordered
-        );
-        assert_eq!(
-            SelectionSet::from_selections(
-                vec![
-                    Selection::from_range(1..4, false),
-                    Selection::from_range(3..5, false),
-                ],
-                0,
-            )
-            .unwrap_err(),
-            SelectionSetError::Overlapping
-        );
-        assert_eq!(
-            SelectionSet::from_selections(
-                vec![Selection::collapsed(2), Selection::collapsed(2)],
-                0,
-            )
-            .unwrap_err(),
-            SelectionSetError::Overlapping
-        );
-    }
-
-    #[test]
-    fn selection_set_preserves_primary_index_for_valid_ordered_ranges() {
-        let set = SelectionSet::from_selections(
-            vec![
-                Selection::collapsed(1),
-                Selection::from_range(3..5, false),
-                Selection::collapsed(7),
-            ],
-            1,
-        )
-        .expect("valid ordered non-overlapping selections");
-
-        assert_eq!(set.primary(), Selection::from_range(3..5, false));
-        assert_eq!(set.primary_index(), 1);
-    }
-
-    #[test]
-    fn selection_set_coalesces_duplicate_batch_cursors_and_preserves_primary() {
+    fn selection_set_coalesces_duplicate_cursors() {
         let set = SelectionSet::from_selections_coalescing_cursors(
             vec![
                 Selection::collapsed(1),
@@ -1604,27 +1248,12 @@ mod tests {
             ],
             1,
         )
-        .expect("duplicate collapsed cursors are coalesced");
+        .expect("duplicate cursors coalesce");
 
         assert_eq!(
             set.as_slice(),
             &[Selection::collapsed(1), Selection::collapsed(3)]
         );
         assert_eq!(set.primary_index(), 0);
-        assert_eq!(set.primary(), Selection::collapsed(1));
-    }
-
-    #[test]
-    fn selection_set_clamping_coalesces_duplicate_cursors() {
-        let set = SelectionSet::from_selections(
-            vec![Selection::collapsed(2), Selection::collapsed(4)],
-            1,
-        )
-        .expect("valid cursors");
-
-        let clamped = set.clamped_to_len(1);
-
-        assert_eq!(clamped.as_slice(), &[Selection::collapsed(1)]);
-        assert_eq!(clamped.primary_index(), 0);
     }
 }

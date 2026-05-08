@@ -11,9 +11,10 @@ observable behavior over feature volume.
 - `lst-gpui`: rendering, widgets, input adaptation, dialogs, clipboard, file
   I/O, benchmark wiring, and desktop integration
 
-Product behavior should move into `lst-editor` when it can be tested through
-model APIs, transactions, effects, snapshots, or document-level contracts. GPUI
-should adapt desktop events to those contracts and render observable state.
+Editor-domain behavior should live in `lst-editor`; accepted product behavior
+should be specified through the real GPUI app under the X11 harness whenever it
+can be driven there. GPUI should adapt desktop events to editor contracts and
+render observable state.
 
 ## Near-Term Priorities
 
@@ -41,8 +42,11 @@ should adapt desktop events to those contracts and render observable state.
 
 ## Quality Gates
 
-- `cargo test` remains the blind refactor gate.
-- `cargo test -p lst-editor --features internal-invariants` covers deeper Vim
-  state-machine invariants.
+- `DISPLAY=:0 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only`
+  is the canonical accepted-behavior gate.
+- `cargo test` and `cargo test --all-features` are fast non-X11 sanity checks,
+  not the source of truth for user-visible editor behavior.
+- `cargo test -p lst-editor --features internal-invariants` covers optional
+  private invariants when a refactor touches those internals.
 - Performance work should use one benchmark scenario and one primary metric at a
   time, as described in `docs/performance-optimization.md`.

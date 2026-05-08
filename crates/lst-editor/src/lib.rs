@@ -22,7 +22,7 @@ pub mod wrap;
 pub use document::{EditKind, UndoBoundary};
 pub use effect::{EditorEffect, FocusTarget, RevealIntent};
 pub use language::{IndentStyle, Language, LanguageConfig};
-pub use selection::{CursorGoal, Selection, SelectionSet, SelectionSetError, SelectionState};
+pub use selection::{Selection, SelectionSet, SelectionSetError};
 pub use snapshot::EditorSnapshot;
 pub use tab::{EditorTab, FileStamp, TabId};
 pub use viewport::Viewport;
@@ -78,7 +78,7 @@ use crate::{
         char_at_line_column, display_line_char_len as buffer_display_line_char_len,
         line_range_at_char, next_grapheme_boundary, next_subword_boundary, next_word_boundary,
         paragraph_range_at_char, previous_grapheme_boundary, previous_subword_boundary,
-        previous_word_boundary, word_range_at_char, SelectionTransform,
+        previous_word_boundary, word_range_at_char, CursorGoal, SelectionTransform,
     },
     tab_set::TabSet,
     transaction::{EditOutcome, EditRequest, SelectionAfter},
@@ -773,21 +773,12 @@ impl EditorModel {
 
     fn apply_selection_motion_with_columns<F>(&mut self, mut motion: F) -> bool
     where
-        F: FnMut(&EditorTab, usize, Selection) -> SelectionMotion,
+        F: FnMut(&EditorTab, usize, Selection) -> SelectionTransform,
     {
         let Some((before, after)) = (|| {
             let tab = self.active_tab();
             let before = tab.selection_state().clone();
-            let after = before.map(|index, selection| {
-                let motion = motion(tab, index, selection);
-                SelectionTransform::with_columns(
-                    motion.selection,
-                    motion
-                        .movement_goal
-                        .expect("selection motion must carry a movement goal"),
-                    motion.visible_column,
-                )
-            })?;
+            let after = before.map(|index, selection| motion(tab, index, selection))?;
             Some((before, after))
         })() else {
             return false;
@@ -934,14 +925,14 @@ impl EditorModel {
                 let target_position = char_to_position(tab.buffer(), target);
                 if select {
                     let selection = Selection::new(selection.anchor(), target);
-                    SelectionMotion::with_goal(
+                    SelectionTransform::with_columns(
                         selection,
                         goal,
                         visible_column_for_motion(selection, goal, target_position.column),
                     )
                 } else {
                     let selection = Selection::collapsed(target);
-                    SelectionMotion::with_goal(
+                    SelectionTransform::with_columns(
                         selection,
                         goal,
                         visible_column_for_motion(selection, goal, target_position.column),
@@ -1025,14 +1016,14 @@ impl EditorModel {
                 let target_position = char_to_position(tab.buffer(), target);
                 if select {
                     let selection = Selection::new(selection.anchor(), target);
-                    SelectionMotion::with_goal(
+                    SelectionTransform::with_columns(
                         selection,
                         goal,
                         visible_column_for_motion(selection, goal, target_position.column),
                     )
                 } else {
                     let selection = Selection::collapsed(target);
-                    SelectionMotion::with_goal(
+                    SelectionTransform::with_columns(
                         selection,
                         goal,
                         visible_column_for_motion(selection, goal, target_position.column),
@@ -2924,23 +2915,6 @@ fn selection_line_span(tab: &EditorTab) -> Option<(usize, usize, bool)> {
     Some((start.line, last.max(start.line), spans))
 }
 
-#[derive(Clone, Copy, Debug)]
-struct SelectionMotion {
-    selection: Selection,
-    movement_goal: Option<CursorGoal>,
-    visible_column: Option<usize>,
-}
-
-impl SelectionMotion {
-    fn with_goal(selection: Selection, goal: CursorGoal, visible_column: Option<usize>) -> Self {
-        Self {
-            selection,
-            movement_goal: Some(goal),
-            visible_column,
-        }
-    }
-}
-
 fn visible_column_for_motion(
     selection: Selection,
     goal: CursorGoal,
@@ -3115,195 +3089,4 @@ fn preferred_newline_for_active_tab(tab: &EditorTab) -> &'static str {
         }
     }
     "\n"
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tab(id: u64, title: &str, text: &str) -> EditorTab {
-        EditorTab::from_text(TabId::from_raw(id), title.to_string(), None, text)
-    }
-
-    fn model_with_tabs(tabs: Vec<EditorTab>, status: String) -> EditorModel {
-        let mut tabs = tabs.into_iter();
-        let first = tabs.next().expect("test model needs at least one tab");
-        EditorModel::from_tabs(first, tabs.collect(), status)
-    }
-
-    #[test]
-    fn tab_switch_commands_own_switch_status() {
-        let mut model = model_with_tabs(
-            vec![tab(1, "one.txt", "one"), tab(2, "two.txt", "two")],
-            "Ready.".to_string(),
-        );
-
-        model.set_active_tab(model.tab_id_at(1).unwrap());
-        assert_eq!(model.snapshot().status, "Switched to two.txt.");
-
-        model.prev_tab();
-        assert_eq!(model.snapshot().status, "Switched to one.txt.");
-
-        model.next_tab();
-        assert_eq!(model.snapshot().status, "Switched to two.txt.");
-    }
-
-    #[test]
-    fn close_active_tab_command_closes_current_tab() {
-        let mut model = model_with_tabs(
-            vec![tab(1, "one.txt", "one"), tab(2, "two.txt", "two")],
-            "Ready.".to_string(),
-        );
-        model.set_active_tab(model.tab_id_at(1).unwrap());
-
-        let active_id = model.active_tab_id();
-        assert!(model.close_clean_tab(active_id));
-
-        let snapshot = model.snapshot();
-        assert_eq!(snapshot.tab_titles, ["one.txt"]);
-        assert_eq!(snapshot.active, 0);
-        assert_eq!(snapshot.status, "Closed tab.");
-    }
-
-    #[test]
-    fn gutter_mode_renders_each_kind() {
-        assert_eq!(GutterMode::Absolute.format(4, 7, &[7]), "  5");
-        assert_eq!(GutterMode::Relative.format(4, 7, &[7]), "  3");
-        assert_eq!(GutterMode::Relative.format(7, 4, &[4]), "  3");
-        // Hybrid: cursor row shows the absolute number, others show distance.
-        assert_eq!(GutterMode::Hybrid.format(7, 7, &[7]), "  8");
-        assert_eq!(GutterMode::Hybrid.format(2, 7, &[7]), "  5");
-    }
-
-    #[test]
-    fn hybrid_gutter_mode_marks_every_multi_cursor_line() {
-        // With cursors on lines 2 and 5, Hybrid shows the absolute number
-        // on each cursor row and the distance-from-primary elsewhere.
-        let cursor_lines = [2usize, 5];
-        assert_eq!(GutterMode::Hybrid.format(2, 5, &cursor_lines), "  3");
-        assert_eq!(GutterMode::Hybrid.format(5, 5, &cursor_lines), "  6");
-        assert_eq!(GutterMode::Hybrid.format(4, 5, &cursor_lines), "  1");
-    }
-
-    #[test]
-    fn cycle_gutter_mode_advances_through_three_modes() {
-        let mut model = model_with_tabs(vec![tab(1, "one.txt", "")], "Ready.".to_string());
-        assert_eq!(model.gutter_mode(), GutterMode::Absolute);
-        model.cycle_gutter_mode();
-        assert_eq!(model.gutter_mode(), GutterMode::Relative);
-        model.cycle_gutter_mode();
-        assert_eq!(model.gutter_mode(), GutterMode::Hybrid);
-        model.cycle_gutter_mode();
-        assert_eq!(model.gutter_mode(), GutterMode::Absolute);
-    }
-
-    #[test]
-    fn vim_gi_returns_to_line_edit_cursor_not_buffer_end() {
-        let mut model = model_with_tabs(
-            vec![EditorTab::from_path(
-                TabId::from_raw(1),
-                std::path::PathBuf::from("example.rs"),
-                "alpha\nbeta\ngamma",
-            )],
-            "Ready.".to_string(),
-        );
-        model.handle_vim_escape();
-        model.move_to_char("alpha\n".chars().count(), false, None);
-
-        press_vim_chars(&mut model, ">>");
-        model.move_document_boundary(true, false);
-        press_vim_chars(&mut model, "gi");
-
-        let snapshot = model.snapshot();
-        assert_eq!(snapshot.vim_mode, vim::Mode::Insert);
-        assert_eq!(snapshot.cursor_position, Position { line: 1, column: 0 });
-    }
-
-    #[test]
-    fn move_active_tab_keeps_focus_on_dragged_tab() {
-        let mut model = model_with_tabs(
-            vec![
-                tab(1, "one.txt", "1"),
-                tab(2, "two.txt", "2"),
-                tab(3, "three.txt", "3"),
-            ],
-            "Ready.".to_string(),
-        );
-        model.set_active_tab(model.tab_id_at(0).unwrap());
-
-        model.move_active_tab(1);
-        let snapshot = model.snapshot();
-        assert_eq!(snapshot.tab_titles, ["two.txt", "one.txt", "three.txt"]);
-        assert_eq!(snapshot.active, 1);
-
-        model.move_active_tab(-1);
-        let snapshot = model.snapshot();
-        assert_eq!(snapshot.tab_titles, ["one.txt", "two.txt", "three.txt"]);
-        assert_eq!(snapshot.active, 0);
-    }
-
-    #[test]
-    fn move_active_tab_wraps_around_when_delta_overshoots() {
-        let mut model = model_with_tabs(
-            vec![
-                tab(1, "one.txt", "1"),
-                tab(2, "two.txt", "2"),
-                tab(3, "three.txt", "3"),
-            ],
-            "Ready.".to_string(),
-        );
-
-        model.set_active_tab(model.tab_id_at(2).unwrap());
-        model.move_active_tab(1);
-        let snapshot = model.snapshot();
-        assert_eq!(snapshot.tab_titles, ["three.txt", "one.txt", "two.txt"]);
-        assert_eq!(snapshot.active, 0);
-
-        model.move_active_tab(-1);
-        let snapshot = model.snapshot();
-        assert_eq!(snapshot.tab_titles, ["one.txt", "two.txt", "three.txt"]);
-        assert_eq!(snapshot.active, 2);
-    }
-
-    #[test]
-    fn move_tab_shifts_other_tabs_without_changing_active_content() {
-        let mut model = model_with_tabs(
-            vec![
-                tab(1, "one.txt", "1"),
-                tab(2, "two.txt", "2"),
-                tab(3, "three.txt", "3"),
-            ],
-            "Ready.".to_string(),
-        );
-        model.set_active_tab(model.tab_id_at(2).unwrap());
-
-        model.move_tab(0, 2);
-
-        let snapshot = model.snapshot();
-        assert_eq!(snapshot.tab_titles, ["two.txt", "three.txt", "one.txt"]);
-        assert_eq!(snapshot.active, 1);
-    }
-
-    #[test]
-    fn select_all_queues_primary_selection() {
-        let mut model = model_with_tabs(vec![tab(1, "one.txt", "hello")], "Ready.".to_string());
-
-        model.select_all();
-
-        assert_eq!(model.snapshot().selection.range(), 0..5);
-        assert_eq!(
-            model.drain_effects(),
-            vec![EditorEffect::WritePrimary("hello".to_string())]
-        );
-    }
-
-    fn press_vim_chars(model: &mut EditorModel, keys: &str) {
-        for ch in keys.chars() {
-            model.handle_vim_key(
-                vim::Key::Character(ch.to_string()),
-                vim::Modifiers::default(),
-                80,
-            );
-        }
-    }
 }

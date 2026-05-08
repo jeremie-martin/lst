@@ -119,31 +119,35 @@ Not testing something is a valid choice when it is a principled boundary, not a 
 The line is: test everything we own, trust everything we don't. If we find ourselves wanting to test framework behavior, that is a sign we are relying on undocumented behavior and should reconsider the design.
 
 
-## Blind refactor gate
+## Behavior gate
 
-If we want a workflow where `cargo test` can be trusted blindly during refactors, the default suite must be biased toward **behavioral contracts**, not implementation choices.
+The canonical behavior gate is the real-display X11 suite:
 
-That means:
+```sh
+DISPLAY=:0 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
+```
 
-- **Default suite:** user-visible behavior, stable command routing, text transformations, file flows, vim semantics, find/replace behavior
-- **Optional invariant suite:** cache reuse, layout-cache invalidation, reveal scheduling, exact scroll math, other internal coordination details
+This is the closest thing the repository has to a true black-box refactor gate:
+it launches the production GPUI app, sends real keyboard and mouse input, and
+asserts on observable user-facing state. When a behavior can be driven through
+that path, X11 is the preferred specification.
 
-Internal invariant tests are still valuable, but they are not part of the blind refactor gate because they can fail after a healthy internal rewrite that preserves behavior. Those tests should run explicitly, not by default.
-
-In this repository:
-
-- `cargo test` is the blind refactor gate for the active workspace
-- `cargo test --features internal-invariants` runs the full suite including app-level cache and scheduler checks
-- `cargo test -p lst-editor --features internal-invariants` runs the deeper Vim state-machine checks
-
-To keep that contract honest, implementation-sensitive checks should stay behind explicit package or feature selections, while the default gate remains biased toward higher-level behavior.
+`cargo test` is still useful, but it is no longer the primary behavior contract.
+Treat it as fast compile/domain feedback. It should stay lean enough to run
+often, and it should not grow into a second implementation-sensitive behavior
+suite beside X11.
 
 ### What lives where
 
-- **Default `cargo test`** — observable behaviour: vim motions, find/replace text outcomes, save/autosave file contents, focus follows the model, reveal causes the cursor to become visible, status string updates, tab open/close semantics. Boundary fakes only at clipboard/filesystem/display/clock.
-- **`--features internal-invariants`** — internal coordination: `assert_tab_views_match_model` (the `tab_views` HashMap mirrors `model.tabs()`), wrap-layout cache seeding (`status_details_ignore_wrap_layouts_that_have_not_been_painted`), syntax-highlight job key consistency, drag-autoscroll delta math, autosave-revision uniqueness, exact reveal scheduling, vim deeper state-machine traces. These tests can fail under a healthy rewrite that preserves user-visible behaviour, which is exactly why they are not part of the blind refactor gate.
+- **X11 tests (`apps/lst-gpui/tests/real_x11_*.rs`)** — accepted product behavior: editor commands, mouse/keyboard input, Vim flows, clipboard-visible results, state trace, autosave/save workflows, cursor/selection geometry, and multi-cursor behavior.
+- **Editor integration tests (`crates/lst-editor/tests`)** — small public-model sanity checks and domain contracts that are much cheaper than X11 or cannot be meaningfully driven through the app.
+- **Inline unit tests (`#[cfg(test)] mod tests`)** — rare private pure-algorithm or invariant checks only. Large inline behavior suites should be pruned or replaced by X11 coverage.
+- **Optional invariant suites** — private coordination checks behind explicit package/feature selections when they protect important internals without pretending to be product behavior.
 
-This split is not an excuse to weaken coverage. The rule is: if an implementation-sensitive test protects important user behavior, replace it with a higher-level behavioral test before demoting it.
+Do not expose private functions just to preserve old unit tests. If a test mostly
+documents implementation mechanics, delete it or reduce it to the smallest
+invariant that still earns its keep. If it protects user-visible behavior, cover
+that behavior through X11 whenever possible.
 
 ### Test-only escape hatches in production code
 

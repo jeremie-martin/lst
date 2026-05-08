@@ -1,8 +1,8 @@
-//! Under-review executable specs for multi-cursor and multi-selection behavior.
+//! Accepted multi-cursor and multi-selection behavior specs.
 //!
-//! Specs in this file are product decisions first. They run in the `x11-tdd`
-//! profile while the behavior is being discussed or implemented. Once accepted
-//! and green, move them into the blocking real-display suite.
+//! This file kept its historical `_tdd` suffix after the behavior was accepted.
+//! It is part of the blocking `x11` real-display lane; `x11-tdd` is only a
+//! focused way to run TDD-named real-display suites.
 
 mod support;
 

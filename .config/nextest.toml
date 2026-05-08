@@ -10,7 +10,6 @@ default-filter = '''
 package(lst-gpui)
 & kind(test)
 & binary(~real_x11_)
-& not binary(=real_x11_multi_cursor_tdd)
 '''
 test-threads = 1
 retries = 0

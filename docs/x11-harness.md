@@ -1,6 +1,7 @@
 # X11 Harness
 
-In-process driver for end-to-end testing of `lst` through real X11 input.
+In-process driver for the canonical end-to-end behavior tests for `lst` through
+real X11 input.
 Tests spawn the editor against `DISPLAY`, drive it with synthesized keyboard
 and mouse events, and assert on user-visible outcomes: saved file contents,
 clipboard contents, cursor/selection state, panels, status text, and viewport
@@ -47,25 +48,22 @@ product behavior tests should go through behavior-named helpers such as
 ## Running Tests
 
 Use the nextest profiles for real-display work. They are the canonical local
-and dedicated-machine entry points:
+and dedicated-machine behavior-gate entry points:
 
 ```sh
-cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
-cargo nextest run --profile x11-stress -p lst-gpui --tests --run-ignored only --stress-count 3
-cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
+DISPLAY=:0 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
+DISPLAY=:0 cargo nextest run --profile x11-stress -p lst-gpui --tests --run-ignored only --stress-count 3
+DISPLAY=:0 cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
 ```
 
 The `x11` profile is the blocking accepted-behavior lane. `x11-stress` runs that
-same set repeatedly for flake detection. `x11-tdd` runs under-review executable
-specs while behavior is being discussed or implemented. Passing/failing is
-diagnostic there; the point is to capture the intended product behavior before
-changing implementation. Once accepted and green, move those specs into the
-blocking `x11` suite. Broad accepted multi-cursor edge-case specs live in
-`apps/lst-gpui/tests/real_x11_multi_cursor_spec.rs`; under-review multi-cursor
-specs live in `apps/lst-gpui/tests/real_x11_multi_cursor_tdd.rs`. The current
-multi-cursor TDD pass covers editor-keybinding movement, selection extension,
-VS Code-style word deletion, line-boundary deletion, auto-pairing, paste, and
-undo behavior; Vim-mode multi-cursor policy is deliberately outside that pass.
+same set repeatedly for flake detection. `x11-tdd` is a focused lane for
+TDD-named real-display suites; it is not a weaker gate for accepted behavior.
+Broad accepted multi-cursor edge-case specs live in
+`apps/lst-gpui/tests/real_x11_multi_cursor_spec.rs`; the now-green
+`apps/lst-gpui/tests/real_x11_multi_cursor_tdd.rs` suite is also part of the
+blocking `x11` profile and remains named as a historical marker until it is
+renamed. Vim-mode multi-cursor policy is deliberately outside that pass.
 
 The profiles run serially. Every test grabs keyboard focus and moves the global
 pointer through XTEST. The harness also takes a cross-process display lock, so
@@ -256,7 +254,7 @@ The real-display suite currently has broad coverage across:
 - multi-cursor creation, text input, deletion, paste distribution, copy/cut
   collection, Escape collapse, smart Enter, per-cursor motion/selection, line
   operation coalescing, find/occurrence gestures, and column drag
-- under-review multi-cursor TDD specs for broader editor-keybinding movement,
+- accepted multi-cursor edge cases for broader editor-keybinding movement,
   selection extension, VS Code-style word/line-boundary deletion, auto-pair,
   paste, and undo behavior
 - chord-hold event trains for held-modifier gestures
@@ -269,16 +267,15 @@ through the framework-neutral model tests.
 
 ## Known Gaps / Things To Watch
 
-1. **Only the explicit TDD profile may contain accepted red specs.** The
-   blocking `x11` and `x11-stress` profiles should contain every accepted green
-   real-display contract. If behavior is still under discussion or ahead of
-   implementation, put it in `x11-tdd` with comments clear enough that failures
-   are interpretable, then promote it to `x11` as soon as it is accepted and
-   green.
+1. **The blocking X11 profile must stay green.** The blocking `x11` and
+   `x11-stress` profiles should contain every accepted green real-display
+   contract. If behavior is still under discussion or ahead of implementation,
+   keep it out of `x11` until it is accepted, with comments clear enough that
+   failures are interpretable, then promote it to `x11` as soon as it is green.
 
-   The current multi-cursor TDD file intentionally excludes Vim-mode
-   multi-cursor behavior. Decide that product policy before adding Vim Normal
-   mode multi-cursor specs.
+   The current multi-cursor TDD-named file is accepted and included in `x11`;
+   it still intentionally excludes Vim-mode multi-cursor behavior. Decide that
+   product policy before adding Vim Normal mode multi-cursor specs.
 
 2. **Trace discipline matters.** The trace is powerful enough to become an
    implementation inspection tool by accident. Keep behavior tests focused on

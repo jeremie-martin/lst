@@ -80,16 +80,17 @@ session, scenario, repetitions, and priming count.
 
 ## Behavior Gate
 
-The active refactor gate is:
+The canonical behavior gate is the real-display X11 suite:
+
+```bash
+DISPLAY=:0 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
+```
+
+Use the fast non-X11 suites for quick sanity while iterating:
 
 ```bash
 cargo test
+cargo test --all-features
 ```
 
-For deeper Vim state-machine coverage:
-
-```bash
-cargo test -p lst-editor --features internal-invariants
-```
-
-Do not trust a performance change unless the active test gate stays green.
+Do not trust a performance change unless the X11 behavior gate stays green.
