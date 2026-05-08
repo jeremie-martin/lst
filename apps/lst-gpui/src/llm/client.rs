@@ -100,6 +100,33 @@ impl LlmClient for DeepSeekClient {
     }
 }
 
+/// In-process stand-in for [`DeepSeekClient`] used by the X11 e2e harness.
+///
+/// Activated when the `lst` process is launched with `LST_LLM_FAKE_RESPONSE`
+/// set; the dispatch lives in `start_cleanup`. Unconditionally compiled so
+/// the test harness can drive the real binary, the same approach
+/// `StateTraceEmitter` uses for its env-var-gated trace channel. With no
+/// env var set this code is dormant.
+pub(crate) struct FakeLlmClient {
+    canned: String,
+    delay: Duration,
+}
+
+impl FakeLlmClient {
+    pub(crate) fn new(canned: String, delay: Duration) -> Self {
+        Self { canned, delay }
+    }
+}
+
+impl LlmClient for FakeLlmClient {
+    fn cleanup(&self, _text: &str) -> Result<String, LlmError> {
+        if !self.delay.is_zero() {
+            std::thread::sleep(self.delay);
+        }
+        Ok(self.canned.clone())
+    }
+}
+
 fn strip_trailing_newline(mut s: String) -> String {
     if s.ends_with('\n') {
         s.pop();

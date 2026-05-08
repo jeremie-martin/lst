@@ -424,10 +424,11 @@ impl LstGpuiApp {
         if self.cleanup_in_flight {
             return;
         }
-        let api_key = match std::env::var("DEEPSEEK_API_KEY") {
-            Ok(value) if !value.is_empty() => value,
-            _ => {
-                self.cleanup_message = Some("DEEPSEEK_API_KEY not set".to_string());
+
+        let client = match build_llm_client() {
+            Ok(client) => client,
+            Err(message) => {
+                self.cleanup_message = Some(message);
                 cx.notify();
                 return;
             }
@@ -461,18 +462,10 @@ impl LstGpuiApp {
         self.cleanup_message = Some("\u{27F3} Cleaning\u{2026}".to_string());
         cx.notify();
 
-        let model_name = std::env::var("DEEPSEEK_MODEL")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| crate::llm::DEFAULT_DEEPSEEK_MODEL.to_string());
-        let client = crate::llm::DeepSeekClient::new(api_key, model_name);
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    use crate::llm::LlmClient;
-                    client.cleanup(&source_text)
-                })
+                .spawn(async move { client.cleanup(&source_text) })
                 .await;
             let _ = this.update(cx, |app, cx| {
                 app.cleanup_in_flight = false;
@@ -1761,6 +1754,39 @@ fn focus_trace_label(target: FocusTarget) -> &'static str {
 
 pub(crate) fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
+}
+
+/// Pick which `LlmClient` should service the next cleanup. `LST_LLM_FAKE_RESPONSE`
+/// activates the in-process fake — used only by the X11 e2e harness — and
+/// bypasses the API key requirement so the test process never needs a
+/// DeepSeek credential. In normal runs the env var is unset and we go
+/// straight to the real DeepSeek client.
+fn build_llm_client() -> Result<Box<dyn crate::llm::LlmClient>, String> {
+    if let Some(canned) = std::env::var("LST_LLM_FAKE_RESPONSE")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        let delay_ms = std::env::var("LST_LLM_FAKE_DELAY_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        return Ok(Box::new(crate::llm::FakeLlmClient::new(
+            canned,
+            Duration::from_millis(delay_ms),
+        )));
+    }
+
+    let api_key = match std::env::var("DEEPSEEK_API_KEY") {
+        Ok(value) if !value.is_empty() => value,
+        _ => return Err("DEEPSEEK_API_KEY not set".to_string()),
+    };
+    let model_name = std::env::var("DEEPSEEK_MODEL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::llm::DEFAULT_DEEPSEEK_MODEL.to_string());
+    Ok(Box::new(crate::llm::DeepSeekClient::new(
+        api_key, model_name,
+    )))
 }
 
 fn main() {

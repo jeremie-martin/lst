@@ -66,6 +66,18 @@ impl ScratchpadSession {
     /// will write to plus the focused [`Editor`] handle. The autosave path
     /// already exists at return time.
     pub fn open(&mut self, name: &str) -> SupportResult<(Editor<'_>, PathBuf)> {
+        self.open_with_env(name, &[])
+    }
+
+    /// Same as [`open`], but exports `extra_env` to the spawned editor.
+    /// Threads through to `SpawnOpts::extra_env` so test seams (like the
+    /// `LST_LLM_FAKE_RESPONSE` fake LLM client) can be activated per-test
+    /// without leaking into the parent process or other tests.
+    pub fn open_with_env(
+        &mut self,
+        name: &str,
+        extra_env: &[(&OsStr, &OsStr)],
+    ) -> SupportResult<(Editor<'_>, PathBuf)> {
         let dir = self.root.join(name);
         fs::create_dir_all(&dir)?;
         let title = unique_title(name);
@@ -79,7 +91,7 @@ impl ScratchpadSession {
             title: &title,
             stderr,
             stdout,
-            extra_env: &[],
+            extra_env,
             stderr_log_path: Some(&stderr_log_path),
             state_trace_path: Some(&state_trace_path),
         })?;
