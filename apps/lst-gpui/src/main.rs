@@ -35,8 +35,8 @@ use interactions::ActiveDragSelection;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
-    find::FindScope, EditorModel, EditorTab as ModelEditorTab, FocusTarget, RevealIntent, TabId,
-    UndoBoundary, UNTITLED_PREFIX,
+    find::FindScope, position::Position, EditorModel, EditorTab as ModelEditorTab, FocusTarget,
+    RevealIntent, TabId, UndoBoundary, UNTITLED_PREFIX,
 };
 #[cfg(not(test))]
 use recent::default_recent_files_path;
@@ -163,6 +163,12 @@ actions!(
         DuplicateLine,
         ToggleComment,
         ToggleBlockComment,
+        TransposeChars,
+        ToggleOvertype,
+        ToggleBookmark,
+        NextBookmark,
+        PreviousBookmark,
+        ReopenClosedTab,
         CleanupText,
         ToggleRecentFiles,
         ZoomIn,
@@ -248,7 +254,17 @@ struct LstGpuiApp {
     /// Surfaced through the state trace so real-X11 tests can click the
     /// button without depending on theme-name / status-details widths.
     cleanup_button_bounds_px: Option<Bounds<Pixels>>,
+    /// Stack of recently closed file tabs, most-recent-last. `Ctrl+Shift+T`
+    /// pops the top entry and reopens it with the cursor restored. Bounded
+    /// so a long-lived editor session does not grow this unboundedly.
+    closed_tabs_history: Vec<ClosedTabRecord>,
     _shell_subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Debug)]
+struct ClosedTabRecord {
+    path: PathBuf,
+    position: Position,
 }
 
 impl LstGpuiApp {
@@ -308,6 +324,7 @@ impl LstGpuiApp {
             cleanup_in_flight: false,
             cleanup_message: None,
             cleanup_button_bounds_px: None,
+            closed_tabs_history: Vec::new(),
             _shell_subscriptions: Vec::new(),
         };
         cx.set_global(ThemeId::default());
@@ -632,14 +649,37 @@ impl LstGpuiApp {
         update(&mut self.model);
         self.sync_tab_views(old_show_wrap);
         let effects = self.model.drain_effects();
-        self.sync_find_inputs_if_changed(old_find_state, cx);
+        self.sync_find_inputs_if_changed(old_find_state.clone(), cx);
         if self.model.goto_line() != old_goto_line.as_deref() {
             self.sync_goto_input(cx);
         }
+        self.select_query_after_panel_open(old_find_state, cx);
         self.handle_model_effects(effects, cx);
         if notify_after_update {
             cx.notify();
         }
+    }
+
+    /// On panel open / show_replace flip, select the prefilled query so
+    /// typing replaces it (VS Code "selection becomes search term, ready
+    /// to overwrite" parity).
+    fn select_query_after_panel_open(
+        &mut self,
+        old_find_state: (bool, bool, String, String),
+        cx: &mut Context<Self>,
+    ) {
+        let (old_visible, old_show_replace, _, _) = old_find_state;
+        let now_visible = self.model.find().visible;
+        let now_show_replace = self.model.find().show_replace;
+        let just_opened = now_visible && (!old_visible || old_show_replace != now_show_replace);
+        if !just_opened {
+            return;
+        }
+        if self.model.find().query.is_empty() {
+            return;
+        }
+        self.find_query_input
+            .update(cx, |input, cx| input.select_all(cx));
     }
 
     /// Append one record to the state-trace channel when one is configured.
@@ -1219,6 +1259,39 @@ impl LstGpuiApp {
         char_to_line_col(self.active_tab().buffer(), self.active_tab().cursor_char())
     }
 
+    /// "▲N" / "▼N" indicator for cursors outside the painted viewport.
+    /// Compares against painted char ranges (not logical lines) so soft-
+    /// wrap segments don't confuse the off-screen test.
+    fn off_screen_cursor_indicator(&self) -> Option<String> {
+        let view = self.tab_views.get(&self.model.active_tab_id())?;
+        let geometry = view.geometry.borrow();
+        let first = geometry.rows.first()?;
+        let last = geometry.rows.last()?;
+        let painted_start_char = first.line_start_char;
+        let painted_end_char = last.display_end_char;
+        let mut above = 0usize;
+        let mut below = 0usize;
+        for selection in self.active_tab().selection_set().as_slice() {
+            let head = selection.head();
+            if head < painted_start_char {
+                above += 1;
+            } else if head > painted_end_char {
+                below += 1;
+            }
+        }
+        if above == 0 && below == 0 {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if above > 0 {
+            parts.push(format!("\u{25B2}{above}"));
+        }
+        if below > 0 {
+            parts.push(format!("\u{25BC}{below}"));
+        }
+        Some(parts.join(" "))
+    }
+
     fn selection_summary(&self) -> Option<String> {
         let tab = self.active_tab();
         let set = tab.selection_set();
@@ -1272,6 +1345,12 @@ impl LstGpuiApp {
         let pending = self.model.vim_pending_display();
         if !pending.is_empty() {
             parts.push(pending);
+        }
+        if self.model.overtype() {
+            parts.push("OVR".to_string());
+        }
+        if let Some(indicator) = self.off_screen_cursor_indicator() {
+            parts.push(indicator);
         }
         if let Some(selection) = self.selection_summary() {
             parts.push(selection);

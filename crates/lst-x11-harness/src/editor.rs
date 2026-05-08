@@ -1770,12 +1770,19 @@ fn parse_keys(input: &str) -> Result<Vec<KeyToken>> {
             }
             tokens.push(parse_escape(&spec)?);
         } else {
+            // Literal `\t` / `\n` map to the dedicated key tokens so test
+            // fixtures can embed them directly.
+            let key = match ch {
+                '\t' => Key::Tab,
+                '\n' | '\r' => Key::Enter,
+                _ => Key::Char(ch),
+            };
             tokens.push(KeyToken::Single(KeyChordSingle {
                 ctrl: false,
                 alt: false,
                 shift: false,
                 platform: false,
-                key: Key::Char(ch),
+                key,
             }));
         }
     }

@@ -45,10 +45,7 @@ fn selection_range_replacement_is_atomic_undo() {
     let cleaned_paragraph = "I think we should ship it.";
 
     let mut model = model_with_text(original);
-    model.set_selection(Selection::from_range(
-        selection_start..selection_end,
-        false,
-    ));
+    model.set_selection(Selection::from_range(selection_start..selection_end, false));
 
     model.replace_text(
         Some(selection_start..selection_end),

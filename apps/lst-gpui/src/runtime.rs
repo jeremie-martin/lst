@@ -3,7 +3,7 @@ use lst_editor::{EditorEffect, EditorTab as ModelEditorTab, FileStamp, TabCloseR
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::{
     collections::HashSet,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process,
     time::{Duration, Instant},
@@ -429,6 +429,7 @@ impl LstGpuiApp {
         };
         match self.model.close_request_for_tab(tab_id) {
             Some(TabCloseRequest::Close { tab_id }) => {
+                self.record_closed_tab(tab_id);
                 self.update_model(cx, true, |model| {
                     model.close_clean_tab(tab_id);
                 });
@@ -508,6 +509,7 @@ impl LstGpuiApp {
             PendingAfterSave::CloseTab(pending_tab_id) if pending_tab_id == tab_id => {
                 self.pending_after_save = None;
                 if success {
+                    self.record_closed_tab(tab_id);
                     self.update_model(cx, true, |model| {
                         model.close_clean_tab(tab_id);
                     });
@@ -721,6 +723,56 @@ impl LstGpuiApp {
             }
         }
     }
+
+    /// Snapshot a closing tab so `Ctrl+Shift+T` can reopen it. Scratchpads
+    /// and untitled tabs are excluded — there is no path to reopen.
+    fn record_closed_tab(&mut self, tab_id: TabId) {
+        const MAX_CLOSED_HISTORY: usize = 32;
+        let Some(tab) = self.model.tab_by_id(tab_id) else {
+            return;
+        };
+        if tab.is_scratchpad() {
+            return;
+        }
+        let Some(path) = tab.path().cloned() else {
+            return;
+        };
+        self.closed_tabs_history.push(crate::ClosedTabRecord {
+            path,
+            position: tab.cursor_position(),
+        });
+        if self.closed_tabs_history.len() > MAX_CLOSED_HISTORY {
+            let overflow = self.closed_tabs_history.len() - MAX_CLOSED_HISTORY;
+            self.closed_tabs_history.drain(..overflow);
+        }
+    }
+
+    /// Pop the most recently closed tab and reopen it, or focus the
+    /// existing tab when the path is already open.
+    pub(crate) fn reopen_recently_closed_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(record) = self.closed_tabs_history.pop() else {
+            return;
+        };
+        let line = record.position.line;
+        let column = record.position.column;
+        let existing = self
+            .model
+            .tabs()
+            .iter()
+            .find(|tab| tab.path() == Some(&record.path))
+            .map(ModelEditorTab::id);
+        if let Some(tab_id) = existing {
+            self.update_model(cx, true, |model| {
+                model.set_active_tab(tab_id);
+                model.set_active_cursor_position(line, column);
+            });
+            return;
+        }
+        self.apply_open_file_results(open_file_results(std::iter::once(record.path)), cx);
+        self.update_model(cx, true, |model| {
+            model.set_active_cursor_position(line, column);
+        });
+    }
 }
 
 fn autosave_temp_path(path: &Path, revision: u64) -> PathBuf {
@@ -774,7 +826,7 @@ fn save_file_result(
 }
 
 fn write_file_result(tab_id: TabId, path: PathBuf, body: String) -> SaveFileResult {
-    match fs::write(&path, body) {
+    match fs::write(&path, apply_save_options(body)) {
         Ok(()) => match file_stamp(&path) {
             Ok(stamp) => SaveFileResult::Saved {
                 tab_id,
@@ -801,7 +853,7 @@ fn write_autosave_body_result(
     body: String,
     revision: u64,
 ) -> AutosaveCompletion {
-    match fs::write(&path, body) {
+    match fs::write(&path, apply_save_options(body)) {
         Ok(()) => match file_stamp(&path) {
             Ok(stamp) => AutosaveCompletion::Finished {
                 tab_id,
@@ -848,7 +900,41 @@ fn can_start_autosave_job(
 
 fn write_autosave_temp_file(job: &AutosaveJob) -> std::io::Result<PathBuf> {
     let temp_path = autosave_temp_path(&job.path, job.revision);
-    fs::write(&temp_path, &job.body).map(|_| temp_path)
+    fs::write(&temp_path, apply_save_options(job.body.clone())).map(|_| temp_path)
+}
+
+/// Opt-in save-time text policies driven by env flags
+/// (`LST_SAVE_TRIM_TRAILING_WS`, `LST_SAVE_ENSURE_FINAL_NEWLINE`). They live
+/// as env vars in the spirit of `LST_LLM_FAKE_RESPONSE` until a real
+/// settings surface lands.
+fn apply_save_options(body: String) -> String {
+    let trim = env_flag("LST_SAVE_TRIM_TRAILING_WS");
+    let ensure_newline = env_flag("LST_SAVE_ENSURE_FINAL_NEWLINE");
+    if !trim && !ensure_newline {
+        return body;
+    }
+    let mut body = if trim { trim_trailing_ws(&body) } else { body };
+    if ensure_newline && !body.is_empty() && !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var_os(name).is_some_and(|value| value == "1")
+}
+
+fn trim_trailing_ws(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut segments = body.split('\n');
+    if let Some(first) = segments.next() {
+        out.push_str(first.trim_end_matches([' ', '\t']));
+    }
+    for segment in segments {
+        out.push('\n');
+        out.push_str(segment.trim_end_matches([' ', '\t']));
+    }
+    out
 }
 
 fn autosave_completion(

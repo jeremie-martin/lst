@@ -179,6 +179,9 @@ pub struct EditorTab {
     history: EditHistory,
     last_edit_position: Option<usize>,
     marked_range: Option<Range<usize>>,
+    /// Bookmarked logical lines, sorted ascending. Stored as raw line
+    /// numbers — no anchor tracking, so bookmarks drift on edits.
+    bookmarks: Vec<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -296,6 +299,7 @@ impl EditorTab {
             history: EditHistory::new(),
             last_edit_position: None,
             marked_range: None,
+            bookmarks: Vec::new(),
         }
     }
 
@@ -355,6 +359,55 @@ impl EditorTab {
 
     pub fn marked_range(&self) -> Option<&Range<usize>> {
         self.marked_range.as_ref()
+    }
+
+    pub fn bookmarks(&self) -> &[usize] {
+        &self.bookmarks
+    }
+
+    /// Returns `true` when the line was just bookmarked, `false` when an
+    /// existing bookmark on that line was cleared.
+    pub(crate) fn toggle_bookmark_at_cursor(&mut self) -> bool {
+        let line = self.buffer.char_to_line(self.cursor_char());
+        match self.bookmarks.binary_search(&line) {
+            Ok(index) => {
+                self.bookmarks.remove(index);
+                false
+            }
+            Err(index) => {
+                self.bookmarks.insert(index, line);
+                true
+            }
+        }
+    }
+
+    /// Bookmark line strictly after `from_line`, wrapping to the first
+    /// bookmark when none lies after the cursor. Returns `None` when no
+    /// bookmarks exist.
+    pub fn next_bookmark_line(&self, from_line: usize) -> Option<usize> {
+        if self.bookmarks.is_empty() {
+            return None;
+        }
+        self.bookmarks
+            .iter()
+            .copied()
+            .find(|line| *line > from_line)
+            .or_else(|| self.bookmarks.first().copied())
+    }
+
+    /// Bookmark line strictly before `from_line`, wrapping to the last
+    /// bookmark when none lies before the cursor. Returns `None` when no
+    /// bookmarks exist.
+    pub fn previous_bookmark_line(&self, from_line: usize) -> Option<usize> {
+        if self.bookmarks.is_empty() {
+            return None;
+        }
+        self.bookmarks
+            .iter()
+            .copied()
+            .rev()
+            .find(|line| *line < from_line)
+            .or_else(|| self.bookmarks.last().copied())
     }
 
     pub(crate) fn clear_marked_range(&mut self) {

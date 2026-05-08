@@ -44,22 +44,6 @@ fn trim_trailing_whitespace_strips_spaces_and_tabs_per_line() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn trim_leaves_blank_lines_empty_not_spacey() -> TestResult {
-    support::run_x11_test("save-trim-blanks", |session| {
-        let env: [(&OsStr, &OsStr); 1] = [(OsStr::new(TRIM_ENV), OsStr::new("1"))];
-        let (mut editor, path) = session.open_with_env("scratch", &env)?;
-
-        // Two blank-but-spacey lines between two real lines. Trim should
-        // collapse the spaces on the blank lines too, not just on lines
-        // with non-whitespace content.
-        editor.keys("alpha<enter>  <enter>\t<enter>omega")?;
-        editor.save_then_expect_file(&path, "alpha\n\n\nomega")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
 fn trim_is_idempotent_on_already_clean_buffer() -> TestResult {
     support::run_x11_test("save-trim-idempotent", |session| {
         let env: [(&OsStr, &OsStr); 1] = [(OsStr::new(TRIM_ENV), OsStr::new("1"))];

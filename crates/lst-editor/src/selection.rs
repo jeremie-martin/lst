@@ -210,9 +210,38 @@ impl SelectionSet {
             (range.start, range.end, origin.sort_key())
         });
 
+        // Prefer the most-recently-added non-duplicate Added as primary —
+        // that's the new edge of a multi-step extension. A naive
+        // `rposition Added` would pick the duplicate that gets coalesced
+        // away, leaving primary stuck on the previous row. When every
+        // Added is a duplicate, fall back to the duplicate's index so the
+        // coalescer redirects primary onto the targeted existing cursor.
         let added_index = selections
             .iter()
-            .rposition(|(_, origin)| *origin == SelectionOrigin::Added);
+            .enumerate()
+            .rev()
+            .find_map(|(i, (_, origin))| {
+                if *origin != SelectionOrigin::Added {
+                    return None;
+                }
+                let range = selections[i].0.range();
+                let prev_dup = i > 0
+                    && selections[i - 1].0.range() == range
+                    && selections[i - 1].1 != SelectionOrigin::Added;
+                let next_dup = i + 1 < selections.len()
+                    && selections[i + 1].0.range() == range
+                    && selections[i + 1].1 != SelectionOrigin::Added;
+                if prev_dup || next_dup {
+                    None
+                } else {
+                    Some(i)
+                }
+            })
+            .or_else(|| {
+                selections
+                    .iter()
+                    .rposition(|(_, origin)| *origin == SelectionOrigin::Added)
+            });
         if let Some(added_index) = added_index {
             if selection_overlaps_neighbor(&selections, added_index) {
                 return None;

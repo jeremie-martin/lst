@@ -6,17 +6,17 @@ use crate::{
     DuplicateLine, FindNext, FindOpen, FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline,
     InsertTab, LstGpuiApp, MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown,
     MoveLineEnd, MoveLineStart, MoveLineUp, MovePageDown, MovePageUp, MoveRight, MoveSmartHome,
-    MoveSubwordLeft,
-    MoveSubwordRight, MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab,
-    NextTab, OpenFile, OutdentSelection, PasteClipboard, PopSelectionCursor, PrevTab, Quit, Redo,
-    ReplaceAll, ReplaceOne, SaveFile, SaveFileAs, SelectAll, SelectAllOccurrences,
-    SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectFindMatches, SelectLeft, SelectLine,
-    SelectLineEnd, SelectLineStart, SelectNextOccurrence, SelectPageDown, SelectPageUp,
-    SelectParagraph, SelectRight, SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp,
-    SelectWordLeft, SelectWordRight, SkipNextOccurrence, SwapRedoBranch, ToggleBlockComment,
+    MoveSubwordLeft, MoveSubwordRight, MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft,
+    MoveWordRight, NewTab, NextBookmark, NextTab, OpenFile, OutdentSelection, PasteClipboard,
+    PopSelectionCursor, PrevTab, PreviousBookmark, Quit, Redo, ReopenClosedTab, ReplaceAll,
+    ReplaceOne, SaveFile, SaveFileAs, SelectAll, SelectAllOccurrences, SelectDocumentEnd,
+    SelectDocumentStart, SelectDown, SelectFindMatches, SelectLeft, SelectLine, SelectLineEnd,
+    SelectLineStart, SelectNextOccurrence, SelectPageDown, SelectPageUp, SelectParagraph,
+    SelectRight, SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft,
+    SelectWordRight, SkipNextOccurrence, SwapRedoBranch, ToggleBlockComment, ToggleBookmark,
     ToggleComment, ToggleFindCase, ToggleFindInSelection, ToggleFindRegex, ToggleFindWholeWord,
-    ToggleLineNumberMode, ToggleRecentFiles, ToggleTheme, ToggleWrap, Undo, ZoomIn, ZoomOut,
-    ZoomReset,
+    ToggleLineNumberMode, ToggleOvertype, ToggleRecentFiles, ToggleTheme, ToggleWrap,
+    TransposeChars, Undo, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
@@ -107,6 +107,11 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         DuplicateLine => |model| model.duplicate_line();
         ToggleComment => |model| model.toggle_comment();
         ToggleBlockComment => |model| model.toggle_block_comment();
+        TransposeChars => |model| model.transpose_chars();
+        ToggleOvertype => |model| model.toggle_overtype();
+        ToggleBookmark => |model| model.toggle_bookmark();
+        NextBookmark => |model| model.jump_next_bookmark();
+        PreviousBookmark => |model| model.jump_previous_bookmark();
     }
 
     let root = root.on_action(cx.listener(|this, _: &NewTab, _window, cx| {
@@ -186,6 +191,12 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
     let root = root.on_action(cx.listener(|this, _: &CloseActiveTab, _window, cx| {
         this.clear_x11_modifier_chord_state();
         this.request_close_active_tab(cx);
+        cx.stop_propagation();
+    }));
+
+    let root = root.on_action(cx.listener(|this, _: &ReopenClosedTab, _window, cx| {
+        this.clear_x11_modifier_chord_state();
+        this.reopen_recently_closed_tab(cx);
         cx.stop_propagation();
     }));
 

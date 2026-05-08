@@ -104,6 +104,10 @@ pub struct EditorModel {
     vim: vim::VimState,
     viewport: Viewport,
     effects: Vec<EditorEffect>,
+    /// Overtype mode replaces the character to the right of the caret on
+    /// each printable insert instead of pushing it forward. Persists across
+    /// motion until toggled off.
+    overtype: bool,
 }
 
 impl EditorModel {
@@ -124,6 +128,7 @@ impl EditorModel {
             vim: vim::VimState::new(),
             viewport: Viewport::default(),
             effects: Vec::new(),
+            overtype: false,
         }
     }
 
@@ -237,6 +242,21 @@ impl EditorModel {
 
     pub fn vim_pending_display(&self) -> String {
         self.vim.pending_display()
+    }
+
+    pub fn overtype(&self) -> bool {
+        self.overtype
+    }
+
+    /// Toggle overtype mode. When on, plain printable insertion replaces
+    /// the char to the right of the caret instead of pushing it forward.
+    pub fn toggle_overtype(&mut self) {
+        self.overtype = !self.overtype;
+        self.status = if self.overtype {
+            "Overtype on.".to_string()
+        } else {
+            "Overtype off.".to_string()
+        };
     }
 
     fn new_empty_tab(&mut self) -> EditorTab {
@@ -1882,12 +1902,49 @@ impl EditorModel {
         self.active_tab_mut().clear_marked_range();
     }
 
+    /// EOL fall-through (the cursor is past the last char) keeps users
+    /// from getting stuck unable to extend a line. Multi-cursor and IME
+    /// composition skip overtype intentionally.
+    fn expand_range_for_overtype(
+        &self,
+        range: Option<Range<usize>>,
+        text: &str,
+    ) -> Option<Range<usize>> {
+        if !self.overtype {
+            return range;
+        }
+        if text.is_empty() || text.contains('\n') || text.contains('\r') {
+            return range;
+        }
+        let tab = self.active_tab();
+        if tab.selection_set().has_multiple() || tab.marked_range().is_some() {
+            return range;
+        }
+        let resolved = text_input::resolve_range(tab, range.clone());
+        if resolved.start != resolved.end {
+            return range;
+        }
+        let buffer = tab.buffer();
+        let cursor = resolved.start;
+        let line = buffer.char_to_line(cursor);
+        let line_start = buffer.line_to_char(line);
+        let line_chars = display_line_char_len(tab, line);
+        if cursor >= line_start + line_chars {
+            // EOL: no char to overwrite, fall back to insert so the user
+            // can still extend the line.
+            return range;
+        }
+        let next = selection::next_grapheme_boundary(buffer, cursor);
+        Some(cursor..next)
+    }
+
     fn apply_text_input(
         &mut self,
         range: Option<Range<usize>>,
         text: String,
         boundary: UndoBoundary,
     ) {
+        let range = self.expand_range_for_overtype(range, &text);
         match text_input::edit_action(self.active_tab(), range, text, boundary) {
             text_input::TextInputAction::MoveCursor(new_cursor) => {
                 self.assign_selection(Selection::collapsed(new_cursor));
@@ -2289,7 +2346,10 @@ impl EditorModel {
             let tab = self.active_tab_mut();
             tab.set_selection_set(after);
             tab.set_preferred_column(preferred_column);
-            self.queue_reveal(RevealIntent::NearestEdge);
+            // Center the new primary so an extension that outgrows the
+            // viewport surfaces the ▲/▼ off-screen indicator instead of
+            // pinning to one edge.
+            self.queue_reveal(RevealIntent::Center);
         }
     }
 
@@ -2646,6 +2706,55 @@ impl EditorModel {
             self.replace_text(None, text.clone(), UndoBoundary::Break);
         }
         self.status = format!("Pasted {} line(s).", text.lines().count());
+    }
+
+    /// Move the primary cursor to `(line, column)` on the active tab,
+    /// clamping to the buffer's logical extent.
+    pub fn set_active_cursor_position(&mut self, line: usize, column: usize) {
+        self.move_active_cursor(line, column, false);
+        self.queue_reveal(RevealIntent::Center);
+    }
+
+    /// Toggle a bookmark on the line that hosts the primary cursor.
+    pub fn toggle_bookmark(&mut self) {
+        let added = self.active_tab_mut().toggle_bookmark_at_cursor();
+        self.status = if added {
+            "Bookmark added.".to_string()
+        } else {
+            "Bookmark cleared.".to_string()
+        };
+    }
+
+    pub fn jump_next_bookmark(&mut self) {
+        let cursor_line = self.active_cursor_position().line;
+        let Some(target) = self.active_tab().next_bookmark_line(cursor_line) else {
+            return;
+        };
+        self.move_cursor_to_bookmarked_line(target);
+    }
+
+    pub fn jump_previous_bookmark(&mut self) {
+        let cursor_line = self.active_cursor_position().line;
+        let Some(target) = self.active_tab().previous_bookmark_line(cursor_line) else {
+            return;
+        };
+        self.move_cursor_to_bookmarked_line(target);
+    }
+
+    fn move_cursor_to_bookmarked_line(&mut self, line: usize) {
+        self.active_tab_mut()
+            .set_cursor_position(Position { line, column: 0 }, None);
+        self.queue_reveal(RevealIntent::Center);
+    }
+
+    /// Emacs `C-t`-style transpose: swap the two graphemes around the
+    /// caret. At BOL/EOL, swap the line's first/last two graphemes
+    /// instead — never crossing the newline.
+    pub fn transpose_chars(&mut self) {
+        let Some(request) = transpose_request(self.active_tab()) else {
+            return;
+        };
+        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
     }
 
     pub fn toggle_find_panel(&mut self, show_replace: bool) {
@@ -3082,6 +3191,54 @@ fn linewise_range_at_char(buffer: &ropey::Rope, char_index: usize) -> Range<usiz
         '\r' => (start - 1)..range.end,
         _ => range,
     }
+}
+
+fn transpose_request(tab: &EditorTab) -> Option<EditRequest> {
+    let buffer = tab.buffer();
+    let cursor = tab.cursor_char();
+    let line = buffer.char_to_line(cursor);
+    let line_start = buffer.line_to_char(line);
+    let line_end = line_start + display_line_char_len(tab, line);
+
+    // Walk by grapheme boundaries — naked-char swaps would split combining
+    // marks off their base character.
+    let mid = if cursor == line_start {
+        let m = next_grapheme_boundary(buffer, line_start);
+        if m >= line_end {
+            return None;
+        }
+        m
+    } else if cursor >= line_end {
+        let m = previous_grapheme_boundary(buffer, line_end);
+        if m <= line_start {
+            return None;
+        }
+        m
+    } else {
+        cursor
+    };
+    let left_start = previous_grapheme_boundary(buffer, mid);
+    let right_end = next_grapheme_boundary(buffer, mid);
+    if left_start < line_start || right_end > line_end {
+        return None;
+    }
+    let first = buffer.slice(left_start..mid).to_string();
+    let second = buffer.slice(mid..right_end).to_string();
+    let mut replacement = String::with_capacity(first.len() + second.len());
+    replacement.push_str(&second);
+    replacement.push_str(&first);
+
+    Some(
+        EditRequest::single(
+            EditKind::Other,
+            UndoBoundary::Break,
+            left_start..right_end,
+            replacement,
+        )
+        .with_selection_after(SelectionAfter::CursorPosition(char_to_position(
+            buffer, right_end,
+        ))),
+    )
 }
 
 fn preferred_newline_for_active_tab(tab: &EditorTab) -> &'static str {

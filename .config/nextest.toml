@@ -39,7 +39,7 @@ inherits = "x11"
 default-filter = '''
 package(lst-gpui)
 & kind(test)
-& binary(=real_x11_multi_cursor_tdd)
+& binary(~real_x11_) & binary(~_tdd)
 '''
 
 [profile.x11-tdd.junit]
