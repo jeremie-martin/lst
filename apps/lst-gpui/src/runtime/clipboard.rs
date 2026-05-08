@@ -19,19 +19,6 @@ impl ExitClipboard for SubprocessExitClipboard {
     }
 }
 
-#[cfg(test)]
-#[derive(Default, Clone)]
-pub(crate) struct CapturingExitClipboard {
-    pub(crate) persisted: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-}
-
-#[cfg(test)]
-impl ExitClipboard for CapturingExitClipboard {
-    fn persist(&self, text: &str) {
-        self.persisted.lock().unwrap().push(text.to_string());
-    }
-}
-
 #[derive(Clone, Copy)]
 enum SystemSelection {
     Clipboard,

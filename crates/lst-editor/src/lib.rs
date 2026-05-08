@@ -2509,7 +2509,7 @@ impl EditorModel {
     pub fn move_line_up(&mut self) {
         if self.active_tab().selection_set().has_multiple() {
             if let Some(request) =
-                line_edit::move_touched_line_clusters_up_request(self.active_tab())
+                line_edit::move_touched_line_clusters_request(self.active_tab(), true)
             {
                 self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
                 return;
@@ -2527,7 +2527,7 @@ impl EditorModel {
     pub fn move_line_down(&mut self) {
         if self.active_tab().selection_set().has_multiple() {
             if let Some(request) =
-                line_edit::move_touched_line_clusters_down_request(self.active_tab())
+                line_edit::move_touched_line_clusters_request(self.active_tab(), false)
             {
                 self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
                 return;

@@ -236,7 +236,7 @@ enum SurroundPhase {
     ChangeAwaitTo { from_open: char },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum Motion {
     Left,
     Right,
@@ -333,9 +333,13 @@ impl VimState {
         self.preferred_column = None;
     }
 
-    pub fn on_tab_switch(&mut self) {
+    fn clear_command_state(&mut self) {
         self.clear_pending();
         self.clear_preferred_column();
+    }
+
+    pub fn on_tab_switch(&mut self) {
+        self.clear_command_state();
         if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
             self.mode = Mode::Normal;
             self.visual_anchor = None;
@@ -345,20 +349,15 @@ impl VimState {
     fn exit_visual(&mut self) {
         self.mode = Mode::Normal;
         self.visual_anchor = None;
-        self.clear_pending();
-        self.clear_preferred_column();
+        self.clear_command_state();
     }
 
     fn repeat_find(&self, c: char) -> Option<Motion> {
         if c != ';' && c != ',' {
             return None;
         }
-        let last = self.last_find.as_ref()?;
-        Some(if c == ';' {
-            last.clone()
-        } else {
-            reverse_find(last)
-        })
+        let last = self.last_find?;
+        Some(if c == ';' { last } else { reverse_find(last) })
     }
 
     fn resolve_find_partial(&mut self, partial: char, c: char) -> Option<Motion> {
@@ -370,7 +369,7 @@ impl VimState {
             'g' if c == 'g' => return Some(Motion::DocumentStart),
             _ => return None,
         };
-        self.last_find = Some(motion.clone());
+        self.last_find = Some(motion);
         Some(motion)
     }
 
@@ -382,8 +381,7 @@ impl VimState {
         match self.mode {
             Mode::Insert => {
                 self.mode = Mode::Normal;
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.clear_command_state();
                 // vim: cursor moves left by 1 when leaving Insert (unless at col 0).
                 // Step by grapheme cluster, then clamp to the start of the last
                 // cluster so we never land mid-cluster on a multi-char grapheme.
@@ -409,8 +407,7 @@ impl VimState {
                 vec![VimCommand::MoveTo(cursor)]
             }
             Mode::Normal => {
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.clear_command_state();
                 vec![VimCommand::Noop]
             }
         }
@@ -425,16 +422,14 @@ impl VimState {
         text: &TextSnapshot,
     ) -> Vec<VimCommand> {
         if let Some(cmd) = ctrl_page_command(key, mods) {
-            self.clear_pending();
-            self.clear_preferred_column();
+            self.clear_command_state();
             return vec![cmd];
         }
 
         if mods.command() {
             if let Key::Character(c) = key {
                 if c.as_str() == "r" {
-                    self.clear_pending();
-                    self.clear_preferred_column();
+                    self.clear_command_state();
                     return vec![VimCommand::Redo];
                 }
             }
@@ -551,8 +546,7 @@ impl VimState {
         }
 
         let count = self.motion_count().unwrap_or(1);
-        self.clear_pending();
-        self.clear_preferred_column();
+        self.clear_command_state();
 
         match c {
             'H' => vec![VimCommand::MoveToScreenTop],
@@ -921,8 +915,7 @@ impl VimState {
             return self.apply_motion(motion, text);
         }
         if partial == 'z' {
-            self.clear_pending();
-            self.clear_preferred_column();
+            self.clear_command_state();
             return match resolve_z_intent(c) {
                 Some(intent) => vec![VimCommand::ScrollCursor(intent)],
                 None => vec![VimCommand::Noop],
@@ -931,8 +924,7 @@ impl VimState {
         match partial {
             'r' => {
                 let count = self.motion_count().unwrap_or(1);
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.clear_command_state();
                 if c == '\n' || line_len(text, text.cursor.line) == 0 {
                     vec![VimCommand::Noop]
                 } else {
@@ -940,8 +932,7 @@ impl VimState {
                 }
             }
             'g' => {
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.clear_command_state();
                 match c {
                     ';' => vec![VimCommand::JumpToLastEdit {
                         enter_insert: false,
@@ -952,8 +943,7 @@ impl VimState {
             }
             '>' | '<' if c == partial => {
                 let count = self.motion_count().unwrap_or(1);
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.clear_command_state();
                 let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
                 if partial == '>' {
                     vec![VimCommand::IndentLines {
@@ -972,8 +962,7 @@ impl VimState {
                 let count = self.motion_count();
                 if let Some(op) = self.pending.operator.take() {
                     if let Some(range) = text_object(text, c, inner, count) {
-                        self.clear_pending();
-                        self.clear_preferred_column();
+                        self.clear_command_state();
                         // Paragraph text objects are linewise
                         if c == 'p' {
                             return self.line_operator(op, range.0.line, range.1.line);
@@ -981,13 +970,11 @@ impl VimState {
                         return self.range_operator(op, range.0, range.1);
                     }
                 }
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.clear_command_state();
                 vec![VimCommand::Noop]
             }
             _ => {
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.clear_command_state();
                 vec![VimCommand::Noop]
             }
         }
@@ -1023,8 +1010,7 @@ impl VimState {
                 vec![VimCommand::Noop]
             }
             Some(SurroundPhase::AddAwaitDelim { from, to }) => {
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.clear_command_state();
                 let Some((open, close)) = surround_pair_for_char(c) else {
                     return vec![VimCommand::Noop];
                 };
@@ -1036,8 +1022,7 @@ impl VimState {
                 }]
             }
             Some(SurroundPhase::DeleteAwaitDelim) => {
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.clear_command_state();
                 let Some((open, _)) = surround_pair_for_char(c) else {
                     return vec![VimCommand::Noop];
                 };
@@ -1052,8 +1037,7 @@ impl VimState {
                 vec![VimCommand::Noop]
             }
             Some(SurroundPhase::ChangeAwaitTo { from_open }) => {
-                self.clear_pending();
-                self.clear_preferred_column();
+                self.clear_command_state();
                 let Some((to_open, _)) = surround_pair_for_char(c) else {
                     return vec![VimCommand::Noop];
                 };
@@ -1135,8 +1119,7 @@ impl VimState {
         };
 
         let count = self.motion_count();
-        self.clear_pending();
-        self.clear_preferred_column();
+        self.clear_command_state();
 
         if motion_is_linewise(&motion, count) {
             let target = compute_motion(&motion, text, count, None);
@@ -1526,13 +1509,13 @@ fn motion_noop_on_same_pos(motion: &Motion) -> bool {
     )
 }
 
-fn reverse_find(motion: &Motion) -> Motion {
+fn reverse_find(motion: Motion) -> Motion {
     match motion {
-        Motion::FindChar(c) => Motion::FindCharBack(*c),
-        Motion::FindCharBack(c) => Motion::FindChar(*c),
-        Motion::TillChar(c) => Motion::TillCharBack(*c),
-        Motion::TillCharBack(c) => Motion::TillChar(*c),
-        other => other.clone(),
+        Motion::FindChar(c) => Motion::FindCharBack(c),
+        Motion::FindCharBack(c) => Motion::FindChar(c),
+        Motion::TillChar(c) => Motion::TillCharBack(c),
+        Motion::TillCharBack(c) => Motion::TillChar(c),
+        other => other,
     }
 }
 

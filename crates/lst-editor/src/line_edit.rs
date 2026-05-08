@@ -297,7 +297,7 @@ pub(crate) fn line_swap_request(tab: &EditorTab, pos: Position, up: bool) -> Opt
     ))
 }
 
-pub(crate) fn move_touched_line_clusters_up_request(tab: &EditorTab) -> Option<EditRequest> {
+pub(crate) fn move_touched_line_clusters_request(tab: &EditorTab, up: bool) -> Option<EditRequest> {
     let lines = selection_set_touched_lines(tab);
     let clusters = line_clusters(&lines);
     if clusters.is_empty() {
@@ -306,46 +306,32 @@ pub(crate) fn move_touched_line_clusters_up_request(tab: &EditorTab) -> Option<E
 
     let mut changes = Vec::with_capacity(clusters.len());
     for cluster in &clusters {
-        if cluster.start == 0 {
-            return None;
-        }
-        let mut replacement_lines = cluster
-            .clone()
-            .map(|line| line_display_text(tab.buffer(), line))
-            .collect::<Vec<_>>();
-        replacement_lines.push(line_display_text(tab.buffer(), cluster.start - 1));
-        let change = replace_lines_in_place_change(
-            tab,
-            cluster.start - 1,
-            cluster.end - 1,
-            &replacement_lines,
-        )?;
+        let (first, last, replacement_lines) = if up {
+            if cluster.start == 0 {
+                return None;
+            }
+            let mut lines = cluster
+                .clone()
+                .map(|line| line_display_text(tab.buffer(), line))
+                .collect::<Vec<_>>();
+            lines.push(line_display_text(tab.buffer(), cluster.start - 1));
+            (cluster.start - 1, cluster.end - 1, lines)
+        } else {
+            if cluster.end >= tab.line_count() {
+                return None;
+            }
+            let mut lines = vec![line_display_text(tab.buffer(), cluster.end)];
+            lines.extend(
+                cluster
+                    .clone()
+                    .map(|line| line_display_text(tab.buffer(), line)),
+            );
+            (cluster.start, cluster.end, lines)
+        };
+        let change = replace_lines_in_place_change(tab, first, last, &replacement_lines)?;
         changes.push(change);
     }
-    request_with_line_move_selection(tab, changes, &clusters, true)
-}
-
-pub(crate) fn move_touched_line_clusters_down_request(tab: &EditorTab) -> Option<EditRequest> {
-    let lines = selection_set_touched_lines(tab);
-    let clusters = line_clusters(&lines);
-    if clusters.is_empty() {
-        return None;
-    }
-
-    let mut changes = Vec::with_capacity(clusters.len());
-    for cluster in &clusters {
-        if cluster.end >= tab.line_count() {
-            return None;
-        }
-        let mut replacement_lines = vec![line_display_text(tab.buffer(), cluster.end)];
-        for line in cluster.clone() {
-            replacement_lines.push(line_display_text(tab.buffer(), line));
-        }
-        let change =
-            replace_lines_in_place_change(tab, cluster.start, cluster.end, &replacement_lines)?;
-        changes.push(change);
-    }
-    request_with_line_move_selection(tab, changes, &clusters, false)
+    request_with_line_move_selection(tab, changes, &clusters, up)
 }
 
 pub(crate) fn duplicate_line_request(tab: &EditorTab, pos: Position) -> Option<EditRequest> {

@@ -13,8 +13,6 @@ use crate::Result;
 
 pub(crate) struct WindowInfo {
     pub(crate) id: Window,
-    pub(crate) root_x: i16,
-    pub(crate) root_y: i16,
     pub(crate) width: u16,
     pub(crate) height: u16,
 }
@@ -36,7 +34,7 @@ pub(crate) fn find(
             ))
             .into());
         }
-        if let Some(info) = find_recursive(conn, root, root, atoms, pid, title)? {
+        if let Some(info) = find_recursive(conn, root, atoms, pid, title)? {
             return Ok(info);
         }
         if Instant::now() >= deadline {
@@ -57,7 +55,6 @@ pub(crate) fn is_viewable(conn: &RustConnection, window: Window) -> Result<bool>
 
 fn find_recursive(
     conn: &RustConnection,
-    root: Window,
     window: Window,
     atoms: &Atoms,
     pid: u32,
@@ -75,15 +72,8 @@ fn find_recursive(
                 Err(error) if is_stale_window_error(&error) => return Ok(None),
                 Err(error) => return Err(error.into()),
             };
-            let translated = match conn.translate_coordinates(window, root, 0, 0)?.reply() {
-                Ok(translated) => translated,
-                Err(error) if is_stale_window_error(&error) => return Ok(None),
-                Err(error) => return Err(error.into()),
-            };
             return Ok(Some(WindowInfo {
                 id: window,
-                root_x: translated.dst_x,
-                root_y: translated.dst_y,
                 width: geometry.width,
                 height: geometry.height,
             }));
@@ -96,7 +86,7 @@ fn find_recursive(
         Err(error) => return Err(error.into()),
     };
     for child in tree.children {
-        if let Some(info) = find_recursive(conn, root, child, atoms, pid, title)? {
+        if let Some(info) = find_recursive(conn, child, atoms, pid, title)? {
             return Ok(Some(info));
         }
     }

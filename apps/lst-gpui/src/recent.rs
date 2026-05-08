@@ -278,11 +278,6 @@ impl RecentView {
         panel.selection.clone()
     }
 
-    #[cfg(test)]
-    pub(crate) fn selected_index(&self) -> Option<usize> {
-        self.page().selected_index
-    }
-
     /// Moves the keyboard selection. Returns `Some(index)` of the new selection
     /// so callers can scroll the corresponding card into view.
     pub(crate) fn move_selection(&mut self, movement: RecentSelectionMove) -> Option<usize> {
@@ -314,17 +309,6 @@ impl RecentView {
 
         panel.selection = visible_paths.get(next).cloned();
         Some(next)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn row_selection_target(
-        &self,
-        current: usize,
-        visible_len: usize,
-        row_next: bool,
-    ) -> Option<usize> {
-        let panel = self.panel.as_ref()?;
-        Self::row_target(&panel.card_bounds, current, visible_len, row_next)
     }
 
     pub(crate) fn card_bounds_for(&self, index: usize) -> Option<Bounds<Pixels>> {

@@ -353,26 +353,6 @@ impl LstGpuiApp {
             model.set_selection(Selection::from_range(selection, reversed));
         });
     }
-
-    #[cfg(test)]
-    pub(crate) fn force_stale_drag_selection_for_test(&mut self, point: Point<Pixels>) {
-        self.start_drag_selection(DragSelectionMode::Character, point);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_active_drag_selection_for_test(&self) -> bool {
-        self.selection_drag.is_some()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn run_drag_autoscroll_once_for_test(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.run_drag_autoscroll(window, cx);
-        self.cancel_drag_selection();
-    }
 }
 
 pub(crate) fn drag_autoscroll_delta(

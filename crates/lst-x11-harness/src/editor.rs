@@ -98,58 +98,10 @@ pub struct SpawnOpts<'a> {
     pub state_trace_path: Option<&'a Path>,
 }
 
-impl<'a> SpawnOpts<'a> {
-    pub fn new(binary: &'a Path, title: &'a str) -> Self {
-        Self {
-            binary,
-            args: &[],
-            title,
-            stderr: Stdio::inherit(),
-            stdout: Stdio::null(),
-            extra_env: &[],
-            stderr_log_path: None,
-            state_trace_path: None,
-        }
-    }
-
-    pub fn with_args(mut self, args: &'a [&'a OsStr]) -> Self {
-        self.args = args;
-        self
-    }
-
-    pub fn with_extra_env(mut self, extra_env: &'a [(&'a OsStr, &'a OsStr)]) -> Self {
-        self.extra_env = extra_env;
-        self
-    }
-
-    pub fn with_stderr(mut self, stderr: Stdio) -> Self {
-        self.stderr = stderr;
-        self
-    }
-
-    pub fn with_stdout(mut self, stdout: Stdio) -> Self {
-        self.stdout = stdout;
-        self
-    }
-
-    pub fn with_stderr_log_path(mut self, path: &'a Path) -> Self {
-        self.stderr_log_path = Some(path);
-        self
-    }
-
-    pub fn with_state_trace_path(mut self, path: &'a Path) -> Self {
-        self.state_trace_path = Some(path);
-        self
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct FileWaitOpts {
     pub stable_for: Duration,
     pub timeout: Duration,
-    /// If `Some`, periodically inject `Ctrl+S` until the file matches.
-    /// Bench callers use this; smoke tests usually pass `None`.
-    pub save_retry_every: Option<Duration>,
 }
 
 impl FileWaitOpts {
@@ -157,13 +109,7 @@ impl FileWaitOpts {
         Self {
             stable_for,
             timeout,
-            save_retry_every: None,
         }
-    }
-
-    pub fn with_save_retry(mut self, every: Duration) -> Self {
-        self.save_retry_every = Some(every);
-        self
     }
 }
 
@@ -177,7 +123,6 @@ pub struct FileStats {
 pub struct FileWaitOutcome {
     pub stats: FileStats,
     pub damage_events: u64,
-    pub save_retries: u64,
 }
 
 /// Handle to a spawned editor. Owns the child process and its DAMAGE
@@ -278,29 +223,15 @@ fn build_command(display: &Display, opts: SpawnOpts<'_>) -> Command {
 }
 
 impl<'a> Editor<'a> {
-    pub fn child_pid(&self) -> u32 {
-        self.child.as_ref().map(Child::id).unwrap_or(0)
-    }
-
     pub fn window_id(&self) -> xproto::Window {
         self.window.id
-    }
-
-    /// Returns `(width, height, root_x, root_y)` in pixels.
-    pub fn window_geometry(&self) -> (u16, u16, i16, i16) {
-        (
-            self.window.width,
-            self.window.height,
-            self.window.root_x,
-            self.window.root_y,
-        )
     }
 
     pub fn is_viewable(&self) -> Result<bool> {
         window::is_viewable(&self.display.conn, self.window.id)
     }
 
-    pub fn focus_for_keyboard(&mut self) -> Result<()> {
+    fn focus_for_keyboard(&mut self) -> Result<()> {
         self.display.conn.set_input_focus(
             xproto::InputFocus::PARENT,
             self.window.id,
@@ -327,18 +258,6 @@ impl<'a> Editor<'a> {
         )?;
         thread::sleep(POINTER_SETTLE);
         input::click_button(&self.display.conn, self.display.root, BUTTON_LEFT)
-    }
-
-    pub fn middle_click_at(&mut self, local_x: i32, local_y: i32) -> Result<()> {
-        input::move_pointer_to_window_point(
-            &self.display.conn,
-            self.display.root,
-            &self.window,
-            local_x,
-            local_y,
-        )?;
-        thread::sleep(POINTER_SETTLE);
-        input::click_button(&self.display.conn, self.display.root, BUTTON_MIDDLE)
     }
 
     /// Single left click at the given (line, col) text position. Resolves
@@ -1154,8 +1073,6 @@ impl<'a> Editor<'a> {
                 &display.conn,
                 damage_id,
                 window_id,
-                display.root,
-                &display.keycodes,
                 child,
                 path,
                 expected,
@@ -1960,13 +1877,10 @@ fn parse_special_name(name: &str) -> Option<Key> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn wait_file_text_impl(
     conn: &RustConnection,
     damage_id: damage::Damage,
     window_id: xproto::Window,
-    root: xproto::Window,
-    kc: &Keycodes,
     child: &mut Child,
     path: &Path,
     expected: &str,
@@ -1975,9 +1889,7 @@ fn wait_file_text_impl(
     let deadline = Instant::now() + opts.timeout;
     let mut last_text = read_optional_text(path)?;
     let mut last_change = Instant::now();
-    let mut last_save: Option<Instant> = None;
     let mut damage_events = 0u64;
-    let mut save_retries = 0u64;
 
     loop {
         if let Some(status) = child.try_wait()? {
@@ -2011,23 +1923,7 @@ fn wait_file_text_impl(
                     lines: text.lines().count(),
                 },
                 damage_events,
-                save_retries,
             });
-        }
-
-        if let Some(retry_every) = opts.save_retry_every {
-            let should_retry = match last_save {
-                Some(when) => when.elapsed() >= retry_every,
-                None => true,
-            };
-            if should_retry {
-                let (s_code, _) = kc
-                    .lookup_char('s')
-                    .ok_or_else(|| io::Error::other("missing keycode for 's' (save retry)"))?;
-                input::chord(conn, root, kc, s_code, true, false, false)?;
-                last_save = Some(Instant::now());
-                save_retries += 1;
-            }
         }
 
         if Instant::now() >= deadline {

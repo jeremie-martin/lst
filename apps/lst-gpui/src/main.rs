@@ -358,9 +358,6 @@ impl LstGpuiApp {
         let page = self.recent.page();
         AppSnapshot {
             model: self.model.snapshot(),
-            find_query_input: self.find_query_input.read(cx).text(),
-            find_replace_input: self.find_replace_input.read(cx).text(),
-            goto_line_input: self.goto_line_input.read(cx).text(),
             recent_query_input: self.recent_query_input.read(cx).text(),
             recent_panel_visible: self.recent.is_open(),
             recent_paths: self.recent.entries().to_vec(),
@@ -377,7 +374,6 @@ impl LstGpuiApp {
                 .filter(|tab| self.tab_views.contains_key(&tab.id()))
                 .map(|tab| tab.id())
                 .collect(),
-            zoom_level: self.zoom_level,
             theme_id: current_theme_id(cx),
         }
     }
@@ -1703,9 +1699,6 @@ impl LstGpuiApp {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AppSnapshot {
     pub(crate) model: lst_editor::EditorSnapshot,
-    pub(crate) find_query_input: String,
-    pub(crate) find_replace_input: String,
-    pub(crate) goto_line_input: String,
     pub(crate) recent_query_input: String,
     pub(crate) recent_panel_visible: bool,
     pub(crate) recent_paths: Vec<PathBuf>,
@@ -1716,7 +1709,6 @@ pub(crate) struct AppSnapshot {
     pub(crate) focus_target: FocusTarget,
     #[cfg(feature = "internal-invariants")]
     pub(crate) tab_view_ids: Vec<TabId>,
-    pub(crate) zoom_level: i32,
     pub(crate) theme_id: ThemeId,
 }
 

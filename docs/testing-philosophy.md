@@ -40,28 +40,7 @@ Every fake in a test is a piece of production code that is *not being tested*. S
 - Pure logic (text manipulation, vim motions, find/replace matching)
 - Anything that is "hard to set up" — if it is hard to set up, that is a design problem
 
-A boundary fake should be a minimal trait implementation, not a general-purpose mock framework. The trait carries only the operations the editor actually invokes at that boundary, and the fake is small enough to trust on inspection. The exit-clipboard pair in `apps/lst-gpui/src/runtime/clipboard.rs` is the live example:
-
-```rust
-pub(crate) trait ExitClipboard: Send + Sync + 'static {
-    fn persist(&self, text: &str);
-}
-
-#[cfg(test)]
-#[derive(Default, Clone)]
-pub(crate) struct CapturingExitClipboard {
-    pub(crate) persisted: Arc<Mutex<Vec<String>>>,
-}
-
-#[cfg(test)]
-impl ExitClipboard for CapturingExitClipboard {
-    fn persist(&self, text: &str) {
-        self.persisted.lock().unwrap().push(text.to_string());
-    }
-}
-```
-
-The trait carries one method because shutdown persistence has one operation; live copy/paste during a session goes through GPUI's own clipboard, not this trait. The fake records into a `Vec` so a test can assert on what would have been persisted. One fake per boundary, shared across tests, maintained as test infrastructure rather than duplicated per file.
+A boundary fake should be a minimal trait implementation, not a general-purpose mock framework. The trait carries only the operations the editor actually invokes at that boundary, and the fake is small enough to trust on inspection. The current exit-clipboard path is intentionally not faked in the GPUI app tests anymore: shutdown clipboard persistence is product behavior, so the real X11 lane owns it through `real_x11_smoke.rs`. Keep that standard for other boundaries too. Add a fake only when the real boundary cannot be driven by the X11 harness or a cheaper public model contract.
 
 
 ## The design constraint
@@ -113,7 +92,7 @@ None of these were hypothetical. They were real bugs in production code, found b
 Not testing something is a valid choice when it is a principled boundary, not a gap. We don't test:
 
 - **GPUI's rendering pipeline, layout engine, and graphics backend** — these are framework internals. We trust them the same way we trust the standard library.
-- **Real clipboard and filesystem in CI** — behind trait boundaries, exercised in production. The traits exist precisely so we can remove these from the test path.
+- **Compositor, clipboard-owner, and filesystem tooling internals** — drive them through X11 when they are part of editor behavior; otherwise trust the platform/tool and keep the editor boundary narrow.
 - **Visual correctness** — no headless renderer available. Pixel-level assertions would be brittle even if they were possible.
 
 The line is: test everything we own, trust everything we don't. If we find ourselves wanting to test framework behavior, that is a sign we are relying on undocumented behavior and should reconsider the design.
@@ -154,7 +133,6 @@ that behavior through X11 whenever possible.
 A few `#[cfg(test)]` items remain in production code. Each is justified or it should be removed:
 
 - `LstGpuiApp::flush_pending_reveal_for_test` — frame-timing escape hatch. GPUI's `cx.on_next_frame` does not always fire under `run_until_parked` before the next paint commits, so tests that assert on observable scroll behaviour need to drain the queued reveal explicitly. The behaviour under test is observable; only the frame timing is bypassed.
-- `runtime::clipboard::CapturingExitClipboard` — boundary fake for the exit-time clipboard subprocess. Wired through the `ExitClipboard` trait field on `LstGpuiApp` and constructed in the test factory. There is no `#[cfg(test)]` branch in the production `finish_quit` path.
 - `process::exit(0)` vs `cx.defer(|app| app.quit())` in `finish_quit` — unavoidable platform difference. Tests cannot terminate the host process; production cannot persist clipboard subprocesses if the app is still alive. The only `#[cfg(test)]` left in `finish_quit` is the exit step itself.
 
 
