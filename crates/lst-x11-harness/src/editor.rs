@@ -51,6 +51,7 @@ pub enum Key {
     Escape,
     Backspace,
     Delete,
+    Insert,
     F2,
     Home,
     End,
@@ -642,8 +643,8 @@ impl<'a> Editor<'a> {
     ///
     /// - Special keys: `<enter>` / `<cr>` / `<return>`, `<esc>` / `<escape>`,
     ///   `<tab>`, `<space>`, `<bs>` / `<backspace>`, `<del>` / `<delete>`,
-    ///   `<f2>`, `<home>`, `<end>`, `<left>`, `<right>`, `<up>`, `<down>`,
-    ///   `<lt>` (literal `<`).
+    ///   `<ins>` / `<insert>`, `<f2>`, `<home>`, `<end>`, `<left>`, `<right>`,
+    ///   `<up>`, `<down>`, `<lt>` (literal `<`).
     /// - Modifier chords: `<C-x>` for Ctrl+x, `<A-x>` for Alt+x, `<S-x>` for
     ///   Shift+x, `<C-A-S-x>` for Ctrl+Alt+Shift+x. The verbose forms
     ///   `<ctrl-x>`, `<alt-x>`, and `<shift-x>` are accepted too. Inside a
@@ -1637,6 +1638,7 @@ fn resolve_key(kc: &Keycodes, key: Key) -> Result<(Keycode, bool)> {
         Key::Escape => Ok((kc.escape, false)),
         Key::Backspace => Ok((kc.backspace, false)),
         Key::Delete => Ok((kc.delete, false)),
+        Key::Insert => Ok((kc.insert, false)),
         Key::F2 => Ok((kc.f2, false)),
         Key::Home => Ok((kc.home, false)),
         Key::End => Ok((kc.end, false)),
@@ -1936,6 +1938,7 @@ fn parse_special_name(name: &str) -> Option<Key> {
         "space" => Key::Space,
         "bs" | "backspace" => Key::Backspace,
         "del" | "delete" => Key::Delete,
+        "ins" | "insert" => Key::Insert,
         "f2" => Key::F2,
         "home" => Key::Home,
         "end" => Key::End,

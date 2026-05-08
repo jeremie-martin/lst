@@ -18,6 +18,7 @@ const KEYSYM_RETURN: u32 = 0xff0d;
 const KEYSYM_ESCAPE: u32 = 0xff1b;
 const KEYSYM_BACKSPACE: u32 = 0xff08;
 const KEYSYM_DELETE: u32 = 0xffff;
+const KEYSYM_INSERT: u32 = 0xff63;
 const KEYSYM_F2: u32 = 0xffbf;
 const KEYSYM_HOME: u32 = 0xff50;
 const KEYSYM_LEFT: u32 = 0xff51;
@@ -39,6 +40,7 @@ pub(crate) struct Keycodes {
     pub(crate) escape: Keycode,
     pub(crate) backspace: Keycode,
     pub(crate) delete: Keycode,
+    pub(crate) insert: Keycode,
     pub(crate) f2: Keycode,
     pub(crate) home: Keycode,
     pub(crate) end: Keycode,
@@ -83,6 +85,7 @@ impl Keycodes {
             escape: require(&reply, setup.min_keycode, KEYSYM_ESCAPE, active_group)?,
             backspace: require(&reply, setup.min_keycode, KEYSYM_BACKSPACE, active_group)?,
             delete: require(&reply, setup.min_keycode, KEYSYM_DELETE, active_group)?,
+            insert: require(&reply, setup.min_keycode, KEYSYM_INSERT, active_group)?,
             f2: require(&reply, setup.min_keycode, KEYSYM_F2, active_group)?,
             home: require(&reply, setup.min_keycode, KEYSYM_HOME, active_group)?,
             end: require(&reply, setup.min_keycode, KEYSYM_END, active_group)?,
