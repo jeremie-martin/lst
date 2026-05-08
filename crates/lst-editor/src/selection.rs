@@ -87,6 +87,74 @@ pub struct SelectionSet {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CursorGoal {
+    Column(usize),
+    LineEnd,
+}
+
+impl CursorGoal {
+    pub(crate) fn column(self) -> Option<usize> {
+        match self {
+            Self::Column(column) => Some(column),
+            Self::LineEnd => None,
+        }
+    }
+
+    pub(crate) fn resolve(self, line_len: usize) -> usize {
+        match self {
+            Self::Column(column) => column.min(line_len),
+            Self::LineEnd => line_len,
+        }
+    }
+}
+
+/// Complete selection state owned by a tab.
+///
+/// `SelectionSet` owns the structural cursor/selection invariant. This wrapper
+/// keeps movement metadata in lockstep with that set so callers cannot retain a
+/// preferred-column vector that no longer matches the active selections.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectionState {
+    set: SelectionSet,
+    goals: CursorGoals,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SelectionTransform {
+    pub(crate) selection: Selection,
+    pub(crate) movement_goal: Option<CursorGoal>,
+    pub(crate) visible_column: Option<usize>,
+}
+
+impl SelectionTransform {
+    pub(crate) fn new(selection: Selection) -> Self {
+        Self {
+            selection,
+            movement_goal: None,
+            visible_column: None,
+        }
+    }
+
+    pub(crate) fn with_columns(
+        selection: Selection,
+        movement_goal: CursorGoal,
+        visible_column: Option<usize>,
+    ) -> Self {
+        Self {
+            selection,
+            movement_goal: Some(movement_goal),
+            visible_column,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct CursorGoals {
+    movement: Option<Vec<CursorGoal>>,
+    visible: Option<Vec<usize>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectionSetError {
     Empty,
     InvalidPrimary,
@@ -299,6 +367,221 @@ impl SelectionSet {
             .collect();
         Self::from_selections_coalescing_cursors(selections, self.primary)
             .expect("clamping a valid selection set preserves selection-set invariants")
+    }
+}
+
+impl SelectionState {
+    pub fn single(selection: Selection) -> Self {
+        Self {
+            set: SelectionSet::single(selection),
+            goals: CursorGoals::default(),
+        }
+    }
+
+    pub fn from_set(set: SelectionSet) -> Self {
+        Self {
+            set,
+            goals: CursorGoals::default(),
+        }
+    }
+
+    pub fn selection_set(&self) -> &SelectionSet {
+        &self.set
+    }
+
+    pub fn primary(&self) -> Selection {
+        self.set.primary()
+    }
+
+    pub fn as_slice(&self) -> &[Selection] {
+        self.set.as_slice()
+    }
+
+    pub fn primary_index(&self) -> usize {
+        self.set.primary_index()
+    }
+
+    pub fn is_single(&self) -> bool {
+        self.set.is_single()
+    }
+
+    pub(crate) fn has_multiple(&self) -> bool {
+        self.set.has_multiple()
+    }
+
+    pub(crate) fn set_single(&mut self, selection: Selection) {
+        self.set.set_single(selection);
+        self.goals.clear();
+    }
+
+    pub(crate) fn replace_set(&mut self, set: SelectionSet) {
+        self.set = set;
+        self.goals.clear();
+    }
+
+    pub(crate) fn with_added_selection(&self, selection: Selection) -> Self {
+        self.with_added_selections([selection])
+    }
+
+    pub(crate) fn with_added_selections<I>(&self, additions: I) -> Self
+    where
+        I: IntoIterator<Item = Selection>,
+    {
+        let next = self.set.with_added_selections(additions);
+        if next == self.set {
+            self.clone()
+        } else {
+            Self::from_set(next)
+        }
+    }
+
+    pub(crate) fn with_removed_at(&self, index: usize) -> Option<Self> {
+        self.set.with_removed_at(index).map(Self::from_set)
+    }
+
+    pub(crate) fn clamped_to_len(&self, len: usize) -> Self {
+        let next = self.set.clamped_to_len(len);
+        if next == self.set {
+            Self {
+                set: next,
+                goals: self.goals.clone(),
+            }
+        } else {
+            Self::from_set(next)
+        }
+    }
+
+    pub(crate) fn movement_goal_for(&self, selection_index: usize) -> Option<CursorGoal> {
+        self.goals.movement_for(selection_index)
+    }
+
+    pub(crate) fn movement_column_for(&self, selection_index: usize) -> Option<usize> {
+        self.movement_goal_for(selection_index)
+            .and_then(CursorGoal::column)
+    }
+
+    pub(crate) fn visible_column_for(&self, selection_index: usize) -> Option<usize> {
+        self.goals.visible_for(selection_index)
+    }
+
+    pub(crate) fn set_all_movement_goals(&mut self, goal: Option<CursorGoal>) {
+        self.goals.set_all_movement(self.set.as_slice().len(), goal);
+    }
+
+    pub(crate) fn clear_goals(&mut self) {
+        self.goals.clear();
+    }
+
+    pub(crate) fn map<F>(&self, mut f: F) -> Option<Self>
+    where
+        F: FnMut(usize, Selection) -> SelectionTransform,
+    {
+        let mut entries = self
+            .set
+            .as_slice()
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, selection)| {
+                let transform = f(index, selection);
+                MappedSelection {
+                    transform,
+                    is_primary: index == self.set.primary_index(),
+                }
+            })
+            .collect::<Vec<_>>();
+        SelectionState::from_mapped_entries(&mut entries)
+    }
+
+    fn from_mapped_entries(entries: &mut [MappedSelection]) -> Option<Self> {
+        entries.sort_by_key(|entry| {
+            let range = entry.transform.selection.range();
+            (range.start, range.end, !entry.is_primary)
+        });
+
+        let mut selections = Vec::with_capacity(entries.len());
+        let mut movement_goals: Vec<Option<CursorGoal>> = Vec::with_capacity(entries.len());
+        let mut visible_columns: Vec<Option<usize>> = Vec::with_capacity(entries.len());
+        let mut primary = None;
+
+        for entry in entries.iter().copied() {
+            let duplicate_cursor = !entry.transform.selection.has_selection()
+                && selections.last().is_some_and(|last: &Selection| {
+                    !last.has_selection() && last.cursor() == entry.transform.selection.cursor()
+                });
+            if duplicate_cursor {
+                if entry.is_primary {
+                    primary = selections.len().checked_sub(1);
+                    if let Some(index) = primary {
+                        movement_goals[index] = entry.transform.movement_goal;
+                        visible_columns[index] = entry.transform.visible_column;
+                    }
+                }
+                continue;
+            }
+
+            if entry.is_primary {
+                primary = Some(selections.len());
+            }
+            selections.push(entry.transform.selection);
+            movement_goals.push(entry.transform.movement_goal);
+            visible_columns.push(entry.transform.visible_column);
+        }
+
+        let primary = primary.unwrap_or(0);
+        let set = SelectionSet::from_selections(selections, primary).ok()?;
+        let goals = CursorGoals::from_optional_columns(
+            set.as_slice().len(),
+            movement_goals,
+            visible_columns,
+        );
+        Some(Self { set, goals })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MappedSelection {
+    transform: SelectionTransform,
+    is_primary: bool,
+}
+
+impl CursorGoals {
+    fn movement_for(&self, selection_index: usize) -> Option<CursorGoal> {
+        self.movement
+            .as_ref()
+            .and_then(|goals| goals.get(selection_index))
+            .copied()
+    }
+
+    fn visible_for(&self, selection_index: usize) -> Option<usize> {
+        self.visible
+            .as_ref()
+            .and_then(|columns| columns.get(selection_index))
+            .copied()
+    }
+
+    fn set_all_movement(&mut self, len: usize, goal: Option<CursorGoal>) {
+        self.movement = goal.map(|goal| vec![goal; len]);
+        self.visible = None;
+    }
+
+    fn clear(&mut self) {
+        self.movement = None;
+        self.visible = None;
+    }
+
+    fn from_optional_columns(
+        len: usize,
+        movement: Vec<Option<CursorGoal>>,
+        visible: Vec<Option<usize>>,
+    ) -> Self {
+        let movement = (movement.len() == len)
+            .then(|| movement.into_iter().collect::<Option<Vec<_>>>())
+            .flatten();
+        let visible = (visible.len() == len)
+            .then(|| visible.into_iter().collect::<Option<Vec<_>>>())
+            .flatten();
+        Self { movement, visible }
     }
 }
 

@@ -1,10 +1,13 @@
 use crate::{
     document::{char_to_position, position_to_char, EditKind, UndoBoundary},
     position::Position,
-    selection::{line_display_text, line_range_at_char},
+    selection::{
+        display_line_char_len, line_display_text, line_range_at_char, Selection, SelectionSet,
+    },
     tab::EditorTab,
-    transaction::{EditRequest, SelectionAfter, TextChange},
+    transaction::{apply_change_to_buffer, EditRequest, SelectionAfter, TextChange, TextChangeSet},
 };
+use std::ops::Range;
 
 pub(crate) enum LineEditAction {
     MoveCursor(Position),
@@ -90,6 +93,20 @@ pub(super) fn replace_lines_change(
         last,
         new_lines,
     )
+}
+
+fn replace_lines_in_place_change(
+    tab: &EditorTab,
+    first: usize,
+    last: usize,
+    new_lines: &[String],
+) -> Option<TextChange> {
+    let (range, trailing_newline) = line_span_without_prefix(tab.buffer(), first, last)?;
+    let mut replacement = new_lines.join(super::preferred_newline_for_active_tab(tab));
+    if trailing_newline && !replacement.is_empty() {
+        replacement.push_str(super::preferred_newline_for_active_tab(tab));
+    }
+    Some(TextChange::replace(range, replacement))
 }
 
 pub(super) fn insert_lines_change(
@@ -194,6 +211,49 @@ pub(crate) fn outdent_request(tab: &EditorTab, first: usize, last: usize) -> Opt
     Some(EditRequest::other_with_selection(changes, selection_after))
 }
 
+pub(crate) fn outdent_selection_set_request(tab: &EditorTab) -> Option<EditRequest> {
+    let lines = selection_set_touched_lines(tab);
+    if lines.is_empty() {
+        return None;
+    }
+
+    let unit = tab.language_config().indent.indent_unit();
+    let mut removed_by_line = Vec::with_capacity(lines.len());
+    let mut changes = Vec::new();
+    for line in lines {
+        let removed = outdent_prefix_len(tab, line, &unit);
+        removed_by_line.push((line, removed));
+        if removed > 0 {
+            let line_start = tab.buffer().line_to_char(line);
+            changes.push(TextChange::delete(line_start..line_start + removed));
+        }
+    }
+    if changes.is_empty() {
+        return None;
+    }
+
+    let selections_after = tab
+        .selection_set()
+        .as_slice()
+        .iter()
+        .map(|selection| {
+            let anchor = map_outdented_endpoint(tab, selection.anchor(), &removed_by_line);
+            let head = map_outdented_endpoint(tab, selection.head(), &removed_by_line);
+            Selection::new(anchor, head)
+        })
+        .collect::<Vec<_>>();
+    let selection_after = SelectionSet::from_selections_coalescing_cursors(
+        selections_after,
+        tab.selection_set().primary_index(),
+    )
+    .expect("line outdent preserves a valid selection set");
+
+    Some(
+        EditRequest::other_break(TextChangeSet::new(changes, 0))
+            .with_selection_after(SelectionAfter::Exact(selection_after)),
+    )
+}
+
 pub(crate) fn delete_line_request(tab: &EditorTab, pos: Position) -> Option<EditRequest> {
     let line = pos.line.min(tab.line_count().saturating_sub(1));
     let change = replace_lines_change(tab, line, line, &[])?;
@@ -201,6 +261,18 @@ pub(crate) fn delete_line_request(tab: &EditorTab, pos: Position) -> Option<Edit
         change,
         Position::new(line, pos.column),
     ))
+}
+
+pub(crate) fn delete_touched_lines_request(tab: &EditorTab) -> Option<EditRequest> {
+    let lines = selection_set_touched_lines(tab);
+    if lines.is_empty() {
+        return None;
+    }
+    let changes = line_clusters(&lines)
+        .into_iter()
+        .filter_map(|cluster| replace_lines_change(tab, cluster.start, cluster.end - 1, &[]))
+        .collect::<Vec<_>>();
+    request_with_mapped_selection(tab, changes)
 }
 
 pub(crate) fn line_swap_request(tab: &EditorTab, pos: Position, up: bool) -> Option<EditRequest> {
@@ -218,11 +290,62 @@ pub(crate) fn line_swap_request(tab: &EditorTab, pos: Position, up: bool) -> Opt
     };
     let first_text = line_display_text(tab.buffer(), first);
     let second_text = line_display_text(tab.buffer(), second);
-    let change = replace_lines_change(tab, first, second, &[second_text, first_text])?;
+    let change = replace_lines_in_place_change(tab, first, second, &[second_text, first_text])?;
     Some(EditRequest::single_other_at_position(
         change,
         Position::new(cursor_line, pos.column),
     ))
+}
+
+pub(crate) fn move_touched_line_clusters_up_request(tab: &EditorTab) -> Option<EditRequest> {
+    let lines = selection_set_touched_lines(tab);
+    let clusters = line_clusters(&lines);
+    if clusters.is_empty() {
+        return None;
+    }
+
+    let mut changes = Vec::with_capacity(clusters.len());
+    for cluster in &clusters {
+        if cluster.start == 0 {
+            return None;
+        }
+        let mut replacement_lines = cluster
+            .clone()
+            .map(|line| line_display_text(tab.buffer(), line))
+            .collect::<Vec<_>>();
+        replacement_lines.push(line_display_text(tab.buffer(), cluster.start - 1));
+        let change = replace_lines_in_place_change(
+            tab,
+            cluster.start - 1,
+            cluster.end - 1,
+            &replacement_lines,
+        )?;
+        changes.push(change);
+    }
+    request_with_line_move_selection(tab, changes, &clusters, true)
+}
+
+pub(crate) fn move_touched_line_clusters_down_request(tab: &EditorTab) -> Option<EditRequest> {
+    let lines = selection_set_touched_lines(tab);
+    let clusters = line_clusters(&lines);
+    if clusters.is_empty() {
+        return None;
+    }
+
+    let mut changes = Vec::with_capacity(clusters.len());
+    for cluster in &clusters {
+        if cluster.end >= tab.line_count() {
+            return None;
+        }
+        let mut replacement_lines = vec![line_display_text(tab.buffer(), cluster.end)];
+        for line in cluster.clone() {
+            replacement_lines.push(line_display_text(tab.buffer(), line));
+        }
+        let change =
+            replace_lines_in_place_change(tab, cluster.start, cluster.end, &replacement_lines)?;
+        changes.push(change);
+    }
+    request_with_line_move_selection(tab, changes, &clusters, false)
 }
 
 pub(crate) fn duplicate_line_request(tab: &EditorTab, pos: Position) -> Option<EditRequest> {
@@ -234,6 +357,21 @@ pub(crate) fn duplicate_line_request(tab: &EditorTab, pos: Position) -> Option<E
         change,
         Position::new(insert_at, pos.column),
     ))
+}
+
+pub(crate) fn duplicate_touched_lines_request(tab: &EditorTab) -> Option<EditRequest> {
+    let lines = selection_set_touched_lines(tab);
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut changes = Vec::new();
+    for line in &lines {
+        let text = line_display_text(tab.buffer(), *line);
+        let change = insert_lines_change(tab, line + 1, std::slice::from_ref(&text))?;
+        changes.push(change);
+    }
+    request_with_duplicate_line_selection(tab, changes, &lines)
 }
 
 pub(crate) fn duplicate_selection_request(tab: &EditorTab) -> Option<EditRequest> {
@@ -314,6 +452,205 @@ pub(crate) fn toggle_comment_action(tab: &EditorTab, prefix: &str) -> Option<Lin
         changes,
         Position::new(cursor.line, cursor_col),
     )))
+}
+
+pub(crate) fn selection_set_touched_lines(tab: &EditorTab) -> Vec<usize> {
+    let mut lines = Vec::new();
+    for selection in tab.selection_set().as_slice() {
+        let range = selection.range();
+        if range.start == range.end {
+            lines.push(char_to_position(tab.buffer(), selection.cursor()).line);
+            continue;
+        }
+        let start = char_to_position(tab.buffer(), range.start);
+        let end = char_to_position(tab.buffer(), range.end);
+        let last = if end.column == 0 && end.line > start.line {
+            end.line - 1
+        } else {
+            end.line
+        };
+        lines.extend(start.line..=last.max(start.line));
+    }
+    lines.sort_unstable();
+    lines.dedup();
+    lines
+}
+
+fn line_clusters(lines: &[usize]) -> Vec<Range<usize>> {
+    let mut clusters = Vec::new();
+    let mut iter = lines.iter().copied();
+    let Some(first) = iter.next() else {
+        return clusters;
+    };
+    let mut start = first;
+    let mut end = first + 1;
+    for line in iter {
+        if line == end {
+            end += 1;
+        } else {
+            clusters.push(start..end);
+            start = line;
+            end = line + 1;
+        }
+    }
+    clusters.push(start..end);
+    clusters
+}
+
+fn request_with_mapped_selection(tab: &EditorTab, changes: Vec<TextChange>) -> Option<EditRequest> {
+    request_with_selection_map(tab, changes, |changes, _after_buffer, offset| {
+        changes.map_offset_to_inserted_end(offset)
+    })
+}
+
+fn request_with_line_move_selection(
+    tab: &EditorTab,
+    changes: Vec<TextChange>,
+    clusters: &[Range<usize>],
+    up: bool,
+) -> Option<EditRequest> {
+    request_with_selection_map(tab, changes, |_changes, after_buffer, offset| {
+        map_line_move_endpoint(tab, after_buffer, offset, clusters, up)
+    })
+}
+
+fn request_with_duplicate_line_selection(
+    tab: &EditorTab,
+    changes: Vec<TextChange>,
+    lines: &[usize],
+) -> Option<EditRequest> {
+    request_with_selection_map(tab, changes, |_changes, after_buffer, offset| {
+        map_duplicate_line_endpoint(tab, after_buffer, offset, lines)
+    })
+}
+
+fn request_with_selection_map<F>(
+    tab: &EditorTab,
+    changes: Vec<TextChange>,
+    mut map_endpoint: F,
+) -> Option<EditRequest>
+where
+    F: FnMut(&TextChangeSet, &ropey::Rope, usize) -> usize,
+{
+    if changes.is_empty() {
+        return None;
+    }
+    let changes = TextChangeSet::try_new(changes, 0)?;
+    let after_buffer = buffer_after_changes(tab, &changes);
+
+    let selections_after = tab
+        .selection_set()
+        .as_slice()
+        .iter()
+        .map(|selection| {
+            let anchor = map_endpoint(&changes, &after_buffer, selection.anchor());
+            let head = map_endpoint(&changes, &after_buffer, selection.head());
+            Selection::new(anchor, head)
+        })
+        .collect::<Vec<_>>();
+    let selection_after = SelectionSet::from_selections_coalescing_cursors(
+        selections_after,
+        tab.selection_set().primary_index(),
+    )
+    .ok()?;
+    Some(
+        EditRequest::other_break(changes)
+            .with_selection_after(SelectionAfter::Exact(selection_after)),
+    )
+}
+
+fn buffer_after_changes(tab: &EditorTab, changes: &TextChangeSet) -> ropey::Rope {
+    let mut after_buffer = tab.buffer().clone();
+    for change in changes.as_slice().iter().rev() {
+        apply_change_to_buffer(&mut after_buffer, change);
+    }
+    after_buffer
+}
+
+fn map_line_move_endpoint(
+    tab: &EditorTab,
+    after_buffer: &ropey::Rope,
+    offset: usize,
+    clusters: &[Range<usize>],
+    up: bool,
+) -> usize {
+    let mut position = char_to_position(tab.buffer(), offset.min(tab.len_chars()));
+    for cluster in clusters {
+        if cluster.contains(&position.line) {
+            position.line = if up {
+                position.line.saturating_sub(1)
+            } else {
+                position.line + 1
+            };
+            return position_to_char(after_buffer, position);
+        }
+        if up {
+            if position.line + 1 == cluster.start {
+                position.line = cluster.end - 1;
+                return position_to_char(after_buffer, position);
+            }
+        } else if position.line == cluster.end {
+            position.line = cluster.start;
+            return position_to_char(after_buffer, position);
+        }
+    }
+    changes_unmapped_offset(tab, after_buffer, offset)
+}
+
+fn map_duplicate_line_endpoint(
+    tab: &EditorTab,
+    after_buffer: &ropey::Rope,
+    offset: usize,
+    lines: &[usize],
+) -> usize {
+    let mut position = char_to_position(tab.buffer(), offset.min(tab.len_chars()));
+    let mut inserted_before = 0;
+    for line in lines {
+        if *line == position.line {
+            position.line += inserted_before + 1;
+            return position_to_char(after_buffer, position);
+        }
+        if *line < position.line {
+            inserted_before += 1;
+        }
+    }
+    position.line += inserted_before;
+    position_to_char(after_buffer, position)
+}
+
+fn changes_unmapped_offset(tab: &EditorTab, after_buffer: &ropey::Rope, offset: usize) -> usize {
+    let position = char_to_position(tab.buffer(), offset.min(tab.len_chars()));
+    position_to_char(after_buffer, position)
+}
+
+fn map_outdented_endpoint(
+    tab: &EditorTab,
+    offset: usize,
+    removed_by_line: &[(usize, usize)],
+) -> usize {
+    let buffer = tab.buffer();
+    let len = tab.len_chars();
+    let offset = offset.min(len);
+    let position = char_to_position(buffer, offset);
+    let removed_before: usize = removed_by_line
+        .iter()
+        .take_while(|(line, _)| *line < position.line)
+        .map(|(_, removed)| *removed)
+        .sum();
+    let removed_on_line = removed_by_line
+        .iter()
+        .find(|(line, _)| *line == position.line)
+        .map(|(_, removed)| *removed)
+        .unwrap_or(0);
+    let new_line_start = buffer
+        .line_to_char(position.line)
+        .saturating_sub(removed_before);
+    let new_line_len = display_line_char_len(buffer, position.line).saturating_sub(removed_on_line);
+    let new_column = position
+        .column
+        .saturating_sub(removed_on_line)
+        .min(new_line_len);
+    new_line_start + new_column
 }
 
 pub(crate) fn toggle_block_comment_request(
@@ -427,4 +764,24 @@ fn span_range(
 
     let trailing_newline = end > start && matches!(buffer.char(end - 1), '\n' | '\r');
     Some((start..end, prefix_newline, trailing_newline))
+}
+
+fn line_span_without_prefix(
+    buffer: &ropey::Rope,
+    first: usize,
+    last: usize,
+) -> Option<(std::ops::Range<usize>, bool)> {
+    let line_count = buffer.len_lines().max(1);
+    if first > last || first >= line_count {
+        return None;
+    }
+    let last = last.min(line_count - 1);
+    let start = buffer.line_to_char(first);
+    let end = if last + 1 < buffer.len_lines() {
+        buffer.line_to_char(last + 1)
+    } else {
+        buffer.len_chars()
+    };
+    let trailing_newline = end > start && matches!(buffer.char(end - 1), '\n' | '\r');
+    Some((start..end, trailing_newline))
 }

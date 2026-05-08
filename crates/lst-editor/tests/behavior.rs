@@ -43,6 +43,10 @@ fn assert_selection_set(set: &SelectionSet, selections: &[Selection], primary: u
     assert_eq!(set.primary_index(), primary);
 }
 
+fn offset_at(model: &EditorModel, line: usize, column: usize) -> usize {
+    model.active_tab().buffer().line_to_char(line) + column
+}
+
 #[test]
 fn new_tab_switches_active_with_stable_tab_identity() {
     let mut model = EditorModel::empty();
@@ -503,6 +507,112 @@ fn multi_cursor_plain_movement_moves_each_cursor() {
     assert_selection_set(
         &snapshot.selection_set,
         &[Selection::collapsed(1), Selection::collapsed(5)],
+        1,
+    );
+}
+
+#[test]
+fn multi_cursor_delete_line_deletes_each_touched_line_once() {
+    let mut model = model_with_text("a\nb\nc\nd\ne");
+    let line_1 = offset_at(&model, 1, 0);
+    let line_3 = offset_at(&model, 3, 0);
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(line_1), Selection::collapsed(line_3)],
+        1,
+    );
+
+    model.delete_line();
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "a\nc\ne");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[
+            Selection::collapsed(offset_at(&model, 1, 0)),
+            Selection::collapsed(offset_at(&model, 2, 0)),
+        ],
+        1,
+    );
+}
+
+#[test]
+fn multi_cursor_move_line_down_keeps_cursors_on_moved_lines() {
+    let mut model = model_with_text("a0\nb1\nc2\nd3\ne4");
+    let line_1_col_1 = offset_at(&model, 1, 1);
+    let line_3_col_1 = offset_at(&model, 3, 1);
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(line_1_col_1),
+            Selection::collapsed(line_3_col_1),
+        ],
+        1,
+    );
+
+    model.move_line_down();
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "a0\nc2\nb1\ne4\nd3");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[
+            Selection::collapsed(offset_at(&model, 2, 1)),
+            Selection::collapsed(offset_at(&model, 4, 1)),
+        ],
+        1,
+    );
+}
+
+#[test]
+fn multi_cursor_duplicate_line_keeps_cursors_on_duplicate_lines() {
+    let mut model = model_with_text("a0\nb1\nc2\nd3\ne4");
+    let line_1_col_1 = offset_at(&model, 1, 1);
+    let line_3_col_1 = offset_at(&model, 3, 1);
+    set_selection_set(
+        &mut model,
+        vec![
+            Selection::collapsed(line_1_col_1),
+            Selection::collapsed(line_3_col_1),
+        ],
+        0,
+    );
+
+    model.duplicate_line();
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "a0\nb1\nb1\nc2\nd3\nd3\ne4");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[
+            Selection::collapsed(offset_at(&model, 2, 1)),
+            Selection::collapsed(offset_at(&model, 5, 1)),
+        ],
+        0,
+    );
+}
+
+#[test]
+fn multi_cursor_duplicate_line_duplicates_adjacent_lines_in_place() {
+    let mut model = model_with_text("alpha\nbeta\ngamma");
+    let line_0 = offset_at(&model, 0, 0);
+    let line_1 = offset_at(&model, 1, 0);
+    set_selection_set(
+        &mut model,
+        vec![Selection::collapsed(line_0), Selection::collapsed(line_1)],
+        1,
+    );
+
+    model.duplicate_line();
+
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.text, "alpha\nalpha\nbeta\nbeta\ngamma");
+    assert_selection_set(
+        &snapshot.selection_set,
+        &[
+            Selection::collapsed(offset_at(&model, 1, 0)),
+            Selection::collapsed(offset_at(&model, 3, 0)),
+        ],
         1,
     );
 }

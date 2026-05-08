@@ -4,8 +4,9 @@ use crate::{
     document::{char_to_position, EditKind, UndoBoundary},
     find::{build_query_regex, FindState},
     selection::{char_at_line_column, word_range_at_char, Selection, SelectionSet},
+    selection_edit::{self, SelectionEdit},
     tab::EditorTab,
-    transaction::{offset_with_delta, EditRequest, SelectionAfter, TextChange, TextChangeSet},
+    transaction::{EditRequest, SelectionAfter, TextChange, TextChangeSet},
 };
 
 pub(crate) fn replacement_request(
@@ -47,42 +48,25 @@ where
     F: Fn(usize) -> String,
 {
     let selection_set = tab.selection_set();
-    if !selection_set.has_multiple() || tab.marked_range().is_some() {
-        return None;
-    }
 
-    let mut delta = 0isize;
-    let mut changes = Vec::with_capacity(selection_set.as_slice().len());
-    let mut selections_after = Vec::with_capacity(selection_set.as_slice().len());
-    for (index, selection) in selection_set.as_slice().iter().enumerate() {
+    let mut replacements = Vec::with_capacity(selection_set.as_slice().len());
+    let mut all_empty = true;
+    for index in 0..selection_set.as_slice().len() {
         let replacement = replacement_for(index);
-        let replacement_len = replacement.chars().count();
-        let range = selection.range();
-        let inserted_start = offset_with_delta(range.start, delta);
-        selections_after.push(Selection::collapsed(inserted_start + replacement_len));
-        delta += replacement_len as isize - (range.end - range.start) as isize;
-        changes.push(TextChange::replace(range, replacement));
+        all_empty &= replacement.is_empty();
+        replacements.push(replacement);
     }
-
-    let changes = TextChangeSet::new(changes, selection_set.primary_index());
-    let selection_after = SelectionSet::from_selections_coalescing_cursors(
-        selections_after,
-        selection_set.primary_index(),
-    )
-    .expect("multi-selection replacement preserves a valid selection set");
-    let kind = if changes
-        .as_slice()
-        .iter()
-        .all(|change| change.replacement.is_empty())
-    {
+    let kind = if all_empty {
         EditKind::Delete
     } else {
         EditKind::Insert
     };
-    Some(
-        EditRequest::from_changes(kind, boundary, changes)
-            .with_selection_after(SelectionAfter::Exact(selection_after)),
-    )
+    selection_edit::request_for_each(tab, kind, boundary, |index, selection| {
+        Some(SelectionEdit::replace_with_collapsed_end(
+            selection.range(),
+            replacements[index].clone(),
+        ))
+    })
 }
 
 pub(crate) fn selected_text_joined(tab: &EditorTab) -> Option<String> {

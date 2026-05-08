@@ -1,6 +1,6 @@
 use crate::{
     document::{EditKind, UndoBoundary},
-    selection::SelectionSet,
+    selection::SelectionState,
 };
 
 const MAX_UNDO: usize = 100;
@@ -9,7 +9,7 @@ const MAX_REDO_BRANCHES: usize = 8;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HistorySnapshot {
     pub(crate) text: String,
-    pub(crate) selection: SelectionSet,
+    pub(crate) selection: SelectionState,
 }
 
 #[derive(Clone)]

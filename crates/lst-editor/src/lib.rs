@@ -8,6 +8,7 @@ mod model_io;
 mod multi_selection;
 pub mod position;
 pub mod selection;
+mod selection_edit;
 mod snapshot;
 mod tab;
 mod tab_set;
@@ -21,7 +22,7 @@ pub mod wrap;
 pub use document::{EditKind, UndoBoundary};
 pub use effect::{EditorEffect, FocusTarget, RevealIntent};
 pub use language::{IndentStyle, Language, LanguageConfig};
-pub use selection::{Selection, SelectionSet, SelectionSetError};
+pub use selection::{CursorGoal, Selection, SelectionSet, SelectionSetError, SelectionState};
 pub use snapshot::EditorSnapshot;
 pub use tab::{EditorTab, FileStamp, TabId};
 pub use viewport::Viewport;
@@ -75,12 +76,12 @@ use crate::{
     position::Position,
     selection::{
         char_at_line_column, display_line_char_len as buffer_display_line_char_len,
-        line_display_text, line_range_at_char, next_grapheme_boundary, next_subword_boundary,
-        next_word_boundary, paragraph_range_at_char, previous_grapheme_boundary,
-        previous_subword_boundary, previous_word_boundary, word_range_at_char,
+        line_range_at_char, next_grapheme_boundary, next_subword_boundary, next_word_boundary,
+        paragraph_range_at_char, previous_grapheme_boundary, previous_subword_boundary,
+        previous_word_boundary, word_range_at_char, SelectionTransform,
     },
     tab_set::TabSet,
-    transaction::{EditOutcome, EditRequest, SelectionAfter, TextChange, TextChangeSet},
+    transaction::{EditOutcome, EditRequest, SelectionAfter},
 };
 use std::{ops::Range, path::PathBuf, sync::Arc};
 
@@ -287,12 +288,12 @@ impl EditorModel {
         let cursor = self.active_tab().cursor_char();
         {
             let tab = self.active_tab_mut();
-            tab.set_preferred_column(preferred_column);
             if select {
                 tab.select_to(target);
             } else {
                 tab.move_to(target);
             }
+            tab.set_preferred_column(preferred_column);
         }
         if target != cursor || select {
             self.queue_reveal(RevealIntent::NearestEdge);
@@ -683,50 +684,6 @@ impl EditorModel {
         delete_word_range_at(tab, tab.cursor_char(), backward)
     }
 
-    fn outdent_selection_set_request(&self) -> Option<EditRequest> {
-        let tab = self.active_tab();
-        let lines = selection_set_touched_lines(tab);
-        if lines.is_empty() {
-            return None;
-        }
-
-        let unit = tab.language_config().indent.indent_unit();
-        let mut removed_by_line = Vec::with_capacity(lines.len());
-        let mut changes = Vec::new();
-        for line in lines {
-            let removed = line_edit::outdent_prefix_len(tab, line, &unit);
-            removed_by_line.push((line, removed));
-            if removed > 0 {
-                let line_start = tab.buffer().line_to_char(line);
-                changes.push(TextChange::delete(line_start..line_start + removed));
-            }
-        }
-        if changes.is_empty() {
-            return None;
-        }
-
-        let selections_after = tab
-            .selection_set()
-            .as_slice()
-            .iter()
-            .map(|selection| {
-                let anchor = map_outdented_endpoint(tab, selection.anchor(), &removed_by_line);
-                let head = map_outdented_endpoint(tab, selection.head(), &removed_by_line);
-                Selection::new(anchor, head)
-            })
-            .collect::<Vec<_>>();
-        let selection_after = SelectionSet::from_selections_coalescing_cursors(
-            selections_after,
-            tab.selection_set().primary_index(),
-        )
-        .expect("line outdent preserves a valid selection set");
-
-        Some(
-            EditRequest::other_break(TextChangeSet::new(changes, 0))
-                .with_selection_after(SelectionAfter::Exact(selection_after)),
-        )
-    }
-
     fn delete_selected_or_word(&mut self, backward: bool) -> bool {
         if self.active_tab().selection_set().has_multiple() {
             return self.apply_multi_selection_delete(UndoBoundary::Break, |tab, cursor| {
@@ -787,43 +744,30 @@ impl EditorModel {
     where
         F: FnMut(&EditorTab, Selection) -> Selection,
     {
-        let (before, previous_preferred, mut entries) = {
+        let Some((before, after)) = (|| {
             let tab = self.active_tab();
-            let before = tab.selection_set().clone();
-            let previous_preferred = tab.preferred_column();
-            let entries = before
-                .as_slice()
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(index, selection)| (motion(tab, selection), index == before.primary_index()))
-                .collect::<Vec<_>>();
-            (before, previous_preferred, entries)
-        };
-
-        entries.sort_by_key(|(selection, is_primary)| {
-            let range = selection.range();
-            (range.start, range.end, !*is_primary)
-        });
-        let primary = entries
-            .iter()
-            .position(|(_, is_primary)| *is_primary)
-            .unwrap_or(0);
-        let selections = entries
-            .into_iter()
-            .map(|(selection, _)| selection)
-            .collect::<Vec<_>>();
-        let Ok(after) = SelectionSet::from_selections_coalescing_cursors(selections, primary)
-        else {
+            let before = tab.selection_state().clone();
+            let goal = preferred_column.map(CursorGoal::Column);
+            let after = before.map(|_, selection| {
+                let selection = motion(tab, selection);
+                match goal {
+                    Some(goal) => SelectionTransform::with_columns(
+                        selection,
+                        goal,
+                        (!selection.has_selection()).then_some(preferred_column.unwrap()),
+                    ),
+                    None => SelectionTransform::new(selection),
+                }
+            })?;
+            Some((before, after))
+        })() else {
             return false;
         };
-        if after == before && preferred_column == previous_preferred {
+        if after == before {
             return false;
         }
 
-        let tab = self.active_tab_mut();
-        tab.set_selection_set(after);
-        tab.set_preferred_column(preferred_column);
+        self.active_tab_mut().set_selection_state(after);
         true
     }
 
@@ -831,49 +775,29 @@ impl EditorModel {
     where
         F: FnMut(&EditorTab, usize, Selection) -> SelectionMotion,
     {
-        let (before, mut entries) = {
+        let Some((before, after)) = (|| {
             let tab = self.active_tab();
-            let before = tab.selection_set().clone();
-            let entries = before
-                .as_slice()
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(index, selection)| {
-                    (
-                        motion(tab, index, selection),
-                        index == before.primary_index(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            (before, entries)
-        };
-
-        entries.sort_by_key(|(motion, is_primary)| {
-            let range = motion.selection.range();
-            (range.start, range.end, !*is_primary)
-        });
-        let primary = entries
-            .iter()
-            .position(|(_, is_primary)| *is_primary)
-            .unwrap_or(0);
-        let selections = entries
-            .iter()
-            .map(|(motion, _)| motion.selection)
-            .collect::<Vec<_>>();
-        let Ok(after) = SelectionSet::from_selections_coalescing_cursors(selections, primary)
-        else {
+            let before = tab.selection_state().clone();
+            let after = before.map(|index, selection| {
+                let motion = motion(tab, index, selection);
+                SelectionTransform::with_columns(
+                    motion.selection,
+                    motion
+                        .movement_goal
+                        .expect("selection motion must carry a movement goal"),
+                    motion.visible_column,
+                )
+            })?;
+            Some((before, after))
+        })() else {
             return false;
         };
+        if after == before {
+            return false;
+        }
 
-        let movement_columns =
-            columns_for_selection_set(&after, &entries, |motion| motion.movement_column);
-        let visible_columns =
-            columns_for_selection_set(&after, &entries, |motion| motion.visible_column);
-        let tab = self.active_tab_mut();
-        tab.set_selection_set(after.clone());
-        tab.set_selection_columns(movement_columns, visible_columns);
-        after != before
+        self.active_tab_mut().set_selection_state(after);
+        true
     }
 
     fn move_horizontal(&mut self, delta: isize, select: bool) -> bool {
@@ -987,9 +911,9 @@ impl EditorModel {
         if self.active_tab().selection_set().has_multiple() {
             return self.apply_selection_motion_with_columns(|tab, index, selection| {
                 let position = char_to_position(tab.buffer(), selection.cursor());
-                let preferred = tab
-                    .preferred_column_for_selection(index)
-                    .unwrap_or(position.column);
+                let goal = tab
+                    .preferred_goal_for_selection(index)
+                    .unwrap_or(CursorGoal::Column(position.column));
                 let last_line = tab.line_count().saturating_sub(1);
                 let at_edge =
                     (delta < 0 && position.line == 0) || (delta > 0 && position.line == last_line);
@@ -1004,13 +928,24 @@ impl EditorModel {
                     } else {
                         (position.line + delta as usize).min(last_line)
                     };
-                    let target_column = preferred.min(display_line_char_len(tab, target_line));
+                    let target_column = goal.resolve(display_line_char_len(tab, target_line));
                     tab.buffer().line_to_char(target_line) + target_column
                 };
+                let target_position = char_to_position(tab.buffer(), target);
                 if select {
-                    SelectionMotion::new(Selection::new(selection.anchor(), target), preferred)
+                    let selection = Selection::new(selection.anchor(), target);
+                    SelectionMotion::with_goal(
+                        selection,
+                        goal,
+                        visible_column_for_motion(selection, goal, target_position.column),
+                    )
                 } else {
-                    SelectionMotion::new(Selection::collapsed(target), preferred)
+                    let selection = Selection::collapsed(target);
+                    SelectionMotion::with_goal(
+                        selection,
+                        goal,
+                        visible_column_for_motion(selection, goal, target_position.column),
+                    )
                 }
             });
         }
@@ -1058,9 +993,13 @@ impl EditorModel {
             let layout = wrap::build_wrap_layout(lines.as_ref(), wrap_columns, true);
             return self.apply_selection_motion_with_columns(|tab, index, selection| {
                 let position = char_to_position(tab.buffer(), selection.cursor());
-                let preferred = tab
-                    .preferred_column_for_selection(index)
-                    .unwrap_or(position.column);
+                let goal = tab
+                    .preferred_goal_for_selection(index)
+                    .unwrap_or(CursorGoal::Column(position.column));
+                let preferred = match goal {
+                    CursorGoal::Column(column) => column,
+                    CursorGoal::LineEnd => display_line_char_len(tab, position.line),
+                };
                 let row_target = wrap::display_row_target(
                     lines.as_ref(),
                     position.line,
@@ -1083,10 +1022,21 @@ impl EditorModel {
                     None
                 }
                 .unwrap_or_else(|| selection.cursor());
+                let target_position = char_to_position(tab.buffer(), target);
                 if select {
-                    SelectionMotion::new(Selection::new(selection.anchor(), target), preferred)
+                    let selection = Selection::new(selection.anchor(), target);
+                    SelectionMotion::with_goal(
+                        selection,
+                        goal,
+                        visible_column_for_motion(selection, goal, target_position.column),
+                    )
                 } else {
-                    SelectionMotion::new(Selection::collapsed(target), preferred)
+                    let selection = Selection::collapsed(target);
+                    SelectionMotion::with_goal(
+                        selection,
+                        goal,
+                        visible_column_for_motion(selection, goal, target_position.column),
+                    )
                 }
             });
         }
@@ -2217,7 +2167,7 @@ impl EditorModel {
     /// cursor and keeps only the primary. Two presses of Esc therefore
     /// always reach a single collapsed cursor.
     pub fn collapse_to_primary(&mut self) -> bool {
-        let set = self.active_tab().selection_set();
+        let set = self.active_tab().selection_state();
         let any_extent = set.as_slice().iter().any(Selection::has_selection);
         if any_extent {
             let collapsed: Vec<Selection> = set
@@ -2254,7 +2204,7 @@ impl EditorModel {
     /// cursor is a no-op rather than a collapse.
     pub fn remove_cursor_at_char(&mut self, offset: usize) -> bool {
         let offset = offset.min(self.active_tab().len_chars());
-        let set = self.active_tab().selection_set();
+        let set = self.active_tab().selection_state();
         if !set.has_multiple() {
             return false;
         }
@@ -2268,7 +2218,7 @@ impl EditorModel {
         let Some(after) = set.with_removed_at(index) else {
             return false;
         };
-        self.active_tab_mut().set_selection_set(after);
+        self.active_tab_mut().set_selection_state(after);
         self.queue_reveal(RevealIntent::NearestEdge);
         true
     }
@@ -2280,10 +2230,10 @@ impl EditorModel {
     }
 
     fn add_selection_to_active_set(&mut self, selection: Selection) {
-        let before = self.active_tab().selection_set().clone();
+        let before = self.active_tab().selection_state().clone();
         let after = before.with_added_selection(selection);
         if after != before {
-            self.active_tab_mut().set_selection_set(after);
+            self.active_tab_mut().set_selection_state(after);
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
@@ -2297,19 +2247,20 @@ impl EditorModel {
     }
 
     fn add_cursor_on_adjacent_line(&mut self, delta: isize) {
-        let (additions, preferred_column) = {
+        let (additions, preferred_goal) = {
             let tab = self.active_tab();
             let current_position = tab.cursor_position();
             let current_line_end = display_line_char_len(tab, current_position.line);
-            let line_end_sticky = tab.preferred_column() == Some(usize::MAX)
+            let line_end_sticky = tab.preferred_goal() == Some(CursorGoal::LineEnd)
                 || (!tab.selection_set().has_multiple()
                     && current_line_end > 0
                     && current_position.column == current_line_end);
-            let preferred_column = if line_end_sticky {
-                Some(usize::MAX)
+            let preferred_goal = if line_end_sticky {
+                Some(CursorGoal::LineEnd)
             } else {
-                tab.preferred_column().or_else(|| {
-                    (!tab.selection_set().has_multiple()).then_some(current_position.column)
+                tab.preferred_goal().or_else(|| {
+                    (!tab.selection_set().has_multiple())
+                        .then_some(CursorGoal::Column(current_position.column))
                 })
             };
             let last_line = tab.line_count().saturating_sub(1);
@@ -2325,27 +2276,25 @@ impl EditorModel {
                         (position.line + delta as usize <= last_line)
                             .then_some(position.line + delta as usize)?
                     };
-                    let column = if preferred_column == Some(usize::MAX) {
-                        display_line_char_len(tab, target_line)
-                    } else {
-                        preferred_column.unwrap_or(position.column)
-                    };
+                    let column = preferred_goal
+                        .unwrap_or(CursorGoal::Column(position.column))
+                        .resolve(display_line_char_len(tab, target_line));
                     let target = char_at_line_column(tab.buffer(), target_line, column);
                     Some(Selection::collapsed(target))
                 })
                 .collect();
-            (additions, preferred_column)
+            (additions, preferred_goal)
         };
         if additions.is_empty() {
             return;
         }
 
-        let before = self.active_tab().selection_set().clone();
+        let before = self.active_tab().selection_state().clone();
         let after = before.with_added_selections(additions);
         if after != before {
             let tab = self.active_tab_mut();
-            tab.set_selection_set(after);
-            tab.set_preferred_column(preferred_column);
+            tab.set_selection_state(after);
+            tab.set_preferred_goal(preferred_goal);
             // Center the new primary so an extension that outgrows the
             // viewport surfaces the ▲/▼ off-screen indicator instead of
             // pinning to one edge.
@@ -2505,7 +2454,7 @@ impl EditorModel {
 
     pub fn insert_tab_at_cursor(&mut self) {
         if self.active_tab().selection_set().has_multiple() {
-            let lines = selection_set_touched_lines(self.active_tab());
+            let lines = line_edit::selection_set_touched_lines(self.active_tab());
             if lines.len() == 1 {
                 self.indent_selected_lines(lines[0], lines[0]);
                 return;
@@ -2522,7 +2471,7 @@ impl EditorModel {
 
     pub fn outdent_at_cursor(&mut self) {
         if self.active_tab().selection_set().has_multiple() {
-            if let Some(request) = self.outdent_selection_set_request() {
+            if let Some(request) = line_edit::outdent_selection_set_request(self.active_tab()) {
                 self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
                 return;
             }
@@ -2551,6 +2500,13 @@ impl EditorModel {
     }
 
     pub fn delete_line(&mut self) {
+        if self.active_tab().selection_set().has_multiple() {
+            if let Some(request) = line_edit::delete_touched_lines_request(self.active_tab()) {
+                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+                return;
+            }
+        }
+
         let Some(request) =
             line_edit::delete_line_request(self.active_tab(), self.active_cursor_position())
         else {
@@ -2560,6 +2516,15 @@ impl EditorModel {
     }
 
     pub fn move_line_up(&mut self) {
+        if self.active_tab().selection_set().has_multiple() {
+            if let Some(request) =
+                line_edit::move_touched_line_clusters_up_request(self.active_tab())
+            {
+                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+                return;
+            }
+        }
+
         let Some(request) =
             line_edit::line_swap_request(self.active_tab(), self.active_cursor_position(), true)
         else {
@@ -2570,7 +2535,9 @@ impl EditorModel {
 
     pub fn move_line_down(&mut self) {
         if self.active_tab().selection_set().has_multiple() {
-            if let Some(request) = self.move_multi_cursor_line_cluster_down_request() {
+            if let Some(request) =
+                line_edit::move_touched_line_clusters_down_request(self.active_tab())
+            {
                 self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
                 return;
             }
@@ -2584,42 +2551,9 @@ impl EditorModel {
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
     }
 
-    fn move_multi_cursor_line_cluster_down_request(&self) -> Option<EditRequest> {
-        let tab = self.active_tab();
-        let lines = selection_set_touched_lines(tab);
-        let first = *lines.first()?;
-        let last = *lines.last()?;
-        if lines.len() != last - first + 1 || last + 1 >= tab.line_count() {
-            return None;
-        }
-        let mut replacement_lines = vec![line_display_text(tab.buffer(), last + 1)];
-        for line in first..=last {
-            replacement_lines.push(line_display_text(tab.buffer(), line));
-        }
-        let start = tab.buffer().line_to_char(first);
-        let (end, include_trailing_newline) = if last + 2 < tab.line_count() {
-            (tab.buffer().line_to_char(last + 2), true)
-        } else {
-            (tab.len_chars(), false)
-        };
-        let mut replacement = replacement_lines.join("\n");
-        if include_trailing_newline {
-            replacement.push('\n');
-        }
-        Some(
-            EditRequest::single(
-                EditKind::Other,
-                UndoBoundary::Break,
-                start..end,
-                replacement,
-            )
-            .with_selection_after(SelectionAfter::Exact(tab.selection_set().clone())),
-        )
-    }
-
     pub fn duplicate_line(&mut self) {
         if self.active_tab().selection_set().has_multiple() {
-            if let Some(request) = self.duplicate_multi_cursor_lines_request() {
+            if let Some(request) = line_edit::duplicate_touched_lines_request(self.active_tab()) {
                 self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
                 return;
             }
@@ -2636,28 +2570,6 @@ impl EditorModel {
             return;
         };
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-    }
-
-    fn duplicate_multi_cursor_lines_request(&self) -> Option<EditRequest> {
-        let tab = self.active_tab();
-        let lines = selection_set_touched_lines(tab);
-        if lines.is_empty() {
-            return None;
-        }
-        let mut changes = Vec::with_capacity(lines.len());
-        for line in lines {
-            if line + 1 >= tab.line_count() {
-                return None;
-            }
-            let text = line_display_text(tab.buffer(), line);
-            let insert_at = tab.buffer().line_to_char(line + 1);
-            changes.push(TextChange::insert(insert_at, format!("{text}\n")));
-        }
-        let changes = TextChangeSet::new(changes, 0);
-        Some(
-            EditRequest::other_break(changes)
-                .with_selection_after(SelectionAfter::Exact(tab.selection_set().clone())),
-        )
     }
 
     pub fn toggle_comment(&mut self) {
@@ -2992,36 +2904,6 @@ fn next_line_join_whitespace_end(buffer: &ropey::Rope, cursor: usize) -> Option<
     Some(end)
 }
 
-fn map_outdented_endpoint(
-    tab: &EditorTab,
-    offset: usize,
-    removed_by_line: &[(usize, usize)],
-) -> usize {
-    let buffer = tab.buffer();
-    let len = tab.len_chars();
-    let offset = offset.min(len);
-    let position = char_to_position(buffer, offset);
-    let removed_before: usize = removed_by_line
-        .iter()
-        .take_while(|(line, _)| *line < position.line)
-        .map(|(_, removed)| *removed)
-        .sum();
-    let removed_on_line = removed_by_line
-        .iter()
-        .find(|(line, _)| *line == position.line)
-        .map(|(_, removed)| *removed)
-        .unwrap_or(0);
-    let new_line_start = buffer
-        .line_to_char(position.line)
-        .saturating_sub(removed_before);
-    let new_line_len = display_line_char_len(tab, position.line).saturating_sub(removed_on_line);
-    let new_column = position
-        .column
-        .saturating_sub(removed_on_line)
-        .min(new_line_len);
-    new_line_start + new_column
-}
-
 /// Returns `(first, last, spans_multiple_lines)` for the active selection,
 /// or `None` for a collapsed cursor. `last` excludes a trailing line whose
 /// only contribution is a column-0 anchor after a preceding newline.
@@ -3042,58 +2924,36 @@ fn selection_line_span(tab: &EditorTab) -> Option<(usize, usize, bool)> {
     Some((start.line, last.max(start.line), spans))
 }
 
-fn selection_set_touched_lines(tab: &EditorTab) -> Vec<usize> {
-    let mut lines = Vec::new();
-    for selection in tab.selection_set().as_slice() {
-        let range = selection.range();
-        if range.start == range.end {
-            lines.push(char_to_position(tab.buffer(), selection.cursor()).line);
-            continue;
-        }
-        let start = char_to_position(tab.buffer(), range.start);
-        let end = char_to_position(tab.buffer(), range.end);
-        let last = if end.column == 0 && end.line > start.line {
-            end.line - 1
-        } else {
-            end.line
-        };
-        lines.extend(start.line..=last.max(start.line));
-    }
-    lines.sort_unstable();
-    lines.dedup();
-    lines
-}
-
 #[derive(Clone, Copy, Debug)]
 struct SelectionMotion {
     selection: Selection,
-    movement_column: Option<usize>,
+    movement_goal: Option<CursorGoal>,
     visible_column: Option<usize>,
 }
 
 impl SelectionMotion {
-    fn new(selection: Selection, preferred_column: usize) -> Self {
+    fn with_goal(selection: Selection, goal: CursorGoal, visible_column: Option<usize>) -> Self {
         Self {
             selection,
-            movement_column: Some(preferred_column),
-            visible_column: (!selection.has_selection()).then_some(preferred_column),
+            movement_goal: Some(goal),
+            visible_column,
         }
     }
 }
 
-fn columns_for_selection_set(
-    selection_set: &SelectionSet,
-    entries: &[(SelectionMotion, bool)],
-    column: impl Fn(&SelectionMotion) -> Option<usize>,
-) -> Option<Vec<usize>> {
-    let mut columns = Vec::with_capacity(selection_set.as_slice().len());
-    for selection in selection_set.as_slice() {
-        let entry = entries
-            .iter()
-            .find(|(motion, _)| motion.selection == *selection)?;
-        columns.push(column(&entry.0)?);
+fn visible_column_for_motion(
+    selection: Selection,
+    goal: CursorGoal,
+    actual_column: usize,
+) -> Option<usize> {
+    if selection.has_selection() {
+        None
+    } else {
+        Some(match goal {
+            CursorGoal::Column(column) => column,
+            CursorGoal::LineEnd => actual_column,
+        })
     }
-    Some(columns)
 }
 
 fn smart_expanded_selection(buffer: &ropey::Rope, selection: Selection) -> Selection {

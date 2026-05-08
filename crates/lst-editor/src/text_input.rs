@@ -2,9 +2,10 @@ use crate::{
     document::{EditKind, UndoBoundary},
     language::LanguageConfig,
     multi_selection,
-    selection::{display_line_char_len, is_identifier_char, Selection, SelectionSet},
+    selection::{display_line_char_len, is_identifier_char},
+    selection_edit::{self, SelectionEdit, SelectionEditAfter},
     tab::EditorTab,
-    transaction::{offset_with_delta, EditRequest, SelectionAfter, TextChange, TextChangeSet},
+    transaction::{EditRequest, SelectionAfter, TextChange},
 };
 use std::ops::Range;
 
@@ -92,10 +93,6 @@ fn multi_edit_action(
     text: &str,
     boundary: UndoBoundary,
 ) -> Option<TextInputAction> {
-    let selection_set = tab.selection_set();
-    if !selection_set.has_multiple() || tab.marked_range().is_some() {
-        return None;
-    }
     if range.is_some_and(|range| *range != tab.selected_range()) {
         return None;
     }
@@ -105,110 +102,83 @@ fn multi_edit_action(
         align_find_current,
     };
 
-    if let Some(request) = multi_request(tab, EditKind::Other, UndoBoundary::Merge, |selection| {
-        // Overtype skips a closer rather than inserting text. The empty change
-        // keeps each selection in the change-set delta accounting; the cursor
-        // is then redirected past the existing closer via AbsoluteCursor.
-        let cursor = auto_pair_overtype_cursor(tab, &selection.range(), text)?;
-        Some((
-            TextChange::insert(selection.cursor(), ""),
-            MultiSelectionAfter::AbsoluteCursor(cursor),
-        ))
-    }) {
+    if let Some(request) = selection_edit::request_for_each(
+        tab,
+        EditKind::Other,
+        UndoBoundary::Merge,
+        |_index, selection| {
+            // Overtype skips a closer rather than inserting text. The empty change
+            // keeps each selection in the change-set delta accounting; the cursor
+            // is then redirected past the existing closer via AbsoluteCursor.
+            let cursor = auto_pair_overtype_cursor(tab, &selection.range(), text)?;
+            Some(SelectionEdit {
+                change: TextChange::insert(selection.cursor(), ""),
+                selection_after: SelectionEditAfter::AbsoluteCursor(cursor),
+            })
+        },
+    ) {
         return Some(edit(request, true));
     }
-    if let Some(request) = multi_request(tab, EditKind::Insert, UndoBoundary::Break, |selection| {
-        let range = auto_dedent_close_brace_range(tab, &selection.range(), text)?;
-        let inserted_chars = text.chars().count();
-        Some((
-            TextChange::replace(range, text.to_string()),
-            MultiSelectionAfter::InsertedRange(inserted_chars..inserted_chars, false),
-        ))
-    }) {
+    if let Some(request) = selection_edit::request_for_each(
+        tab,
+        EditKind::Insert,
+        UndoBoundary::Break,
+        |_index, selection| {
+            let range = auto_dedent_close_brace_range(tab, &selection.range(), text)?;
+            let inserted_chars = text.chars().count();
+            Some(SelectionEdit {
+                change: TextChange::replace(range, text.to_string()),
+                selection_after: SelectionEditAfter::InsertedRange(
+                    inserted_chars..inserted_chars,
+                    false,
+                ),
+            })
+        },
+    ) {
         return Some(edit(request, false));
     }
-    if let Some(request) = multi_request(tab, EditKind::Insert, UndoBoundary::Break, |selection| {
-        let (edit_range, replacement, new_selection) =
-            auto_pair_surround_edit(tab, &selection.range(), text)?;
-        let relative_selection = new_selection.start.saturating_sub(edit_range.start)
-            ..new_selection.end.saturating_sub(edit_range.start);
-        Some((
-            TextChange::replace(edit_range, replacement),
-            MultiSelectionAfter::InsertedRange(relative_selection, selection.is_reversed()),
-        ))
-    }) {
+    if let Some(request) = selection_edit::request_for_each(
+        tab,
+        EditKind::Insert,
+        UndoBoundary::Break,
+        |_index, selection| {
+            let (edit_range, replacement, new_selection) =
+                auto_pair_surround_edit(tab, &selection.range(), text)?;
+            let relative_selection = new_selection.start.saturating_sub(edit_range.start)
+                ..new_selection.end.saturating_sub(edit_range.start);
+            Some(SelectionEdit {
+                change: TextChange::replace(edit_range, replacement),
+                selection_after: SelectionEditAfter::InsertedRange(
+                    relative_selection,
+                    selection.is_reversed(),
+                ),
+            })
+        },
+    ) {
         return Some(edit(request, true));
     }
-    if let Some(request) = multi_request(tab, EditKind::Insert, UndoBoundary::Break, |selection| {
-        let (edit_range, replacement, caret) =
-            auto_pair_insert_edit(tab, &selection.range(), text)?;
-        let relative_caret = caret.saturating_sub(edit_range.start);
-        Some((
-            TextChange::replace(edit_range, replacement),
-            MultiSelectionAfter::InsertedRange(relative_caret..relative_caret, false),
-        ))
-    }) {
+    if let Some(request) = selection_edit::request_for_each(
+        tab,
+        EditKind::Insert,
+        UndoBoundary::Break,
+        |_index, selection| {
+            let (edit_range, replacement, caret) =
+                auto_pair_insert_edit(tab, &selection.range(), text)?;
+            let relative_caret = caret.saturating_sub(edit_range.start);
+            Some(SelectionEdit {
+                change: TextChange::replace(edit_range, replacement),
+                selection_after: SelectionEditAfter::InsertedRange(
+                    relative_caret..relative_caret,
+                    false,
+                ),
+            })
+        },
+    ) {
         return Some(edit(request, true));
     }
 
     let request = multi_selection::replacement_request(tab, text.to_string(), boundary)?;
     Some(edit(request, false))
-}
-
-enum MultiSelectionAfter {
-    AbsoluteCursor(usize),
-    InsertedRange(Range<usize>, bool),
-}
-
-/// Builds a multi-selection edit request by asking `per_selection` to produce a
-/// `(TextChange, MultiSelectionAfter)` for every selection. Returns `None` as
-/// soon as any selection opts out, so handlers behave atomically: either every
-/// cursor participates or the dispatcher falls through to the next handler.
-fn multi_request<F>(
-    tab: &EditorTab,
-    kind: EditKind,
-    boundary: UndoBoundary,
-    per_selection: F,
-) -> Option<EditRequest>
-where
-    F: Fn(&Selection) -> Option<(TextChange, MultiSelectionAfter)>,
-{
-    let selection_set = tab.selection_set();
-    let pairs: Vec<(TextChange, MultiSelectionAfter)> = selection_set
-        .as_slice()
-        .iter()
-        .map(per_selection)
-        .collect::<Option<_>>()?;
-
-    let mut delta = 0isize;
-    let mut text_changes = Vec::with_capacity(pairs.len());
-    let mut selections_after = Vec::with_capacity(pairs.len());
-    for (change, selection_after) in pairs {
-        let inserted_start = offset_with_delta(change.range.start, delta);
-        let inserted_len = change.replacement.chars().count();
-        let selection = match selection_after {
-            MultiSelectionAfter::AbsoluteCursor(cursor) => Selection::collapsed(cursor),
-            MultiSelectionAfter::InsertedRange(range, reversed) => {
-                let start = range.start.min(inserted_len);
-                let end = range.end.min(inserted_len);
-                Selection::from_range(inserted_start + start..inserted_start + end, reversed)
-            }
-        };
-        delta += inserted_len as isize - (change.range.end - change.range.start) as isize;
-        text_changes.push(change);
-        selections_after.push(selection);
-    }
-
-    let text_changes = TextChangeSet::try_new(text_changes, selection_set.primary_index())?;
-    let selections_after = SelectionSet::from_selections_coalescing_cursors(
-        selections_after,
-        selection_set.primary_index(),
-    )
-    .ok()?;
-    Some(
-        EditRequest::from_changes(kind, boundary, text_changes)
-            .with_selection_after(SelectionAfter::Exact(selections_after)),
-    )
 }
 
 pub(crate) fn resolve_range(tab: &EditorTab, range: Option<Range<usize>>) -> Range<usize> {
