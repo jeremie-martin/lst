@@ -53,7 +53,7 @@ fn cleanup_replaces_only_the_selection_with_atomic_undo() -> TestResult {
         let env: [(&OsStr, &OsStr); 1] = [(OsStr::new(FAKE_ENV), OsStr::new(canned))];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
 
-        editor.keys(original)?;
+        editor.keys("before<enter>um middle<enter>after")?;
         editor.save_then_expect_file(&path, original)?;
 
         // Select line 2 ("um middle") without including the surrounding newlines.
