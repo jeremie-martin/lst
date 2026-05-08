@@ -259,6 +259,9 @@ pub trait EditorTestExt {
         query: &str,
         match_count: usize,
     ) -> SupportResult<StateTraceRecord>;
+
+    /// Click the status-bar cleanup (sparkle) button.
+    fn click_cleanup_button(&mut self) -> SupportResult<()>;
 }
 
 impl EditorTestExt for Editor<'_> {
@@ -330,6 +333,25 @@ impl EditorTestExt for Editor<'_> {
                 && record.find.query == query
                 && record.find.match_count == match_count
         })
+    }
+
+    fn click_cleanup_button(&mut self) -> SupportResult<()> {
+        let record = self.wait_state("cleanup button bounds", FOCUS_TIMEOUT, |state| {
+            state.cleanup_button_bounds_px.is_some()
+        })?;
+        let (ox, oy, w, h) = record
+            .cleanup_button_bounds_px
+            .ok_or("cleanup button bounds missing after wait")?;
+        let scale = if record.viewport.scale_factor > 0.0 {
+            record.viewport.scale_factor
+        } else {
+            1.0
+        };
+        let cx = ((ox + w * 0.5) * scale).round() as i32;
+        let cy = ((oy + h * 0.5) * scale).round() as i32;
+        let result = self.click_at(cx, cy);
+        with_window_artifact(self, "cleanup-click", result)?;
+        Ok(())
     }
 }
 

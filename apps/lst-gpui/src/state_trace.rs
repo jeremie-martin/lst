@@ -116,6 +116,7 @@ pub(crate) struct StateTraceRecord {
     pub recent_panel_query: Option<String>,
     pub focused_input: &'static str,
     pub status_bar: String,
+    pub cleanup_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub viewport: TraceViewport,
 }
 
@@ -214,6 +215,7 @@ mod tests {
             recent_panel_query: None,
             focused_input: "editor",
             status_bar: "INSERT | Ln 1 | Col 4".to_string(),
+            cleanup_button_bounds_px: None,
             viewport: TraceViewport::default(),
         };
         let line = serde_json::to_string(&record).expect("serialize");

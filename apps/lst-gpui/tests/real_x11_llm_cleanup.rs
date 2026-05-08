@@ -1,10 +1,11 @@
-//! Real-display tests for the LLM cleanup action (Ctrl+Shift+R). The
-//! editor binary is launched with `LST_LLM_FAKE_RESPONSE` exported, which
-//! activates an in-process fake `LlmClient` so the test never reaches
-//! the real DeepSeek API. Coverage:
+//! Real-display tests for the LLM cleanup action (Ctrl+Shift+R and the
+//! status-bar sparkle button). The editor binary is launched with
+//! `LST_LLM_FAKE_RESPONSE` exported, which activates an in-process fake
+//! `LlmClient` so the test never reaches the real DeepSeek API. Coverage:
 //!
 //! - whole-buffer cleanup replaces inline; one Ctrl+Z restores the original
 //! - selection-only cleanup replaces just the selection; Ctrl+Z restores
+//! - clicking the status-bar sparkle button drives the same cleanup path
 //!
 //! Run with
 //!
@@ -32,6 +33,31 @@ fn cleanup_replaces_whole_buffer_inline_with_atomic_undo() -> TestResult {
 
         let before = editor.read_state()?;
         editor.keys("<C-S-r>")?;
+        editor.wait_state("cleanup applied", secs(5), |record| {
+            record.revision > before.revision
+        })?;
+        editor.save_then_expect_file(&path, canned)?;
+
+        editor.keys("<C-z>")?;
+        editor.save_then_expect_file(&path, original)?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn status_bar_sparkle_button_drives_cleanup_with_atomic_undo() -> TestResult {
+    support::run_x11_test("llm-cleanup-button", |session| {
+        let original = "um, hello, world";
+        let canned = "Hello, world.";
+        let env: [(&OsStr, &OsStr); 1] = [(OsStr::new(FAKE_ENV), OsStr::new(canned))];
+        let (mut editor, path) = session.open_with_env("scratch", &env)?;
+
+        editor.keys(original)?;
+        editor.save_then_expect_file(&path, original)?;
+
+        let before = editor.read_state()?;
+        editor.click_cleanup_button()?;
         editor.wait_state("cleanup applied", secs(5), |record| {
             record.revision > before.revision
         })?;

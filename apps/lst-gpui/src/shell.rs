@@ -886,6 +886,27 @@ impl LstGpuiApp {
                     .flex_none()
                     .items_center()
                     .gap_2()
+                    .child({
+                        let entity = cx.entity();
+                        div()
+                            .flex_none()
+                            .on_children_prepainted(
+                                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                                    let captured = bounds.first().copied();
+                                    entity.update(cx, |this, _| {
+                                        this.cleanup_button_bounds_px = captured;
+                                    });
+                                },
+                            )
+                            .child(
+                                IconButton::new("cleanup-button", IconKind::Sparkle, theme)
+                                    .disabled(self.cleanup_in_flight)
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.start_cleanup(cx);
+                                        cx.stop_propagation();
+                                    })),
+                            )
+                    })
                     .child(
                         IconButton::new("theme-toggle-button", IconKind::Theme, theme).on_click(
                             cx.listener(|this, _, _window, cx| {

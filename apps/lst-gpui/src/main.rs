@@ -245,6 +245,9 @@ struct LstGpuiApp {
     state_trace: StateTraceEmitter,
     cleanup_in_flight: bool,
     cleanup_message: Option<String>,
+    /// Surfaced through the state trace so real-X11 tests can click the
+    /// button without depending on theme-name / status-details widths.
+    cleanup_button_bounds_px: Option<Bounds<Pixels>>,
     _shell_subscriptions: Vec<Subscription>,
 }
 
@@ -304,6 +307,7 @@ impl LstGpuiApp {
             state_trace: StateTraceEmitter::from_env(),
             cleanup_in_flight: false,
             cleanup_message: None,
+            cleanup_button_bounds_px: None,
             _shell_subscriptions: Vec::new(),
         };
         cx.set_global(ThemeId::default());
@@ -695,6 +699,14 @@ impl LstGpuiApp {
             Some(sel) => format!("{} | {sel}", self.status_details()),
             None => self.status_details(),
         };
+        let cleanup_button_bounds_px = self.cleanup_button_bounds_px.map(|bounds| {
+            (
+                f32::from(bounds.origin.x),
+                f32::from(bounds.origin.y),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height),
+            )
+        });
         let viewport = self.build_state_trace_viewport(window);
         StateTraceRecord {
             schema_version: STATE_TRACE_SCHEMA_VERSION,
@@ -719,6 +731,7 @@ impl LstGpuiApp {
                 .then(|| self.recent.query().to_string()),
             focused_input: self.state_trace_focus_label(),
             status_bar,
+            cleanup_button_bounds_px,
             viewport,
         }
     }

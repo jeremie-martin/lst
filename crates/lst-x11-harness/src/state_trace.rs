@@ -37,6 +37,8 @@ pub struct StateTraceRecord {
     #[serde(default)]
     pub focused_input: String,
     pub status_bar: String,
+    #[serde(default)]
+    pub cleanup_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub viewport: TraceViewport,
 }
 
