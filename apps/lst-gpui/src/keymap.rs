@@ -1,9 +1,10 @@
 use gpui::KeyBinding;
 
 use crate::{
-    AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, Backspace, CloseActiveTab, CopySelection,
-    CutSelection, DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward, DuplicateLine,
-    FindNext, FindOpen, FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline, InsertTab,
+    AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, Backspace, CleanupText, CloseActiveTab,
+    CopySelection, CutSelection, DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward,
+    DuplicateLine, FindNext, FindOpen, FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline,
+    InsertTab,
     MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd,
     MoveLineStart, MoveLineUp, MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft,
     MoveSubwordRight, MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab,
@@ -184,5 +185,7 @@ pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-p", SelectParagraph, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-q", Quit, Some("Workspace && !InlineInput")),
         KeyBinding::new("cmd-q", Quit, Some("Workspace && !InlineInput")),
+        KeyBinding::new("ctrl-shift-r", CleanupText, Some(EDITOR_CONTEXT)),
+        KeyBinding::new("cmd-shift-r", CleanupText, Some(EDITOR_CONTEXT)),
     ]
 }

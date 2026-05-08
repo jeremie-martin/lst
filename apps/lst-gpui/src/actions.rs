@@ -1,11 +1,12 @@
 use gpui::{Context, Div, InteractiveElement, Window};
 
 use crate::{
-    AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, Backspace, CloseActiveTab, CopySelection,
-    CutSelection, DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward, DuplicateLine,
-    FindNext, FindOpen, FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline, InsertTab,
-    LstGpuiApp, MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd,
-    MoveLineStart, MoveLineUp, MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft,
+    AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, Backspace, CleanupText, CloseActiveTab,
+    CopySelection, CutSelection, DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward,
+    DuplicateLine, FindNext, FindOpen, FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline,
+    InsertTab, LstGpuiApp, MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown,
+    MoveLineEnd, MoveLineStart, MoveLineUp, MovePageDown, MovePageUp, MoveRight, MoveSmartHome,
+    MoveSubwordLeft,
     MoveSubwordRight, MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab,
     NextTab, OpenFile, OutdentSelection, PasteClipboard, PopSelectionCursor, PrevTab, Quit, Redo,
     ReplaceAll, ReplaceOne, SaveFile, SaveFileAs, SelectAll, SelectAllOccurrences,
@@ -121,6 +122,11 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
     let root = root.on_action(cx.listener(|this, _: &ToggleTheme, _window, cx| {
         this.clear_x11_modifier_chord_state();
         this.cycle_theme(cx);
+        cx.stop_propagation();
+    }));
+    let root = root.on_action(cx.listener(|this, _: &CleanupText, _window, cx| {
+        this.clear_x11_modifier_chord_state();
+        this.start_cleanup(cx);
         cx.stop_propagation();
     }));
     let root = root.on_action(cx.listener(|this, _: &SelectNextOccurrence, _window, cx| {

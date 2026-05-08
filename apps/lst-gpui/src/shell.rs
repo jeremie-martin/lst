@@ -874,7 +874,11 @@ impl LstGpuiApp {
                     .truncate()
                     .text_sm()
                     .text_color(rgb(theme.role.text_subtle))
-                    .child(self.model.status().to_string()),
+                    .child(
+                        self.cleanup_message
+                            .clone()
+                            .unwrap_or_else(|| self.model.status().to_string()),
+                    ),
             )
             .child(
                 div()

@@ -11,6 +11,7 @@ mod input_adapter;
 mod interactions;
 mod keymap;
 mod launch;
+mod llm;
 mod recent;
 mod runtime;
 mod shell;
@@ -35,7 +36,7 @@ use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
     find::FindScope, EditorModel, EditorTab as ModelEditorTab, FocusTarget, RevealIntent, TabId,
-    UNTITLED_PREFIX,
+    UndoBoundary, UNTITLED_PREFIX,
 };
 #[cfg(not(test))]
 use recent::default_recent_files_path;
@@ -162,6 +163,7 @@ actions!(
         DuplicateLine,
         ToggleComment,
         ToggleBlockComment,
+        CleanupText,
         ToggleRecentFiles,
         ZoomIn,
         ZoomOut,
@@ -241,6 +243,8 @@ struct LstGpuiApp {
     zoom_level: i32,
     exit_clipboard: Arc<dyn ExitClipboard>,
     state_trace: StateTraceEmitter,
+    cleanup_in_flight: bool,
+    cleanup_message: Option<String>,
     _shell_subscriptions: Vec<Subscription>,
 }
 
@@ -298,6 +302,8 @@ impl LstGpuiApp {
             zoom_level: 0,
             exit_clipboard: Arc::new(SubprocessExitClipboard),
             state_trace: StateTraceEmitter::from_env(),
+            cleanup_in_flight: false,
+            cleanup_message: None,
             _shell_subscriptions: Vec::new(),
         };
         cx.set_global(ThemeId::default());
@@ -414,6 +420,100 @@ impl LstGpuiApp {
         self.set_theme(current_theme_id(cx).next(), cx);
     }
 
+    pub(crate) fn start_cleanup(&mut self, cx: &mut Context<Self>) {
+        if self.cleanup_in_flight {
+            return;
+        }
+        let api_key = match std::env::var("DEEPSEEK_API_KEY") {
+            Ok(value) if !value.is_empty() => value,
+            _ => {
+                self.cleanup_message = Some("DEEPSEEK_API_KEY not set".to_string());
+                cx.notify();
+                return;
+            }
+        };
+
+        let tab = self.active_tab();
+        let tab_id = tab.id();
+        let revision = tab.revision();
+        let (range, source_text) = if tab.has_selection() {
+            let range = tab.selected_range();
+            match tab.selected_text() {
+                Some(text) if !text.is_empty() => (range, text),
+                _ => {
+                    self.cleanup_message = Some("Nothing to clean up.".to_string());
+                    cx.notify();
+                    return;
+                }
+            }
+        } else {
+            let text = tab.buffer_text();
+            if text.is_empty() {
+                self.cleanup_message = Some("Nothing to clean up.".to_string());
+                cx.notify();
+                return;
+            }
+            let len = tab.buffer().len_chars();
+            (0..len, text)
+        };
+
+        self.cleanup_in_flight = true;
+        self.cleanup_message = Some("\u{27F3} Cleaning\u{2026}".to_string());
+        cx.notify();
+
+        let model_name = std::env::var("DEEPSEEK_MODEL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| crate::llm::DEFAULT_DEEPSEEK_MODEL.to_string());
+        let client = crate::llm::DeepSeekClient::new(api_key, model_name);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    use crate::llm::LlmClient;
+                    client.cleanup(&source_text)
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.cleanup_in_flight = false;
+                match result {
+                    Ok(cleaned) => app.apply_cleanup_result(tab_id, revision, range, cleaned, cx),
+                    Err(err) => app.finish_cleanup_with_error(err, cx),
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn apply_cleanup_result(
+        &mut self,
+        tab_id: TabId,
+        revision: u64,
+        range: std::ops::Range<usize>,
+        cleaned: String,
+        cx: &mut Context<Self>,
+    ) {
+        let stale = match self.model.tab_by_id(tab_id) {
+            Some(tab) => self.model.active_tab_id() != tab_id || tab.revision() != revision,
+            None => true,
+        };
+        if stale {
+            self.cleanup_message =
+                Some("Buffer changed during cleanup; result discarded.".to_string());
+            cx.notify();
+            return;
+        }
+
+        self.update_model(cx, true, |model| {
+            model.replace_text(Some(range), cleaned, UndoBoundary::Break);
+        });
+    }
+
+    fn finish_cleanup_with_error(&mut self, err: crate::llm::LlmError, cx: &mut Context<Self>) {
+        self.cleanup_message = Some(format!("Cleanup failed: {err}"));
+        cx.notify();
+    }
+
     fn set_zoom_level(&mut self, level: i32, window: &mut Window, cx: &mut Context<Self>) {
         let level = level.clamp(metrics::MIN_ZOOM_LEVEL, metrics::MAX_ZOOM_LEVEL);
         if self.zoom_level == level {
@@ -525,6 +625,9 @@ impl LstGpuiApp {
         notify_after_update: bool,
         update: impl FnOnce(&mut EditorModel),
     ) {
+        if !self.cleanup_in_flight {
+            self.cleanup_message = None;
+        }
         self.sync_viewport_state();
         let old_show_wrap = self.model.show_wrap();
         let old_find_state = self.find_input_state();
