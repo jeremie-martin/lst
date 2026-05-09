@@ -218,16 +218,18 @@ pub(crate) fn outdent_selection_set_request(tab: &EditorTab) -> Option<EditReque
     }
 
     let unit = tab.language_config().indent.indent_unit();
-    let mut removed_by_line = Vec::with_capacity(lines.len());
-    let mut changes = Vec::new();
-    for line in lines {
-        let removed = outdent_prefix_len(tab, line, &unit);
-        removed_by_line.push((line, removed));
-        if removed > 0 {
-            let line_start = tab.buffer().line_to_char(line);
-            changes.push(TextChange::delete(line_start..line_start + removed));
-        }
-    }
+    let removed_by_line = lines
+        .into_iter()
+        .map(|line| (line, outdent_prefix_len(tab, line, &unit)))
+        .collect::<Vec<_>>();
+    let changes = removed_by_line
+        .iter()
+        .filter(|(_, removed)| *removed > 0)
+        .map(|(line, removed)| {
+            let line_start = tab.buffer().line_to_char(*line);
+            TextChange::delete(line_start..line_start + *removed)
+        })
+        .collect::<Vec<_>>();
     if changes.is_empty() {
         return None;
     }
@@ -463,23 +465,16 @@ pub(crate) fn selection_set_touched_lines(tab: &EditorTab) -> Vec<usize> {
 }
 
 fn line_clusters(lines: &[usize]) -> Vec<Range<usize>> {
-    let mut clusters = Vec::new();
-    let mut iter = lines.iter().copied();
-    let Some(first) = iter.next() else {
-        return clusters;
-    };
-    let mut start = first;
-    let mut end = first + 1;
-    for line in iter {
-        if line == end {
-            end += 1;
-        } else {
-            clusters.push(start..end);
-            start = line;
-            end = line + 1;
+    let mut clusters: Vec<Range<usize>> = Vec::new();
+    for line in lines.iter().copied() {
+        if let Some(last) = clusters.last_mut() {
+            if line == last.end {
+                last.end += 1;
+                continue;
+            }
         }
+        clusters.push(line..line + 1);
     }
-    clusters.push(start..end);
     clusters
 }
 

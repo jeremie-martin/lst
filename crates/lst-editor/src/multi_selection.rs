@@ -35,10 +35,6 @@ pub(crate) fn paste_request(
     }
 }
 
-/// Multi-cursor replacement where the inserted text varies per selection.
-/// `replacement_for(i)` is called for each selection in document order.
-/// Returns `None` for single-selection sets and during IME composition,
-/// matching `replacement_request`'s contract.
 pub(crate) fn replacement_request_by_index<F>(
     tab: &EditorTab,
     replacement_for: F,
@@ -48,15 +44,10 @@ where
     F: Fn(usize) -> String,
 {
     let selection_set = tab.selection_set();
-
-    let mut replacements = Vec::with_capacity(selection_set.as_slice().len());
-    let mut all_empty = true;
-    for index in 0..selection_set.as_slice().len() {
-        let replacement = replacement_for(index);
-        all_empty &= replacement.is_empty();
-        replacements.push(replacement);
-    }
-    let kind = if all_empty {
+    let replacements = (0..selection_set.as_slice().len())
+        .map(replacement_for)
+        .collect::<Vec<_>>();
+    let kind = if replacements.iter().all(String::is_empty) {
         EditKind::Delete
     } else {
         EditKind::Insert
@@ -70,37 +61,24 @@ where
 }
 
 pub(crate) fn selected_text_joined(tab: &EditorTab) -> Option<String> {
-    let selection_set = tab.selection_set();
-    if !selection_set.has_multiple()
-        || !selection_set
-            .as_slice()
-            .iter()
-            .any(Selection::has_selection)
-    {
+    let selections = tab.selection_set().as_slice();
+    if selections.len() <= 1 || !selections.iter().any(Selection::has_selection) {
         return None;
     }
 
-    // Cursor-only selections contribute an empty fragment so that the
-    // resulting `\n`-joined clipboard has exactly one line per selection.
-    // Pasting back into the same set then round-trips through
-    // `paste_request`'s line-count equality branch.
-    let mut joined = String::new();
-    for (index, selection) in selection_set.as_slice().iter().enumerate() {
-        if index > 0 {
-            joined.push('\n');
-        }
-        joined.push_str(&tab.buffer().slice(selection.range()).to_string());
-    }
-    Some(joined)
+    Some(
+        selections
+            .iter()
+            .map(|selection| tab.buffer().slice(selection.range()).to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 fn clipboard_lines_for_distribution(text: &str) -> Vec<String> {
-    let mut lines: Vec<&str> = text.split('\n').collect();
-    if text.ends_with('\n') {
-        lines.pop();
-    }
-    lines
-        .into_iter()
+    text.strip_suffix('\n')
+        .unwrap_or(text)
+        .split('\n')
         .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
         .collect()
 }
@@ -187,10 +165,6 @@ fn merge_delete_ranges(ranges: impl IntoIterator<Item = Range<usize>>) -> Vec<Ra
     merged
 }
 
-/// Builds a column block selection between `anchor` and `head`. Each line in
-/// the block contributes one selection clamped to its display width; lines
-/// shorter than `start_column` collapse to a cursor at the line end. The
-/// primary tracks the line containing `head`.
 pub(crate) fn rectangular_selection_set(
     tab: &EditorTab,
     anchor: usize,
@@ -204,27 +178,17 @@ pub(crate) fn rectangular_selection_set(
     let start_column = anchor.column.min(head.column);
     let end_column = anchor.column.max(head.column);
     let reversed = head.column < anchor.column;
-    let primary_line = head.line.clamp(first_line, last_line);
-
-    let mut selections = Vec::with_capacity(last_line - first_line + 1);
-    let mut primary = 0;
-    for line in first_line..=last_line {
-        let start = char_at_line_column(buffer, line, start_column);
-        let end = char_at_line_column(buffer, line, end_column);
-        if line == primary_line {
-            primary = selections.len();
-        }
-        selections.push(Selection::from_range(start..end, reversed));
-    }
+    let primary = head.line.clamp(first_line, last_line) - first_line;
+    let selections = (first_line..=last_line)
+        .map(|line| {
+            let start = char_at_line_column(buffer, line, start_column);
+            let end = char_at_line_column(buffer, line, end_column);
+            Selection::from_range(start..end, reversed)
+        })
+        .collect();
     SelectionSet::from_selections_coalescing_cursors(selections, primary).ok()
 }
 
-/// Selection to add for the next occurrence of the active tab's selected
-/// query, skipping ranges that already overlap the selection set. Wraps to
-/// the first non-overlapping match if no match exists past the primary.
-/// Honours the find panel's case / whole-word flags (and the smart-case
-/// heuristic) via [`FindState`]; the selection text is always treated
-/// literally — `use_regex` only applies to the find panel itself.
 pub(crate) fn next_occurrence_addition(tab: &EditorTab, find: &FindState) -> Option<Selection> {
     let (query, _) = occurrence_query(tab)?;
     let regex = build_query_regex(&query, find.case_sensitive, find.whole_word, false).ok()?;
@@ -232,28 +196,8 @@ pub(crate) fn next_occurrence_addition(tab: &EditorTab, find: &FindState) -> Opt
     let primary_end = tab.selection().range().end;
     let selection_set = tab.selection_set();
 
-    // Stream regex matches and stop on the first non-overlapping match
-    // past the primary's end. Only fall back to a wrap-around match
-    // (first non-overlapping match anywhere) when the forward scan finds
-    // none — saves walking the buffer to completion for the common
-    // Ctrl-D case.
-    let mut last_match_end_byte = 0usize;
-    let mut last_match_end_char = 0usize;
     let mut wrap_candidate: Option<Range<usize>> = None;
-    for m in regex.find_iter(&text) {
-        let start_byte = m.start();
-        let end_byte = m.end();
-        if start_byte == end_byte {
-            continue;
-        }
-        let chars_in_gap = text[last_match_end_byte..start_byte].chars().count();
-        let match_start_char = last_match_end_char + chars_in_gap;
-        let chars_in_match = text[start_byte..end_byte].chars().count();
-        let match_end_char = match_start_char + chars_in_match;
-        last_match_end_byte = end_byte;
-        last_match_end_char = match_end_char;
-
-        let range = match_start_char..match_end_char;
+    for range in regex_char_ranges(&text, &regex) {
         if range_overlaps_selection_set(&range, selection_set) {
             continue;
         }
@@ -267,10 +211,6 @@ pub(crate) fn next_occurrence_addition(tab: &EditorTab, find: &FindState) -> Opt
     wrap_candidate.map(|range| Selection::from_range(range, false))
 }
 
-/// Selection set spanning every occurrence of the active tab's selection
-/// (or the word under the cursor when there's no selection). The primary
-/// is the match equal to the original query range when present, otherwise
-/// the first match. Same flag semantics as [`next_occurrence_addition`].
 pub(crate) fn all_occurrences_set(tab: &EditorTab, find: &FindState) -> Option<SelectionSet> {
     let (query, query_range) = occurrence_query(tab)?;
     let ranges = occurrence_ranges(&tab.buffer_text(), &query, find);
@@ -331,25 +271,29 @@ fn occurrence_ranges(text: &str, query: &str, find: &FindState) -> Vec<Range<usi
         Err(_) => return Vec::new(),
     };
 
-    let mut ranges = Vec::new();
+    regex_char_ranges(text, &regex).collect()
+}
+
+fn regex_char_ranges<'a>(
+    text: &'a str,
+    regex: &'a regex::Regex,
+) -> impl Iterator<Item = Range<usize>> + 'a {
     let mut last_match_end_byte = 0usize;
     let mut last_match_end_char = 0usize;
-    for m in regex.find_iter(text) {
+    regex.find_iter(text).filter_map(move |m| {
         let start_byte = m.start();
         let end_byte = m.end();
         if start_byte == end_byte {
-            // Skip zero-width matches; cursor-add has no use for them.
-            continue;
+            return None;
         }
         let chars_in_gap = text[last_match_end_byte..start_byte].chars().count();
         let match_start_char = last_match_end_char + chars_in_gap;
         let chars_in_match = text[start_byte..end_byte].chars().count();
         let match_end_char = match_start_char + chars_in_match;
-        ranges.push(match_start_char..match_end_char);
         last_match_end_byte = end_byte;
         last_match_end_char = match_end_char;
-    }
-    ranges
+        Some(match_start_char..match_end_char)
+    })
 }
 
 fn range_overlaps_selection_set(range: &Range<usize>, selection_set: &SelectionSet) -> bool {

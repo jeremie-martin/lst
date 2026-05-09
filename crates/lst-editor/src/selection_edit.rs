@@ -18,11 +18,27 @@ pub(crate) struct SelectionEdit {
 }
 
 impl SelectionEdit {
+    pub(crate) fn insert_with_absolute_cursor(offset: usize, cursor: usize) -> Self {
+        Self {
+            change: TextChange::insert(offset, ""),
+            selection_after: SelectionEditAfter::AbsoluteCursor(cursor),
+        }
+    }
+
     pub(crate) fn replace_with_collapsed_end(range: Range<usize>, replacement: String) -> Self {
         let len = replacement.chars().count();
+        Self::replace_with_inserted_range(range, replacement, len..len, false)
+    }
+
+    pub(crate) fn replace_with_inserted_range(
+        range: Range<usize>,
+        replacement: String,
+        selection_after: Range<usize>,
+        reversed: bool,
+    ) -> Self {
         Self {
             change: TextChange::replace(range, replacement),
-            selection_after: SelectionEditAfter::InsertedRange(len..len, false),
+            selection_after: SelectionEditAfter::InsertedRange(selection_after, reversed),
         }
     }
 }
@@ -49,15 +65,6 @@ where
         .map(|(index, selection)| per_selection(index, selection))
         .collect::<Option<Vec<_>>>()?;
 
-    request_from_edits(selection_set, kind, boundary, edits)
-}
-
-fn request_from_edits(
-    selection_set: &SelectionSet,
-    kind: EditKind,
-    boundary: UndoBoundary,
-    edits: Vec<SelectionEdit>,
-) -> Option<EditRequest> {
     let mut delta = 0isize;
     let mut changes = Vec::with_capacity(edits.len());
     let mut selections_after = Vec::with_capacity(edits.len());

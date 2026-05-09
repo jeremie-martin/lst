@@ -3,9 +3,9 @@ use crate::{
     language::LanguageConfig,
     multi_selection,
     selection::{display_line_char_len, is_identifier_char},
-    selection_edit::{self, SelectionEdit, SelectionEditAfter},
+    selection_edit::{self, SelectionEdit},
     tab::EditorTab,
-    transaction::{EditRequest, SelectionAfter, TextChange},
+    transaction::{EditRequest, SelectionAfter},
 };
 use std::ops::Range;
 
@@ -111,10 +111,10 @@ fn multi_edit_action(
             // keeps each selection in the change-set delta accounting; the cursor
             // is then redirected past the existing closer via AbsoluteCursor.
             let cursor = auto_pair_overtype_cursor(tab, &selection.range(), text)?;
-            Some(SelectionEdit {
-                change: TextChange::insert(selection.cursor(), ""),
-                selection_after: SelectionEditAfter::AbsoluteCursor(cursor),
-            })
+            Some(SelectionEdit::insert_with_absolute_cursor(
+                selection.cursor(),
+                cursor,
+            ))
         },
     ) {
         return Some(edit(request, true));
@@ -125,14 +125,10 @@ fn multi_edit_action(
         UndoBoundary::Break,
         |_index, selection| {
             let range = auto_dedent_close_brace_range(tab, &selection.range(), text)?;
-            let inserted_chars = text.chars().count();
-            Some(SelectionEdit {
-                change: TextChange::replace(range, text.to_string()),
-                selection_after: SelectionEditAfter::InsertedRange(
-                    inserted_chars..inserted_chars,
-                    false,
-                ),
-            })
+            Some(SelectionEdit::replace_with_collapsed_end(
+                range,
+                text.to_string(),
+            ))
         },
     ) {
         return Some(edit(request, false));
@@ -146,13 +142,12 @@ fn multi_edit_action(
                 auto_pair_surround_edit(tab, &selection.range(), text)?;
             let relative_selection = new_selection.start.saturating_sub(edit_range.start)
                 ..new_selection.end.saturating_sub(edit_range.start);
-            Some(SelectionEdit {
-                change: TextChange::replace(edit_range, replacement),
-                selection_after: SelectionEditAfter::InsertedRange(
-                    relative_selection,
-                    selection.is_reversed(),
-                ),
-            })
+            Some(SelectionEdit::replace_with_inserted_range(
+                edit_range,
+                replacement,
+                relative_selection,
+                selection.is_reversed(),
+            ))
         },
     ) {
         return Some(edit(request, true));
@@ -165,13 +160,12 @@ fn multi_edit_action(
             let (edit_range, replacement, caret) =
                 auto_pair_insert_edit(tab, &selection.range(), text)?;
             let relative_caret = caret.saturating_sub(edit_range.start);
-            Some(SelectionEdit {
-                change: TextChange::replace(edit_range, replacement),
-                selection_after: SelectionEditAfter::InsertedRange(
-                    relative_caret..relative_caret,
-                    false,
-                ),
-            })
+            Some(SelectionEdit::replace_with_inserted_range(
+                edit_range,
+                replacement,
+                relative_caret..relative_caret,
+                false,
+            ))
         },
     ) {
         return Some(edit(request, true));

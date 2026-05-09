@@ -73,13 +73,8 @@ impl Selection {
     }
 }
 
-/// Programmatic multi-cursor selection state for the editor model.
-///
 /// A `SelectionSet` is always non-empty, sorted by selected range, and
-/// non-overlapping. One selection is primary; commands that intentionally
-/// collapse multi-cursor state use that primary selection as the surviving
-/// cursor. This type is part of the model API so tests and host applications
-/// can exercise multi-cursor behavior before the GPUI gesture surface exists.
+/// non-overlapping, with one primary selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectionSet {
     selections: Vec<Selection>,
@@ -108,11 +103,7 @@ impl CursorGoal {
     }
 }
 
-/// Complete selection state owned by a tab.
-///
-/// `SelectionSet` owns the structural cursor/selection invariant. This wrapper
-/// keeps movement metadata in lockstep with that set so callers cannot retain a
-/// preferred-column vector that no longer matches the active selections.
+/// Selection state plus movement metadata owned by a tab.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SelectionState {
     set: SelectionSet,
@@ -170,9 +161,6 @@ impl SelectionSet {
         }
     }
 
-    /// Builds a selection set after validating ordering, overlap, and primary
-    /// index. Use `from_selections_coalescing_cursors` internally when an edit
-    /// can legitimately produce duplicate collapsed cursors.
     pub fn from_selections(
         selections: Vec<Selection>,
         primary: usize,
@@ -208,11 +196,6 @@ impl SelectionSet {
         self.with_added_selections([selection])
     }
 
-    /// Returns a set with `additions` merged in. The most recently added
-    /// selection becomes primary; on overlap with an existing selection the
-    /// addition is silently dropped and the original set is returned, so
-    /// callers can safely ignore "no change" results. Duplicate collapsed
-    /// cursors are coalesced.
     pub(crate) fn with_added_selections<I>(&self, additions: I) -> Self
     where
         I: IntoIterator<Item = Selection>,
@@ -248,11 +231,10 @@ impl SelectionSet {
         let mut coalesced = Vec::with_capacity(selections.len());
         let mut coalesced_primary = None;
         for (index, selection) in selections.into_iter().enumerate() {
-            let duplicate_cursor = !selection.has_selection()
-                && coalesced.last().is_some_and(|last: &Selection| {
-                    !last.has_selection() && last.cursor() == selection.cursor()
-                });
-            if duplicate_cursor {
+            if coalesced
+                .last()
+                .is_some_and(|last| duplicate_cursor(*last, selection))
+            {
                 if index == primary {
                     coalesced_primary = coalesced.len().checked_sub(1);
                 }
@@ -278,32 +260,20 @@ impl SelectionSet {
             (range.start, range.end, origin.sort_key())
         });
 
-        // Prefer the most-recently-added non-duplicate Added as primary —
-        // that's the new edge of a multi-step extension. A naive
-        // `rposition Added` would pick the duplicate that gets coalesced
-        // away, leaving primary stuck on the previous row. When every
-        // Added is a duplicate, fall back to the duplicate's index so the
-        // coalescer redirects primary onto the targeted existing cursor.
-        let added_index = selections
-            .iter()
-            .enumerate()
+        let added_index = (0..selections.len())
             .rev()
-            .find_map(|(i, (_, origin))| {
-                if *origin != SelectionOrigin::Added {
-                    return None;
+            .find(|&i| {
+                if selections[i].1 != SelectionOrigin::Added {
+                    return false;
                 }
                 let range = selections[i].0.range();
-                let prev_dup = i > 0
-                    && selections[i - 1].0.range() == range
-                    && selections[i - 1].1 != SelectionOrigin::Added;
-                let next_dup = i + 1 < selections.len()
-                    && selections[i + 1].0.range() == range
-                    && selections[i + 1].1 != SelectionOrigin::Added;
-                if prev_dup || next_dup {
-                    None
-                } else {
-                    Some(i)
-                }
+                let prev_dup = i.checked_sub(1).is_some_and(|j| {
+                    selections[j].0.range() == range && selections[j].1 != SelectionOrigin::Added
+                });
+                let next_dup = selections.get(i + 1).is_some_and(|(selection, origin)| {
+                    selection.range() == range && *origin != SelectionOrigin::Added
+                });
+                !(prev_dup || next_dup)
             })
             .or_else(|| {
                 selections
@@ -331,10 +301,6 @@ impl SelectionSet {
         self.primary = 0;
     }
 
-    /// Returns a set with the selection at `index` removed. Returns `None`
-    /// when the removal would empty the set (single-selection case) or the
-    /// index is out of range. When the primary is removed, the next
-    /// selection takes over (or the previous one if removing the last).
     pub(crate) fn with_removed_at(&self, index: usize) -> Option<Self> {
         if index >= self.selections.len() || self.selections.len() <= 1 {
             return None;
@@ -490,42 +456,44 @@ impl SelectionState {
             (range.start, range.end, !entry.is_primary)
         });
 
-        let mut selections = Vec::with_capacity(entries.len());
-        let mut movement_goals: Vec<Option<CursorGoal>> = Vec::with_capacity(entries.len());
-        let mut visible_columns: Vec<Option<usize>> = Vec::with_capacity(entries.len());
+        let mut mapped = Vec::with_capacity(entries.len());
         let mut primary = None;
 
         for entry in entries.iter().copied() {
-            let duplicate_cursor = !entry.transform.selection.has_selection()
-                && selections.last().is_some_and(|last: &Selection| {
-                    !last.has_selection() && last.cursor() == entry.transform.selection.cursor()
-                });
-            if duplicate_cursor {
+            if mapped.last().is_some_and(|last: &MappedSelection| {
+                duplicate_cursor(last.transform.selection, entry.transform.selection)
+            }) {
                 if entry.is_primary {
-                    primary = selections.len().checked_sub(1);
+                    primary = mapped.len().checked_sub(1);
                     if let Some(index) = primary {
-                        movement_goals[index] = entry.transform.movement_goal;
-                        visible_columns[index] = entry.transform.visible_column;
+                        mapped[index] = entry;
                     }
                 }
                 continue;
             }
 
             if entry.is_primary {
-                primary = Some(selections.len());
+                primary = Some(mapped.len());
             }
-            selections.push(entry.transform.selection);
-            movement_goals.push(entry.transform.movement_goal);
-            visible_columns.push(entry.transform.visible_column);
+            mapped.push(entry);
         }
 
         let primary = primary.unwrap_or(0);
+        let selections = mapped
+            .iter()
+            .map(|entry| entry.transform.selection)
+            .collect();
         let set = SelectionSet::from_selections(selections, primary).ok()?;
-        let goals = CursorGoals::from_optional_columns(
-            set.as_slice().len(),
-            movement_goals,
-            visible_columns,
-        );
+        let goals = CursorGoals {
+            movement: mapped
+                .iter()
+                .map(|entry| entry.transform.movement_goal)
+                .collect(),
+            visible: mapped
+                .iter()
+                .map(|entry| entry.transform.visible_column)
+                .collect(),
+        };
         Some(Self { set, goals })
     }
 }
@@ -559,20 +527,6 @@ impl CursorGoals {
     fn clear(&mut self) {
         self.movement = None;
         self.visible = None;
-    }
-
-    fn from_optional_columns(
-        len: usize,
-        movement: Vec<Option<CursorGoal>>,
-        visible: Vec<Option<usize>>,
-    ) -> Self {
-        let movement = (movement.len() == len)
-            .then(|| movement.into_iter().collect::<Option<Vec<_>>>())
-            .flatten();
-        let visible = (visible.len() == len)
-            .then(|| visible.into_iter().collect::<Option<Vec<_>>>())
-            .flatten();
-        Self { movement, visible }
     }
 }
 
@@ -623,6 +577,10 @@ fn validate_selection_set(
         previous = Some(range);
     }
     Ok(())
+}
+
+fn duplicate_cursor(left: Selection, right: Selection) -> bool {
+    !left.has_selection() && !right.has_selection() && left.cursor() == right.cursor()
 }
 
 fn clamped_selection(selection: Selection, len: usize) -> Selection {
