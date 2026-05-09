@@ -1,7 +1,7 @@
 use crate::{
-    document::{position_to_char, EditKind, UndoBoundary},
+    document::{char_to_position, position_to_char, EditKind, UndoBoundary},
     position::Position,
-    selection::{cell_partition_by_byte, cells_of_str, line_display_text},
+    selection::{cell_partition_by_byte, cells_of_str, line_display_text, Selection, SelectionSet},
     tab::EditorTab,
     transaction::{EditRequest, SelectionAfter, TextChange, TextChangeSet},
     TabId,
@@ -235,13 +235,144 @@ impl FindState {
         true
     }
 
-    pub fn finish_reindex(&mut self, revision: u64) {
-        self.indexed_revision = Some(revision);
-    }
-
     pub fn is_stale(&self, revision: u64) -> bool {
         !self.query.is_empty() && self.indexed_revision != Some(revision)
     }
+
+    pub(crate) fn reindex_for_tab(&mut self, tab: &EditorTab) {
+        if self.query.is_empty() {
+            self.clear_results();
+            return;
+        }
+        self.compute_matches_in_text(&tab.buffer_text());
+        if let Some(scope) = self.scope.selection_range_for(tab.id()) {
+            let buffer = tab.buffer();
+            let len = buffer.len_chars();
+            let scope = scope.start.min(len)..scope.end.min(len);
+            self.matches
+                .retain(|m| scope_contains(&scope, &m.char_range_in(buffer)));
+            match (self.matches.is_empty(), self.active) {
+                (true, _) => self.active = None,
+                (false, Some(index)) => self.active = Some(index.min(self.matches.len() - 1)),
+                _ => {}
+            }
+        }
+        self.indexed_revision = Some(tab.revision());
+    }
+
+    pub(crate) fn reindex_to_nearest(&mut self, tab: &EditorTab) {
+        self.reindex_for_tab(tab);
+        if !self.matches.is_empty() {
+            self.align_to_visible_match(tab);
+        }
+    }
+
+    pub(crate) fn ensure_current(&mut self, tab: &EditorTab) {
+        if self.is_stale(tab.revision()) {
+            self.reindex_for_tab(tab);
+        }
+    }
+
+    pub(crate) fn sync_with_tab(&mut self, tab: &EditorTab) {
+        if self.query.is_empty() {
+            self.clear_results();
+        } else {
+            self.reindex_to_nearest(tab);
+        }
+    }
+
+    pub(crate) fn sync_after_edit(&mut self, tab: &EditorTab) {
+        if !self.query.is_empty() {
+            self.reindex_to_nearest(tab);
+        }
+    }
+
+    pub(crate) fn active_selection_set(&self, tab: &EditorTab) -> Option<SelectionSet> {
+        if self.matches.is_empty() {
+            return None;
+        }
+        let buffer = tab.buffer();
+        let selections = self
+            .matches
+            .iter()
+            .map(|m| Selection::from_range(m.char_range_in(buffer), false))
+            .collect::<Vec<_>>();
+        let primary = self.active.unwrap_or(0).min(selections.len() - 1);
+        SelectionSet::from_selections(selections, primary).ok()
+    }
+
+    pub(crate) fn next_from(&mut self, position: Position) -> Option<Position> {
+        self.select_relative_from(position, true)
+    }
+
+    pub(crate) fn prev_from(&mut self, position: Position) -> Option<Position> {
+        self.select_relative_from(position, false)
+    }
+
+    pub(crate) fn search_word_from(
+        &mut self,
+        tab: &EditorTab,
+        word: String,
+        position: Position,
+        forward: bool,
+    ) -> Option<Position> {
+        self.query = word;
+        self.whole_word = true;
+        self.case_sensitive = true;
+        self.use_regex = false;
+        self.scope = FindScope::Document;
+        self.reindex_for_tab(tab);
+        if forward {
+            self.next_from(position)
+        } else {
+            self.prev_from(position)
+        }
+    }
+
+    fn align_to_visible_match(&mut self, tab: &EditorTab) {
+        if let Some(start) = self.selected_match_start(tab) {
+            if self.select_exact(&start) {
+                return;
+            }
+        }
+        self.find_nearest(&tab.cursor_position());
+    }
+
+    fn selected_match_start(&self, tab: &EditorTab) -> Option<Position> {
+        if self.query.is_empty() || !tab.has_selection() {
+            return None;
+        }
+        let selected = tab.selected_range();
+        if selected.end.saturating_sub(selected.start) != self.query.chars().count() {
+            return None;
+        }
+        Some(char_to_position(tab.buffer(), selected.start))
+    }
+
+    fn select_relative_from(&mut self, position: Position, forward: bool) -> Option<Position> {
+        let index = if forward {
+            self.matches
+                .iter()
+                .position(|m| {
+                    m.line > position.line || (m.line == position.line && m.col > position.column)
+                })
+                .or_else(|| (!self.matches.is_empty()).then_some(0))
+        } else {
+            self.matches
+                .iter()
+                .rposition(|m| {
+                    m.line < position.line || (m.line == position.line && m.col < position.column)
+                })
+                .or_else(|| self.matches.len().checked_sub(1))
+        }?;
+        self.active = Some(index);
+        let m = self.matches[index];
+        Some(Position::new(m.line, m.col))
+    }
+}
+
+fn scope_contains(scope: &Range<usize>, range: &Range<usize>) -> bool {
+    range.start >= scope.start && range.end <= scope.end
 }
 
 impl Default for FindState {

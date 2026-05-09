@@ -100,7 +100,7 @@ impl EditorModel {
             DuplicateLine => self.duplicate_line(),
             ToggleComment => self.toggle_comment(),
             ToggleBlockComment => self.toggle_block_comment(),
-            TransposeChars => { self.apply_optional_edit_request(super::transpose_request(self.active_tab()), Some(RevealIntent::NearestEdge)); }
+            TransposeChars => { self.apply_optional_edit_request(super::text_input::transpose_request(self.active_tab()), Some(RevealIntent::NearestEdge)); }
             ToggleOvertype => { self.overtype = !self.overtype; self.status = if self.overtype { "Overtype on.".to_string() } else { "Overtype off.".to_string() }; }
             ToggleBookmark => self.toggle_bookmark(),
             JumpNextBookmark => self.jump_bookmark(true),

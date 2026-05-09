@@ -5,6 +5,7 @@ use crate::{
         display_line_char_len, line_display_text, line_range_at_char, Selection, SelectionSet,
     },
     tab::EditorTab,
+    text_input,
     transaction::{apply_change_to_buffer, EditRequest, SelectionAfter, TextChange, TextChangeSet},
 };
 use std::ops::Range;
@@ -88,7 +89,7 @@ pub(super) fn replace_lines_change(
 ) -> Option<TextChange> {
     span_change(
         tab.buffer(),
-        super::preferred_newline_for_active_tab(tab),
+        text_input::preferred_newline(tab),
         first,
         last,
         new_lines,
@@ -102,9 +103,10 @@ fn replace_lines_in_place_change(
     new_lines: &[String],
 ) -> Option<TextChange> {
     let (range, trailing_newline) = line_span_without_prefix(tab.buffer(), first, last)?;
-    let mut replacement = new_lines.join(super::preferred_newline_for_active_tab(tab));
+    let newline = text_input::preferred_newline(tab);
+    let mut replacement = new_lines.join(newline);
     if trailing_newline && !replacement.is_empty() {
-        replacement.push_str(super::preferred_newline_for_active_tab(tab));
+        replacement.push_str(newline);
     }
     Some(TextChange::replace(range, replacement))
 }
@@ -116,7 +118,7 @@ pub(super) fn insert_lines_change(
 ) -> Option<TextChange> {
     insert_change(
         tab.buffer(),
-        super::preferred_newline_for_active_tab(tab),
+        text_input::preferred_newline(tab),
         insert_at,
         new_lines,
     )

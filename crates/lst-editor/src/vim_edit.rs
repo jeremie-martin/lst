@@ -7,6 +7,7 @@ use crate::{
     position::Position,
     selection::{self, line_display_text},
     tab::EditorTab,
+    text_input,
     transaction::{EditRequest, SelectionAfter, TextChange, TextChangeSet},
     vim,
 };
@@ -251,7 +252,7 @@ fn paste_chars(
     };
     let insert_at = position_to_char(tab.buffer(), Position::new(cursor.line, insert_col));
     let paste_lines: Vec<&str> = paste_text.split('\n').collect();
-    let replacement = paste_lines.join(super::preferred_newline_for_active_tab(tab));
+    let replacement = paste_lines.join(text_input::preferred_newline(tab));
     let cursor_position = if paste_lines.len() == 1 {
         Position::new(
             cursor.line,
