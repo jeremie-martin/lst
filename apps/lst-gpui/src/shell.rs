@@ -1,17 +1,13 @@
 use crate::ui::{
-    scrollbar::{
-        horizontal_scrollbar_layout, paint_horizontal_scrollbar, paint_vertical_scrollbar,
-        scroll_left_for_thumb_drag, scroll_left_for_track_click, scroll_top_for_thumb_drag,
-        scroll_top_for_track_click, vertical_scrollbar_layout,
-    },
+    scrollbar::ScrollbarAxis,
     theme::{metrics, typography},
     IconButton, IconKind, Tab as UiTab, TabBar,
 };
 use gpui::{
     canvas, div, prelude::*, px, rgb, AnyElement, App, Bounds, Context, CursorStyle,
     ElementInputHandler, InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    MouseUpEvent, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
+    Window,
 };
 use lst_editor::EditorCommand as Command;
 
@@ -19,14 +15,11 @@ use crate::actions::attach_workspace_actions;
 use crate::recent::RecentPreviewState;
 use crate::syntax::syntax_mode_for_language;
 use crate::viewport::{
-    buffer_content_height, code_origin_pad, max_unwrapped_line_width, paint_viewport,
-    prepare_viewport_paint_state, scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for,
+    buffer_content_height, code_char_width, code_origin_pad, ensure_wrap_layout,
+    max_unwrapped_line_width, paint_viewport, prepare_viewport_paint_state, scroll_left_for,
     ViewportPaintInput, ViewportPreparation, WrapLayoutInput,
 };
-use crate::{
-    code_char_width, ensure_wrap_layout, EditorHorizontalScrollbarDrag, EditorScrollbarDrag,
-    FocusTarget, LstGpuiApp, RECENT_CARD_BASIS,
-};
+use crate::{FocusTarget, LstGpuiApp, RECENT_CARD_BASIS};
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
@@ -560,294 +553,6 @@ impl LstGpuiApp {
             .children(overlays)
     }
 
-    fn render_editor_scrollbar(
-        &mut self,
-        viewport_scroll: ScrollHandle,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let scale = self.ui_scale();
-        let theme = self.theme(cx);
-        let track_width = metrics::px_for_scale(metrics::SCROLLBAR_TRACK_WIDTH, scale);
-        let has_overflow = viewport_scroll.max_offset().height > px(0.0);
-        let prepare_scroll = viewport_scroll.clone();
-        let paint_scroll = viewport_scroll;
-        let entity = cx.entity();
-
-        div()
-            .id("editor-scrollbar")
-            .absolute()
-            .top_0()
-            .right_0()
-            .h_full()
-            .w(track_width)
-            .when(has_overflow, |bar| bar.cursor(CursorStyle::Arrow))
-            .child(
-                canvas(
-                    move |bounds, _, _| {
-                        vertical_scrollbar_layout(
-                            bounds,
-                            scroll_top_for(&prepare_scroll),
-                            prepare_scroll.max_offset().height.max(px(0.0)),
-                            scale,
-                        )
-                    },
-                    move |_, layout, window, cx| {
-                        let Some(layout) = layout else {
-                            return;
-                        };
-
-                        let (active, hovered) = {
-                            let app = entity.read(cx);
-                            (
-                                app.editor_scrollbar_drag.is_some(),
-                                app.editor_scrollbar_hovered
-                                    || layout.thumb_bounds.contains(&window.mouse_position()),
-                            )
-                        };
-                        paint_vertical_scrollbar(&layout, active, hovered, scale, theme, window);
-
-                        let entity_for_down = entity.clone();
-                        let scroll_for_down = paint_scroll.clone();
-                        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-                            if !phase.bubble()
-                                || event.button != MouseButton::Left
-                                || !layout.track_bounds.contains(&event.position)
-                            {
-                                return;
-                            }
-
-                            let focus_handle = entity_for_down.read(cx).focus_handle.clone();
-                            window.focus(&focus_handle);
-                            let current = scroll_top_for(&scroll_for_down);
-                            let on_thumb = layout.thumb_bounds.contains(&event.position);
-                            let drag = if on_thumb {
-                                let grab_offset_y = event.position.y - layout.thumb_bounds.top();
-                                Some(EditorScrollbarDrag { grab_offset_y })
-                            } else {
-                                let target =
-                                    scroll_top_for_track_click(&layout, event.position.y, current);
-                                scroll_to_top(&scroll_for_down, target);
-                                None
-                            };
-                            entity_for_down.update(cx, |this, _| {
-                                this.set_focus(FocusTarget::Editor);
-                                this.selection_drag = None;
-                                this.editor_scrollbar_hovered = on_thumb;
-                                this.editor_scrollbar_drag = drag;
-                            });
-                            cx.stop_propagation();
-                            cx.notify(entity_for_down.entity_id());
-                        });
-
-                        let entity_for_move = entity.clone();
-                        let scroll_for_move = paint_scroll.clone();
-                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                            if !phase.bubble() {
-                                return;
-                            }
-
-                            let drag = entity_for_move.read(cx).editor_scrollbar_drag;
-                            if let Some(drag) = drag {
-                                if event.dragging() {
-                                    let target = scroll_top_for_thumb_drag(
-                                        &layout,
-                                        event.position.y,
-                                        drag.grab_offset_y,
-                                    );
-                                    scroll_to_top(&scroll_for_move, target);
-                                    entity_for_move.update(cx, |this, _| {
-                                        this.editor_scrollbar_hovered = true;
-                                    });
-                                    cx.stop_propagation();
-                                    cx.notify(entity_for_move.entity_id());
-                                } else {
-                                    entity_for_move.update(cx, |this, _| {
-                                        this.editor_scrollbar_drag = None;
-                                    });
-                                    cx.notify(entity_for_move.entity_id());
-                                }
-                                return;
-                            }
-
-                            let hovered = layout.thumb_bounds.contains(&event.position);
-                            if entity_for_move.read(cx).editor_scrollbar_hovered != hovered {
-                                entity_for_move.update(cx, |this, _| {
-                                    this.editor_scrollbar_hovered = hovered;
-                                });
-                                cx.notify(entity_for_move.entity_id());
-                            }
-                        });
-
-                        let entity_for_up = entity.clone();
-                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                            if !phase.bubble() || event.button != MouseButton::Left {
-                                return;
-                            }
-
-                            let was_dragging =
-                                entity_for_up.read(cx).editor_scrollbar_drag.is_some();
-                            if was_dragging || layout.track_bounds.contains(&event.position) {
-                                entity_for_up.update(cx, |this, _| {
-                                    this.editor_scrollbar_drag = None;
-                                    this.editor_scrollbar_hovered =
-                                        layout.thumb_bounds.contains(&event.position);
-                                });
-                                cx.stop_propagation();
-                                cx.notify(entity_for_up.entity_id());
-                            }
-                        });
-                    },
-                )
-                .size_full(),
-            )
-    }
-
-    fn render_editor_horizontal_scrollbar(
-        &mut self,
-        viewport_scroll: ScrollHandle,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let scale = self.ui_scale();
-        let theme = self.theme(cx);
-        let track_height = metrics::px_for_scale(metrics::SCROLLBAR_TRACK_WIDTH, scale);
-        let has_overflow = viewport_scroll.max_offset().width > px(0.0);
-        let prepare_scroll = viewport_scroll.clone();
-        let paint_scroll = viewport_scroll;
-        let entity = cx.entity();
-
-        div()
-            .id("editor-horizontal-scrollbar")
-            .absolute()
-            .left_0()
-            .bottom_0()
-            .right(track_height)
-            .h(track_height)
-            .when(has_overflow, |bar| bar.cursor(CursorStyle::Arrow))
-            .child(
-                canvas(
-                    move |bounds, _, _| {
-                        horizontal_scrollbar_layout(
-                            bounds,
-                            scroll_left_for(&prepare_scroll),
-                            prepare_scroll.max_offset().width.max(px(0.0)),
-                            scale,
-                        )
-                    },
-                    move |_, layout, window, cx| {
-                        let Some(layout) = layout else {
-                            return;
-                        };
-
-                        let (active, hovered) = {
-                            let app = entity.read(cx);
-                            (
-                                app.editor_horizontal_scrollbar_drag.is_some(),
-                                app.editor_horizontal_scrollbar_hovered
-                                    || layout.thumb_bounds.contains(&window.mouse_position()),
-                            )
-                        };
-                        paint_horizontal_scrollbar(&layout, active, hovered, scale, theme, window);
-
-                        let entity_for_down = entity.clone();
-                        let scroll_for_down = paint_scroll.clone();
-                        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-                            if !phase.bubble()
-                                || event.button != MouseButton::Left
-                                || !layout.track_bounds.contains(&event.position)
-                            {
-                                return;
-                            }
-
-                            let focus_handle = entity_for_down.read(cx).focus_handle.clone();
-                            window.focus(&focus_handle);
-                            let current = scroll_left_for(&scroll_for_down);
-                            let on_thumb = layout.thumb_bounds.contains(&event.position);
-                            let drag = if on_thumb {
-                                let grab_offset_x = event.position.x - layout.thumb_bounds.left();
-                                Some(EditorHorizontalScrollbarDrag { grab_offset_x })
-                            } else {
-                                let target =
-                                    scroll_left_for_track_click(&layout, event.position.x, current);
-                                scroll_to_left(&scroll_for_down, target);
-                                None
-                            };
-                            entity_for_down.update(cx, |this, _| {
-                                this.set_focus(FocusTarget::Editor);
-                                this.selection_drag = None;
-                                this.editor_horizontal_scrollbar_hovered = on_thumb;
-                                this.editor_horizontal_scrollbar_drag = drag;
-                            });
-                            cx.stop_propagation();
-                            cx.notify(entity_for_down.entity_id());
-                        });
-
-                        let entity_for_move = entity.clone();
-                        let scroll_for_move = paint_scroll.clone();
-                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                            if !phase.bubble() {
-                                return;
-                            }
-
-                            let drag = entity_for_move.read(cx).editor_horizontal_scrollbar_drag;
-                            if let Some(drag) = drag {
-                                if event.dragging() {
-                                    let target = scroll_left_for_thumb_drag(
-                                        &layout,
-                                        event.position.x,
-                                        drag.grab_offset_x,
-                                    );
-                                    scroll_to_left(&scroll_for_move, target);
-                                    entity_for_move.update(cx, |this, _| {
-                                        this.editor_horizontal_scrollbar_hovered = true;
-                                    });
-                                    cx.stop_propagation();
-                                    cx.notify(entity_for_move.entity_id());
-                                } else {
-                                    entity_for_move.update(cx, |this, _| {
-                                        this.editor_horizontal_scrollbar_drag = None;
-                                    });
-                                    cx.notify(entity_for_move.entity_id());
-                                }
-                                return;
-                            }
-
-                            let hovered = layout.thumb_bounds.contains(&event.position);
-                            if entity_for_move.read(cx).editor_horizontal_scrollbar_hovered
-                                != hovered
-                            {
-                                entity_for_move.update(cx, |this, _| {
-                                    this.editor_horizontal_scrollbar_hovered = hovered;
-                                });
-                                cx.notify(entity_for_move.entity_id());
-                            }
-                        });
-
-                        let entity_for_up = entity.clone();
-                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                            if !phase.bubble() || event.button != MouseButton::Left {
-                                return;
-                            }
-
-                            let was_dragging = entity_for_up
-                                .read(cx)
-                                .editor_horizontal_scrollbar_drag
-                                .is_some();
-                            if was_dragging || layout.track_bounds.contains(&event.position) {
-                                entity_for_up.update(cx, |this, _| {
-                                    this.editor_horizontal_scrollbar_drag = None;
-                                    this.editor_horizontal_scrollbar_hovered =
-                                        layout.thumb_bounds.contains(&event.position);
-                                });
-                                cx.stop_propagation();
-                                cx.notify(entity_for_up.entity_id());
-                            }
-                        });
-                    },
-                )
-                .size_full(),
-            )
-    }
-
     fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
         let theme = self.theme(cx);
@@ -1280,12 +985,14 @@ impl Render for LstGpuiApp {
                                                     ),
                                             )
                                             .child(self.render_editor_scrollbar(
+                                                ScrollbarAxis::Vertical,
                                                 scrollbar_scroll,
                                                 cx,
                                             ))
                                             .when(!show_wrap, |viewport| {
                                                 viewport.child(
-                                                    self.render_editor_horizontal_scrollbar(
+                                                    self.render_editor_scrollbar(
+                                                        ScrollbarAxis::Horizontal,
                                                         h_scrollbar_scroll,
                                                         cx,
                                                     ),

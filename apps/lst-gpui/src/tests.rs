@@ -1,9 +1,6 @@
 use crate::ui::{
     input_keybindings,
-    scrollbar::{
-        horizontal_scrollbar_layout, vertical_scrollbar_layout, HorizontalScrollbarLayout,
-        VerticalScrollbarLayout,
-    },
+    scrollbar::{scrollbar_layout, ScrollbarAxis, ScrollbarLayout},
     theme::{SyntaxRole, ThemeId},
 };
 use gpui::{
@@ -25,6 +22,7 @@ use crate::syntax::SyntaxHighlightJobKey;
 use crate::syntax::{
     compute_syntax_highlights, syntax_mode_for_language, SyntaxLanguage, SyntaxMode,
 };
+use crate::viewport::code_origin_pad;
 #[cfg(feature = "internal-invariants")]
 use crate::viewport::PaintedRow;
 use crate::*;
@@ -169,13 +167,14 @@ fn active_cursor_viewport_state(
 fn active_editor_scrollbar_layout(
     view: &Entity<LstGpuiApp>,
     cx: &mut VisualTestContext,
-) -> Option<VerticalScrollbarLayout> {
+) -> Option<ScrollbarLayout> {
     view.update(cx, |app, _cx| {
         let bounds = app
             .active_viewport_bounds()
             .expect("viewport should have rendered bounds");
         let active_view = app.active_view();
-        vertical_scrollbar_layout(
+        scrollbar_layout(
+            ScrollbarAxis::Vertical,
             Bounds::new(
                 point(
                     bounds.right() - app.ui_px(crate::ui::theme::metrics::SCROLLBAR_TRACK_WIDTH),
@@ -196,13 +195,14 @@ fn active_editor_scrollbar_layout(
 fn active_editor_horizontal_scrollbar_layout(
     view: &Entity<LstGpuiApp>,
     cx: &mut VisualTestContext,
-) -> Option<HorizontalScrollbarLayout> {
+) -> Option<ScrollbarLayout> {
     view.update(cx, |app, _cx| {
         let bounds = app
             .active_viewport_bounds()
             .expect("viewport should have rendered bounds");
         let active_view = app.active_view();
-        horizontal_scrollbar_layout(
+        scrollbar_layout(
+            ScrollbarAxis::Horizontal,
             Bounds::new(
                 point(
                     bounds.left(),

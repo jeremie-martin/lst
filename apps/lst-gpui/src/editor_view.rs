@@ -1,0 +1,485 @@
+use gpui::{px, App, Bounds, ClipboardItem, Context, Pixels, Point, Window};
+use lst_editor::{EditorCommand as Command, EditorTab as ModelEditorTab, RevealIntent};
+
+use crate::{
+    bench_trace, char_to_line_col,
+    ui::theme::metrics,
+    viewport::{
+        byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout,
+        line_display_text, scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for,
+        visual_row_for_char, x_for_display_char, WrapLayoutInput,
+    },
+    EditorTabView, LstGpuiApp,
+};
+
+impl LstGpuiApp {
+    pub(crate) fn active_tab(&self) -> &ModelEditorTab {
+        self.model.active_tab()
+    }
+
+    pub(crate) fn record_find_metrics(&self, reindex_ms: f64) {
+        bench_trace::record_ms("find_reindex_ms", reindex_ms);
+        bench_trace::record_usize("find_match_count", self.model.find().matches.len());
+        bench_trace::record_usize("find_query_len", self.model.find().query.chars().count());
+    }
+
+    pub(crate) fn record_operation(
+        &self,
+        label: &'static str,
+        clipboard_read_ms: Option<f64>,
+        apply_ms: f64,
+    ) {
+        let tab = self.active_tab();
+        bench_trace::record_operation(
+            label,
+            tab.buffer().len_bytes(),
+            tab.line_count(),
+            clipboard_read_ms,
+            apply_ms,
+        );
+    }
+
+    pub(crate) fn active_view(&self) -> &EditorTabView {
+        self.tab_views
+            .get(&self.model.active_tab_id())
+            .expect("active tab must have a tab view")
+    }
+
+    fn active_cursor_line_col(&self) -> (usize, usize) {
+        char_to_line_col(self.active_tab().buffer(), self.active_tab().cursor_char())
+    }
+
+    /// "▲N" / "▼N" indicator for cursors outside the painted viewport.
+    /// Compares against painted char ranges (not logical lines) so soft-
+    /// wrap segments don't confuse the off-screen test.
+    fn off_screen_cursor_indicator(&self) -> Option<String> {
+        let view = self.tab_views.get(&self.model.active_tab_id())?;
+        let geometry = view.geometry.borrow();
+        let first = geometry.rows.first()?;
+        let last = geometry.rows.last()?;
+        let painted_start_char = first.line_start_char;
+        let painted_end_char = last.display_end_char;
+        let mut above = 0usize;
+        let mut below = 0usize;
+        for selection in self.active_tab().selection_set().as_slice() {
+            let head = selection.head();
+            if head < painted_start_char {
+                above += 1;
+            } else if head > painted_end_char {
+                below += 1;
+            }
+        }
+        if above == 0 && below == 0 {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if above > 0 {
+            parts.push(format!("\u{25B2}{above}"));
+        }
+        if below > 0 {
+            parts.push(format!("\u{25BC}{below}"));
+        }
+        Some(parts.join(" "))
+    }
+
+    pub(crate) fn selection_summary(&self) -> Option<String> {
+        let tab = self.active_tab();
+        let set = tab.selection_set();
+        if !set.is_single() {
+            let buffer = tab.buffer();
+            let (total_chars, total_lines) =
+                set.as_slice()
+                    .iter()
+                    .fold((0usize, 0usize), |(chars, lines), selection| {
+                        let range = selection.range();
+                        if range.start == range.end {
+                            return (chars, lines);
+                        }
+                        let start_line = buffer.char_to_line(range.start);
+                        let end_line = buffer.char_to_line(range.end - 1);
+                        (chars + range.len(), lines + (end_line - start_line + 1))
+                    });
+            let mut parts = vec![format!("{} cursors", set.as_slice().len())];
+            if total_chars > 0 {
+                parts.push(format!("Sel {total_chars}"));
+                if total_lines > 1 {
+                    parts.push(format!("{total_lines} lines"));
+                }
+            }
+            return Some(parts.join(" · "));
+        }
+        let selected = tab.selected_range();
+        (selected.start != selected.end).then(|| format!("Sel {}", selected.len()))
+    }
+
+    fn painted_wrap_columns(&self) -> Option<usize> {
+        self.active_view().geometry.borrow().painted_wrap_columns
+    }
+
+    pub(crate) fn status_details(&self) -> String {
+        let tab = self.active_tab();
+        let (line, column) = self.active_cursor_line_col();
+        let mut parts = vec![
+            self.model.vim_mode().label().to_string(),
+            format!("Ln {}", line + 1),
+            format!("Col {}", column + 1),
+            if self.model.show_wrap() {
+                self.painted_wrap_columns()
+                    .map(|columns| format!("Wrap {columns} cols"))
+                    .unwrap_or_else(|| "Wrap".to_string())
+            } else {
+                "No Wrap".to_string()
+            },
+            format!("{} lines", tab.line_count()),
+        ];
+        let pending = self.model.vim_pending_display();
+        if !pending.is_empty() {
+            parts.push(pending);
+        }
+        if self.model.overtype() {
+            parts.push("OVR".to_string());
+        }
+        if let Some(indicator) = self.off_screen_cursor_indicator() {
+            parts.push(indicator);
+        }
+        if let Some(selection) = self.selection_summary() {
+            parts.push(selection);
+        }
+        if self.zoom_level != 0 {
+            parts.push(format!("Zoom {:.0}%", self.ui_scale() * 100.0));
+        }
+        if self.model.find().visible {
+            let current = if self.model.find().matches.is_empty() {
+                0
+            } else {
+                self.model.find().active.map_or(0, |index| index + 1)
+            };
+            parts.push(format!(
+                "Match {current}/{}",
+                self.model.find().matches.len()
+            ));
+        }
+        parts.join("  ")
+    }
+
+    pub(crate) fn move_vertical(
+        &mut self,
+        delta: isize,
+        select: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let wrap_columns = self.active_wrap_columns(window, cx);
+        self.execute_model_command(cx, Command::MoveDisplayRows(delta, select, wrap_columns));
+    }
+
+    pub(crate) fn active_wrap_columns(&mut self, window: &mut Window, cx: &App) -> usize {
+        if !self.model.show_wrap() {
+            return usize::MAX;
+        }
+
+        let (geometry, cache) = {
+            let active_view = self.active_view();
+            (active_view.geometry.clone(), active_view.cache.clone())
+        };
+        let viewport_width = geometry
+            .borrow()
+            .bounds
+            .map(|bounds| bounds.size.width)
+            .unwrap_or_else(|| self.ui_px(metrics::WINDOW_WIDTH - 48.0));
+        let char_width = code_char_width(window, self.ui_scale(), self.theme(cx));
+        let revision = self.model.active_tab().revision();
+        let lines = self.model.active_tab_lines();
+        let layout = {
+            let mut cache = cache.borrow_mut();
+            ensure_wrap_layout(
+                &mut cache,
+                WrapLayoutInput {
+                    lines: lines.as_ref(),
+                    revision,
+                    viewport_width,
+                    char_width,
+                    show_gutter: self.model.show_gutter(),
+                    show_wrap: self.model.show_wrap(),
+                    scale: self.ui_scale(),
+                },
+            )
+        };
+        layout.wrap_columns
+    }
+
+    pub(crate) fn move_page(
+        &mut self,
+        down: bool,
+        select: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let wrap_columns = self.active_wrap_columns(window, cx);
+        self.execute_model_command(cx, Command::Page(down, select, wrap_columns));
+    }
+
+    pub(crate) fn sync_viewport_state(&mut self) {
+        let bounds = self.active_view().geometry.borrow().bounds;
+        let Some(bounds) = bounds else {
+            return;
+        };
+        let row_height = self.ui_px(metrics::ROW_HEIGHT);
+        if row_height <= px(0.0) || bounds.size.height <= px(0.0) {
+            return;
+        }
+        let rows = ((bounds.size.height / row_height).floor() as usize).max(1);
+        let scroll_top = scroll_top_for(&self.active_view().scroll);
+        let top = (scroll_top / row_height).floor() as usize;
+        self.model.set_viewport_rows(rows);
+        self.model.set_viewport_top(top);
+    }
+
+    pub(crate) fn queue_cursor_reveal(&mut self, intent: RevealIntent) {
+        self.pending_reveal = Some(intent);
+    }
+
+    pub(crate) fn schedule_pending_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_reveal.is_none() || self.reveal_scheduled {
+            return;
+        }
+
+        self.reveal_scheduled = true;
+        cx.on_next_frame(window, |this, window, cx| {
+            this.reveal_scheduled = false;
+            this.flush_pending_reveal(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn flush_pending_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(intent) = self.pending_reveal.take() else {
+            return;
+        };
+
+        if !self.try_reveal_active_cursor(intent, window, cx) {
+            self.pending_reveal = Some(intent);
+            self.schedule_pending_reveal(window, cx);
+        }
+    }
+
+    /// `cx.on_next_frame` may not fire under `run_until_parked` before the next paint commits.
+    #[cfg(test)]
+    pub(crate) fn flush_pending_reveal_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.reveal_scheduled = false;
+        self.flush_pending_reveal(window, cx);
+    }
+
+    fn active_cursor_visual_row(&self) -> Option<usize> {
+        let tab = self.active_tab();
+        let view = self.active_view();
+
+        if self.model.show_wrap() {
+            let cache = view.cache.borrow();
+            let cached = cache.wrap_layout.as_ref()?;
+            if cached.revision != tab.revision() || !cached.layout.show_wrap {
+                return None;
+            }
+            visual_row_for_char(tab, &cached.layout)
+        } else {
+            Some(tab.buffer().char_to_line(tab.cursor_char()))
+        }
+    }
+
+    fn try_reveal_active_cursor(
+        &self,
+        intent: RevealIntent,
+        window: &mut Window,
+        cx: &App,
+    ) -> bool {
+        let view = self.active_view();
+        let viewport_bounds = {
+            let geometry = view.geometry.borrow();
+            let Some(bounds) = geometry.bounds else {
+                return false;
+            };
+            bounds
+        };
+        if viewport_bounds.size.height <= px(0.) {
+            return false;
+        }
+
+        let Some(visual_row) = self.active_cursor_visual_row() else {
+            return false;
+        };
+
+        let row_height = self.ui_px(metrics::ROW_HEIGHT);
+        let caret_top = row_height * visual_row as f32;
+        let caret_bottom = caret_top + row_height;
+        let scroll_top = scroll_top_for(&view.scroll);
+        let viewport_height = viewport_bounds.size.height;
+        let margin = row_height * self.model.viewport().effective_scrolloff() as f32;
+
+        let target = match intent {
+            RevealIntent::NearestEdge => {
+                if caret_top < scroll_top + margin {
+                    Some(caret_top - margin)
+                } else if caret_bottom > scroll_top + viewport_height - margin {
+                    Some(caret_bottom + margin - viewport_height)
+                } else {
+                    None
+                }
+            }
+            RevealIntent::Center => Some(caret_top - (viewport_height - row_height) / 2.0),
+            RevealIntent::Top => Some(caret_top - margin),
+            RevealIntent::Bottom => Some(caret_bottom + margin - viewport_height),
+        };
+
+        if let Some(target) = target {
+            scroll_to_top(&view.scroll, target);
+        }
+
+        if !self.model.show_wrap() {
+            self.try_reveal_active_cursor_horizontally(view, viewport_bounds, window, cx);
+        }
+        true
+    }
+
+    fn try_reveal_active_cursor_horizontally(
+        &self,
+        view: &EditorTabView,
+        viewport_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &App,
+    ) {
+        let geometry = view.geometry.borrow();
+        let char_width = geometry.painted_char_width;
+        if char_width <= px(0.0) {
+            return;
+        }
+
+        let scroll_left = scroll_left_for(&view.scroll);
+        let pad = code_origin_pad(self.model.show_gutter(), self.ui_scale());
+        let visible_width = (viewport_bounds.size.width - pad).max(px(0.0));
+        if visible_width <= px(0.0) {
+            return;
+        }
+
+        let visible_cols = ((visible_width / px(1.0)) / (char_width / px(1.0))).floor() as usize;
+        if visible_cols == 0 {
+            return;
+        }
+
+        let cursor_x = self.active_cursor_rendered_x(char_width, window, cx);
+
+        let raw_margin = self.model.viewport().sidescrolloff;
+        let margin_cols = if visible_cols <= 1 {
+            0
+        } else {
+            raw_margin.min((visible_cols - 1) / 2)
+        };
+        let margin = char_width * margin_cols as f32;
+
+        let target_x = if cursor_x < scroll_left + margin {
+            Some(cursor_x - margin)
+        } else if cursor_x > scroll_left + visible_width - margin {
+            Some(cursor_x + margin - visible_width)
+        } else {
+            None
+        };
+
+        if let Some(target_x) = target_x {
+            drop(geometry);
+            scroll_to_left(&view.scroll, target_x);
+        }
+    }
+
+    fn active_cursor_rendered_x(
+        &self,
+        char_width: Pixels,
+        window: &mut Window,
+        cx: &App,
+    ) -> Pixels {
+        let tab = self.active_tab();
+        let cursor = tab.cursor_char().min(tab.buffer().len_chars());
+        let line = tab.buffer().char_to_line(cursor);
+        let line_start = tab.buffer().line_to_char(line);
+        let display_text = line_display_text(tab.buffer(), line);
+        let column = cursor
+            .saturating_sub(line_start)
+            .min(display_text.as_ref().chars().count());
+        x_for_display_char(
+            display_text.as_ref(),
+            column,
+            char_width,
+            self.ui_scale(),
+            self.theme(cx),
+            window,
+        )
+    }
+
+    pub(crate) fn sync_primary_selection(&self, cx: &mut Context<Self>) {
+        if let Some(text) = self.active_tab().selected_text() {
+            cx.write_to_primary(ClipboardItem::new_string(text));
+        }
+    }
+
+    pub(crate) fn point_below_painted_rows(&self, point: Point<Pixels>) -> bool {
+        let active_view = self.active_view();
+        let geometry = active_view.geometry.borrow();
+        let Some(last_row) = geometry.rows.last() else {
+            return false;
+        };
+        point.y >= last_row.row_top + self.ui_px(metrics::ROW_HEIGHT)
+    }
+
+    pub(crate) fn active_char_index_for_point(&self, point: Point<Pixels>) -> usize {
+        let active_view = self.active_view();
+        let geometry = active_view.geometry.borrow();
+        let Some(bounds) = geometry.bounds else {
+            return self.active_tab().cursor_char();
+        };
+        const SCROLL_STALE_THRESHOLD: f32 = 0.5;
+        let current_scroll_top = scroll_top_for(&active_view.scroll);
+        let current_scroll_left = scroll_left_for(&active_view.scroll);
+        if self.selection_drag.is_none()
+            && ((current_scroll_top - geometry.scroll_top_at_paint).abs()
+                > px(SCROLL_STALE_THRESHOLD)
+                || (current_scroll_left - geometry.scroll_left_at_paint).abs()
+                    > px(SCROLL_STALE_THRESHOLD))
+        {
+            return self.active_tab().cursor_char();
+        }
+        let code_origin_x =
+            bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
+
+        let row_height = self.ui_px(metrics::ROW_HEIGHT);
+        let row = if geometry.rows.is_empty() {
+            return 0;
+        } else if point.y <= geometry.rows[0].row_top {
+            &geometry.rows[0]
+        } else if let Some(row) = geometry
+            .rows
+            .iter()
+            .find(|row| point.y >= row.row_top && point.y < row.row_top + row_height)
+        {
+            row
+        } else {
+            geometry.rows.last().expect("checked above")
+        };
+
+        let x = if point.x >= code_origin_x {
+            point.x - code_origin_x + current_scroll_left
+        } else {
+            px(0.0)
+        };
+
+        if let Some(code_line) = row.code_line.as_ref() {
+            let hit_x = (x - geometry.painted_char_width * 0.5).max(px(0.0));
+            let byte_index = code_line.closest_index_for_x(hit_x);
+            let line_char = byte_index_to_char(code_line.text.as_ref(), byte_index);
+            (row.line_start_char + line_char).min(row.display_end_char)
+        } else {
+            row.line_start_char
+        }
+    }
+}

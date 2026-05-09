@@ -1,196 +1,147 @@
-use gpui::{fill, point, px, rgb, size, Bounds, Pixels, Window};
+use gpui::{fill, point, px, rgb, size, Bounds, Pixels, Point, Window};
 
 use crate::ui::theme::{metrics, Theme};
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct VerticalScrollbarLayout {
-    pub(crate) track_bounds: Bounds<Pixels>,
-    pub(crate) thumb_bounds: Bounds<Pixels>,
-    pub(crate) max_scroll_top: Pixels,
-    thumb_min_y: Pixels,
-    thumb_travel: Pixels,
-}
-
-pub(crate) fn vertical_scrollbar_layout(
-    track_bounds: Bounds<Pixels>,
-    scroll_top: Pixels,
-    max_scroll_top: Pixels,
-    scale: f32,
-) -> Option<VerticalScrollbarLayout> {
-    let max_scroll_top = max_scroll_top.max(px(0.0));
-    if max_scroll_top <= px(0.0) || track_bounds.size.height <= px(0.0) {
-        return None;
-    }
-
-    let edge_pad = metrics::px_for_scale(metrics::SCROLLBAR_EDGE_PAD, scale);
-    let thumb_width = metrics::px_for_scale(metrics::SCROLLBAR_THUMB_WIDTH, scale);
-    let min_thumb_height = metrics::px_for_scale(metrics::SCROLLBAR_MIN_THUMB_HEIGHT, scale);
-    let available_height = (track_bounds.size.height - edge_pad * 2.0).max(px(0.0));
-    if available_height <= px(0.0) {
-        return None;
-    }
-
-    let content_height = track_bounds.size.height + max_scroll_top;
-    let proportional_height = available_height * (track_bounds.size.height / content_height);
-    let thumb_height = proportional_height
-        .max(min_thumb_height.min(available_height))
-        .min(available_height);
-    let thumb_travel = (available_height - thumb_height).max(px(0.0));
-    let scroll_ratio = if max_scroll_top > px(0.0) {
-        (scroll_top.max(px(0.0)).min(max_scroll_top) / max_scroll_top).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let thumb_min_y = track_bounds.top() + edge_pad;
-    let thumb_top = thumb_min_y + thumb_travel * scroll_ratio;
-    let thumb_left = track_bounds.right() - edge_pad - thumb_width;
-
-    Some(VerticalScrollbarLayout {
-        track_bounds,
-        thumb_bounds: Bounds::new(
-            point(thumb_left, thumb_top),
-            size(thumb_width, thumb_height),
-        ),
-        max_scroll_top,
-        thumb_min_y,
-        thumb_travel,
-    })
-}
-
-pub(crate) fn scroll_top_for_thumb_drag(
-    layout: &VerticalScrollbarLayout,
-    pointer_y: Pixels,
-    grab_offset_y: Pixels,
-) -> Pixels {
-    if layout.max_scroll_top <= px(0.0) || layout.thumb_travel <= px(0.0) {
-        return px(0.0);
-    }
-
-    let raw_thumb_top = pointer_y - grab_offset_y;
-    let ratio = ((raw_thumb_top - layout.thumb_min_y) / layout.thumb_travel).clamp(0.0, 1.0);
-    layout.max_scroll_top * ratio
-}
-
-pub(crate) fn scroll_top_for_track_click(
-    layout: &VerticalScrollbarLayout,
-    pointer_y: Pixels,
-    current_scroll_top: Pixels,
-) -> Pixels {
-    let page_height = layout.track_bounds.size.height;
-    let target = if pointer_y < layout.thumb_bounds.top() {
-        current_scroll_top - page_height
-    } else if pointer_y > layout.thumb_bounds.bottom() {
-        current_scroll_top + page_height
-    } else {
-        current_scroll_top
-    };
-    target.max(px(0.0)).min(layout.max_scroll_top)
-}
-
-pub(crate) fn paint_vertical_scrollbar(
-    layout: &VerticalScrollbarLayout,
-    active: bool,
-    hovered: bool,
-    scale: f32,
-    theme: Theme,
-    window: &mut Window,
-) {
-    let color = if active || hovered {
-        theme.role.scrollbar_thumb_active
-    } else {
-        theme.role.scrollbar_thumb
-    };
-    let radius = metrics::px_for_scale(metrics::SCROLLBAR_THUMB_WIDTH / 2.0, scale);
-    window.paint_quad(fill(layout.thumb_bounds, rgb(color)).corner_radii(radius));
+pub(crate) enum ScrollbarAxis {
+    Vertical,
+    Horizontal,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct HorizontalScrollbarLayout {
+pub(crate) struct ScrollbarLayout {
     pub(crate) track_bounds: Bounds<Pixels>,
     pub(crate) thumb_bounds: Bounds<Pixels>,
-    pub(crate) max_scroll_left: Pixels,
-    thumb_min_x: Pixels,
+    max_scroll: Pixels,
+    thumb_min: Pixels,
     thumb_travel: Pixels,
+    axis: ScrollbarAxis,
 }
 
-pub(crate) fn horizontal_scrollbar_layout(
+impl ScrollbarAxis {
+    pub(crate) fn pointer_offset(self, point: Point<Pixels>) -> Pixels {
+        match self {
+            Self::Vertical => point.y,
+            Self::Horizontal => point.x,
+        }
+    }
+
+    fn track_extent(self, bounds: Bounds<Pixels>) -> Pixels {
+        match self {
+            Self::Vertical => bounds.size.height,
+            Self::Horizontal => bounds.size.width,
+        }
+    }
+
+    fn thumb_bounds(
+        self,
+        track_bounds: Bounds<Pixels>,
+        edge_pad: Pixels,
+        thickness: Pixels,
+        thumb_start: Pixels,
+        thumb_extent: Pixels,
+    ) -> Bounds<Pixels> {
+        match self {
+            Self::Vertical => Bounds::new(
+                point(track_bounds.right() - edge_pad - thickness, thumb_start),
+                size(thickness, thumb_extent),
+            ),
+            Self::Horizontal => Bounds::new(
+                point(thumb_start, track_bounds.bottom() - edge_pad - thickness),
+                size(thumb_extent, thickness),
+            ),
+        }
+    }
+}
+
+pub(crate) fn scrollbar_layout(
+    axis: ScrollbarAxis,
     track_bounds: Bounds<Pixels>,
-    scroll_left: Pixels,
-    max_scroll_left: Pixels,
+    scroll_offset: Pixels,
+    max_scroll: Pixels,
     scale: f32,
-) -> Option<HorizontalScrollbarLayout> {
-    let max_scroll_left = max_scroll_left.max(px(0.0));
-    if max_scroll_left <= px(0.0) || track_bounds.size.width <= px(0.0) {
+) -> Option<ScrollbarLayout> {
+    let max_scroll = max_scroll.max(px(0.0));
+    let track_extent = axis.track_extent(track_bounds);
+    if max_scroll <= px(0.0) || track_extent <= px(0.0) {
         return None;
     }
 
     let edge_pad = metrics::px_for_scale(metrics::SCROLLBAR_EDGE_PAD, scale);
-    let thumb_height = metrics::px_for_scale(metrics::SCROLLBAR_THUMB_WIDTH, scale);
-    let min_thumb_width = metrics::px_for_scale(metrics::SCROLLBAR_MIN_THUMB_HEIGHT, scale);
-    let available_width = (track_bounds.size.width - edge_pad * 2.0).max(px(0.0));
-    if available_width <= px(0.0) {
+    let thickness = metrics::px_for_scale(metrics::SCROLLBAR_THUMB_WIDTH, scale);
+    let min_thumb_extent = metrics::px_for_scale(metrics::SCROLLBAR_MIN_THUMB_HEIGHT, scale);
+    let available = (track_extent - edge_pad * 2.0).max(px(0.0));
+    if available <= px(0.0) {
         return None;
     }
 
-    let content_width = track_bounds.size.width + max_scroll_left;
-    let proportional_width = available_width * (track_bounds.size.width / content_width);
-    let thumb_width = proportional_width
-        .max(min_thumb_width.min(available_width))
-        .min(available_width);
-    let thumb_travel = (available_width - thumb_width).max(px(0.0));
-    let scroll_ratio = if max_scroll_left > px(0.0) {
-        (scroll_left.max(px(0.0)).min(max_scroll_left) / max_scroll_left).clamp(0.0, 1.0)
+    let content_extent = track_extent + max_scroll;
+    let proportional_extent = available * (track_extent / content_extent);
+    let thumb_extent = proportional_extent
+        .max(min_thumb_extent.min(available))
+        .min(available);
+    let thumb_travel = (available - thumb_extent).max(px(0.0));
+    let scroll_ratio = if max_scroll > px(0.0) {
+        (scroll_offset.max(px(0.0)).min(max_scroll) / max_scroll).clamp(0.0, 1.0)
     } else {
         0.0
     };
-    let thumb_min_x = track_bounds.left() + edge_pad;
-    let thumb_left = thumb_min_x + thumb_travel * scroll_ratio;
-    let thumb_top = track_bounds.bottom() - edge_pad - thumb_height;
+    let thumb_min = match axis {
+        ScrollbarAxis::Vertical => track_bounds.top() + edge_pad,
+        ScrollbarAxis::Horizontal => track_bounds.left() + edge_pad,
+    };
+    let thumb_start = thumb_min + thumb_travel * scroll_ratio;
 
-    Some(HorizontalScrollbarLayout {
+    Some(ScrollbarLayout {
         track_bounds,
-        thumb_bounds: Bounds::new(
-            point(thumb_left, thumb_top),
-            size(thumb_width, thumb_height),
+        thumb_bounds: axis.thumb_bounds(
+            track_bounds,
+            edge_pad,
+            thickness,
+            thumb_start,
+            thumb_extent,
         ),
-        max_scroll_left,
-        thumb_min_x,
+        max_scroll,
+        thumb_min,
         thumb_travel,
+        axis,
     })
 }
 
-pub(crate) fn scroll_left_for_thumb_drag(
-    layout: &HorizontalScrollbarLayout,
-    pointer_x: Pixels,
-    grab_offset_x: Pixels,
+pub(crate) fn scroll_for_thumb_drag(
+    layout: &ScrollbarLayout,
+    pointer_offset: Pixels,
+    grab_offset: Pixels,
 ) -> Pixels {
-    if layout.max_scroll_left <= px(0.0) || layout.thumb_travel <= px(0.0) {
+    if layout.max_scroll <= px(0.0) || layout.thumb_travel <= px(0.0) {
         return px(0.0);
     }
 
-    let raw_thumb_left = pointer_x - grab_offset_x;
-    let ratio = ((raw_thumb_left - layout.thumb_min_x) / layout.thumb_travel).clamp(0.0, 1.0);
-    layout.max_scroll_left * ratio
+    let raw_thumb_start = pointer_offset - grab_offset;
+    let ratio = ((raw_thumb_start - layout.thumb_min) / layout.thumb_travel).clamp(0.0, 1.0);
+    layout.max_scroll * ratio
 }
 
-pub(crate) fn scroll_left_for_track_click(
-    layout: &HorizontalScrollbarLayout,
-    pointer_x: Pixels,
-    current_scroll_left: Pixels,
+pub(crate) fn scroll_for_track_click(
+    layout: &ScrollbarLayout,
+    pointer_offset: Pixels,
+    current_scroll: Pixels,
 ) -> Pixels {
-    let page_width = layout.track_bounds.size.width;
-    let target = if pointer_x < layout.thumb_bounds.left() {
-        current_scroll_left - page_width
-    } else if pointer_x > layout.thumb_bounds.right() {
-        current_scroll_left + page_width
+    let page = layout.axis.track_extent(layout.track_bounds);
+    let thumb_start = layout.axis.pointer_offset(layout.thumb_bounds.origin);
+    let thumb_end = thumb_start + layout.axis.track_extent(layout.thumb_bounds);
+    let target = if pointer_offset < thumb_start {
+        current_scroll - page
+    } else if pointer_offset > thumb_end {
+        current_scroll + page
     } else {
-        current_scroll_left
+        current_scroll
     };
-    target.max(px(0.0)).min(layout.max_scroll_left)
+    target.max(px(0.0)).min(layout.max_scroll)
 }
 
-pub(crate) fn paint_horizontal_scrollbar(
-    layout: &HorizontalScrollbarLayout,
+pub(crate) fn paint_scrollbar(
+    layout: &ScrollbarLayout,
     active: bool,
     hovered: bool,
     scale: f32,
@@ -222,14 +173,18 @@ mod tests {
         Bounds::new(point(px(90.0), px(0.0)), size(px(10.0), px(100.0)))
     }
 
+    fn vertical_layout(scroll: Pixels, max: Pixels) -> Option<ScrollbarLayout> {
+        scrollbar_layout(ScrollbarAxis::Vertical, test_bounds(), scroll, max, 1.0)
+    }
+
     #[test]
     fn layout_is_absent_without_overflow() {
-        assert!(vertical_scrollbar_layout(test_bounds(), px(0.0), px(0.0), 1.0).is_none());
+        assert!(vertical_layout(px(0.0), px(0.0)).is_none());
     }
 
     #[test]
     fn layout_uses_min_thumb_height_and_reaches_bottom() {
-        let layout = vertical_scrollbar_layout(test_bounds(), px(300.0), px(300.0), 1.0)
+        let layout = vertical_layout(px(300.0), px(300.0))
             .expect("overflow should create a scrollbar layout");
 
         assert_px_close(layout.thumb_bounds.size.height, px(24.0));
@@ -238,30 +193,30 @@ mod tests {
 
     #[test]
     fn thumb_drag_maps_to_scroll_range_and_clamps() {
-        let layout = vertical_scrollbar_layout(test_bounds(), px(0.0), px(300.0), 1.0)
-            .expect("overflow should create a scrollbar layout");
+        let layout =
+            vertical_layout(px(0.0), px(300.0)).expect("overflow should create a scrollbar layout");
 
         assert_px_close(
-            scroll_top_for_thumb_drag(&layout, layout.track_bounds.top() - px(100.0), px(0.0)),
+            scroll_for_thumb_drag(&layout, layout.track_bounds.top() - px(100.0), px(0.0)),
             px(0.0),
         );
         assert_px_close(
-            scroll_top_for_thumb_drag(&layout, layout.track_bounds.bottom() + px(100.0), px(0.0)),
+            scroll_for_thumb_drag(&layout, layout.track_bounds.bottom() + px(100.0), px(0.0)),
             px(300.0),
         );
     }
 
     #[test]
     fn track_click_pages_toward_pointer_and_clamps() {
-        let layout = vertical_scrollbar_layout(test_bounds(), px(150.0), px(300.0), 1.0)
+        let layout = vertical_layout(px(150.0), px(300.0))
             .expect("overflow should create a scrollbar layout");
 
         assert_px_close(
-            scroll_top_for_track_click(&layout, layout.thumb_bounds.top() - px(1.0), px(50.0)),
+            scroll_for_track_click(&layout, layout.thumb_bounds.top() - px(1.0), px(50.0)),
             px(0.0),
         );
         assert_px_close(
-            scroll_top_for_track_click(&layout, layout.thumb_bounds.bottom() + px(1.0), px(250.0)),
+            scroll_for_track_click(&layout, layout.thumb_bounds.bottom() + px(1.0), px(250.0)),
             px(300.0),
         );
     }
@@ -270,18 +225,25 @@ mod tests {
         Bounds::new(point(px(0.0), px(90.0)), size(px(100.0), px(10.0)))
     }
 
+    fn horizontal_layout(scroll: Pixels, max: Pixels) -> Option<ScrollbarLayout> {
+        scrollbar_layout(
+            ScrollbarAxis::Horizontal,
+            horizontal_test_bounds(),
+            scroll,
+            max,
+            1.0,
+        )
+    }
+
     #[test]
     fn horizontal_layout_is_absent_without_overflow() {
-        assert!(
-            horizontal_scrollbar_layout(horizontal_test_bounds(), px(0.0), px(0.0), 1.0).is_none()
-        );
+        assert!(horizontal_layout(px(0.0), px(0.0)).is_none());
     }
 
     #[test]
     fn horizontal_layout_uses_min_thumb_width_and_reaches_right_edge() {
-        let layout =
-            horizontal_scrollbar_layout(horizontal_test_bounds(), px(300.0), px(300.0), 1.0)
-                .expect("overflow should create a scrollbar layout");
+        let layout = horizontal_layout(px(300.0), px(300.0))
+            .expect("overflow should create a scrollbar layout");
 
         assert_px_close(layout.thumb_bounds.size.width, px(24.0));
         assert_px_close(layout.thumb_bounds.right(), px(97.0));
@@ -289,31 +251,30 @@ mod tests {
 
     #[test]
     fn horizontal_thumb_drag_maps_to_scroll_range_and_clamps() {
-        let layout = horizontal_scrollbar_layout(horizontal_test_bounds(), px(0.0), px(300.0), 1.0)
+        let layout = horizontal_layout(px(0.0), px(300.0))
             .expect("overflow should create a scrollbar layout");
 
         assert_px_close(
-            scroll_left_for_thumb_drag(&layout, layout.track_bounds.left() - px(100.0), px(0.0)),
+            scroll_for_thumb_drag(&layout, layout.track_bounds.left() - px(100.0), px(0.0)),
             px(0.0),
         );
         assert_px_close(
-            scroll_left_for_thumb_drag(&layout, layout.track_bounds.right() + px(100.0), px(0.0)),
+            scroll_for_thumb_drag(&layout, layout.track_bounds.right() + px(100.0), px(0.0)),
             px(300.0),
         );
     }
 
     #[test]
     fn horizontal_track_click_pages_toward_pointer_and_clamps() {
-        let layout =
-            horizontal_scrollbar_layout(horizontal_test_bounds(), px(150.0), px(300.0), 1.0)
-                .expect("overflow should create a scrollbar layout");
+        let layout = horizontal_layout(px(150.0), px(300.0))
+            .expect("overflow should create a scrollbar layout");
 
         assert_px_close(
-            scroll_left_for_track_click(&layout, layout.thumb_bounds.left() - px(1.0), px(50.0)),
+            scroll_for_track_click(&layout, layout.thumb_bounds.left() - px(1.0), px(50.0)),
             px(0.0),
         );
         assert_px_close(
-            scroll_left_for_track_click(&layout, layout.thumb_bounds.right() + px(1.0), px(250.0)),
+            scroll_for_track_click(&layout, layout.thumb_bounds.right() + px(1.0), px(250.0)),
             px(300.0),
         );
     }

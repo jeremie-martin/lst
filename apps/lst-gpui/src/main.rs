@@ -1,21 +1,25 @@
 use gpui::{
-    actions, prelude::*, px, size, App, Application, Bounds, ClipboardItem, Context, Entity,
-    FocusHandle, Focusable, Modifiers, Pixels, Point, ScrollHandle, Subscription, Window,
-    WindowBounds, WindowOptions,
+    actions, prelude::*, px, size, App, Application, Bounds, Context, Entity, FocusHandle,
+    Focusable, Modifiers, Pixels, ScrollHandle, Subscription, Window, WindowBounds, WindowOptions,
 };
 
 mod actions;
 mod bench_trace;
+mod cleanup;
 mod crash_log;
+mod editor_scrollbar;
+mod editor_view;
 mod input_adapter;
 mod interactions;
 mod keymap;
 mod launch;
 mod llm;
 mod recent;
+mod recent_panel;
 mod runtime;
 mod shell;
 mod state_trace;
+mod state_trace_adapter;
 mod syntax;
 #[cfg(test)]
 mod tests;
@@ -25,7 +29,7 @@ mod viewport;
 use crate::ui::{
     input_keybindings,
     theme::{current_theme, current_theme_id, metrics, Theme, ThemeId},
-    InputField, InputFieldEvent, InputFieldNavigation,
+    InputField, InputFieldEvent,
 };
 #[cfg(test)]
 pub(crate) use input_adapter::{char_range_to_utf16_range, utf16_range_to_char_range_in_text};
@@ -35,31 +39,25 @@ use interactions::ActiveDragSelection;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
-    find::FindScope, position::Position, EditorCommand as Command, EditorModel,
-    EditorTab as ModelEditorTab, FocusTarget, RevealIntent, TabId, UndoBoundary, UNTITLED_PREFIX,
+    position::Position, EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab,
+    FocusTarget, RevealIntent, TabId, UNTITLED_PREFIX,
 };
 #[cfg(not(test))]
 use recent::default_recent_files_path;
-use recent::{
-    normalize_recent_path, read_recent_preview, search_recent_content, ApplyPreviewOutcome,
-    RecentPreviewRead, RecentSelectionMove, RecentView,
-};
+use recent::RecentView;
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
 use runtime::clipboard::{ExitClipboard, SubprocessExitClipboard};
-use state_trace::{
-    StateTraceEmitter, StateTraceRecord, TraceCursor, TraceFind, TraceRange, TraceRow,
-    TraceViewport, STATE_TRACE_SCHEMA_VERSION,
-};
+use state_trace::StateTraceEmitter;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process,
     rc::Rc,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 use syntax::{
     compute_syntax_highlights, syntax_mode_for_language, CachedSyntaxHighlights,
@@ -67,15 +65,9 @@ use syntax::{
 };
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use viewport::row_contains_cursor;
-use viewport::{
-    byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, line_display_text,
-    reset_scroll, scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for,
-    visual_row_for_char, x_for_display_char, ViewportCache, ViewportGeometry, WrapLayoutInput,
-};
+use viewport::{scroll_to_left, ViewportCache, ViewportGeometry};
 
 pub(crate) const RECENT_CARD_BASIS: f32 = 260.0;
-#[cfg(not(test))]
-const RECENT_CONTENT_SEARCH_DEBOUNCE_MS: u64 = 200;
 
 actions!(
     lst_gpui,
@@ -186,15 +178,10 @@ enum PendingAfterSave {
 
 #[derive(Clone, Copy, Debug)]
 struct EditorScrollbarDrag {
-    grab_offset_y: Pixels,
+    grab_offset: Pixels,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct EditorHorizontalScrollbarDrag {
-    grab_offset_x: Pixels,
-}
-
-struct EditorTabView {
+pub(crate) struct EditorTabView {
     revision: u64,
     scroll: ScrollHandle,
     cache: Rc<RefCell<ViewportCache>>,
@@ -227,7 +214,7 @@ struct LstGpuiApp {
     selection_drag: Option<ActiveDragSelection>,
     editor_scrollbar_drag: Option<EditorScrollbarDrag>,
     editor_scrollbar_hovered: bool,
-    editor_horizontal_scrollbar_drag: Option<EditorHorizontalScrollbarDrag>,
+    editor_horizontal_scrollbar_drag: Option<EditorScrollbarDrag>,
     editor_horizontal_scrollbar_hovered: bool,
     find_query_input: Entity<InputField>,
     find_replace_input: Entity<InputField>,
@@ -395,8 +382,8 @@ impl LstGpuiApp {
         let bounds = active_view.geometry.borrow().bounds?;
         let cache = active_view.cache.borrow();
         let layout = cache.wrap_layout.as_ref()?;
-        let cursor_row = visual_row_for_char(self.active_tab(), &layout.layout)?;
-        let scroll_top = scroll_top_for(&active_view.scroll);
+        let cursor_row = viewport::visual_row_for_char(self.active_tab(), &layout.layout)?;
+        let scroll_top = viewport::scroll_top_for(&active_view.scroll);
         let max_offset = active_view.scroll.max_offset().height.max(px(0.0));
         let row_height = self.ui_px(metrics::ROW_HEIGHT);
         Some(ObservableCursorViewport {
@@ -435,93 +422,6 @@ impl LstGpuiApp {
 
     fn cycle_theme(&mut self, cx: &mut Context<Self>) {
         self.set_theme(current_theme_id(cx).next(), cx);
-    }
-
-    pub(crate) fn start_cleanup(&mut self, cx: &mut Context<Self>) {
-        if self.cleanup_in_flight {
-            return;
-        }
-
-        let client = match build_llm_client() {
-            Ok(client) => client,
-            Err(message) => {
-                self.cleanup_message = Some(message);
-                cx.notify();
-                return;
-            }
-        };
-
-        let tab = self.active_tab();
-        let tab_id = tab.id();
-        let revision = tab.revision();
-        let (range, source_text) = if tab.has_selection() {
-            let range = tab.selected_range();
-            match tab.selected_text() {
-                Some(text) if !text.is_empty() => (range, text),
-                _ => {
-                    self.cleanup_message = Some("Nothing to clean up.".to_string());
-                    cx.notify();
-                    return;
-                }
-            }
-        } else {
-            let text = tab.buffer_text();
-            if text.is_empty() {
-                self.cleanup_message = Some("Nothing to clean up.".to_string());
-                cx.notify();
-                return;
-            }
-            let len = tab.buffer().len_chars();
-            (0..len, text)
-        };
-
-        self.cleanup_in_flight = true;
-        self.cleanup_message = Some("\u{27F3} Cleaning\u{2026}".to_string());
-        cx.notify();
-
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { client.cleanup(&source_text) })
-                .await;
-            let _ = this.update(cx, |app, cx| {
-                app.cleanup_in_flight = false;
-                match result {
-                    Ok(cleaned) => app.apply_cleanup_result(tab_id, revision, range, cleaned, cx),
-                    Err(err) => app.finish_cleanup_with_error(err, cx),
-                }
-            });
-        })
-        .detach();
-    }
-
-    fn apply_cleanup_result(
-        &mut self,
-        tab_id: TabId,
-        revision: u64,
-        range: std::ops::Range<usize>,
-        cleaned: String,
-        cx: &mut Context<Self>,
-    ) {
-        let stale = match self.model.tab_by_id(tab_id) {
-            Some(tab) => self.model.active_tab_id() != tab_id || tab.revision() != revision,
-            None => true,
-        };
-        if stale {
-            self.cleanup_message =
-                Some("Buffer changed during cleanup; result discarded.".to_string());
-            cx.notify();
-            return;
-        }
-
-        self.update_model(cx, true, |model| {
-            model.replace_text(Some(range), cleaned, UndoBoundary::Break);
-        });
-    }
-
-    fn finish_cleanup_with_error(&mut self, err: crate::llm::LlmError, cx: &mut Context<Self>) {
-        self.cleanup_message = Some(format!("Cleanup failed: {err}"));
-        cx.notify();
     }
 
     fn set_zoom_level(&mut self, level: i32, window: &mut Window, cx: &mut Context<Self>) {
@@ -682,151 +582,6 @@ impl LstGpuiApp {
             .update(cx, |input, cx| input.select_all(cx));
     }
 
-    /// Append one record to the state-trace channel when one is configured.
-    /// No-op in production. Re-entrant calls (during effect handling) are
-    /// dropped by `StateTraceEmitter::try_emit`'s internal guard.
-    fn emit_state_trace(&self, window: &Window) {
-        self.state_trace
-            .try_emit(|seq| self.build_state_trace_record(seq, window));
-    }
-
-    fn build_state_trace_record(&self, seq: u64, window: &Window) -> StateTraceRecord {
-        let tab = self.active_tab();
-        let buffer = tab.buffer();
-        let selection_set = tab.selection_set();
-        let cursors = selection_set
-            .as_slice()
-            .iter()
-            .enumerate()
-            .map(|(index, sel)| {
-                let (anchor_line, anchor_col) = char_to_line_col(buffer, sel.anchor());
-                let (head_line, head_col) = char_to_line_col(buffer, sel.head());
-                let visible_col = (!sel.has_selection())
-                    .then(|| tab.visible_column_for_selection(index))
-                    .flatten();
-                let anchor_col = visible_col.unwrap_or(anchor_col);
-                let head_col = visible_col.unwrap_or(head_col);
-                TraceCursor {
-                    anchor_char: sel.anchor(),
-                    head_char: sel.head(),
-                    anchor_line,
-                    anchor_col,
-                    head_line,
-                    head_col,
-                }
-            })
-            .collect::<Vec<_>>();
-        let marked_range = tab.marked_range().map(|r| TraceRange {
-            start: r.start,
-            end: r.end,
-        });
-        let find = self.model.find();
-        let find_record = TraceFind {
-            visible: find.visible,
-            show_replace: find.show_replace,
-            query: find.query.clone(),
-            case_sensitive: find.case_sensitive,
-            whole_word: find.whole_word,
-            use_regex: find.use_regex,
-            scope: match find.scope {
-                FindScope::Document => "document",
-                FindScope::Selection { .. } => "selection",
-            },
-            match_count: find.matches.len(),
-            active_index: find.active,
-        };
-        let status_bar = match self.selection_summary() {
-            Some(sel) => format!("{} | {sel}", self.status_details()),
-            None => self.status_details(),
-        };
-        let cleanup_button_bounds_px = self.cleanup_button_bounds_px.map(|bounds| {
-            (
-                f32::from(bounds.origin.x),
-                f32::from(bounds.origin.y),
-                f32::from(bounds.size.width),
-                f32::from(bounds.size.height),
-            )
-        });
-        let viewport = self.build_state_trace_viewport(window);
-        StateTraceRecord {
-            schema_version: STATE_TRACE_SCHEMA_VERSION,
-            seq,
-            revision: tab.revision(),
-            active_tab_index: self.model.active_index(),
-            active_tab_id: tab.id().get(),
-            active_tab_path: tab.path().map(|p| p.to_string_lossy().into_owned()),
-            active_tab_modified: tab.modified(),
-            line_count: tab.line_count(),
-            cursors,
-            primary_cursor_index: selection_set.primary_index(),
-            marked_range,
-            vim_mode: self.model.vim_mode().label().to_string(),
-            vim_pending: self.model.vim_pending_display(),
-            find: find_record,
-            goto_line_input: self.model.goto_line().map(ToOwned::to_owned),
-            recent_panel_open: self.recent.is_open(),
-            recent_panel_query: self
-                .recent
-                .is_open()
-                .then(|| self.recent.query().to_string()),
-            focused_input: self.state_trace_focus_label(),
-            status_bar,
-            cleanup_button_bounds_px,
-            viewport,
-        }
-    }
-
-    fn state_trace_focus_label(&self) -> &'static str {
-        if self.recent.is_open() {
-            "recent_query"
-        } else {
-            focus_trace_label(self.focus_last_applied)
-        }
-    }
-
-    fn build_state_trace_viewport(&self, window: &Window) -> TraceViewport {
-        // `tab_views` is populated by `sync_tab_views` which runs in
-        // `update_model` before the trace emit, so a present view is the
-        // common path. Absence (briefly between tab switches) yields an
-        // empty geometry rather than a panic.
-        let Some(view) = self.tab_views.get(&self.model.active_tab_id()) else {
-            return TraceViewport::default();
-        };
-        let geometry = view.geometry.borrow();
-        let (origin, size) = match geometry.bounds {
-            Some(bounds) => (
-                Some((f32::from(bounds.origin.x), f32::from(bounds.origin.y))),
-                Some((f32::from(bounds.size.width), f32::from(bounds.size.height))),
-            ),
-            None => (None, None),
-        };
-        // PaintedRow doesn't carry the logical line index — wrapped
-        // segments share a logical line — so recover it via the rope.
-        let buffer = self.active_tab().buffer();
-        let len_chars = buffer.len_chars();
-        let rows = geometry
-            .rows
-            .iter()
-            .map(|row| TraceRow {
-                logical_line: buffer.char_to_line(row.line_start_char.min(len_chars)),
-                top_px: f32::from(row.row_top),
-                line_start_char: row.line_start_char,
-                display_end_char: row.display_end_char,
-            })
-            .collect::<Vec<_>>();
-        TraceViewport {
-            scale_factor: window.scale_factor(),
-            bounds_origin_px: origin,
-            bounds_size_px: size,
-            char_width_px: f32::from(geometry.painted_char_width),
-            line_height_px: f32::from(geometry.painted_row_height),
-            scroll_top_px: f32::from(geometry.scroll_top_at_paint),
-            scroll_left_px: f32::from(geometry.scroll_left_at_paint),
-            code_origin_x_px: f32::from(geometry.code_origin_x_at_paint),
-            rows,
-        }
-    }
-
     fn sync_find_inputs(&mut self, cx: &mut Context<Self>) {
         let query = self.model.find().query.clone();
         let replacement = self.model.find().replacement.clone();
@@ -859,231 +614,6 @@ impl LstGpuiApp {
         let text = self.model.goto_line().unwrap_or_default().to_string();
         self.goto_line_input
             .update(cx, |input, cx| input.set_text(&text, cx));
-    }
-
-    pub(crate) fn toggle_recent_files_panel(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.recent.is_open() {
-            self.close_recent_files_panel(cx);
-            return;
-        }
-
-        let pending_search = self.recent.open();
-        let seeded_query = self.recent.query().to_string();
-        reset_scroll(&self.recent_scroll);
-        self.recent_query_input
-            .update(cx, |input, cx| input.set_text(&seeded_query, cx));
-        let focus_handle = self.recent_query_input.read(cx).focus_handle();
-        window.focus(&focus_handle);
-        if let Some(generation) = pending_search {
-            self.schedule_recent_content_search(generation, cx);
-        }
-        self.spawn_recent_previews(cx);
-        cx.notify();
-    }
-
-    fn close_recent_files_panel(&mut self, cx: &mut Context<Self>) {
-        if self.recent.is_open() {
-            self.recent.close();
-            self.force_editor_focus = true;
-            cx.notify();
-        }
-    }
-
-    fn handle_recent_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
-        match event {
-            InputFieldEvent::Changed(text) => {
-                self.update_recent_query(text.clone(), cx);
-                cx.notify();
-            }
-            InputFieldEvent::Submitted => {
-                if let Some(path) = self.recent.selected_path() {
-                    self.open_recent_path(path, cx);
-                }
-            }
-            InputFieldEvent::Cancelled => self.close_recent_files_panel(cx),
-            InputFieldEvent::NextRequested => {
-                self.move_recent_selection(RecentSelectionMove::Next, cx);
-            }
-            InputFieldEvent::PreviousRequested => {
-                self.move_recent_selection(RecentSelectionMove::Previous, cx);
-            }
-            InputFieldEvent::Navigate(navigation) => match navigation {
-                InputFieldNavigation::Up => {
-                    self.move_recent_selection(RecentSelectionMove::RowPrevious, cx);
-                }
-                InputFieldNavigation::Down => {
-                    self.move_recent_selection(RecentSelectionMove::RowNext, cx);
-                }
-            },
-        }
-    }
-
-    fn update_recent_query(&mut self, text: String, cx: &mut Context<Self>) {
-        let pending_search = self.recent.set_query(text);
-        reset_scroll(&self.recent_scroll);
-        self.spawn_recent_previews(cx);
-        if let Some(generation) = pending_search {
-            self.schedule_recent_content_search(generation, cx);
-        }
-    }
-
-    fn move_recent_selection(&mut self, movement: RecentSelectionMove, cx: &mut Context<Self>) {
-        if let Some(index) = self.recent.move_selection(movement) {
-            self.scroll_recent_selection_into_view(index);
-        }
-        cx.notify();
-    }
-
-    fn scroll_recent_selection_into_view(&self, index: usize) {
-        let Some(bounds) = self.recent.card_bounds_for(index) else {
-            return;
-        };
-
-        let viewport = self.recent_scroll.bounds();
-        if viewport.size.height <= px(0.0) {
-            return;
-        }
-
-        let offset_y = self.recent_scroll.offset().y;
-        let target = if bounds.top() + offset_y < viewport.top() {
-            bounds.top() - viewport.top()
-        } else if bounds.bottom() + offset_y > viewport.bottom() {
-            bounds.bottom() - viewport.bottom()
-        } else {
-            return;
-        };
-        scroll_to_top(&self.recent_scroll, target);
-    }
-
-    fn load_more_recent_files(&mut self, cx: &mut Context<Self>) {
-        self.recent.load_more();
-        self.spawn_recent_previews(cx);
-        cx.notify();
-    }
-
-    fn spawn_recent_previews(&mut self, cx: &mut Context<Self>) {
-        for path in self.recent.paths_to_load_previews() {
-            cx.spawn(async move |this, cx| {
-                let preview_path = path.clone();
-                let result = cx
-                    .background_executor()
-                    .spawn(async move { read_recent_preview(&preview_path) })
-                    .await;
-                let _ = this.update(cx, |view, cx| view.finish_recent_preview(path, result, cx));
-            })
-            .detach();
-        }
-    }
-
-    fn schedule_recent_content_search(&mut self, generation: u64, cx: &mut Context<Self>) {
-        let query = self.recent.query().trim().to_lowercase();
-        if query.is_empty() {
-            return;
-        }
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(recent_content_search_debounce())
-                .await;
-            let _ = this.update(cx, |view, cx| {
-                if view.recent.search_still_relevant(generation, &query) {
-                    view.start_recent_content_search(query, cx);
-                }
-            });
-        })
-        .detach();
-    }
-
-    fn start_recent_content_search(&mut self, query: String, cx: &mut Context<Self>) {
-        if !self.recent.start_content_search(query.clone()) {
-            return;
-        }
-
-        let paths = self.recent.entries().to_vec();
-        cx.spawn(async move |this, cx| {
-            let search_query = query.clone();
-            let matches = cx
-                .background_executor()
-                .spawn(async move { search_recent_content(paths, &search_query) })
-                .await;
-            let _ = this.update(cx, |view, cx| {
-                view.finish_recent_content_search(query, matches, cx);
-            });
-        })
-        .detach();
-    }
-
-    fn finish_recent_content_search(
-        &mut self,
-        query: String,
-        matches: Vec<PathBuf>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.recent.finish_content_search(query, matches) {
-            self.spawn_recent_previews(cx);
-            cx.notify();
-        }
-    }
-
-    fn finish_recent_preview(
-        &mut self,
-        path: PathBuf,
-        result: RecentPreviewRead,
-        cx: &mut Context<Self>,
-    ) {
-        if matches!(
-            self.recent.apply_preview(path, result),
-            ApplyPreviewOutcome::Pruned
-        ) {
-            self.spawn_recent_previews(cx);
-        }
-        cx.notify();
-    }
-
-    fn open_recent_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let path = normalize_recent_path(&path);
-        if self.activate_existing_tab_for_path(&path, cx) {
-            self.recent.record(&path);
-            self.close_recent_files_panel(cx);
-            return;
-        }
-
-        match runtime::read_file_with_stamp(&path) {
-            Ok((text, stamp)) => {
-                let opened_path = path.clone();
-                self.update_model(cx, true, |model| {
-                    model.open_files_with_stamps(vec![(opened_path, text, Some(stamp))]);
-                });
-                self.recent.record(&path);
-                self.close_recent_files_panel(cx);
-            }
-            Err(err) => {
-                if err.kind() == std::io::ErrorKind::NotFound {
-                    self.recent.prune_path(&path);
-                    self.spawn_recent_previews(cx);
-                }
-                self.update_model(cx, true, |model| {
-                    model.open_file_failed(path, err.to_string());
-                });
-            }
-        }
-    }
-
-    fn activate_existing_tab_for_path(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
-        let Some(tab_id) = self.model.tabs().iter().find_map(|tab| {
-            let tab_path = tab.path()?;
-            (normalize_recent_path(tab_path) == path).then_some(tab.id())
-        }) else {
-            return false;
-        };
-
-        self.update_model(cx, true, |model| {
-            model.set_active_tab(tab_id);
-        });
-        true
     }
 
     fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
@@ -1222,473 +752,6 @@ impl LstGpuiApp {
             cx.notify();
         }
     }
-
-    fn active_tab(&self) -> &ModelEditorTab {
-        self.model.active_tab()
-    }
-
-    fn record_find_metrics(&self, reindex_ms: f64) {
-        bench_trace::record_ms("find_reindex_ms", reindex_ms);
-        bench_trace::record_usize("find_match_count", self.model.find().matches.len());
-        bench_trace::record_usize("find_query_len", self.model.find().query.chars().count());
-    }
-
-    pub(crate) fn record_operation(
-        &self,
-        label: &'static str,
-        clipboard_read_ms: Option<f64>,
-        apply_ms: f64,
-    ) {
-        let tab = self.active_tab();
-        bench_trace::record_operation(
-            label,
-            tab.buffer().len_bytes(),
-            tab.line_count(),
-            clipboard_read_ms,
-            apply_ms,
-        );
-    }
-
-    fn active_view(&self) -> &EditorTabView {
-        self.tab_views
-            .get(&self.model.active_tab_id())
-            .expect("active tab must have a tab view")
-    }
-
-    fn active_cursor_line_col(&self) -> (usize, usize) {
-        char_to_line_col(self.active_tab().buffer(), self.active_tab().cursor_char())
-    }
-
-    /// "▲N" / "▼N" indicator for cursors outside the painted viewport.
-    /// Compares against painted char ranges (not logical lines) so soft-
-    /// wrap segments don't confuse the off-screen test.
-    fn off_screen_cursor_indicator(&self) -> Option<String> {
-        let view = self.tab_views.get(&self.model.active_tab_id())?;
-        let geometry = view.geometry.borrow();
-        let first = geometry.rows.first()?;
-        let last = geometry.rows.last()?;
-        let painted_start_char = first.line_start_char;
-        let painted_end_char = last.display_end_char;
-        let mut above = 0usize;
-        let mut below = 0usize;
-        for selection in self.active_tab().selection_set().as_slice() {
-            let head = selection.head();
-            if head < painted_start_char {
-                above += 1;
-            } else if head > painted_end_char {
-                below += 1;
-            }
-        }
-        if above == 0 && below == 0 {
-            return None;
-        }
-        let mut parts = Vec::new();
-        if above > 0 {
-            parts.push(format!("\u{25B2}{above}"));
-        }
-        if below > 0 {
-            parts.push(format!("\u{25BC}{below}"));
-        }
-        Some(parts.join(" "))
-    }
-
-    fn selection_summary(&self) -> Option<String> {
-        let tab = self.active_tab();
-        let set = tab.selection_set();
-        if !set.is_single() {
-            let buffer = tab.buffer();
-            let (total_chars, total_lines) =
-                set.as_slice()
-                    .iter()
-                    .fold((0usize, 0usize), |(chars, lines), selection| {
-                        let range = selection.range();
-                        if range.start == range.end {
-                            return (chars, lines);
-                        }
-                        let start_line = buffer.char_to_line(range.start);
-                        let end_line = buffer.char_to_line(range.end - 1);
-                        (chars + range.len(), lines + (end_line - start_line + 1))
-                    });
-            let mut parts = vec![format!("{} cursors", set.as_slice().len())];
-            if total_chars > 0 {
-                parts.push(format!("Sel {total_chars}"));
-                if total_lines > 1 {
-                    parts.push(format!("{total_lines} lines"));
-                }
-            }
-            return Some(parts.join(" · "));
-        }
-        let selected = tab.selected_range();
-        (selected.start != selected.end).then(|| format!("Sel {}", selected.len()))
-    }
-
-    fn painted_wrap_columns(&self) -> Option<usize> {
-        self.active_view().geometry.borrow().painted_wrap_columns
-    }
-
-    fn status_details(&self) -> String {
-        let tab = self.active_tab();
-        let (line, column) = self.active_cursor_line_col();
-        let mut parts = vec![
-            self.model.vim_mode().label().to_string(),
-            format!("Ln {}", line + 1),
-            format!("Col {}", column + 1),
-            if self.model.show_wrap() {
-                self.painted_wrap_columns()
-                    .map(|columns| format!("Wrap {columns} cols"))
-                    .unwrap_or_else(|| "Wrap".to_string())
-            } else {
-                "No Wrap".to_string()
-            },
-            format!("{} lines", tab.line_count()),
-        ];
-        let pending = self.model.vim_pending_display();
-        if !pending.is_empty() {
-            parts.push(pending);
-        }
-        if self.model.overtype() {
-            parts.push("OVR".to_string());
-        }
-        if let Some(indicator) = self.off_screen_cursor_indicator() {
-            parts.push(indicator);
-        }
-        if let Some(selection) = self.selection_summary() {
-            parts.push(selection);
-        }
-        if self.zoom_level != 0 {
-            parts.push(format!("Zoom {:.0}%", self.ui_scale() * 100.0));
-        }
-        if self.model.find().visible {
-            let current = if self.model.find().matches.is_empty() {
-                0
-            } else {
-                self.model.find().active.map_or(0, |index| index + 1)
-            };
-            parts.push(format!(
-                "Match {current}/{}",
-                self.model.find().matches.len()
-            ));
-        }
-        parts.join("  ")
-    }
-
-    fn move_vertical(
-        &mut self,
-        delta: isize,
-        select: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let wrap_columns = self.active_wrap_columns(window, cx);
-        self.execute_model_command(cx, Command::MoveDisplayRows(delta, select, wrap_columns));
-    }
-
-    fn active_wrap_columns(&mut self, window: &mut Window, cx: &App) -> usize {
-        if !self.model.show_wrap() {
-            return usize::MAX;
-        }
-
-        let (geometry, cache) = {
-            let active_view = self.active_view();
-            (active_view.geometry.clone(), active_view.cache.clone())
-        };
-        let viewport_width = geometry
-            .borrow()
-            .bounds
-            .map(|bounds| bounds.size.width)
-            .unwrap_or_else(|| self.ui_px(metrics::WINDOW_WIDTH - 48.0));
-        let char_width = code_char_width(window, self.ui_scale(), self.theme(cx));
-        let revision = self.model.active_tab().revision();
-        let lines = self.model.active_tab_lines();
-        let layout = {
-            let mut cache = cache.borrow_mut();
-            ensure_wrap_layout(
-                &mut cache,
-                WrapLayoutInput {
-                    lines: lines.as_ref(),
-                    revision,
-                    viewport_width,
-                    char_width,
-                    show_gutter: self.model.show_gutter(),
-                    show_wrap: self.model.show_wrap(),
-                    scale: self.ui_scale(),
-                },
-            )
-        };
-        layout.wrap_columns
-    }
-
-    fn move_page(&mut self, down: bool, select: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let wrap_columns = self.active_wrap_columns(window, cx);
-        self.execute_model_command(cx, Command::Page(down, select, wrap_columns));
-    }
-
-    fn sync_viewport_state(&mut self) {
-        let bounds = self.active_view().geometry.borrow().bounds;
-        let Some(bounds) = bounds else {
-            return;
-        };
-        let row_height = self.ui_px(metrics::ROW_HEIGHT);
-        if row_height <= px(0.0) || bounds.size.height <= px(0.0) {
-            return;
-        }
-        let rows = ((bounds.size.height / row_height).floor() as usize).max(1);
-        let scroll_top = scroll_top_for(&self.active_view().scroll);
-        let top = (scroll_top / row_height).floor() as usize;
-        self.model.set_viewport_rows(rows);
-        self.model.set_viewport_top(top);
-    }
-
-    fn queue_cursor_reveal(&mut self, intent: RevealIntent) {
-        self.pending_reveal = Some(intent);
-    }
-
-    fn schedule_pending_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending_reveal.is_none() || self.reveal_scheduled {
-            return;
-        }
-
-        self.reveal_scheduled = true;
-        cx.on_next_frame(window, |this, window, cx| {
-            this.reveal_scheduled = false;
-            this.flush_pending_reveal(window, cx);
-        });
-        cx.notify();
-    }
-
-    fn flush_pending_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(intent) = self.pending_reveal.take() else {
-            return;
-        };
-
-        if !self.try_reveal_active_cursor(intent, window, cx) {
-            self.pending_reveal = Some(intent);
-            self.schedule_pending_reveal(window, cx);
-        }
-    }
-
-    /// `cx.on_next_frame` may not fire under `run_until_parked` before the next paint commits.
-    #[cfg(test)]
-    fn flush_pending_reveal_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.reveal_scheduled = false;
-        self.flush_pending_reveal(window, cx);
-    }
-
-    fn active_cursor_visual_row(&self) -> Option<usize> {
-        let tab = self.active_tab();
-        let view = self.active_view();
-
-        if self.model.show_wrap() {
-            let cache = view.cache.borrow();
-            let cached = cache.wrap_layout.as_ref()?;
-            if cached.revision != tab.revision() || !cached.layout.show_wrap {
-                return None;
-            }
-            visual_row_for_char(tab, &cached.layout)
-        } else {
-            Some(tab.buffer().char_to_line(tab.cursor_char()))
-        }
-    }
-
-    fn try_reveal_active_cursor(
-        &self,
-        intent: RevealIntent,
-        window: &mut Window,
-        cx: &App,
-    ) -> bool {
-        let view = self.active_view();
-        let viewport_bounds = {
-            let geometry = view.geometry.borrow();
-            let Some(bounds) = geometry.bounds else {
-                return false;
-            };
-            bounds
-        };
-        if viewport_bounds.size.height <= px(0.) {
-            return false;
-        }
-
-        let Some(visual_row) = self.active_cursor_visual_row() else {
-            return false;
-        };
-
-        let row_height = self.ui_px(metrics::ROW_HEIGHT);
-        let caret_top = row_height * visual_row as f32;
-        let caret_bottom = caret_top + row_height;
-        let scroll_top = scroll_top_for(&view.scroll);
-        let viewport_height = viewport_bounds.size.height;
-        let margin = row_height * self.model.viewport().effective_scrolloff() as f32;
-
-        let target = match intent {
-            RevealIntent::NearestEdge => {
-                if caret_top < scroll_top + margin {
-                    Some(caret_top - margin)
-                } else if caret_bottom > scroll_top + viewport_height - margin {
-                    Some(caret_bottom + margin - viewport_height)
-                } else {
-                    None
-                }
-            }
-            RevealIntent::Center => Some(caret_top - (viewport_height - row_height) / 2.0),
-            RevealIntent::Top => Some(caret_top - margin),
-            RevealIntent::Bottom => Some(caret_bottom + margin - viewport_height),
-        };
-
-        if let Some(target) = target {
-            scroll_to_top(&view.scroll, target);
-        }
-
-        if !self.model.show_wrap() {
-            self.try_reveal_active_cursor_horizontally(view, viewport_bounds, window, cx);
-        }
-        true
-    }
-
-    fn try_reveal_active_cursor_horizontally(
-        &self,
-        view: &EditorTabView,
-        viewport_bounds: Bounds<Pixels>,
-        window: &mut Window,
-        cx: &App,
-    ) {
-        let geometry = view.geometry.borrow();
-        let char_width = geometry.painted_char_width;
-        if char_width <= px(0.0) {
-            return;
-        }
-
-        let scroll_left = scroll_left_for(&view.scroll);
-        let pad = code_origin_pad(self.model.show_gutter(), self.ui_scale());
-        let visible_width = (viewport_bounds.size.width - pad).max(px(0.0));
-        if visible_width <= px(0.0) {
-            return;
-        }
-
-        let visible_cols = ((visible_width / px(1.0)) / (char_width / px(1.0))).floor() as usize;
-        if visible_cols == 0 {
-            return;
-        }
-
-        let cursor_x = self.active_cursor_rendered_x(char_width, window, cx);
-
-        let raw_margin = self.model.viewport().sidescrolloff;
-        let margin_cols = if visible_cols <= 1 {
-            0
-        } else {
-            raw_margin.min((visible_cols - 1) / 2)
-        };
-        let margin = char_width * margin_cols as f32;
-
-        let target_x = if cursor_x < scroll_left + margin {
-            Some(cursor_x - margin)
-        } else if cursor_x > scroll_left + visible_width - margin {
-            Some(cursor_x + margin - visible_width)
-        } else {
-            None
-        };
-
-        if let Some(target_x) = target_x {
-            drop(geometry);
-            scroll_to_left(&view.scroll, target_x);
-        }
-    }
-
-    fn active_cursor_rendered_x(
-        &self,
-        char_width: Pixels,
-        window: &mut Window,
-        cx: &App,
-    ) -> Pixels {
-        let tab = self.active_tab();
-        let cursor = tab.cursor_char().min(tab.buffer().len_chars());
-        let line = tab.buffer().char_to_line(cursor);
-        let line_start = tab.buffer().line_to_char(line);
-        let display_text = line_display_text(tab.buffer(), line);
-        let column = cursor
-            .saturating_sub(line_start)
-            .min(display_text.as_ref().chars().count());
-        x_for_display_char(
-            display_text.as_ref(),
-            column,
-            char_width,
-            self.ui_scale(),
-            self.theme(cx),
-            window,
-        )
-    }
-
-    fn sync_primary_selection(&self, cx: &mut Context<Self>) {
-        if let Some(text) = self.active_tab().selected_text() {
-            cx.write_to_primary(ClipboardItem::new_string(text));
-        }
-    }
-
-    fn point_below_painted_rows(&self, point: Point<Pixels>) -> bool {
-        let active_view = self.active_view();
-        let geometry = active_view.geometry.borrow();
-        let Some(last_row) = geometry.rows.last() else {
-            return false;
-        };
-        point.y >= last_row.row_top + self.ui_px(metrics::ROW_HEIGHT)
-    }
-
-    fn active_char_index_for_point(&self, point: Point<Pixels>) -> usize {
-        let active_view = self.active_view();
-        let geometry = active_view.geometry.borrow();
-        let Some(bounds) = geometry.bounds else {
-            return self.active_tab().cursor_char();
-        };
-        // If the scroll has moved since the last paint (e.g. a Reveal just
-        // repositioned the viewport), `geometry.rows` describes the previous
-        // scroll position and mapping a click through it would land on the
-        // wrong row. Bail and keep the cursor where it is; the next paint
-        // will refresh `geometry.rows` and subsequent clicks behave normally.
-        // Skip the guard during drag-autoscroll: the drag loop imperatively
-        // nudges scroll between frames and still needs the cursor to track.
-        const SCROLL_STALE_THRESHOLD: f32 = 0.5;
-        let current_scroll_top = scroll_top_for(&active_view.scroll);
-        let current_scroll_left = scroll_left_for(&active_view.scroll);
-        if self.selection_drag.is_none()
-            && ((current_scroll_top - geometry.scroll_top_at_paint).abs()
-                > px(SCROLL_STALE_THRESHOLD)
-                || (current_scroll_left - geometry.scroll_left_at_paint).abs()
-                    > px(SCROLL_STALE_THRESHOLD))
-        {
-            return self.active_tab().cursor_char();
-        }
-        let code_origin_x =
-            bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
-
-        let row_height = self.ui_px(metrics::ROW_HEIGHT);
-        let row = if geometry.rows.is_empty() {
-            return 0;
-        } else if point.y <= geometry.rows[0].row_top {
-            &geometry.rows[0]
-        } else if let Some(row) = geometry
-            .rows
-            .iter()
-            .find(|row| point.y >= row.row_top && point.y < row.row_top + row_height)
-        {
-            row
-        } else {
-            geometry.rows.last().expect("checked above")
-        };
-
-        let x = if point.x >= code_origin_x {
-            point.x - code_origin_x + current_scroll_left
-        } else {
-            px(0.0)
-        };
-
-        if let Some(code_line) = row.code_line.as_ref() {
-            let hit_x = (x - geometry.painted_char_width * 0.5).max(px(0.0));
-            let byte_index = code_line.closest_index_for_x(hit_x);
-            let line_char = byte_index_to_char(code_line.text.as_ref(), byte_index);
-            (row.line_start_char + line_char).min(row.display_end_char)
-        } else {
-            row.line_start_char
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1725,22 +788,11 @@ fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
     let mut status = "Ready.".to_string();
 
     if launch.files.is_empty() {
-        match runtime::create_scratchpad_note(launch.scratchpad_dir.as_deref()) {
-            Ok((path, file_stamp)) => {
-                tabs.push(ModelEditorTab::scratchpad_with_stamp(
-                    TabId::from_raw(next_tab_id),
-                    path,
-                    file_stamp,
-                ));
-            }
-            Err(err) => {
-                status = format!("Failed to create scratchpad: {err}");
-                tabs.push(ModelEditorTab::empty(
-                    TabId::from_raw(next_tab_id),
-                    format!("{UNTITLED_PREFIX}-1"),
-                ));
-            }
-        }
+        tabs.push(scratchpad_or_empty_tab(
+            TabId::from_raw(next_tab_id),
+            launch.scratchpad_dir.as_deref(),
+            &mut status,
+        ));
     } else {
         for path in launch.files {
             match runtime::read_file_with_stamp(&path) {
@@ -1760,27 +812,34 @@ fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
         }
 
         if tabs.is_empty() {
-            match runtime::create_scratchpad_note(launch.scratchpad_dir.as_deref()) {
-                Ok((path, file_stamp)) => {
-                    tabs.push(ModelEditorTab::scratchpad_with_stamp(
-                        TabId::from_raw(next_tab_id),
-                        path,
-                        file_stamp,
-                    ));
-                }
-                Err(err) => {
-                    status = format!("{status}; failed to create scratchpad: {err}");
-                    tabs.push(ModelEditorTab::empty(
-                        TabId::from_raw(next_tab_id),
-                        format!("{UNTITLED_PREFIX}-1"),
-                    ));
-                }
-            }
+            tabs.push(scratchpad_or_empty_tab(
+                TabId::from_raw(next_tab_id),
+                launch.scratchpad_dir.as_deref(),
+                &mut status,
+            ));
         }
     }
 
     let first = tabs.remove(0);
     EditorModel::from_tabs(first, tabs, status)
+}
+
+fn scratchpad_or_empty_tab(
+    tab_id: TabId,
+    scratchpad_dir: Option<&std::path::Path>,
+    status: &mut String,
+) -> ModelEditorTab {
+    match runtime::create_scratchpad_note(scratchpad_dir) {
+        Ok((path, file_stamp)) => ModelEditorTab::scratchpad_with_stamp(tab_id, path, file_stamp),
+        Err(err) => {
+            *status = if status == "Ready." {
+                format!("Failed to create scratchpad: {err}")
+            } else {
+                format!("{status}; failed to create scratchpad: {err}")
+            };
+            ModelEditorTab::empty(tab_id, format!("{UNTITLED_PREFIX}-1"))
+        }
+    }
 }
 
 impl Focusable for LstGpuiApp {
@@ -1812,17 +871,6 @@ fn char_to_line_col(buffer: &Rope, char_offset: usize) -> (usize, usize) {
     (line, char_offset - line_start)
 }
 
-fn recent_content_search_debounce() -> Duration {
-    #[cfg(test)]
-    {
-        Duration::from_millis(0)
-    }
-    #[cfg(not(test))]
-    {
-        Duration::from_millis(RECENT_CONTENT_SEARCH_DEBOUNCE_MS)
-    }
-}
-
 fn focus_trace_label(target: FocusTarget) -> &'static str {
     match target {
         FocusTarget::Editor => "editor",
@@ -1834,39 +882,6 @@ fn focus_trace_label(target: FocusTarget) -> &'static str {
 
 pub(crate) fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
-}
-
-/// Pick which `LlmClient` should service the next cleanup. `LST_LLM_FAKE_RESPONSE`
-/// activates the in-process fake — used only by the X11 e2e harness — and
-/// bypasses the API key requirement so the test process never needs a
-/// DeepSeek credential. In normal runs the env var is unset and we go
-/// straight to the real DeepSeek client.
-fn build_llm_client() -> Result<Box<dyn crate::llm::LlmClient>, String> {
-    if let Some(canned) = std::env::var("LST_LLM_FAKE_RESPONSE")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
-        let delay_ms = std::env::var("LST_LLM_FAKE_DELAY_MS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        return Ok(Box::new(crate::llm::FakeLlmClient::new(
-            canned,
-            Duration::from_millis(delay_ms),
-        )));
-    }
-
-    let api_key = match std::env::var("DEEPSEEK_API_KEY") {
-        Ok(value) if !value.is_empty() => value,
-        _ => return Err("DEEPSEEK_API_KEY not set".to_string()),
-    };
-    let model_name = std::env::var("DEEPSEEK_MODEL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| crate::llm::DEFAULT_DEEPSEEK_MODEL.to_string());
-    Ok(Box::new(crate::llm::DeepSeekClient::new(
-        api_key, model_name,
-    )))
 }
 
 fn main() {
