@@ -5,7 +5,9 @@
 //! tests pin the contract that one `undo()` restores the original text
 //! byte-for-byte, for both the whole-buffer and selection paths.
 
-use lst_editor::{EditorModel, EditorTab, Selection, TabId, UndoBoundary};
+use lst_editor::{
+    EditorCommand as Command, EditorModel, EditorTab, Selection, TabId, UndoBoundary,
+};
 
 mod common;
 use common::model_with_tabs;
@@ -33,7 +35,7 @@ fn whole_buffer_replacement_is_atomic_undo() {
     model.replace_text(Some(0..len), cleaned.into(), UndoBoundary::Break);
     assert_eq!(model.active_tab().buffer_text(), cleaned);
 
-    model.undo();
+    model.execute(Command::Undo);
     assert_eq!(model.active_tab().buffer_text(), original);
 }
 
@@ -55,7 +57,7 @@ fn selection_range_replacement_is_atomic_undo() {
     let expected = format!("intro\n{cleaned_paragraph}\noutro");
     assert_eq!(model.active_tab().buffer_text(), expected);
 
-    model.undo();
+    model.execute(Command::Undo);
     assert_eq!(model.active_tab().buffer_text(), original);
 }
 
@@ -72,6 +74,6 @@ fn break_boundary_separates_cleanup_from_prior_typing() {
     model.replace_text(Some(0..len), "First Draft".into(), UndoBoundary::Break);
     assert_eq!(model.active_tab().buffer_text(), "First Draft");
 
-    model.undo();
+    model.execute(Command::Undo);
     assert_eq!(model.active_tab().buffer_text(), "first draft");
 }

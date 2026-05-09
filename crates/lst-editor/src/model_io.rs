@@ -2,7 +2,7 @@ use crate::{EditorEffect, EditorModel, EditorTab, FileStamp, RevealIntent, TabId
 use std::path::PathBuf;
 
 impl EditorModel {
-    pub fn request_open_files(&mut self) {
+    pub(crate) fn request_open_files(&mut self) {
         self.queue_effect(EditorEffect::OpenFiles);
     }
 
@@ -28,7 +28,7 @@ impl EditorModel {
         self.status = format!("Failed to open {}: {message}", path.display());
     }
 
-    pub fn request_save(&mut self) {
+    pub(crate) fn request_save(&mut self) {
         self.request_save_tab(self.active_tab_id());
     }
 
@@ -54,11 +54,11 @@ impl EditorModel {
         }
     }
 
-    pub fn request_save_as(&mut self) {
+    pub(crate) fn request_save_as(&mut self) {
         self.request_save_as_tab(self.active_tab_id());
     }
 
-    pub fn request_save_as_tab(&mut self, tab_id: TabId) {
+    pub(crate) fn request_save_as_tab(&mut self, tab_id: TabId) {
         let Some(tab) = self.tab_by_id(tab_id) else {
             return;
         };

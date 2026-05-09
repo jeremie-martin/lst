@@ -1,6 +1,6 @@
 use lst_editor::{
     vim::{Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
-    EditorEffect, EditorModel, EditorTab, RevealIntent, TabId,
+    EditorCommand as Command, EditorEffect, EditorModel, EditorTab, RevealIntent, TabId,
 };
 
 mod common;
@@ -22,7 +22,7 @@ fn long_model() -> EditorModel {
     );
     // Viewport tests operate on logical lines; disable soft-wrap so visual
     // rows and logical lines coincide and `wrap_columns` is irrelevant.
-    model.toggle_wrap();
+    model.execute(Command::ToggleWrap);
     let _ = model.drain_effects();
     model
 }
@@ -41,7 +41,7 @@ fn only_reveal_intents(effects: &[EditorEffect]) -> Vec<RevealIntent> {
 fn arrow_down_emits_reveal_nearest_edge() {
     let mut model = long_model();
     let _ = model.drain_effects();
-    model.move_display_rows_by(1, false, 0);
+    model.execute(Command::MoveDisplayRows(1, false, 0));
     assert_eq!(
         only_reveal_intents(&model.drain_effects()),
         vec![RevealIntent::NearestEdge],
@@ -52,7 +52,7 @@ fn arrow_down_emits_reveal_nearest_edge() {
 fn horizontal_move_emits_reveal_nearest_edge() {
     let mut model = long_model();
     let _ = model.drain_effects();
-    model.move_horizontal_by(1, false);
+    model.execute(Command::MoveHorizontal(1, false));
     assert_eq!(
         only_reveal_intents(&model.drain_effects()),
         vec![RevealIntent::NearestEdge],
@@ -63,12 +63,12 @@ fn horizontal_move_emits_reveal_nearest_edge() {
 fn document_boundary_emits_reveal_nearest_edge() {
     let mut model = long_model();
     let _ = model.drain_effects();
-    model.move_document_boundary(true, false);
+    model.execute(Command::MoveDocumentBoundary(true, false));
     assert_eq!(
         only_reveal_intents(&model.drain_effects()),
         vec![RevealIntent::NearestEdge],
     );
-    model.move_document_boundary(false, false);
+    model.execute(Command::MoveDocumentBoundary(false, false));
     assert_eq!(
         only_reveal_intents(&model.drain_effects()),
         vec![RevealIntent::NearestEdge],
@@ -81,7 +81,7 @@ fn goto_line_submit_emits_reveal_center() {
     model.open_goto_line_panel();
     model.update_goto_line("120".into());
     let _ = model.drain_effects();
-    model.submit_goto_line_input();
+    model.execute(Command::SubmitGotoLine);
     assert_eq!(
         only_reveal_intents(&model.drain_effects()),
         vec![RevealIntent::Center],
@@ -102,13 +102,13 @@ fn find_query_and_next_emit_reveal_center() {
 
     model.update_find_query_and_activate("line 1".into());
     let _ = model.drain_effects();
-    model.find_next_match();
+    model.execute(Command::FindNext);
     assert_eq!(
         only_reveal_intents(&model.drain_effects()),
         vec![RevealIntent::Center],
     );
 
-    model.find_prev_match();
+    model.execute(Command::FindPrev);
     assert_eq!(
         only_reveal_intents(&model.drain_effects()),
         vec![RevealIntent::Center],
@@ -125,9 +125,9 @@ fn text_edit_emits_reveal_nearest_edge() {
 }
 
 fn set_cursor_line(model: &mut EditorModel, line: usize) {
-    model.move_document_boundary(false, false);
+    model.execute(Command::MoveDocumentBoundary(false, false));
     if line > 0 {
-        model.move_logical_rows(line as isize, false);
+        model.execute(Command::MoveDisplayRows(line as isize, false, 0));
     }
     let _ = model.drain_effects();
 }
@@ -147,63 +147,17 @@ fn ctrl(c: &str) -> (VimKey, VimModifiers) {
 }
 
 #[test]
-fn half_page_down_moves_cursor_by_half_viewport_rows() {
-    let mut model = long_model();
-    model.set_viewport_rows(20);
-    set_cursor_line(&mut model, 5);
-
-    model.half_page_down(false, 0);
-    assert_eq!(model.snapshot().cursor_position.line, 15);
-    let intents = only_reveal_intents(&model.drain_effects());
-    assert_eq!(intents, vec![RevealIntent::NearestEdge]);
-}
-
-#[test]
-fn half_page_up_moves_cursor_by_half_viewport_rows() {
-    let mut model = long_model();
-    model.set_viewport_rows(20);
-    set_cursor_line(&mut model, 50);
-
-    model.half_page_up(false, 0);
-    assert_eq!(model.snapshot().cursor_position.line, 40);
-}
-
-#[test]
-fn half_page_down_at_eof_snaps_to_eol() {
-    let mut model = long_model();
-    model.set_viewport_rows(20);
-    set_cursor_line(&mut model, 199);
-
-    model.half_page_down(false, 0);
-    assert_eq!(model.snapshot().cursor_position.line, 199);
-    assert_eq!(
-        model.snapshot().cursor_position.column,
-        "line 199".chars().count()
-    );
-}
-
-#[test]
-fn half_page_up_at_bof_clamps() {
-    let mut model = long_model();
-    model.set_viewport_rows(20);
-    set_cursor_line(&mut model, 0);
-
-    model.half_page_up(false, 0);
-    assert_eq!(model.snapshot().cursor_position.line, 0);
-}
-
-#[test]
 fn page_down_respects_current_viewport_rows() {
     let mut model = long_model();
     model.set_viewport_rows(20);
     set_cursor_line(&mut model, 10);
 
-    model.page_down(false, 0);
+    model.execute(Command::Page(true, false, 0));
     assert_eq!(model.snapshot().cursor_position.line, 28);
 
     model.set_viewport_rows(10);
     set_cursor_line(&mut model, 10);
-    model.page_down(false, 0);
+    model.execute(Command::Page(true, false, 0));
     assert_eq!(model.snapshot().cursor_position.line, 18);
 }
 
@@ -212,10 +166,10 @@ fn page_down_at_eof_snaps_to_line_end_and_emits_reveal() {
     let mut model = long_model();
     model.set_viewport_rows(20);
     set_cursor_line(&mut model, 199);
-    model.move_horizontal_by(2, false);
+    model.execute(Command::MoveHorizontal(2, false));
     let _ = model.drain_effects();
 
-    model.page_down(false, 0);
+    model.execute(Command::Page(true, false, 0));
     assert_eq!(model.snapshot().cursor_position.line, 199);
     assert_eq!(
         model.snapshot().cursor_position.column,
@@ -233,7 +187,7 @@ fn page_up_at_bof_snaps_to_line_start_and_emits_reveal() {
     model.set_viewport_rows(20);
     set_cursor(&mut model, 2, None);
 
-    model.page_up(false, 0);
+    model.execute(Command::Page(false, false, 0));
     assert_eq!(model.snapshot().cursor_position.line, 0);
     assert_eq!(model.snapshot().cursor_position.column, 0);
     assert_eq!(
@@ -296,7 +250,7 @@ fn vim_half_page_commands_keep_clamped_columns_at_document_edges() {
     let mut eof = long_model();
     eof.set_viewport_rows(20);
     set_cursor_line(&mut eof, 199);
-    eof.move_horizontal_by(2, false);
+    eof.execute(Command::MoveHorizontal(2, false));
     let _ = eof.drain_effects();
     enter_normal(&mut eof);
     let before = eof.snapshot().cursor_position;
@@ -323,7 +277,7 @@ fn vim_full_page_commands_keep_clamped_columns_at_document_edges() {
     let mut eof = long_model();
     eof.set_viewport_rows(20);
     set_cursor_line(&mut eof, 199);
-    eof.move_horizontal_by(2, false);
+    eof.execute(Command::MoveHorizontal(2, false));
     let _ = eof.drain_effects();
     enter_normal(&mut eof);
     let before = eof.snapshot().cursor_position;

@@ -1,5 +1,7 @@
 use lst_editor::position::Position;
-use lst_editor::{EditorModel, EditorTab, FileStamp, Language, Selection, TabId};
+use lst_editor::{
+    EditorCommand as Command, EditorModel, EditorTab, FileStamp, Language, Selection, TabId,
+};
 use std::path::PathBuf;
 
 mod common;
@@ -72,28 +74,28 @@ fn shebang_detects_language_when_extension_absent() {
 #[test]
 fn toggle_comment_uses_language_prefix_for_python() {
     let mut model = model_with_path("example.py", "x = 1");
-    model.toggle_comment();
+    model.execute(Command::ToggleComment);
     assert_eq!(model.snapshot().text, "# x = 1");
 }
 
 #[test]
 fn toggle_comment_uses_language_prefix_for_rust() {
     let mut model = model_with_path("example.rs", "let x = 1;");
-    model.toggle_comment();
+    model.execute(Command::ToggleComment);
     assert_eq!(model.snapshot().text, "// let x = 1;");
 }
 
 #[test]
 fn toggle_comment_uses_language_prefix_for_lua() {
     let mut model = model_with_path("example.lua", "print(1)");
-    model.toggle_comment();
+    model.execute(Command::ToggleComment);
     assert_eq!(model.snapshot().text, "-- print(1)");
 }
 
 #[test]
 fn toggle_comment_uses_makefile_prefix_for_mk_files() {
     let mut model = model_with_path("rules.mk", "target:");
-    model.toggle_comment();
+    model.execute(Command::ToggleComment);
     assert_eq!(model.snapshot().text, "# target:");
 }
 
@@ -101,7 +103,7 @@ fn toggle_comment_uses_makefile_prefix_for_mk_files() {
 fn toggle_comment_is_noop_when_language_has_no_line_comment() {
     let mut model = model_with_path("example.json", "{}");
     let before = model.snapshot().text.clone();
-    model.toggle_comment();
+    model.execute(Command::ToggleComment);
     assert_eq!(model.snapshot().text, before);
 }
 
@@ -109,7 +111,7 @@ fn toggle_comment_is_noop_when_language_has_no_line_comment() {
 fn toggle_block_comment_wraps_selection_for_rust() {
     let mut model = model_with_path("example.rs", "let x = 1 + 2;");
     model.set_selection(Selection::from_range(8..13, false));
-    model.toggle_block_comment();
+    model.execute(Command::ToggleBlockComment);
     assert_eq!(model.snapshot().text, "let x = /*1 + 2*/;");
 }
 
@@ -117,21 +119,21 @@ fn toggle_block_comment_wraps_selection_for_rust() {
 fn toggle_block_comment_unwraps_existing_block() {
     let mut model = model_with_path("example.rs", "let x = /*1 + 2*/;");
     model.set_selection(Selection::from_range(8..17, false));
-    model.toggle_block_comment();
+    model.execute(Command::ToggleBlockComment);
     assert_eq!(model.snapshot().text, "let x = 1 + 2;");
 }
 
 #[test]
 fn toggle_block_comment_falls_back_to_current_line_without_selection() {
     let mut model = model_with_path("example.rs", "let x = 1;\n");
-    model.toggle_block_comment();
+    model.execute(Command::ToggleBlockComment);
     assert_eq!(model.snapshot().text, "/*let x = 1;*/\n");
 }
 
 #[test]
 fn toggle_block_comment_unwraps_current_line_without_selection() {
     let mut model = model_with_path("example.rs", "/*let x = 1;*/\n");
-    model.toggle_block_comment();
+    model.execute(Command::ToggleBlockComment);
     assert_eq!(model.snapshot().text, "let x = 1;\n");
 }
 
@@ -140,7 +142,7 @@ fn toggle_block_comment_is_noop_for_python() {
     let mut model = model_with_path("example.py", "x = 1");
     model.set_selection(Selection::from_range(0..5, false));
     let before = model.snapshot().text.clone();
-    model.toggle_block_comment();
+    model.execute(Command::ToggleBlockComment);
     assert_eq!(model.snapshot().text, before);
 }
 
@@ -148,7 +150,7 @@ fn toggle_block_comment_is_noop_for_python() {
 fn toggle_block_comment_uses_html_delimiters_for_html() {
     let mut model = model_with_path("page.html", "<p>hi</p>");
     model.set_selection(Selection::from_range(3..5, false));
-    model.toggle_block_comment();
+    model.execute(Command::ToggleBlockComment);
     assert_eq!(model.snapshot().text, "<p><!--hi--></p>");
 }
 
@@ -231,21 +233,21 @@ fn auto_dedent_fires_in_javascript_with_two_space_step() {
 #[test]
 fn tab_inserts_language_indent_unit_rust() {
     let mut model = model_with_path("main.rs", "");
-    model.insert_tab_at_cursor();
+    model.execute(Command::InsertTab);
     assert_eq!(model.snapshot().text, "    ");
 }
 
 #[test]
 fn tab_inserts_language_indent_unit_javascript() {
     let mut model = model_with_path("main.js", "");
-    model.insert_tab_at_cursor();
+    model.execute(Command::InsertTab);
     assert_eq!(model.snapshot().text, "  ");
 }
 
 #[test]
 fn tab_inserts_tab_character_for_go() {
     let mut model = model_with_path("main.go", "");
-    model.insert_tab_at_cursor();
+    model.execute(Command::InsertTab);
     assert_eq!(model.snapshot().text, "\t");
 }
 
@@ -253,7 +255,7 @@ fn tab_inserts_tab_character_for_go() {
 fn backspace_removes_indent_unit_for_space_language() {
     let mut model = model_with_path("main.js", "      ");
     model.move_to_char(6, false, None);
-    model.backspace();
+    model.execute(Command::Backspace);
     assert_eq!(model.snapshot().text, "    ");
 }
 
@@ -261,7 +263,7 @@ fn backspace_removes_indent_unit_for_space_language() {
 fn backspace_removes_one_grapheme_for_tab_language() {
     let mut model = model_with_path("main.go", "\tfoo");
     model.move_to_char(1, false, None);
-    model.backspace();
+    model.execute(Command::Backspace);
     assert_eq!(model.snapshot().text, "foo");
 }
 
@@ -269,7 +271,7 @@ fn backspace_removes_one_grapheme_for_tab_language() {
 fn backspace_removes_one_grapheme_when_cursor_past_indent() {
     let mut model = model_with_path("main.rs", "    fn x");
     model.move_to_char(8, false, None);
-    model.backspace();
+    model.execute(Command::Backspace);
     assert_eq!(model.snapshot().text, "    fn ");
 }
 
@@ -279,7 +281,7 @@ fn backspace_removes_one_grapheme_when_indent_misaligned() {
     // Rust indent is 4 spaces but the line only has 3 leading spaces; the
     // cursor at column 3 isn't on a unit boundary, so backspace removes one.
     model.move_to_char(3, false, None);
-    model.backspace();
+    model.execute(Command::Backspace);
     assert_eq!(model.snapshot().text, "  fn x");
 }
 
@@ -287,7 +289,7 @@ fn backspace_removes_one_grapheme_when_indent_misaligned() {
 fn backspace_does_not_collapse_hard_tab_in_space_language() {
     let mut model = model_with_path("main.rs", "\t   fn x");
     model.move_to_char(4, false, None);
-    model.backspace();
+    model.execute(Command::Backspace);
     assert_eq!(model.snapshot().text, "\t  fn x");
 }
 
@@ -301,7 +303,7 @@ fn set_tab_language_overrides_detection_and_retunes_behavior() {
     model.set_tab_language(id, Some(Language::Rust));
     assert_eq!(model.active_tab().language(), Some(Language::Rust));
 
-    model.toggle_comment();
+    model.execute(Command::ToggleComment);
     assert_eq!(model.snapshot().text, "// x = 1");
 }
 
@@ -344,7 +346,7 @@ fn save_as_recomputes_language_from_new_path() {
     model.save_as_finished_for_tab(id, PathBuf::from("main.rs"), FileStamp::from_raw(5, None));
     assert_eq!(model.active_tab().language(), Some(Language::Rust));
 
-    model.toggle_comment();
+    model.execute(Command::ToggleComment);
     assert_eq!(model.snapshot().text, "// x = 1");
 }
 
@@ -406,7 +408,7 @@ fn saved_untitled_tab_detects_language_from_saved_path() {
 fn indent_selection_uses_language_unit() {
     let mut model = model_with_path("main.js", "alpha\nbeta\n");
     model.set_selection(Selection::from_range(0..10, false));
-    model.insert_tab_at_cursor();
+    model.execute(Command::InsertTab);
 
     assert_eq!(model.snapshot().text, "  alpha\n  beta\n");
 }
@@ -415,7 +417,7 @@ fn indent_selection_uses_language_unit() {
 fn outdent_selection_uses_language_unit_for_tabs() {
     let mut model = model_with_path("main.go", "\talpha\n\tbeta\n");
     model.set_selection(Selection::from_range(0..12, false));
-    model.outdent_at_cursor();
+    model.execute(Command::Outdent);
 
     assert_eq!(model.snapshot().text, "alpha\nbeta\n");
 }

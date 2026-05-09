@@ -1,3 +1,4 @@
+mod command;
 mod document;
 mod effect;
 pub mod find;
@@ -19,6 +20,7 @@ pub mod vim;
 mod vim_edit;
 pub mod wrap;
 
+pub use command::EditorCommand;
 pub use document::{EditKind, UndoBoundary};
 pub use effect::{EditorEffect, FocusTarget, RevealIntent};
 pub use language::{IndentStyle, Language, LanguageConfig};
@@ -52,11 +54,6 @@ impl GutterMode {
         }
     }
 
-    /// Formats the gutter label for `line_ix`. `cursor_line` anchors
-    /// Relative mode (distance is measured from the primary cursor's
-    /// line); `cursor_lines` lists every line that hosts a cursor head
-    /// (sorted, may contain just `cursor_line`) so Hybrid mode can mark
-    /// each multi-cursor row with its absolute number.
     pub fn format(self, line_ix: usize, cursor_line: usize, cursor_lines: &[usize]) -> String {
         match self {
             Self::Absolute => format!("{:>3}", line_ix + 1),
@@ -76,8 +73,7 @@ use crate::{
     position::Position,
     selection::{
         char_at_line_column, display_line_char_len as buffer_display_line_char_len,
-        line_range_at_char, next_grapheme_boundary, next_subword_boundary, next_word_boundary,
-        paragraph_range_at_char, previous_grapheme_boundary, previous_subword_boundary,
+        line_range_at_char, next_grapheme_boundary, next_word_boundary, previous_grapheme_boundary,
         previous_word_boundary, word_range_at_char, CursorGoal, SelectionTransform,
     },
     tab_set::TabSet,
@@ -105,9 +101,6 @@ pub struct EditorModel {
     vim: vim::VimState,
     viewport: Viewport,
     effects: Vec<EditorEffect>,
-    /// Overtype mode replaces the character to the right of the caret on
-    /// each printable insert instead of pushing it forward. Persists across
-    /// motion until toggled off.
     overtype: bool,
 }
 
@@ -204,11 +197,6 @@ impl EditorModel {
         self.gutter_mode
     }
 
-    pub fn cycle_gutter_mode(&mut self) {
-        self.gutter_mode = self.gutter_mode.cycle();
-        self.status = format!("Line numbers: {}", self.gutter_mode.label());
-    }
-
     pub fn find(&self) -> &FindState {
         &self.find
     }
@@ -247,17 +235,6 @@ impl EditorModel {
 
     pub fn overtype(&self) -> bool {
         self.overtype
-    }
-
-    /// Toggle overtype mode. When on, plain printable insertion replaces
-    /// the char to the right of the caret instead of pushing it forward.
-    pub fn toggle_overtype(&mut self) {
-        self.overtype = !self.overtype;
-        self.status = if self.overtype {
-            "Overtype on.".to_string()
-        } else {
-            "Overtype off.".to_string()
-        };
     }
 
     fn new_empty_tab(&mut self) -> EditorTab {
@@ -364,23 +341,8 @@ impl EditorModel {
         self.find.replacement = text;
     }
 
-    pub fn toggle_find_case_sensitive(&mut self) {
-        self.find.case_sensitive = !self.find.case_sensitive;
-        self.reindex_find_matches_to_nearest();
-    }
-
-    pub fn toggle_find_whole_word(&mut self) {
-        self.find.whole_word = !self.find.whole_word;
-        self.reindex_find_matches_to_nearest();
-    }
-
-    pub fn toggle_find_regex(&mut self) {
-        self.find.use_regex = !self.find.use_regex;
-        self.reindex_find_matches_to_nearest();
-    }
-
     // No-op when toggling on without a selection (UI grays the chip).
-    pub fn toggle_find_in_selection(&mut self) {
+    fn toggle_find_in_selection(&mut self) {
         let active_tab_id = self.active_tab_id();
         if self.find.scope.is_selection_for(active_tab_id) {
             self.find.scope = FindScope::Document;
@@ -544,7 +506,7 @@ impl EditorModel {
         true
     }
 
-    pub fn submit_goto_line_input(&mut self) {
+    fn submit_goto_line_input(&mut self) {
         let Some(text) = self.goto_line.clone() else {
             return;
         };
@@ -633,6 +595,18 @@ impl EditorModel {
         outcome
     }
 
+    fn apply_optional_edit_request(
+        &mut self,
+        request: Option<EditRequest>,
+        reveal: Option<RevealIntent>,
+    ) -> bool {
+        let Some(request) = request else {
+            return false;
+        };
+        self.apply_active_edit_request(request, reveal);
+        true
+    }
+
     fn apply_multi_selection_replacement(&mut self, text: String, boundary: UndoBoundary) -> bool {
         let Some(request) = multi_selection::replacement_request(self.active_tab(), text, boundary)
         else {
@@ -642,12 +616,6 @@ impl EditorModel {
         true
     }
 
-    /// Programmatic replacement entry point. Multi-cursor distributes the same
-    /// `text` to every selection; auto-pair semantics are intentionally NOT
-    /// applied here (callers like `paste_text`, `insert_newline`, and
-    /// `insert_tab_at_cursor` want literal insertion). Keyboard input goes
-    /// through `apply_text_input` instead, which dispatches multi-cursor
-    /// auto-pair handlers before falling through to the same plain replacement.
     pub fn replace_text(
         &mut self,
         range: Option<Range<usize>>,
@@ -796,7 +764,7 @@ impl EditorModel {
         })
     }
 
-    pub fn move_horizontal_collapsed(&mut self, backward: bool) {
+    fn move_horizontal_collapsed(&mut self, backward: bool) {
         let selection = self.active_tab().selected_range();
         if selection.start != selection.end {
             let target = if backward {
@@ -1066,9 +1034,6 @@ impl EditorModel {
             return self.move_vertical(target as isize - current as isize, select, true);
         }
 
-        // Build the wrap layout once and reuse it for both the current-row
-        // lookup and the delta application; going through `move_display_rows`
-        // would build it again.
         let cursor = self.active_tab().cursor_char();
         let (target_char, preferred_column) = {
             let tab = self.active_tab_mut();
@@ -1127,7 +1092,7 @@ impl EditorModel {
         }
     }
 
-    pub fn move_line_boundary(&mut self, to_end: bool, select: bool) {
+    fn move_line_boundary(&mut self, to_end: bool, select: bool) {
         if self.apply_selection_motion(None, |tab, selection| {
             let line = tab
                 .buffer()
@@ -1147,7 +1112,7 @@ impl EditorModel {
         }
     }
 
-    pub fn smart_home(&mut self, select: bool) {
+    fn smart_home(&mut self, select: bool) {
         if self.apply_selection_motion(None, |tab, selection| {
             let cursor = selection.cursor();
             let line = tab.buffer().char_to_line(cursor.min(tab.len_chars()));
@@ -1168,7 +1133,7 @@ impl EditorModel {
         }
     }
 
-    pub fn move_document_boundary(&mut self, to_end: bool, select: bool) {
+    fn move_document_boundary(&mut self, to_end: bool, select: bool) {
         let target = if to_end {
             self.active_tab().len_chars()
         } else {
@@ -1277,7 +1242,7 @@ impl EditorModel {
         (range, text, use_current_line)
     }
 
-    pub fn copy_selection(&mut self) {
+    fn copy_selection(&mut self) {
         if let Some(text) = multi_selection::selected_text_joined(self.active_tab()) {
             if text.is_empty() {
                 return;
@@ -1299,7 +1264,7 @@ impl EditorModel {
         };
     }
 
-    pub fn cut_selection(&mut self) {
+    fn cut_selection(&mut self) {
         if let Some(text) = multi_selection::selected_text_joined(self.active_tab()) {
             if text.is_empty() {
                 return;
@@ -1469,7 +1434,6 @@ impl EditorModel {
                 }
                 vim::VimCommand::SearchWordUnderCursor { word, forward } => {
                     self.find.query = word;
-                    // Vim `*` / `#` are whole-word, case-sensitive, literal.
                     self.find.whole_word = true;
                     self.find.case_sensitive = true;
                     self.find.use_regex = false;
@@ -1684,11 +1648,10 @@ impl EditorModel {
     }
 
     fn vim_surround_range(&mut self, from: Position, to: Position, open: char, close: char) {
-        let Some(request) = vim_edit::surround_range(self.active_tab(), from, to, open, close)
-        else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            vim_edit::surround_range(self.active_tab(), from, to, open, close),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
     fn vim_delete_surround(&mut self, open: char) {
@@ -1699,11 +1662,10 @@ impl EditorModel {
             self.status = "No surrounding pair.".to_string();
             return;
         };
-        let Some(request) = vim_edit::delete_surround(self.active_tab(), open_pos, close_pos)
-        else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            vim_edit::delete_surround(self.active_tab(), open_pos, close_pos),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
     fn vim_change_surround(&mut self, from_open: char, to_open: char) {
@@ -1717,12 +1679,10 @@ impl EditorModel {
             self.status = "No surrounding pair.".to_string();
             return;
         };
-        let Some(request) =
-            vim_edit::change_surround(self.active_tab(), open_pos, close_pos, to_open, to_close)
-        else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            vim_edit::change_surround(self.active_tab(), open_pos, close_pos, to_open, to_close),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
     fn vim_extract_range(&mut self, from: Position, to: Position) -> String {
@@ -1735,35 +1695,34 @@ impl EditorModel {
 
     fn vim_paste(&mut self, before: bool) {
         let cursor = self.active_cursor_position();
-        let Some(request) = vim_edit::paste(self.active_tab(), cursor, &self.vim.register, before)
-        else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            vim_edit::paste(self.active_tab(), cursor, &self.vim.register, before),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
     fn vim_open_line(&mut self, above: bool) {
         let pos = self.active_cursor_position();
-        let Some(request) = vim_edit::open_line(self.active_tab(), pos, above) else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            vim_edit::open_line(self.active_tab(), pos, above),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
     fn vim_join_lines(&mut self, count: usize) {
         let pos = self.active_cursor_position();
-        let Some(request) = vim_edit::join_lines(self.active_tab(), pos, count) else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            vim_edit::join_lines(self.active_tab(), pos, count),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
     fn vim_replace_char(&mut self, ch: char, count: usize) {
         let pos = self.active_cursor_position();
-        let Some(request) = vim_edit::replace_char(self.active_tab(), pos, ch, count) else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            vim_edit::replace_char(self.active_tab(), pos, ch, count),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
     fn vim_transform_case_range(&mut self, from: Position, to: Position, uppercase: bool) {
@@ -1808,9 +1767,6 @@ impl EditorModel {
         self.active_tab_mut().clear_marked_range();
     }
 
-    /// EOL fall-through (the cursor is past the last char) keeps users
-    /// from getting stuck unable to extend a line. Multi-cursor and IME
-    /// composition skip overtype intentionally.
     fn expand_range_for_overtype(
         &self,
         range: Option<Range<usize>>,
@@ -1836,8 +1792,6 @@ impl EditorModel {
         let line_start = buffer.line_to_char(line);
         let line_chars = display_line_char_len(tab, line);
         if cursor >= line_start + line_chars {
-            // EOL: no char to overwrite, fall back to insert so the user
-            // can still extend the line.
             return range;
         }
         let next = selection::next_grapheme_boundary(buffer, cursor);
@@ -1867,16 +1821,6 @@ impl EditorModel {
                 self.queue_reveal(RevealIntent::NearestEdge);
             }
         }
-    }
-
-    pub fn toggle_wrap(&mut self) {
-        self.show_wrap = !self.show_wrap;
-        self.status = if self.show_wrap {
-            "Soft wrap enabled.".to_string()
-        } else {
-            "Soft wrap disabled.".to_string()
-        };
-        self.queue_reveal(RevealIntent::NearestEdge);
     }
 
     pub fn new_tab(&mut self) {
@@ -1939,14 +1883,14 @@ impl EditorModel {
         }
     }
 
-    pub fn next_tab(&mut self) {
+    fn next_tab(&mut self) {
         if self.tabs.len() > 1 {
             self.activate_tab((self.active_index() + 1) % self.tabs.len());
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
-    pub fn prev_tab(&mut self) {
+    fn prev_tab(&mut self) {
         if self.tabs.len() > 1 {
             let active = self.active_index();
             let prev = if active == 0 {
@@ -1965,39 +1909,6 @@ impl EditorModel {
         }
     }
 
-    pub fn move_active_tab(&mut self, delta: isize) {
-        let len = self.tabs.len();
-        if len < 2 {
-            return;
-        }
-        let from = self.active_index();
-        let to = (from as isize + delta).rem_euclid(len as isize) as usize;
-        self.move_tab(from, to);
-    }
-
-    pub fn select_all(&mut self) {
-        self.active_tab_mut().select_all();
-        if let Some(text) = self.active_tab().selected_text() {
-            self.queue_effect(EditorEffect::WritePrimary(text));
-        }
-    }
-
-    pub fn move_horizontal_by(&mut self, delta: isize, select: bool) {
-        if self.move_horizontal(delta, select) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn move_logical_rows(&mut self, delta: isize, select: bool) {
-        if self.move_vertical(delta, select, true) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn move_display_rows_by(&mut self, delta: isize, select: bool, wrap_columns: usize) {
-        self.move_paged(delta, select, wrap_columns, true);
-    }
-
     pub fn viewport(&self) -> Viewport {
         self.viewport
     }
@@ -2010,88 +1921,23 @@ impl EditorModel {
         self.viewport.top_visual_row = row;
     }
 
-    pub fn page_down(&mut self, select: bool, wrap_columns: usize) {
-        let delta = self.viewport.page() as isize;
-        self.move_paged(delta, select, wrap_columns, true);
-    }
-
-    pub fn page_up(&mut self, select: bool, wrap_columns: usize) {
-        let delta = -(self.viewport.page() as isize);
-        self.move_paged(delta, select, wrap_columns, true);
-    }
-
-    pub fn half_page_down(&mut self, select: bool, wrap_columns: usize) {
-        let delta = self.viewport.half_page() as isize;
-        self.move_paged(delta, select, wrap_columns, true);
-    }
-
-    pub fn half_page_up(&mut self, select: bool, wrap_columns: usize) {
-        let delta = -(self.viewport.half_page() as isize);
-        self.move_paged(delta, select, wrap_columns, true);
-    }
-
-    pub fn screen_top(&mut self, select: bool, wrap_columns: usize) {
+    fn screen_top(&mut self, select: bool, wrap_columns: usize) {
         let target = self.viewport.screen_top_row();
         if self.move_to_visual_row(target, select, wrap_columns) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
-    pub fn screen_middle(&mut self, select: bool, wrap_columns: usize) {
+    fn screen_middle(&mut self, select: bool, wrap_columns: usize) {
         let target = self.viewport.screen_middle_row();
         if self.move_to_visual_row(target, select, wrap_columns) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
-    pub fn screen_bottom(&mut self, select: bool, wrap_columns: usize) {
+    fn screen_bottom(&mut self, select: bool, wrap_columns: usize) {
         let target = self.viewport.screen_bottom_row();
         if self.move_to_visual_row(target, select, wrap_columns) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn scroll_to_center(&mut self) {
-        self.queue_reveal(RevealIntent::Center);
-    }
-
-    pub fn scroll_to_top(&mut self) {
-        self.queue_reveal(RevealIntent::Top);
-    }
-
-    pub fn scroll_to_bottom(&mut self) {
-        self.queue_reveal(RevealIntent::Bottom);
-    }
-
-    pub fn move_word(&mut self, backward: bool, select: bool) {
-        if self.move_boundary(backward, select, previous_word_boundary, next_word_boundary) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn move_subword(&mut self, backward: bool, select: bool) {
-        if self.move_boundary(
-            backward,
-            select,
-            previous_subword_boundary,
-            next_subword_boundary,
-        ) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn smart_expand_selection(&mut self) {
-        if self.apply_selection_motion(None, |tab, selection| {
-            smart_expanded_selection(tab.buffer(), selection)
-        }) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    pub fn smart_shrink_selection(&mut self) {
-        if self.apply_selection_motion(None, |tab, selection| {
-            smart_shrunk_selection(tab.buffer(), selection)
-        }) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
@@ -2100,11 +1946,6 @@ impl EditorModel {
         self.assign_selection(selection);
     }
 
-    /// Replaces the active selection state with a validated multi-cursor set.
-    ///
-    /// This is the public model-level entry point for programmatic
-    /// multi-cursor behavior. Commands that do not yet define multi-cursor
-    /// semantics collapse through the set's primary selection.
     pub fn set_selection_set(&mut self, selection_set: SelectionSet) {
         self.active_tab_mut().set_selection_set(selection_set);
     }
@@ -2117,7 +1958,6 @@ impl EditorModel {
         self.active_tab().selection_set()
     }
 
-    /// First collapses selections to cursors, then drops secondary cursors.
     pub fn collapse_to_primary(&mut self) -> bool {
         let set = self.active_tab().selection_state();
         let any_extent = set.as_slice().iter().any(Selection::has_selection);
@@ -2185,14 +2025,6 @@ impl EditorModel {
         }
     }
 
-    pub fn add_cursor_above(&mut self) {
-        self.add_cursor_on_adjacent_line(-1);
-    }
-
-    pub fn add_cursor_below(&mut self) {
-        self.add_cursor_on_adjacent_line(1);
-    }
-
     fn add_cursor_on_adjacent_line(&mut self, delta: isize) {
         let (additions, preferred_goal) = {
             let tab = self.active_tab();
@@ -2258,7 +2090,7 @@ impl EditorModel {
         }
     }
 
-    pub fn select_next_occurrence(&mut self) {
+    fn select_next_occurrence(&mut self) {
         let tab = self.active_tab();
         if !tab.selection().has_selection() {
             let range = word_range_at_char(tab.buffer(), tab.cursor_char());
@@ -2274,7 +2106,7 @@ impl EditorModel {
         }
     }
 
-    pub fn select_all_occurrences(&mut self) {
+    fn select_all_occurrences(&mut self) {
         let Some(selection_set) =
             multi_selection::all_occurrences_set(self.active_tab(), &self.find)
         else {
@@ -2284,7 +2116,7 @@ impl EditorModel {
         self.queue_reveal(RevealIntent::NearestEdge);
     }
 
-    pub fn select_all_find_matches(&mut self) {
+    fn select_all_find_matches(&mut self) {
         self.ensure_find_matches_current();
         let Some(selection_set) = self.find_match_selection_set() else {
             return;
@@ -2310,7 +2142,7 @@ impl EditorModel {
         SelectionSet::from_selections(selections, primary).ok()
     }
 
-    pub fn skip_next_occurrence(&mut self) {
+    fn skip_next_occurrence(&mut self) {
         let skipped = self.active_tab().selection_set().primary();
         let Some(addition) =
             multi_selection::next_occurrence_addition(self.active_tab(), &self.find)
@@ -2335,7 +2167,7 @@ impl EditorModel {
         self.queue_reveal(RevealIntent::NearestEdge);
     }
 
-    pub fn pop_primary_selection_cursor(&mut self) {
+    fn pop_primary_selection_cursor(&mut self) {
         let set = self.active_tab().selection_set();
         let Some(after) = set.with_removed_at(set.primary_index()) else {
             return;
@@ -2344,7 +2176,7 @@ impl EditorModel {
         self.queue_reveal(RevealIntent::NearestEdge);
     }
 
-    pub fn add_cursors_to_selected_line_ends(&mut self) {
+    fn add_cursors_to_selected_line_ends(&mut self) {
         let tab = self.active_tab();
         let (first, last) = selection_line_span(tab)
             .map(|(first, last, _)| (first, last))
@@ -2368,35 +2200,7 @@ impl EditorModel {
         self.queue_reveal(RevealIntent::NearestEdge);
     }
 
-    pub fn select_current_line(&mut self) {
-        let tab = self.active_tab();
-        let range = line_range_at_char(tab.buffer(), tab.cursor_char());
-        self.assign_selection(Selection::from_range(range, false));
-    }
-
-    pub fn select_current_paragraph(&mut self) {
-        let tab = self.active_tab();
-        let range = paragraph_range_at_char(tab.buffer(), tab.cursor_char());
-        self.assign_selection(Selection::from_range(range, false));
-    }
-
-    pub fn backspace(&mut self) {
-        self.delete_selected_or_previous();
-    }
-
-    pub fn delete_forward(&mut self) {
-        self.delete_selected_or_next();
-    }
-
-    pub fn delete_word(&mut self, backward: bool) {
-        self.delete_selected_or_word(backward);
-    }
-
-    pub fn insert_newline_at_cursor(&mut self) {
-        self.insert_newline();
-    }
-
-    pub fn insert_tab_at_cursor(&mut self) {
+    fn insert_tab_at_cursor(&mut self) {
         if self.active_tab().selection_set().has_multiple() {
             let lines = line_edit::selection_set_touched_lines(self.active_tab());
             if lines.len() == 1 {
@@ -2413,12 +2217,14 @@ impl EditorModel {
         }
     }
 
-    pub fn outdent_at_cursor(&mut self) {
-        if self.active_tab().selection_set().has_multiple() {
-            if let Some(request) = line_edit::outdent_selection_set_request(self.active_tab()) {
-                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-                return;
-            }
+    fn outdent_at_cursor(&mut self) {
+        if self.active_tab().selection_set().has_multiple()
+            && self.apply_optional_edit_request(
+                line_edit::outdent_selection_set_request(self.active_tab()),
+                Some(RevealIntent::NearestEdge),
+            )
+        {
+            return;
         }
         let (first, last) = selection_line_span(self.active_tab())
             .map(|(first, last, _)| (first, last))
@@ -2430,93 +2236,41 @@ impl EditorModel {
     }
 
     fn indent_selected_lines(&mut self, first: usize, last: usize) {
-        let Some(request) = line_edit::indent_request(self.active_tab(), first, last) else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            line_edit::indent_request(self.active_tab(), first, last),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
     fn outdent_selected_lines(&mut self, first: usize, last: usize) {
-        let Some(request) = line_edit::outdent_request(self.active_tab(), first, last) else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            line_edit::outdent_request(self.active_tab(), first, last),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
-    pub fn delete_line(&mut self) {
-        if self.active_tab().selection_set().has_multiple() {
-            if let Some(request) = line_edit::delete_touched_lines_request(self.active_tab()) {
-                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-                return;
-            }
-        }
-
-        let Some(request) =
-            line_edit::delete_line_request(self.active_tab(), self.active_cursor_position())
-        else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+    fn delete_line(&mut self) {
+        self.apply_optional_edit_request(
+            line_edit::delete_lines_request(self.active_tab(), self.active_cursor_position()),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
-    pub fn move_line_up(&mut self) {
-        if self.active_tab().selection_set().has_multiple() {
-            if let Some(request) =
-                line_edit::move_touched_line_clusters_request(self.active_tab(), true)
-            {
-                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-                return;
-            }
-        }
-
-        let Some(request) =
-            line_edit::line_swap_request(self.active_tab(), self.active_cursor_position(), true)
-        else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+    fn move_line(&mut self, up: bool) {
+        self.apply_optional_edit_request(
+            line_edit::move_lines_request(self.active_tab(), self.active_cursor_position(), up),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
-    pub fn move_line_down(&mut self) {
-        if self.active_tab().selection_set().has_multiple() {
-            if let Some(request) =
-                line_edit::move_touched_line_clusters_request(self.active_tab(), false)
-            {
-                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-                return;
-            }
-        }
-
-        let Some(request) =
-            line_edit::line_swap_request(self.active_tab(), self.active_cursor_position(), false)
-        else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+    fn duplicate_line(&mut self) {
+        self.apply_optional_edit_request(
+            line_edit::duplicate_lines_request(self.active_tab(), self.active_cursor_position()),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
-    pub fn duplicate_line(&mut self) {
-        if self.active_tab().selection_set().has_multiple() {
-            if let Some(request) = line_edit::duplicate_touched_lines_request(self.active_tab()) {
-                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-                return;
-            }
-        }
-
-        if let Some(request) = line_edit::duplicate_selection_request(self.active_tab()) {
-            self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-            return;
-        }
-
-        let Some(request) =
-            line_edit::duplicate_line_request(self.active_tab(), self.active_cursor_position())
-        else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-    }
-
-    pub fn toggle_comment(&mut self) {
+    fn toggle_comment(&mut self) {
         let Some(prefix) = self.active_tab().language_config().line_comment else {
             self.status = "No line-comment syntax for this language.".to_string();
             return;
@@ -2533,20 +2287,15 @@ impl EditorModel {
         }
     }
 
-    pub fn toggle_block_comment(&mut self) {
+    fn toggle_block_comment(&mut self) {
         let Some((open, close)) = self.active_tab().language_config().block_comment else {
             self.status = "No block-comment syntax for this language.".to_string();
             return;
         };
-        let Some(request) = line_edit::toggle_block_comment_request(self.active_tab(), open, close)
-        else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-    }
-
-    pub fn request_paste(&mut self) {
-        self.queue_effect(EditorEffect::ReadClipboard);
+        self.apply_optional_edit_request(
+            line_edit::toggle_block_comment_request(self.active_tab(), open, close),
+            Some(RevealIntent::NearestEdge),
+        );
     }
 
     pub fn clipboard_unavailable(&mut self) {
@@ -2564,15 +2313,12 @@ impl EditorModel {
         self.status = format!("Pasted {} line(s).", text.lines().count());
     }
 
-    /// Move the primary cursor to `(line, column)` on the active tab,
-    /// clamping to the buffer's logical extent.
     pub fn set_active_cursor_position(&mut self, line: usize, column: usize) {
         self.move_active_cursor(line, column, false);
         self.queue_reveal(RevealIntent::Center);
     }
 
-    /// Toggle a bookmark on the line that hosts the primary cursor.
-    pub fn toggle_bookmark(&mut self) {
+    fn toggle_bookmark(&mut self) {
         let added = self.active_tab_mut().toggle_bookmark_at_cursor();
         self.status = if added {
             "Bookmark added.".to_string()
@@ -2581,72 +2327,19 @@ impl EditorModel {
         };
     }
 
-    pub fn jump_next_bookmark(&mut self) {
+    fn jump_bookmark(&mut self, next: bool) {
         let cursor_line = self.active_cursor_position().line;
-        let Some(target) = self.active_tab().next_bookmark_line(cursor_line) else {
+        let target = if next {
+            self.active_tab().next_bookmark_line(cursor_line)
+        } else {
+            self.active_tab().previous_bookmark_line(cursor_line)
+        };
+        let Some(line) = target else {
             return;
         };
-        self.move_cursor_to_bookmarked_line(target);
-    }
-
-    pub fn jump_previous_bookmark(&mut self) {
-        let cursor_line = self.active_cursor_position().line;
-        let Some(target) = self.active_tab().previous_bookmark_line(cursor_line) else {
-            return;
-        };
-        self.move_cursor_to_bookmarked_line(target);
-    }
-
-    fn move_cursor_to_bookmarked_line(&mut self, line: usize) {
         self.active_tab_mut()
             .set_cursor_position(Position { line, column: 0 }, None);
         self.queue_reveal(RevealIntent::Center);
-    }
-
-    /// Emacs `C-t`-style transpose: swap the two graphemes around the
-    /// caret. At BOL/EOL, swap the line's first/last two graphemes
-    /// instead — never crossing the newline.
-    pub fn transpose_chars(&mut self) {
-        let Some(request) = transpose_request(self.active_tab()) else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-    }
-
-    pub fn toggle_find_panel(&mut self, show_replace: bool) {
-        if self.find.visible && self.find.show_replace == show_replace {
-            self.close_find_panel();
-        } else {
-            self.open_find_panel(show_replace);
-        }
-    }
-
-    pub fn find_next_match(&mut self) {
-        if self.find_next() {
-            self.queue_reveal(RevealIntent::Center);
-        }
-    }
-
-    pub fn find_prev_match(&mut self) {
-        if self.find_prev() {
-            self.queue_reveal(RevealIntent::Center);
-        }
-    }
-
-    pub fn replace_current_match(&mut self) {
-        self.replace_one();
-    }
-
-    pub fn replace_all_matches_in_document(&mut self) {
-        self.replace_all_matches();
-    }
-
-    pub fn toggle_goto_line_panel(&mut self) {
-        if self.goto_line.is_some() {
-            self.close_goto_line_panel();
-        } else {
-            self.open_goto_line_panel();
-        }
     }
 
     fn undo_active_text_mutation(&mut self, reveal: Option<RevealIntent>) -> bool {
@@ -2673,15 +2366,7 @@ impl EditorModel {
         }
     }
 
-    pub fn undo(&mut self) {
-        self.undo_active_text_mutation(Some(RevealIntent::NearestEdge));
-    }
-
-    pub fn redo(&mut self) {
-        self.redo_active_text_mutation(Some(RevealIntent::NearestEdge));
-    }
-
-    pub fn swap_redo_branch(&mut self) {
+    fn swap_redo_branch(&mut self) {
         if self.active_tab_mut().swap_redo_branch() {
             self.status = format!(
                 "Switched to alternate redo branch ({} more saved).",
@@ -2693,9 +2378,6 @@ impl EditorModel {
     }
 }
 
-/// When the cursor sits in aligned leading indent of a space-indent language,
-/// collapse one full indent unit instead of one grapheme. Returns `None` to
-/// fall back to the regular grapheme delete.
 fn soft_tab_backspace_range(tab: &EditorTab) -> Option<Range<usize>> {
     soft_tab_backspace_range_at(tab, tab.cursor_char())
 }
@@ -2716,8 +2398,6 @@ fn soft_tab_backspace_range_at(tab: &EditorTab, cursor: usize) -> Option<Range<u
     if col == 0 || !col.is_multiple_of(unit) {
         return None;
     }
-    // Space-indent languages should only collapse real spaces; hard tabs fall
-    // back to the regular grapheme delete even when they appear in indentation.
     let prefix_len = buffer
         .line(line)
         .chars()
@@ -2848,9 +2528,6 @@ fn next_line_join_whitespace_end(buffer: &ropey::Rope, cursor: usize) -> Option<
     Some(end)
 }
 
-/// Returns `(first, last, spans_multiple_lines)` for the active selection,
-/// or `None` for a collapsed cursor. `last` excludes a trailing line whose
-/// only contribution is a column-0 anchor after a preceding newline.
 fn selection_line_span(tab: &EditorTab) -> Option<(usize, usize, bool)> {
     let selection = tab.selected_range();
     if selection.start == selection.end {
@@ -2958,15 +2635,11 @@ fn first_non_blank_column(tab: &EditorTab, line_ix: usize) -> usize {
 
 fn linewise_range_at_char(buffer: &ropey::Rope, char_index: usize) -> Range<usize> {
     let range = line_range_at_char(buffer, char_index);
-    // If the line already owns its terminator we can return as-is.
     let ends_in_newline =
         range.end > range.start && matches!(buffer.char(range.end - 1), '\n' | '\r');
     if ends_in_newline {
         return range;
     }
-    // Only try to pull a terminator from the preceding line when the cursor
-    // sits on the buffer's final line (either the trailing unterminated line
-    // or an empty trailing row after the last `\n`).
     if range.end != buffer.len_chars() || range.start == 0 {
         return range;
     }
@@ -2991,8 +2664,6 @@ fn transpose_request(tab: &EditorTab) -> Option<EditRequest> {
     let line_start = buffer.line_to_char(line);
     let line_end = line_start + display_line_char_len(tab, line);
 
-    // Walk by grapheme boundaries — naked-char swaps would split combining
-    // marks off their base character.
     let mid = if cursor == line_start {
         let m = next_grapheme_boundary(buffer, line_start);
         if m >= line_end {

@@ -13,6 +13,7 @@ use gpui::{
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollHandle,
     SharedString, StatefulInteractiveElement, Styled, Window,
 };
+use lst_editor::EditorCommand as Command;
 
 use crate::actions::attach_workspace_actions;
 use crate::recent::RecentPreviewState;
@@ -189,9 +190,7 @@ impl LstGpuiApp {
                 theme,
                 scale,
                 cx,
-                |this, cx| {
-                    this.update_model(cx, true, |m| m.toggle_find_case_sensitive());
-                },
+                |this, cx| this.execute_model_command(cx, Command::ToggleFindCaseSensitive),
             ))
             .child(find_chip(
                 "find-chip-word",
@@ -203,9 +202,7 @@ impl LstGpuiApp {
                 theme,
                 scale,
                 cx,
-                |this, cx| {
-                    this.update_model(cx, true, |m| m.toggle_find_whole_word());
-                },
+                |this, cx| this.execute_model_command(cx, Command::ToggleFindWholeWord),
             ))
             .child(find_chip(
                 "find-chip-regex",
@@ -217,9 +214,7 @@ impl LstGpuiApp {
                 theme,
                 scale,
                 cx,
-                |this, cx| {
-                    this.update_model(cx, true, |m| m.toggle_find_regex());
-                },
+                |this, cx| this.execute_model_command(cx, Command::ToggleFindRegex),
             ))
             .child(find_chip(
                 "find-chip-scope",
@@ -231,9 +226,7 @@ impl LstGpuiApp {
                 theme,
                 scale,
                 cx,
-                |this, cx| {
-                    this.update_model(cx, true, |m| m.toggle_find_in_selection());
-                },
+                |this, cx| this.execute_model_command(cx, Command::ToggleFindInSelection),
             ))
     }
 

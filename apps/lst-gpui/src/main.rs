@@ -35,8 +35,8 @@ use interactions::ActiveDragSelection;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
-    find::FindScope, position::Position, EditorModel, EditorTab as ModelEditorTab, FocusTarget,
-    RevealIntent, TabId, UndoBoundary, UNTITLED_PREFIX,
+    find::FindScope, position::Position, EditorCommand as Command, EditorModel,
+    EditorTab as ModelEditorTab, FocusTarget, RevealIntent, TabId, UndoBoundary, UNTITLED_PREFIX,
 };
 #[cfg(not(test))]
 use recent::default_recent_files_path;
@@ -656,6 +656,10 @@ impl LstGpuiApp {
         }
     }
 
+    fn execute_model_command(&mut self, cx: &mut Context<Self>, command: Command) {
+        self.update_model(cx, true, |model| model.execute(command));
+    }
+
     /// On panel open / show_replace flip, select the prefilled query so
     /// typing replaces it (VS Code "selection becomes search term, ready
     /// to overwrite" parity).
@@ -1092,7 +1096,7 @@ impl LstGpuiApp {
                 self.record_find_metrics(elapsed_ms(reindex_started));
             }
             InputFieldEvent::Submitted => {
-                self.update_model(cx, true, EditorModel::find_next_match);
+                self.execute_model_command(cx, Command::FindNext);
             }
             InputFieldEvent::Cancelled => {
                 self.update_model(cx, true, EditorModel::close_find_panel);
@@ -1116,7 +1120,7 @@ impl LstGpuiApp {
                 });
             }
             InputFieldEvent::Submitted => {
-                self.update_model(cx, true, EditorModel::replace_current_match);
+                self.execute_model_command(cx, Command::ReplaceCurrentMatch);
             }
             InputFieldEvent::Cancelled => {
                 self.update_model(cx, true, EditorModel::close_find_panel);
@@ -1138,7 +1142,7 @@ impl LstGpuiApp {
                 });
             }
             InputFieldEvent::Submitted => {
-                self.update_model(cx, true, EditorModel::submit_goto_line_input);
+                self.execute_model_command(cx, Command::SubmitGotoLine);
             }
             InputFieldEvent::Cancelled => {
                 self.update_model(cx, true, EditorModel::close_goto_line_panel);
@@ -1376,9 +1380,7 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         let wrap_columns = self.active_wrap_columns(window, cx);
-        self.update_model(cx, true, |model| {
-            model.move_display_rows_by(delta, select, wrap_columns);
-        });
+        self.execute_model_command(cx, Command::MoveDisplayRows(delta, select, wrap_columns));
     }
 
     fn active_wrap_columns(&mut self, window: &mut Window, cx: &App) -> usize {
@@ -1418,13 +1420,7 @@ impl LstGpuiApp {
 
     fn move_page(&mut self, down: bool, select: bool, window: &mut Window, cx: &mut Context<Self>) {
         let wrap_columns = self.active_wrap_columns(window, cx);
-        self.update_model(cx, true, |model| {
-            if down {
-                model.page_down(select, wrap_columns);
-            } else {
-                model.page_up(select, wrap_columns);
-            }
-        });
+        self.execute_model_command(cx, Command::Page(down, select, wrap_columns));
     }
 
     fn sync_viewport_state(&mut self) {

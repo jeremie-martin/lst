@@ -1,4 +1,5 @@
 use gpui::{Context, Div, InteractiveElement, Window};
+use lst_editor::EditorCommand as Command;
 
 use crate::{
     AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, Backspace, CleanupText, CloseActiveTab,
@@ -21,12 +22,12 @@ use crate::{
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
     macro_rules! bind_commands {
-        ($root:ident, $($action:ty => $update:expr;)*) => {
+        ($root:ident, $($action:ty => $command:expr;)*) => {
             $(
                 let $root = $root.on_action(cx.listener(
                     |this, _: &$action, _: &mut Window, cx| {
                         this.clear_x11_modifier_chord_state();
-                        this.update_model(cx, true, $update);
+                        this.execute_model_command(cx, $command);
                         cx.stop_propagation();
                     },
                 ));
@@ -36,82 +37,82 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
 
     bind_commands! {
         root,
-        OpenFile => |model| model.request_open_files();
-        SaveFile => |model| model.request_save();
-        SaveFileAs => |model| model.request_save_as();
-        NextTab => |model| model.next_tab();
-        PrevTab => |model| model.prev_tab();
-        MoveTabLeft => |model| model.move_active_tab(-1);
-        MoveTabRight => |model| model.move_active_tab(1);
-        ToggleWrap => |model| model.toggle_wrap();
-        ToggleLineNumberMode => |model| model.cycle_gutter_mode();
-        CopySelection => |model| model.copy_selection();
-        CutSelection => |model| model.cut_selection();
-        PasteClipboard => |model| model.request_paste();
-        MoveLeft => |model| model.move_horizontal_collapsed(true);
-        MoveRight => |model| model.move_horizontal_collapsed(false);
-        MoveWordLeft => |model| model.move_word(true, false);
-        MoveWordRight => |model| model.move_word(false, false);
-        MoveSubwordLeft => |model| model.move_subword(true, false);
-        MoveSubwordRight => |model| model.move_subword(false, false);
-        MoveDocumentStart => |model| model.move_document_boundary(false, false);
-        MoveDocumentEnd => |model| model.move_document_boundary(true, false);
-        SelectLeft => |model| model.move_horizontal_by(-1, true);
-        SelectRight => |model| model.move_horizontal_by(1, true);
-        SelectWordLeft => |model| model.move_word(true, true);
-        SelectWordRight => |model| model.move_word(false, true);
-        SelectSubwordLeft => |model| model.smart_shrink_selection();
-        SelectSubwordRight => |model| model.smart_expand_selection();
-        SelectDocumentStart => |model| model.move_document_boundary(false, true);
-        SelectDocumentEnd => |model| model.move_document_boundary(true, true);
-        MoveSmartHome => |model| model.smart_home(false);
-        MoveLineStart => |model| model.move_line_boundary(false, false);
-        MoveLineEnd => |model| model.move_line_boundary(true, false);
-        SelectSmartHome => |model| model.smart_home(true);
-        SelectLineStart => |model| model.move_line_boundary(false, true);
-        SelectLineEnd => |model| model.move_line_boundary(true, true);
-        Backspace => |model| model.backspace();
-        DeleteForward => |model| model.delete_forward();
-        DeleteWordBackward => |model| model.delete_word(true);
-        DeleteWordForward => |model| model.delete_word(false);
-        InsertNewline => |model| model.insert_newline_at_cursor();
-        InsertTab => |model| model.insert_tab_at_cursor();
-        OutdentSelection => |model| model.outdent_at_cursor();
-        SelectAll => |model| model.select_all();
-        SelectAllOccurrences => |model| model.select_all_occurrences();
-        SelectFindMatches => |model| model.select_all_find_matches();
-        SkipNextOccurrence => |model| model.skip_next_occurrence();
-        PopSelectionCursor => |model| model.pop_primary_selection_cursor();
-        AddCursorAbove => |model| model.add_cursor_above();
-        AddCursorBelow => |model| model.add_cursor_below();
-        AddCursorsToLineEnds => |model| model.add_cursors_to_selected_line_ends();
-        SelectLine => |model| model.select_current_line();
-        SelectParagraph => |model| model.select_current_paragraph();
-        Undo => |model| model.undo();
-        Redo => |model| model.redo();
-        SwapRedoBranch => |model| model.swap_redo_branch();
-        FindOpen => |model| model.toggle_find_panel(false);
-        FindOpenReplace => |model| model.toggle_find_panel(true);
-        FindNext => |model| model.find_next_match();
-        FindPrev => |model| model.find_prev_match();
-        ReplaceOne => |model| model.replace_current_match();
-        ReplaceAll => |model| model.replace_all_matches_in_document();
-        ToggleFindCase => |model| model.toggle_find_case_sensitive();
-        ToggleFindWholeWord => |model| model.toggle_find_whole_word();
-        ToggleFindRegex => |model| model.toggle_find_regex();
-        ToggleFindInSelection => |model| model.toggle_find_in_selection();
-        GotoLineOpen => |model| model.toggle_goto_line_panel();
-        DeleteLine => |model| model.delete_line();
-        MoveLineUp => |model| model.move_line_up();
-        MoveLineDown => |model| model.move_line_down();
-        DuplicateLine => |model| model.duplicate_line();
-        ToggleComment => |model| model.toggle_comment();
-        ToggleBlockComment => |model| model.toggle_block_comment();
-        TransposeChars => |model| model.transpose_chars();
-        ToggleOvertype => |model| model.toggle_overtype();
-        ToggleBookmark => |model| model.toggle_bookmark();
-        NextBookmark => |model| model.jump_next_bookmark();
-        PreviousBookmark => |model| model.jump_previous_bookmark();
+        OpenFile => Command::RequestOpenFiles;
+        SaveFile => Command::RequestSave;
+        SaveFileAs => Command::RequestSaveAs;
+        NextTab => Command::NextTab;
+        PrevTab => Command::PrevTab;
+        MoveTabLeft => Command::MoveActiveTab(-1);
+        MoveTabRight => Command::MoveActiveTab(1);
+        ToggleWrap => Command::ToggleWrap;
+        ToggleLineNumberMode => Command::CycleGutterMode;
+        CopySelection => Command::CopySelection;
+        CutSelection => Command::CutSelection;
+        PasteClipboard => Command::RequestPaste;
+        MoveLeft => Command::MoveHorizontalCollapsed(true);
+        MoveRight => Command::MoveHorizontalCollapsed(false);
+        MoveWordLeft => Command::MoveWord(true, false);
+        MoveWordRight => Command::MoveWord(false, false);
+        MoveSubwordLeft => Command::MoveSubword(true, false);
+        MoveSubwordRight => Command::MoveSubword(false, false);
+        MoveDocumentStart => Command::MoveDocumentBoundary(false, false);
+        MoveDocumentEnd => Command::MoveDocumentBoundary(true, false);
+        SelectLeft => Command::MoveHorizontal(-1, true);
+        SelectRight => Command::MoveHorizontal(1, true);
+        SelectWordLeft => Command::MoveWord(true, true);
+        SelectWordRight => Command::MoveWord(false, true);
+        SelectSubwordLeft => Command::SmartShrinkSelection;
+        SelectSubwordRight => Command::SmartExpandSelection;
+        SelectDocumentStart => Command::MoveDocumentBoundary(false, true);
+        SelectDocumentEnd => Command::MoveDocumentBoundary(true, true);
+        MoveSmartHome => Command::SmartHome(false);
+        MoveLineStart => Command::MoveLineBoundary(false, false);
+        MoveLineEnd => Command::MoveLineBoundary(true, false);
+        SelectSmartHome => Command::SmartHome(true);
+        SelectLineStart => Command::MoveLineBoundary(false, true);
+        SelectLineEnd => Command::MoveLineBoundary(true, true);
+        Backspace => Command::Backspace;
+        DeleteForward => Command::DeleteForward;
+        DeleteWordBackward => Command::DeleteWord(true);
+        DeleteWordForward => Command::DeleteWord(false);
+        InsertNewline => Command::InsertNewline;
+        InsertTab => Command::InsertTab;
+        OutdentSelection => Command::Outdent;
+        SelectAll => Command::SelectAll;
+        SelectAllOccurrences => Command::SelectAllOccurrences;
+        SelectFindMatches => Command::SelectAllFindMatches;
+        SkipNextOccurrence => Command::SkipNextOccurrence;
+        PopSelectionCursor => Command::PopPrimarySelectionCursor;
+        AddCursorAbove => Command::AddCursorAbove;
+        AddCursorBelow => Command::AddCursorBelow;
+        AddCursorsToLineEnds => Command::AddCursorsToSelectedLineEnds;
+        SelectLine => Command::SelectCurrentLine;
+        SelectParagraph => Command::SelectCurrentParagraph;
+        Undo => Command::Undo;
+        Redo => Command::Redo;
+        SwapRedoBranch => Command::SwapRedoBranch;
+        FindOpen => Command::ToggleFindPanel(false);
+        FindOpenReplace => Command::ToggleFindPanel(true);
+        FindNext => Command::FindNext;
+        FindPrev => Command::FindPrev;
+        ReplaceOne => Command::ReplaceCurrentMatch;
+        ReplaceAll => Command::ReplaceAllMatches;
+        ToggleFindCase => Command::ToggleFindCaseSensitive;
+        ToggleFindWholeWord => Command::ToggleFindWholeWord;
+        ToggleFindRegex => Command::ToggleFindRegex;
+        ToggleFindInSelection => Command::ToggleFindInSelection;
+        GotoLineOpen => Command::ToggleGotoLinePanel;
+        DeleteLine => Command::DeleteLine;
+        MoveLineUp => Command::MoveLineUp;
+        MoveLineDown => Command::MoveLineDown;
+        DuplicateLine => Command::DuplicateLine;
+        ToggleComment => Command::ToggleComment;
+        ToggleBlockComment => Command::ToggleBlockComment;
+        TransposeChars => Command::TransposeChars;
+        ToggleOvertype => Command::ToggleOvertype;
+        ToggleBookmark => Command::ToggleBookmark;
+        NextBookmark => Command::JumpNextBookmark;
+        PreviousBookmark => Command::JumpPreviousBookmark;
     }
 
     let root = root.on_action(cx.listener(|this, _: &NewTab, _window, cx| {
@@ -138,11 +139,11 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         let skip = this.x11_ctrl_k_pending;
         this.clear_x11_modifier_chord_state();
         this.update_model(cx, true, |model| {
-            if skip {
-                model.skip_next_occurrence();
+            model.execute(if skip {
+                Command::SkipNextOccurrence
             } else {
-                model.select_next_occurrence();
-            }
+                Command::SelectNextOccurrence
+            });
         });
         cx.stop_propagation();
     }));

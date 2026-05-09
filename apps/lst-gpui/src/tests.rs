@@ -10,6 +10,7 @@ use gpui::{
     point, px, Bounds, Entity, EntityInputHandler, Keystroke, Modifiers, MouseButton,
     TestAppContext, VisualContext as _, VisualTestContext,
 };
+use lst_editor::EditorCommand as Command;
 #[cfg(feature = "internal-invariants")]
 use lst_editor::{EditorModel, EditorTab, TabId, UndoBoundary};
 #[cfg(feature = "internal-invariants")]
@@ -815,7 +816,7 @@ fn editor_horizontal_scrollbar_is_absent_without_overflow(cx: &mut TestAppContex
         },
     );
     view.update(cx, |app, cx| {
-        app.update_model(cx, true, |model| model.toggle_wrap());
+        app.execute_model_command(cx, Command::ToggleWrap);
     });
     cx.refresh().expect("first paint after wrap toggle");
     cx.run_until_parked();
@@ -843,7 +844,7 @@ fn arrow_right_at_long_line_scrolls_horizontally_to_keep_cursor_in_sidescrolloff
         },
     );
     view.update(cx, |app, cx| {
-        app.update_model(cx, true, |model| model.toggle_wrap());
+        app.execute_model_command(cx, Command::ToggleWrap);
     });
     cx.refresh().expect("first paint after wrap toggle");
     cx.run_until_parked();
@@ -881,7 +882,7 @@ fn horizontal_scroll_uses_rendered_glyph_width(cx: &mut TestAppContext) {
         },
     );
     view.update(cx, |app, cx| {
-        app.update_model(cx, true, |model| model.toggle_wrap());
+        app.execute_model_command(cx, Command::ToggleWrap);
     });
     cx.refresh().expect("first paint after wrap toggle");
     cx.run_until_parked();
@@ -942,7 +943,7 @@ fn clicking_horizontally_scrolled_text_hits_visible_column(cx: &mut TestAppConte
         },
     );
     view.update(cx, |app, cx| {
-        app.update_model(cx, true, |model| model.toggle_wrap());
+        app.execute_model_command(cx, Command::ToggleWrap);
     });
     cx.refresh().expect("first paint after wrap toggle");
     cx.run_until_parked();
@@ -1005,7 +1006,7 @@ fn ime_bounds_follow_horizontally_scrolled_text(cx: &mut TestAppContext) {
         },
     );
     view.update(cx, |app, cx| {
-        app.update_model(cx, true, |model| model.toggle_wrap());
+        app.execute_model_command(cx, Command::ToggleWrap);
     });
     cx.refresh().expect("first paint after wrap toggle");
     cx.run_until_parked();
@@ -1065,7 +1066,7 @@ fn toggling_wrap_back_on_resets_horizontal_scroll(cx: &mut TestAppContext) {
         },
     );
     view.update(cx, |app, cx| {
-        app.update_model(cx, true, |model| model.toggle_wrap());
+        app.execute_model_command(cx, Command::ToggleWrap);
     });
     cx.refresh().expect("first paint after wrap toggle");
     cx.run_until_parked();
@@ -1086,7 +1087,7 @@ fn toggling_wrap_back_on_resets_horizontal_scroll(cx: &mut TestAppContext) {
     );
 
     view.update(cx, |app, cx| {
-        app.update_model(cx, true, |model| model.toggle_wrap());
+        app.execute_model_command(cx, Command::ToggleWrap);
     });
     cx.refresh().expect("paint after toggling wrap back on");
     cx.run_until_parked();

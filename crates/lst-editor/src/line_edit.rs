@@ -277,6 +277,15 @@ pub(crate) fn delete_touched_lines_request(tab: &EditorTab) -> Option<EditReques
     request_with_mapped_selection(tab, changes)
 }
 
+pub(crate) fn delete_lines_request(tab: &EditorTab, pos: Position) -> Option<EditRequest> {
+    if tab.selection_set().has_multiple() {
+        if let Some(request) = delete_touched_lines_request(tab) {
+            return Some(request);
+        }
+    }
+    delete_line_request(tab, pos)
+}
+
 pub(crate) fn line_swap_request(tab: &EditorTab, pos: Position, up: bool) -> Option<EditRequest> {
     let line = pos.line.min(tab.line_count().saturating_sub(1));
     let (first, second, cursor_line) = if up {
@@ -336,6 +345,15 @@ pub(crate) fn move_touched_line_clusters_request(tab: &EditorTab, up: bool) -> O
     request_with_line_move_selection(tab, changes, &clusters, up)
 }
 
+pub(crate) fn move_lines_request(tab: &EditorTab, pos: Position, up: bool) -> Option<EditRequest> {
+    if tab.selection_set().has_multiple() {
+        if let Some(request) = move_touched_line_clusters_request(tab, up) {
+            return Some(request);
+        }
+    }
+    line_swap_request(tab, pos, up)
+}
+
 pub(crate) fn duplicate_line_request(tab: &EditorTab, pos: Position) -> Option<EditRequest> {
     let line = pos.line.min(tab.line_count().saturating_sub(1));
     let text = line_display_text(tab.buffer(), line);
@@ -379,6 +397,15 @@ pub(crate) fn duplicate_selection_request(tab: &EditorTab) -> Option<EditRequest
             reversed: false,
         }),
     )
+}
+
+pub(crate) fn duplicate_lines_request(tab: &EditorTab, pos: Position) -> Option<EditRequest> {
+    if tab.selection_set().has_multiple() {
+        if let Some(request) = duplicate_touched_lines_request(tab) {
+            return Some(request);
+        }
+    }
+    duplicate_selection_request(tab).or_else(|| duplicate_line_request(tab, pos))
 }
 
 pub(crate) fn toggle_comment_action(tab: &EditorTab, prefix: &str) -> Option<LineEditAction> {

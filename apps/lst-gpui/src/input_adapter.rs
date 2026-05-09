@@ -2,7 +2,10 @@ use gpui::{
     point, Bounds, Context, EntityInputHandler, KeyDownEvent, Modifiers, ModifiersChangedEvent,
     Pixels, Point, UTF16Selection, Window,
 };
-use lst_editor::vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey};
+use lst_editor::{
+    vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
+    EditorCommand as Command,
+};
 use ropey::Rope;
 use std::{ops::Range, time::Instant};
 
@@ -56,6 +59,13 @@ impl LstGpuiApp {
             return false;
         }
 
+        macro_rules! run_command {
+            ($command:expr) => {{
+                self.execute_model_command(cx, $command);
+                true
+            }};
+        }
+
         let mut preserves_ctrl_k_pending = false;
         let handled = if modifiers.control
             && modifiers.shift
@@ -63,62 +73,31 @@ impl LstGpuiApp {
             && !modifiers.platform
         {
             match key.as_str() {
-                "down" | "up" => {
-                    self.update_model(cx, true, |model| {
-                        model.duplicate_line();
-                    });
-                    true
-                }
+                "down" | "up" => run_command!(Command::DuplicateLine),
                 _ => false,
             }
         } else if modifiers.control && modifiers.shift && !modifiers.alt && !modifiers.platform {
             match key.as_str() {
-                "left" => {
-                    self.update_model(cx, true, |model| {
-                        model.move_word(true, true);
-                    });
-                    true
-                }
-                "right" => {
-                    self.update_model(cx, true, |model| {
-                        model.move_word(false, true);
-                    });
-                    true
-                }
-                "l" => {
-                    self.update_model(cx, true, |model| {
-                        model.select_all_occurrences();
-                    });
-                    true
-                }
+                "left" => run_command!(Command::MoveWord(true, true)),
+                "right" => run_command!(Command::MoveWord(false, true)),
+                "l" => run_command!(Command::SelectAllOccurrences),
                 _ => false,
             }
         } else if modifiers.control && !modifiers.shift && !modifiers.alt && !modifiers.platform {
             match key.as_str() {
-                "a" => {
-                    self.update_model(cx, true, |model| {
-                        model.select_all();
-                    });
-                    true
-                }
+                "a" => run_command!(Command::SelectAll),
                 "d" => {
                     let skip = self.x11_ctrl_k_pending;
                     self.x11_ctrl_k_pending = false;
-                    self.update_model(cx, true, |model| {
-                        if skip {
-                            model.skip_next_occurrence();
-                        } else {
-                            model.select_next_occurrence();
-                        }
-                    });
-                    true
+                    run_command!(if skip {
+                        Command::SkipNextOccurrence
+                    } else {
+                        Command::SelectNextOccurrence
+                    })
                 }
                 "g" => {
                     self.x11_ctrl_k_pending = false;
-                    self.update_model(cx, true, |model| {
-                        model.toggle_goto_line_panel();
-                    });
-                    true
+                    run_command!(Command::ToggleGotoLinePanel)
                 }
                 "k" => {
                     self.x11_ctrl_k_pending = true;
@@ -133,56 +112,21 @@ impl LstGpuiApp {
             }
         } else if modifiers.shift && !modifiers.control && !modifiers.alt && !modifiers.platform {
             match key.as_str() {
-                "left" => {
-                    self.update_model(cx, true, |model| {
-                        model.move_horizontal_by(-1, true);
-                    });
-                    true
-                }
-                "right" => {
-                    self.update_model(cx, true, |model| {
-                        model.move_horizontal_by(1, true);
-                    });
-                    true
-                }
-                "tab" => {
-                    self.update_model(cx, true, |model| {
-                        model.outdent_at_cursor();
-                    });
-                    true
-                }
+                "left" => run_command!(Command::MoveHorizontal(-1, true)),
+                "right" => run_command!(Command::MoveHorizontal(1, true)),
+                "tab" => run_command!(Command::Outdent),
                 _ => false,
             }
         } else if modifiers.platform && modifiers.shift && !modifiers.control && !modifiers.alt {
             match key.as_str() {
-                "left" | "home" => {
-                    self.update_model(cx, true, |model| {
-                        model.move_line_boundary(false, true);
-                    });
-                    true
-                }
-                "right" | "end" => {
-                    self.update_model(cx, true, |model| {
-                        model.move_line_boundary(true, true);
-                    });
-                    true
-                }
+                "left" | "home" => run_command!(Command::MoveLineBoundary(false, true)),
+                "right" | "end" => run_command!(Command::MoveLineBoundary(true, true)),
                 _ => false,
             }
         } else if modifiers.alt && modifiers.shift && !modifiers.control && !modifiers.platform {
             match key.as_str() {
-                "up" => {
-                    self.update_model(cx, true, |model| {
-                        model.add_cursor_above();
-                    });
-                    true
-                }
-                "down" => {
-                    self.update_model(cx, true, |model| {
-                        model.add_cursor_below();
-                    });
-                    true
-                }
+                "up" => run_command!(Command::AddCursorAbove),
+                "down" => run_command!(Command::AddCursorBelow),
                 _ => false,
             }
         } else {
@@ -223,13 +167,7 @@ impl LstGpuiApp {
                 let down = event.keystroke.key == "pagedown";
                 let wrap_columns = self.active_wrap_columns(window, cx);
                 self.x11_ctrl_k_pending = false;
-                self.update_model(cx, true, |model| {
-                    if down {
-                        model.page_down(false, wrap_columns);
-                    } else {
-                        model.page_up(false, wrap_columns);
-                    }
-                });
+                self.execute_model_command(cx, Command::Page(down, false, wrap_columns));
                 cx.stop_propagation();
                 true
             }
