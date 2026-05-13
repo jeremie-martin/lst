@@ -1,7 +1,8 @@
 use lst_editor::{
-    EditorCommand as Command, EditorEffect, EditorModel, EditorTab, Selection, SelectionSet, TabId,
-    UndoBoundary,
+    EditorCommand as Command, EditorEffect, EditorModel, EditorTab, FileStamp, Selection,
+    SelectionSet, TabId, UndoBoundary,
 };
+use std::path::PathBuf;
 
 mod common;
 use common::model_with_tabs;
@@ -51,6 +52,45 @@ fn multi_cursor_insert_is_one_public_model_transaction() {
 }
 
 #[test]
+fn multi_cursor_newline_places_each_cursor_at_inherited_indent() {
+    let mut model = model_with_text("    alpha!\n        be");
+    let set =
+        SelectionSet::from_selections(vec![Selection::collapsed(10), Selection::collapsed(21)], 1)
+            .expect("valid multi-cursor set");
+    model.set_selection_set(set);
+
+    model.execute(Command::InsertNewline);
+
+    assert_eq!(
+        model.snapshot().text,
+        "    alpha!\n    \n        be\n        "
+    );
+    let snapshot = model.snapshot();
+    let head_cols: Vec<usize> = snapshot
+        .selection_set
+        .as_slice()
+        .iter()
+        .map(|selection| char_column(&snapshot.text, selection.head()))
+        .collect();
+    assert_eq!(head_cols, vec![4, 8]);
+}
+
+fn char_column(text: &str, offset: usize) -> usize {
+    let mut column = 0;
+    for (index, ch) in text.chars().enumerate() {
+        if index == offset {
+            break;
+        }
+        if ch == '\n' {
+            column = 0;
+        } else {
+            column += 1;
+        }
+    }
+    column
+}
+
+#[test]
 fn find_replace_changes_observable_document_text() {
     let mut model = model_with_text("one two one");
     model.update_find_query("one".into());
@@ -59,6 +99,75 @@ fn find_replace_changes_observable_document_text() {
     model.execute(Command::ReplaceAllMatches);
 
     assert_eq!(model.snapshot().text, "three two three");
+}
+
+#[test]
+fn grapheme_backspace_deletes_the_whole_cluster() {
+    let mut model = model_with_text("e\u{301}🙂");
+    model.set_selection(Selection::collapsed(2));
+
+    model.execute(Command::Backspace);
+
+    assert_eq!(model.snapshot().text, "🙂");
+    assert_eq!(model.selection().cursor(), 0);
+}
+
+#[test]
+fn public_edit_ranges_expand_to_grapheme_boundaries() {
+    let mut model = model_with_text("e\u{301}x");
+
+    model.replace_text(Some(1..1), "A".into(), UndoBoundary::Break);
+
+    assert_eq!(model.snapshot().text, "Ax");
+}
+
+#[test]
+fn regex_replace_all_expands_capture_groups_once_per_match() {
+    let mut model = model_with_text("alpha-one beta-two");
+    model.update_find_query(r"(\w+)-(\w+)".into());
+    model.execute(Command::ToggleFindRegex);
+    model.update_find_replacement("$2:$1".into());
+
+    model.execute(Command::ReplaceAllMatches);
+
+    assert_eq!(model.snapshot().text, "one:alpha two:beta");
+}
+
+#[test]
+fn invalid_regex_replace_all_is_a_noop() {
+    let mut model = model_with_text("[abc] [def]");
+    model.update_find_query("[".into());
+    model.execute(Command::ToggleFindRegex);
+    model.update_find_replacement("x".into());
+
+    model.execute(Command::ReplaceAllMatches);
+
+    assert_eq!(model.snapshot().text, "[abc] [def]");
+    assert!(model.find().error.is_some());
+}
+
+#[test]
+fn whole_word_replace_all_skips_identifier_substrings() {
+    let mut model = model_with_text("foobar foo_bar foo bar");
+    model.update_find_query("foo".into());
+    model.execute(Command::ToggleFindWholeWord);
+    model.update_find_replacement("baz".into());
+
+    model.execute(Command::ReplaceAllMatches);
+
+    assert_eq!(model.snapshot().text, "foobar foo_bar baz bar");
+}
+
+#[test]
+fn case_sensitive_replace_all_disables_smart_case() {
+    let mut model = model_with_text("Foo foo FOO");
+    model.update_find_query("foo".into());
+    model.execute(Command::ToggleFindCaseSensitive);
+    model.update_find_replacement("bar".into());
+
+    model.execute(Command::ReplaceAllMatches);
+
+    assert_eq!(model.snapshot().text, "Foo bar FOO");
 }
 
 #[test]
@@ -96,4 +205,149 @@ fn selection_copy_emits_clipboard_boundary_effects() {
             EditorEffect::WritePrimary("hello".into()),
         ]
     );
+}
+
+#[test]
+fn stale_manual_save_completion_does_not_clear_newer_edits() {
+    let path = PathBuf::from("/tmp/lst-stale-save.txt");
+    let stamp = FileStamp::from_raw(3, Some(1));
+    let tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), path.clone(), "old", Some(stamp));
+    let mut model = EditorModel::from_tab(tab, "Ready.".into());
+
+    model.replace_text(Some(3..3), " saved".into(), UndoBoundary::Break);
+    let save_revision = model.active_tab().revision();
+    let _ = model.drain_effects();
+    model.request_save_tab(TabId::from_raw(1));
+    let effects = model.drain_effects();
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [EditorEffect::SaveFile { revision, .. }] if *revision == save_revision
+        ),
+        "{effects:?}"
+    );
+
+    model.replace_text(Some(0..0), "newer ".into(), UndoBoundary::Break);
+    model.save_finished_for_tab(
+        TabId::from_raw(1),
+        path,
+        save_revision,
+        FileStamp::from_raw(9, Some(2)),
+        "old saved".into(),
+    );
+
+    assert_eq!(model.snapshot().text, "newer old saved");
+    assert!(model.active_tab().modified());
+}
+
+#[test]
+fn typing_after_moving_cursor_starts_a_new_undo_group() {
+    let mut model = model_with_text("");
+
+    model.replace_text_from_input(None, "a".into());
+    model.execute(Command::MoveHorizontal(-1, false));
+    model.replace_text_from_input(None, "b".into());
+
+    assert_eq!(model.snapshot().text, "ba");
+    model.execute(Command::Undo);
+    assert_eq!(model.snapshot().text, "a");
+}
+
+#[test]
+fn undoing_back_to_the_saved_snapshot_clears_dirty_state() {
+    let path = PathBuf::from("/tmp/lst-clean-undo.txt");
+    let stamp = FileStamp::from_raw(3, Some(1));
+    let tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), path, "old", Some(stamp));
+    let mut model = EditorModel::from_tab(tab, "Ready.".into());
+
+    model.replace_text(Some(3..3), " dirty".into(), UndoBoundary::Break);
+    assert!(model.active_tab().modified());
+
+    model.execute(Command::Undo);
+
+    assert_eq!(model.snapshot().text, "old");
+    assert!(!model.active_tab().modified());
+}
+
+#[test]
+fn multi_selection_move_line_up_at_document_boundary_is_a_noop() {
+    let mut model = model_with_text("a\nb\nc\n");
+    let set =
+        SelectionSet::from_selections(vec![Selection::collapsed(0), Selection::collapsed(4)], 1)
+            .expect("valid multi-cursor set");
+    model.set_selection_set(set);
+
+    model.execute(Command::MoveLineUp);
+
+    assert_eq!(model.snapshot().text, "a\nb\nc\n");
+    assert_eq!(model.selection_set().as_slice().len(), 2);
+}
+
+#[test]
+fn moving_a_full_line_selection_down_keeps_the_moved_line_selected() {
+    let mut model = model_with_text("a\nb\nc\n");
+    model.set_selection(Selection::from_range(0..2, false));
+
+    model.execute(Command::MoveLineDown);
+
+    assert_eq!(model.snapshot().text, "b\na\nc\n");
+    assert_eq!(model.selection().range(), 2..4);
+}
+
+#[test]
+fn insert_tab_indents_each_line_touched_by_multiple_selections() {
+    let mut model = model_with_text("a\nb\nc");
+    let set = SelectionSet::from_selections(
+        vec![
+            Selection::from_range(0..1, false),
+            Selection::from_range(4..5, false),
+        ],
+        1,
+    )
+    .expect("valid multi-cursor set");
+    model.set_selection_set(set);
+
+    model.execute(Command::InsertTab);
+
+    assert_eq!(model.snapshot().text, "    a\nb\n    c");
+    assert_eq!(model.selection_set().as_slice().len(), 2);
+}
+
+#[test]
+#[should_panic(expected = "duplicate tab id")]
+fn model_construction_rejects_duplicate_tab_ids() {
+    let first = EditorTab::from_text(TabId::from_raw(1), "one".into(), None, "1");
+    let second = EditorTab::from_text(TabId::from_raw(1), "two".into(), None, "2");
+
+    let _ = EditorModel::from_tabs(first, vec![second], "Ready.".into());
+}
+
+#[test]
+fn public_selection_offsets_are_normalized_to_grapheme_boundaries() {
+    let mut model = model_with_text("e\u{301}x");
+
+    model.set_selection(Selection::collapsed(1));
+    assert_eq!(model.selection().cursor(), 0);
+
+    model.add_selection_range(1..2, false);
+    let ranges = model
+        .selection_set()
+        .as_slice()
+        .iter()
+        .map(Selection::range)
+        .collect::<Vec<_>>();
+    assert_eq!(ranges, vec![0..0, 0..2]);
+}
+
+#[test]
+fn bookmarks_shift_with_inserted_lines_before_them() {
+    let mut model = model_with_text("a\nb\nc");
+    model.set_selection(Selection::collapsed(2));
+    model.execute(Command::ToggleBookmark);
+    assert_eq!(model.active_tab().bookmarks(), &[1]);
+
+    model.set_selection(Selection::collapsed(0));
+    model.insert_text("new\n".into());
+
+    assert_eq!(model.active_tab().bookmarks(), &[2]);
 }

@@ -13,6 +13,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 pub(crate) const RECENT_FILE_LIMIT: usize = 10_000;
 pub(crate) const RECENT_BATCH_SIZE: usize = 60;
+const CONTENT_SEARCH_FILE_LIMIT: usize = 500;
 
 const RECENT_FILE_HEADER: &str = "lst-recent-files-v1";
 const PREVIEW_BYTES: u64 = 4096;
@@ -123,6 +124,7 @@ impl RecentFiles {
 pub(crate) struct RecentView {
     files: RecentFiles,
     panel: Option<RecentPanel>,
+    last_query: String,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +163,7 @@ impl RecentView {
         Self {
             files: RecentFiles::load(state_path),
             panel: None,
+            last_query: String::new(),
         }
     }
 
@@ -185,11 +188,7 @@ impl RecentView {
     /// filter. Returns `Some(generation)` if the preserved query is non-empty
     /// and the caller should schedule a debounced content search.
     pub(crate) fn open(&mut self) -> Option<u64> {
-        let prior_query = self
-            .panel
-            .as_ref()
-            .map(|p| p.query.clone())
-            .unwrap_or_default();
+        let prior_query = self.last_query.clone();
         let mut panel = RecentPanel::fresh(prior_query);
         Self::reset_selection_in(&mut panel, &self.files);
         let pending_search = if panel.query.trim().is_empty() {
@@ -204,6 +203,9 @@ impl RecentView {
     }
 
     pub(crate) fn close(&mut self) {
+        if let Some(panel) = &self.panel {
+            self.last_query = panel.query.clone();
+        }
         self.panel = None;
     }
 
@@ -217,6 +219,7 @@ impl RecentView {
     pub(crate) fn set_query(&mut self, text: String) -> Option<u64> {
         let panel = self.panel.as_mut()?;
         panel.query = text;
+        self.last_query = panel.query.clone();
         panel.visible_count = RECENT_BATCH_SIZE;
         panel.content_matches.clear();
         Self::reset_selection_in(panel, &self.files);
@@ -582,6 +585,7 @@ pub(crate) fn search_recent_content(paths: Vec<PathBuf>, query: &str) -> Vec<Pat
 
     paths
         .into_iter()
+        .take(CONTENT_SEARCH_FILE_LIMIT)
         .filter(|path| recent_file_content_matches(path, &query))
         .collect()
 }
@@ -842,6 +846,39 @@ mod tests {
             Some(&normalize_recent_path(&dir.join("3.txt")))
         );
 
+        fs::remove_dir_all(dir).expect("remove recent test temp dir");
+    }
+
+    #[test]
+    fn recent_panel_preserves_query_across_close_and_reopen() {
+        let mut recent = RecentView::load(None);
+
+        recent.open();
+        recent.set_query("needle".to_string());
+        recent.close();
+        recent.open();
+
+        assert_eq!(recent.query(), "needle");
+    }
+
+    #[test]
+    fn content_search_is_capped_to_the_recent_prefix() {
+        let dir = temp_dir("content-cap");
+        let mut paths = Vec::new();
+        for index in 0..=CONTENT_SEARCH_FILE_LIMIT {
+            let path = dir.join(format!("{index}.txt"));
+            let body = if index == CONTENT_SEARCH_FILE_LIMIT {
+                "needle"
+            } else {
+                "haystack"
+            };
+            fs::write(&path, body).expect("write content-search fixture");
+            paths.push(path);
+        }
+
+        let matches = search_recent_content(paths, "needle");
+
+        assert!(matches.is_empty());
         fs::remove_dir_all(dir).expect("remove recent test temp dir");
     }
 }

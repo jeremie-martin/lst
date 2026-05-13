@@ -163,6 +163,44 @@ pub(crate) fn indent_request(tab: &EditorTab, first: usize, last: usize) -> Opti
     ))
 }
 
+pub(crate) fn indent_selection_set_request(tab: &EditorTab) -> Option<EditRequest> {
+    let lines = selection_set_touched_lines(tab);
+    if lines.is_empty() {
+        return None;
+    }
+
+    let unit = tab.language_config().indent.indent_unit();
+    let unit_chars = unit.chars().count();
+    let changes = lines
+        .iter()
+        .map(|line| {
+            let line_start = tab.buffer().line_to_char(*line);
+            TextChange::insert(line_start, unit.clone())
+        })
+        .collect::<Vec<_>>();
+
+    let selections_after = tab
+        .selection_set()
+        .as_slice()
+        .iter()
+        .map(|selection| {
+            let anchor = map_indented_endpoint(tab, selection.anchor(), &lines, unit_chars);
+            let head = map_indented_endpoint(tab, selection.head(), &lines, unit_chars);
+            Selection::new(anchor, head)
+        })
+        .collect::<Vec<_>>();
+    let selection_after = SelectionSet::from_selections_coalescing_cursors(
+        selections_after,
+        tab.selection_set().primary_index(),
+    )
+    .expect("line indent preserves a valid selection set");
+
+    Some(
+        EditRequest::other_break(TextChangeSet::new(changes, 0))
+            .with_selection_after(SelectionAfter::Exact(selection_after)),
+    )
+}
+
 pub(crate) fn outdent_request(tab: &EditorTab, first: usize, last: usize) -> Option<EditRequest> {
     if first > last || last >= tab.line_count() {
         return None;
@@ -348,10 +386,8 @@ pub(crate) fn move_touched_line_clusters_request(tab: &EditorTab, up: bool) -> O
 }
 
 pub(crate) fn move_lines_request(tab: &EditorTab, pos: Position, up: bool) -> Option<EditRequest> {
-    if tab.selection_set().has_multiple() {
-        if let Some(request) = move_touched_line_clusters_request(tab, up) {
-            return Some(request);
-        }
+    if tab.selection_set().has_multiple() || tab.has_selection() {
+        return move_touched_line_clusters_request(tab, up);
     }
     line_swap_request(tab, pos, up)
 }
@@ -519,9 +555,45 @@ fn request_with_line_move_selection(
     clusters: &[Range<usize>],
     up: bool,
 ) -> Option<EditRequest> {
-    request_with_selection_map(tab, changes, |_changes, after_buffer, offset| {
-        map_line_move_endpoint(tab, after_buffer, offset, clusters, up)
-    })
+    if changes.is_empty() {
+        return None;
+    }
+    let changes = TextChangeSet::try_new(changes, 0)?;
+    let after_buffer = buffer_after_changes(tab, &changes);
+
+    let selections_after = tab
+        .selection_set()
+        .as_slice()
+        .iter()
+        .map(|selection| {
+            let anchor = map_line_move_selection_endpoint(
+                tab,
+                &after_buffer,
+                selection,
+                selection.anchor(),
+                clusters,
+                up,
+            );
+            let head = map_line_move_selection_endpoint(
+                tab,
+                &after_buffer,
+                selection,
+                selection.head(),
+                clusters,
+                up,
+            );
+            Selection::new(anchor, head)
+        })
+        .collect::<Vec<_>>();
+    let selection_after = SelectionSet::from_selections_coalescing_cursors(
+        selections_after,
+        tab.selection_set().primary_index(),
+    )
+    .ok()?;
+    Some(
+        EditRequest::other_break(changes)
+            .with_selection_after(SelectionAfter::Exact(selection_after)),
+    )
 }
 
 fn request_with_duplicate_line_selection(
@@ -607,6 +679,35 @@ fn map_line_move_endpoint(
     changes_unmapped_offset(tab, after_buffer, offset)
 }
 
+fn map_line_move_selection_endpoint(
+    tab: &EditorTab,
+    after_buffer: &ropey::Rope,
+    selection: &Selection,
+    offset: usize,
+    clusters: &[Range<usize>],
+    up: bool,
+) -> usize {
+    if selection.has_selection() && offset == selection.range().end {
+        let position = char_to_position(tab.buffer(), offset.min(tab.len_chars()));
+        if position.column == 0 && position.line > 0 {
+            let previous_line = position.line - 1;
+            if let Some(cluster) = clusters
+                .iter()
+                .find(|cluster| cluster.contains(&previous_line))
+            {
+                let line = if up {
+                    cluster.end.saturating_sub(1)
+                } else {
+                    cluster.end + 1
+                };
+                return after_buffer
+                    .line_to_char(line.min(after_buffer.len_lines().saturating_sub(1)));
+            }
+        }
+    }
+    map_line_move_endpoint(tab, after_buffer, offset, clusters, up)
+}
+
 fn map_duplicate_line_endpoint(
     tab: &EditorTab,
     after_buffer: &ropey::Rope,
@@ -661,6 +762,30 @@ fn map_outdented_endpoint(
         .saturating_sub(removed_on_line)
         .min(new_line_len);
     new_line_start + new_column
+}
+
+fn map_indented_endpoint(
+    tab: &EditorTab,
+    offset: usize,
+    indented_lines: &[usize],
+    unit_chars: usize,
+) -> usize {
+    let buffer = tab.buffer();
+    let len = tab.len_chars();
+    let offset = offset.min(len);
+    let position = char_to_position(buffer, offset);
+    let inserted_before = indented_lines
+        .iter()
+        .take_while(|line| **line < position.line)
+        .count()
+        * unit_chars;
+    let inserted_on_line = if indented_lines.binary_search(&position.line).is_ok() {
+        unit_chars
+    } else {
+        0
+    };
+    let line_start = buffer.line_to_char(position.line) + inserted_before;
+    line_start + position.column + usize::from(position.column > 0) * inserted_on_line
 }
 
 pub(crate) fn toggle_block_comment_request(

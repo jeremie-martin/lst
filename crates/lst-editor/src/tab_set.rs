@@ -12,6 +12,7 @@ impl TabSet {
         let mut tabs = Vec::with_capacity(rest.len() + 1);
         tabs.push(first);
         tabs.extend(rest);
+        assert_unique_tab_ids(&tabs);
         let next_tab_id = next_id_after(&tabs);
         Self {
             tabs,
@@ -108,6 +109,17 @@ impl Deref for TabSet {
 
     fn deref(&self) -> &Self::Target {
         &self.tabs
+    }
+}
+
+fn assert_unique_tab_ids(tabs: &[EditorTab]) {
+    for (index, tab) in tabs.iter().enumerate() {
+        if tabs[..index]
+            .iter()
+            .any(|candidate| candidate.id() == tab.id())
+        {
+            panic!("duplicate tab id {}", tab.id().get());
+        }
     }
 }
 

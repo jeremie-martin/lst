@@ -3,8 +3,9 @@ use crate::{
     language::LanguageConfig,
     multi_selection,
     selection::{
-        display_line_char_len, is_identifier_char, next_grapheme_boundary, next_word_boundary,
-        previous_grapheme_boundary, previous_word_boundary,
+        ceil_grapheme_boundary, display_line_char_len, floor_grapheme_boundary, is_identifier_char,
+        next_grapheme_boundary, next_word_boundary, previous_grapheme_boundary,
+        previous_word_boundary,
     },
     selection_edit::{self, SelectionEdit},
     tab::EditorTab,
@@ -278,9 +279,11 @@ fn multi_edit_action(
 }
 
 pub(crate) fn resolve_range(tab: &EditorTab, range: Option<Range<usize>>) -> Range<usize> {
-    range
+    let range = range
         .or_else(|| tab.marked_range().cloned())
-        .unwrap_or_else(|| tab.selected_range())
+        .unwrap_or_else(|| tab.selected_range());
+    floor_grapheme_boundary(tab.buffer(), range.start)
+        ..ceil_grapheme_boundary(tab.buffer(), range.end)
 }
 
 pub(crate) fn marked_text_request(

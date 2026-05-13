@@ -8,6 +8,7 @@
 mod support;
 
 use lst_x11_harness::{clipboard::write_clipboard_text, Selection};
+use std::fs;
 
 use support::{EditorTestExt, TestResult};
 
@@ -52,6 +53,62 @@ fn goto_line_panel_moves_focus_back_to_editor_after_submit() -> TestResult {
 
         editor.keys("<C-g>2:3<enter>X")?;
         editor.save_then_expect_file(&path, "alpha\nbeXta\ngamma")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_w_dirty_file_tab_saves_before_close() -> TestResult {
+    support::run_x11_test("workflow-dirty-close-save", |session| {
+        let path = session.seed_file("dirty-close.txt", "original")?;
+        let path_string = path.to_string_lossy().into_owned();
+        let mut editor = session.open_file("dirty-close", &path)?;
+
+        editor.keys("<C-a>saved before close")?;
+        editor.keys("<C-n>")?;
+        editor.wait_state("sibling tab focused", support::secs(2), |record| {
+            record.active_tab_path.as_deref() != Some(&path_string)
+        })?;
+        editor.keys("<C-S-tab>")?;
+        editor.wait_state("dirty file tab focused", support::secs(2), |record| {
+            record.active_tab_path.as_deref() == Some(&path_string)
+        })?;
+
+        editor.keys("<C-w>")?;
+        editor.wait_state("dirty file tab closed", support::secs(5), |record| {
+            record.active_tab_path.as_deref() != Some(&path_string)
+        })?;
+        editor.expect_file(&path, "saved before close")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_q_dirty_file_saves_before_exit() -> TestResult {
+    support::run_x11_test("workflow-dirty-file-quit-save", |session| {
+        let path = session.seed_file("dirty-quit.txt", "original")?;
+        let mut editor = session.open_file("dirty-file-quit", &path)?;
+
+        editor.keys("<C-a>saved before quit")?;
+        editor.quit_default()?;
+
+        assert_eq!(fs::read_to_string(&path)?, "saved before quit");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_q_dirty_scratchpad_saves_before_exit() -> TestResult {
+    support::run_x11_test("workflow-dirty-scratchpad-quit-save", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("scratchpad before quit")?;
+        editor.quit_default()?;
+
+        assert_eq!(fs::read_to_string(&path)?, "scratchpad before quit");
         Ok(())
     })
 }

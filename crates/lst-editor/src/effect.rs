@@ -29,12 +29,14 @@ pub enum EditorEffect {
         tab_id: TabId,
         path: PathBuf,
         body: String,
+        revision: u64,
         expected_stamp: Option<FileStamp>,
     },
     SaveFileAs {
         tab_id: TabId,
         suggested_name: String,
         body: String,
+        revision: u64,
         previous_scratchpad_path: Option<PathBuf>,
     },
     AutosaveFile {

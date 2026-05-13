@@ -48,7 +48,6 @@ use recent::RecentView;
 use ropey::Rope;
 #[cfg(all(test, feature = "internal-invariants"))]
 pub(crate) use runtime::autosave_revision_is_current;
-use runtime::clipboard::{ExitClipboard, SubprocessExitClipboard};
 use state_trace::StateTraceEmitter;
 use std::{
     cell::RefCell,
@@ -56,7 +55,7 @@ use std::{
     path::PathBuf,
     process,
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Instant,
 };
 use syntax::{
@@ -226,6 +225,7 @@ struct LstGpuiApp {
     pending_reveal: Option<RevealIntent>,
     reveal_scheduled: bool,
     autosave_inflight: HashSet<PathBuf>,
+    save_ticket_generations: HashMap<PathBuf, Arc<Mutex<u64>>>,
     autosave_started: bool,
     scratchpad_dir: Option<PathBuf>,
     recent: RecentView,
@@ -234,13 +234,13 @@ struct LstGpuiApp {
     recent_modifier_chord: Option<(Modifiers, Instant)>,
     x11_ctrl_k_pending: bool,
     zoom_level: i32,
-    exit_clipboard: Arc<dyn ExitClipboard>,
     state_trace: StateTraceEmitter,
     cleanup_in_flight: bool,
     cleanup_message: Option<String>,
     /// Surfaced through the state trace so real-X11 tests can click the
     /// button without depending on theme-name / status-details widths.
     cleanup_button_bounds_px: Option<Bounds<Pixels>>,
+    status_details_rendered: String,
     /// Stack of recently closed file tabs, most-recent-last. `Ctrl+Shift+T`
     /// pops the top entry and reopens it with the cursor restored. Bounded
     /// so a long-lived editor session does not grow this unboundedly.
@@ -298,6 +298,7 @@ impl LstGpuiApp {
             pending_reveal: None,
             reveal_scheduled: false,
             autosave_inflight: HashSet::new(),
+            save_ticket_generations: HashMap::new(),
             autosave_started: false,
             scratchpad_dir,
             recent,
@@ -306,11 +307,11 @@ impl LstGpuiApp {
             recent_modifier_chord: None,
             x11_ctrl_k_pending: false,
             zoom_level: 0,
-            exit_clipboard: Arc::new(SubprocessExitClipboard),
             state_trace: StateTraceEmitter::from_env(),
             cleanup_in_flight: false,
             cleanup_message: None,
             cleanup_button_bounds_px: None,
+            status_details_rendered: String::new(),
             closed_tabs_history: Vec::new(),
             _shell_subscriptions: Vec::new(),
         };
@@ -703,7 +704,7 @@ impl LstGpuiApp {
             {
                 return;
             }
-            if cache_ref.syntax_highlight_inflight == Some(key) {
+            if cache_ref.syntax_highlight_inflight.is_some() {
                 return;
             }
         }
@@ -737,6 +738,9 @@ impl LstGpuiApp {
 
         cache_ref.syntax_highlight_inflight = None;
         if !syntax_highlight_result_is_current(&self.model, &self.tab_views, tab_id, &cache, key) {
+            if self.model.active_tab_id() == tab_id {
+                cx.notify();
+            }
             return;
         }
 

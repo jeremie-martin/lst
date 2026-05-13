@@ -91,12 +91,11 @@ impl LlmClient for DeepSeekClient {
             .map(|c| c.message.content)
             .ok_or(LlmError::EmptyResponse)?;
 
-        let cleaned = strip_trailing_newline(content);
-        if cleaned.is_empty() {
+        if content.is_empty() {
             return Err(LlmError::EmptyResponse);
         }
 
-        Ok(cleaned)
+        Ok(content)
     }
 }
 
@@ -127,16 +126,6 @@ impl LlmClient for FakeLlmClient {
     }
 }
 
-fn strip_trailing_newline(mut s: String) -> String {
-    if s.ends_with('\n') {
-        s.pop();
-        if s.ends_with('\r') {
-            s.pop();
-        }
-    }
-    s
-}
-
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
@@ -164,10 +153,9 @@ mod tests {
     }
 
     #[test]
-    fn strip_trailing_newline_removes_lf_and_crlf() {
-        assert_eq!(strip_trailing_newline("hi\n".into()), "hi");
-        assert_eq!(strip_trailing_newline("hi\r\n".into()), "hi");
-        assert_eq!(strip_trailing_newline("hi".into()), "hi");
-        assert_eq!(strip_trailing_newline("hi\n\n".into()), "hi\n");
+    fn parsed_content_preserves_trailing_newlines() {
+        let raw = r#"{"choices":[{"message":{"role":"assistant","content":"hello\n"}}]}"#;
+        let parsed: ChatResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.choices[0].message.content, "hello\n");
     }
 }

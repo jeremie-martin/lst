@@ -406,18 +406,6 @@ impl SelectionState {
         self.set.with_removed_at(index).map(Self::from_set)
     }
 
-    pub(crate) fn clamped_to_len(&self, len: usize) -> Self {
-        let next = self.set.clamped_to_len(len);
-        if next == self.set {
-            Self {
-                set: next,
-                goals: self.goals.clone(),
-            }
-        } else {
-            Self::from_set(next)
-        }
-    }
-
     pub(crate) fn movement_goal_for(&self, selection_index: usize) -> Option<CursorGoal> {
         self.goals.movement_for(selection_index)
     }
@@ -1028,6 +1016,62 @@ pub fn next_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
         return (ci + 1).min(total);
     }
     line_start + next_grapheme_column(&body, local_ci)
+}
+
+pub(crate) fn floor_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
+    let total = buffer.len_chars();
+    let ci = char_index.min(total);
+    if ci == total {
+        return total;
+    }
+    let line = buffer.char_to_line(ci);
+    let line_start = buffer.line_to_char(line);
+    let body = line_display_text(buffer, line);
+    let local_ci = ci - line_start;
+    let body_chars = body.chars().count();
+    if local_ci >= body_chars {
+        return ci;
+    }
+
+    let mut char_start = 0usize;
+    let mut best = 0usize;
+    for cluster in body.graphemes(true) {
+        if char_start > local_ci {
+            break;
+        }
+        best = char_start;
+        char_start += cluster.chars().count();
+    }
+    line_start + best
+}
+
+pub(crate) fn ceil_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
+    let total = buffer.len_chars();
+    let ci = char_index.min(total);
+    if ci == total {
+        return total;
+    }
+    let line = buffer.char_to_line(ci);
+    let line_start = buffer.line_to_char(line);
+    let body = line_display_text(buffer, line);
+    let local_ci = ci - line_start;
+    let body_chars = body.chars().count();
+    if local_ci >= body_chars {
+        return ci;
+    }
+
+    let mut char_start = 0usize;
+    for cluster in body.graphemes(true) {
+        let next = char_start + cluster.chars().count();
+        if local_ci == char_start {
+            return ci;
+        }
+        if local_ci < next {
+            return line_start + next;
+        }
+        char_start = next;
+    }
+    line_start + body_chars
 }
 
 pub fn previous_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {

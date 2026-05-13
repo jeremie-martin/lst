@@ -10,6 +10,7 @@ const MAX_REDO_BRANCHES: usize = 8;
 pub(crate) struct HistorySnapshot {
     pub(crate) text: String,
     pub(crate) selection: SelectionState,
+    pub(crate) modified: bool,
 }
 
 #[derive(Clone)]
@@ -37,6 +38,10 @@ impl EditHistory {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.redo_branches.clear();
+        self.last_edit_kind = None;
+    }
+
+    pub(crate) fn break_current_group(&mut self) {
         self.last_edit_kind = None;
     }
 

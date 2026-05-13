@@ -1444,12 +1444,12 @@ impl EditorModel {
     }
 
     pub fn add_cursor_at_char(&mut self, offset: usize) {
-        let offset = offset.min(self.active_tab().len_chars());
+        let offset = selection::floor_grapheme_boundary(self.active_tab().buffer(), offset);
         self.add_selection_to_active_set(Selection::collapsed(offset));
     }
 
     pub fn remove_cursor_at_char(&mut self, offset: usize) -> bool {
-        let offset = offset.min(self.active_tab().len_chars());
+        let offset = selection::floor_grapheme_boundary(self.active_tab().buffer(), offset);
         let set = self.active_tab().selection_state();
         if !set.has_multiple() {
             return false;
@@ -1470,8 +1470,9 @@ impl EditorModel {
     }
 
     pub fn add_selection_range(&mut self, range: Range<usize>, reversed: bool) {
-        let len = self.active_tab().len_chars();
-        let range = range.start.min(len)..range.end.min(len);
+        let buffer = self.active_tab().buffer();
+        let range = selection::floor_grapheme_boundary(buffer, range.start)
+            ..selection::ceil_grapheme_boundary(buffer, range.end);
         self.add_selection_to_active_set(Selection::from_range(range, reversed));
     }
 
@@ -1644,12 +1645,13 @@ impl EditorModel {
     }
 
     fn insert_tab_at_cursor(&mut self) {
-        if self.active_tab().selection_set().has_multiple() {
-            let lines = line_edit::selection_set_touched_lines(self.active_tab());
-            if lines.len() == 1 {
-                self.indent_selected_lines(lines[0], lines[0]);
-                return;
-            }
+        if self.active_tab().selection_set().has_multiple()
+            && self.apply_optional_edit_request(
+                line_edit::indent_selection_set_request(self.active_tab()),
+                Some(RevealIntent::NearestEdge),
+            )
+        {
+            return;
         }
         match selection_line_span(self.active_tab()) {
             Some((first, last, true)) => self.indent_selected_lines(first, last),

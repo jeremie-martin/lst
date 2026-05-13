@@ -3,15 +3,18 @@ use lst_editor::{EditorEffect, EditorTab as ModelEditorTab, FileStamp, TabCloseR
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::{
     collections::HashSet,
-    env, fs,
+    env, fs, io,
     path::{Path, PathBuf},
     process,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
     time::{Duration, Instant},
 };
 
 use crate::{elapsed_ms, LstGpuiApp, PendingAfterSave};
 
-pub(crate) mod clipboard;
 mod scratchpad;
 
 pub(crate) use scratchpad::create_scratchpad_note;
@@ -30,6 +33,54 @@ struct AutosaveJob {
     expected_stamp: Option<FileStamp>,
 }
 
+#[derive(Clone)]
+struct SaveTicket {
+    generation: u64,
+    current_generation: Arc<Mutex<u64>>,
+}
+
+impl SaveTicket {
+    fn issue(current_generation: &Arc<Mutex<u64>>) -> Self {
+        let generation = {
+            let mut current = lock_generation(current_generation);
+            *current += 1;
+            *current
+        };
+        Self {
+            generation,
+            current_generation: current_generation.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    fn current_for_test() -> Self {
+        let current_generation = Arc::new(Mutex::new(1));
+        Self {
+            generation: 1,
+            current_generation,
+        }
+    }
+
+    fn is_current(&self) -> bool {
+        *lock_generation(&self.current_generation) == self.generation
+    }
+
+    fn current_guard(&self) -> Option<MutexGuard<'_, u64>> {
+        let guard = lock_generation(&self.current_generation);
+        if *guard == self.generation {
+            Some(guard)
+        } else {
+            None
+        }
+    }
+}
+
+fn lock_generation(generation: &Mutex<u64>) -> MutexGuard<'_, u64> {
+    generation
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct OpenFileResults {
     opened: Vec<(PathBuf, String, Option<FileStamp>)>,
@@ -41,7 +92,9 @@ enum SaveFileResult {
     Saved {
         tab_id: TabId,
         path: PathBuf,
+        revision: u64,
         stamp: FileStamp,
+        body: String,
     },
     Failed {
         tab_id: TabId,
@@ -52,7 +105,13 @@ enum SaveFileResult {
         tab_id: TabId,
         path: PathBuf,
         body: String,
+        revision: u64,
         disk_stamp: FileStamp,
+    },
+    Stale {
+        tab_id: TabId,
+        path: PathBuf,
+        revision: u64,
     },
 }
 
@@ -63,6 +122,7 @@ enum AutosaveCompletion {
         path: PathBuf,
         revision: u64,
         stamp: FileStamp,
+        body: String,
     },
     Failed {
         tab_id: TabId,
@@ -87,7 +147,7 @@ enum FileConflictDecision {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConflictWrite {
-    Save,
+    Save { revision: u64 },
     Autosave { revision: u64 },
 }
 
@@ -131,12 +191,14 @@ impl LstGpuiApp {
                     tab_id,
                     path,
                     body,
+                    revision,
                     expected_stamp,
-                } => self.save_file_with_conflict_check(tab_id, path, body, expected_stamp, cx),
+                } => self.start_save_file_job(tab_id, path, body, revision, expected_stamp, cx),
                 EditorEffect::SaveFileAs {
                     tab_id,
                     suggested_name,
                     body,
+                    revision,
                     previous_scratchpad_path,
                 } => {
                     let Some(path) = FileDialog::new().set_file_name(&suggested_name).save_file()
@@ -144,8 +206,11 @@ impl LstGpuiApp {
                         self.save_cancelled(tab_id, cx);
                         continue;
                     };
-                    self.apply_save_as_file_result(
-                        save_file_result(tab_id, path, body, None),
+                    self.start_save_as_file_job(
+                        tab_id,
+                        path,
+                        body,
+                        revision,
                         previous_scratchpad_path,
                         cx,
                     );
@@ -282,15 +347,56 @@ impl LstGpuiApp {
         }
     }
 
-    fn save_file_with_conflict_check(
+    fn start_save_file_job(
         &mut self,
         tab_id: TabId,
         path: PathBuf,
         body: String,
+        revision: u64,
         expected_stamp: Option<FileStamp>,
         cx: &mut Context<Self>,
     ) {
-        self.apply_save_file_result(save_file_result(tab_id, path, body, expected_stamp), cx);
+        let ticket = self.issue_save_ticket(&path);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    save_file_result(tab_id, path, body, revision, expected_stamp, ticket)
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| view.apply_save_file_result(result, cx));
+        })
+        .detach();
+    }
+
+    fn start_save_as_file_job(
+        &mut self,
+        tab_id: TabId,
+        path: PathBuf,
+        body: String,
+        revision: u64,
+        previous_scratchpad_path: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let ticket = self.issue_save_ticket(&path);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { save_file_result(tab_id, path, body, revision, None, ticket) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.apply_save_as_file_result(result, previous_scratchpad_path, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn issue_save_ticket(&mut self, path: &Path) -> SaveTicket {
+        let current_generation = self
+            .save_ticket_generations
+            .entry(path.to_path_buf())
+            .or_insert_with(|| Arc::new(Mutex::new(0)));
+        SaveTicket::issue(current_generation)
     }
 
     pub(crate) fn check_external_file_changes(&mut self, cx: &mut Context<Self>) {
@@ -366,8 +472,8 @@ impl LstGpuiApp {
                 self.finish_pending_after_save(tab_id, true, cx);
             }
             FileConflictDecision::Overwrite => match write {
-                ConflictWrite::Save => {
-                    self.apply_save_file_result(write_file_result(tab_id, path, body), cx);
+                ConflictWrite::Save { revision } => {
+                    self.start_save_file_job(tab_id, path, body, revision, None, cx);
                 }
                 ConflictWrite::Autosave { revision } => {
                     self.apply_autosave_completion(
@@ -483,14 +589,11 @@ impl LstGpuiApp {
     }
 
     fn finish_quit(&mut self, cx: &mut Context<Self>) {
-        self.exit_clipboard
-            .persist(&self.model.active_tab().buffer_text());
         self.cleanup_empty_scratchpad_files();
-        // X11 WM_DELETE_WINDOW already holds GPUI's X11 client RefCell,
-        // so defer exit until the current frame releases it. Production
-        // shutdown calls `process::exit`; tests cannot terminate the host
-        // process and instead route through GPUI's `quit` so the test
-        // harness can observe the shutdown and assert on captured state.
+        // X11 WM_DELETE_WINDOW already holds GPUI's X11 client RefCell, so defer
+        // exit until the current frame releases it. Production shutdown calls
+        // `process::exit`; tests route through GPUI's `quit` so the harness can
+        // observe shutdown.
         #[cfg(test)]
         cx.defer(|app| app.quit());
         #[cfg(not(test))]
@@ -551,14 +654,19 @@ impl LstGpuiApp {
             SaveFileResult::Saved {
                 tab_id,
                 path,
+                revision,
                 stamp,
+                body,
             } => {
                 let recent_path = path.clone();
+                let mut saved = false;
                 self.update_model(cx, true, |model| {
-                    model.save_finished_for_tab(tab_id, path, stamp);
+                    saved = model.save_finished_for_tab(tab_id, path, revision, stamp, body);
                 });
-                self.recent.record(&recent_path);
-                self.finish_pending_after_save(tab_id, true, cx);
+                if saved {
+                    self.recent.record(&recent_path);
+                }
+                self.finish_pending_after_save(tab_id, saved, cx);
             }
             SaveFileResult::Failed {
                 tab_id,
@@ -574,9 +682,20 @@ impl LstGpuiApp {
                 tab_id,
                 path,
                 body,
+                revision,
                 disk_stamp,
             } => {
-                self.handle_file_conflict(tab_id, path, body, disk_stamp, ConflictWrite::Save, cx);
+                self.handle_file_conflict(
+                    tab_id,
+                    path,
+                    body,
+                    disk_stamp,
+                    ConflictWrite::Save { revision },
+                    cx,
+                );
+            }
+            SaveFileResult::Stale { .. } => {
+                cx.notify();
             }
         }
     }
@@ -591,19 +710,25 @@ impl LstGpuiApp {
             SaveFileResult::Saved {
                 tab_id,
                 path,
+                revision,
                 stamp,
+                body,
             } => {
                 let recent_path = path.clone();
+                let mut saved = false;
                 self.update_model(cx, true, |model| {
-                    model.save_as_finished_for_tab(tab_id, path.clone(), stamp);
+                    saved =
+                        model.save_as_finished_for_tab(tab_id, path.clone(), revision, stamp, body);
                 });
-                self.recent.record(&recent_path);
-                remove_previous_scratchpad_after_save_as(
-                    previous_scratchpad_path,
-                    &path,
-                    self.model.tabs(),
-                );
-                self.finish_pending_after_save(tab_id, true, cx);
+                if saved {
+                    self.recent.record(&recent_path);
+                    remove_previous_scratchpad_after_save_as(
+                        previous_scratchpad_path,
+                        &path,
+                        self.model.tabs(),
+                    );
+                }
+                self.finish_pending_after_save(tab_id, saved, cx);
             }
             SaveFileResult::Failed {
                 tab_id,
@@ -619,9 +744,20 @@ impl LstGpuiApp {
                 tab_id,
                 path,
                 body,
+                revision,
                 disk_stamp,
             } => {
-                self.handle_file_conflict(tab_id, path, body, disk_stamp, ConflictWrite::Save, cx);
+                self.handle_file_conflict(
+                    tab_id,
+                    path,
+                    body,
+                    disk_stamp,
+                    ConflictWrite::Save { revision },
+                    cx,
+                );
+            }
+            SaveFileResult::Stale { .. } => {
+                cx.notify();
             }
         }
     }
@@ -637,10 +773,11 @@ impl LstGpuiApp {
                 path,
                 revision,
                 stamp,
+                body,
             } => {
                 let recent_path = path.clone();
                 self.update_model(cx, true, |model| {
-                    model.autosave_finished_for_tab(tab_id, path, revision, stamp);
+                    model.autosave_finished_for_tab(tab_id, path, revision, stamp, body);
                 });
                 self.recent.record(&recent_path);
             }
@@ -768,10 +905,21 @@ impl LstGpuiApp {
             });
             return;
         }
-        self.apply_open_file_results(open_file_results(std::iter::once(record.path)), cx);
-        self.update_model(cx, true, |model| {
-            model.set_active_cursor_position(line, column);
-        });
+        match read_file_with_stamp(&record.path) {
+            Ok((text, stamp)) => {
+                let opened_path = record.path.clone();
+                self.update_model(cx, true, |model| {
+                    model.open_files_with_stamps(vec![(opened_path, text, Some(stamp))]);
+                    model.set_active_cursor_position(line, column);
+                });
+                self.recent.record(&record.path);
+            }
+            Err(err) => {
+                self.update_model(cx, true, |model| {
+                    model.open_file_failed(record.path, err.to_string());
+                });
+            }
+        }
     }
 }
 
@@ -784,6 +932,79 @@ fn autosave_temp_path(path: &Path, revision: u64) -> PathBuf {
         ".{file_name}.lst-gpui-autosave-{}-{revision}.tmp",
         process::id()
     ))
+}
+
+fn save_temp_path(path: &Path) -> PathBuf {
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    let temp_id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("buffer");
+    path.with_file_name(format!(
+        ".{file_name}.lst-gpui-save-{}-{temp_id}.tmp",
+        process::id()
+    ))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AtomicWriteOutcome {
+    Written,
+    Stale,
+}
+
+fn write_file_atomically(
+    path: &Path,
+    bytes: &[u8],
+    ticket: Option<&SaveTicket>,
+) -> io::Result<AtomicWriteOutcome> {
+    let temp_path = save_temp_path(path);
+    let result = (|| {
+        if ticket.is_some_and(|ticket| !ticket.is_current()) {
+            return Ok(AtomicWriteOutcome::Stale);
+        }
+
+        fs::write(&temp_path, bytes)?;
+        copy_target_permissions_to_temp(path, &temp_path)?;
+
+        match ticket {
+            Some(ticket) => {
+                let Some(_current) = ticket.current_guard() else {
+                    return Ok(AtomicWriteOutcome::Stale);
+                };
+                fs::rename(&temp_path, path)?;
+            }
+            None => fs::rename(&temp_path, path)?,
+        }
+        Ok(AtomicWriteOutcome::Written)
+    })();
+    match result {
+        Ok(AtomicWriteOutcome::Written) => Ok(AtomicWriteOutcome::Written),
+        Ok(AtomicWriteOutcome::Stale) => {
+            let _ = fs::remove_file(&temp_path);
+            Ok(AtomicWriteOutcome::Stale)
+        }
+        Err(err) => {
+            let _ = fs::remove_file(&temp_path);
+            Err(err)
+        }
+    }
+}
+
+fn copy_target_permissions_to_temp(target: &Path, temp_path: &Path) -> io::Result<()> {
+    match fs::metadata(target) {
+        Ok(metadata) => fs::set_permissions(temp_path, metadata.permissions()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn stale_save_result(tab_id: TabId, path: PathBuf, revision: u64) -> SaveFileResult {
+    SaveFileResult::Stale {
+        tab_id,
+        path,
+        revision,
+    }
 }
 
 fn open_file_results(paths: impl IntoIterator<Item = PathBuf>) -> OpenFileResults {
@@ -802,14 +1023,21 @@ fn save_file_result(
     tab_id: TabId,
     path: PathBuf,
     body: String,
+    revision: u64,
     expected_stamp: Option<FileStamp>,
+    ticket: SaveTicket,
 ) -> SaveFileResult {
+    if !ticket.is_current() {
+        return stale_save_result(tab_id, path, revision);
+    }
+
     match file_conflict_stamp(&path, expected_stamp) {
         Ok(Some(disk_stamp)) => {
             return SaveFileResult::Conflict {
                 tab_id,
                 path,
                 body,
+                revision,
                 disk_stamp,
             };
         }
@@ -822,16 +1050,28 @@ fn save_file_result(
             };
         }
     }
-    write_file_result(tab_id, path, body)
+    if !ticket.is_current() {
+        return stale_save_result(tab_id, path, revision);
+    }
+    write_file_result(tab_id, path, body, revision, ticket)
 }
 
-fn write_file_result(tab_id: TabId, path: PathBuf, body: String) -> SaveFileResult {
-    match fs::write(&path, apply_save_options(body)) {
-        Ok(()) => match file_stamp(&path) {
+fn write_file_result(
+    tab_id: TabId,
+    path: PathBuf,
+    body: String,
+    revision: u64,
+    ticket: SaveTicket,
+) -> SaveFileResult {
+    let body = apply_save_options(body);
+    match write_file_atomically(&path, body.as_bytes(), Some(&ticket)) {
+        Ok(AtomicWriteOutcome::Written) => match file_stamp(&path) {
             Ok(stamp) => SaveFileResult::Saved {
                 tab_id,
                 path,
+                revision,
                 stamp,
+                body,
             },
             Err(err) => SaveFileResult::Failed {
                 tab_id,
@@ -839,6 +1079,7 @@ fn write_file_result(tab_id: TabId, path: PathBuf, body: String) -> SaveFileResu
                 message: err.to_string(),
             },
         },
+        Ok(AtomicWriteOutcome::Stale) => stale_save_result(tab_id, path, revision),
         Err(err) => SaveFileResult::Failed {
             tab_id,
             path,
@@ -853,13 +1094,14 @@ fn write_autosave_body_result(
     body: String,
     revision: u64,
 ) -> AutosaveCompletion {
-    match fs::write(&path, apply_save_options(body)) {
-        Ok(()) => match file_stamp(&path) {
+    match write_file_atomically(&path, body.as_bytes(), None) {
+        Ok(AtomicWriteOutcome::Written) => match file_stamp(&path) {
             Ok(stamp) => AutosaveCompletion::Finished {
                 tab_id,
                 path,
                 revision,
                 stamp,
+                body,
             },
             Err(err) => AutosaveCompletion::Failed {
                 tab_id,
@@ -867,6 +1109,7 @@ fn write_autosave_body_result(
                 message: err.to_string(),
             },
         },
+        Ok(AtomicWriteOutcome::Stale) => unreachable!("autosave writes are never ticket-gated"),
         Err(err) => AutosaveCompletion::Failed {
             tab_id,
             path,
@@ -900,7 +1143,7 @@ fn can_start_autosave_job(
 
 fn write_autosave_temp_file(job: &AutosaveJob) -> std::io::Result<PathBuf> {
     let temp_path = autosave_temp_path(&job.path, job.revision);
-    fs::write(&temp_path, apply_save_options(job.body.clone())).map(|_| temp_path)
+    fs::write(&temp_path, job.body.as_bytes()).map(|_| temp_path)
 }
 
 /// Opt-in save-time text policies driven by env flags
@@ -980,6 +1223,15 @@ fn autosave_completion(
         }
     }
 
+    if let Err(err) = copy_target_permissions_to_temp(&job.path, &temp_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Some(AutosaveCompletion::Failed {
+            tab_id: job.tab_id,
+            path: job.path,
+            message: err.to_string(),
+        });
+    }
+
     match fs::rename(&temp_path, &job.path) {
         Ok(()) => match file_stamp(&job.path) {
             Ok(stamp) => Some(AutosaveCompletion::Finished {
@@ -987,6 +1239,7 @@ fn autosave_completion(
                 path: job.path,
                 revision: job.revision,
                 stamp,
+                body: job.body,
             }),
             Err(err) => Some(AutosaveCompletion::Failed {
                 tab_id: job.tab_id,
@@ -1078,6 +1331,8 @@ fn prompt_file_conflict_decision(title: &str) -> FileConflictDecision {
 mod tests {
     use super::*;
     use lst_editor::{EditorModel, TabId, UndoBoundary};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::{
         collections::HashSet,
         sync::atomic::{AtomicUsize, Ordering},
@@ -1247,17 +1502,28 @@ mod tests {
         let path = dir.join("saved.txt");
 
         let tab_id = TabId::from_raw(1);
-        let result = save_file_result(tab_id, path.clone(), "saved body".to_string(), None);
+        let result = save_file_result(
+            tab_id,
+            path.clone(),
+            "saved body".to_string(),
+            7,
+            None,
+            SaveTicket::current_for_test(),
+        );
 
         match result {
             SaveFileResult::Saved {
                 tab_id: saved_tab,
                 path: saved_path,
+                revision,
                 stamp,
+                body,
             } => {
                 assert_eq!(saved_tab, tab_id);
                 assert_eq!(saved_path, path.clone());
+                assert_eq!(revision, 7);
                 assert_eq!(stamp, file_stamp(&path).expect("saved stamp"));
+                assert_eq!(body, "saved body");
             }
             other => panic!("expected save success result, got {other:?}"),
         }
@@ -1265,6 +1531,70 @@ mod tests {
             fs::read_to_string(&path).expect("read saved file"),
             "saved body"
         );
+
+        fs::remove_dir_all(dir).expect("remove test temp dir");
+    }
+
+    #[test]
+    fn superseded_save_ticket_does_not_write_stale_body() {
+        let dir = temp_dir("save-stale-ticket");
+        let path = dir.join("saved.txt");
+        fs::write(&path, "newer body").expect("write newer fixture");
+        let tab_id = TabId::from_raw(1);
+        let current_generation = Arc::new(Mutex::new(0));
+        let old_ticket = SaveTicket::issue(&current_generation);
+        let _new_ticket = SaveTicket::issue(&current_generation);
+
+        let result = save_file_result(
+            tab_id,
+            path.clone(),
+            "older body".to_string(),
+            1,
+            None,
+            old_ticket,
+        );
+
+        assert_eq!(
+            result,
+            SaveFileResult::Stale {
+                tab_id,
+                path: path.clone(),
+                revision: 1,
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(&path).expect("read saved file"),
+            "newer body"
+        );
+
+        fs::remove_dir_all(dir).expect("remove test temp dir");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_save_preserves_existing_file_permissions() {
+        let dir = temp_dir("save-mode");
+        let path = dir.join("script.sh");
+        fs::write(&path, "#!/bin/sh\n").expect("write script fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("set executable mode");
+        let tab_id = TabId::from_raw(1);
+
+        let result = save_file_result(
+            tab_id,
+            path.clone(),
+            "#!/bin/sh\necho saved\n".to_string(),
+            1,
+            None,
+            SaveTicket::current_for_test(),
+        );
+
+        assert!(matches!(result, SaveFileResult::Saved { .. }), "{result:?}");
+        let mode = fs::metadata(&path)
+            .expect("saved metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o755);
 
         fs::remove_dir_all(dir).expect("remove test temp dir");
     }
@@ -1278,7 +1608,9 @@ mod tests {
             tab_id,
             dir.clone(),
             "cannot replace directory".to_string(),
+            7,
             None,
+            SaveTicket::current_for_test(),
         );
 
         match result {
@@ -1311,7 +1643,9 @@ mod tests {
             tab_id,
             path.clone(),
             "local".to_string(),
+            7,
             Some(expected_stamp),
+            SaveTicket::current_for_test(),
         );
 
         assert_eq!(
@@ -1320,6 +1654,7 @@ mod tests {
                 tab_id,
                 path: path.clone(),
                 body: "local".to_string(),
+                revision: 7,
                 disk_stamp,
             }
         );
@@ -1344,7 +1679,9 @@ mod tests {
             tab_id,
             path.clone(),
             "local".to_string(),
+            7,
             Some(expected_stamp),
+            SaveTicket::current_for_test(),
         );
 
         assert_eq!(
@@ -1353,6 +1690,7 @@ mod tests {
                 tab_id,
                 path: path.clone(),
                 body: "local".to_string(),
+                revision: 7,
                 disk_stamp: expected_stamp,
             }
         );
@@ -1427,11 +1765,13 @@ mod tests {
                 path: saved_path,
                 revision,
                 stamp,
+                body,
             }) => {
                 assert_eq!(tab_id, TabId::from_raw(1));
                 assert_eq!(saved_path, path.clone());
                 assert_eq!(revision, 0);
                 assert_eq!(stamp, file_stamp(&path).expect("autosaved stamp"));
+                assert_eq!(body, "new");
             }
             other => panic!("expected autosave completion, got {other:?}"),
         }

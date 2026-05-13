@@ -46,15 +46,21 @@ impl LstGpuiApp {
             return false;
         }
 
-        let modifiers = self.effective_modifier_chord(event.keystroke.modifiers);
+        let insert_mode = self.model.vim_mode() == vim::Mode::Insert;
+        let modifiers = if insert_mode {
+            self.effective_current_modifiers(event.keystroke.modifiers)
+        } else {
+            self.effective_modifier_chord(event.keystroke.modifiers)
+        };
         if !modifiers_active(modifiers) {
+            if insert_mode {
+                self.clear_recent_x11_modifier_chord();
+            }
             return false;
         }
 
         let key = event.keystroke.key.to_ascii_lowercase();
-        if self.model.vim_mode() != vim::Mode::Insert
-            && vim_owns_modifier_chord(key.as_str(), modifiers)
-        {
+        if !insert_mode && vim_owns_modifier_chord(key.as_str(), modifiers) {
             self.x11_ctrl_k_pending = false;
             return false;
         }
@@ -378,11 +384,15 @@ impl EntityInputHandler for LstGpuiApp {
 
 impl LstGpuiApp {
     fn effective_modifier_chord(&self, event_modifiers: Modifiers) -> Modifiers {
-        let mut modifiers = event_modifiers;
+        let mut modifiers = self.effective_current_modifiers(event_modifiers);
         if let Some(recent) = self.recent_modifier_chord() {
             modifiers = merge_modifiers(modifiers, recent);
         }
-        modifiers = merge_modifiers(modifiers, self.modifier_chord_accumulated);
+        modifiers
+    }
+
+    fn effective_current_modifiers(&self, event_modifiers: Modifiers) -> Modifiers {
+        let modifiers = merge_modifiers(event_modifiers, self.modifier_chord_accumulated);
         merge_modifiers(modifiers, x11_current_modifiers())
     }
 

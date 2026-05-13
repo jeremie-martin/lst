@@ -556,6 +556,8 @@ impl LstGpuiApp {
     fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
         let theme = self.theme(cx);
+        let status_details = self.status_details();
+        self.status_details_rendered = status_details.clone();
         div()
             .flex_none()
             .flex()
@@ -626,7 +628,7 @@ impl LstGpuiApp {
                             .font(typography::primary_font())
                             .text_size(metrics::px_for_scale(12.0, scale))
                             .text_color(rgb(theme.role.text_muted))
-                            .child(self.status_details()),
+                            .child(status_details),
                     ),
             )
     }
@@ -933,7 +935,12 @@ impl Render for LstGpuiApp {
                                                                     }
                                                                     prepare_entity.update(
                                                                         cx,
-                                                                        |this, _| {
+                                                                        |this, cx| {
+                                                                            if this.status_details()
+                                                                                != this.status_details_rendered
+                                                                            {
+                                                                                cx.notify();
+                                                                            }
                                                                             this.emit_state_trace(window);
                                                                         },
                                                                     );

@@ -48,10 +48,7 @@ impl LstGpuiApp {
             end: r.end,
         });
         let find = self.model.find();
-        let status_bar = match self.selection_summary() {
-            Some(sel) => format!("{} | {sel}", self.status_details()),
-            None => self.status_details(),
-        };
+        let status_bar = self.status_details();
         let cleanup_button_bounds_px = self.cleanup_button_bounds_px.map(|bounds| {
             (
                 f32::from(bounds.origin.x),

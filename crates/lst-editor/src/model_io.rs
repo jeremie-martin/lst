@@ -37,11 +37,13 @@ impl EditorModel {
             return;
         };
         let body = tab.buffer_text();
+        let revision = tab.revision();
         if let Some(path) = tab.path().cloned() {
             self.queue_effect(EditorEffect::SaveFile {
                 tab_id,
                 path,
                 body,
+                revision,
                 expected_stamp: tab.file_stamp(),
             });
         } else {
@@ -49,6 +51,7 @@ impl EditorModel {
                 tab_id,
                 suggested_name: tab.display_name(),
                 body,
+                revision,
                 previous_scratchpad_path: tab.scratchpad_path().cloned(),
             });
         }
@@ -66,27 +69,45 @@ impl EditorModel {
             tab_id,
             suggested_name: tab.display_name(),
             body: tab.buffer_text(),
+            revision: tab.revision(),
             previous_scratchpad_path: tab.scratchpad_path().cloned(),
         });
     }
 
-    pub fn save_finished_for_tab(&mut self, tab_id: TabId, path: PathBuf, file_stamp: FileStamp) {
+    pub fn save_finished_for_tab(
+        &mut self,
+        tab_id: TabId,
+        path: PathBuf,
+        revision: u64,
+        file_stamp: FileStamp,
+        saved_body: String,
+    ) -> bool {
         if let Some(tab) = self.tab_mut_by_id(tab_id) {
-            tab.mark_saved(path.clone(), file_stamp);
+            if !tab.mark_saved_if_current(path.clone(), revision, file_stamp, &saved_body) {
+                return false;
+            }
             self.status = format!("Saved {}.", path.display());
+            return true;
         }
+        false
     }
 
     pub fn save_as_finished_for_tab(
         &mut self,
         tab_id: TabId,
         path: PathBuf,
+        revision: u64,
         file_stamp: FileStamp,
-    ) {
+        saved_body: String,
+    ) -> bool {
         if let Some(tab) = self.tab_mut_by_id(tab_id) {
-            tab.mark_saved_as(path.clone(), file_stamp);
+            if !tab.mark_saved_as_if_current(path.clone(), revision, file_stamp, &saved_body) {
+                return false;
+            }
             self.status = format!("Saved {}.", path.display());
+            return true;
         }
+        false
     }
 
     pub fn save_failed(&mut self, path: PathBuf, message: String) {
@@ -135,6 +156,7 @@ impl EditorModel {
         path: PathBuf,
         revision: u64,
         file_stamp: FileStamp,
+        saved_body: String,
     ) {
         let active_id = self.active_tab_id();
         let Some(tab) = self.tab_mut_by_id(tab_id) else {
@@ -143,7 +165,7 @@ impl EditorModel {
         if tab.path() != Some(&path) || tab.revision() != revision {
             return;
         }
-        tab.mark_autosaved(file_stamp);
+        tab.mark_autosaved(file_stamp, &saved_body);
         if tab_id == active_id {
             self.status = format!("Autosaved {}.", path.display());
         }

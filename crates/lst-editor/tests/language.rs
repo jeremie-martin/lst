@@ -343,7 +343,13 @@ fn save_as_recomputes_language_from_new_path() {
     assert_eq!(model.active_tab().language(), Some(Language::Python));
 
     let id = model.active_tab_id();
-    model.save_as_finished_for_tab(id, PathBuf::from("main.rs"), FileStamp::from_raw(5, None));
+    model.save_as_finished_for_tab(
+        id,
+        PathBuf::from("main.rs"),
+        model.active_tab().revision(),
+        FileStamp::from_raw(5, None),
+        model.snapshot().text,
+    );
     assert_eq!(model.active_tab().language(), Some(Language::Rust));
 
     model.execute(Command::ToggleComment);
@@ -359,7 +365,9 @@ fn save_preserves_explicit_language_override() {
     model.save_finished_for_tab(
         id,
         PathBuf::from("example.py"),
+        model.active_tab().revision(),
         FileStamp::from_raw(5, None),
+        model.snapshot().text,
     );
 
     assert_eq!(model.active_tab().language(), Some(Language::Rust));
@@ -374,7 +382,9 @@ fn save_preserves_explicit_no_language_override() {
     model.save_finished_for_tab(
         id,
         PathBuf::from("example.rs"),
+        model.active_tab().revision(),
         FileStamp::from_raw(10, None),
+        model.snapshot().text,
     );
 
     assert_eq!(model.active_tab().language(), None);
@@ -389,7 +399,9 @@ fn save_as_preserves_explicit_language_override() {
     model.save_as_finished_for_tab(
         id,
         PathBuf::from("example.txt"),
+        model.active_tab().revision(),
         FileStamp::from_raw(5, None),
+        model.snapshot().text,
     );
 
     assert_eq!(model.active_tab().language(), Some(Language::Rust));
@@ -400,7 +412,13 @@ fn saved_untitled_tab_detects_language_from_saved_path() {
     let mut model = EditorModel::empty();
     let id = model.active_tab_id();
 
-    model.save_as_finished_for_tab(id, PathBuf::from("main.rs"), FileStamp::from_raw(0, None));
+    model.save_as_finished_for_tab(
+        id,
+        PathBuf::from("main.rs"),
+        model.active_tab().revision(),
+        FileStamp::from_raw(0, None),
+        model.snapshot().text,
+    );
     assert_eq!(model.active_tab().language(), Some(Language::Rust));
 }
 

@@ -497,6 +497,7 @@ impl EditorTab {
         self.selection
             .set_single(Selection::from_range(0..end, false));
         self.marked_range = None;
+        self.history.break_current_group();
     }
 
     pub(crate) fn set_cursor_position(
@@ -508,30 +509,38 @@ impl EditorTab {
         match select_from {
             Some(anchor) => {
                 let anchor = position_to_char(&self.buffer, anchor);
-                self.selection.set_single(Selection::new(anchor, head));
+                self.selection.set_single(normalized_selection_for_buffer(
+                    &self.buffer,
+                    Selection::new(anchor, head),
+                ));
             }
             None => self.move_to(head),
         }
         self.marked_range = None;
+        self.history.break_current_group();
     }
 
     pub(crate) fn set_selection(&mut self, selection: Selection) {
-        let len = self.len_chars();
-        let anchor = selection.anchor().min(len);
-        let head = selection.head().min(len);
-        self.selection.set_single(Selection::new(anchor, head));
+        self.selection
+            .set_single(normalized_selection_for_buffer(&self.buffer, selection));
         self.marked_range = None;
+        self.history.break_current_group();
     }
 
     pub(crate) fn set_selection_set(&mut self, selection_set: SelectionSet) {
         self.selection
-            .replace_set(selection_set.clamped_to_len(self.len_chars()));
+            .replace_set(normalized_selection_set_for_buffer(
+                &self.buffer,
+                selection_set,
+            ));
         self.marked_range = None;
+        self.history.break_current_group();
     }
 
     pub(crate) fn set_selection_state(&mut self, selection_state: SelectionState) {
-        self.selection = selection_state.clamped_to_len(self.len_chars());
+        self.selection = normalized_selection_state_for_buffer(&self.buffer, selection_state);
         self.marked_range = None;
+        self.history.break_current_group();
     }
 
     // Cycles through abandoned redo paths so a fresh edit no longer permanently
@@ -546,17 +555,20 @@ impl EditorTab {
     }
 
     pub(crate) fn move_to(&mut self, offset: usize) {
-        let offset = offset.min(self.len_chars());
+        let offset = crate::selection::floor_grapheme_boundary(&self.buffer, offset);
         self.selection.set_single(Selection::collapsed(offset));
         self.marked_range = None;
+        self.history.break_current_group();
     }
 
     pub(crate) fn select_to(&mut self, offset: usize) {
-        let offset = offset.min(self.len_chars());
+        let offset = crate::selection::floor_grapheme_boundary(&self.buffer, offset);
         let mut selection = self.selection();
         selection.select_to(offset);
-        self.selection.set_single(selection);
+        self.selection
+            .set_single(normalized_selection_for_buffer(&self.buffer, selection));
         self.marked_range = None;
+        self.history.break_current_group();
     }
 
     pub(crate) fn apply_edit_request(&mut self, request: EditRequest) -> EditOutcome {
@@ -593,6 +605,7 @@ impl EditorTab {
         marked_range_after: Option<Range<usize>>,
     ) {
         if changes_text {
+            remap_bookmarks_after_changes(&self.buffer, &mut self.bookmarks, &changes);
             for change in changes.iter().rev() {
                 apply_change_to_buffer(&mut self.buffer, change);
             }
@@ -633,18 +646,6 @@ impl EditorTab {
         self.last_edit_position = None;
     }
 
-    pub(crate) fn mark_saved(&mut self, path: PathBuf, file_stamp: FileStamp) {
-        self.origin.mark_saved(path, file_stamp);
-        self.refresh_language();
-        self.modified = false;
-    }
-
-    pub(crate) fn mark_saved_as(&mut self, path: PathBuf, file_stamp: FileStamp) {
-        self.origin.mark_saved_as(path, file_stamp);
-        self.refresh_language();
-        self.modified = false;
-    }
-
     pub(crate) fn reset_from_disk_at_path(
         &mut self,
         path: PathBuf,
@@ -655,11 +656,8 @@ impl EditorTab {
         self.reset_from_disk(text);
     }
 
-    pub(crate) fn mark_modified(&mut self) {
-        self.modified = true;
-    }
-
-    pub(crate) fn mark_autosaved(&mut self, file_stamp: FileStamp) {
+    pub(crate) fn mark_autosaved(&mut self, file_stamp: FileStamp, saved_body: &str) {
+        self.apply_saved_body(saved_body);
         self.modified = false;
         self.origin.update_file_stamp(file_stamp);
     }
@@ -687,7 +685,6 @@ impl EditorTab {
     pub(crate) fn undo(&mut self) -> bool {
         if let Some(snapshot) = self.history.undo(self.history_snapshot()) {
             self.restore_history_snapshot(snapshot);
-            self.mark_modified();
             true
         } else {
             false
@@ -697,7 +694,6 @@ impl EditorTab {
     pub(crate) fn redo(&mut self) -> bool {
         if let Some(snapshot) = self.history.redo(self.history_snapshot()) {
             self.restore_history_snapshot(snapshot);
-            self.mark_modified();
             true
         } else {
             false
@@ -708,13 +704,61 @@ impl EditorTab {
         HistorySnapshot {
             text: self.buffer_text(),
             selection: self.selection.clone(),
+            modified: self.modified,
         }
     }
 
     fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
         self.buffer = Rope::from_str(&snapshot.text);
         self.selection = snapshot.selection;
+        self.modified = snapshot.modified;
         self.marked_range = None;
+        self.touch_content();
+    }
+
+    pub(crate) fn mark_saved_if_current(
+        &mut self,
+        path: PathBuf,
+        revision: u64,
+        file_stamp: FileStamp,
+        saved_body: &str,
+    ) -> bool {
+        if self.revision != revision || self.path() != Some(&path) {
+            return false;
+        }
+        self.apply_saved_body(saved_body);
+        self.origin.mark_saved(path, file_stamp);
+        self.refresh_language();
+        self.modified = false;
+        true
+    }
+
+    pub(crate) fn mark_saved_as_if_current(
+        &mut self,
+        path: PathBuf,
+        revision: u64,
+        file_stamp: FileStamp,
+        saved_body: &str,
+    ) -> bool {
+        if self.revision != revision {
+            return false;
+        }
+        self.apply_saved_body(saved_body);
+        self.origin.mark_saved_as(path, file_stamp);
+        self.refresh_language();
+        self.modified = false;
+        true
+    }
+
+    fn apply_saved_body(&mut self, saved_body: &str) {
+        if self.buffer_text() == saved_body {
+            return;
+        }
+        self.buffer = Rope::from_str(saved_body);
+        self.selection =
+            normalized_selection_state_for_buffer(&self.buffer, self.selection.clone());
+        self.marked_range =
+            marked_range_after_edit(self.marked_range.clone(), 0..0, self.len_chars());
         self.touch_content();
     }
 }
@@ -731,6 +775,92 @@ fn changes_modify_text(buffer: &Rope, changes: &[TextChange]) -> bool {
     changes
         .iter()
         .any(|change| buffer.slice(change.range.clone()) != change.replacement.as_str())
+}
+
+fn remap_bookmarks_after_changes(
+    buffer: &Rope,
+    bookmarks: &mut Vec<usize>,
+    changes: &[TextChange],
+) {
+    if bookmarks.is_empty() {
+        return;
+    }
+
+    let mut mapped = bookmarks
+        .iter()
+        .copied()
+        .map(|line| line as isize)
+        .collect::<Vec<_>>();
+    let mut line_delta = 0isize;
+    for change in changes {
+        let start_char = change.range.start.min(buffer.len_chars());
+        let end_char = change.range.end.min(buffer.len_chars());
+        let start_line = buffer.char_to_line(start_char);
+        let removed = buffer.char_to_line(end_char).saturating_sub(start_line);
+        let inserted = change.replacement.chars().filter(|ch| *ch == '\n').count();
+        let start = start_line as isize + line_delta;
+        let end = start + removed as isize;
+        let shift = inserted as isize - removed as isize;
+
+        for line in &mut mapped {
+            if *line < start {
+                continue;
+            }
+            if *line > end {
+                *line += shift;
+            } else {
+                *line = start;
+            }
+        }
+        line_delta += shift;
+    }
+
+    let line_count = (buffer.len_lines() as isize + line_delta).max(1) as usize;
+    let last_line = line_count.saturating_sub(1);
+    *bookmarks = mapped
+        .into_iter()
+        .filter(|line| *line >= 0)
+        .map(|line| (line as usize).min(last_line))
+        .collect();
+    bookmarks.sort_unstable();
+    bookmarks.dedup();
+}
+
+fn normalized_selection_for_buffer(buffer: &Rope, selection: Selection) -> Selection {
+    let range = selection.range();
+    if range.start == range.end {
+        return Selection::collapsed(crate::selection::floor_grapheme_boundary(
+            buffer,
+            selection.cursor(),
+        ));
+    }
+    let start = crate::selection::floor_grapheme_boundary(buffer, range.start);
+    let end = crate::selection::ceil_grapheme_boundary(buffer, range.end);
+    Selection::from_range(start..end, selection.is_reversed())
+}
+
+fn normalized_selection_set_for_buffer(buffer: &Rope, selection_set: SelectionSet) -> SelectionSet {
+    let len = buffer.len_chars();
+    let selections = selection_set
+        .as_slice()
+        .iter()
+        .map(|selection| normalized_selection_for_buffer(buffer, *selection))
+        .collect::<Vec<_>>();
+    SelectionSet::from_selections_coalescing_cursors(selections, selection_set.primary_index())
+        .unwrap_or_else(|_| selection_set.clamped_to_len(len))
+}
+
+fn normalized_selection_state_for_buffer(
+    buffer: &Rope,
+    selection_state: SelectionState,
+) -> SelectionState {
+    let normalized =
+        normalized_selection_set_for_buffer(buffer, selection_state.selection_set().clone());
+    if normalized == *selection_state.selection_set() {
+        selection_state
+    } else {
+        SelectionState::from_set(normalized)
+    }
 }
 
 fn selection_after_edit(

@@ -105,8 +105,17 @@ impl ScratchpadSession {
     /// Spawn the editor with the given file path as a positional arg and
     /// return the focused [`Editor`] handle.
     pub fn open_file(&mut self, name: &str, file: &Path) -> SupportResult<Editor<'_>> {
+        self.open_files(name, &[file.to_path_buf()])
+    }
+
+    /// Spawn the editor with the given file paths as positional args and
+    /// return the focused [`Editor`] handle.
+    pub fn open_files(&mut self, name: &str, files: &[PathBuf]) -> SupportResult<Editor<'_>> {
         let title = unique_title(name);
-        let args: [&OsStr; 1] = [file.as_os_str()];
+        let args = files
+            .iter()
+            .map(|file| file.as_os_str())
+            .collect::<Vec<_>>();
         let stderr_log_path = self.stderr_log_path(name);
         let state_trace_path = self.state_trace_path(name);
         let (stdout, stderr) = self.log_stdio(name)?;

@@ -20,6 +20,8 @@ use lst_x11_harness::{
 use support::{secs, EditorTestExt, ScratchpadSession, SupportResult, TestResult};
 
 const TEXT: &str = "quit clipboard smoke";
+const EXISTING_CLIPBOARD: &str = "existing clipboard";
+const EXISTING_PRIMARY: &str = "existing primary";
 const PRIMARY_TEXT: &str = "middle paste smoke";
 
 #[test]
@@ -44,17 +46,19 @@ fn closing_an_empty_scratchpad_removes_its_file() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn quit_persists_buffer_into_clipboard_and_primary() -> TestResult {
+fn quit_preserves_clipboard_and_primary() -> TestResult {
     support::run_x11_test("smoke-quit-clipboard", |session| {
         let text_path = with_seed_file(session, "quit-source.txt", TEXT)?;
+        write_clipboard_text(Selection::Clipboard, EXISTING_CLIPBOARD)?;
+        write_clipboard_text(Selection::Primary, EXISTING_PRIMARY)?;
         let editor = session.open_file("text", &text_path)?;
 
         // Ctrl+Q is an editor accelerator; the spawn already focused the window
         // for us, so the synthesized chord lands in the editor.
         editor.quit_default()?;
 
-        wait_clipboard_text(Selection::Clipboard, TEXT, secs(10))?;
-        wait_clipboard_text(Selection::Primary, TEXT, secs(10))?;
+        wait_clipboard_text(Selection::Clipboard, EXISTING_CLIPBOARD, secs(10))?;
+        wait_clipboard_text(Selection::Primary, EXISTING_PRIMARY, secs(10))?;
         Ok(())
     })
 }

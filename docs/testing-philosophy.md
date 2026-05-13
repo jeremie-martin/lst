@@ -133,7 +133,7 @@ that behavior through X11 whenever possible.
 A few `#[cfg(test)]` items remain in production code. Each is justified or it should be removed:
 
 - `LstGpuiApp::flush_pending_reveal_for_test` — frame-timing escape hatch. GPUI's `cx.on_next_frame` does not always fire under `run_until_parked` before the next paint commits, so tests that assert on observable scroll behaviour need to drain the queued reveal explicitly. The behaviour under test is observable; only the frame timing is bypassed.
-- `process::exit(0)` vs `cx.defer(|app| app.quit())` in `finish_quit` — unavoidable platform difference. Tests cannot terminate the host process; production cannot persist clipboard subprocesses if the app is still alive. The only `#[cfg(test)]` left in `finish_quit` is the exit step itself.
+- `process::exit(0)` vs `cx.defer(|app| app.quit())` in `finish_quit` — unavoidable platform difference. Tests cannot terminate the host process. The only `#[cfg(test)]` left in `finish_quit` is the exit step itself.
 
 
 ## The testability feedback loop

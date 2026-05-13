@@ -611,29 +611,12 @@ impl<'a> Editor<'a> {
                             }
                         }
                     }
-                    if !wait_for_state_change || !retryable_after_no_damage(&token) {
-                        return Err(error);
-                    }
-                    if let Some(before) = before_state.as_ref() {
-                        if let Some(changed) = self.peek_latest_context_after(Some(before))? {
-                            observed_state = Some(changed);
-                            continue;
-                        }
-                    }
-                    self.dispatch_token(&token)?;
-                    self.wait_after_dispatched_key(true)?;
+                    return Err(error);
                 }
                 if wait_for_state_change {
                     let before_state = before_state.expect("checked above");
                     match self.wait_state_change_after_without_consuming(&before_state) {
                         Ok(state) => observed_state = Some(state),
-                        Err(_) if retryable_after_state_timeout(&token) => {
-                            self.dispatch_token(&token)?;
-                            self.wait_after_dispatched_key(true)?;
-                            observed_state = Some(
-                                self.wait_state_change_after_without_consuming(&before_state)?,
-                            );
-                        }
                         Err(error) => return Err(error),
                     }
                 } else {
@@ -1240,6 +1223,7 @@ fn key_token_expects_state_change(token: &KeyToken, state: &StateTraceRecord) ->
         // GPUI's X11 text path can commit printable input after a following
         // event, so the harness must not block after each individual
         // character waiting for a repaint that may intentionally be batched.
+        KeyToken::Single(chord) if editor_enter_key_changes_state(chord, state) => true,
         KeyToken::Single(chord) if plain_insert_text_key_changes_state(chord, state) => false,
         KeyToken::Single(chord) if vim_key_context_changes_state(chord, state) => true,
         KeyToken::Single(chord) if editor_chord_changes_state(chord, state) => true,
@@ -1278,32 +1262,6 @@ fn key_token_expects_state_change(token: &KeyToken, state: &StateTraceRecord) ->
             }),
         _ => false,
     }
-}
-
-fn retryable_after_no_damage(token: &KeyToken) -> bool {
-    matches!(
-        token,
-        KeyToken::Single(KeyChordSingle {
-            ctrl: false,
-            alt: false,
-            shift: false,
-            key: Key::PageUp | Key::PageDown,
-            ..
-        })
-    )
-}
-
-fn retryable_after_state_timeout(token: &KeyToken) -> bool {
-    matches!(
-        token,
-        KeyToken::Single(KeyChordSingle {
-            ctrl: false,
-            alt: false,
-            shift: false,
-            key: Key::Char('g' | 'd'),
-            ..
-        })
-    )
 }
 
 fn page_key_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> bool {
@@ -1471,6 +1429,16 @@ fn vim_key_context_changes_state(chord: &KeyChordSingle, state: &StateTraceRecor
         Key::Char('v') => state.vim_mode == "NORMAL",
         _ => false,
     }
+}
+
+fn editor_enter_key_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> bool {
+    !chord.ctrl
+        && !chord.alt
+        && !chord.shift
+        && !chord.platform
+        && matches!(chord.key, Key::Enter)
+        && state.focused_input == "editor"
+        && state.vim_mode == "INSERT"
 }
 
 fn plain_insert_text_key_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> bool {

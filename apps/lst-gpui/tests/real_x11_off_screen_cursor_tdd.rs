@@ -77,7 +77,8 @@ fn status_bar_shows_count_when_secondary_cursors_are_below_viewport() -> TestRes
         // Reveal targets the newly-added cursor near the top of the cluster,
         // so the cursors near line 99 fall below the viewport.
         editor.keys("<C-end>")?;
-        for _ in 0..30 {
+        let visible_rows = editor.read_state()?.viewport.rows.len().max(1);
+        for _ in 0..(visible_rows + 5).min(90) {
             editor.keys("<S-A-up>")?;
         }
 
@@ -115,7 +116,8 @@ fn status_bar_shows_count_when_secondary_cursors_are_above_viewport() -> TestRes
         // the newly-added cursor near the bottom of the cluster, so the
         // cursors near line 0 fall above the viewport.
         editor.place_cursor_at_document_start()?;
-        for _ in 0..30 {
+        let visible_rows = editor.read_state()?.viewport.rows.len().max(1);
+        for _ in 0..(visible_rows + 5).min(90) {
             editor.keys("<S-A-down>")?;
         }
 
@@ -154,7 +156,8 @@ fn shift_alt_down_keeps_bottom_most_cursor_visible_after_extending_past_viewport
         // edge. The viewport must scroll so the bottom-most cursor stays
         // visible — otherwise the user cannot see the leading edge of the
         // cluster they're building.
-        for _ in 0..40 {
+        let visible_rows = editor.read_state()?.viewport.rows.len().max(1);
+        for _ in 0..(visible_rows + 5).min(90) {
             editor.keys("<S-A-down>")?;
         }
 
