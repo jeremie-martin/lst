@@ -367,18 +367,7 @@ impl LstGpuiApp {
         expected_stamp: Option<FileStamp>,
         cx: &mut Context<Self>,
     ) {
-        let ticket = self.issue_save_ticket(&path);
-        self.begin_save_inflight(&path);
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    save_file_result(tab_id, path, body, revision, expected_stamp, ticket)
-                })
-                .await;
-            let _ = this.update(cx, |view, cx| view.apply_save_file_result(result, cx));
-        })
-        .detach();
+        self.spawn_save_job(tab_id, path, body, revision, expected_stamp, None, cx);
     }
 
     fn start_save_as_file_job(
@@ -390,15 +379,38 @@ impl LstGpuiApp {
         previous_scratchpad_path: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) {
+        self.spawn_save_job(
+            tab_id,
+            path,
+            body,
+            revision,
+            None,
+            Some(previous_scratchpad_path),
+            cx,
+        );
+    }
+
+    fn spawn_save_job(
+        &mut self,
+        tab_id: TabId,
+        path: PathBuf,
+        body: String,
+        revision: u64,
+        expected_stamp: Option<FileStamp>,
+        save_as_previous_scratchpad: Option<Option<PathBuf>>,
+        cx: &mut Context<Self>,
+    ) {
         let ticket = self.issue_save_ticket(&path);
         self.begin_save_inflight(&path);
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { save_file_result(tab_id, path, body, revision, None, ticket) })
+                .spawn(async move {
+                    save_file_result(tab_id, path, body, revision, expected_stamp, ticket)
+                })
                 .await;
             let _ = this.update(cx, |view, cx| {
-                view.apply_save_as_file_result(result, previous_scratchpad_path, cx);
+                view.apply_save_outcome(result, save_as_previous_scratchpad, cx);
             });
         })
         .detach();
@@ -761,19 +773,6 @@ impl LstGpuiApp {
                 self.recent.record(&path);
             }
         }
-    }
-
-    fn apply_save_file_result(&mut self, result: SaveFileResult, cx: &mut Context<Self>) {
-        self.apply_save_outcome(result, None, cx);
-    }
-
-    fn apply_save_as_file_result(
-        &mut self,
-        result: SaveFileResult,
-        previous_scratchpad_path: Option<PathBuf>,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_save_outcome(result, Some(previous_scratchpad_path), cx);
     }
 
     fn apply_save_outcome(

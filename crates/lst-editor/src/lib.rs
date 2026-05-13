@@ -1029,24 +1029,41 @@ impl EditorModel {
     }
 
     fn vim_surround_range(&mut self, from: Position, to: Position, open: char, close: char) {
-        self.apply_optional_edit_request(
-            vim_edit::surround_range(self.active_tab(), from, to, open, close),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_vim_optional(vim_edit::surround_range(
+            self.active_tab(),
+            from,
+            to,
+            open,
+            close,
+        ));
+    }
+
+    fn vim_find_surround_or_warn(
+        &mut self,
+        open: char,
+        close: char,
+    ) -> Option<(Position, Position)> {
+        let snapshot = self.vim_snapshot();
+        match vim::find_surround_pair(&snapshot, open, close) {
+            Some(pair) => Some(pair),
+            None => {
+                self.status = "No surrounding pair.".to_string();
+                None
+            }
+        }
     }
 
     fn vim_delete_surround(&mut self, open: char) {
         let (open, close) =
             vim::surround_pair_for_char(open).expect("validated by resolve_surround");
-        let snapshot = self.vim_snapshot();
-        let Some((open_pos, close_pos)) = vim::find_surround_pair(&snapshot, open, close) else {
-            self.status = "No surrounding pair.".to_string();
+        let Some((open_pos, close_pos)) = self.vim_find_surround_or_warn(open, close) else {
             return;
         };
-        self.apply_optional_edit_request(
-            vim_edit::delete_surround(self.active_tab(), open_pos, close_pos),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_vim_optional(vim_edit::delete_surround(
+            self.active_tab(),
+            open_pos,
+            close_pos,
+        ));
     }
 
     fn vim_change_surround(&mut self, from_open: char, to_open: char) {
@@ -1054,16 +1071,17 @@ impl EditorModel {
             vim::surround_pair_for_char(from_open).expect("validated by resolve_surround");
         let (to_open, to_close) =
             vim::surround_pair_for_char(to_open).expect("validated by resolve_surround");
-        let snapshot = self.vim_snapshot();
-        let Some((open_pos, close_pos)) = vim::find_surround_pair(&snapshot, from_open, from_close)
+        let Some((open_pos, close_pos)) = self.vim_find_surround_or_warn(from_open, from_close)
         else {
-            self.status = "No surrounding pair.".to_string();
             return;
         };
-        self.apply_optional_edit_request(
-            vim_edit::change_surround(self.active_tab(), open_pos, close_pos, to_open, to_close),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_vim_optional(vim_edit::change_surround(
+            self.active_tab(),
+            open_pos,
+            close_pos,
+            to_open,
+            to_close,
+        ));
     }
 
     fn vim_extract_range(&mut self, from: Position, to: Position) -> String {
@@ -1074,61 +1092,53 @@ impl EditorModel {
         vim_edit::extract_lines(self.active_tab(), first, last)
     }
 
+    fn apply_vim_optional(&mut self, request: Option<EditRequest>) {
+        self.apply_optional_edit_request(request, Some(RevealIntent::NearestEdge));
+    }
+
+    fn apply_vim_edit_action(&mut self, action: vim_edit::VimEditAction) {
+        match action {
+            vim_edit::VimEditAction::Edit(request) => {
+                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+            }
+            vim_edit::VimEditAction::MoveCursor(p) => {
+                self.move_active_cursor(p.line, p.column, false);
+                self.queue_reveal(RevealIntent::NearestEdge);
+            }
+        }
+    }
+
     fn vim_paste(&mut self, before: bool) {
         let cursor = self.active_cursor_position();
-        self.apply_optional_edit_request(
-            vim_edit::paste(self.active_tab(), cursor, &self.vim.register, before),
-            Some(RevealIntent::NearestEdge),
-        );
+        let request = vim_edit::paste(self.active_tab(), cursor, &self.vim.register, before);
+        self.apply_vim_optional(request);
     }
 
     fn vim_open_line(&mut self, above: bool) {
         let pos = self.active_cursor_position();
-        self.apply_optional_edit_request(
-            vim_edit::open_line(self.active_tab(), pos, above),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_vim_optional(vim_edit::open_line(self.active_tab(), pos, above));
     }
 
     fn vim_join_lines(&mut self, count: usize) {
         let pos = self.active_cursor_position();
-        self.apply_optional_edit_request(
-            vim_edit::join_lines(self.active_tab(), pos, count),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_vim_optional(vim_edit::join_lines(self.active_tab(), pos, count));
     }
 
     fn vim_replace_char(&mut self, ch: char, count: usize) {
         let pos = self.active_cursor_position();
-        self.apply_optional_edit_request(
-            vim_edit::replace_char(self.active_tab(), pos, ch, count),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_vim_optional(vim_edit::replace_char(self.active_tab(), pos, ch, count));
     }
 
     fn vim_transform_case_range(&mut self, from: Position, to: Position, uppercase: bool) {
-        match vim_edit::transform_case_range(self.active_tab(), from, to, uppercase) {
-            Some(vim_edit::VimEditAction::Edit(request)) => {
-                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-            }
-            Some(vim_edit::VimEditAction::MoveCursor(position)) => {
-                self.move_active_cursor(position.line, position.column, false);
-                self.queue_reveal(RevealIntent::NearestEdge);
-            }
-            None => {}
+        if let Some(action) = vim_edit::transform_case_range(self.active_tab(), from, to, uppercase)
+        {
+            self.apply_vim_edit_action(action);
         }
     }
 
     fn vim_transform_case_lines(&mut self, first: usize, last: usize, uppercase: bool) {
-        match vim_edit::transform_case_lines(self.active_tab(), first, last, uppercase) {
-            vim_edit::VimEditAction::Edit(request) => {
-                self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-            }
-            vim_edit::VimEditAction::MoveCursor(position) => {
-                self.move_active_cursor(position.line, position.column, false);
-                self.queue_reveal(RevealIntent::NearestEdge);
-            }
-        }
+        let action = vim_edit::transform_case_lines(self.active_tab(), first, last, uppercase);
+        self.apply_vim_edit_action(action);
     }
 
     pub fn insert_text(&mut self, text: String) {
