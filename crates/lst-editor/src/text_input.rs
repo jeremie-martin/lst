@@ -1,13 +1,12 @@
 use crate::{
     document::{char_to_position, line_indent_prefix, EditKind, UndoBoundary},
     language::LanguageConfig,
-    multi_selection,
+    multi_selection::{self, request_for_each, SelectionEdit},
     selection::{
         ceil_grapheme_boundary, display_line_char_len, floor_grapheme_boundary, is_identifier_char,
         next_grapheme_boundary, next_word_boundary, previous_grapheme_boundary,
         previous_word_boundary,
     },
-    selection_edit::{self, SelectionEdit},
     tab::EditorTab,
     transaction::{EditRequest, SelectionAfter},
 };
@@ -205,7 +204,7 @@ fn multi_edit_action(
         align_find_current,
     };
 
-    if let Some(request) = selection_edit::request_for_each(
+    if let Some(request) = request_for_each(
         tab,
         EditKind::Other,
         UndoBoundary::Merge,
@@ -222,7 +221,7 @@ fn multi_edit_action(
     ) {
         return Some(edit(request, true));
     }
-    if let Some(request) = selection_edit::request_for_each(
+    if let Some(request) = request_for_each(
         tab,
         EditKind::Insert,
         UndoBoundary::Break,
@@ -236,7 +235,7 @@ fn multi_edit_action(
     ) {
         return Some(edit(request, false));
     }
-    if let Some(request) = selection_edit::request_for_each(
+    if let Some(request) = request_for_each(
         tab,
         EditKind::Insert,
         UndoBoundary::Break,
@@ -255,7 +254,7 @@ fn multi_edit_action(
     ) {
         return Some(edit(request, true));
     }
-    if let Some(request) = selection_edit::request_for_each(
+    if let Some(request) = request_for_each(
         tab,
         EditKind::Insert,
         UndoBoundary::Break,

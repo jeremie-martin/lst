@@ -1,4 +1,4 @@
-use lst_editor::position::Position;
+use lst_editor::Position;
 use lst_editor::{
     EditorCommand as Command, EditorModel, EditorTab, FileStamp, Language, Selection, TabId,
 };

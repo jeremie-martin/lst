@@ -496,14 +496,20 @@ fn gpui_key_to_vim(event: &KeyDownEvent) -> Option<VimKey> {
 }
 
 pub(crate) fn char_to_utf16(buffer: &Rope, char_offset: usize) -> usize {
-    buffer
-        .chars()
-        .take(char_offset.min(buffer.len_chars()))
-        .map(char::len_utf16)
-        .sum()
+    let clamped = char_offset.min(buffer.len_chars());
+    // ASCII fast-path: when len_bytes == len_chars the buffer is pure ASCII,
+    // so char count == UTF-16 unit count. Skips O(N) rope walks on every IME
+    // tick for typical (ASCII-only) edit buffers.
+    if buffer.len_bytes() == buffer.len_chars() {
+        return clamped;
+    }
+    buffer.chars().take(clamped).map(char::len_utf16).sum()
 }
 
 fn utf16_to_char(buffer: &Rope, utf16_offset: usize) -> usize {
+    if buffer.len_bytes() == buffer.len_chars() {
+        return utf16_offset.min(buffer.len_chars());
+    }
     let mut chars = 0usize;
     let mut utf16 = 0usize;
     for ch in buffer.chars() {

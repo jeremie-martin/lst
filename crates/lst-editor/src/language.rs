@@ -593,7 +593,7 @@ impl Language {
         }
     }
 
-    pub fn from_name(name: &str) -> Option<Self> {
+    fn from_name(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "rust" | "rs" => Some(Self::Rust),
             "python" | "py" => Some(Self::Python),
@@ -662,7 +662,7 @@ pub fn detect(path: Option<&Path>, first_line: Option<&str>) -> Option<Language>
     first_line.and_then(detect_from_shebang)
 }
 
-pub fn detect_from_filename(name: &str) -> Option<Language> {
+fn detect_from_filename(name: &str) -> Option<Language> {
     match name {
         "Makefile" | "makefile" | "GNUmakefile" | "BSDmakefile" => Some(Language::Makefile),
         "Dockerfile" | "dockerfile" | "Containerfile" => Some(Language::Dockerfile),
@@ -679,7 +679,7 @@ pub fn detect_from_filename(name: &str) -> Option<Language> {
     }
 }
 
-pub fn detect_from_extension(extension: &str) -> Option<Language> {
+fn detect_from_extension(extension: &str) -> Option<Language> {
     match extension
         .trim_start_matches('.')
         .to_ascii_lowercase()
@@ -735,7 +735,7 @@ pub fn detect_from_extension(extension: &str) -> Option<Language> {
     }
 }
 
-pub fn detect_from_shebang(first_line: &str) -> Option<Language> {
+fn detect_from_shebang(first_line: &str) -> Option<Language> {
     let rest = first_line.strip_prefix("#!")?;
     let rest = rest.trim_start();
     let (head, tail) = match rest.split_once(char::is_whitespace) {

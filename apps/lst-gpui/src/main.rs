@@ -5,9 +5,7 @@ use gpui::{
 
 mod actions;
 mod bench_trace;
-mod cleanup;
 mod crash_log;
-mod editor_scrollbar;
 mod editor_view;
 mod input_adapter;
 mod interactions;
@@ -15,11 +13,9 @@ mod keymap;
 mod launch;
 mod llm;
 mod recent;
-mod recent_panel;
 mod runtime;
 mod shell;
 mod state_trace;
-mod state_trace_adapter;
 mod syntax;
 #[cfg(test)]
 mod tests;
@@ -39,8 +35,8 @@ use interactions::ActiveDragSelection;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
-    position::Position, EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab,
-    FocusTarget, RevealIntent, TabId, UNTITLED_PREFIX,
+    EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FocusTarget, Position,
+    RevealIntent, TabId, UNTITLED_PREFIX,
 };
 #[cfg(not(test))]
 use recent::default_recent_files_path;

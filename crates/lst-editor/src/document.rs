@@ -1,7 +1,4 @@
-use crate::{
-    position::Position,
-    selection::{self, line_display_text},
-};
+use crate::selection::{self, line_display_text, Position};
 use ropey::Rope;
 use std::ops::Range;
 

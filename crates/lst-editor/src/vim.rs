@@ -3,13 +3,12 @@
 //! Pure keystroke to command translation. The caller executes commands against
 //! whatever editor surface owns the document state.
 
-use crate::effect::RevealIntent;
-use crate::position::Position;
 use crate::selection::{
     cell_containing_char, cell_partition_by_char, cells_of_str, is_identifier_char,
     last_grapheme_column, next_grapheme_column, previous_grapheme_column, vim_token_class,
-    GraphemeCell, TokenClass,
+    GraphemeCell, Position, TokenClass,
 };
+use crate::RevealIntent;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -325,11 +324,11 @@ impl VimState {
         s
     }
 
-    pub fn clear_pending(&mut self) {
+    fn clear_pending(&mut self) {
         self.pending = Pending::default();
     }
 
-    pub fn clear_preferred_column(&mut self) {
+    fn clear_preferred_column(&mut self) {
         self.preferred_column = None;
     }
 

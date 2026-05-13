@@ -1,8 +1,8 @@
 use crate::{
     document::{char_to_position, position_to_char, EditKind, UndoBoundary},
-    position::Position,
     selection::{
-        display_line_char_len, line_display_text, line_range_at_char, Selection, SelectionSet,
+        display_line_char_len, line_display_text, line_range_at_char, Position, Selection,
+        SelectionSet,
     },
     tab::EditorTab,
     text_input,

@@ -1,9 +1,8 @@
 use crate::{
     document::{char_to_position, position_to_char},
-    position::Position,
     selection::{
-        next_grapheme_boundary, previous_grapheme_boundary, CursorGoal, Selection, SelectionState,
-        SelectionTransform,
+        next_grapheme_boundary, previous_grapheme_boundary, CursorGoal, Position, Selection,
+        SelectionState, SelectionTransform,
     },
     tab::EditorTab,
     wrap,

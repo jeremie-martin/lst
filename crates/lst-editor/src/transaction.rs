@@ -1,7 +1,6 @@
 use crate::{
     document::{EditKind, UndoBoundary},
-    position::Position,
-    selection::SelectionSet,
+    selection::{Position, SelectionSet},
 };
 use ropey::Rope;
 use std::ops::Range;

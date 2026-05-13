@@ -1,6 +1,5 @@
 mod command;
 mod document;
-mod effect;
 pub mod find;
 mod history;
 pub mod language;
@@ -8,10 +7,7 @@ mod line_edit;
 mod model_io;
 mod motion;
 mod multi_selection;
-pub mod position;
 pub mod selection;
-mod selection_edit;
-mod snapshot;
 mod tab;
 mod tab_set;
 mod text_input;
@@ -23,12 +19,57 @@ pub mod wrap;
 
 pub use command::EditorCommand;
 pub use document::{EditKind, UndoBoundary};
-pub use effect::{EditorEffect, FocusTarget, RevealIntent};
 pub use language::{IndentStyle, Language, LanguageConfig};
-pub use selection::{Selection, SelectionSet, SelectionSetError};
-pub use snapshot::EditorSnapshot;
+pub use selection::{Position, Selection, SelectionSet, SelectionSetError};
 pub use tab::{EditorTab, FileStamp, TabId};
 pub use viewport::Viewport;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusTarget {
+    Editor,
+    FindQuery,
+    FindReplace,
+    GotoLine,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RevealIntent {
+    NearestEdge,
+    Center,
+    Top,
+    Bottom,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditorEffect {
+    Focus(FocusTarget),
+    Reveal(RevealIntent),
+    WriteClipboard(String),
+    WritePrimary(String),
+    ReadClipboard,
+    OpenFiles,
+    SaveFile {
+        tab_id: TabId,
+        path: PathBuf,
+        body: String,
+        revision: u64,
+        expected_stamp: Option<FileStamp>,
+    },
+    SaveFileAs {
+        tab_id: TabId,
+        suggested_name: String,
+        body: String,
+        revision: u64,
+        previous_scratchpad_path: Option<PathBuf>,
+    },
+    AutosaveFile {
+        tab_id: TabId,
+        path: PathBuf,
+        body: String,
+        revision: u64,
+        expected_stamp: Option<FileStamp>,
+    },
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GutterMode {
@@ -68,7 +109,6 @@ impl GutterMode {
 use crate::{
     document::{char_to_position, inclusive_position_to_exclusive_char, position_to_char},
     find::{FindScope, FindState},
-    position::Position,
     selection::{
         char_at_line_column, display_line_char_len as buffer_display_line_char_len,
         line_range_at_char, word_range_at_char, CursorGoal, SelectionTransform,
@@ -1308,10 +1348,6 @@ impl EditorModel {
         }
     }
 
-    pub fn first_dirty_tab_index(&self) -> Option<usize> {
-        self.tabs.iter().position(EditorTab::modified)
-    }
-
     pub fn tab_id_at(&self, index: usize) -> Option<TabId> {
         self.tabs.get(index).map(EditorTab::id)
     }
@@ -1921,5 +1957,83 @@ fn linewise_range_at_char(buffer: &ropey::Rope, char_index: usize) -> Range<usiz
         }
         '\r' => (start - 1)..range.end,
         _ => range,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditorSnapshot {
+    pub active: usize,
+    pub tab_count: usize,
+    pub active_tab_id: TabId,
+    pub tab_ids: Vec<TabId>,
+    pub tab_titles: Vec<String>,
+    pub tab_modified: Vec<bool>,
+    pub tab_scratchpad: Vec<bool>,
+    pub text: String,
+    pub cursor: usize,
+    pub cursor_position: Position,
+    pub selection: Selection,
+    pub selection_set: SelectionSet,
+    pub active_path: Option<PathBuf>,
+    pub active_revision: u64,
+    pub show_wrap: bool,
+    pub show_gutter: bool,
+    pub find_visible: bool,
+    pub find_show_replace: bool,
+    pub find_query: String,
+    pub find_replacement: String,
+    pub find_matches: usize,
+    pub find_current: Option<usize>,
+    pub find_match_ranges: Vec<Range<usize>>,
+    pub find_active_match: Option<Range<usize>>,
+    pub find_case_sensitive: bool,
+    pub find_whole_word: bool,
+    pub find_use_regex: bool,
+    pub find_in_selection: bool,
+    pub find_error: Option<String>,
+    pub goto_line: Option<String>,
+    pub vim_mode: vim::Mode,
+    pub vim_pending: String,
+    pub status: String,
+}
+
+impl EditorModel {
+    pub fn snapshot(&self) -> EditorSnapshot {
+        let active = self.active_tab();
+        EditorSnapshot {
+            active: self.active_index(),
+            tab_count: self.tabs.len(),
+            active_tab_id: active.id(),
+            tab_ids: self.tabs.iter().map(EditorTab::id).collect(),
+            tab_titles: self.tabs.iter().map(|tab| tab.display_name()).collect(),
+            tab_modified: self.tabs.iter().map(EditorTab::modified).collect(),
+            tab_scratchpad: self.tabs.iter().map(EditorTab::is_scratchpad).collect(),
+            text: active.buffer_text(),
+            cursor: active.cursor_char(),
+            cursor_position: active.cursor_position(),
+            selection: active.selection(),
+            selection_set: active.selection_set().clone(),
+            active_path: active.path().cloned(),
+            active_revision: active.revision(),
+            show_wrap: self.show_wrap,
+            show_gutter: self.show_gutter,
+            find_visible: self.find.visible,
+            find_show_replace: self.find.show_replace,
+            find_query: self.find.query.clone(),
+            find_replacement: self.find.replacement.clone(),
+            find_matches: self.find.matches.len(),
+            find_current: self.find.active,
+            find_match_ranges: self.find_match_ranges(),
+            find_active_match: self.active_find_match_range(),
+            find_case_sensitive: self.find.case_sensitive,
+            find_whole_word: self.find.whole_word,
+            find_use_regex: self.find.use_regex,
+            find_in_selection: self.find.scope.is_selection_for(active.id()),
+            find_error: self.find.error.clone(),
+            goto_line: self.goto_line.clone(),
+            vim_mode: self.vim.mode,
+            vim_pending: self.vim.pending_display(),
+            status: self.status.clone(),
+        }
     }
 }

@@ -2,8 +2,7 @@ use crate::{
     document::{char_to_position, position_to_char},
     history::{EditHistory, HistorySnapshot},
     language::{self, Language},
-    position::Position,
-    selection::{CursorGoal, Selection, SelectionSet, SelectionState},
+    selection::{CursorGoal, Position, Selection, SelectionSet, SelectionState},
     transaction::{
         apply_change_to_buffer, clamped_range, inserted_relative_range, EditOutcome, EditRequest,
         SelectionAfter, TextChange,
@@ -226,7 +225,7 @@ impl EditorTab {
         Self::from_text_with_stamp(id, name_hint, path, text, None)
     }
 
-    pub fn from_text_with_stamp(
+    fn from_text_with_stamp(
         id: TabId,
         name_hint: String,
         path: Option<PathBuf>,

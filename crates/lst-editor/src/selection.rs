@@ -2,6 +2,18 @@ use ropey::Rope;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Position {
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Position {
+    pub const fn new(line: usize, column: usize) -> Self {
+        Self { line, column }
+    }
+}
+
 /// Editor selection as an `(anchor, head)` pair of char offsets.
 ///
 /// `anchor` is the fixed end of the selection (where it started); `head` is

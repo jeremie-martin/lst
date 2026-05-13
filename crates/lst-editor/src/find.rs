@@ -1,7 +1,8 @@
 use crate::{
     document::{char_to_position, position_to_char, EditKind, UndoBoundary},
-    position::Position,
-    selection::{cell_partition_by_byte, cells_of_str, line_display_text, Selection, SelectionSet},
+    selection::{
+        cell_partition_by_byte, cells_of_str, line_display_text, Position, Selection, SelectionSet,
+    },
     tab::EditorTab,
     transaction::{EditRequest, SelectionAfter, TextChange, TextChangeSet},
     TabId,
@@ -54,7 +55,7 @@ impl FindScope {
         self.selection_range_for(tab_id).is_some()
     }
 
-    pub fn selection_range_for(self, tab_id: TabId) -> Option<Range<usize>> {
+    fn selection_range_for(self, tab_id: TabId) -> Option<Range<usize>> {
         match self {
             FindScope::Selection {
                 tab_id: owner,
@@ -100,7 +101,7 @@ impl FindState {
         }
     }
 
-    pub fn clear_results(&mut self) {
+    fn clear_results(&mut self) {
         self.matches.clear();
         self.active = None;
         self.error = None;
@@ -109,7 +110,7 @@ impl FindState {
 
     // Single source of truth for query interpretation — keeps
     // `compute_matches_in_text` and the replace paths in lock-step.
-    pub fn build_regex(&self) -> Result<Regex, regex::Error> {
+    fn build_regex(&self) -> Result<Regex, regex::Error> {
         build_query_regex(
             &self.query,
             self.case_sensitive,
@@ -118,7 +119,7 @@ impl FindState {
         )
     }
 
-    pub fn compute_matches_in_text(&mut self, text: &str) {
+    fn compute_matches_in_text(&mut self, text: &str) {
         let previous_active = self.active;
         self.matches.clear();
         self.error = None;
@@ -209,7 +210,7 @@ impl FindState {
         }
     }
 
-    pub fn find_nearest(&mut self, position: &Position) {
+    fn find_nearest(&mut self, position: &Position) {
         if self.matches.is_empty() {
             self.active = None;
             return;
@@ -223,7 +224,7 @@ impl FindState {
         self.active = Some(0);
     }
 
-    pub fn select_exact(&mut self, position: &Position) -> bool {
+    fn select_exact(&mut self, position: &Position) -> bool {
         let Some(index) = self
             .matches
             .iter()
@@ -235,7 +236,7 @@ impl FindState {
         true
     }
 
-    pub fn is_stale(&self, revision: u64) -> bool {
+    fn is_stale(&self, revision: u64) -> bool {
         !self.query.is_empty() && self.indexed_revision != Some(revision)
     }
 
