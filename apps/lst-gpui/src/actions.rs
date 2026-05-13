@@ -21,22 +21,30 @@ use crate::{
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
-    macro_rules! bind_commands {
+    macro_rules! cmd {
         ($root:ident, $($action:ty => $command:expr;)*) => {
-            $(
-                let $root = $root.on_action(cx.listener(
-                    |this, _: &$action, _: &mut Window, cx| {
-                        this.clear_x11_modifier_chord_state();
-                        this.execute_model_command(cx, $command);
-                        cx.stop_propagation();
-                    },
-                ));
-            )*
+            $(let $root = $root.on_action(cx.listener(
+                |this, _: &$action, _: &mut Window, cx| {
+                    this.clear_x11_modifier_chord_state();
+                    this.execute_model_command(cx, $command);
+                    cx.stop_propagation();
+                },
+            ));)*
+        };
+    }
+    macro_rules! call {
+        ($root:ident, $($action:ty => |$this:ident, $win:ident, $context:ident| $body:expr;)*) => {
+            $(let $root = $root.on_action(cx.listener(
+                |$this, _: &$action, $win: &mut Window, $context| {
+                    $this.clear_x11_modifier_chord_state();
+                    $body;
+                    $context.stop_propagation();
+                },
+            ));)*
         };
     }
 
-    bind_commands! {
-        root,
+    cmd! { root,
         OpenFile => Command::RequestOpenFiles;
         SaveFile => Command::RequestSave;
         SaveFileAs => Command::RequestSaveAs;
@@ -115,111 +123,36 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         PreviousBookmark => Command::JumpPreviousBookmark;
     }
 
-    let root = root.on_action(cx.listener(|this, _: &NewTab, _window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.request_new_tab(cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &ToggleRecentFiles, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.toggle_recent_files_panel(window, cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &ToggleTheme, _window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.cycle_theme(cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &CleanupText, _window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.start_cleanup(cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &SelectNextOccurrence, _window, cx| {
-        let skip = this.x11_ctrl_k_pending;
-        this.clear_x11_modifier_chord_state();
-        this.update_model(cx, true, |model| {
-            model.execute(if skip {
-                Command::SkipNextOccurrence
-            } else {
-                Command::SelectNextOccurrence
+    call! { root,
+        NewTab => |this, _window, cx| this.request_new_tab(cx);
+        ToggleRecentFiles => |this, window, cx| this.toggle_recent_files_panel(window, cx);
+        ToggleTheme => |this, _window, cx| this.cycle_theme(cx);
+        CleanupText => |this, _window, cx| this.start_cleanup(cx);
+        SelectNextOccurrence => |this, _window, cx| {
+            let skip = this.x11_ctrl_k_pending;
+            this.update_model(cx, true, |model| {
+                model.execute(if skip {
+                    Command::SkipNextOccurrence
+                } else {
+                    Command::SelectNextOccurrence
+                });
             });
-        });
-        cx.stop_propagation();
-    }));
+        };
+        MoveUp => |this, window, cx| this.move_vertical(-1, false, window, cx);
+        MoveDown => |this, window, cx| this.move_vertical(1, false, window, cx);
+        MovePageUp => |this, window, cx| this.move_page(false, false, window, cx);
+        MovePageDown => |this, window, cx| this.move_page(true, false, window, cx);
+        SelectUp => |this, window, cx| this.move_vertical(-1, true, window, cx);
+        SelectDown => |this, window, cx| this.move_vertical(1, true, window, cx);
+        SelectPageUp => |this, window, cx| this.move_page(false, true, window, cx);
+        SelectPageDown => |this, window, cx| this.move_page(true, true, window, cx);
+        CloseActiveTab => |this, _window, cx| this.request_close_active_tab(cx);
+        ReopenClosedTab => |this, _window, cx| this.reopen_recently_closed_tab(cx);
+        ZoomIn => |this, window, cx| this.zoom_in(window, cx);
+        ZoomOut => |this, window, cx| this.zoom_out(window, cx);
+        ZoomReset => |this, window, cx| this.zoom_reset(window, cx);
+        Quit => |this, _window, cx| this.request_quit(cx);
+    }
 
-    let root = root.on_action(cx.listener(|this, _: &MoveUp, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.move_vertical(-1, false, window, cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &MoveDown, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.move_vertical(1, false, window, cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &MovePageUp, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.move_page(false, false, window, cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &MovePageDown, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.move_page(true, false, window, cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &SelectUp, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.move_vertical(-1, true, window, cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &SelectDown, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.move_vertical(1, true, window, cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &SelectPageUp, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.move_page(false, true, window, cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &SelectPageDown, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.move_page(true, true, window, cx);
-        cx.stop_propagation();
-    }));
-
-    let root = root.on_action(cx.listener(|this, _: &CloseActiveTab, _window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.request_close_active_tab(cx);
-        cx.stop_propagation();
-    }));
-
-    let root = root.on_action(cx.listener(|this, _: &ReopenClosedTab, _window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.reopen_recently_closed_tab(cx);
-        cx.stop_propagation();
-    }));
-
-    let root = root.on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.zoom_in(window, cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.zoom_out(window, cx);
-        cx.stop_propagation();
-    }));
-    let root = root.on_action(cx.listener(|this, _: &ZoomReset, window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.zoom_reset(window, cx);
-        cx.stop_propagation();
-    }));
-
-    root.on_action(cx.listener(|this, _: &Quit, _window, cx| {
-        this.clear_x11_modifier_chord_state();
-        this.request_quit(cx);
-        cx.stop_propagation();
-    }))
+    root
 }
