@@ -4,11 +4,9 @@ use gpui::{
 };
 
 mod actions;
-mod bench_trace;
-mod crash_log;
+mod diagnostics;
 mod editor_view;
-mod input_adapter;
-mod interactions;
+mod input;
 mod keymap;
 mod launch;
 mod llm;
@@ -27,11 +25,11 @@ use crate::ui::{
     theme::{current_theme, current_theme_id, metrics, Theme, ThemeId},
     InputField, InputFieldEvent,
 };
-#[cfg(test)]
-pub(crate) use input_adapter::{char_range_to_utf16_range, utf16_range_to_char_range_in_text};
 #[cfg(all(test, feature = "internal-invariants"))]
-pub(crate) use interactions::drag_autoscroll_delta;
-use interactions::ActiveDragSelection;
+pub(crate) use input::drag_autoscroll_delta;
+use input::ActiveDragSelection;
+#[cfg(test)]
+pub(crate) use input::{char_range_to_utf16_range, utf16_range_to_char_range_in_text};
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
@@ -451,7 +449,7 @@ impl LstGpuiApp {
 
     pub(crate) fn set_focus(&mut self, target: FocusTarget) {
         if self.focus_target != target {
-            bench_trace::record_label("focus_queued", focus_trace_label(target));
+            diagnostics::record_label("focus_queued", focus_trace_label(target));
             self.focus_target = target;
         }
     }
@@ -486,7 +484,7 @@ impl LstGpuiApp {
             } else {
                 "focus_maintained"
             };
-            bench_trace::record_label(label, focus_trace_label(target));
+            diagnostics::record_label(label, focus_trace_label(target));
         }
         self.focus_last_applied = target;
     }
@@ -887,7 +885,7 @@ pub(crate) fn elapsed_ms(started: Instant) -> f64 {
 }
 
 fn main() {
-    crash_log::install();
+    diagnostics::install();
 
     let launch = parse_launch_args();
     let has_graphical_env =

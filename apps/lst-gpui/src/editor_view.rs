@@ -6,7 +6,7 @@ use gpui::{
 use lst_editor::{EditorCommand as Command, EditorTab as ModelEditorTab, RevealIntent};
 
 use crate::{
-    bench_trace, char_to_line_col,
+    char_to_line_col, diagnostics,
     ui::{
         scrollbar::{
             paint_scrollbar, scroll_for_thumb_drag, scroll_for_track_click, scrollbar_layout,
@@ -28,9 +28,9 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn record_find_metrics(&self, reindex_ms: f64) {
-        bench_trace::record_ms("find_reindex_ms", reindex_ms);
-        bench_trace::record_usize("find_match_count", self.model.find().matches.len());
-        bench_trace::record_usize("find_query_len", self.model.find().query.chars().count());
+        diagnostics::record_ms("find_reindex_ms", reindex_ms);
+        diagnostics::record_usize("find_match_count", self.model.find().matches.len());
+        diagnostics::record_usize("find_query_len", self.model.find().query.chars().count());
     }
 
     pub(crate) fn record_operation(
@@ -40,7 +40,7 @@ impl LstGpuiApp {
         apply_ms: f64,
     ) {
         let tab = self.active_tab();
-        bench_trace::record_operation(
+        diagnostics::record_operation(
             label,
             tab.buffer().len_bytes(),
             tab.line_count(),
