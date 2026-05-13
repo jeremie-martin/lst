@@ -128,9 +128,6 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         ToggleRecentFiles => |this, window, cx| this.toggle_recent_files_panel(window, cx);
         ToggleTheme => |this, _window, cx| this.cycle_theme(cx);
         CleanupText => |this, _window, cx| this.start_cleanup(cx);
-        // No call! entry for SelectNextOccurrence — see hand-written
-        // listener below; it must read x11_ctrl_k_pending BEFORE the macro's
-        // clear_x11_modifier_chord_state() call clobbers it.
         MoveUp => |this, window, cx| this.move_vertical(-1, false, window, cx);
         MoveDown => |this, window, cx| this.move_vertical(1, false, window, cx);
         MovePageUp => |this, window, cx| this.move_page(false, false, window, cx);

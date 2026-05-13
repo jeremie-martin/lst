@@ -205,7 +205,7 @@ impl LstGpuiApp {
                     body,
                     revision,
                     expected_stamp,
-                } => self.start_save_file_job(tab_id, path, body, revision, expected_stamp, cx),
+                } => self.spawn_save_job(tab_id, path, body, revision, expected_stamp, None, cx),
                 EditorEffect::SaveFileAs {
                     tab_id,
                     suggested_name,
@@ -218,12 +218,13 @@ impl LstGpuiApp {
                         self.save_cancelled(tab_id, cx);
                         continue;
                     };
-                    self.start_save_as_file_job(
+                    self.spawn_save_job(
                         tab_id,
                         path,
                         body,
                         revision,
-                        previous_scratchpad_path,
+                        None,
+                        Some(previous_scratchpad_path),
                         cx,
                     );
                 }
@@ -356,38 +357,6 @@ impl LstGpuiApp {
         } else {
             cx.notify();
         }
-    }
-
-    fn start_save_file_job(
-        &mut self,
-        tab_id: TabId,
-        path: PathBuf,
-        body: String,
-        revision: u64,
-        expected_stamp: Option<FileStamp>,
-        cx: &mut Context<Self>,
-    ) {
-        self.spawn_save_job(tab_id, path, body, revision, expected_stamp, None, cx);
-    }
-
-    fn start_save_as_file_job(
-        &mut self,
-        tab_id: TabId,
-        path: PathBuf,
-        body: String,
-        revision: u64,
-        previous_scratchpad_path: Option<PathBuf>,
-        cx: &mut Context<Self>,
-    ) {
-        self.spawn_save_job(
-            tab_id,
-            path,
-            body,
-            revision,
-            None,
-            Some(previous_scratchpad_path),
-            cx,
-        );
     }
 
     fn spawn_save_job(
@@ -526,7 +495,7 @@ impl LstGpuiApp {
             }
             FileConflictDecision::Overwrite => match write {
                 ConflictWrite::Save { revision } => {
-                    self.start_save_file_job(tab_id, path, body, revision, None, cx);
+                    self.spawn_save_job(tab_id, path, body, revision, None, None, cx);
                 }
                 ConflictWrite::Autosave { revision } => {
                     self.apply_autosave_completion(
