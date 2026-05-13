@@ -5,6 +5,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::panic;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use time::OffsetDateTime;
 
@@ -46,21 +47,24 @@ fn record_line(label: &str, value: std::fmt::Arguments<'_>) {
     }
 }
 
-fn trace_path() -> Option<PathBuf> {
-    let path = env::var_os("LST_BENCH_TRACE_FILE")?;
-    if path.is_empty() {
-        return None;
-    }
-    Some(path.into())
+fn trace_path() -> Option<&'static Path> {
+    static CACHED: OnceLock<Option<PathBuf>> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            env::var_os("LST_BENCH_TRACE_FILE")
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from)
+        })
+        .as_deref()
 }
 
-fn append_line(path: PathBuf, line: std::fmt::Arguments<'_>) -> io::Result<()> {
+fn append_line(path: &Path, line: std::fmt::Arguments<'_>) -> io::Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_fmt(line)
 }
 
 fn append_operation(
-    path: PathBuf,
+    path: &Path,
     label: &str,
     bytes: usize,
     lines: usize,

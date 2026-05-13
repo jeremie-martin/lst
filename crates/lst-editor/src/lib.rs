@@ -896,8 +896,8 @@ impl EditorModel {
             C::DeleteLines { first, last } => self.vim_delete_lines(first, last),
             C::ChangeRange { from, to } => { self.vim_delete_range(from, to); self.vim.mode = vim::Mode::Insert; }
             C::ChangeLines { first, last } => { self.vim_change_lines(first, last); self.vim.mode = vim::Mode::Insert; }
-            C::YankRange { from, to } => self.vim.register = vim::Register::Char(self.vim_extract_range(from, to)),
-            C::YankLines { first, last } => self.vim.register = vim::Register::Line(self.vim_extract_lines(first, last)),
+            C::YankRange { from, to } => self.vim.register = vim::Register::Char(vim_edit::extract_range(self.active_tab(), from, to)),
+            C::YankLines { first, last } => self.vim.register = vim::Register::Line(vim_edit::extract_lines(self.active_tab(), first, last)),
             C::EnterInsert => self.vim.mode = vim::Mode::Insert,
             C::PasteAfter => self.vim_paste(false),
             C::PasteBefore => self.vim_paste(true),
@@ -1082,14 +1082,6 @@ impl EditorModel {
             to_open,
             to_close,
         ));
-    }
-
-    fn vim_extract_range(&mut self, from: Position, to: Position) -> String {
-        vim_edit::extract_range(self.active_tab(), from, to)
-    }
-
-    fn vim_extract_lines(&mut self, first: usize, last: usize) -> String {
-        vim_edit::extract_lines(self.active_tab(), first, last)
     }
 
     fn apply_vim_optional(&mut self, request: Option<EditRequest>) {

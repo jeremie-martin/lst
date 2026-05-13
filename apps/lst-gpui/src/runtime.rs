@@ -163,6 +163,16 @@ enum ConflictWrite {
     Autosave { revision: u64 },
 }
 
+#[derive(Debug)]
+enum SaveKind {
+    Save {
+        expected_stamp: Option<FileStamp>,
+    },
+    SaveAs {
+        previous_scratchpad: Option<PathBuf>,
+    },
+}
+
 impl LstGpuiApp {
     pub(crate) fn handle_model_effects(
         &mut self,
@@ -205,7 +215,14 @@ impl LstGpuiApp {
                     body,
                     revision,
                     expected_stamp,
-                } => self.spawn_save_job(tab_id, path, body, revision, expected_stamp, None, cx),
+                } => self.spawn_save_job(
+                    tab_id,
+                    path,
+                    body,
+                    revision,
+                    SaveKind::Save { expected_stamp },
+                    cx,
+                ),
                 EditorEffect::SaveFileAs {
                     tab_id,
                     suggested_name,
@@ -223,8 +240,9 @@ impl LstGpuiApp {
                         path,
                         body,
                         revision,
-                        None,
-                        Some(previous_scratchpad_path),
+                        SaveKind::SaveAs {
+                            previous_scratchpad: previous_scratchpad_path,
+                        },
                         cx,
                     );
                 }
@@ -365,12 +383,15 @@ impl LstGpuiApp {
         path: PathBuf,
         body: String,
         revision: u64,
-        expected_stamp: Option<FileStamp>,
-        save_as_previous_scratchpad: Option<Option<PathBuf>>,
+        kind: SaveKind,
         cx: &mut Context<Self>,
     ) {
         let ticket = self.issue_save_ticket(&path);
         self.begin_save_inflight(&path);
+        let expected_stamp = match &kind {
+            SaveKind::Save { expected_stamp } => *expected_stamp,
+            SaveKind::SaveAs { .. } => None,
+        };
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -379,7 +400,7 @@ impl LstGpuiApp {
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {
-                view.apply_save_outcome(result, save_as_previous_scratchpad, cx);
+                view.apply_save_outcome(result, kind, cx);
             });
         })
         .detach();
@@ -495,7 +516,16 @@ impl LstGpuiApp {
             }
             FileConflictDecision::Overwrite => match write {
                 ConflictWrite::Save { revision } => {
-                    self.spawn_save_job(tab_id, path, body, revision, None, None, cx);
+                    self.spawn_save_job(
+                        tab_id,
+                        path,
+                        body,
+                        revision,
+                        SaveKind::Save {
+                            expected_stamp: None,
+                        },
+                        cx,
+                    );
                 }
                 ConflictWrite::Autosave { revision } => {
                     self.apply_autosave_completion(
@@ -747,12 +777,12 @@ impl LstGpuiApp {
     fn apply_save_outcome(
         &mut self,
         result: SaveFileResult,
-        save_as_previous_scratchpad: Option<Option<PathBuf>>,
+        kind: SaveKind,
         cx: &mut Context<Self>,
     ) {
         let inflight_path = save_file_result_path(&result).to_path_buf();
         self.finish_save_inflight(&inflight_path);
-        let is_save_as = save_as_previous_scratchpad.is_some();
+        let is_save_as = matches!(kind, SaveKind::SaveAs { .. });
         match result {
             SaveFileResult::Saved {
                 tab_id,
@@ -761,7 +791,6 @@ impl LstGpuiApp {
                 stamp,
                 body,
             } => {
-                let recent_path = path.clone();
                 let saved_path = path.clone();
                 let mut saved = false;
                 let mut record_recent = false;
@@ -778,12 +807,15 @@ impl LstGpuiApp {
                                 .is_some_and(|tab| !tab.is_scratchpad()));
                 });
                 if record_recent {
-                    self.recent.record(&recent_path);
+                    self.recent.record(&saved_path);
                 }
-                if let Some(previous_scratchpad_path) = save_as_previous_scratchpad {
+                if let SaveKind::SaveAs {
+                    previous_scratchpad,
+                } = kind
+                {
                     if saved {
                         remove_previous_scratchpad_after_save_as(
-                            previous_scratchpad_path,
+                            previous_scratchpad,
                             &saved_path,
                             self.model.tabs(),
                         );
