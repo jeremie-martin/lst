@@ -10,7 +10,8 @@ const MAX_REDO_BRANCHES: usize = 8;
 pub(crate) struct HistorySnapshot {
     pub(crate) text: String,
     pub(crate) selection: SelectionState,
-    pub(crate) modified: bool,
+    pub(crate) content_epoch: u64,
+    pub(crate) bookmarks: Vec<usize>,
 }
 
 #[derive(Clone)]

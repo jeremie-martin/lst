@@ -17,37 +17,23 @@ use support::{EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn state_trace_records_each_settled_keystroke_in_sequence() -> TestResult {
-    support::run_x11_test("state-trace-per-keystroke", |session| {
+fn state_trace_exposes_final_state_after_text_input() -> TestResult {
+    support::run_x11_test("state-trace-text-input-state", |session| {
         let (mut editor, _path) = session.open("scratch")?;
 
-        // Drain any startup records (focus click, initial paint) so the
-        // assertion below sees only the records produced by our typing.
-        editor.drain_state_records()?;
+        let baseline = editor.read_state()?;
 
         editor.keys("abc")?;
-        let new = editor.drain_state_records()?;
+        let after = editor.read_state()?;
         assert!(
-            new.len() >= 3,
-            "expected at least 3 trace records for 3 keystrokes; got {}",
-            new.len()
+            after.seq > baseline.seq,
+            "trace should advance after text input: {baseline:?} -> {after:?}"
         );
-        for window in new.windows(2) {
-            assert_eq!(
-                window[1].seq,
-                window[0].seq + 1,
-                "trace seq must be monotonically increasing: {:?} → {:?}",
-                window[0].seq,
-                window[1].seq
-            );
-        }
-        let last = new.last().expect("at least one record");
         assert!(
-            last.revision > new[0].revision,
-            "revision should advance over typed characters: {} → {}",
-            new[0].revision,
-            last.revision
+            after.revision > baseline.revision,
+            "revision should advance after text input: {baseline:?} -> {after:?}"
         );
+        assert_eq!(after.cursors[0].head_char, 3, "{after:?}");
         Ok(())
     })
 }

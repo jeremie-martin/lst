@@ -16,6 +16,7 @@ use crate::Result;
 /// to the target window can route the click to the previous pointer location.
 pub(crate) const POINTER_SETTLE: Duration = Duration::from_millis(50);
 const BUTTON_HOLD: Duration = Duration::from_millis(5);
+const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(25);
 const KEY_HOLD: Duration = Duration::from_millis(20);
 pub(crate) const KEY_PHASE_SETTLE: Duration = Duration::from_millis(20);
 
@@ -94,10 +95,9 @@ pub(crate) fn button_release(conn: &RustConnection, root: Window, button: u8) ->
 /// detects double / triple / quadruple clicks by comparing X event
 /// timestamps; X servers stamp at queue time with millisecond resolution,
 /// so a microsecond-tight burst can hand back identical timestamps and
-/// fail the click-count promotion. Sleep a single millisecond between
-/// pairs — well inside the typical click-interval threshold (~200ms) but
-/// long enough to guarantee distinct timestamps on every reasonable
-/// server clock.
+/// fail the click-count promotion. Sleep briefly between pairs — well
+/// inside the typical click-interval threshold (~200ms) but long enough for
+/// the application to observe distinct click phases reliably under load.
 pub(crate) fn multi_click_button(
     conn: &RustConnection,
     root: Window,
@@ -107,7 +107,7 @@ pub(crate) fn multi_click_button(
     for index in 0..count {
         if index > 0 {
             conn.flush()?;
-            thread::sleep(Duration::from_millis(1));
+            thread::sleep(MULTI_CLICK_INTERVAL);
         }
         button_press(conn, root, button)?;
         conn.flush()?;

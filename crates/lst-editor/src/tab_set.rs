@@ -1,5 +1,5 @@
 use crate::tab::{EditorTab, TabId};
-use std::ops::Deref;
+use std::{collections::HashSet, ops::Deref};
 
 pub(crate) struct TabSet {
     tabs: Vec<EditorTab>,
@@ -12,7 +12,7 @@ impl TabSet {
         let mut tabs = Vec::with_capacity(rest.len() + 1);
         tabs.push(first);
         tabs.extend(rest);
-        assert_unique_tab_ids(&tabs);
+        repair_duplicate_tab_ids(&mut tabs);
         let next_tab_id = next_id_after(&tabs);
         Self {
             tabs,
@@ -112,14 +112,20 @@ impl Deref for TabSet {
     }
 }
 
-fn assert_unique_tab_ids(tabs: &[EditorTab]) {
-    for (index, tab) in tabs.iter().enumerate() {
-        if tabs[..index]
-            .iter()
-            .any(|candidate| candidate.id() == tab.id())
-        {
-            panic!("duplicate tab id {}", tab.id().get());
+fn repair_duplicate_tab_ids(tabs: &mut [EditorTab]) {
+    let mut seen = HashSet::with_capacity(tabs.len());
+    let mut next_id = next_id_after(tabs);
+    for tab in tabs {
+        if seen.insert(tab.id()) {
+            continue;
         }
+        while seen.contains(&TabId::from_raw(next_id)) {
+            next_id = next_id.saturating_add(1);
+        }
+        let repaired = TabId::from_raw(next_id);
+        tab.set_id(repaired);
+        seen.insert(repaired);
+        next_id = next_id.saturating_add(1);
     }
 }
 

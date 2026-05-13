@@ -1019,6 +1019,9 @@ impl Render for LstGpuiApp {
             );
         self.schedule_pending_reveal(window, cx);
         self.apply_focus(window, cx);
+        if self.recent.is_open() {
+            self.emit_state_trace(window);
+        }
         root
     }
 }

@@ -1013,7 +1013,11 @@ pub fn next_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
     let body = line_display_text(buffer, line);
     let local_ci = ci - line_start;
     if local_ci >= body.chars().count() {
-        return (ci + 1).min(total);
+        return if line + 1 < buffer.len_lines() {
+            buffer.line_to_char(line + 1)
+        } else {
+            total
+        };
     }
     line_start + next_grapheme_column(&body, local_ci)
 }
@@ -1083,12 +1087,17 @@ pub fn previous_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
     let line = buffer.char_to_line(ci);
     let line_start = buffer.line_to_char(line);
     if ci == line_start {
-        return ci - 1;
+        return if line == 0 {
+            0
+        } else {
+            let previous_line = line - 1;
+            buffer.line_to_char(previous_line) + display_line_char_len(buffer, previous_line)
+        };
     }
     let body = line_display_text(buffer, line);
     let local_ci = ci - line_start;
     if local_ci > body.chars().count() {
-        return ci - 1;
+        return line_start + body.chars().count();
     }
     line_start + previous_grapheme_column(&body, local_ci)
 }

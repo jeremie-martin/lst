@@ -157,22 +157,35 @@ impl EditorModel {
         revision: u64,
         file_stamp: FileStamp,
         saved_body: String,
-    ) {
+    ) -> bool {
         let active_id = self.active_tab_id();
         let Some(tab) = self.tab_mut_by_id(tab_id) else {
-            return;
+            return false;
         };
         if tab.path() != Some(&path) || tab.revision() != revision {
-            return;
+            return false;
         }
         tab.mark_autosaved(file_stamp, &saved_body);
         if tab_id == active_id {
             self.status = format!("Autosaved {}.", path.display());
         }
+        true
     }
 
     pub fn autosave_failed(&mut self, path: PathBuf, message: String) {
         self.status = format!("Autosave failed for {}: {message}", path.display());
+    }
+
+    pub fn refresh_file_stamp_for_tab(
+        &mut self,
+        tab_id: TabId,
+        path: PathBuf,
+        file_stamp: FileStamp,
+    ) -> bool {
+        let Some(tab) = self.tab_mut_by_id(tab_id) else {
+            return false;
+        };
+        tab.refresh_file_stamp_if_path(&path, file_stamp)
     }
 
     pub fn reload_tab_from_disk(

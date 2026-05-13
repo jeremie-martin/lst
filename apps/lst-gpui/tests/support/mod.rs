@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use lst_x11_harness::{Display, Editor, FileWaitOpts, Key, KeyChord, SpawnOpts, StateTraceRecord};
+use lst_x11_harness::{Display, Editor, FileWaitOpts, SpawnOpts, StateTraceRecord};
 
 pub type TestResult = Result<(), Box<dyn Error + Send + Sync>>;
 pub type SupportResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -30,6 +30,7 @@ const FOCUS_QUIET: Duration = Duration::from_millis(75);
 const FOCUS_TIMEOUT: Duration = Duration::from_secs(5);
 const FILE_STABLE: Duration = Duration::from_millis(200);
 const FILE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+const SAVE_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const SCRATCHPAD_DISCOVERY: Duration = Duration::from_secs(10);
 const QUIT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -41,6 +42,8 @@ pub struct ScratchpadSession {
     binary: PathBuf,
     root: PathBuf,
     artifacts: PathBuf,
+    home: PathBuf,
+    state_home: PathBuf,
     drop_handled: bool,
 }
 
@@ -50,13 +53,19 @@ impl ScratchpadSession {
         let binary = editor_binary()?;
         let root = temp_dir(&format!("lst-real-x11-{label}"))?;
         let artifacts = root.join("artifacts");
+        let home = root.join("home");
+        let state_home = root.join("state");
         fs::create_dir_all(&artifacts)?;
+        fs::create_dir_all(&home)?;
+        fs::create_dir_all(&state_home)?;
         env::set_var("LST_X11_ARTIFACT_DIR", &artifacts);
         Ok(Self {
             display,
             binary,
             root,
             artifacts,
+            home,
+            state_home,
             drop_handled: false,
         })
     }
@@ -85,13 +94,14 @@ impl ScratchpadSession {
         let stderr_log_path = self.stderr_log_path(name);
         let state_trace_path = self.state_trace_path(name);
         let (stdout, stderr) = self.log_stdio(name)?;
+        let env = spawn_env(&self.home, &self.state_home, extra_env);
         let mut editor = self.display.spawn_editor(SpawnOpts {
             binary: &self.binary,
             args: &args,
             title: &title,
             stderr,
             stdout,
-            extra_env,
+            extra_env: &env,
             stderr_log_path: Some(&stderr_log_path),
             state_trace_path: Some(&state_trace_path),
         })?;
@@ -119,13 +129,14 @@ impl ScratchpadSession {
         let stderr_log_path = self.stderr_log_path(name);
         let state_trace_path = self.state_trace_path(name);
         let (stdout, stderr) = self.log_stdio(name)?;
+        let env = spawn_env(&self.home, &self.state_home, &[]);
         let mut editor = self.display.spawn_editor(SpawnOpts {
             binary: &self.binary,
             args: &args,
             title: &title,
             stderr,
             stdout,
-            extra_env: &[],
+            extra_env: &env,
             stderr_log_path: Some(&stderr_log_path),
             state_trace_path: Some(&state_trace_path),
         })?;
@@ -188,6 +199,19 @@ impl ScratchpadSession {
     fn state_trace_path(&self, name: &str) -> PathBuf {
         self.artifacts.join(format!("{name}-state-trace.jsonl"))
     }
+}
+
+fn spawn_env<'a>(
+    home: &'a Path,
+    state_home: &'a Path,
+    extra_env: &'a [(&'a OsStr, &'a OsStr)],
+) -> Vec<(&'a OsStr, &'a OsStr)> {
+    let mut env = vec![
+        (OsStr::new("HOME"), home.as_os_str()),
+        (OsStr::new("XDG_STATE_HOME"), state_home.as_os_str()),
+    ];
+    env.extend_from_slice(extra_env);
+    env
 }
 
 impl Drop for ScratchpadSession {
@@ -280,8 +304,8 @@ impl EditorTestExt for Editor<'_> {
     }
 
     fn save(&mut self) -> SupportResult<()> {
-        self.press(KeyChord::Ctrl(Key::Char('s')))?;
-        Ok(())
+        let result = self.send_keys("<C-s>");
+        with_window_artifact(self, "save", result)
     }
 
     fn expect_file(&mut self, path: &Path, expected: &str) -> SupportResult<()> {
@@ -296,7 +320,11 @@ impl EditorTestExt for Editor<'_> {
 
     fn save_then_expect_file(&mut self, path: &Path, expected: &str) -> SupportResult<()> {
         self.save()?;
-        self.expect_file(path, expected)
+        self.expect_file(path, expected)?;
+        self.wait_state("save completion", SAVE_WAIT_TIMEOUT, |record| {
+            !record.active_tab_modified
+        })?;
+        Ok(())
     }
 
     fn wait_for_successful_exit(&mut self, timeout: Duration) -> SupportResult<()> {

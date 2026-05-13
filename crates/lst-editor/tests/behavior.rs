@@ -270,6 +270,42 @@ fn undoing_back_to_the_saved_snapshot_clears_dirty_state() {
 }
 
 #[test]
+fn undoing_away_from_newly_saved_text_marks_buffer_dirty() {
+    let path = PathBuf::from("/tmp/lst-dirty-after-save-undo.txt");
+    let stamp = FileStamp::from_raw(3, Some(1));
+    let tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), path.clone(), "old", Some(stamp));
+    let mut model = EditorModel::from_tab(tab, "Ready.".into());
+
+    model.replace_text(Some(3..3), " saved".into(), UndoBoundary::Break);
+    let save_revision = model.active_tab().revision();
+    assert!(model.save_finished_for_tab(
+        TabId::from_raw(1),
+        path,
+        save_revision,
+        FileStamp::from_raw(9, Some(2)),
+        "old saved".into()
+    ));
+    assert!(!model.active_tab().modified());
+
+    model.execute(Command::Undo);
+
+    assert_eq!(model.snapshot().text, "old");
+    assert!(model.active_tab().modified());
+}
+
+#[test]
+fn crlf_line_ending_is_one_horizontal_delete_boundary() {
+    let mut model = model_with_text("a\r\nb");
+
+    model.set_selection(Selection::collapsed(1));
+    model.execute(Command::MoveHorizontal(1, false));
+    assert_eq!(model.selection().cursor(), 3);
+
+    model.execute(Command::Backspace);
+    assert_eq!(model.snapshot().text, "ab");
+}
+
+#[test]
 fn multi_selection_move_line_up_at_document_boundary_is_a_noop() {
     let mut model = model_with_text("a\nb\nc\n");
     let set =
@@ -314,12 +350,18 @@ fn insert_tab_indents_each_line_touched_by_multiple_selections() {
 }
 
 #[test]
-#[should_panic(expected = "duplicate tab id")]
-fn model_construction_rejects_duplicate_tab_ids() {
+fn model_construction_repairs_duplicate_tab_ids() {
     let first = EditorTab::from_text(TabId::from_raw(1), "one".into(), None, "1");
     let second = EditorTab::from_text(TabId::from_raw(1), "two".into(), None, "2");
 
-    let _ = EditorModel::from_tabs(first, vec![second], "Ready.".into());
+    let model = EditorModel::from_tabs(first, vec![second], "Ready.".into());
+
+    let ids = model
+        .tabs()
+        .iter()
+        .map(|tab| tab.id().get())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![1, 2]);
 }
 
 #[test]
@@ -340,6 +382,29 @@ fn public_selection_offsets_are_normalized_to_grapheme_boundaries() {
 }
 
 #[test]
+fn public_selection_set_offsets_are_coalesced_after_grapheme_normalization() {
+    let mut model = model_with_text("e\u{301}x");
+    let set = SelectionSet::from_selections(
+        vec![
+            Selection::from_range(0..1, false),
+            Selection::from_range(1..2, false),
+        ],
+        1,
+    )
+    .expect("adjacent public selections are valid");
+
+    model.set_selection_set(set);
+
+    let ranges = model
+        .selection_set()
+        .as_slice()
+        .iter()
+        .map(Selection::range)
+        .collect::<Vec<_>>();
+    assert_eq!(ranges, vec![0..2]);
+}
+
+#[test]
 fn bookmarks_shift_with_inserted_lines_before_them() {
     let mut model = model_with_text("a\nb\nc");
     model.set_selection(Selection::collapsed(2));
@@ -350,4 +415,30 @@ fn bookmarks_shift_with_inserted_lines_before_them() {
     model.insert_text("new\n".into());
 
     assert_eq!(model.active_tab().bookmarks(), &[2]);
+}
+
+#[test]
+fn bookmarks_follow_their_line_when_inserting_at_line_start() {
+    let mut model = model_with_text("a\nb\nc");
+    model.set_selection(Selection::collapsed(2));
+    model.execute(Command::ToggleBookmark);
+
+    model.insert_text("new\n".into());
+
+    assert_eq!(model.active_tab().bookmarks(), &[2]);
+}
+
+#[test]
+fn undo_restores_bookmarks_with_text_snapshot() {
+    let mut model = model_with_text("a\nb\nc");
+    model.set_selection(Selection::collapsed(2));
+    model.execute(Command::ToggleBookmark);
+    model.set_selection(Selection::collapsed(0));
+    model.insert_text("new\n".into());
+    assert_eq!(model.active_tab().bookmarks(), &[2]);
+
+    model.execute(Command::Undo);
+
+    assert_eq!(model.snapshot().text, "a\nb\nc");
+    assert_eq!(model.active_tab().bookmarks(), &[1]);
 }

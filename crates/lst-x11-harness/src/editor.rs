@@ -585,11 +585,18 @@ impl<'a> Editor<'a> {
                 .state_trace
                 .as_mut()
                 .and_then(|reader| reader.latest().ok());
+            let mut pending_text_anchor: Option<StateTraceRecord> = None;
             for token in tokens {
                 let before_state = observed_state.clone();
                 let wait_for_state_change = before_state
                     .as_ref()
                     .is_some_and(|state| key_token_expects_state_change(&token, state));
+                let batched_text_change = before_state
+                    .as_ref()
+                    .is_some_and(|state| key_token_has_batched_text_state_change(&token, state));
+                if batched_text_change && pending_text_anchor.is_none() {
+                    pending_text_anchor = before_state.clone();
+                }
                 self.focus_for_keyboard()?;
                 self.dispatch_token(&token)?;
                 // Settle: wait until the editor has painted in response. Short
@@ -616,12 +623,18 @@ impl<'a> Editor<'a> {
                 if wait_for_state_change {
                     let before_state = before_state.expect("checked above");
                     match self.wait_state_change_after_without_consuming(&before_state) {
-                        Ok(state) => observed_state = Some(state),
+                        Ok(state) => {
+                            observed_state = Some(state);
+                            pending_text_anchor = None;
+                        }
                         Err(error) => return Err(error),
                     }
                 } else {
                     observed_state = self.peek_latest_context_after(before_state.as_ref())?;
                 }
+            }
+            if let Some(anchor) = pending_text_anchor {
+                self.wait_state_change_after_without_consuming(&anchor)?;
             }
             Ok(())
         })();
@@ -1264,6 +1277,15 @@ fn key_token_expects_state_change(token: &KeyToken, state: &StateTraceRecord) ->
     }
 }
 
+fn key_token_has_batched_text_state_change(token: &KeyToken, state: &StateTraceRecord) -> bool {
+    matches!(
+        token,
+        KeyToken::Single(chord)
+            if !editor_enter_key_changes_state(chord, state)
+                && plain_insert_text_key_changes_state(chord, state)
+    )
+}
+
 fn page_key_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) -> bool {
     if chord.ctrl || chord.alt || chord.shift || chord.platform || state.focused_input != "editor" {
         return false;
@@ -1330,7 +1352,21 @@ fn editor_chord_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) 
             ctrl: true,
             alt: false,
             shift: false,
-            key: Key::Char('d' | 'u' | 'g'),
+            key: Key::Char('d' | 'u' | 'g' | 'y' | 'z'),
+            platform: false,
+        }
+        | KeyChordSingle {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            key: Key::Backspace | Key::Delete,
+            platform: false,
+        }
+        | KeyChordSingle {
+            ctrl: true,
+            alt: false,
+            shift: false,
+            key: Key::Backspace | Key::Delete,
             platform: false,
         }
         | KeyChordSingle {
@@ -1367,6 +1403,13 @@ fn editor_chord_changes_state(chord: &KeyChordSingle, state: &StateTraceRecord) 
             shift: true,
             platform: false,
             key: Key::Left | Key::Right | Key::Home | Key::End | Key::Tab,
+        }
+        | KeyChordSingle {
+            ctrl: false,
+            alt: true,
+            shift: true,
+            key: Key::Left | Key::Right,
+            platform: false,
         } => true,
         KeyChordSingle {
             ctrl: false,

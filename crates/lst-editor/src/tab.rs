@@ -13,7 +13,7 @@ use ropey::Rope;
 use std::{
     fs::Metadata,
     ops::Range,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -171,7 +171,9 @@ pub struct EditorTab {
     language: Option<Language>,
     language_override: Option<Option<Language>>,
     buffer: Rope,
-    modified: bool,
+    content_epoch: u64,
+    saved_content_epoch: u64,
+    next_content_epoch: u64,
     selection: SelectionState,
     revision: u64,
     line_cache: Option<CachedLines>,
@@ -248,7 +250,9 @@ impl EditorTab {
             language,
             language_override: None,
             buffer: Rope::from_str(text),
-            modified: false,
+            content_epoch: 0,
+            saved_content_epoch: 0,
+            next_content_epoch: 1,
             selection: SelectionState::single(Selection::collapsed(0)),
             revision: 0,
             line_cache: None,
@@ -261,6 +265,10 @@ impl EditorTab {
 
     pub fn id(&self) -> TabId {
         self.id
+    }
+
+    pub(crate) fn set_id(&mut self, id: TabId) {
+        self.id = id;
     }
 
     pub fn path(&self) -> Option<&PathBuf> {
@@ -408,7 +416,7 @@ impl EditorTab {
     }
 
     pub fn modified(&self) -> bool {
-        self.modified
+        self.content_epoch != self.saved_content_epoch
     }
 
     pub fn display_name(&self) -> String {
@@ -427,6 +435,16 @@ impl EditorTab {
     fn touch_content(&mut self) {
         self.revision = self.revision.wrapping_add(1);
         self.line_cache = None;
+    }
+
+    fn touch_text_content(&mut self) {
+        self.content_epoch = self.next_content_epoch;
+        self.next_content_epoch = self.next_content_epoch.saturating_add(1);
+        self.touch_content();
+    }
+
+    fn mark_current_content_saved(&mut self) {
+        self.saved_content_epoch = self.content_epoch;
     }
 
     pub fn len_chars(&self) -> usize {
@@ -619,8 +637,7 @@ impl EditorTab {
         self.marked_range =
             marked_range_after_edit(marked_range_after, primary_inserted_range, self.len_chars());
         if changes_text {
-            self.modified = true;
-            self.touch_content();
+            self.touch_text_content();
         }
 
         let last_edit_position = self.selection().head().min(self.len_chars());
@@ -638,11 +655,11 @@ impl EditorTab {
     pub(crate) fn reset_from_disk(&mut self, text: &str) {
         self.buffer = Rope::from_str(text);
         self.move_to(0);
-        self.modified = false;
+        self.touch_text_content();
+        self.mark_current_content_saved();
         self.marked_range = None;
         self.history.clear();
         self.refresh_language();
-        self.touch_content();
         self.last_edit_position = None;
     }
 
@@ -658,8 +675,20 @@ impl EditorTab {
 
     pub(crate) fn mark_autosaved(&mut self, file_stamp: FileStamp, saved_body: &str) {
         self.apply_saved_body(saved_body);
-        self.modified = false;
+        self.mark_current_content_saved();
         self.origin.update_file_stamp(file_stamp);
+    }
+
+    pub(crate) fn refresh_file_stamp_if_path(
+        &mut self,
+        path: &Path,
+        file_stamp: FileStamp,
+    ) -> bool {
+        if self.path().map(PathBuf::as_path) != Some(path) {
+            return false;
+        }
+        self.origin.update_file_stamp(file_stamp);
+        true
     }
 
     pub(crate) fn suppress_file_conflict(&mut self, stamp: FileStamp) {
@@ -704,14 +733,19 @@ impl EditorTab {
         HistorySnapshot {
             text: self.buffer_text(),
             selection: self.selection.clone(),
-            modified: self.modified,
+            content_epoch: self.content_epoch,
+            bookmarks: self.bookmarks.clone(),
         }
     }
 
     fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
         self.buffer = Rope::from_str(&snapshot.text);
         self.selection = snapshot.selection;
-        self.modified = snapshot.modified;
+        self.content_epoch = snapshot.content_epoch;
+        self.next_content_epoch = self
+            .next_content_epoch
+            .max(snapshot.content_epoch.saturating_add(1));
+        self.bookmarks = snapshot.bookmarks;
         self.marked_range = None;
         self.touch_content();
     }
@@ -729,7 +763,7 @@ impl EditorTab {
         self.apply_saved_body(saved_body);
         self.origin.mark_saved(path, file_stamp);
         self.refresh_language();
-        self.modified = false;
+        self.mark_current_content_saved();
         true
     }
 
@@ -746,7 +780,7 @@ impl EditorTab {
         self.apply_saved_body(saved_body);
         self.origin.mark_saved_as(path, file_stamp);
         self.refresh_language();
-        self.modified = false;
+        self.mark_current_content_saved();
         true
     }
 
@@ -759,7 +793,7 @@ impl EditorTab {
             normalized_selection_state_for_buffer(&self.buffer, self.selection.clone());
         self.marked_range =
             marked_range_after_edit(self.marked_range.clone(), 0..0, self.len_chars());
-        self.touch_content();
+        self.touch_text_content();
     }
 }
 
@@ -801,9 +835,15 @@ fn remap_bookmarks_after_changes(
         let start = start_line as isize + line_delta;
         let end = start + removed as isize;
         let shift = inserted as isize - removed as isize;
+        let insertion_before_start_line =
+            removed == 0 && inserted > 0 && start_char == buffer.line_to_char(start_line);
 
         for line in &mut mapped {
             if *line < start {
+                continue;
+            }
+            if insertion_before_start_line {
+                *line += inserted as isize;
                 continue;
             }
             if *line > end {
@@ -840,14 +880,43 @@ fn normalized_selection_for_buffer(buffer: &Rope, selection: Selection) -> Selec
 }
 
 fn normalized_selection_set_for_buffer(buffer: &Rope, selection_set: SelectionSet) -> SelectionSet {
-    let len = buffer.len_chars();
     let selections = selection_set
         .as_slice()
         .iter()
         .map(|selection| normalized_selection_for_buffer(buffer, *selection))
         .collect::<Vec<_>>();
     SelectionSet::from_selections_coalescing_cursors(selections, selection_set.primary_index())
-        .unwrap_or_else(|_| selection_set.clamped_to_len(len))
+        .unwrap_or_else(|_| coalesced_normalized_selection_set(buffer, selection_set))
+}
+
+fn coalesced_normalized_selection_set(buffer: &Rope, selection_set: SelectionSet) -> SelectionSet {
+    let mut merged: Vec<(Range<usize>, bool, bool)> = Vec::new();
+    for (index, selection) in selection_set.as_slice().iter().enumerate() {
+        let normalized = normalized_selection_for_buffer(buffer, *selection);
+        let range = normalized.range();
+        let is_primary = index == selection_set.primary_index();
+        if let Some((last_range, last_reversed, last_primary)) = merged.last_mut() {
+            if range.start <= last_range.end {
+                last_range.end = last_range.end.max(range.end);
+                if is_primary {
+                    *last_reversed = normalized.is_reversed();
+                    *last_primary = true;
+                }
+                continue;
+            }
+        }
+        merged.push((range, normalized.is_reversed(), is_primary));
+    }
+    let primary = merged
+        .iter()
+        .position(|(_, _, is_primary)| *is_primary)
+        .unwrap_or(0);
+    let selections = merged
+        .into_iter()
+        .map(|(range, reversed, _)| Selection::from_range(range, reversed))
+        .collect::<Vec<_>>();
+    SelectionSet::from_selections(selections, primary)
+        .unwrap_or_else(|_| SelectionSet::single(Selection::collapsed(0)))
 }
 
 fn normalized_selection_state_for_buffer(

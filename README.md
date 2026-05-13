@@ -74,7 +74,7 @@ There is also an opt-in real-display behavior suite for scratchpad cleanup,
 clipboard, vim, multi-cursor, modifier, and whole-editor workflow coverage:
 
 ```bash
-DISPLAY=:1 cargo test -p lst-gpui --tests -- --ignored --test-threads=1 --nocapture
+DISPLAY=:1 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
 ```
 
 For stable baseline work, use the runner default of one priming run and seven
