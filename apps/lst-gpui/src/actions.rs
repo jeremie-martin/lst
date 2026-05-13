@@ -128,16 +128,9 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         ToggleRecentFiles => |this, window, cx| this.toggle_recent_files_panel(window, cx);
         ToggleTheme => |this, _window, cx| this.cycle_theme(cx);
         CleanupText => |this, _window, cx| this.start_cleanup(cx);
-        SelectNextOccurrence => |this, _window, cx| {
-            let skip = this.x11_ctrl_k_pending;
-            this.update_model(cx, true, |model| {
-                model.execute(if skip {
-                    Command::SkipNextOccurrence
-                } else {
-                    Command::SelectNextOccurrence
-                });
-            });
-        };
+        // No call! entry for SelectNextOccurrence — see hand-written
+        // listener below; it must read x11_ctrl_k_pending BEFORE the macro's
+        // clear_x11_modifier_chord_state() call clobbers it.
         MoveUp => |this, window, cx| this.move_vertical(-1, false, window, cx);
         MoveDown => |this, window, cx| this.move_vertical(1, false, window, cx);
         MovePageUp => |this, window, cx| this.move_page(false, false, window, cx);
@@ -153,6 +146,25 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
         ZoomReset => |this, window, cx| this.zoom_reset(window, cx);
         Quit => |this, _window, cx| this.request_quit(cx);
     }
+
+    // Read the x11_ctrl_k_pending flag BEFORE clearing modifier-chord state,
+    // so a `ctrl-k ctrl-d` chord routes to SkipNextOccurrence instead of
+    // SelectNextOccurrence. The cmd! / call! macros above clear chord state
+    // first, which would race the flag away.
+    let root = root.on_action(
+        cx.listener(|this, _: &SelectNextOccurrence, _: &mut Window, cx| {
+            let skip = this.x11_ctrl_k_pending;
+            this.clear_x11_modifier_chord_state();
+            this.update_model(cx, true, |model| {
+                model.execute(if skip {
+                    Command::SkipNextOccurrence
+                } else {
+                    Command::SelectNextOccurrence
+                });
+            });
+            cx.stop_propagation();
+        }),
+    );
 
     root
 }
