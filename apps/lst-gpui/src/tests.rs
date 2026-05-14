@@ -17,6 +17,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use crate::input::utf16_range_to_char_range;
 #[cfg(feature = "internal-invariants")]
 use crate::syntax::SyntaxHighlightJobKey;
 use crate::syntax::{
@@ -1165,7 +1166,19 @@ fn utf16_range_conversion_handles_surrogate_pairs() {
     let buffer = Rope::from_str("a🙂b");
 
     assert_eq!(char_range_to_utf16_range(&buffer, &(1..2)), 1..3);
+    assert_eq!(utf16_range_to_char_range(&buffer, &(1..3)), 1..2);
     assert_eq!(utf16_range_to_char_range_in_text("a🙂b", &(1..3)), 1..2);
+}
+
+#[gpui::test]
+fn utf16_range_conversion_clamps_offsets_past_buffer_end() {
+    let buffer = Rope::from_str("a🙂b");
+
+    assert_eq!(utf16_range_to_char_range(&buffer, &(1..usize::MAX)), 1..3);
+    assert_eq!(
+        utf16_range_to_char_range(&buffer, &(usize::MAX - 1..usize::MAX)),
+        3..3
+    );
 }
 
 #[cfg(feature = "internal-invariants")]

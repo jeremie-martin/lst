@@ -884,8 +884,12 @@ pub(crate) fn char_range_to_utf16_range(buffer: &Rope, range: &Range<usize>) -> 
     char_to_utf16(buffer, range.start)..char_to_utf16(buffer, range.end)
 }
 
+fn utf16_to_char(buffer: &Rope, utf16_offset: usize) -> usize {
+    buffer.utf16_cu_to_char(utf16_offset.min(buffer.len_utf16_cu()))
+}
+
 pub(crate) fn utf16_range_to_char_range(buffer: &Rope, range: &Range<usize>) -> Range<usize> {
-    buffer.utf16_cu_to_char(range.start)..buffer.utf16_cu_to_char(range.end)
+    utf16_to_char(buffer, range.start)..utf16_to_char(buffer, range.end)
 }
 
 pub(crate) fn utf16_range_to_char_range_in_text(text: &str, range: &Range<usize>) -> Range<usize> {
