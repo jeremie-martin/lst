@@ -35,6 +35,12 @@ pub struct StateTraceRecord {
     pub recent_panel_open: bool,
     pub recent_panel_query: Option<String>,
     #[serde(default)]
+    pub recent_panel_selected_path: Option<String>,
+    #[serde(default)]
+    pub recent_panel_empty_message: Option<String>,
+    #[serde(default)]
+    pub recent_panel_content_search_pending: bool,
+    #[serde(default)]
     pub focused_input: String,
     pub status_bar: String,
     #[serde(default)]

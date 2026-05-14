@@ -160,6 +160,24 @@ impl ScratchpadSession {
         Ok(path)
     }
 
+    pub fn seed_recent_files(&self, paths: &[PathBuf]) -> SupportResult<PathBuf> {
+        let state_path = self.state_home.join("lst").join("recent-files");
+        if let Some(parent) = state_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut body = String::from("lst-recent-files-v1\n");
+        for path in paths {
+            for byte in recent_path_bytes(path) {
+                body.push(hex_digit(byte >> 4));
+                body.push(hex_digit(byte & 0x0f));
+            }
+            body.push('\n');
+        }
+        fs::write(&state_path, body)?;
+        Ok(state_path)
+    }
+
     fn cleanup(&mut self) -> SupportResult<()> {
         if env::var_os("LST_X11_KEEP_TEMP").is_some() {
             self.preserve("LST_X11_KEEP_TEMP");
@@ -504,6 +522,26 @@ fn unique_id() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+fn hex_digit(value: u8) -> char {
+    match value {
+        0..=9 => (b'0' + value) as char,
+        10..=15 => (b'a' + (value - 10)) as char,
+        _ => unreachable!("nibble should fit in hex digit"),
+    }
+}
+
+#[cfg(unix)]
+fn recent_path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn recent_path_bytes(path: &Path) -> Vec<u8> {
+    path.as_os_str().to_string_lossy().as_bytes().to_vec()
 }
 
 pub fn ms(value: u64) -> Duration {

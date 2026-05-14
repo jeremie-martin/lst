@@ -1505,7 +1505,11 @@ fn state_key_context_changed_after(before: &StateTraceRecord, after: &StateTrace
             || after.find.query != before.find.query
             || after.goto_line_input != before.goto_line_input
             || after.recent_panel_open != before.recent_panel_open
-            || after.recent_panel_query != before.recent_panel_query)
+            || after.recent_panel_query != before.recent_panel_query
+            || after.recent_panel_selected_path != before.recent_panel_selected_path
+            || after.recent_panel_empty_message != before.recent_panel_empty_message
+            || after.recent_panel_content_search_pending
+                != before.recent_panel_content_search_pending)
 }
 
 fn state_cursor_signature(record: &StateTraceRecord) -> Vec<(usize, usize, usize, usize)> {

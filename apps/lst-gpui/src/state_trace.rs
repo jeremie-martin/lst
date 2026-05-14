@@ -118,6 +118,9 @@ pub(crate) struct StateTraceRecord {
     pub goto_line_input: Option<String>,
     pub recent_panel_open: bool,
     pub recent_panel_query: Option<String>,
+    pub recent_panel_selected_path: Option<String>,
+    pub recent_panel_empty_message: Option<String>,
+    pub recent_panel_content_search_pending: bool,
     pub focused_input: &'static str,
     pub status_bar: String,
     pub cleanup_button_bounds_px: Option<(f32, f32, f32, f32)>,
@@ -215,6 +218,12 @@ impl LstGpuiApp {
         });
         let find = self.model.find();
         let status_bar = self.status_details();
+        let recent_page = self.recent.page();
+        let recent_panel_selected_path = recent_page
+            .selected_index
+            .and_then(|index| recent_page.visible.get(index))
+            .map(|path| path.to_string_lossy().into_owned());
+        let recent_panel_empty_message = recent_page.empty_message;
         let cleanup_button_bounds_px = self.cleanup_button_bounds_px.map(|bounds| {
             (
                 f32::from(bounds.origin.x),
@@ -257,6 +266,9 @@ impl LstGpuiApp {
                 .recent
                 .is_open()
                 .then(|| self.recent.query().to_string()),
+            recent_panel_selected_path,
+            recent_panel_empty_message,
+            recent_panel_content_search_pending: self.recent.content_search_pending(),
             focused_input: self.state_trace_focus_label(),
             status_bar,
             cleanup_button_bounds_px,
@@ -351,6 +363,9 @@ mod tests {
             goto_line_input: None,
             recent_panel_open: false,
             recent_panel_query: None,
+            recent_panel_selected_path: None,
+            recent_panel_empty_message: None,
+            recent_panel_content_search_pending: false,
             focused_input: "editor",
             status_bar: "INSERT | Ln 1 | Col 4".to_string(),
             cleanup_button_bounds_px: None,
