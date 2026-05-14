@@ -15,8 +15,6 @@ mod runtime;
 mod shell;
 mod state_trace;
 mod syntax;
-#[cfg(test)]
-mod tests;
 mod ui;
 mod viewport;
 
@@ -25,23 +23,16 @@ use crate::ui::{
     theme::{current_theme, current_theme_id, metrics, Theme, ThemeId},
     InputField, InputFieldEvent,
 };
-#[cfg(all(test, feature = "internal-invariants"))]
-pub(crate) use input::drag_autoscroll_delta;
 use input::ActiveDragSelection;
-#[cfg(test)]
-pub(crate) use input::{char_range_to_utf16_range, utf16_range_to_char_range_in_text};
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
     EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FocusTarget, Position,
     RevealIntent, TabId, UNTITLED_PREFIX,
 };
-#[cfg(not(test))]
 use recent::default_recent_files_path;
 use recent::RecentView;
 use ropey::Rope;
-#[cfg(all(test, feature = "internal-invariants"))]
-pub(crate) use runtime::autosave_revision_is_current;
 use state_trace::StateTraceEmitter;
 use std::{
     cell::RefCell,
@@ -56,8 +47,6 @@ use syntax::{
     compute_syntax_highlights, syntax_mode_for_language, CachedSyntaxHighlights,
     SyntaxHighlightJobKey, SyntaxMode, SyntaxSpan,
 };
-#[cfg(all(test, feature = "internal-invariants"))]
-pub(crate) use viewport::row_contains_cursor;
 use viewport::{scroll_to_left, ViewportCache, ViewportGeometry};
 
 pub(crate) const RECENT_CARD_BASIS: f32 = 260.0;
@@ -256,9 +245,6 @@ impl LstGpuiApp {
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line[:Column]"));
         let recent_query_input =
             cx.new(|cx| InputField::new(cx, "Search recent files").with_vertical_navigation());
-        #[cfg(test)]
-        let recent_files_path = launch.recent_files_path.clone();
-        #[cfg(not(test))]
         let recent_files_path = default_recent_files_path();
         let scratchpad_dir = launch.scratchpad_dir.clone();
         let model = initial_model_from_launch(launch);
@@ -335,62 +321,6 @@ impl LstGpuiApp {
         ));
 
         app
-    }
-
-    #[cfg(test)]
-    fn snapshot(&self, cx: &mut Context<Self>) -> AppSnapshot {
-        let page = self.recent.page();
-        AppSnapshot {
-            model: self.model.snapshot(),
-            recent_query_input: self.recent_query_input.read(cx).text(),
-            recent_panel_visible: self.recent.is_open(),
-            recent_paths: self.recent.entries().to_vec(),
-            recent_visible_paths: page.visible,
-            recent_selected_index: page.selected_index,
-            recent_empty_message: page.empty_message,
-            recent_content_search_pending: self.recent.content_search_pending(),
-            focus_target: self.focus_target,
-            #[cfg(feature = "internal-invariants")]
-            tab_view_ids: self
-                .model
-                .tabs()
-                .iter()
-                .filter(|tab| self.tab_views.contains_key(&tab.id()))
-                .map(|tab| tab.id())
-                .collect(),
-            theme_id: current_theme_id(cx),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active_viewport_bounds(&self) -> Option<gpui::Bounds<Pixels>> {
-        self.active_view().geometry.borrow().bounds
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active_painted_rows(&self) -> Vec<viewport::PaintedRow> {
-        self.active_view().geometry.borrow().rows.clone()
-    }
-
-    /// `None` until the wrap layout has been built for the current tab.
-    #[cfg(test)]
-    pub(crate) fn observable_cursor_viewport(&self) -> Option<ObservableCursorViewport> {
-        let active_view = self.active_view();
-        let bounds = active_view.geometry.borrow().bounds?;
-        let cache = active_view.cache.borrow();
-        let layout = cache.wrap_layout.as_ref()?;
-        let cursor_row = viewport::visual_row_for_char(self.active_tab(), &layout.layout)?;
-        let scroll_top = viewport::scroll_top_for(&active_view.scroll);
-        let max_offset = active_view.scroll.max_offset().height.max(px(0.0));
-        let row_height = self.ui_px(metrics::ROW_HEIGHT);
-        Some(ObservableCursorViewport {
-            scroll_top: scroll_top / px(1.0),
-            viewport_height: bounds.size.height / px(1.0),
-            row_height: row_height / px(1.0),
-            cursor_row,
-            max_offset: max_offset / px(1.0),
-            total_rows: layout.layout.total_rows,
-        })
     }
 
     fn ui_scale(&self) -> f32 {
@@ -752,34 +682,6 @@ impl LstGpuiApp {
             cx.notify();
         }
     }
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AppSnapshot {
-    pub(crate) model: lst_editor::EditorSnapshot,
-    pub(crate) recent_query_input: String,
-    pub(crate) recent_panel_visible: bool,
-    pub(crate) recent_paths: Vec<PathBuf>,
-    pub(crate) recent_visible_paths: Vec<PathBuf>,
-    pub(crate) recent_selected_index: Option<usize>,
-    pub(crate) recent_empty_message: Option<String>,
-    pub(crate) recent_content_search_pending: bool,
-    pub(crate) focus_target: FocusTarget,
-    #[cfg(feature = "internal-invariants")]
-    pub(crate) tab_view_ids: Vec<TabId>,
-    pub(crate) theme_id: ThemeId,
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ObservableCursorViewport {
-    pub(crate) scroll_top: f32,
-    pub(crate) viewport_height: f32,
-    pub(crate) row_height: f32,
-    pub(crate) cursor_row: usize,
-    pub(crate) max_offset: f32,
-    pub(crate) total_rows: usize,
 }
 
 fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {

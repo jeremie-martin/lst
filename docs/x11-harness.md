@@ -260,8 +260,8 @@ The real-display suite currently has broad coverage across:
 - chord-hold event trains for held-modifier gestures
 
 This is the project's load-bearing end-to-end test path. When adding a new
-behavior test, prefer extending this suite unless the behavior is better covered
-through the framework-neutral model tests.
+behavior test, prefer extending this suite unless the test protects a pure
+representation invariant or boundary contract that X11 cannot naturally express.
 
 ---
 
@@ -282,8 +282,9 @@ through the framework-neutral model tests.
    user-visible state and move schema/mechanics assertions into trace self-tests.
 
 3. **Modal-panel coverage is still thinner than core editing coverage.** Find
-   has state coverage and goto has workflow coverage, but replace, recent files,
-   and other focus-changing panels need more real-display scenarios.
+   has basic query and navigation coverage, and goto has workflow coverage, but
+   find option controls, replace, recent files, and other focus-changing panels
+   need more real-display scenarios.
 
 4. **Visual pixel correctness is not covered.** The trace can expose viewport
    geometry and text-coordinate rows; it is not a general screenshot oracle for

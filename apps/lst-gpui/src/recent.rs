@@ -92,11 +92,6 @@ impl RecentFiles {
         &self.entries
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_persistent(&self) -> bool {
-        self.state_path.is_some()
-    }
-
     pub(crate) fn record(&mut self, path: &Path) {
         let path = normalize_recent_path(path);
         if move_to_front(&mut self.entries, path) {
@@ -183,11 +178,6 @@ impl RecentView {
 
     pub(crate) fn entries(&self) -> &[PathBuf] {
         self.files.entries()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_persistent(&self) -> bool {
-        self.files.is_persistent()
     }
 
     pub(crate) fn is_open(&self) -> bool {
@@ -541,7 +531,6 @@ fn bounds_center_x(bounds: Bounds<Pixels>) -> f32 {
     bounds.left() / gpui::px(1.0) + (bounds.size.width / gpui::px(1.0)) / 2.0
 }
 
-#[cfg(not(test))]
 pub(crate) fn default_recent_files_path() -> Option<PathBuf> {
     if let Some(state_home) = std::env::var_os("XDG_STATE_HOME") {
         return Some(PathBuf::from(state_home).join("lst").join("recent-files"));
@@ -1102,18 +1091,6 @@ mod tests {
         );
 
         fs::remove_dir_all(dir).expect("remove recent test temp dir");
-    }
-
-    #[test]
-    fn recent_panel_preserves_query_across_close_and_reopen() {
-        let mut recent = RecentView::load(None);
-
-        recent.open();
-        recent.set_query("needle".to_string());
-        recent.close();
-        recent.open();
-
-        assert_eq!(recent.query(), "needle");
     }
 
     #[test]

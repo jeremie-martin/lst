@@ -47,6 +47,47 @@ fn recent_panel_path_query_opens_matching_file() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn recent_panel_path_query_searches_beyond_initial_batch() -> TestResult {
+    support::run_x11_test("recent-path-query-beyond-batch", |session| {
+        let mut paths = Vec::new();
+        for index in 0..65 {
+            paths.push(
+                session.seed_file(&format!("file-{index:02}.txt"), &format!("body {index}\n"))?,
+            );
+        }
+        let target = paths[64].clone();
+        let target_text = path_text(&target);
+        session.seed_recent_files(&paths)?;
+
+        let (mut editor, _scratchpad) = session.open("recent-path-query-beyond-batch")?;
+        editor.keys("<C-r>file-64")?;
+        editor.wait_state(
+            "recent search selected target beyond first batch",
+            secs(5),
+            |record| {
+                record.recent_panel_open
+                    && record.recent_panel_query.as_deref() == Some("file-64")
+                    && record.recent_panel_selected_path.as_deref() == Some(target_text.as_str())
+            },
+        )?;
+
+        editor.keys("<enter>")?;
+        editor.wait_state(
+            "recent target beyond first batch opened",
+            secs(5),
+            |record| {
+                !record.recent_panel_open
+                    && record.active_tab_path.as_deref() == Some(target_text.as_str())
+            },
+        )?;
+        editor.keys("X")?;
+        editor.save_then_expect_file(&target, "Xbody 64\n")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn recent_panel_keyboard_selection_opens_selected_file() -> TestResult {
     support::run_x11_test("recent-keyboard-selection", |session| {
         let one = session.seed_file("one.txt", "one\n")?;
@@ -77,6 +118,32 @@ fn recent_panel_keyboard_selection_opens_selected_file() -> TestResult {
         })?;
         editor.keys("X")?;
         editor.save_then_expect_file(&two, "Xtwo\n")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn recent_panel_preserves_query_across_close_and_reopen() -> TestResult {
+    support::run_x11_test("recent-query-preserved", |session| {
+        let file = session.seed_file("needle.txt", "needle body\n")?;
+        session.seed_recent_files(&[file])?;
+
+        let (mut editor, _scratchpad) = session.open("recent-query-preserved")?;
+        editor.keys("<C-r>needle")?;
+        editor.wait_state("recent query entered", secs(5), |record| {
+            record.recent_panel_open && record.recent_panel_query.as_deref() == Some("needle")
+        })?;
+
+        editor.keys("<escape>")?;
+        editor.wait_state("recent closed after escape", secs(5), |record| {
+            !record.recent_panel_open
+        })?;
+
+        editor.keys("<C-r>")?;
+        editor.wait_state("recent query restored", secs(5), |record| {
+            record.recent_panel_open && record.recent_panel_query.as_deref() == Some("needle")
+        })?;
         Ok(())
     })
 }

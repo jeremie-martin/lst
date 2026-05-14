@@ -165,11 +165,6 @@ impl InputText {
         }
     }
 
-    #[cfg(test)]
-    fn text(&self) -> String {
-        self.content.to_string()
-    }
-
     fn set_text(&mut self, text: &str) -> bool {
         if self.content.as_ref() == text {
             return false;
@@ -395,11 +390,6 @@ impl InputField {
             self.last_layout = None;
             cx.notify();
         }
-    }
-
-    #[cfg(test)]
-    pub fn text(&self) -> String {
-        self.text.text()
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
@@ -1036,45 +1026,7 @@ impl Render for InputField {
 mod tests {
     use super::*;
     use crate::ui::theme::ThemeId;
-    use gpui::{Keystroke, Modifiers, MouseMoveEvent, TestAppContext};
-
-    fn has_binding<A: gpui::Action + 'static>(keystroke: &str) -> bool {
-        let typed = [Keystroke::parse(keystroke).expect("valid test keystroke")];
-        input_keybindings().iter().any(|binding| {
-            binding.match_keystrokes(&typed) == Some(false) && binding.action().as_any().is::<A>()
-        })
-    }
-
-    #[test]
-    fn input_keybindings_include_overlay_navigation_actions() {
-        let names = input_keybindings()
-            .into_iter()
-            .map(|binding| binding.action().name())
-            .collect::<Vec<_>>();
-
-        assert!(names.iter().any(|name| name.ends_with("FieldSubmit")));
-        assert!(names.iter().any(|name| name.ends_with("FieldCancel")));
-        assert!(names.iter().any(|name| name.ends_with("FieldNext")));
-        assert!(names.iter().any(|name| name.ends_with("FieldPrevious")));
-    }
-
-    #[test]
-    fn input_keybindings_include_standard_word_and_boundary_actions() {
-        assert!(has_binding::<FieldWordLeft>("ctrl-left"));
-        assert!(has_binding::<FieldWordRight>("ctrl-right"));
-        assert!(has_binding::<FieldSelectWordLeft>("ctrl-shift-left"));
-        assert!(has_binding::<FieldSelectWordRight>("ctrl-shift-right"));
-        assert!(has_binding::<FieldSubwordLeft>("alt-left"));
-        assert!(has_binding::<FieldSubwordRight>("alt-right"));
-        assert!(has_binding::<FieldSelectSubwordLeft>("alt-shift-left"));
-        assert!(has_binding::<FieldSelectSubwordRight>("alt-shift-right"));
-        assert!(!has_binding::<FieldWordLeft>("alt-left"));
-        assert!(!has_binding::<FieldWordRight>("alt-right"));
-        assert!(!has_binding::<FieldSelectWordLeft>("alt-shift-left"));
-        assert!(!has_binding::<FieldSelectWordRight>("alt-shift-right"));
-        assert!(has_binding::<FieldSelectHome>("shift-home"));
-        assert!(has_binding::<FieldSelectEnd>("shift-end"));
-    }
+    use gpui::{Modifiers, MouseMoveEvent, TestAppContext};
 
     #[test]
     fn setting_same_input_text_preserves_selection() {

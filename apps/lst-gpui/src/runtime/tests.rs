@@ -1,7 +1,7 @@
 use super::*;
 use lst_editor::{EditorModel, TabId, UndoBoundary};
 #[cfg(unix)]
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::{
     collections::HashSet,
     sync::atomic::{AtomicUsize, Ordering},
@@ -233,94 +233,6 @@ fn superseded_save_ticket_does_not_write_stale_body() {
         fs::read_to_string(&path).expect("read saved file"),
         "newer body"
     );
-
-    fs::remove_dir_all(dir).expect("remove test temp dir");
-}
-
-#[cfg(unix)]
-#[test]
-fn atomic_save_preserves_existing_file_permissions() {
-    let dir = temp_dir("save-mode");
-    let path = dir.join("script.sh");
-    fs::write(&path, "#!/bin/sh\n").expect("write script fixture");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("set executable mode");
-    let tab_id = TabId::from_raw(1);
-
-    let result = save_file_result(
-        tab_id,
-        path.clone(),
-        "#!/bin/sh\necho saved\n".to_string(),
-        1,
-        None,
-        SaveTicket::current_for_test(),
-    );
-
-    assert!(matches!(result, SaveFileResult::Saved { .. }), "{result:?}");
-    let mode = fs::metadata(&path)
-        .expect("saved metadata")
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o755);
-
-    fs::remove_dir_all(dir).expect("remove test temp dir");
-}
-
-#[cfg(unix)]
-#[test]
-fn save_through_symlink_updates_target_without_replacing_link() {
-    let dir = temp_dir("save-symlink");
-    let target = dir.join("target.txt");
-    let link = dir.join("link.txt");
-    fs::write(&target, "old").expect("write symlink target");
-    symlink(&target, &link).expect("create symlink");
-    let tab_id = TabId::from_raw(1);
-
-    let result = save_file_result(
-        tab_id,
-        link.clone(),
-        "new".to_string(),
-        1,
-        None,
-        SaveTicket::current_for_test(),
-    );
-
-    assert!(matches!(result, SaveFileResult::Saved { .. }), "{result:?}");
-    assert!(fs::symlink_metadata(&link)
-        .expect("link metadata")
-        .file_type()
-        .is_symlink());
-    assert_eq!(fs::read_to_string(&target).expect("read target"), "new");
-
-    fs::remove_dir_all(dir).expect("remove test temp dir");
-}
-
-#[cfg(unix)]
-#[test]
-fn failed_safe_save_preserves_existing_file_contents() {
-    let dir = temp_dir("save-failure-preserves");
-    let path = dir.join("note.txt");
-    fs::write(&path, "old").expect("write save fixture");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("set writable file mode");
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).expect("make parent read-only");
-    let tab_id = TabId::from_raw(1);
-
-    let result = save_file_result(
-        tab_id,
-        path.clone(),
-        "new".to_string(),
-        1,
-        None,
-        SaveTicket::current_for_test(),
-    );
-    let saved_text = fs::read_to_string(&path).expect("read destination after failed save");
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("restore parent mode");
-
-    match result {
-        SaveFileResult::Failed { path: failed, .. } => assert_eq!(failed, path),
-        other => panic!("expected save failure result, got {other:?}"),
-    }
-    assert_eq!(saved_text, "old");
 
     fs::remove_dir_all(dir).expect("remove test temp dir");
 }

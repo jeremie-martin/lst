@@ -57,18 +57,23 @@ This is not a test failure. It is a design failure. The production code has made
 The right response to "this is hard to test" is never "write a more clever test." It is "restructure the production code so the obvious test works."
 
 
-## The test factory
+## Lean non-X11 contracts
 
-A well-structured app can offer a single constructor that wires in null boundaries and produces a fully functional instance for testing. The test exercises the real state machine — real event handling, real state transitions, real text manipulation — with only the external world removed.
+A non-X11 test should have a narrow public contract owned by the module under
+test. It should not instantiate the GPUI app, inspect snapshots, or poke private
+state to approximate a user workflow. That kind of test is usually a stale X11
+test trying to survive in source form.
 
-```rust
-let mut app = App::test("foo bar foo");
-app.update_inner(Message::FindOpen);
-app.update_inner(Message::FindQueryChanged("foo".to_string()));
-assert_eq!(app.find.matches.len(), 3);
-```
+Good remaining examples are parser contracts, filesystem result shapes,
+UTF-16/character boundary conversion, syntax catalog registration, trace JSONL
+reading, and small representation invariants. These tests stay useful because
+they protect a boundary or representation directly, not because they are cheaper
+duplicates of product behavior.
 
-This test exercises the real find logic, the real match computation, the real state update. Nothing is faked except the clipboard and filesystem, which find/replace never touches. The test is short because the code is well-structured, not because the test is clever.
+If setup starts to resemble a product workflow, move the behavior to X11 and
+delete the source-side test. If the behavior cannot be driven through the real
+app yet, put it on the watch list rather than treating the unit test as the
+preferred long-term home.
 
 
 ## Tests as bug detectors
@@ -116,10 +121,17 @@ Treat it as fast compile/domain feedback. It should stay lean enough to run
 often, and it should not grow into a second implementation-sensitive behavior
 suite beside X11.
 
+"Pure invariant" is an allowed exception, not the preferred shape. If an
+assertion describes accepted editor behavior that a user can trigger in the real
+app, specify it through X11 even when a source-side unit test would be shorter.
+Keep source tests for representation invariants, parser/boundary contracts, and
+small algorithms that X11 cannot naturally isolate without brittle test-only
+plumbing.
+
 ### What lives where
 
 - **X11 tests (`apps/lst-gpui/tests/real_x11_*.rs`)** — accepted product behavior: editor commands, mouse/keyboard input, Vim flows, clipboard-visible results, state trace, autosave/save workflows, cursor/selection geometry, and multi-cursor behavior.
-- **Editor core unit tests (`#[cfg(test)] mod tests` in `crates/lst-editor/src`)** — rare pure-algorithm or invariant checks only: text search semantics, Unicode boundary handling, transaction validation, wrapping calculations, and small state containers. Do not rebuild `crates/lst-editor/tests` as a public-model behavior suite when X11 can cover the same user-visible path.
+- **Editor core unit tests (`#[cfg(test)] mod tests` in `crates/lst-editor/src`)** — rare pure-algorithm or invariant checks only: Unicode boundary handling, transaction validation, wrapping calculations, and small state containers. Do not rebuild `crates/lst-editor/tests` as a public-model behavior suite when X11 can cover the same user-visible path.
 - **App-private unit tests** — boundary, parser, syntax, harness, and widget geometry contracts that are not accepted product behavior by themselves. Keep these lean; user-visible editing behavior belongs in X11.
 - **Optional invariant suites** — private coordination checks behind explicit package/feature selections when they protect important internals without pretending to be product behavior.
 
@@ -128,11 +140,19 @@ documents implementation mechanics, delete it or reduce it to the smallest
 invariant that still earns its keep. If it protects user-visible behavior, cover
 that behavior through X11 whenever possible.
 
+Before adding or keeping a non-X11 test, ask two questions:
+
+1. Can a user drive this behavior through the real app today?
+2. Would deleting this source test leave an internal representation or boundary
+   contract meaningfully less protected?
+
+If the answer to the first question is yes and the second is no, write or keep
+the X11 test and prune the source test.
+
 ### Test-only escape hatches in production code
 
 A few `#[cfg(test)]` items remain in production code. Each is justified or it should be removed:
 
-- `LstGpuiApp::flush_pending_reveal_for_test` — frame-timing escape hatch. GPUI's `cx.on_next_frame` does not always fire under `run_until_parked` before the next paint commits, so tests that assert on observable scroll behaviour need to drain the queued reveal explicitly. The behaviour under test is observable; only the frame timing is bypassed.
 - `process::exit(0)` vs `cx.defer(|app| app.quit())` in `finish_quit` — unavoidable platform difference. Tests cannot terminate the host process. The only `#[cfg(test)]` left in `finish_quit` is the exit step itself.
 
 
@@ -144,7 +164,7 @@ Testability is a leading indicator of code quality. When you notice:
 |---|---|
 | Many fakes needed to instantiate one struct | Struct has too many responsibilities |
 | Tests break when internals change | Struct lacks a clean public interface |
-| Same setup boilerplate in every test | Missing test factory or builder |
+| Same setup boilerplate in every test | Missing shared harness helper or narrow constructor |
 | Hard to assert on outcomes | Side effects are hidden or state is inaccessible |
 | Test requires complex orchestration | Components are implicitly coupled through shared mutable state |
 | "Works in tests, breaks in production" | Fakes diverged from real behavior — too many fakes |

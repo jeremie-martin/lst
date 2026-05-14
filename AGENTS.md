@@ -12,8 +12,8 @@ The active editor is the GPUI implementation in `apps/lst-gpui`. The repository 
 - `apps/lst-gpui`: GPUI desktop app, rendering, input adaptation, runtime file/clipboard/display effects, and app-private UI widgets under `src/ui`. Should mostly adapt desktop events to `lst-editor` contracts and render observable state.
 - `crates/lst-x11-harness`: in-process X11 driver for spawning the editor binary and synthesizing real keyboard/mouse input under `DISPLAY`. This is the canonical behavior-spec harness for accepted editor behavior. Outside `default-members` because it has no purpose without an X server.
 - `apps/lst-gpui/examples/bench_editor_x11.rs`: real-display X11 benchmark runner.
-- Inline tests in `crates/lst-editor/src`: small pure-algorithm and invariant checks only. Do not reintroduce `crates/lst-editor/tests` as a duplicate behavior suite when X11 can cover the same user-visible path.
-- `apps/lst-gpui/src/tests.rs` and `apps/lst-gpui/tests`: app tests plus the real-display test suites (`real_x11_*.rs`) on top of `lst-x11-harness`. Shared fixture lives in `apps/lst-gpui/tests/support/mod.rs` (`ScratchpadSession`, `EditorTestExt::save_then_expect_file`, etc.) — new accepted editor behavior should normally be added here. See `docs/x11-harness.md` for the canonical test shape, the synchronization model, and the current list of harness gaps to be aware of when writing new tests.
+- Inline tests in `crates/lst-editor/src`: small pure-algorithm and invariant checks only, and only when X11 cannot naturally cover the same user-visible path. Do not reintroduce `crates/lst-editor/tests` as a duplicate behavior suite.
+- `apps/lst-gpui/tests`: app real-display suites (`real_x11_*.rs`) on top of `lst-x11-harness`. Shared fixture lives in `apps/lst-gpui/tests/support/mod.rs` (`ScratchpadSession`, `EditorTestExt::save_then_expect_file`, etc.) — new accepted editor behavior should normally be added here. See `docs/x11-harness.md` for the canonical test shape, the synchronization model, and the current list of harness gaps to be aware of when writing new tests.
 - `docs`: testing philosophy, behavior checklist, roadmap, performance workflow.
 
 ## Build, Test, and Development Commands
@@ -51,7 +51,7 @@ Full writeup in `docs/testing-philosophy.md`. The short version:
 - **Assert on observable outcomes** (outputs, state changes, text content), not on call counts or internal method invocations.
 - **If a test requires excessive faking or setup, the production code is wrong.** Restructure the code so the obvious test works. "Hard to test" is a design signal, not a reason to write a cleverer test.
 - **One minimal fake per boundary**, shared across tests. Prefer a `NullX` trait implementation over a dynamic mock framework.
-- **X11 is the behavior gate.** `cargo test` is useful fast feedback, but accepted editor behavior is specified through the real app under `apps/lst-gpui/tests/real_x11_*.rs`. Unit/model tests should stay small and should not duplicate X11 coverage.
+- **X11 is the behavior gate.** `cargo test` is useful fast feedback, but accepted editor behavior is specified through the real app under `apps/lst-gpui/tests/real_x11_*.rs`. Pure invariant tests are allowed exceptions, not the preferred shape; when behavior is user-visible and X11-drivable, rely on X11 and prune the source-side test.
 
 Name tests after observable behavior, e.g. `save_preserves_explicit_language_override` or `search_matches_for_row_slices_to_visible_char_range`. Any user-visible logic change should include or update X11 coverage unless the behavior cannot be driven through the app.
 

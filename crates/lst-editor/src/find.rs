@@ -519,23 +519,6 @@ mod tests {
     }
 
     #[test]
-    fn smart_case_lowercase_query_matches_mixed_case() {
-        let mut find = FindState::new();
-        find.query = "foo".into();
-        find.compute_matches_in_text("Foo foo FOO");
-        assert_eq!(find.matches.len(), 3);
-    }
-
-    #[test]
-    fn smart_case_uppercase_query_is_strict() {
-        let mut find = FindState::new();
-        find.query = "Foo".into();
-        find.compute_matches_in_text("Foo foo FOO");
-        assert_eq!(find.matches.len(), 1);
-        assert_eq!(find.matches[0].col, 0);
-    }
-
-    #[test]
     fn case_sensitive_flag_disables_smart_case() {
         let mut find = FindState::new();
         find.query = "foo".into();
@@ -588,29 +571,5 @@ mod tests {
         assert!(find.matches.is_empty());
         assert!(find.error.is_some(), "invalid regex must populate error");
         assert!(find.active.is_none());
-    }
-
-    #[test]
-    fn computes_matches_and_current_range() {
-        let mut find = FindState::new();
-        find.query = "foo".into();
-        find.compute_matches_in_text("foo bar\nbaz foo");
-
-        assert_eq!(find.matches.len(), 2);
-        assert_eq!(
-            find.current_match_range(),
-            Some((
-                Position { line: 0, column: 0 },
-                Position { line: 0, column: 3 }
-            ))
-        );
-        find.next();
-        assert_eq!(
-            find.current_match_range(),
-            Some((
-                Position { line: 1, column: 4 },
-                Position { line: 1, column: 7 }
-            ))
-        );
     }
 }

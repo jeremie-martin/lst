@@ -16,8 +16,8 @@ use crate::{
     },
     viewport::{
         byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout,
-        line_display_text, scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for,
-        visual_row_for_char, x_for_display_char, WrapLayoutInput,
+        line_display_text, max_scroll_left, max_scroll_top, scroll_left_for, scroll_to_left,
+        scroll_to_top, scroll_top_for, visual_row_for_char, x_for_display_char, WrapLayoutInput,
     },
     EditorScrollbarDrag, EditorTabView, FocusTarget, LstGpuiApp,
 };
@@ -267,21 +267,12 @@ impl LstGpuiApp {
             return;
         };
 
-        if !self.try_reveal_active_cursor(intent, window, cx) {
+        if self.try_reveal_active_cursor(intent, window, cx) {
+            cx.notify();
+        } else {
             self.pending_reveal = Some(intent);
             self.schedule_pending_reveal(window, cx);
         }
-    }
-
-    /// `cx.on_next_frame` may not fire under `run_until_parked` before the next paint commits.
-    #[cfg(test)]
-    pub(crate) fn flush_pending_reveal_for_test(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.reveal_scheduled = false;
-        self.flush_pending_reveal(window, cx);
     }
 
     fn active_cursor_visual_row(&self) -> Option<usize> {
@@ -345,11 +336,14 @@ impl LstGpuiApp {
         };
 
         if let Some(target) = target {
+            if target > px(0.0) && max_scroll_top(&view.scroll) <= px(0.0) {
+                return false;
+            }
             scroll_to_top(&view.scroll, target);
         }
 
         if !self.model.show_wrap() {
-            self.try_reveal_active_cursor_horizontally(view, viewport_bounds, window, cx);
+            return self.try_reveal_active_cursor_horizontally(view, viewport_bounds, window, cx);
         }
         true
     }
@@ -360,23 +354,23 @@ impl LstGpuiApp {
         viewport_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &App,
-    ) {
+    ) -> bool {
         let geometry = view.geometry.borrow();
         let char_width = geometry.painted_char_width;
         if char_width <= px(0.0) {
-            return;
+            return false;
         }
 
         let scroll_left = scroll_left_for(&view.scroll);
         let pad = code_origin_pad(self.model.show_gutter(), self.ui_scale());
         let visible_width = (viewport_bounds.size.width - pad).max(px(0.0));
         if visible_width <= px(0.0) {
-            return;
+            return false;
         }
 
         let visible_cols = ((visible_width / px(1.0)) / (char_width / px(1.0))).floor() as usize;
         if visible_cols == 0 {
-            return;
+            return false;
         }
 
         let cursor_x = self.active_cursor_rendered_x(char_width, window, cx);
@@ -398,9 +392,13 @@ impl LstGpuiApp {
         };
 
         if let Some(target_x) = target_x {
+            if target_x > px(0.0) && max_scroll_left(&view.scroll) <= px(0.0) {
+                return false;
+            }
             drop(geometry);
             scroll_to_left(&view.scroll, target_x);
         }
+        true
     }
 
     fn active_cursor_rendered_x(
