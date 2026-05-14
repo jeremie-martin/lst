@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::{secs, EditorTestExt, TestResult};
+use support::{secs, EditorTestExt, FindChip, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
@@ -52,6 +52,100 @@ fn submitting_find_query_advances_to_next_match() -> TestResult {
                 && matches!(record.cursors.as_slice(), [cursor] if cursor.head_pos() == (1, 4))
         })?;
         assert_eq!(second.cursors[0].head_pos(), (1, 4), "{second:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn case_sensitive_chip_disables_smart_case() -> TestResult {
+    support::run_x11_test("find-chip-case-sensitive", |session| {
+        let path = session.seed_file("find-chip-case.txt", "Foo foo FOO")?;
+        let mut editor = session.open_file("find-chip-case-sensitive", &path)?;
+
+        editor.keys("<C-f>foo")?;
+        editor.expect_find_state("foo", 3)?;
+
+        editor.click_find_chip(FindChip::CaseSensitive)?;
+        let record = editor.wait_state("case-sensitive find", secs(5), |record| {
+            record.find.visible
+                && record.find.query == "foo"
+                && record.find.case_sensitive
+                && record.find.match_count == 1
+        })?;
+        assert!(record.find.case_sensitive, "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn whole_word_chip_restricts_matches_to_word_boundaries() -> TestResult {
+    support::run_x11_test("find-chip-whole-word", |session| {
+        let path = session.seed_file("find-chip-word.txt", "foobar foo_bar foo (foo) foo!")?;
+        let mut editor = session.open_file("find-chip-whole-word", &path)?;
+
+        editor.keys("<C-f>foo")?;
+        editor.expect_find_state("foo", 5)?;
+
+        editor.click_find_chip(FindChip::WholeWord)?;
+        let record = editor.wait_state("whole-word find", secs(5), |record| {
+            record.find.visible
+                && record.find.query == "foo"
+                && record.find.whole_word
+                && record.find.match_count == 3
+        })?;
+        assert!(record.find.whole_word, "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn regex_chip_treats_query_as_pattern() -> TestResult {
+    support::run_x11_test("find-chip-regex-pattern", |session| {
+        let path = session.seed_file("find-chip-regex.txt", "foo foa fo.")?;
+        let mut editor = session.open_file("find-chip-regex-pattern", &path)?;
+
+        editor.keys("<C-f>fo.")?;
+        editor.expect_find_state("fo.", 1)?;
+
+        editor.click_find_chip(FindChip::Regex)?;
+        let record = editor.wait_state("regex find", secs(5), |record| {
+            record.find.visible
+                && record.find.query == "fo."
+                && record.find.use_regex
+                && record.find.match_count == 3
+        })?;
+        assert!(record.find.use_regex, "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn invalid_regex_query_reports_error_and_clears_matches() -> TestResult {
+    support::run_x11_test("find-chip-invalid-regex", |session| {
+        let path = session.seed_file("find-chip-invalid-regex.txt", "[abc] [def]")?;
+        let mut editor = session.open_file("find-chip-invalid-regex", &path)?;
+
+        editor.keys("<C-f>[")?;
+        editor.expect_find_state("[", 2)?;
+
+        editor.click_find_chip(FindChip::Regex)?;
+        let record = editor.wait_state("invalid regex find", secs(5), |record| {
+            record.find.visible
+                && record.find.query == "["
+                && record.find.use_regex
+                && record.find.match_count == 0
+                && record.find.active_index.is_none()
+                && record
+                    .find
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.starts_with("regex:"))
+        })?;
+        assert!(record.find.error.is_some(), "{record:?}");
         Ok(())
     })
 }

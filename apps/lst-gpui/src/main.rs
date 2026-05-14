@@ -222,6 +222,9 @@ struct LstGpuiApp {
     cleanup_in_flight: bool,
     cleanup_message: Option<String>,
     /// Surfaced through the state trace so real-X11 tests can click the
+    /// find chips without relying on fixed shell geometry.
+    find_chip_bounds_px: FindChipBounds,
+    /// Surfaced through the state trace so real-X11 tests can click the
     /// button without depending on theme-name / status-details widths.
     cleanup_button_bounds_px: Option<Bounds<Pixels>>,
     status_details_rendered: String,
@@ -236,6 +239,14 @@ struct LstGpuiApp {
 struct ClosedTabRecord {
     path: PathBuf,
     position: Position,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FindChipBounds {
+    case_sensitive: Option<Bounds<Pixels>>,
+    whole_word: Option<Bounds<Pixels>>,
+    regex: Option<Bounds<Pixels>>,
+    scope: Option<Bounds<Pixels>>,
 }
 
 impl LstGpuiApp {
@@ -292,6 +303,7 @@ impl LstGpuiApp {
             state_trace: StateTraceEmitter::from_env(),
             cleanup_in_flight: false,
             cleanup_message: None,
+            find_chip_bounds_px: FindChipBounds::default(),
             cleanup_button_bounds_px: None,
             status_details_rendered: String::new(),
             closed_tabs_history: Vec::new(),

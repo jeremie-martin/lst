@@ -26,6 +26,14 @@ use lst_x11_harness::{Display, Editor, FileWaitOpts, SpawnOpts, StateTraceRecord
 pub type TestResult = Result<(), Box<dyn Error + Send + Sync>>;
 pub type SupportResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
+#[derive(Clone, Copy, Debug)]
+pub enum FindChip {
+    CaseSensitive,
+    WholeWord,
+    Regex,
+    Scope,
+}
+
 const FOCUS_QUIET: Duration = Duration::from_millis(75);
 const FOCUS_TIMEOUT: Duration = Duration::from_secs(5);
 const FILE_STABLE: Duration = Duration::from_millis(200);
@@ -311,6 +319,9 @@ pub trait EditorTestExt {
         match_count: usize,
     ) -> SupportResult<StateTraceRecord>;
 
+    /// Click one of the visible find-panel option chips.
+    fn click_find_chip(&mut self, chip: FindChip) -> SupportResult<()>;
+
     /// Click the status-bar cleanup (sparkle) button.
     fn click_cleanup_button(&mut self) -> SupportResult<()>;
 }
@@ -390,6 +401,24 @@ impl EditorTestExt for Editor<'_> {
         })
     }
 
+    fn click_find_chip(&mut self, chip: FindChip) -> SupportResult<()> {
+        let record = self.wait_state("find chip bounds", FOCUS_TIMEOUT, |state| {
+            state.find.visible && find_chip_bounds(state, chip).is_some()
+        })?;
+        let (ox, oy, w, h) =
+            find_chip_bounds(&record, chip).ok_or("find chip bounds missing after wait")?;
+        let scale = if record.viewport.scale_factor > 0.0 {
+            record.viewport.scale_factor
+        } else {
+            1.0
+        };
+        let cx = ((ox + w * 0.5) * scale).round() as i32;
+        let cy = ((oy + h * 0.5) * scale).round() as i32;
+        let result = self.click_at(cx, cy);
+        with_window_artifact(self, "find-chip-click", result)?;
+        Ok(())
+    }
+
     fn click_cleanup_button(&mut self) -> SupportResult<()> {
         let record = self.wait_state("cleanup button bounds", FOCUS_TIMEOUT, |state| {
             state.cleanup_button_bounds_px.is_some()
@@ -407,6 +436,15 @@ impl EditorTestExt for Editor<'_> {
         let result = self.click_at(cx, cy);
         with_window_artifact(self, "cleanup-click", result)?;
         Ok(())
+    }
+}
+
+fn find_chip_bounds(record: &StateTraceRecord, chip: FindChip) -> Option<(f32, f32, f32, f32)> {
+    match chip {
+        FindChip::CaseSensitive => record.find.chip_bounds_px.case_sensitive,
+        FindChip::WholeWord => record.find.chip_bounds_px.whole_word,
+        FindChip::Regex => record.find.chip_bounds_px.regex,
+        FindChip::Scope => record.find.chip_bounds_px.scope,
     }
 }
 

@@ -15,7 +15,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use gpui::Window;
+use gpui::{Bounds, Pixels, Window};
 use lst_editor::find::FindScope;
 use serde::Serialize;
 
@@ -148,12 +148,22 @@ pub(crate) struct TraceFind {
     pub visible: bool,
     pub show_replace: bool,
     pub query: String,
+    pub error: Option<String>,
     pub case_sensitive: bool,
     pub whole_word: bool,
     pub use_regex: bool,
     pub scope: &'static str,
     pub match_count: usize,
     pub active_index: Option<usize>,
+    pub chip_bounds_px: TraceFindChipBounds,
+}
+
+#[derive(Serialize, Default)]
+pub(crate) struct TraceFindChipBounds {
+    pub case_sensitive: Option<(f32, f32, f32, f32)>,
+    pub whole_word: Option<(f32, f32, f32, f32)>,
+    pub regex: Option<(f32, f32, f32, f32)>,
+    pub scope: Option<(f32, f32, f32, f32)>,
 }
 
 #[derive(Serialize, Default)]
@@ -250,6 +260,7 @@ impl LstGpuiApp {
                 visible: find.visible,
                 show_replace: find.show_replace,
                 query: find.query.clone(),
+                error: find.error.clone(),
                 case_sensitive: find.case_sensitive,
                 whole_word: find.whole_word,
                 use_regex: find.use_regex,
@@ -259,6 +270,12 @@ impl LstGpuiApp {
                 },
                 match_count: find.matches.len(),
                 active_index: find.active,
+                chip_bounds_px: TraceFindChipBounds {
+                    case_sensitive: trace_bounds(self.find_chip_bounds_px.case_sensitive),
+                    whole_word: trace_bounds(self.find_chip_bounds_px.whole_word),
+                    regex: trace_bounds(self.find_chip_bounds_px.regex),
+                    scope: trace_bounds(self.find_chip_bounds_px.scope),
+                },
             },
             goto_line_input: self.model.goto_line().map(ToOwned::to_owned),
             recent_panel_open: self.recent.is_open(),
@@ -322,6 +339,17 @@ impl LstGpuiApp {
     }
 }
 
+fn trace_bounds(bounds: Option<Bounds<Pixels>>) -> Option<(f32, f32, f32, f32)> {
+    bounds.map(|bounds| {
+        (
+            f32::from(bounds.origin.x),
+            f32::from(bounds.origin.y),
+            f32::from(bounds.size.width),
+            f32::from(bounds.size.height),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,12 +381,14 @@ mod tests {
                 visible: false,
                 show_replace: false,
                 query: String::new(),
+                error: None,
                 case_sensitive: false,
                 whole_word: false,
                 use_regex: false,
                 scope: "document",
                 match_count: 0,
                 active_index: None,
+                chip_bounds_px: TraceFindChipBounds::default(),
             },
             goto_line_input: None,
             recent_panel_open: false,

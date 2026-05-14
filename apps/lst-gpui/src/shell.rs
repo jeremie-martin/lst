@@ -138,6 +138,7 @@ impl LstGpuiApp {
             .bg(rgb(theme.role.panel_bg))
             .border_1()
             .border_color(rgb(theme.role.border))
+            .occlude()
             .child(
                 div()
                     .flex_none()
@@ -174,8 +175,11 @@ impl LstGpuiApp {
                 )
             })
             .child(find_chip(
-                "find-chip-case",
-                "Aa",
+                FindChipSpec {
+                    id: "find-chip-case",
+                    label: "Aa",
+                    kind: FindChipKind::CaseSensitive,
+                },
                 FindChipState {
                     active: case_sensitive,
                     enabled: true,
@@ -186,8 +190,11 @@ impl LstGpuiApp {
                 |this, cx| this.execute_model_command(cx, Command::ToggleFindCaseSensitive),
             ))
             .child(find_chip(
-                "find-chip-word",
-                "W",
+                FindChipSpec {
+                    id: "find-chip-word",
+                    label: "W",
+                    kind: FindChipKind::WholeWord,
+                },
                 FindChipState {
                     active: whole_word,
                     enabled: true,
@@ -198,8 +205,11 @@ impl LstGpuiApp {
                 |this, cx| this.execute_model_command(cx, Command::ToggleFindWholeWord),
             ))
             .child(find_chip(
-                "find-chip-regex",
-                ".*",
+                FindChipSpec {
+                    id: "find-chip-regex",
+                    label: ".*",
+                    kind: FindChipKind::Regex,
+                },
                 FindChipState {
                     active: use_regex,
                     enabled: true,
@@ -210,8 +220,11 @@ impl LstGpuiApp {
                 |this, cx| this.execute_model_command(cx, Command::ToggleFindRegex),
             ))
             .child(find_chip(
-                "find-chip-scope",
-                "In Sel",
+                FindChipSpec {
+                    id: "find-chip-scope",
+                    label: "In Sel",
+                    kind: FindChipKind::Scope,
+                },
                 FindChipState {
                     active: in_selection,
                     enabled: selection_chip_enabled,
@@ -1032,9 +1045,23 @@ struct FindChipState {
     enabled: bool,
 }
 
-fn find_chip<F>(
+#[derive(Clone, Copy)]
+enum FindChipKind {
+    CaseSensitive,
+    WholeWord,
+    Regex,
+    Scope,
+}
+
+#[derive(Clone, Copy)]
+struct FindChipSpec {
     id: &'static str,
     label: &'static str,
+    kind: FindChipKind,
+}
+
+fn find_chip<F>(
+    spec: FindChipSpec,
     state: FindChipState,
     theme: crate::ui::theme::Theme,
     scale: f32,
@@ -1061,8 +1088,29 @@ where
     } else {
         theme.role.text_subtle
     };
-    let label_id: SharedString = id.into();
+    let label_id: SharedString = spec.id.into();
+    let entity = cx.entity();
     div()
+        .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, window, cx| {
+            let captured = bounds.first().copied();
+            entity.update(cx, |this, _| {
+                match spec.kind {
+                    FindChipKind::CaseSensitive => {
+                        this.find_chip_bounds_px.case_sensitive = captured;
+                    }
+                    FindChipKind::WholeWord => {
+                        this.find_chip_bounds_px.whole_word = captured;
+                    }
+                    FindChipKind::Regex => {
+                        this.find_chip_bounds_px.regex = captured;
+                    }
+                    FindChipKind::Scope => {
+                        this.find_chip_bounds_px.scope = captured;
+                    }
+                }
+                this.emit_state_trace(window);
+            });
+        })
         .id(label_id)
         .flex()
         .flex_none()
@@ -1076,12 +1124,15 @@ where
         .when(state.enabled, |s| {
             s.cursor(CursorStyle::PointingHand)
                 .hover(|h| h.bg(rgb(hover_bg)))
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    on_click(this, cx);
-                    cx.stop_propagation();
-                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _window, cx| {
+                        on_click(this, cx);
+                        cx.stop_propagation();
+                    }),
+                )
         })
         .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
         .text_color(rgb(fg))
-        .child(label)
+        .child(spec.label)
 }

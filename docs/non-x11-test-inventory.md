@@ -28,6 +28,15 @@ cannot express.
   - lowercase queries use smart-case matching
   - uppercase queries are case-sensitive
   - submitting an active query advances to the next match
+  - clicking the case-sensitive chip disables smart-case for lowercase queries
+  - clicking the whole-word chip excludes identifier substrings and accepts
+    punctuation-bounded words
+  - clicking the regex chip treats the query as a pattern and surfaces invalid
+    regex errors through the real find panel
+- Tab active-index behavior formerly covered through `TabSet` internals now has
+  X11 specs:
+  - moving the active tab left/right keeps the same file focused
+  - closing the last tab selects the left neighbor
 - Small contracts that still earn their keep were moved to owned modules:
   - launch argument parsing lives in `apps/lst-gpui/src/launch.rs`
   - syntax highlighting contracts live in `apps/lst-gpui/src/syntax/mod.rs`
@@ -41,13 +50,11 @@ cannot express.
 
 ## Remaining Non-X11 Tests
 
-- `crates/lst-editor/src/{document,selection,tab_set,transaction,wrap}.rs`
+- `crates/lst-editor/src/{document,selection,transaction,wrap}.rs`
   contains pure editor-domain invariants: Unicode boundaries, wrapping,
   transaction validation, and small state-container behavior.
-- `crates/lst-editor/src/find.rs` keeps a grapheme-boundary invariant plus
-  watch-listed find-option checks until the X11 harness has stable coverage for
-  option controls and non-ASCII query input. These option checks are not the
-  long-term preferred home for user-facing find behavior.
+- `crates/lst-editor/src/find.rs` keeps only a grapheme-boundary invariant.
+  Find option semantics belong in X11 and are covered there.
 - `apps/lst-gpui/src/runtime/tests.rs` covers filesystem boundary contracts
   that are awkward or brittle to force through a display: scratchpad filename
   collision handling, save/open result shapes, conflict detection, stale save
@@ -82,6 +89,6 @@ cannot express.
 - `apps/lst-gpui/src/runtime/tests.rs`: when a filesystem behavior can be
   cleanly driven through the app, prefer a real X11 spec and delete the helper
   test.
-- `crates/lst-editor/src/find.rs`: move case-sensitive, whole-word, and regex
-  option behavior to X11 once the real app exposes a stable keyboard path or
-  harness support for clicking the find-panel controls.
+- `crates/lst-editor/src/find.rs`: the remaining grapheme-boundary check should
+  move to X11 only when non-ASCII query input is stable enough to avoid a brittle
+  test.

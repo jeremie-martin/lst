@@ -83,12 +83,28 @@ pub struct TraceFind {
     pub visible: bool,
     pub show_replace: bool,
     pub query: String,
+    #[serde(default)]
+    pub error: Option<String>,
     pub case_sensitive: bool,
     pub whole_word: bool,
     pub use_regex: bool,
     pub scope: String,
     pub match_count: usize,
     pub active_index: Option<usize>,
+    #[serde(default)]
+    pub chip_bounds_px: TraceFindChipBounds,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TraceFindChipBounds {
+    #[serde(default)]
+    pub case_sensitive: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    pub whole_word: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    pub regex: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    pub scope: Option<(f32, f32, f32, f32)>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
