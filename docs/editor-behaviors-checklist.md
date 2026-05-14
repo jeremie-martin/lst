@@ -172,16 +172,16 @@ multi-cursor policy is intentionally separate.
 - [x] **Backspace at start of line joins previous line** - Backspace at column 0 removes the line break.
 - [x] **Delete at end of line joins next line** - Delete at line end removes the following line break.
 - [x] **Smart indent on Enter** - Enter preserves the active line's indentation.
-- [x] **Auto-dedent on close bracket** - typing a closer on a whitespace-only line dedents when the language expects it.
-- [x] **Indent/outdent selection** - Tab and Shift-Tab indent or outdent all touched lines; Vim indent commands follow the same user-visible behavior. X11: `real_x11_vim.rs`.
+- [x] **Auto-dedent on close bracket** - typing a closer on a whitespace-only line dedents when the language expects it. X11: `real_x11_language.rs`.
+- [x] **Indent/outdent selection** - Tab and Shift-Tab indent or outdent all touched lines; Vim indent commands follow the same user-visible behavior. X11: `real_x11_language.rs`, `real_x11_vim.rs`.
 - [x] **Move line up/down** - line move commands swap the current line or selected block with neighboring lines.
 - [x] **Duplicate line/selection** - duplicate command duplicates the selected text, or the active line if there is no selection. X11: `real_x11_multi_cursor.rs`.
 - [x] **Delete line** - delete-line removes the active line or selected line block.
 - [x] **Join lines with single-space collapse** - join removes line breaks and collapses surrounding whitespace appropriately.
 - [ ] **Transpose** - transpose adjacent characters or selected units.
-- [x] **Toggle comment line/block** - line and block comments toggle according to the active language.
+- [x] **Toggle comment line/block** - line and block comments toggle according to the active language. X11: `real_x11_language.rs`, `real_x11_multi_cursor_spec.rs`.
 - [x] **Surround with brackets/quotes** - selected text can be surrounded with brackets or quotes; Vim surround commands work. X11: `real_x11_vim.rs`.
-- [x] **Auto-pair brackets/quotes** - typing openers inserts matching closers; typing an existing closer steps over it.
+- [x] **Auto-pair brackets/quotes** - typing openers inserts matching closers; typing an existing closer steps over it. X11: `real_x11_language.rs`, `real_x11_multi_cursor_tdd.rs`.
 
 ## Clipboard
 
@@ -208,8 +208,8 @@ multi-cursor policy is intentionally separate.
 ## Text Input
 
 - [x] **IME composition** - marked text composition, replacement, and unmarking work as a text input flow.
-- [x] **Unicode grapheme clusters** - motion, selection, word behavior, search, and wrapping treat grapheme clusters as indivisible user-visible characters.
-- [x] **Tab to spaces with soft-tab backspace** - Tab inserts the language's indentation unit; Backspace in leading indentation removes one indentation unit when appropriate.
+- [x] **Unicode grapheme clusters** - motion, selection, word behavior, search, and wrapping treat grapheme clusters as indivisible user-visible characters. X11: `real_x11_text_input.rs`.
+- [x] **Tab to spaces with soft-tab backspace** - Tab inserts the language's indentation unit; Backspace in leading indentation removes one indentation unit when appropriate. X11: `real_x11_language.rs`.
 - [ ] **Trim trailing whitespace on save** - save can remove trailing whitespace.
 - [ ] **Ensure final newline on save** - save can ensure a final newline.
 - [x] **Detect/preserve line endings** - files preserve their newline style when saved.
@@ -238,7 +238,7 @@ multi-cursor policy is intentionally separate.
 - [ ] **Recover from crash via swap/journal** - unsaved work can be recovered after a crash.
 - [x] **Multiple tabs/buffers** - users can open, close, activate, and reorder buffers.
 - [ ] **Recently closed reopen** - recently closed buffers can be reopened.
-- [~] **Filetype / language detection** - common languages are detected for syntax and editor behavior, but there is no user-facing language picker or config override UI.
+- [~] **Filetype / language detection** - common languages are detected for syntax and editor behavior, but there is no user-facing language picker or config override UI. X11: `real_x11_language.rs`.
 
 ## Accessibility & Input
 

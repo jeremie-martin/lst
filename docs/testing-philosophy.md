@@ -119,8 +119,8 @@ suite beside X11.
 ### What lives where
 
 - **X11 tests (`apps/lst-gpui/tests/real_x11_*.rs`)** — accepted product behavior: editor commands, mouse/keyboard input, Vim flows, clipboard-visible results, state trace, autosave/save workflows, cursor/selection geometry, and multi-cursor behavior.
-- **Editor integration tests (`crates/lst-editor/tests`)** — small public-model sanity checks and domain contracts that are much cheaper than X11 or cannot be meaningfully driven through the app.
-- **Inline unit tests (`#[cfg(test)] mod tests`)** — rare private pure-algorithm or invariant checks only. Large inline behavior suites should be pruned or replaced by X11 coverage.
+- **Editor core unit tests (`#[cfg(test)] mod tests` in `crates/lst-editor/src`)** — rare pure-algorithm or invariant checks only: text search semantics, Unicode boundary handling, transaction validation, wrapping calculations, and small state containers. Do not rebuild `crates/lst-editor/tests` as a public-model behavior suite when X11 can cover the same user-visible path.
+- **App-private unit tests** — boundary, parser, syntax, harness, and widget geometry contracts that are not accepted product behavior by themselves. Keep these lean; user-visible editing behavior belongs in X11.
 - **Optional invariant suites** — private coordination checks behind explicit package/feature selections when they protect important internals without pretending to be product behavior.
 
 Do not expose private functions just to preserve old unit tests. If a test mostly

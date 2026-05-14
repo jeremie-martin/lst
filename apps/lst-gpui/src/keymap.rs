@@ -114,6 +114,8 @@ pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-/", ToggleComment, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-shift-/", ToggleBlockComment, Some(EDITOR_CONTEXT)),
         KeyBinding::new("cmd-shift-/", ToggleBlockComment, Some(EDITOR_CONTEXT)),
+        KeyBinding::new("ctrl-?", ToggleBlockComment, Some(EDITOR_CONTEXT)),
+        KeyBinding::new("cmd-?", ToggleBlockComment, Some(EDITOR_CONTEXT)),
         KeyBinding::new("left", MoveLeft, Some(EDITOR_CONTEXT)),
         KeyBinding::new("right", MoveRight, Some(EDITOR_CONTEXT)),
         KeyBinding::new("ctrl-left", MoveWordLeft, Some(EDITOR_CONTEXT)),

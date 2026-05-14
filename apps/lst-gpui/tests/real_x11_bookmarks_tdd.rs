@@ -139,3 +139,23 @@ fn ctrl_alt_k_on_marked_line_clears_the_mark() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn bookmarks_track_inserted_lines_and_restore_on_undo() -> TestResult {
+    support::run_x11_test("bookmarks-track-edits", |session| {
+        let path = session.seed_file("bookmarks-track-edits.txt", "a\nb\nc")?;
+        let mut editor = session.open_file("bookmarks-track-edits", &path)?;
+
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<down><C-A-k><C-home><enter>")?;
+
+        editor.keys("<C-home><C-A-l>")?;
+        editor.expect_cursor_heads(&[(2, 0)])?;
+
+        editor.keys("<C-z><C-home><C-A-l>")?;
+        editor.expect_cursor_heads(&[(1, 0)])?;
+        editor.save_then_expect_file(&path, "a\nb\nc")?;
+        Ok(())
+    })
+}

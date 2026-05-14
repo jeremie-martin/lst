@@ -12,7 +12,7 @@ The active editor is the GPUI implementation in `apps/lst-gpui`. The repository 
 - `apps/lst-gpui`: GPUI desktop app, rendering, input adaptation, runtime file/clipboard/display effects, and app-private UI widgets under `src/ui`. Should mostly adapt desktop events to `lst-editor` contracts and render observable state.
 - `crates/lst-x11-harness`: in-process X11 driver for spawning the editor binary and synthesizing real keyboard/mouse input under `DISPLAY`. This is the canonical behavior-spec harness for accepted editor behavior. Outside `default-members` because it has no purpose without an X server.
 - `apps/lst-gpui/examples/bench_editor_x11.rs`: real-display X11 benchmark runner.
-- `crates/lst-editor/tests`: small public-model sanity and domain-contract tests. Do not grow this into a duplicate behavior suite when X11 can cover the same user-visible path.
+- Inline tests in `crates/lst-editor/src`: small pure-algorithm and invariant checks only. Do not reintroduce `crates/lst-editor/tests` as a duplicate behavior suite when X11 can cover the same user-visible path.
 - `apps/lst-gpui/src/tests.rs` and `apps/lst-gpui/tests`: app tests plus the real-display test suites (`real_x11_*.rs`) on top of `lst-x11-harness`. Shared fixture lives in `apps/lst-gpui/tests/support/mod.rs` (`ScratchpadSession`, `EditorTestExt::save_then_expect_file`, etc.) — new accepted editor behavior should normally be added here. See `docs/x11-harness.md` for the canonical test shape, the synchronization model, and the current list of harness gaps to be aware of when writing new tests.
 - `docs`: testing philosophy, behavior checklist, roadmap, performance workflow.
 
