@@ -6,7 +6,7 @@ items must not depend on production implementation details.
 
 Status legend: `[ ]` missing · `[~]` partial · `[x]` done
 
-Status last refreshed: 2026-05-08 (X11-first testing policy and multi-cursor TDD promotion).
+Status last refreshed: 2026-05-14 (behavior-led X11 coverage refresh).
 
 Real-display tests under `apps/lst-gpui/tests/real_x11_*.rs` are the executable
 reference for this checklist. When an item links tests, those tests should assert
@@ -30,7 +30,7 @@ positions, visible modes/panels/status text, or viewport-observable geometry.
 - [x] **Scroll without moving cursor** - scroll commands can reposition the viewport without changing the cursor.
 - [x] **Matching bracket jump** - Vim `%` jumps between matching brackets.
 - [x] **Go to line** - the goto panel accepts a line number, moves there, and returns focus to editing. X11: `real_x11_workflows.rs`, `real_x11_state_trace.rs`.
-- [x] **Go to column** - the goto panel accepts `line:column` and clamps out-of-range values.
+- [x] **Go to column** - the goto panel accepts `line:column` and clamps out-of-range values. X11: `real_x11_workflows.rs`.
 - [ ] **Jump list / navigation history** - jumps between meaningful prior locations.
 - [x] **Last edit location** - Vim `gi` / `g;` return to the last edit location, with `gi` entering Insert.
 
@@ -145,7 +145,7 @@ multi-cursor policy is intentionally separate.
 - [ ] **All cursors blink in phase** - cursor blink state is synchronized across cursors.
 - [ ] **Primary-cursor distinction** - the primary cursor has a subtle visible distinction.
 - [~] **Reveal targets primary or last-moved cursor** - movement keeps the relevant cursor visible, but last-moved behavior is not complete.
-- [ ] **Off-screen cursor indicator** - UI indicates when cursors exist outside the viewport.
+- [x] **Off-screen cursor indicator** - UI indicates when cursors exist outside the viewport. X11: `real_x11_off_screen_cursor_tdd.rs`.
 - [x] **Gutter marker for cursor-bearing lines** - line-number gutter reflects all lines with active cursors.
 - [x] **Status-bar metrics** - status reports multi-cursor counts and selection totals. X11: `real_x11_state_trace.rs`.
 
@@ -178,7 +178,7 @@ multi-cursor policy is intentionally separate.
 - [x] **Duplicate line/selection** - duplicate command duplicates the selected text, or the active line if there is no selection. X11: `real_x11_multi_cursor.rs`.
 - [x] **Delete line** - delete-line removes the active line or selected line block.
 - [x] **Join lines with single-space collapse** - join removes line breaks and collapses surrounding whitespace appropriately.
-- [ ] **Transpose** - transpose adjacent characters or selected units.
+- [x] **Transpose** - transpose adjacent characters. X11: `real_x11_transpose_tdd.rs`.
 - [x] **Toggle comment line/block** - line and block comments toggle according to the active language. X11: `real_x11_language.rs`, `real_x11_multi_cursor_spec.rs`.
 - [x] **Surround with brackets/quotes** - selected text can be surrounded with brackets or quotes; Vim surround commands work. X11: `real_x11_vim.rs`.
 - [x] **Auto-pair brackets/quotes** - typing openers inserts matching closers; typing an existing closer steps over it. X11: `real_x11_language.rs`, `real_x11_multi_cursor_tdd.rs`.
@@ -200,7 +200,7 @@ multi-cursor policy is intentionally separate.
 - [x] **Whole word toggle** - find can restrict matches to whole words.
 - [x] **Regex toggle with capture groups** - find supports regex queries and replacement capture references.
 - [x] **Find in selection scope** - find can restrict matches to the active selection.
-- [x] **Replace / replace all** - single replace and replace-all update matches predictably.
+- [x] **Replace / replace all** - single replace and replace-all update matches predictably. X11: `real_x11_find.rs`, `real_x11_replace_scope_tdd.rs`.
 - [x] **Wrap-around at end** - find navigation wraps at document edges.
 - [x] **Highlight all matches** - all matches remain visibly highlighted while find is active.
 - [x] **Star search** - Vim `*` searches for the word under the cursor.
@@ -210,8 +210,8 @@ multi-cursor policy is intentionally separate.
 - [x] **IME composition** - marked text composition, replacement, and unmarking work as a text input flow.
 - [x] **Unicode grapheme clusters** - motion, selection, word behavior, search, and wrapping treat grapheme clusters as indivisible user-visible characters. X11: `real_x11_text_input.rs`.
 - [x] **Tab to spaces with soft-tab backspace** - Tab inserts the language's indentation unit; Backspace in leading indentation removes one indentation unit when appropriate. X11: `real_x11_language.rs`.
-- [ ] **Trim trailing whitespace on save** - save can remove trailing whitespace.
-- [ ] **Ensure final newline on save** - save can ensure a final newline.
+- [~] **Trim trailing whitespace on save** - save can remove trailing whitespace through the current env-gated option; no user settings UI yet. X11: `real_x11_save_options_tdd.rs`.
+- [~] **Ensure final newline on save** - save can ensure a final newline through the current env-gated option; no user settings UI yet. X11: `real_x11_save_options_tdd.rs`.
 - [x] **Detect/preserve line endings** - files preserve their newline style when saved.
 - [ ] **Detect/preserve encoding** - file encoding detection and preservation are not available.
 
@@ -219,7 +219,9 @@ multi-cursor policy is intentionally separate.
 
 - [x] **Soft wrap** - long logical lines wrap visually and cursor movement respects visual rows.
 - [x] **Visual vs logical line motion** - the editor distinguishes visual-row and logical-line movement.
-- [x] **Line numbers** - absolute, relative, and hybrid line-number modes are available.
+- [x] **Line numbers** - absolute, relative, and hybrid line-number modes are available. X11: `real_x11_chrome.rs`.
+- [x] **Zoom controls** - keyboard zoom in/out/reset updates the visible status bar and returns to the default size. X11: `real_x11_chrome.rs`.
+- [x] **Theme toggle** - the visible theme control cycles the active theme label. X11: `real_x11_chrome.rs`.
 - [ ] **Ruler / column guides** - visible column guides can be shown.
 - [x] **Current line highlight** - the cursor line is visibly highlighted.
 - [ ] **Cursor blink** - cursor blink respects OS or editor settings.
@@ -237,7 +239,7 @@ multi-cursor policy is intentionally separate.
 - [x] **Auto-save** - scratchpad and autosave workflows persist edits. X11: `real_x11_smoke.rs`, `real_x11_workflows.rs`.
 - [ ] **Recover from crash via swap/journal** - unsaved work can be recovered after a crash.
 - [x] **Multiple tabs/buffers** - users can open, close, activate, and reorder buffers.
-- [ ] **Recently closed reopen** - recently closed buffers can be reopened.
+- [x] **Recently closed reopen** - recently closed buffers can be reopened with caret position restored. X11: `real_x11_recently_closed_tdd.rs`.
 - [~] **Filetype / language detection** - common languages are detected for syntax and editor behavior, but there is no user-facing language picker or config override UI. X11: `real_x11_language.rs`.
 
 ## Accessibility & Input
@@ -264,26 +266,22 @@ multi-cursor policy is intentionally separate.
 
 ## Summary
 
-- **Done:** 103
-- **Partial:** 8
-- **Missing:** 53
+- **Done:** 128
+- **Partial:** 12
+- **Missing:** 26
 
 **Strong foundation:** Vim editing workflows, viewport motion and scroll
 margin, soft wrap, undo/redo, autosave, find/replace, mouse selection,
 clipboard and PRIMARY, IME composition, gutter modes, current-line highlight,
 line-ending preservation, grapheme-aware text behavior, scrollbars, horizontal
-scrolling, keyboard-driven buffer workflows, and the real-display X11 suite.
+scrolling, keyboard-driven buffer workflows, theme/zoom chrome, recently closed
+tabs, save-option hooks, and the real-display X11 suite.
 
 **Biggest gaps to close for idiomatic behavior:**
 
-1. Multi-cursor per-cursor motion.
-2. Multi-cursor line, Vim, find-scope, indent, comment, duplicate, and move-line operations.
-3. Multi-cursor creation polish: Ctrl-U history, Ctrl-K Ctrl-D skip, Shift-Alt-I, and a dedicated word-occurrence binding.
-4. Column/block selection on the canonical Shift-Alt-drag gesture.
-5. Cursor blink respecting OS/editor settings.
-6. Trim trailing whitespace and ensure final newline on save.
-7. Recently closed buffer reopen.
-8. Jump list / navigation history.
-9. User-configurable keybindings.
-10. User-facing language picker / manual language override UI.
-11. Paste indentation, transpose, and clipboard history.
+1. Multi-cursor policy gaps: Vim-mode behavior, page/document-edge movement, join-line clusters, and find/replace over multiple selections.
+2. Selection polish: syntax-aware expand selection, additive drag selection, target-cursor drag behavior, and optional keyboard column selection.
+3. Visual polish: cursor blink, primary-cursor distinction, ruler/indent guides, minimap, and large-cursor-count responsiveness.
+4. Jump list / navigation history.
+5. User-configurable keybindings and user-facing language override UI.
+6. Paste indentation, clipboard history, encoding preservation, and crash recovery.

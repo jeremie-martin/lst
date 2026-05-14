@@ -64,6 +64,7 @@ pub(crate) struct PaintedRow {
     pub(crate) cursor_end_inclusive: bool,
     pub(crate) code_line: Option<ShapedLine>,
     pub(crate) gutter_line: Option<ShapedLine>,
+    pub(crate) gutter_text: Option<String>,
 }
 
 pub(crate) struct ViewportPaintState {
@@ -692,11 +693,16 @@ pub(crate) fn prepare_viewport_paint_state(
                 font_size,
                 window,
             );
-            let gutter_line = if show_gutter && segment_ix == 0 {
+            let gutter_text = if show_gutter && segment_ix == 0 {
+                Some(gutter_mode.format(line_ix, cursor_line, cursor_lines))
+            } else {
+                None
+            };
+            let gutter_line = if let Some(gutter_text) = gutter_text.as_ref() {
                 shape_cached_line(
                     &mut cache.gutter_lines,
                     line_ix,
-                    SharedString::from(gutter_mode.format(line_ix, cursor_line, cursor_lines)),
+                    SharedString::from(gutter_text.clone()),
                     theme.style_key(),
                     &gutter_run,
                     font_size,
@@ -719,6 +725,7 @@ pub(crate) fn prepare_viewport_paint_state(
                     && logical_end_char == segment_end_char,
                 code_line,
                 gutter_line,
+                gutter_text,
             });
         }
     }
@@ -986,131 +993,4 @@ fn char_to_byte(text: &str, char_offset: usize) -> usize {
 
 pub(crate) fn byte_index_to_char(text: &str, byte_index: usize) -> usize {
     text[..byte_index.min(text.len())].chars().count()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ui::theme::{SyntaxRole, ThemeId};
-    use lst_editor::Selection;
-
-    fn base_run(theme: Theme) -> TextRun {
-        TextRun {
-            len: 0,
-            font: typography::primary_font(),
-            color: rgb(theme.role.text).into(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        }
-    }
-
-    #[test]
-    fn syntax_style_key_and_colors_change_with_theme() {
-        let dark = ThemeId::Dark.theme();
-        let light = ThemeId::Light.theme();
-        let spans = [SyntaxSpan {
-            start: 0,
-            end: 3,
-            role: SyntaxRole::Keyword,
-        }];
-
-        let (dark_runs, dark_key) =
-            text_runs_for_segment("let value", 0, 9, &spans, &base_run(dark), dark);
-        let (light_runs, light_key) =
-            text_runs_for_segment("let value", 0, 9, &spans, &base_run(light), light);
-
-        assert_ne!(dark_key, light_key);
-        assert_ne!(dark_runs[0].color, light_runs[0].color);
-    }
-
-    #[test]
-    fn wrap_columns_match_painted_code_width_with_gutter() {
-        let viewport_width = px(800.0);
-        let char_width = px(8.0);
-
-        let columns = wrap_columns_for_viewport(viewport_width, char_width, true, true, 1.0);
-
-        assert_eq!(
-            columns,
-            ((800.0 - metrics::GUTTER_WIDTH - metrics::CURSOR_WIDTH) / 8.0).floor() as usize
-        );
-    }
-
-    #[test]
-    fn wrap_columns_match_painted_code_width_without_gutter() {
-        let viewport_width = px(800.0);
-        let char_width = px(8.0);
-
-        let columns = wrap_columns_for_viewport(viewport_width, char_width, false, true, 1.0);
-
-        assert_eq!(
-            columns,
-            ((800.0 - metrics::EDITOR_LEFT_PAD - metrics::CURSOR_WIDTH) / 8.0).floor() as usize
-        );
-    }
-
-    #[test]
-    fn wrap_columns_leave_right_slack_for_the_insert_caret() {
-        let viewport_width = px(metrics::GUTTER_WIDTH + 10.0 * 8.0);
-        let char_width = px(8.0);
-
-        let columns = wrap_columns_for_viewport(viewport_width, char_width, true, true, 1.0);
-
-        assert_eq!(columns, 9);
-    }
-
-    #[test]
-    fn search_matches_for_row_slices_to_visible_char_range() {
-        let matches = vec![0..2, 5..7, 10..12, 15..18, 22..25];
-        let row = PaintedRow {
-            row_top: px(0.0),
-            line_start_char: 10,
-            display_end_char: 20,
-            logical_end_char: 20,
-            cursor_end_inclusive: false,
-            code_line: None,
-            gutter_line: None,
-        };
-
-        assert_eq!(search_matches_for_row(&matches, &row), &[10..12, 15..18]);
-    }
-
-    #[test]
-    fn search_matches_for_row_excludes_adjacent_ranges() {
-        let matches = vec![0..5, 5..10, 10..15, 15..20];
-        let row = PaintedRow {
-            row_top: px(0.0),
-            line_start_char: 10,
-            display_end_char: 15,
-            logical_end_char: 15,
-            cursor_end_inclusive: false,
-            code_line: None,
-            gutter_line: None,
-        };
-
-        assert_eq!(search_matches_for_row(&matches, &row), &matches[2..3]);
-    }
-
-    #[test]
-    fn paint_cursors_emits_one_entry_per_selection_with_collapsed_flag() {
-        let primary = Selection::collapsed(4);
-        let extended = Selection::from_range(7..12, false);
-        let set = SelectionSet::from_selections(vec![primary, extended], 0)
-            .expect("ordered non-overlapping selections");
-
-        let cursors = paint_cursors(&set);
-        assert_eq!(cursors.len(), 2);
-        assert_eq!((cursors[0].char, cursors[0].collapsed), (4, true));
-        assert_eq!((cursors[1].char, cursors[1].collapsed), (12, false));
-    }
-
-    #[test]
-    fn paint_cursors_marks_extended_selection_head_as_non_collapsed() {
-        let selection_set = SelectionSet::single(Selection::from_range(2..8, false));
-        let cursors = paint_cursors(&selection_set);
-        assert_eq!(cursors.len(), 1);
-        assert_eq!(cursors[0].char, 8);
-        assert!(!cursors[0].collapsed);
-    }
 }

@@ -569,6 +569,7 @@ impl LstGpuiApp {
     fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
         let theme = self.theme(cx);
+        self.theme_name_rendered = theme.name.to_string();
         let status_details = self.status_details();
         self.status_details_rendered = status_details.clone();
         div()
@@ -620,14 +621,26 @@ impl LstGpuiApp {
                                     })),
                             )
                     })
-                    .child(
-                        IconButton::new("theme-toggle-button", IconKind::Theme, theme).on_click(
-                            cx.listener(|this, _, _window, cx| {
-                                this.cycle_theme(cx);
-                                cx.stop_propagation();
-                            }),
-                        ),
-                    )
+                    .child({
+                        let entity = cx.entity();
+                        div()
+                            .flex_none()
+                            .on_children_prepainted(
+                                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                                    let captured = bounds.first().copied();
+                                    entity.update(cx, |this, _| {
+                                        this.theme_button_bounds_px = captured;
+                                    });
+                                },
+                            )
+                            .child(
+                                IconButton::new("theme-toggle-button", IconKind::Theme, theme)
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.cycle_theme(cx);
+                                        cx.stop_propagation();
+                                    })),
+                            )
+                    })
                     .child(
                         div()
                             .flex_none()

@@ -1,94 +1,106 @@
 # Non-X11 Test Inventory
 
-This inventory explains the remaining non-X11 tests after pruning the legacy
-GPUI app snapshot suite. The goal is to keep `cargo test` as fast compile and
-domain feedback, not as a second behavior-spec lane beside real-display tests.
+Status: 2026-05-14. This is the source-side test map after the first
+aggressive pruning pass.
 
-Pure invariant tests are allowed exceptions, not a preferred alternative to
-X11. When a feature can be driven through the real app, the source-side test
-should be deleted or reduced to the smallest representation invariant that X11
-cannot express.
+X11 is the behavior gate. A source-side test does not survive merely because it
+is a pure invariant. It needs a narrower justification: it is test
+infrastructure, an external-boundary adapter, or a temporary structural check
+with a clear path to either X11 coverage or deletion.
 
-## Removed Or Ported
+## Pruned Or Ported
 
-- `apps/lst-gpui/src/tests.rs` was deleted. It mixed GPUI snapshots, direct
-  model mutation, keybinding introspection, rendering internals, and product
-  behavior in one large white-box suite.
-- Recent-panel behavior formerly covered through app snapshots now has X11
-  specs:
-  - query can find entries beyond the initial visible batch
-  - query text is preserved across close and reopen
-- Viewport behavior formerly covered through GPUI internals now has X11 specs:
-  - find/goto overlays do not resize the text viewport
-  - `Alt+Z` no-wrap reveals a far-right cursor, and wrapping back on clears
-    horizontal scroll
-  - typing at the end of a long wrapped line keeps the cursor visible
-- Find behavior formerly covered through `FindState` internals now has X11
-  specs:
-  - lowercase queries use smart-case matching
-  - uppercase queries are case-sensitive
-  - submitting an active query advances to the next match
-  - clicking the case-sensitive chip disables smart-case for lowercase queries
-  - clicking the whole-word chip excludes identifier substrings and accepts
-    punctuation-bounded words
-  - clicking the regex chip treats the query as a pattern and surfaces invalid
-    regex errors through the real find panel
-- Tab active-index behavior formerly covered through `TabSet` internals now has
-  X11 specs:
-  - moving the active tab left/right keeps the same file focused
-  - closing the last tab selects the left neighbor
-- Small contracts that still earn their keep were moved to owned modules:
-  - launch argument parsing lives in `apps/lst-gpui/src/launch.rs`
-  - syntax highlighting contracts live in `apps/lst-gpui/src/syntax/mod.rs`
-  - UTF-16/char range conversion lives in `apps/lst-gpui/src/input.rs`
-- Runtime save tests for executable-mode preservation, symlink saves, and
-  failed safe-save preservation were removed because the same user-visible
-  behavior is already covered by `apps/lst-gpui/tests/real_x11_regressions.rs`.
+- `apps/lst-gpui/src/tests.rs` was deleted earlier. It mixed GPUI snapshots,
+  direct model mutation, keybinding introspection, rendering internals, and
+  product behavior in one large white-box suite.
+- `apps/lst-gpui/src/ui/input_field.rs` no longer has source-side tests. The
+  removed tests asserted private input selection state, word/subword helper
+  outputs, and stale-drag internals. Visible panel input replacement is now
+  covered by `real_x11_find.rs::find_query_ctrl_a_replaces_existing_query`.
+- `apps/lst-gpui/src/viewport.rs` no longer has source-side tests. The removed
+  tests asserted paint-helper bookkeeping: syntax style keys, wrap-column math,
+  row-local search slicing, and cursor paint entries. User-visible viewport
+  behavior is covered through `real_x11_viewport.rs`, `real_x11_chrome.rs`,
+  `real_x11_find.rs`, and multi-cursor X11 suites.
+- `apps/lst-gpui/src/ui/scrollbar.rs` no longer has source-side tests. The
+  removed tests pinned private thumb geometry and track-click math instead of a
+  user workflow. Scrolling behavior is covered through viewport and off-screen
+  cursor X11 specs; scrollbar-drag behavior should be added as X11 if it becomes
+  a product contract.
+- `crates/lst-editor/src/document.rs` no longer has source-side tests. The old
+  position-conversion clamp assertion is represented as visible go-to
+  line/column behavior in
+  `real_x11_workflows.rs::goto_line_column_moves_to_requested_column_and_clamps`.
+- `crates/lst-editor/src/selection.rs` no longer has source-side tests. The old
+  word/subword and cursor-coalescing assertions are represented by X11 motion,
+  mouse, and multi-cursor behavior. This pass also added
+  `real_x11_motion.rs::ctrl_right_crosses_decomposed_grapheme_word_without_splitting_it`.
+- `crates/lst-editor/src/find.rs` no longer has source-side tests. The old
+  grapheme-boundary assertion moved to
+  `real_x11_find.rs::find_respects_grapheme_boundaries_for_combining_clusters`.
+- Runtime save tests for executable-mode preservation, symlink saves, and failed
+  safe-save preservation were already removed because the same user-visible
+  behavior is covered by `real_x11_regressions.rs`.
 - Recent-panel query preservation and input-field keybinding registration unit
-  tests were removed in favor of X11 delivery tests that exercise the actual
-  shortcuts and panel focus path.
+  tests were already removed in favor of X11 delivery tests that exercise the
+  actual shortcuts and panel focus path.
 
-## Remaining Non-X11 Tests
+## Remaining Map
 
-- `crates/lst-editor/src/{document,selection,transaction,wrap}.rs`
-  contains pure editor-domain invariants: Unicode boundaries, wrapping,
-  transaction validation, and small state-container behavior.
-- `crates/lst-editor/src/find.rs` keeps only a grapheme-boundary invariant.
-  Find option semantics belong in X11 and are covered there.
-- `apps/lst-gpui/src/runtime/tests.rs` covers filesystem boundary contracts
-  that are awkward or brittle to force through a display: scratchpad filename
-  collision handling, save/open result shapes, conflict detection, stale save
-  tickets, and autosave temp-file completion.
-- `apps/lst-gpui/src/recent.rs` covers recent-file persistence format,
-  normalization, pruning, caps, and content-search limits. Panel behavior
-  belongs in X11.
-- `apps/lst-gpui/src/syntax/{mod.rs,catalog.rs}` covers tree-sitter language
-  registration, injection configuration, and highlight-role contracts. Visual
-  color correctness is intentionally not tested.
-- `apps/lst-gpui/src/input.rs` covers UTF-16 conversion at the IME boundary.
-- `apps/lst-gpui/src/ui/input_field.rs` and
-  `apps/lst-gpui/src/ui/scrollbar.rs` contain widget model and geometry
-  contracts, not accepted editor behavior.
-- `apps/lst-gpui/src/viewport.rs` contains rendering-geometry helper contracts:
-  wrap-column math, row-local search slicing, syntax style keys, and cursor
-  paint entries.
-- `apps/lst-gpui/src/{diagnostics,llm,state_trace}.rs` covers formatting,
-  response parsing, and state-trace serialization contracts.
-- `crates/lst-x11-harness/src/{editor,state_trace}.rs` contains harness
-  self-tests for key-sequence parsing and JSONL trace reading.
-- `apps/lst-gpui/examples/bench_editor_x11.rs` contains benchmark harness
-  parser, corpus, metric, and trace aggregation tests.
+There are 89 non-X11 `#[test]` functions left. They are not preferred behavior
+coverage; they are the remaining exceptions and migration targets.
 
-## Watch List
+### Test Infrastructure
 
-- `apps/lst-gpui/src/ui/input_field.rs`: the remaining text-boundary tests are
-  acceptable as widget model checks, but any panel-level behavior should move
-  to X11.
-- `apps/lst-gpui/src/viewport.rs`: keep only geometry contracts that cannot be
-  asserted through the trace without making tests brittle.
-- `apps/lst-gpui/src/runtime/tests.rs`: when a filesystem behavior can be
-  cleanly driven through the app, prefer a real X11 spec and delete the helper
-  test.
-- `crates/lst-editor/src/find.rs`: the remaining grapheme-boundary check should
-  move to X11 only when non-ASCII query input is stable enough to avoid a brittle
-  test.
+- `crates/lst-x11-harness/src/editor.rs` has 23 parser/self-tests for the
+  key-sequence DSL used by X11 suites.
+- `crates/lst-x11-harness/src/state_trace.rs` has 7 JSONL reader tests for
+  missing files, partial lines, truncation, offset advancement, and latest-record
+  semantics.
+- `apps/lst-gpui/examples/bench_editor_x11.rs` has 6 benchmark-runner tests for
+  scenario parsing, generated corpora, metric selection, medians, and trace
+  aggregation.
+
+These are not editor behavior specs. They protect the tools that make the X11
+lane usable.
+
+### Boundary Adapters
+
+- `apps/lst-gpui/src/launch.rs` has 4 CLI parser tests for `--window-title` and
+  `--scratchpad-dir`, including missing-value errors.
+- `apps/lst-gpui/src/input.rs` has 2 IME UTF-16 conversion tests for surrogate
+  pairs and clamping past the buffer end.
+- `apps/lst-gpui/src/llm.rs` has 2 OpenAI response-parser tests for content
+  extraction and trailing-newline preservation.
+- `apps/lst-gpui/src/diagnostics.rs` has 3 log-format/filesystem tests for
+  session headers, panic entries, and append behavior.
+- `apps/lst-gpui/src/state_trace.rs` has 1 serialization round-trip test.
+- `apps/lst-gpui/src/syntax/{mod.rs,catalog.rs}` has 9 tree-sitter adapter
+  tests for language mapping, injection registration, highlight-role contracts,
+  and multiline parser context.
+
+These should stay small and boundary-shaped. If a test starts asserting editor
+behavior rather than adapter correctness, move the behavior to X11 and delete
+the source-side assertion.
+
+### Migration Targets
+
+- `apps/lst-gpui/src/runtime/tests.rs` has 17 filesystem/runtime tests:
+  scratchpad filename collision handling, save-as cleanup rules, open/save
+  result shapes, stale save tickets, external conflicts, deleted backing files,
+  and autosave temp-file completion. Many of these are user-visible enough to
+  move to X11; the remaining job-ticket checks should disappear as the runtime
+  makes stale states unrepresentable.
+- `apps/lst-gpui/src/recent.rs` has 6 recent-file persistence tests: dedupe,
+  state round-trip, corrupt state, prune, cap, and content-search cap. Panel
+  behavior is already X11-covered; persistence across actual app launches and
+  cap behavior are good next ports.
+- `crates/lst-editor/src/wrap.rs` has 6 wrapping algorithm tests: row segments,
+  wide trailing cells, visual-row mapping, vertical target preservation, and
+  grapheme-cluster integrity. These are user-visible rendering/motion behavior
+  and should be ported with seeded wide-character fixtures plus state-trace row
+  assertions where practical.
+- `crates/lst-editor/src/transaction.rs` has 3 structural validation tests for
+  text-change ordering and inserted-range mapping. These are not accepted
+  behavior specs; keep only until the edit request API makes invalid change sets
+  unrepresentable enough that the tests add no signal.

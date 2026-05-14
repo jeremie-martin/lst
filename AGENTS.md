@@ -51,7 +51,7 @@ Full writeup in `docs/testing-philosophy.md`. The short version:
 - **Assert on observable outcomes** (outputs, state changes, text content), not on call counts or internal method invocations.
 - **If a test requires excessive faking or setup, the production code is wrong.** Restructure the code so the obvious test works. "Hard to test" is a design signal, not a reason to write a cleverer test.
 - **One minimal fake per boundary**, shared across tests. Prefer a `NullX` trait implementation over a dynamic mock framework.
-- **X11 is the behavior gate.** `cargo test` is useful fast feedback, but accepted editor behavior is specified through the real app under `apps/lst-gpui/tests/real_x11_*.rs`. Pure invariant tests are allowed exceptions, not the preferred shape; when behavior is user-visible and X11-drivable, rely on X11 and prune the source-side test.
+- **X11 is the behavior gate.** `cargo test` is useful fast feedback, but accepted editor behavior is specified through the real app under `apps/lst-gpui/tests/real_x11_*.rs`. A pure invariant is not a free pass; when behavior is user-visible and X11-drivable, rely on X11 and prune the source-side test. Keep source-side tests only when they are boundary/tooling contracts or when there is no practical display-level route yet.
 
 Name tests after observable behavior, e.g. `save_preserves_explicit_language_override` or `search_matches_for_row_slices_to_visible_char_range`. Any user-visible logic change should include or update X11 coverage unless the behavior cannot be driven through the app.
 

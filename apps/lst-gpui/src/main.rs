@@ -227,6 +227,10 @@ struct LstGpuiApp {
     /// Surfaced through the state trace so real-X11 tests can click the
     /// button without depending on theme-name / status-details widths.
     cleanup_button_bounds_px: Option<Bounds<Pixels>>,
+    /// Surfaced through the state trace so real-X11 tests can click the
+    /// visible theme button without depending on fixed status-bar geometry.
+    theme_button_bounds_px: Option<Bounds<Pixels>>,
+    theme_name_rendered: String,
     status_details_rendered: String,
     /// Stack of recently closed file tabs, most-recent-last. `Ctrl+Shift+T`
     /// pops the top entry and reopens it with the cursor restored. Bounded
@@ -305,6 +309,8 @@ impl LstGpuiApp {
             cleanup_message: None,
             find_chip_bounds_px: FindChipBounds::default(),
             cleanup_button_bounds_px: None,
+            theme_button_bounds_px: None,
+            theme_name_rendered: ThemeId::default().theme().name.to_string(),
             status_details_rendered: String::new(),
             closed_tabs_history: Vec::new(),
             _shell_subscriptions: Vec::new(),

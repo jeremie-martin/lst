@@ -59,6 +59,25 @@ fn goto_line_panel_moves_focus_back_to_editor_after_submit() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn goto_line_column_moves_to_requested_column_and_clamps() -> TestResult {
+    support::run_x11_test("workflow-goto-line-column-clamp", |session| {
+        let path = session.seed_file("goto-column.txt", "alpha\nbeta\ngamma")?;
+        let mut editor = session.open_file("goto-column", &path)?;
+
+        editor.keys("<C-g>2:3<enter>")?;
+        editor.expect_cursor_heads(&[(1, 2)])?;
+
+        editor.keys("<C-g>2:99<enter>")?;
+        editor.expect_cursor_heads(&[(1, 4)])?;
+
+        editor.keys("<C-g>99:2<enter>")?;
+        editor.expect_cursor_heads(&[(2, 1)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn ctrl_w_dirty_file_tab_saves_before_close() -> TestResult {
     support::run_x11_test("workflow-dirty-close-save", |session| {
         let path = session.seed_file("dirty-close.txt", "original")?;

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-pub const STATE_TRACE_SCHEMA_VERSION: u32 = 1;
+pub const STATE_TRACE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StateTraceRecord {
@@ -42,9 +42,15 @@ pub struct StateTraceRecord {
     pub recent_panel_content_search_pending: bool,
     #[serde(default)]
     pub focused_input: String,
+    #[serde(default)]
+    pub status_message: String,
     pub status_bar: String,
     #[serde(default)]
     pub cleanup_button_bounds_px: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    pub theme_name: String,
+    #[serde(default)]
+    pub theme_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub viewport: TraceViewport,
 }
 
@@ -186,12 +192,14 @@ impl TraceViewport {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TraceRow {
     pub logical_line: usize,
     pub top_px: f32,
     pub line_start_char: usize,
     pub display_end_char: usize,
+    #[serde(default)]
+    pub gutter_text: Option<String>,
 }
 
 /// Reads a JSONL trace file produced by the editor under
@@ -373,7 +381,7 @@ mod tests {
 
     fn sample_record_line(seq: u64) -> String {
         format!(
-            r#"{{"schema_version":1,"seq":{seq},"revision":{seq},"active_tab_index":0,"active_tab_id":1,"active_tab_path":null,"active_tab_modified":false,"line_count":1,"cursors":[{{"anchor_char":0,"head_char":0,"anchor_line":0,"anchor_col":0,"head_line":0,"head_col":0}}],"primary_cursor_index":0,"marked_range":null,"vim_mode":"INSERT","vim_pending":"","find":{{"visible":false,"show_replace":false,"query":"","case_sensitive":false,"whole_word":false,"use_regex":false,"scope":"document","match_count":0,"active_index":null}},"goto_line_input":null,"recent_panel_open":false,"recent_panel_query":null,"status_bar":"INSERT","viewport":{{"bounds_origin_px":null,"bounds_size_px":null,"char_width_px":0.0,"line_height_px":0.0,"scroll_top_px":0.0,"scroll_left_px":0.0,"rows":[]}}}}"#
+            r#"{{"schema_version":2,"seq":{seq},"revision":{seq},"active_tab_index":0,"active_tab_id":1,"active_tab_path":null,"active_tab_modified":false,"line_count":1,"cursors":[{{"anchor_char":0,"head_char":0,"anchor_line":0,"anchor_col":0,"head_line":0,"head_col":0}}],"primary_cursor_index":0,"marked_range":null,"vim_mode":"INSERT","vim_pending":"","find":{{"visible":false,"show_replace":false,"query":"","case_sensitive":false,"whole_word":false,"use_regex":false,"scope":"document","match_count":0,"active_index":null}},"goto_line_input":null,"recent_panel_open":false,"recent_panel_query":null,"status_message":"Ready.","status_bar":"INSERT","theme_name":"Dark","viewport":{{"bounds_origin_px":null,"bounds_size_px":null,"char_width_px":0.0,"line_height_px":0.0,"scroll_top_px":0.0,"scroll_left_px":0.0,"rows":[]}}}}"#
         )
     }
 

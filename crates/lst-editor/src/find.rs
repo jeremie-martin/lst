@@ -493,28 +493,3 @@ fn expand_match_replacement(
     }
     template.to_string()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn grapheme_boundary_filters_mid_cluster_match() {
-        // First line has the composed form `é` (U+00E9, single codepoint).
-        // Second line has the decomposed form `e` + U+0301 (combining acute).
-        // Querying the combining mark alone must NOT match — the only place
-        // where the byte sequence appears is mid-cluster on the second line.
-        let mut find = FindState::new();
-        find.query = "\u{0301}".into();
-        find.compute_matches_in_text("caf\u{00E9}\ncafe\u{0301}");
-        assert_eq!(find.matches.len(), 0, "mid-cluster match must be filtered");
-
-        // Querying the full decomposed cluster matches the second line only.
-        find.query = "e\u{0301}".into();
-        find.compute_matches_in_text("caf\u{00E9}\ncafe\u{0301}");
-        assert_eq!(find.matches.len(), 1);
-        assert_eq!(find.matches[0].line, 1);
-        assert_eq!(find.matches[0].col, 3);
-        assert_eq!(find.matches[0].char_len, 2);
-    }
-}

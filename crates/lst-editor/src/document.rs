@@ -88,27 +88,3 @@ pub fn line_indent_prefix(buffer: &Rope, line_ix: usize) -> String {
         .take_while(|ch| ch.is_whitespace())
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn position_conversion_clamps_to_line_width() {
-        let buffer = Rope::from_str("abc\ndef");
-        assert_eq!(
-            position_to_char(
-                &buffer,
-                Position {
-                    line: 0,
-                    column: 99
-                }
-            ),
-            3
-        );
-        assert_eq!(
-            char_to_position(&buffer, 5),
-            Position { line: 1, column: 1 }
-        );
-    }
-}

@@ -121,18 +121,19 @@ Treat it as fast compile/domain feedback. It should stay lean enough to run
 often, and it should not grow into a second implementation-sensitive behavior
 suite beside X11.
 
-"Pure invariant" is an allowed exception, not the preferred shape. If an
-assertion describes accepted editor behavior that a user can trigger in the real
-app, specify it through X11 even when a source-side unit test would be shorter.
-Keep source tests for representation invariants, parser/boundary contracts, and
-small algorithms that X11 cannot naturally isolate without brittle test-only
-plumbing.
+"Pure invariant" is not a free pass. A source-side test must justify why the
+behavior cannot be driven through the real app without brittle test-only
+plumbing. If an assertion describes accepted editor behavior that a user can
+trigger in the real app, specify it through X11 even when a source-side unit test
+would be shorter. Keep source tests only for representation invariants,
+parser/boundary contracts, and small algorithms whose user-visible behavior has
+no practical display-level route yet.
 
 ### What lives where
 
 - **X11 tests (`apps/lst-gpui/tests/real_x11_*.rs`)** — accepted product behavior: editor commands, mouse/keyboard input, Vim flows, clipboard-visible results, state trace, autosave/save workflows, cursor/selection geometry, and multi-cursor behavior.
-- **Editor core unit tests (`#[cfg(test)] mod tests` in `crates/lst-editor/src`)** — rare pure-algorithm or invariant checks only: Unicode boundary handling, transaction validation, wrapping calculations, and small state containers. Do not rebuild `crates/lst-editor/tests` as a public-model behavior suite when X11 can cover the same user-visible path.
-- **App-private unit tests** — boundary, parser, syntax, harness, and widget geometry contracts that are not accepted product behavior by themselves. Keep these lean; user-visible editing behavior belongs in X11.
+- **Editor core unit tests (`#[cfg(test)] mod tests` in `crates/lst-editor/src`)** — rare structural checks only, such as transaction validation or wrapping calculations that do not yet have practical X11 coverage. Delete them once X11 carries the behavior or the core representation makes the invalid state unrepresentable.
+- **App-private unit tests** — boundary, parser, syntax, and harness contracts that are not accepted product behavior by themselves. Keep these lean; user-visible editing behavior belongs in X11, including widget behavior when it is observable through a real panel.
 - **Optional invariant suites** — private coordination checks behind explicit package/feature selections when they protect important internals without pretending to be product behavior.
 
 Do not expose private functions just to preserve old unit tests. If a test mostly

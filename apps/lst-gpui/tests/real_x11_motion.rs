@@ -92,6 +92,20 @@ fn ctrl_right_advances_cursor_across_word_boundaries() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_right_crosses_decomposed_grapheme_word_without_splitting_it() -> TestResult {
+    support::run_x11_test("motion-ctrl-right-grapheme-word", |session| {
+        let path = session.seed_file("grapheme-word.txt", "nai\u{0308}ve word")?;
+        let mut editor = session.open_file("motion-ctrl-right-grapheme-word", &path)?;
+
+        editor.keys("<C-home><C-right>")?;
+        let record = editor.expect_cursor_heads(&[(0, 6)])?;
+        assert_eq!(record.cursors[0].head_col, 6, "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn alt_right_subword_motion_lands_inside_camel_and_snake_runs() -> TestResult {
     // "fooBar_baz" should produce subword stops at the case transition
     // (Bar) and the snake separator (_). Don't pin exact stops; assert

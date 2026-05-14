@@ -21,7 +21,7 @@ use serde::Serialize;
 
 use crate::{char_to_line_col, focus_trace_label, LstGpuiApp};
 
-pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 1;
+pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 2;
 
 /// Holds the state-trace path and emitter state. Constructed once at app
 /// init from the env var; subsequent calls to `try_emit` are no-ops when
@@ -122,8 +122,11 @@ pub(crate) struct StateTraceRecord {
     pub recent_panel_empty_message: Option<String>,
     pub recent_panel_content_search_pending: bool,
     pub focused_input: &'static str,
+    pub status_message: String,
     pub status_bar: String,
     pub cleanup_button_bounds_px: Option<(f32, f32, f32, f32)>,
+    pub theme_name: String,
+    pub theme_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub viewport: TraceViewport,
 }
 
@@ -187,6 +190,7 @@ pub(crate) struct TraceRow {
     pub top_px: f32,
     pub line_start_char: usize,
     pub display_end_char: usize,
+    pub gutter_text: Option<String>,
 }
 
 impl LstGpuiApp {
@@ -227,6 +231,10 @@ impl LstGpuiApp {
             end: r.end,
         });
         let find = self.model.find();
+        let status_message = self
+            .cleanup_message
+            .clone()
+            .unwrap_or_else(|| self.model.status().to_string());
         let status_bar = self.status_details();
         let recent_page = self.recent.page();
         let recent_panel_selected_path = recent_page
@@ -242,6 +250,7 @@ impl LstGpuiApp {
                 f32::from(bounds.size.height),
             )
         });
+        let theme_button_bounds_px = trace_bounds(self.theme_button_bounds_px);
         StateTraceRecord {
             schema_version: STATE_TRACE_SCHEMA_VERSION,
             seq,
@@ -287,8 +296,11 @@ impl LstGpuiApp {
             recent_panel_empty_message,
             recent_panel_content_search_pending: self.recent.content_search_pending(),
             focused_input: self.state_trace_focus_label(),
+            status_message,
             status_bar,
             cleanup_button_bounds_px,
+            theme_name: self.theme_name_rendered.clone(),
+            theme_button_bounds_px,
             viewport: self.build_state_trace_viewport(window),
         }
     }
@@ -323,6 +335,7 @@ impl LstGpuiApp {
                 top_px: f32::from(row.row_top),
                 line_start_char: row.line_start_char,
                 display_end_char: row.display_end_char,
+                gutter_text: row.gutter_text.clone(),
             })
             .collect::<Vec<_>>();
         TraceViewport {
@@ -397,13 +410,16 @@ mod tests {
             recent_panel_empty_message: None,
             recent_panel_content_search_pending: false,
             focused_input: "editor",
+            status_message: "Ready.".to_string(),
             status_bar: "INSERT | Ln 1 | Col 4".to_string(),
             cleanup_button_bounds_px: None,
+            theme_name: "Dark".to_string(),
+            theme_button_bounds_px: None,
             viewport: TraceViewport::default(),
         };
         let line = serde_json::to_string(&record).expect("serialize");
         assert!(line.contains("\"vim_mode\":\"INSERT\""));
-        assert!(line.contains("\"schema_version\":1"));
+        assert!(line.contains("\"schema_version\":2"));
         assert!(line.contains("\"seq\":7"));
         assert!(line.contains("\"head_char\":3"));
         assert!(line.contains("\"focused_input\":\"editor\""));

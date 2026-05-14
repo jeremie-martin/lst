@@ -2,6 +2,7 @@
 
 mod support;
 
+use lst_x11_harness::{clipboard::write_clipboard_text, Selection};
 use support::{secs, EditorTestExt, FindChip, TestResult};
 
 #[test]
@@ -146,6 +147,55 @@ fn invalid_regex_query_reports_error_and_clears_matches() -> TestResult {
                     .is_some_and(|error| error.starts_with("regex:"))
         })?;
         assert!(record.find.error.is_some(), "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn find_query_ctrl_a_replaces_existing_query() -> TestResult {
+    support::run_x11_test("find-query-ctrl-a-replace", |session| {
+        let path = session.seed_file("find-query-replace.txt", "alpha beta\nalpha beta")?;
+        let mut editor = session.open_file("find-query-ctrl-a-replace", &path)?;
+
+        editor.keys("<C-f>alpha")?;
+        editor.expect_find_state("alpha", 2)?;
+
+        editor.keys("<C-a>beta")?;
+        let record = editor.expect_find_state("beta", 2)?;
+        assert_eq!(record.focused_input, "find_query", "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn find_respects_grapheme_boundaries_for_combining_clusters() -> TestResult {
+    support::run_x11_test("find-grapheme-boundaries", |session| {
+        let path = session.seed_file("find-grapheme.txt", "cafe\u{0301}\ncafe")?;
+        let mut editor = session.open_file("find-grapheme-boundaries", &path)?;
+
+        editor.keys("<C-f>e")?;
+        let ascii = editor.expect_find_state("e", 1)?;
+        assert_eq!(ascii.cursors[0].head_pos(), (1, 3), "{ascii:?}");
+
+        write_clipboard_text(Selection::Clipboard, "e\u{0301}")?;
+        editor.keys("<C-a><C-v>")?;
+        let decomposed = editor.expect_find_state("e\u{0301}", 1)?;
+        assert_eq!(decomposed.cursors[0].head_pos(), (0, 3), "{decomposed:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn replace_current_match_only_rewrites_active_match() -> TestResult {
+    support::run_x11_test("find-replace-one-active-match", |session| {
+        let path = session.seed_file("replace-one.txt", "foo foo foo")?;
+        let mut editor = session.open_file("find-replace-one-active-match", &path)?;
+
+        editor.keys("<C-h>foo<tab>bar<enter>")?;
+        editor.save_then_expect_file(&path, "bar foo foo")?;
         Ok(())
     })
 }
