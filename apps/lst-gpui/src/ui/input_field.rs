@@ -427,39 +427,30 @@ impl InputField {
         }
         line.closest_index_for_x(position.x - bounds.left())
     }
-
     fn left(&mut self, _: &FieldLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::PreviousGrapheme, false, cx);
     }
-
     fn right(&mut self, _: &FieldRight, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::NextGrapheme, false, cx);
     }
-
     fn word_left(&mut self, _: &FieldWordLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::PreviousWord, false, cx);
     }
-
     fn word_right(&mut self, _: &FieldWordRight, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::NextWord, false, cx);
     }
-
     fn subword_left(&mut self, _: &FieldSubwordLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::PreviousSubword, false, cx);
     }
-
     fn subword_right(&mut self, _: &FieldSubwordRight, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::NextSubword, false, cx);
     }
-
     fn select_left(&mut self, _: &FieldSelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::PreviousGrapheme, true, cx);
     }
-
     fn select_right(&mut self, _: &FieldSelectRight, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::NextGrapheme, true, cx);
     }
-
     fn select_word_left(
         &mut self,
         _: &FieldSelectWordLeft,
@@ -468,7 +459,6 @@ impl InputField {
     ) {
         self.move_text(TextMovement::PreviousWord, true, cx);
     }
-
     fn select_word_right(
         &mut self,
         _: &FieldSelectWordRight,
@@ -477,7 +467,6 @@ impl InputField {
     ) {
         self.move_text(TextMovement::NextWord, true, cx);
     }
-
     fn select_subword_left(
         &mut self,
         _: &FieldSelectSubwordLeft,
@@ -486,7 +475,6 @@ impl InputField {
     ) {
         self.move_text(TextMovement::PreviousSubword, true, cx);
     }
-
     fn select_subword_right(
         &mut self,
         _: &FieldSelectSubwordRight,
@@ -495,23 +483,18 @@ impl InputField {
     ) {
         self.move_text(TextMovement::NextSubword, true, cx);
     }
-
     fn select_all_action(&mut self, _: &FieldSelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.select_all(cx);
     }
-
     fn home(&mut self, _: &FieldHome, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::Start, false, cx);
     }
-
     fn end(&mut self, _: &FieldEnd, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::End, false, cx);
     }
-
     fn select_home(&mut self, _: &FieldSelectHome, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::Start, true, cx);
     }
-
     fn select_end(&mut self, _: &FieldSelectEnd, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::End, true, cx);
     }
@@ -550,34 +533,22 @@ impl InputField {
             self.replace_text_in_range(None, "", window, cx);
         }
     }
-
     fn submit(&mut self, _: &FieldSubmit, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputFieldEvent::Submitted);
     }
-
     fn cancel(&mut self, _: &FieldCancel, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputFieldEvent::Cancelled);
     }
-
     fn next(&mut self, _: &FieldNext, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputFieldEvent::NextRequested);
     }
-
     fn previous(&mut self, _: &FieldPrevious, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputFieldEvent::PreviousRequested);
     }
-
-    fn up(&mut self, _: &FieldUp, _: &mut Window, cx: &mut Context<Self>) {
-        if self.vertical_navigation {
-            cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Up));
-        }
-    }
-
-    fn down(&mut self, _: &FieldDown, _: &mut Window, cx: &mut Context<Self>) {
-        if self.vertical_navigation {
-            cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Down));
-        }
-    }
+    #[rustfmt::skip]
+    fn up(&mut self, _: &FieldUp, _: &mut Window, cx: &mut Context<Self>) { if self.vertical_navigation { cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Up)); } }
+    #[rustfmt::skip]
+    fn down(&mut self, _: &FieldDown, _: &mut Window, cx: &mut Context<Self>) { if self.vertical_navigation { cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Down)); } }
 
     fn on_mouse_down(
         &mut self,

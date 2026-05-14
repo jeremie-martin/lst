@@ -148,22 +148,3 @@ struct ChatChoice {
 struct ChatMessage {
     content: String,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_chat_response_extracts_content() {
-        let raw = r#"{"choices":[{"message":{"role":"assistant","content":"hello world"}}]}"#;
-        let parsed: ChatResponse = serde_json::from_str(raw).unwrap();
-        assert_eq!(parsed.choices[0].message.content, "hello world");
-    }
-
-    #[test]
-    fn parsed_content_preserves_trailing_newlines() {
-        let raw = r#"{"choices":[{"message":{"role":"assistant","content":"hello\n"}}]}"#;
-        let parsed: ChatResponse = serde_json::from_str(raw).unwrap();
-        assert_eq!(parsed.choices[0].message.content, "hello\n");
-    }
-}

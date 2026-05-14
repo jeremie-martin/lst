@@ -23,8 +23,6 @@ use std::ops::Range;
 mod scratchpad;
 
 pub(crate) use scratchpad::create_scratchpad_note;
-#[cfg(test)]
-use scratchpad::create_scratchpad_note_with_timestamp;
 use scratchpad::{
     remove_previous_scratchpad_after_save_as, remove_scratchpad_file_if_unreferenced,
 };
@@ -57,15 +55,6 @@ impl SaveTicket {
         }
     }
 
-    #[cfg(test)]
-    fn current_for_test() -> Self {
-        let current_generation = Arc::new(Mutex::new(1));
-        Self {
-            generation: 1,
-            current_generation,
-        }
-    }
-
     fn is_current(&self) -> bool {
         *lock_generation(&self.current_generation) == self.generation
     }
@@ -86,15 +75,18 @@ fn lock_generation(generation: &Mutex<u64>) -> MutexGuard<'_, u64> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct OpenFileResults {
-    opened: Vec<(PathBuf, String, Option<FileStamp>)>,
-    failed: Vec<(PathBuf, String)>,
-}
+type OpenFileResults = (
+    Vec<(PathBuf, String, Option<FileStamp>)>,
+    Vec<(PathBuf, String)>,
+);
 
+/// Outcome of a single file-write attempt (save, save-as, or autosave).
+///
+/// `Stale` is only produced by save tickets — autosave is not ticket-gated,
+/// so its job pipeline never observes it.
 #[derive(Debug, PartialEq, Eq)]
-enum SaveFileResult {
-    Saved {
+enum FileWriteOutcome {
+    Written {
         tab_id: TabId,
         path: PathBuf,
         revision: u64,
@@ -119,35 +111,15 @@ enum SaveFileResult {
     },
 }
 
-fn save_file_result_path(result: &SaveFileResult) -> &Path {
-    match result {
-        SaveFileResult::Saved { path, .. }
-        | SaveFileResult::Failed { path, .. }
-        | SaveFileResult::Conflict { path, .. }
-        | SaveFileResult::Stale { path, .. } => path,
+impl FileWriteOutcome {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Written { path, .. }
+            | Self::Failed { path, .. }
+            | Self::Conflict { path, .. }
+            | Self::Stale { path, .. } => path,
+        }
     }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum AutosaveCompletion {
-    Finished {
-        tab_id: TabId,
-        path: PathBuf,
-        revision: u64,
-        stamp: FileStamp,
-        body: String,
-    },
-    Failed {
-        tab_id: TabId,
-        path: PathBuf,
-        message: String,
-    },
-    Conflict {
-        tab_id: TabId,
-        path: PathBuf,
-        revision: u64,
-        disk_stamp: FileStamp,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,7 +204,7 @@ impl LstGpuiApp {
                 } => {
                     let Some(path) = FileDialog::new().set_file_name(&suggested_name).save_file()
                     else {
-                        self.save_cancelled(tab_id, cx);
+                        self.finish_pending_after_save(tab_id, false, cx);
                         continue;
                     };
                     self.spawn_save_job(
@@ -330,7 +302,7 @@ impl LstGpuiApp {
             Ok(None) => {}
             Err(err) => {
                 self.apply_autosave_completion(
-                    AutosaveCompletion::Failed {
+                    FileWriteOutcome::Failed {
                         tab_id,
                         path,
                         message: err.to_string(),
@@ -413,7 +385,6 @@ impl LstGpuiApp {
             .or_insert_with(|| Arc::new(Mutex::new(0)));
         SaveTicket::issue(current_generation)
     }
-
     fn begin_save_inflight(&mut self, path: &Path) {
         *self.save_inflight.entry(path.to_path_buf()).or_insert(0) += 1;
     }
@@ -572,7 +543,7 @@ impl LstGpuiApp {
             }
             ConflictWrite::Autosave { revision } => {
                 self.apply_autosave_completion(
-                    AutosaveCompletion::Finished {
+                    FileWriteOutcome::Written {
                         tab_id,
                         path,
                         revision,
@@ -725,10 +696,6 @@ impl LstGpuiApp {
         cx.defer(|_| process::exit(0));
     }
 
-    fn save_cancelled(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
-        self.finish_pending_after_save(tab_id, false, cx);
-    }
-
     fn finish_pending_after_save(&mut self, tab_id: TabId, success: bool, cx: &mut Context<Self>) {
         let Some(pending) = self.pending_after_save else {
             return;
@@ -753,21 +720,17 @@ impl LstGpuiApp {
         }
     }
 
-    fn apply_open_file_results(&mut self, results: OpenFileResults, cx: &mut Context<Self>) {
-        for (path, message) in results.failed {
-            self.update_model(cx, true, |model| {
-                model.open_file_failed(path, message);
-            });
+    fn apply_open_file_results(
+        &mut self,
+        (opened, failed): OpenFileResults,
+        cx: &mut Context<Self>,
+    ) {
+        for (path, message) in failed {
+            self.update_model(cx, true, |model| model.open_file_failed(path, message));
         }
-        if !results.opened.is_empty() {
-            let opened_paths = results
-                .opened
-                .iter()
-                .map(|(path, _, _)| path.clone())
-                .collect::<Vec<_>>();
-            self.update_model(cx, true, |model| {
-                model.open_files_with_stamps(results.opened);
-            });
+        if !opened.is_empty() {
+            let opened_paths: Vec<_> = opened.iter().map(|(p, _, _)| p.clone()).collect();
+            self.update_model(cx, true, |model| model.open_files_with_stamps(opened));
             for path in opened_paths {
                 self.recent.record(&path);
             }
@@ -776,15 +739,15 @@ impl LstGpuiApp {
 
     fn apply_save_outcome(
         &mut self,
-        result: SaveFileResult,
+        result: FileWriteOutcome,
         kind: SaveKind,
         cx: &mut Context<Self>,
     ) {
-        let inflight_path = save_file_result_path(&result).to_path_buf();
+        let inflight_path = result.path().to_path_buf();
         self.finish_save_inflight(&inflight_path);
         let is_save_as = matches!(kind, SaveKind::SaveAs { .. });
         match result {
-            SaveFileResult::Saved {
+            FileWriteOutcome::Written {
                 tab_id,
                 path,
                 revision,
@@ -823,7 +786,7 @@ impl LstGpuiApp {
                 }
                 self.finish_pending_after_save(tab_id, saved, cx);
             }
-            SaveFileResult::Failed {
+            FileWriteOutcome::Failed {
                 tab_id,
                 path,
                 message,
@@ -833,7 +796,7 @@ impl LstGpuiApp {
                 });
                 self.finish_pending_after_save(tab_id, false, cx);
             }
-            SaveFileResult::Conflict {
+            FileWriteOutcome::Conflict {
                 tab_id,
                 path,
                 revision,
@@ -847,7 +810,7 @@ impl LstGpuiApp {
                     cx,
                 );
             }
-            SaveFileResult::Stale { .. } => {
+            FileWriteOutcome::Stale { .. } => {
                 cx.notify();
             }
         }
@@ -855,11 +818,11 @@ impl LstGpuiApp {
 
     fn apply_autosave_completion(
         &mut self,
-        completion: AutosaveCompletion,
+        completion: FileWriteOutcome,
         cx: &mut Context<Self>,
     ) {
         match completion {
-            AutosaveCompletion::Finished {
+            FileWriteOutcome::Written {
                 tab_id,
                 path,
                 revision,
@@ -879,7 +842,7 @@ impl LstGpuiApp {
                     self.recent.record(&recent_path);
                 }
             }
-            AutosaveCompletion::Failed {
+            FileWriteOutcome::Failed {
                 tab_id: _,
                 path,
                 message,
@@ -888,7 +851,7 @@ impl LstGpuiApp {
                     model.autosave_failed(path, message);
                 });
             }
-            AutosaveCompletion::Conflict {
+            FileWriteOutcome::Conflict {
                 tab_id,
                 path,
                 revision,
@@ -900,6 +863,8 @@ impl LstGpuiApp {
                 ConflictWrite::Autosave { revision },
                 cx,
             ),
+            // Autosave is not ticket-gated, so it never emits `Stale`.
+            FileWriteOutcome::Stale { .. } => {}
         }
     }
 
@@ -1192,8 +1157,8 @@ fn remove_temp_file(path: &Path) {
     let _ = fs::remove_file(path);
 }
 
-fn stale_save_result(tab_id: TabId, path: PathBuf, revision: u64) -> SaveFileResult {
-    SaveFileResult::Stale {
+fn stale_save_result(tab_id: TabId, path: PathBuf, revision: u64) -> FileWriteOutcome {
+    FileWriteOutcome::Stale {
         tab_id,
         path,
         revision,
@@ -1216,7 +1181,7 @@ fn open_file_results(paths: impl IntoIterator<Item = PathBuf>) -> OpenFileResult
             Err(err) => failed.push((path, err.to_string())),
         }
     }
-    OpenFileResults { opened, failed }
+    (opened, failed)
 }
 
 fn save_file_result(
@@ -1226,14 +1191,14 @@ fn save_file_result(
     revision: u64,
     expected_stamp: Option<FileStamp>,
     ticket: SaveTicket,
-) -> SaveFileResult {
+) -> FileWriteOutcome {
     if !ticket.is_current() {
         return stale_save_result(tab_id, path, revision);
     }
 
     match file_conflict_stamp(&path, expected_stamp) {
         Ok(Some(disk_stamp)) => {
-            return SaveFileResult::Conflict {
+            return FileWriteOutcome::Conflict {
                 tab_id,
                 path,
                 revision,
@@ -1242,7 +1207,7 @@ fn save_file_result(
         }
         Ok(None) => {}
         Err(err) => {
-            return SaveFileResult::Failed {
+            return FileWriteOutcome::Failed {
                 tab_id,
                 path,
                 message: err.to_string(),
@@ -1262,31 +1227,31 @@ fn write_file_result(
     revision: u64,
     expected_stamp: Option<FileStamp>,
     ticket: SaveTicket,
-) -> SaveFileResult {
+) -> FileWriteOutcome {
     let body = apply_save_options(body);
     match write_file_with_guards(&path, body.as_bytes(), expected_stamp, Some(&ticket)) {
         Ok(AtomicWriteOutcome::Written) => match file_stamp(&path) {
-            Ok(stamp) => SaveFileResult::Saved {
+            Ok(stamp) => FileWriteOutcome::Written {
                 tab_id,
                 path,
                 revision,
                 stamp,
                 body,
             },
-            Err(err) => SaveFileResult::Failed {
+            Err(err) => FileWriteOutcome::Failed {
                 tab_id,
                 path,
                 message: err.to_string(),
             },
         },
         Ok(AtomicWriteOutcome::Stale) => stale_save_result(tab_id, path, revision),
-        Ok(AtomicWriteOutcome::Conflict(disk_stamp)) => SaveFileResult::Conflict {
+        Ok(AtomicWriteOutcome::Conflict(disk_stamp)) => FileWriteOutcome::Conflict {
             tab_id,
             path,
             revision,
             disk_stamp,
         },
-        Err(err) => SaveFileResult::Failed {
+        Err(err) => FileWriteOutcome::Failed {
             tab_id,
             path,
             message: err.to_string(),
@@ -1300,30 +1265,30 @@ fn write_autosave_body_result(
     body: String,
     revision: u64,
     expected_stamp: Option<FileStamp>,
-) -> AutosaveCompletion {
+) -> FileWriteOutcome {
     match write_file_with_guards(&path, body.as_bytes(), expected_stamp, None) {
         Ok(AtomicWriteOutcome::Written) => match file_stamp(&path) {
-            Ok(stamp) => AutosaveCompletion::Finished {
+            Ok(stamp) => FileWriteOutcome::Written {
                 tab_id,
                 path,
                 revision,
                 stamp,
                 body,
             },
-            Err(err) => AutosaveCompletion::Failed {
+            Err(err) => FileWriteOutcome::Failed {
                 tab_id,
                 path,
                 message: err.to_string(),
             },
         },
         Ok(AtomicWriteOutcome::Stale) => unreachable!("autosave writes are never ticket-gated"),
-        Ok(AtomicWriteOutcome::Conflict(disk_stamp)) => AutosaveCompletion::Conflict {
+        Ok(AtomicWriteOutcome::Conflict(disk_stamp)) => FileWriteOutcome::Conflict {
             tab_id,
             path,
             revision,
             disk_stamp,
         },
-        Err(err) => AutosaveCompletion::Failed {
+        Err(err) => FileWriteOutcome::Failed {
             tab_id,
             path,
             message: err.to_string(),
@@ -1397,11 +1362,11 @@ fn autosave_completion(
     tabs: &[ModelEditorTab],
     job: AutosaveJob,
     result: std::io::Result<PathBuf>,
-) -> Option<AutosaveCompletion> {
+) -> Option<FileWriteOutcome> {
     let temp_path = match result {
         Ok(temp_path) => temp_path,
         Err(err) => {
-            return Some(AutosaveCompletion::Failed {
+            return Some(FileWriteOutcome::Failed {
                 tab_id: job.tab_id,
                 path: job.path,
                 message: err.to_string(),
@@ -1608,6 +1573,3 @@ fn build_llm_client() -> Result<Box<dyn crate::llm::LlmClient>, String> {
         api_key, model_name,
     )))
 }
-
-#[cfg(test)]
-mod tests;

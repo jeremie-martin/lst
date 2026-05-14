@@ -24,10 +24,8 @@ impl EditorModel {
         }
     }
 
-    pub fn open_file_failed(&mut self, path: PathBuf, message: String) {
-        self.status = format!("Failed to open {}: {message}", path.display());
-    }
-
+    #[rustfmt::skip]
+    pub fn open_file_failed(&mut self, path: PathBuf, message: String) { self.status = format!("Failed to open {}: {message}", path.display()); }
     pub(crate) fn request_save(&mut self) {
         self.request_save_tab(self.active_tab_id());
     }
@@ -58,10 +56,7 @@ impl EditorModel {
     }
 
     pub(crate) fn request_save_as(&mut self) {
-        self.request_save_as_tab(self.active_tab_id());
-    }
-
-    pub(crate) fn request_save_as_tab(&mut self, tab_id: TabId) {
+        let tab_id = self.active_tab_id();
         let Some(tab) = self.tab_by_id(tab_id) else {
             return;
         };
@@ -82,14 +77,14 @@ impl EditorModel {
         file_stamp: FileStamp,
         saved_body: String,
     ) -> bool {
-        if let Some(tab) = self.tab_mut_by_id(tab_id) {
-            if !tab.mark_saved_if_current(path.clone(), revision, file_stamp, &saved_body) {
-                return false;
-            }
-            self.status = format!("Saved {}.", path.display());
-            return true;
+        let Some(tab) = self.tab_mut_by_id(tab_id) else {
+            return false;
+        };
+        if !tab.mark_saved_if_current(path.clone(), revision, file_stamp, &saved_body) {
+            return false;
         }
-        false
+        self.status = format!("Saved {}.", path.display());
+        true
     }
 
     pub fn save_as_finished_for_tab(
@@ -100,19 +95,18 @@ impl EditorModel {
         file_stamp: FileStamp,
         saved_body: String,
     ) -> bool {
-        if let Some(tab) = self.tab_mut_by_id(tab_id) {
-            if !tab.mark_saved_as_if_current(path.clone(), revision, file_stamp, &saved_body) {
-                return false;
-            }
-            self.status = format!("Saved {}.", path.display());
-            return true;
+        let Some(tab) = self.tab_mut_by_id(tab_id) else {
+            return false;
+        };
+        if !tab.mark_saved_as_if_current(path.clone(), revision, file_stamp, &saved_body) {
+            return false;
         }
-        false
+        self.status = format!("Saved {}.", path.display());
+        true
     }
 
-    pub fn save_failed(&mut self, path: PathBuf, message: String) {
-        self.status = format!("Failed to save {}: {message}", path.display());
-    }
+    #[rustfmt::skip]
+    pub fn save_failed(&mut self, path: PathBuf, message: String) { self.status = format!("Failed to save {}: {message}", path.display()); }
 
     pub fn autosave_tick(&mut self) {
         let jobs = self
@@ -172,9 +166,8 @@ impl EditorModel {
         true
     }
 
-    pub fn autosave_failed(&mut self, path: PathBuf, message: String) {
-        self.status = format!("Autosave failed for {}: {message}", path.display());
-    }
+    #[rustfmt::skip]
+    pub fn autosave_failed(&mut self, path: PathBuf, message: String) { self.status = format!("Autosave failed for {}: {message}", path.display()); }
 
     pub fn refresh_file_stamp_for_tab(
         &mut self,
@@ -204,9 +197,8 @@ impl EditorModel {
         true
     }
 
-    pub fn reload_failed(&mut self, path: PathBuf, message: String) {
-        self.status = format!("Failed to reload {}: {message}", path.display());
-    }
+    #[rustfmt::skip]
+    pub fn reload_failed(&mut self, path: PathBuf, message: String) { self.status = format!("Failed to reload {}: {message}", path.display()); }
 
     pub fn suppress_file_conflict(&mut self, tab_id: TabId, path: PathBuf, stamp: FileStamp) {
         if let Some(tab) = self.tab_mut_by_id(tab_id) {

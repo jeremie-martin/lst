@@ -668,29 +668,21 @@ impl LstGpuiApp {
                 return;
             }
             if self.model.goto_line().is_some() {
-                self.update_model(cx, true, |model| {
-                    model.close_goto_line_panel();
-                });
+                self.update_model(cx, true, |model| model.close_goto_line_panel());
                 cx.stop_propagation();
                 return;
             }
             if self.model.find().visible {
-                self.update_model(cx, true, |model| {
-                    model.close_find_panel();
-                });
+                self.update_model(cx, true, |model| model.close_find_panel());
                 cx.stop_propagation();
                 return;
             }
 
-            // Collapse multi-cursor before handing Esc to Vim. Single-cursor
-            // selections (including Vim Visual) fall through so Vim's own
-            // escape handler can transition modes. Two presses on a
-            // multi-cursor set first collapse extents, then drop secondaries.
+            // Collapse multi-cursor before handing Esc to Vim. Two presses on a multi-cursor
+            // set first collapse extents, then drop secondaries.
             if !self.model.selection_set().is_single() {
                 let mut collapsed = false;
-                self.update_model(cx, true, |model| {
-                    collapsed = model.collapse_to_primary();
-                });
+                self.update_model(cx, true, |model| collapsed = model.collapse_to_primary());
                 if collapsed {
                     cx.stop_propagation();
                     return;
@@ -701,11 +693,9 @@ impl LstGpuiApp {
         if self.maybe_handle_recent_modifier_key_action(event, cx) {
             return;
         }
-
         if self.maybe_handle_unmodified_key_action(event, window, cx) {
             return;
         }
-
         let _ = self.maybe_handle_vim_key(event, window, cx);
     }
 

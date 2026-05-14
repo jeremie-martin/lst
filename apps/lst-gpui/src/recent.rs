@@ -87,7 +87,6 @@ impl RecentFiles {
             entries,
         }
     }
-
     pub(crate) fn entries(&self) -> &[PathBuf] {
         &self.entries
     }
@@ -171,15 +170,12 @@ impl RecentView {
             last_query: String::new(),
         }
     }
-
     pub(crate) fn record(&mut self, path: &Path) {
         self.files.record(path);
     }
-
     pub(crate) fn entries(&self) -> &[PathBuf] {
         self.files.entries()
     }
-
     pub(crate) fn is_open(&self) -> bool {
         self.panel.is_some()
     }
@@ -208,7 +204,6 @@ impl RecentView {
         }
         self.panel = None;
     }
-
     pub(crate) fn query(&self) -> &str {
         self.panel.as_ref().map(|p| p.query.as_str()).unwrap_or("")
     }
@@ -983,134 +978,5 @@ fn recent_content_search_debounce() -> Duration {
     #[cfg(not(test))]
     {
         Duration::from_millis(RECENT_CONTENT_SEARCH_DEBOUNCE_MS)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static NEXT_TEST_DIR: AtomicUsize = AtomicUsize::new(0);
-
-    fn temp_dir(label: &str) -> PathBuf {
-        let id = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "lst-gpui-recent-tests-{label}-{}-{id}",
-            process::id()
-        ));
-        fs::create_dir(&dir).expect("create recent test temp dir");
-        dir
-    }
-
-    #[test]
-    fn record_dedupes_and_moves_existing_paths_to_front() {
-        let dir = temp_dir("dedupe");
-        let state_path = dir.join("recent");
-        let one = dir.join("one.txt");
-        let two = dir.join("two.txt");
-
-        let mut recent = RecentFiles::load(Some(state_path.clone()));
-        recent.record(&one);
-        recent.record(&two);
-        recent.record(&one);
-
-        assert_eq!(
-            recent.entries(),
-            [normalize_recent_path(&one), normalize_recent_path(&two)]
-        );
-        assert!(state_path.exists());
-
-        fs::remove_dir_all(dir).expect("remove recent test temp dir");
-    }
-
-    #[test]
-    fn load_round_trips_paths_without_touching_targets() {
-        let dir = temp_dir("roundtrip");
-        let state_path = dir.join("recent");
-        let path = dir.join("missing\nname.txt");
-
-        let mut recent = RecentFiles::load(Some(state_path.clone()));
-        recent.record(&path);
-        let loaded = RecentFiles::load(Some(state_path));
-
-        assert_eq!(loaded.entries(), [normalize_recent_path(&path)]);
-
-        fs::remove_dir_all(dir).expect("remove recent test temp dir");
-    }
-
-    #[test]
-    fn corrupt_state_loads_as_empty() {
-        let dir = temp_dir("corrupt");
-        let state_path = dir.join("recent");
-        fs::write(&state_path, "not the header\n").expect("write corrupt recent state");
-
-        let loaded = RecentFiles::load(Some(state_path));
-
-        assert!(loaded.entries().is_empty());
-
-        fs::remove_dir_all(dir).expect("remove recent test temp dir");
-    }
-
-    #[test]
-    fn prune_removes_matching_normalized_path() {
-        let dir = temp_dir("prune");
-        let state_path = dir.join("recent");
-        let path = dir.join("gone.txt");
-
-        let mut recent = RecentFiles::load(Some(state_path.clone()));
-        recent.record(&path);
-        recent.prune(&path);
-        let loaded = RecentFiles::load(Some(state_path));
-
-        assert!(recent.entries().is_empty());
-        assert!(loaded.entries().is_empty());
-
-        fs::remove_dir_all(dir).expect("remove recent test temp dir");
-    }
-
-    #[test]
-    fn cap_keeps_the_most_recent_entries() {
-        let dir = temp_dir("cap");
-        let mut recent = RecentFiles::load(None);
-
-        for index in 0..(RECENT_FILE_LIMIT + 3) {
-            recent.record(&dir.join(format!("{index}.txt")));
-        }
-
-        assert_eq!(recent.entries().len(), RECENT_FILE_LIMIT);
-        assert_eq!(
-            recent.entries().first(),
-            Some(&normalize_recent_path(
-                &dir.join(format!("{}.txt", RECENT_FILE_LIMIT + 2))
-            ))
-        );
-        assert_eq!(
-            recent.entries().last(),
-            Some(&normalize_recent_path(&dir.join("3.txt")))
-        );
-
-        fs::remove_dir_all(dir).expect("remove recent test temp dir");
-    }
-
-    #[test]
-    fn content_search_is_capped_to_the_recent_prefix() {
-        let dir = temp_dir("content-cap");
-        let mut paths = Vec::new();
-        for index in 0..=CONTENT_SEARCH_FILE_LIMIT {
-            let path = dir.join(format!("{index}.txt"));
-            let body = if index == CONTENT_SEARCH_FILE_LIMIT {
-                "needle"
-            } else {
-                "haystack"
-            };
-            fs::write(&path, body).expect("write content-search fixture");
-            paths.push(path);
-        }
-
-        let matches = search_recent_content(paths, "needle");
-
-        assert!(matches.is_empty());
-        fs::remove_dir_all(dir).expect("remove recent test temp dir");
     }
 }

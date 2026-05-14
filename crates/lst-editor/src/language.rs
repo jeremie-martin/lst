@@ -1,53 +1,12 @@
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[rustfmt::skip]
 pub enum Language {
-    Rust,
-    Python,
-    JavaScript,
-    Jsx,
-    TypeScript,
-    Tsx,
-    Json,
-    Jsonc,
-    Toml,
-    Yaml,
-    Markdown,
-    Html,
-    Xml,
-    Css,
-    Scss,
-    C,
-    Cpp,
-    Java,
-    Go,
-    CSharp,
-    Swift,
-    Kotlin,
-    Scala,
-    Zig,
-    Shell,
-    Bash,
-    Zsh,
-    Fish,
-    Ruby,
-    Perl,
-    Lua,
-    Sql,
-    Haskell,
-    Elixir,
-    Erlang,
-    Clojure,
-    CommonLisp,
-    Scheme,
-    EmacsLisp,
-    Dockerfile,
-    Makefile,
-    CMake,
-    Ini,
-    Proto,
-    Vim,
-    Tex,
+    Rust, Python, JavaScript, Jsx, TypeScript, Tsx, Json, Jsonc, Toml, Yaml, Markdown, Html, Xml,
+    Css, Scss, C, Cpp, Java, Go, CSharp, Swift, Kotlin, Scala, Zig, Shell, Bash, Zsh, Fish, Ruby,
+    Perl, Lua, Sql, Haskell, Elixir, Erlang, Clojure, CommonLisp, Scheme, EmacsLisp, Dockerfile,
+    Makefile, CMake, Ini, Proto, Vim, Tex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -88,7 +47,6 @@ pub struct LanguageConfig {
 const BLOCK_C: Option<(&str, &str)> = Some(("/*", "*/"));
 const BLOCK_HTML: Option<(&str, &str)> = Some(("<!--", "-->"));
 
-// Shared auto-pair sets.
 const PAIRS_BASIC: &[(char, char)] = &[
     ('(', ')'),
     ('[', ']'),
@@ -97,9 +55,8 @@ const PAIRS_BASIC: &[(char, char)] = &[
     ('\'', '\''),
     ('`', '`'),
 ];
-const PAIRS_NO_SINGLE_QUOTE: &[(char, char)] =
-    &[('(', ')'), ('[', ']'), ('{', '}'), ('"', '"'), ('`', '`')];
-const PAIRS_WITH_ANGLE: &[(char, char)] = &[
+const PAIRS_NO_SQ: &[(char, char)] = &[('(', ')'), ('[', ']'), ('{', '}'), ('"', '"'), ('`', '`')];
+const PAIRS_ANGLE: &[(char, char)] = &[
     ('(', ')'),
     ('[', ']'),
     ('{', '}'),
@@ -109,540 +66,144 @@ const PAIRS_WITH_ANGLE: &[(char, char)] = &[
     ('<', '>'),
 ];
 
-const CLOSERS_BRACE: &[char] = &['}'];
-const CLOSERS_NONE: &[char] = &[];
+const CL_BR: &[char] = &['}'];
+const CL_NO: &[char] = &[];
+const SUP_SQ: &[char] = &['\''];
+const SUP_NO: &[char] = &[];
 
-const SUPPRESS_SINGLE_QUOTE: &[char] = &['\''];
-const SUPPRESS_NONE: &[char] = &[];
+const fn lc(
+    indent: IndentStyle,
+    line_comment: Option<&'static str>,
+    block_comment: Option<(&'static str, &'static str)>,
+    auto_pairs: &'static [(char, char)],
+    auto_pair_suppress_quotes: &'static [char],
+    auto_dedent_closers: &'static [char],
+) -> LanguageConfig {
+    LanguageConfig {
+        indent,
+        line_comment,
+        block_comment,
+        auto_pairs,
+        auto_pair_suppress_quotes,
+        auto_dedent_closers,
+    }
+}
 
-const CONFIG_RUST: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_NO_SINGLE_QUOTE,
-    auto_pair_suppress_quotes: SUPPRESS_SINGLE_QUOTE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
+const fn sp(width: usize) -> IndentStyle {
+    IndentStyle::Spaces { width }
+}
+const fn tb(width: usize) -> IndentStyle {
+    IndentStyle::Tabs {
+        display_width: width,
+    }
+}
 
-const CONFIG_PYTHON: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_JAVASCRIPT: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_JSX: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_WITH_ANGLE,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_TYPESCRIPT: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_TSX: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_WITH_ANGLE,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_JSON: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: None,
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_JSONC: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_TOML: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_YAML: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_MARKDOWN: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: None,
-    block_comment: BLOCK_HTML,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_HTML: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: None,
-    block_comment: BLOCK_HTML,
-    auto_pairs: PAIRS_WITH_ANGLE,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_XML: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: None,
-    block_comment: BLOCK_HTML,
-    auto_pairs: PAIRS_WITH_ANGLE,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_CSS: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: None,
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_SCSS: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_C: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_CPP: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_JAVA: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_GO: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Tabs { display_width: 4 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_CSHARP: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_SWIFT: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_KOTLIN: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_SCALA: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_ZIG: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("//"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_SHELL: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_BASH: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_ZSH: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_FISH: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_RUBY: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("#"),
-    block_comment: Some(("=begin", "=end")),
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_PERL: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_LUA: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("--"),
-    block_comment: Some(("--[[", "]]")),
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_SQL: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("--"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_HASKELL: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("--"),
-    block_comment: Some(("{-", "-}")),
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_ELIXIR: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_ERLANG: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("%"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_CLOJURE: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some(";;"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_COMMONLISP: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some(";;"),
-    block_comment: Some(("#|", "|#")),
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_SCHEME: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some(";;"),
-    block_comment: Some(("#|", "|#")),
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_EMACSLISP: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some(";;"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_DOCKERFILE: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_MAKEFILE: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Tabs { display_width: 4 },
-    line_comment: Some("#"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_CMAKE: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("#"),
-    block_comment: Some(("#[[", "]]")),
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_INI: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: Some(";"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_PROTO: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("//"),
-    block_comment: BLOCK_C,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-const CONFIG_VIM: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("\""),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_NONE,
-};
-
-const CONFIG_TEX: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 2 },
-    line_comment: Some("%"),
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
-
-// Used when a tab has no detected language (unknown extension, scratchpad).
-// The values mirror the editor's prior hardcoded behavior so existing flows
-// keep working even when detection returns None.
-const CONFIG_DEFAULT: LanguageConfig = LanguageConfig {
-    indent: IndentStyle::Spaces { width: 4 },
-    line_comment: None,
-    block_comment: None,
-    auto_pairs: PAIRS_BASIC,
-    auto_pair_suppress_quotes: SUPPRESS_NONE,
-    auto_dedent_closers: CLOSERS_BRACE,
-};
+#[rustfmt::skip]
+const CONFIGS: &[LanguageConfig] = &[
+    lc(sp(4), Some("//"), BLOCK_C,                  PAIRS_NO_SQ, SUP_SQ, CL_BR), // Rust
+    lc(sp(4), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Python
+    lc(sp(2), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // JavaScript
+    lc(sp(2), Some("//"), BLOCK_C,                  PAIRS_ANGLE, SUP_NO, CL_BR), // Jsx
+    lc(sp(2), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // TypeScript
+    lc(sp(2), Some("//"), BLOCK_C,                  PAIRS_ANGLE, SUP_NO, CL_BR), // Tsx
+    lc(sp(2), None,       None,                     PAIRS_BASIC, SUP_NO, CL_BR), // Json
+    lc(sp(2), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // Jsonc
+    lc(sp(4), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Toml
+    lc(sp(2), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Yaml
+    lc(sp(2), None,       BLOCK_HTML,               PAIRS_BASIC, SUP_NO, CL_NO), // Markdown
+    lc(sp(2), None,       BLOCK_HTML,               PAIRS_ANGLE, SUP_NO, CL_NO), // Html
+    lc(sp(2), None,       BLOCK_HTML,               PAIRS_ANGLE, SUP_NO, CL_NO), // Xml
+    lc(sp(2), None,       BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // Css
+    lc(sp(2), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // Scss
+    lc(sp(4), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // C
+    lc(sp(4), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // Cpp
+    lc(sp(4), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // Java
+    lc(tb(4), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // Go
+    lc(sp(4), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // CSharp
+    lc(sp(4), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // Swift
+    lc(sp(4), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // Kotlin
+    lc(sp(2), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // Scala
+    lc(sp(4), Some("//"), None,                     PAIRS_BASIC, SUP_NO, CL_BR), // Zig
+    lc(sp(4), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Shell
+    lc(sp(4), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Bash
+    lc(sp(4), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Zsh
+    lc(sp(4), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Fish
+    lc(sp(2), Some("#"),  Some(("=begin", "=end")), PAIRS_BASIC, SUP_NO, CL_NO), // Ruby
+    lc(sp(4), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_BR), // Perl
+    lc(sp(4), Some("--"), Some(("--[[", "]]")),     PAIRS_BASIC, SUP_NO, CL_NO), // Lua
+    lc(sp(2), Some("--"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_NO), // Sql
+    lc(sp(2), Some("--"), Some(("{-", "-}")),       PAIRS_BASIC, SUP_NO, CL_NO), // Haskell
+    lc(sp(2), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Elixir
+    lc(sp(4), Some("%"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Erlang
+    lc(sp(2), Some(";;"), None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Clojure
+    lc(sp(2), Some(";;"), Some(("#|", "|#")),       PAIRS_BASIC, SUP_NO, CL_NO), // CommonLisp
+    lc(sp(2), Some(";;"), Some(("#|", "|#")),       PAIRS_BASIC, SUP_NO, CL_NO), // Scheme
+    lc(sp(2), Some(";;"), None,                     PAIRS_BASIC, SUP_NO, CL_NO), // EmacsLisp
+    lc(sp(4), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Dockerfile
+    lc(tb(4), Some("#"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Makefile
+    lc(sp(2), Some("#"),  Some(("#[[", "]]")),      PAIRS_BASIC, SUP_NO, CL_NO), // CMake
+    lc(sp(4), Some(";"),  None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Ini
+    lc(sp(2), Some("//"), BLOCK_C,                  PAIRS_BASIC, SUP_NO, CL_BR), // Proto
+    lc(sp(2), Some("\""), None,                     PAIRS_BASIC, SUP_NO, CL_NO), // Vim
+    lc(sp(2), Some("%"),  None,                     PAIRS_BASIC, SUP_NO, CL_BR), // Tex
+];
 
 impl Language {
-    pub const fn config(self) -> &'static LanguageConfig {
-        match self {
-            Self::Rust => &CONFIG_RUST,
-            Self::Python => &CONFIG_PYTHON,
-            Self::JavaScript => &CONFIG_JAVASCRIPT,
-            Self::Jsx => &CONFIG_JSX,
-            Self::TypeScript => &CONFIG_TYPESCRIPT,
-            Self::Tsx => &CONFIG_TSX,
-            Self::Json => &CONFIG_JSON,
-            Self::Jsonc => &CONFIG_JSONC,
-            Self::Toml => &CONFIG_TOML,
-            Self::Yaml => &CONFIG_YAML,
-            Self::Markdown => &CONFIG_MARKDOWN,
-            Self::Html => &CONFIG_HTML,
-            Self::Xml => &CONFIG_XML,
-            Self::Css => &CONFIG_CSS,
-            Self::Scss => &CONFIG_SCSS,
-            Self::C => &CONFIG_C,
-            Self::Cpp => &CONFIG_CPP,
-            Self::Java => &CONFIG_JAVA,
-            Self::Go => &CONFIG_GO,
-            Self::CSharp => &CONFIG_CSHARP,
-            Self::Swift => &CONFIG_SWIFT,
-            Self::Kotlin => &CONFIG_KOTLIN,
-            Self::Scala => &CONFIG_SCALA,
-            Self::Zig => &CONFIG_ZIG,
-            Self::Shell => &CONFIG_SHELL,
-            Self::Bash => &CONFIG_BASH,
-            Self::Zsh => &CONFIG_ZSH,
-            Self::Fish => &CONFIG_FISH,
-            Self::Ruby => &CONFIG_RUBY,
-            Self::Perl => &CONFIG_PERL,
-            Self::Lua => &CONFIG_LUA,
-            Self::Sql => &CONFIG_SQL,
-            Self::Haskell => &CONFIG_HASKELL,
-            Self::Elixir => &CONFIG_ELIXIR,
-            Self::Erlang => &CONFIG_ERLANG,
-            Self::Clojure => &CONFIG_CLOJURE,
-            Self::CommonLisp => &CONFIG_COMMONLISP,
-            Self::Scheme => &CONFIG_SCHEME,
-            Self::EmacsLisp => &CONFIG_EMACSLISP,
-            Self::Dockerfile => &CONFIG_DOCKERFILE,
-            Self::Makefile => &CONFIG_MAKEFILE,
-            Self::CMake => &CONFIG_CMAKE,
-            Self::Ini => &CONFIG_INI,
-            Self::Proto => &CONFIG_PROTO,
-            Self::Vim => &CONFIG_VIM,
-            Self::Tex => &CONFIG_TEX,
-        }
+    pub fn config(self) -> &'static LanguageConfig {
+        &CONFIGS[self as usize]
     }
 
+    #[rustfmt::skip]
     fn from_name(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
-            "rust" | "rs" => Some(Self::Rust),
-            "python" | "py" => Some(Self::Python),
-            "javascript" | "js" => Some(Self::JavaScript),
-            "jsx" => Some(Self::Jsx),
-            "typescript" | "ts" => Some(Self::TypeScript),
-            "tsx" => Some(Self::Tsx),
-            "json" => Some(Self::Json),
-            "jsonc" | "json5" => Some(Self::Jsonc),
-            "toml" => Some(Self::Toml),
-            "yaml" | "yml" => Some(Self::Yaml),
-            "markdown" | "md" => Some(Self::Markdown),
-            "html" | "htm" => Some(Self::Html),
-            "xml" => Some(Self::Xml),
-            "css" => Some(Self::Css),
-            "scss" => Some(Self::Scss),
-            "c" => Some(Self::C),
-            "cpp" | "c++" | "cc" | "cxx" => Some(Self::Cpp),
-            "java" => Some(Self::Java),
-            "go" | "golang" => Some(Self::Go),
-            "c_sharp" | "csharp" | "c#" | "cs" => Some(Self::CSharp),
-            "swift" => Some(Self::Swift),
-            "kotlin" | "kt" => Some(Self::Kotlin),
-            "scala" => Some(Self::Scala),
-            "zig" => Some(Self::Zig),
-            "shell" | "sh" => Some(Self::Shell),
-            "bash" => Some(Self::Bash),
-            "zsh" => Some(Self::Zsh),
-            "fish" => Some(Self::Fish),
-            "ruby" | "rb" => Some(Self::Ruby),
-            "perl" | "pl" => Some(Self::Perl),
-            "lua" => Some(Self::Lua),
-            "sql" => Some(Self::Sql),
-            "haskell" | "hs" => Some(Self::Haskell),
-            "elixir" | "ex" | "exs" => Some(Self::Elixir),
-            "erlang" | "erl" => Some(Self::Erlang),
-            "clojure" | "clj" | "cljs" => Some(Self::Clojure),
-            "common_lisp" | "commonlisp" | "lisp" | "cl" => Some(Self::CommonLisp),
-            "scheme" | "scm" | "racket" | "rkt" => Some(Self::Scheme),
-            "emacs_lisp" | "emacslisp" | "elisp" | "el" => Some(Self::EmacsLisp),
-            "dockerfile" => Some(Self::Dockerfile),
-            "makefile" | "make" => Some(Self::Makefile),
-            "cmake" => Some(Self::CMake),
-            "ini" | "conf" | "cfg" => Some(Self::Ini),
-            "proto" | "protobuf" => Some(Self::Proto),
-            "vim" | "vimscript" => Some(Self::Vim),
-            "tex" | "latex" => Some(Self::Tex),
-            _ => None,
-        }
+        Some(match name.to_ascii_lowercase().as_str() {
+            "rust" | "rs" => Self::Rust,
+            "python" | "py" => Self::Python,
+            "javascript" | "js" => Self::JavaScript,
+            "jsx" => Self::Jsx,
+            "typescript" | "ts" => Self::TypeScript,
+            "tsx" => Self::Tsx,
+            "json" => Self::Json,
+            "jsonc" | "json5" => Self::Jsonc,
+            "toml" => Self::Toml,
+            "yaml" | "yml" => Self::Yaml,
+            "markdown" | "md" => Self::Markdown,
+            "html" | "htm" => Self::Html,
+            "xml" => Self::Xml,
+            "css" => Self::Css,
+            "scss" => Self::Scss,
+            "c" => Self::C,
+            "cpp" | "c++" | "cc" | "cxx" => Self::Cpp,
+            "java" => Self::Java,
+            "go" | "golang" => Self::Go,
+            "c_sharp" | "csharp" | "c#" | "cs" => Self::CSharp,
+            "swift" => Self::Swift,
+            "kotlin" | "kt" => Self::Kotlin,
+            "scala" => Self::Scala,
+            "zig" => Self::Zig,
+            "shell" | "sh" => Self::Shell,
+            "bash" => Self::Bash,
+            "zsh" => Self::Zsh,
+            "fish" => Self::Fish,
+            "ruby" | "rb" => Self::Ruby,
+            "perl" | "pl" => Self::Perl,
+            "lua" => Self::Lua,
+            "sql" => Self::Sql,
+            "haskell" | "hs" => Self::Haskell,
+            "elixir" | "ex" | "exs" => Self::Elixir,
+            "erlang" | "erl" => Self::Erlang,
+            "clojure" | "clj" | "cljs" => Self::Clojure,
+            "common_lisp" | "commonlisp" | "lisp" | "cl" => Self::CommonLisp,
+            "scheme" | "scm" | "racket" | "rkt" => Self::Scheme,
+            "emacs_lisp" | "emacslisp" | "elisp" | "el" => Self::EmacsLisp,
+            "dockerfile" => Self::Dockerfile,
+            "makefile" | "make" => Self::Makefile,
+            "cmake" => Self::CMake,
+            "ini" | "conf" | "cfg" => Self::Ini,
+            "proto" | "protobuf" => Self::Proto,
+            "vim" | "vimscript" => Self::Vim,
+            "tex" | "latex" => Self::Tex,
+            _ => return None,
+        })
     }
 }
 
@@ -662,100 +223,89 @@ pub fn detect(path: Option<&Path>, first_line: Option<&str>) -> Option<Language>
     first_line.and_then(detect_from_shebang)
 }
 
+#[rustfmt::skip]
 fn detect_from_filename(name: &str) -> Option<Language> {
-    match name {
-        "Makefile" | "makefile" | "GNUmakefile" | "BSDmakefile" => Some(Language::Makefile),
-        "Dockerfile" | "dockerfile" | "Containerfile" => Some(Language::Dockerfile),
-        "CMakeLists.txt" => Some(Language::CMake),
-        "Cargo.lock" | "Cargo.toml" | "rust-toolchain.toml" | "pyproject.toml" => {
-            Some(Language::Toml)
-        }
-        ".bashrc" | ".bash_profile" | ".bash_login" | ".bash_logout" | ".bash_aliases" => {
-            Some(Language::Bash)
-        }
-        ".zshrc" | ".zprofile" | ".zlogin" | ".zlogout" | ".zshenv" => Some(Language::Zsh),
-        ".profile" | ".login" => Some(Language::Shell),
-        _ => None,
-    }
+    Some(match name {
+        "Makefile" | "makefile" | "GNUmakefile" | "BSDmakefile" => Language::Makefile,
+        "Dockerfile" | "dockerfile" | "Containerfile" => Language::Dockerfile,
+        "CMakeLists.txt" => Language::CMake,
+        "Cargo.lock" | "Cargo.toml" | "rust-toolchain.toml" | "pyproject.toml" => Language::Toml,
+        ".bashrc" | ".bash_profile" | ".bash_login" | ".bash_logout" | ".bash_aliases" => Language::Bash,
+        ".zshrc" | ".zprofile" | ".zlogin" | ".zlogout" | ".zshenv" => Language::Zsh,
+        ".profile" | ".login" => Language::Shell,
+        _ => return None,
+    })
 }
 
+#[rustfmt::skip]
 fn detect_from_extension(extension: &str) -> Option<Language> {
-    match extension
-        .trim_start_matches('.')
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "rs" => Some(Language::Rust),
-        "py" | "pyw" | "pyi" => Some(Language::Python),
-        "js" | "mjs" | "cjs" => Some(Language::JavaScript),
-        "jsx" => Some(Language::Jsx),
-        "ts" | "mts" | "cts" => Some(Language::TypeScript),
-        "tsx" => Some(Language::Tsx),
-        "json" => Some(Language::Json),
-        "jsonc" | "json5" => Some(Language::Jsonc),
-        "toml" => Some(Language::Toml),
-        "yaml" | "yml" => Some(Language::Yaml),
-        "md" | "markdown" | "mdx" => Some(Language::Markdown),
-        "html" | "htm" => Some(Language::Html),
-        "xml" | "xhtml" | "svg" => Some(Language::Xml),
-        "css" => Some(Language::Css),
-        "scss" | "sass" => Some(Language::Scss),
-        "c" | "h" => Some(Language::C),
-        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" | "c++" | "h++" => Some(Language::Cpp),
-        "java" => Some(Language::Java),
-        "go" => Some(Language::Go),
-        "cs" => Some(Language::CSharp),
-        "swift" => Some(Language::Swift),
-        "kt" | "kts" => Some(Language::Kotlin),
-        "scala" | "sc" => Some(Language::Scala),
-        "zig" => Some(Language::Zig),
-        "sh" => Some(Language::Shell),
-        "bash" => Some(Language::Bash),
-        "zsh" => Some(Language::Zsh),
-        "fish" => Some(Language::Fish),
-        "rb" | "ruby" => Some(Language::Ruby),
-        "pl" | "pm" => Some(Language::Perl),
-        "lua" => Some(Language::Lua),
-        "sql" => Some(Language::Sql),
-        "hs" | "lhs" => Some(Language::Haskell),
-        "ex" | "exs" => Some(Language::Elixir),
-        "erl" | "hrl" => Some(Language::Erlang),
-        "clj" | "cljs" | "cljc" | "edn" => Some(Language::Clojure),
-        "lisp" | "cl" | "asd" => Some(Language::CommonLisp),
-        "scm" | "ss" | "rkt" => Some(Language::Scheme),
-        "el" => Some(Language::EmacsLisp),
-        "dockerfile" => Some(Language::Dockerfile),
-        "mk" => Some(Language::Makefile),
-        "cmake" => Some(Language::CMake),
-        "ini" | "conf" | "cfg" | "properties" => Some(Language::Ini),
-        "proto" => Some(Language::Proto),
-        "vim" | "vimrc" => Some(Language::Vim),
-        "tex" | "latex" | "sty" | "cls" => Some(Language::Tex),
-        _ => None,
-    }
+    Some(match extension.trim_start_matches('.').to_ascii_lowercase().as_str() {
+        "rs" => Language::Rust,
+        "py" | "pyw" | "pyi" => Language::Python,
+        "js" | "mjs" | "cjs" => Language::JavaScript,
+        "jsx" => Language::Jsx,
+        "ts" | "mts" | "cts" => Language::TypeScript,
+        "tsx" => Language::Tsx,
+        "json" => Language::Json,
+        "jsonc" | "json5" => Language::Jsonc,
+        "toml" => Language::Toml,
+        "yaml" | "yml" => Language::Yaml,
+        "md" | "markdown" | "mdx" => Language::Markdown,
+        "html" | "htm" => Language::Html,
+        "xml" | "xhtml" | "svg" => Language::Xml,
+        "css" => Language::Css,
+        "scss" | "sass" => Language::Scss,
+        "c" | "h" => Language::C,
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" | "c++" | "h++" => Language::Cpp,
+        "java" => Language::Java,
+        "go" => Language::Go,
+        "cs" => Language::CSharp,
+        "swift" => Language::Swift,
+        "kt" | "kts" => Language::Kotlin,
+        "scala" | "sc" => Language::Scala,
+        "zig" => Language::Zig,
+        "sh" => Language::Shell,
+        "bash" => Language::Bash,
+        "zsh" => Language::Zsh,
+        "fish" => Language::Fish,
+        "rb" | "ruby" => Language::Ruby,
+        "pl" | "pm" => Language::Perl,
+        "lua" => Language::Lua,
+        "sql" => Language::Sql,
+        "hs" | "lhs" => Language::Haskell,
+        "ex" | "exs" => Language::Elixir,
+        "erl" | "hrl" => Language::Erlang,
+        "clj" | "cljs" | "cljc" | "edn" => Language::Clojure,
+        "lisp" | "cl" | "asd" => Language::CommonLisp,
+        "scm" | "ss" | "rkt" => Language::Scheme,
+        "el" => Language::EmacsLisp,
+        "dockerfile" => Language::Dockerfile,
+        "mk" => Language::Makefile,
+        "cmake" => Language::CMake,
+        "ini" | "conf" | "cfg" | "properties" => Language::Ini,
+        "proto" => Language::Proto,
+        "vim" | "vimrc" => Language::Vim,
+        "tex" | "latex" | "sty" | "cls" => Language::Tex,
+        _ => return None,
+    })
 }
 
 fn detect_from_shebang(first_line: &str) -> Option<Language> {
-    let rest = first_line.strip_prefix("#!")?;
-    let rest = rest.trim_start();
-    let (head, tail) = match rest.split_once(char::is_whitespace) {
-        Some((head, tail)) => (head, tail.trim_start()),
-        None => (rest, ""),
-    };
+    let rest = first_line.strip_prefix("#!")?.trim_start();
+    let (head, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
     let interpreter = if head.ends_with("/env") || head == "env" {
-        tail.split_whitespace().next().unwrap_or("")
+        tail.trim_start().split_whitespace().next().unwrap_or("")
     } else {
         head.rsplit('/').next().unwrap_or("")
     };
     let interpreter = interpreter.trim_end_matches(|ch: char| ch.is_ascii_digit() || ch == '.');
-    if let Some(lang) = Language::from_name(interpreter) {
-        return Some(lang);
-    }
-    match interpreter {
+    Language::from_name(interpreter).or(match interpreter {
         "node" => Some(Language::JavaScript),
         _ => None,
-    }
+    })
 }
+
+const CONFIG_DEFAULT: LanguageConfig = lc(sp(4), None, None, PAIRS_BASIC, SUP_NO, CL_BR);
 
 pub(crate) const DEFAULT_CONFIG: &LanguageConfig = &CONFIG_DEFAULT;
 

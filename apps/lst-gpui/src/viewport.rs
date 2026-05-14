@@ -141,49 +141,39 @@ pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) theme: Theme,
 }
 
+#[rustfmt::skip]
 pub(crate) fn buffer_content_height(visual_rows: usize, scale: f32) -> Pixels {
     metrics::px_for_scale((visual_rows.max(1) as f32) * metrics::ROW_HEIGHT, scale)
 }
 
-/// GPUI's `ScrollHandle::offset().y` is negative when scrolled away from the
-/// top; this helper returns the non-negative "pixels scrolled from the top."
+/// GPUI's `ScrollHandle::offset()` is negative when scrolled away from the
+/// origin; these helpers return non-negative "pixels scrolled from the edge."
 pub(crate) fn scroll_top_for(scroll: &ScrollHandle) -> Pixels {
     (-scroll.offset().y).max(px(0.0))
 }
-
-/// Mirror of `scroll_top_for` for the horizontal axis: returns non-negative
-/// "pixels scrolled from the left."
 pub(crate) fn scroll_left_for(scroll: &ScrollHandle) -> Pixels {
     (-scroll.offset().x).max(px(0.0))
 }
-
 pub(crate) fn max_scroll_top(scroll: &ScrollHandle) -> Pixels {
     scroll.max_offset().height.max(px(0.0))
 }
-
 pub(crate) fn max_scroll_left(scroll: &ScrollHandle) -> Pixels {
     scroll.max_offset().width.max(px(0.0))
 }
 
-/// Sets the vertical scroll position to `top` (non-negative "pixels from the
-/// top"), preserving the horizontal axis and clamping to `[0, max_offset]`.
+/// Sets scroll position, clamped to `[0, max_offset]`, preserving the other axis.
 pub(crate) fn scroll_to_top(scroll: &ScrollHandle, top: Pixels) {
     let top = top.max(px(0.0)).min(max_scroll_top(scroll));
-    let current_x = scroll.offset().x;
-    scroll.set_offset(gpui::point(current_x, -top));
+    scroll.set_offset(gpui::point(scroll.offset().x, -top));
 }
 
-/// Sets the horizontal scroll position to `left`, preserving the vertical axis.
 pub(crate) fn scroll_to_left(scroll: &ScrollHandle, left: Pixels) {
     let left = left.max(px(0.0)).min(max_scroll_left(scroll));
-    let current_y = scroll.offset().y;
-    scroll.set_offset(gpui::point(-left, current_y));
+    scroll.set_offset(gpui::point(-left, scroll.offset().y));
 }
-
 pub(crate) fn reset_scroll(scroll: &ScrollHandle) {
     scroll.set_offset(gpui::point(px(0.0), px(0.0)));
 }
-
 fn trim_display_line(line: &str) -> &str {
     line.strip_suffix('\r').unwrap_or(line)
 }
@@ -200,10 +190,9 @@ fn char_to_byte_index(text: &str, char_ix: usize) -> usize {
     if char_ix == 0 {
         return 0;
     }
-
     text.char_indices()
         .nth(char_ix)
-        .map(|(byte_ix, _)| byte_ix)
+        .map(|(b, _)| b)
         .unwrap_or(text.len())
 }
 
@@ -972,7 +961,6 @@ pub(crate) fn row_contains_cursor(row: &PaintedRow, cursor_char: usize) -> bool 
     if cursor_char < row.line_start_char {
         return false;
     }
-
     cursor_char < row.logical_end_char
         || (row.cursor_end_inclusive && cursor_char == row.logical_end_char)
 }
@@ -980,17 +968,15 @@ pub(crate) fn row_contains_cursor(row: &PaintedRow, cursor_char: usize) -> bool 
 pub(crate) fn x_for_global_char(row: &PaintedRow, global_char: usize) -> Option<Pixels> {
     let local_char = global_char.saturating_sub(row.line_start_char);
     let code_line = row.code_line.as_ref()?;
-    let byte = char_to_byte(code_line.text.as_ref(), local_char);
-    Some(code_line.x_for_index(byte))
+    Some(code_line.x_for_index(char_to_byte(code_line.text.as_ref(), local_char)))
 }
 
+#[rustfmt::skip]
 fn char_to_byte(text: &str, char_offset: usize) -> usize {
-    text.char_indices()
-        .nth(char_offset)
-        .map(|(index, _)| index)
-        .unwrap_or(text.len())
+    text.char_indices().nth(char_offset).map(|(i, _)| i).unwrap_or(text.len())
 }
 
+#[rustfmt::skip]
 pub(crate) fn byte_index_to_char(text: &str, byte_index: usize) -> usize {
     text[..byte_index.min(text.len())].chars().count()
 }

@@ -62,7 +62,7 @@ impl FindScope {
                 start_char,
                 end_char,
             } if owner == tab_id => Some(start_char..end_char),
-            FindScope::Document | FindScope::Selection { .. } => None,
+            _ => None,
         }
     }
 }
@@ -196,7 +196,7 @@ impl FindState {
     pub fn next(&mut self) {
         let len = self.matches.len();
         if len > 0 {
-            self.active = Some(self.active.map_or(0, |current| (current + 1) % len));
+            self.active = Some(self.active.map_or(0, |c| (c + 1) % len));
         }
     }
 
@@ -205,7 +205,7 @@ impl FindState {
         if len > 0 {
             self.active = Some(match self.active {
                 Some(0) | None => len - 1,
-                Some(current) => current - 1,
+                Some(c) => c - 1,
             });
         }
     }
@@ -235,7 +235,6 @@ impl FindState {
         self.active = Some(index);
         true
     }
-
     fn is_stale(&self, revision: u64) -> bool {
         !self.query.is_empty() && self.indexed_revision != Some(revision)
     }
@@ -268,24 +267,19 @@ impl FindState {
         }
     }
 
+    #[rustfmt::skip]
     pub(crate) fn ensure_current(&mut self, tab: &EditorTab) {
-        if self.is_stale(tab.revision()) {
-            self.reindex_for_tab(tab);
-        }
+        if self.is_stale(tab.revision()) { self.reindex_for_tab(tab); }
     }
 
+    #[rustfmt::skip]
     pub(crate) fn sync_with_tab(&mut self, tab: &EditorTab) {
-        if self.query.is_empty() {
-            self.clear_results();
-        } else {
-            self.reindex_to_nearest(tab);
-        }
+        if self.query.is_empty() { self.clear_results(); } else { self.reindex_to_nearest(tab); }
     }
 
+    #[rustfmt::skip]
     pub(crate) fn sync_after_edit(&mut self, tab: &EditorTab) {
-        if !self.query.is_empty() {
-            self.reindex_to_nearest(tab);
-        }
+        if !self.query.is_empty() { self.reindex_to_nearest(tab); }
     }
 
     pub(crate) fn active_selection_set(&self, tab: &EditorTab) -> Option<SelectionSet> {
@@ -293,19 +287,17 @@ impl FindState {
             return None;
         }
         let buffer = tab.buffer();
-        let selections = self
+        let selections: Vec<_> = self
             .matches
             .iter()
             .map(|m| Selection::from_range(m.char_range_in(buffer), false))
-            .collect::<Vec<_>>();
+            .collect();
         let primary = self.active.unwrap_or(0).min(selections.len() - 1);
         SelectionSet::from_selections(selections, primary).ok()
     }
-
     pub(crate) fn next_from(&mut self, position: Position) -> Option<Position> {
         self.select_relative_from(position, true)
     }
-
     pub(crate) fn prev_from(&mut self, position: Position) -> Option<Position> {
         self.select_relative_from(position, false)
     }
@@ -416,11 +408,10 @@ pub(crate) fn replace_one_request(tab: &EditorTab, find: &FindState) -> Option<E
     let range = position_to_char(buffer, start)..position_to_char(buffer, end);
     let replacement = regex.map_or(template.clone(), |re| {
         let line_start = buffer.char_to_byte(buffer.line_to_char(start.line));
-        let match_start = buffer.char_to_byte(range.start);
         expand_match_replacement(
             &re,
             &line_display_text(buffer, start.line),
-            match_start - line_start,
+            buffer.char_to_byte(range.start) - line_start,
             &template,
         )
     });

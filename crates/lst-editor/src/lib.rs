@@ -80,20 +80,14 @@ pub enum GutterMode {
 }
 
 impl GutterMode {
+    #[rustfmt::skip]
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Absolute => "Absolute",
-            Self::Relative => "Relative",
-            Self::Hybrid => "Hybrid",
-        }
+        match self { Self::Absolute => "Absolute", Self::Relative => "Relative", Self::Hybrid => "Hybrid" }
     }
 
+    #[rustfmt::skip]
     fn cycle(self) -> Self {
-        match self {
-            Self::Absolute => Self::Relative,
-            Self::Relative => Self::Hybrid,
-            Self::Hybrid => Self::Absolute,
-        }
+        match self { Self::Absolute => Self::Relative, Self::Relative => Self::Hybrid, Self::Hybrid => Self::Absolute }
     }
 
     pub fn format(self, line_ix: usize, cursor_line: usize, cursor_lines: &[usize]) -> String {
@@ -142,10 +136,6 @@ pub struct EditorModel {
 }
 
 impl EditorModel {
-    pub fn from_tab(tab: EditorTab, status: String) -> Self {
-        Self::from_tabs(tab, Vec::new(), status)
-    }
-
     pub fn from_tabs(first: EditorTab, rest: Vec<EditorTab>, status: String) -> Self {
         Self {
             tabs: TabSet::new(first, rest),
@@ -162,78 +152,51 @@ impl EditorModel {
             overtype: false,
         }
     }
-
-    pub fn empty() -> Self {
-        let tab = EditorTab::empty(TabId::from_raw(1), format!("{UNTITLED_PREFIX}-1"));
-        Self::from_tab(tab, "Ready.".to_string())
-    }
-
     fn alloc_tab_id(&mut self) -> TabId {
         self.tabs.alloc_tab_id()
     }
-
     pub fn active_tab(&self) -> &EditorTab {
         self.tabs.active()
     }
-
     fn active_tab_mut(&mut self) -> &mut EditorTab {
         self.tabs.active_mut()
     }
-
     pub fn active_tab_id(&self) -> TabId {
         self.active_tab().id()
     }
-
     pub fn active_tab_lines(&mut self) -> Arc<[String]> {
         self.active_tab_mut().lines()
     }
-
     pub fn tabs(&self) -> &[EditorTab] {
         &self.tabs
     }
-
     pub fn tab(&self, index: usize) -> Option<&EditorTab> {
         self.tabs.get(index)
     }
-
     pub fn tab_by_id(&self, tab_id: TabId) -> Option<&EditorTab> {
         self.tabs.tab_by_id(tab_id)
     }
-
     fn tab_mut_by_id(&mut self, tab_id: TabId) -> Option<&mut EditorTab> {
         self.tabs.tab_mut_by_id(tab_id)
     }
-
-    pub fn set_tab_language(&mut self, tab_id: TabId, language: Option<Language>) {
-        if let Some(tab) = self.tab_mut_by_id(tab_id) {
-            tab.set_language(language);
-        }
-    }
-
     fn tab_index_by_id(&self, tab_id: TabId) -> Option<usize> {
         self.tabs.index_by_id(tab_id)
     }
-
     pub fn tab_count(&self) -> usize {
         self.tabs.len()
     }
-
     pub fn active_index(&self) -> usize {
         self.tabs.active_index()
     }
-
     pub fn show_gutter(&self) -> bool {
         self.show_gutter
     }
-
     pub fn show_wrap(&self) -> bool {
         self.show_wrap
     }
-
     pub fn gutter_mode(&self) -> GutterMode {
         self.gutter_mode
     }
-
     pub fn find(&self) -> &FindState {
         &self.find
     }
@@ -253,23 +216,18 @@ impl EditorModel {
         let m = *self.find.matches.get(active)?;
         Some(m.char_range_in(self.active_tab().buffer()))
     }
-
     pub fn goto_line(&self) -> Option<&str> {
         self.goto_line.as_deref()
     }
-
     pub fn status(&self) -> &str {
         &self.status
     }
-
     pub fn vim_mode(&self) -> vim::Mode {
         self.vim.mode
     }
-
     pub fn vim_pending_display(&self) -> String {
         self.vim.pending_display()
     }
-
     pub fn overtype(&self) -> bool {
         self.overtype
     }
@@ -313,23 +271,18 @@ impl EditorModel {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
-
     fn assign_selection(&mut self, selection: Selection) {
         self.active_tab_mut().set_selection(selection);
     }
-
     fn queue_focus(&mut self, target: FocusTarget) {
         self.effects.push(EditorEffect::Focus(target));
     }
-
     fn queue_effect(&mut self, effect: EditorEffect) {
         self.effects.push(effect);
     }
-
     fn queue_reveal(&mut self, intent: RevealIntent) {
         self.queue_effect(EditorEffect::Reveal(intent));
     }
-
     pub fn drain_effects(&mut self) -> Vec<EditorEffect> {
         self.effects.drain(..).collect()
     }
@@ -362,13 +315,9 @@ impl EditorModel {
         self.queue_focus(FocusTarget::Editor);
     }
 
-    pub fn update_find_query(&mut self, text: String) {
+    pub fn update_find_query_and_activate(&mut self, text: String) {
         self.find.query = text;
         self.reindex_find_matches_to_nearest();
-    }
-
-    pub fn update_find_query_and_activate(&mut self, text: String) {
-        self.update_find_query(text);
         if self.move_to_current_find_match() {
             self.queue_reveal(RevealIntent::Center);
         }
@@ -401,57 +350,35 @@ impl EditorModel {
     pub fn update_goto_line(&mut self, text: String) {
         self.goto_line = Some(text);
     }
-
     fn active_cursor_position(&self) -> Position {
         self.active_tab().cursor_position()
     }
-
     fn reindex_find_matches(&mut self) {
         self.find.reindex_for_tab(self.tabs.active());
     }
-
     fn reindex_find_matches_to_nearest(&mut self) {
         self.find.reindex_to_nearest(self.tabs.active());
     }
-
     fn ensure_find_matches_current(&mut self) {
         self.find.ensure_current(self.tabs.active());
     }
-
     fn sync_find_with_active_document(&mut self) {
         self.find.sync_with_tab(self.tabs.active());
     }
-
     fn sync_find_after_edit(&mut self) {
         self.find.sync_after_edit(self.tabs.active());
     }
 
-    fn finish_active_text_mutation(&mut self, outcome: EditOutcome, reveal: Option<RevealIntent>) {
-        if outcome.text_changed {
-            self.sync_find_after_edit();
-        }
-        if outcome.changed() {
-            if let Some(intent) = reveal {
-                self.queue_reveal(intent);
-            }
-        }
-    }
-
-    fn find_next(&mut self) -> bool {
+    fn find_step(&mut self, forward: bool) -> bool {
         self.ensure_find_matches_current();
         if self.find.matches.is_empty() {
             return false;
         }
-        self.find.next();
-        self.move_to_current_find_match()
-    }
-
-    fn find_prev(&mut self) -> bool {
-        self.ensure_find_matches_current();
-        if self.find.matches.is_empty() {
-            return false;
+        if forward {
+            self.find.next();
+        } else {
+            self.find.prev();
         }
-        self.find.prev();
         self.move_to_current_find_match()
     }
 
@@ -550,7 +477,14 @@ impl EditorModel {
         reveal: Option<RevealIntent>,
     ) -> EditOutcome {
         let outcome = self.active_tab_mut().apply_edit_request(request);
-        self.finish_active_text_mutation(outcome, reveal);
+        if outcome.text_changed {
+            self.sync_find_after_edit();
+        }
+        if outcome.changed() {
+            if let Some(intent) = reveal {
+                self.queue_reveal(intent);
+            }
+        }
         outcome
     }
 
@@ -559,9 +493,7 @@ impl EditorModel {
         request: Option<EditRequest>,
         reveal: Option<RevealIntent>,
     ) -> bool {
-        let Some(request) = request else {
-            return false;
-        };
+        let Some(request) = request else { return false };
         self.apply_active_edit_request(request, reveal);
         true
     }
@@ -649,12 +581,6 @@ impl EditorModel {
         self.apply_selection_state(motion::horizontal(self.active_tab(), delta, select))
     }
 
-    fn move_horizontal_collapsed(&mut self, backward: bool) {
-        if self.apply_selection_state(motion::horizontal_collapsed(self.active_tab(), backward)) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
     fn move_boundary(
         &mut self,
         backward: bool,
@@ -676,7 +602,7 @@ impl EditorModel {
         delta: isize,
         select: bool,
         wrap_columns: usize,
-        snap_to_document_edges: bool,
+        snap: bool,
     ) -> bool {
         let lines = self.show_wrap.then(|| self.active_tab_lines());
         self.apply_selection_state(motion::display_rows(
@@ -686,7 +612,7 @@ impl EditorModel {
             delta,
             select,
             wrap_columns,
-            snap_to_document_edges,
+            snap,
         ))
     }
 
@@ -702,33 +628,14 @@ impl EditorModel {
         ))
     }
 
-    fn move_paged(
-        &mut self,
-        delta: isize,
-        select: bool,
-        wrap_columns: usize,
-        snap_to_document_edges: bool,
-    ) {
-        if self.move_display_rows(delta, select, wrap_columns, snap_to_document_edges) {
+    fn move_paged(&mut self, delta: isize, select: bool, wrap_columns: usize, snap: bool) {
+        if self.move_display_rows(delta, select, wrap_columns, snap) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
 
-    fn move_line_boundary(&mut self, to_end: bool, select: bool) {
-        if self.apply_selection_state(motion::line_boundary(self.active_tab(), to_end, select)) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    fn smart_home(&mut self, select: bool) {
-        if self.apply_selection_state(motion::smart_home(self.active_tab(), select)) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    fn move_document_boundary(&mut self, to_end: bool, select: bool) {
-        if self.apply_selection_state(motion::document_boundary(self.active_tab(), to_end, select))
-        {
+    fn move_with_reveal(&mut self, state: Option<selection::SelectionState>) {
+        if self.apply_selection_state(state) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
@@ -905,8 +812,8 @@ impl EditorModel {
             C::OpenLineAbove => { self.vim_open_line(true); self.vim.mode = vim::Mode::Insert; }
             C::JoinLines { count } => self.vim_join_lines(count),
             C::ReplaceChar { ch, count } => self.vim_replace_char(ch, count),
-            C::Undo => { self.undo_active_text_mutation(None); }
-            C::Redo => { self.redo_active_text_mutation(None); }
+            C::Undo => { self.undo_or_redo(false, None); }
+            C::Redo => { self.undo_or_redo(true, None); }
             C::OpenFind => self.open_find_panel(false),
             C::FindNext => self.vim_find_step(true),
             C::FindPrev => self.vim_find_step(false),
@@ -922,9 +829,9 @@ impl EditorModel {
             C::HalfPageUp => self.vim_paged(-(self.viewport.half_page() as isize), wrap_columns),
             C::PageDown => self.vim_paged(self.viewport.page() as isize, wrap_columns),
             C::PageUp => self.vim_paged(-(self.viewport.page() as isize), wrap_columns),
-            C::MoveToScreenTop => self.screen_top(self.vim_in_visual(), wrap_columns),
-            C::MoveToScreenMiddle => self.screen_middle(self.vim_in_visual(), wrap_columns),
-            C::MoveToScreenBottom => self.screen_bottom(self.vim_in_visual(), wrap_columns),
+            C::MoveToScreenTop => self.screen_row(self.viewport.screen_top_row(), self.vim_in_visual(), wrap_columns),
+            C::MoveToScreenMiddle => self.screen_row(self.viewport.screen_middle_row(), self.vim_in_visual(), wrap_columns),
+            C::MoveToScreenBottom => self.screen_row(self.viewport.screen_bottom_row(), self.vim_in_visual(), wrap_columns),
             C::SurroundRange { from, to, open, close } => self.vim_surround_range(from, to, open, close),
             C::DeleteSurround { open } => self.vim_delete_surround(open),
             C::ChangeSurround { from_open, to_open } => self.vim_change_surround(from_open, to_open),
@@ -941,16 +848,18 @@ impl EditorModel {
         true
     }
 
+    #[rustfmt::skip]
     fn vim_paged(&mut self, delta: isize, wrap_columns: usize) {
         self.move_paged(delta, self.vim_in_visual(), wrap_columns, false);
     }
 
     fn vim_find_step(&mut self, forward: bool) {
         self.ensure_find_matches_current();
+        let cursor = self.active_cursor_position();
         let target = if forward {
-            self.find.next_from(self.active_cursor_position())
+            self.find.next_from(cursor)
         } else {
-            self.find.prev_from(self.active_cursor_position())
+            self.find.prev_from(cursor)
         };
         if let Some(target) = target {
             self.move_to_vim_search_target(target);
@@ -962,7 +871,6 @@ impl EditorModel {
             self.queue_effect(EditorEffect::WritePrimary(text));
         }
     }
-
     fn vim_in_visual(&self) -> bool {
         matches!(self.vim.mode, vim::Mode::Visual | vim::Mode::VisualLine)
     }
@@ -999,43 +907,37 @@ impl EditorModel {
         }
     }
 
-    fn vim_delete_range(&mut self, from: Position, to: Position) {
-        let Some((deleted, request)) = vim_edit::delete_range(self.active_tab(), from, to) else {
-            self.vim.register = vim::Register::Char(String::new());
+    fn apply_vim_capture(&mut self, result: Option<vim_edit::DeletedEdit>, line: bool) {
+        let make = |s: String| {
+            if line {
+                vim::Register::Line(s)
+            } else {
+                vim::Register::Char(s)
+            }
+        };
+        let Some((deleted, request)) = result else {
+            self.vim.register = make(String::new());
             return;
         };
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-        self.vim.register = vim::Register::Char(deleted);
+        self.vim.register = make(deleted);
+    }
+
+    fn vim_delete_range(&mut self, from: Position, to: Position) {
+        self.apply_vim_capture(vim_edit::delete_range(self.active_tab(), from, to), false);
     }
 
     fn vim_delete_lines(&mut self, first: usize, last: usize) {
-        let Some((deleted, request)) = vim_edit::delete_lines(self.active_tab(), first, last)
-        else {
-            self.vim.register = vim::Register::Line(String::new());
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-        self.vim.register = vim::Register::Line(deleted);
+        self.apply_vim_capture(vim_edit::delete_lines(self.active_tab(), first, last), true);
     }
 
     fn vim_change_lines(&mut self, first: usize, last: usize) {
-        let Some((deleted, request)) = vim_edit::change_lines(self.active_tab(), first, last)
-        else {
-            self.vim.register = vim::Register::Line(String::new());
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-        self.vim.register = vim::Register::Line(deleted);
+        self.apply_vim_capture(vim_edit::change_lines(self.active_tab(), first, last), true);
     }
 
+    #[rustfmt::skip]
     fn vim_surround_range(&mut self, from: Position, to: Position, open: char, close: char) {
-        self.apply_vim_optional(vim_edit::surround_range(
-            self.active_tab(),
-            from,
-            to,
-            open,
-            close,
-        ));
+        self.apply_vim_optional(vim_edit::surround_range(self.active_tab(), from, to, open, close));
     }
 
     fn vim_find_surround_or_warn(
@@ -1044,13 +946,11 @@ impl EditorModel {
         close: char,
     ) -> Option<(Position, Position)> {
         let snapshot = self.vim_snapshot();
-        match vim::find_surround_pair(&snapshot, open, close) {
-            Some(pair) => Some(pair),
-            None => {
-                self.status = "No surrounding pair.".to_string();
-                None
-            }
+        let pair = vim::find_surround_pair(&snapshot, open, close);
+        if pair.is_none() {
+            self.status = "No surrounding pair.".to_string();
         }
+        pair
     }
 
     fn vim_delete_surround(&mut self, open: char) {
@@ -1084,6 +984,7 @@ impl EditorModel {
         ));
     }
 
+    #[rustfmt::skip]
     fn apply_vim_optional(&mut self, request: Option<EditRequest>) {
         self.apply_optional_edit_request(request, Some(RevealIntent::NearestEdge));
     }
@@ -1102,8 +1003,12 @@ impl EditorModel {
 
     fn vim_paste(&mut self, before: bool) {
         let cursor = self.active_cursor_position();
-        let request = vim_edit::paste(self.active_tab(), cursor, &self.vim.register, before);
-        self.apply_vim_optional(request);
+        self.apply_vim_optional(vim_edit::paste(
+            self.active_tab(),
+            cursor,
+            &self.vim.register,
+            before,
+        ));
     }
 
     fn vim_open_line(&mut self, above: bool) {
@@ -1131,10 +1036,6 @@ impl EditorModel {
     fn vim_transform_case_lines(&mut self, first: usize, last: usize, uppercase: bool) {
         let action = vim_edit::transform_case_lines(self.active_tab(), first, last, uppercase);
         self.apply_vim_edit_action(action);
-    }
-
-    pub fn insert_text(&mut self, text: String) {
-        self.apply_text_input(None, text, UndoBoundary::Break);
     }
 
     pub fn replace_text_from_input(&mut self, range: Option<Range<usize>>, text: String) {
@@ -1225,13 +1126,13 @@ impl EditorModel {
 
     pub fn close_request_for_tab(&self, tab_id: TabId) -> Option<TabCloseRequest> {
         let tab = self.tab_by_id(tab_id)?;
-        if tab.modified() {
-            Some(TabCloseRequest::SaveAndClose { tab_id: tab.id() })
+        let tab_id = tab.id();
+        Some(if tab.modified() {
+            TabCloseRequest::SaveAndClose { tab_id }
         } else {
-            Some(TabCloseRequest::Close { tab_id: tab.id() })
-        }
+            TabCloseRequest::Close { tab_id }
+        })
     }
-
     pub fn tab_id_at(&self, index: usize) -> Option<TabId> {
         self.tabs.get(index).map(EditorTab::id)
     }
@@ -1287,52 +1188,30 @@ impl EditorModel {
             self.status = format!("Reordered tab to position {}.", to + 1);
         }
     }
-
     pub fn viewport(&self) -> Viewport {
         self.viewport
     }
-
     pub fn set_viewport_rows(&mut self, rows: usize) {
         self.viewport.rows = rows.max(1);
     }
-
     pub fn set_viewport_top(&mut self, row: usize) {
         self.viewport.top_visual_row = row;
     }
 
-    fn screen_top(&mut self, select: bool, wrap_columns: usize) {
-        let target = self.viewport.screen_top_row();
+    fn screen_row(&mut self, target: usize, select: bool, wrap_columns: usize) {
         if self.move_to_visual_row(target, select, wrap_columns) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
-
-    fn screen_middle(&mut self, select: bool, wrap_columns: usize) {
-        let target = self.viewport.screen_middle_row();
-        if self.move_to_visual_row(target, select, wrap_columns) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
-    fn screen_bottom(&mut self, select: bool, wrap_columns: usize) {
-        let target = self.viewport.screen_bottom_row();
-        if self.move_to_visual_row(target, select, wrap_columns) {
-            self.queue_reveal(RevealIntent::NearestEdge);
-        }
-    }
-
     pub fn set_selection(&mut self, selection: Selection) {
         self.assign_selection(selection);
     }
-
     pub fn set_selection_set(&mut self, selection_set: SelectionSet) {
         self.active_tab_mut().set_selection_set(selection_set);
     }
-
     pub fn selection(&self) -> Selection {
         self.active_tab().selection()
     }
-
     pub fn selection_set(&self) -> &SelectionSet {
         self.active_tab().selection_set()
     }
@@ -1600,39 +1479,29 @@ impl EditorModel {
         self.outdent_selected_lines(first, last);
     }
 
+    #[rustfmt::skip]
     fn indent_selected_lines(&mut self, first: usize, last: usize) {
-        self.apply_optional_edit_request(
-            line_edit::indent_request(self.active_tab(), first, last),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_optional_edit_request(line_edit::indent_request(self.active_tab(), first, last), Some(RevealIntent::NearestEdge));
     }
 
+    #[rustfmt::skip]
     fn outdent_selected_lines(&mut self, first: usize, last: usize) {
-        self.apply_optional_edit_request(
-            line_edit::outdent_request(self.active_tab(), first, last),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_optional_edit_request(line_edit::outdent_request(self.active_tab(), first, last), Some(RevealIntent::NearestEdge));
     }
 
+    #[rustfmt::skip]
     fn delete_line(&mut self) {
-        self.apply_optional_edit_request(
-            line_edit::delete_lines_request(self.active_tab(), self.active_cursor_position()),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_optional_edit_request(line_edit::delete_lines_request(self.active_tab(), self.active_cursor_position()), Some(RevealIntent::NearestEdge));
     }
 
+    #[rustfmt::skip]
     fn move_line(&mut self, up: bool) {
-        self.apply_optional_edit_request(
-            line_edit::move_lines_request(self.active_tab(), self.active_cursor_position(), up),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_optional_edit_request(line_edit::move_lines_request(self.active_tab(), self.active_cursor_position(), up), Some(RevealIntent::NearestEdge));
     }
 
+    #[rustfmt::skip]
     fn duplicate_line(&mut self) {
-        self.apply_optional_edit_request(
-            line_edit::duplicate_lines_request(self.active_tab(), self.active_cursor_position()),
-            Some(RevealIntent::NearestEdge),
-        );
+        self.apply_optional_edit_request(line_edit::duplicate_lines_request(self.active_tab(), self.active_cursor_position()), Some(RevealIntent::NearestEdge));
     }
 
     fn toggle_comment(&mut self) {
@@ -1662,7 +1531,6 @@ impl EditorModel {
             Some(RevealIntent::NearestEdge),
         );
     }
-
     pub fn clipboard_unavailable(&mut self) {
         self.status = "Clipboard does not currently contain plain text.".to_string();
     }
@@ -1707,28 +1575,20 @@ impl EditorModel {
         self.queue_reveal(RevealIntent::Center);
     }
 
-    fn undo_active_text_mutation(&mut self, reveal: Option<RevealIntent>) -> bool {
-        if self.active_tab_mut().undo() {
-            self.sync_find_after_edit();
-            if let Some(intent) = reveal {
-                self.queue_reveal(intent);
-            }
-            true
+    fn undo_or_redo(&mut self, redo: bool, reveal: Option<RevealIntent>) -> bool {
+        let changed = if redo {
+            self.active_tab_mut().redo()
         } else {
-            false
+            self.active_tab_mut().undo()
+        };
+        if !changed {
+            return false;
         }
-    }
-
-    fn redo_active_text_mutation(&mut self, reveal: Option<RevealIntent>) -> bool {
-        if self.active_tab_mut().redo() {
-            self.sync_find_after_edit();
-            if let Some(intent) = reveal {
-                self.queue_reveal(intent);
-            }
-            true
-        } else {
-            false
+        self.sync_find_after_edit();
+        if let Some(intent) = reveal {
+            self.queue_reveal(intent);
         }
+        true
     }
 
     fn swap_redo_branch(&mut self) {
@@ -1841,83 +1701,5 @@ fn linewise_range_at_char(buffer: &ropey::Rope, char_index: usize) -> Range<usiz
         }
         '\r' => (start - 1)..range.end,
         _ => range,
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EditorSnapshot {
-    pub active: usize,
-    pub tab_count: usize,
-    pub active_tab_id: TabId,
-    pub tab_ids: Vec<TabId>,
-    pub tab_titles: Vec<String>,
-    pub tab_modified: Vec<bool>,
-    pub tab_scratchpad: Vec<bool>,
-    pub text: String,
-    pub cursor: usize,
-    pub cursor_position: Position,
-    pub selection: Selection,
-    pub selection_set: SelectionSet,
-    pub active_path: Option<PathBuf>,
-    pub active_revision: u64,
-    pub show_wrap: bool,
-    pub show_gutter: bool,
-    pub find_visible: bool,
-    pub find_show_replace: bool,
-    pub find_query: String,
-    pub find_replacement: String,
-    pub find_matches: usize,
-    pub find_current: Option<usize>,
-    pub find_match_ranges: Vec<Range<usize>>,
-    pub find_active_match: Option<Range<usize>>,
-    pub find_case_sensitive: bool,
-    pub find_whole_word: bool,
-    pub find_use_regex: bool,
-    pub find_in_selection: bool,
-    pub find_error: Option<String>,
-    pub goto_line: Option<String>,
-    pub vim_mode: vim::Mode,
-    pub vim_pending: String,
-    pub status: String,
-}
-
-impl EditorModel {
-    pub fn snapshot(&self) -> EditorSnapshot {
-        let active = self.active_tab();
-        EditorSnapshot {
-            active: self.active_index(),
-            tab_count: self.tabs.len(),
-            active_tab_id: active.id(),
-            tab_ids: self.tabs.iter().map(EditorTab::id).collect(),
-            tab_titles: self.tabs.iter().map(|tab| tab.display_name()).collect(),
-            tab_modified: self.tabs.iter().map(EditorTab::modified).collect(),
-            tab_scratchpad: self.tabs.iter().map(EditorTab::is_scratchpad).collect(),
-            text: active.buffer_text(),
-            cursor: active.cursor_char(),
-            cursor_position: active.cursor_position(),
-            selection: active.selection(),
-            selection_set: active.selection_set().clone(),
-            active_path: active.path().cloned(),
-            active_revision: active.revision(),
-            show_wrap: self.show_wrap,
-            show_gutter: self.show_gutter,
-            find_visible: self.find.visible,
-            find_show_replace: self.find.show_replace,
-            find_query: self.find.query.clone(),
-            find_replacement: self.find.replacement.clone(),
-            find_matches: self.find.matches.len(),
-            find_current: self.find.active,
-            find_match_ranges: self.find_match_ranges(),
-            find_active_match: self.active_find_match_range(),
-            find_case_sensitive: self.find.case_sensitive,
-            find_whole_word: self.find.whole_word,
-            find_use_regex: self.find.use_regex,
-            find_in_selection: self.find.scope.is_selection_for(active.id()),
-            find_error: self.find.error.clone(),
-            goto_line: self.goto_line.clone(),
-            vim_mode: self.vim.mode,
-            vim_pending: self.vim.pending_display(),
-            status: self.status.clone(),
-        }
     }
 }

@@ -18,19 +18,10 @@ pub enum Key {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[rustfmt::skip]
 pub enum NamedKey {
-    ArrowLeft,
-    ArrowRight,
-    ArrowUp,
-    ArrowDown,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Backspace,
-    Delete,
-    Tab,
-    Enter,
+    ArrowLeft, ArrowRight, ArrowUp, ArrowDown,
+    Home, End, PageUp, PageDown, Backspace, Delete, Tab, Enter,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -48,38 +39,27 @@ impl Modifiers {
         command: false,
         control: true,
     };
-
     pub fn command(self) -> bool {
         self.command
     }
-
     pub fn control(self) -> bool {
         self.control
     }
 }
 
-fn pos(line: usize, column: usize) -> Position {
-    Position { line, column }
-}
+#[rustfmt::skip]
+fn pos(line: usize, column: usize) -> Position { Position { line, column } }
 
 // -- Public types ------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    Normal,
-    Insert,
-    Visual,
-    VisualLine,
-}
+#[rustfmt::skip]
+pub enum Mode { Normal, Insert, Visual, VisualLine }
 
 impl Mode {
+    #[rustfmt::skip]
     pub fn label(self) -> &'static str {
-        match self {
-            Mode::Normal => "NORMAL",
-            Mode::Insert => "INSERT",
-            Mode::Visual => "VISUAL",
-            Mode::VisualLine => "V-LINE",
-        }
+        match self { Mode::Normal => "NORMAL", Mode::Insert => "INSERT", Mode::Visual => "VISUAL", Mode::VisualLine => "V-LINE" }
     }
 }
 
@@ -219,11 +199,8 @@ struct Pending {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Operator {
-    Delete,
-    Change,
-    Yank,
-}
+#[rustfmt::skip]
+enum Operator { Delete, Change, Yank }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SurroundPhase {
@@ -236,26 +213,13 @@ enum SurroundPhase {
 }
 
 #[derive(Clone, Copy)]
+#[rustfmt::skip]
 enum Motion {
-    Left,
-    Right,
-    Down,
-    Up,
-    WordForward,
-    WordBackward,
-    WordEnd,
-    BigWordForward,
-    BigWordBackward,
-    BigWordEnd,
-    LineStart,
-    LineEnd,
-    FirstNonBlank,
-    DocumentStart,
-    DocumentEnd,
-    FindChar(char),
-    TillChar(char),
-    FindCharBack(char),
-    TillCharBack(char),
+    Left, Right, Down, Up,
+    WordForward, WordBackward, WordEnd,
+    BigWordForward, BigWordBackward, BigWordEnd,
+    LineStart, LineEnd, FirstNonBlank, DocumentStart, DocumentEnd,
+    FindChar(char), TillChar(char), FindCharBack(char), TillCharBack(char),
     Percent,
 }
 
@@ -287,7 +251,7 @@ impl VimState {
     ) -> Vec<VimCommand> {
         match self.mode {
             Mode::Normal => self.handle_normal(key, mods, text),
-            Mode::Insert => vec![], // caller lets the editor surface handle text input
+            Mode::Insert => vec![], // caller handles text input
             Mode::Visual | Mode::VisualLine => self.handle_visual(key, mods, text),
         }
     }
@@ -323,15 +287,12 @@ impl VimState {
         }
         s
     }
-
     fn clear_pending(&mut self) {
         self.pending = Pending::default();
     }
-
     fn clear_preferred_column(&mut self) {
         self.preferred_column = None;
     }
-
     fn clear_command_state(&mut self) {
         self.clear_pending();
         self.clear_preferred_column();
@@ -1265,60 +1226,12 @@ fn compute_motion(
                 .min(line_len(text, line).saturating_sub(1));
             pos(line, col)
         }
-        Motion::WordForward => {
-            let (mut l, mut c) = (text.cursor.line, text.cursor.column);
-            for _ in 0..n {
-                let (nl, nc) = word_forward(text, l, c, false);
-                l = nl;
-                c = nc;
-            }
-            pos(l, c)
-        }
-        Motion::WordBackward => {
-            let (mut l, mut c) = (text.cursor.line, text.cursor.column);
-            for _ in 0..n {
-                let (nl, nc) = word_backward(text, l, c, false);
-                l = nl;
-                c = nc;
-            }
-            pos(l, c)
-        }
-        Motion::WordEnd => {
-            let (mut l, mut c) = (text.cursor.line, text.cursor.column);
-            for _ in 0..n {
-                let (nl, nc) = word_end(text, l, c, false);
-                l = nl;
-                c = nc;
-            }
-            pos(l, c)
-        }
-        Motion::BigWordForward => {
-            let (mut l, mut c) = (text.cursor.line, text.cursor.column);
-            for _ in 0..n {
-                let (nl, nc) = word_forward(text, l, c, true);
-                l = nl;
-                c = nc;
-            }
-            pos(l, c)
-        }
-        Motion::BigWordBackward => {
-            let (mut l, mut c) = (text.cursor.line, text.cursor.column);
-            for _ in 0..n {
-                let (nl, nc) = word_backward(text, l, c, true);
-                l = nl;
-                c = nc;
-            }
-            pos(l, c)
-        }
-        Motion::BigWordEnd => {
-            let (mut l, mut c) = (text.cursor.line, text.cursor.column);
-            for _ in 0..n {
-                let (nl, nc) = word_end(text, l, c, true);
-                l = nl;
-                c = nc;
-            }
-            pos(l, c)
-        }
+        Motion::WordForward => repeat_word(text, n, false, word_forward),
+        Motion::WordBackward => repeat_word(text, n, false, word_backward),
+        Motion::WordEnd => repeat_word(text, n, false, word_end),
+        Motion::BigWordForward => repeat_word(text, n, true, word_forward),
+        Motion::BigWordBackward => repeat_word(text, n, true, word_backward),
+        Motion::BigWordEnd => repeat_word(text, n, true, word_end),
         Motion::LineStart => pos(text.cursor.line, 0),
         Motion::LineEnd => {
             let line =
@@ -1344,61 +1257,10 @@ fn compute_motion(
                 pos(line, first_non_blank(text, line))
             }
         },
-        Motion::FindChar(ch) => {
-            let chars = line_chars(text, text.cursor.line);
-            let mut found = 0;
-            for (i, &c) in chars.iter().enumerate().skip(text.cursor.column + 1) {
-                if c == *ch {
-                    found += 1;
-                    if found == n {
-                        return pos(text.cursor.line, i);
-                    }
-                }
-            }
-            text.cursor
-        }
-        Motion::TillChar(ch) => {
-            let chars = line_chars(text, text.cursor.line);
-            let mut found = 0;
-            for (i, &c) in chars.iter().enumerate().skip(text.cursor.column + 1) {
-                if c == *ch {
-                    found += 1;
-                    if found == n {
-                        return pos(
-                            text.cursor.line,
-                            i.saturating_sub(1).max(text.cursor.column),
-                        );
-                    }
-                }
-            }
-            text.cursor
-        }
-        Motion::FindCharBack(ch) => {
-            let chars = line_chars(text, text.cursor.line);
-            let mut found = 0;
-            for i in (0..text.cursor.column.min(chars.len())).rev() {
-                if chars[i] == *ch {
-                    found += 1;
-                    if found == n {
-                        return pos(text.cursor.line, i);
-                    }
-                }
-            }
-            text.cursor
-        }
-        Motion::TillCharBack(ch) => {
-            let chars = line_chars(text, text.cursor.line);
-            let mut found = 0;
-            for i in (0..text.cursor.column.min(chars.len())).rev() {
-                if chars[i] == *ch {
-                    found += 1;
-                    if found == n {
-                        return pos(text.cursor.line, (i + 1).min(text.cursor.column));
-                    }
-                }
-            }
-            text.cursor
-        }
+        Motion::FindChar(ch) => find_char(text, *ch, n, true, false),
+        Motion::TillChar(ch) => find_char(text, *ch, n, true, true),
+        Motion::FindCharBack(ch) => find_char(text, *ch, n, false, false),
+        Motion::TillCharBack(ch) => find_char(text, *ch, n, false, true),
         Motion::Percent => match count {
             Some(n) => {
                 let total = text.line_count().max(1);
@@ -1409,6 +1271,48 @@ fn compute_motion(
             None => match_bracket(text).unwrap_or(text.cursor),
         },
     }
+}
+
+fn find_char(text: &TextSnapshot, ch: char, n: usize, forward: bool, till: bool) -> Position {
+    let chars = line_chars(text, text.cursor.line);
+    let col = text.cursor.column;
+    let mut found = 0;
+    let positions: Box<dyn Iterator<Item = usize>> = if forward {
+        Box::new(col.saturating_add(1)..chars.len())
+    } else {
+        Box::new((0..col.min(chars.len())).rev())
+    };
+    for i in positions {
+        if chars[i] == ch {
+            found += 1;
+            if found == n {
+                let target_col = if !till {
+                    i
+                } else if forward {
+                    i.saturating_sub(1).max(col)
+                } else {
+                    (i + 1).min(col)
+                };
+                return pos(text.cursor.line, target_col);
+            }
+        }
+    }
+    text.cursor
+}
+
+fn repeat_word(
+    text: &TextSnapshot,
+    n: usize,
+    big: bool,
+    step: fn(&TextSnapshot, usize, usize, bool) -> (usize, usize),
+) -> Position {
+    let (mut l, mut c) = (text.cursor.line, text.cursor.column);
+    for _ in 0..n {
+        let (nl, nc) = step(text, l, c, big);
+        l = nl;
+        c = nc;
+    }
+    pos(l, c)
 }
 
 fn named_key_to_motion(named: &NamedKey) -> Option<Motion> {
@@ -2138,32 +2042,27 @@ fn find_match(
     }
 }
 
-fn is_bracket(c: char) -> bool {
-    matches!(c, '(' | ')' | '[' | ']' | '{' | '}')
-}
+#[rustfmt::skip]
+fn is_bracket(c: char) -> bool { matches!(c, '(' | ')' | '[' | ']' | '{' | '}') }
 
 // -- Helpers -----------------------------------------------------------------
-
 fn line_len(text: &TextSnapshot, line: usize) -> usize {
     text.lines.get(line).map_or(0, |l| l.chars().count())
 }
 
-// Used by bracket / quote / paragraph helpers, which target ASCII chars and
-// don't need grapheme awareness (every match is a single-cluster ASCII char).
-// Word/text-object motion uses `line_cells` instead.
+// Bracket/quote/paragraph helpers target ASCII chars and don't need grapheme
+// awareness. Word/text-object motion uses `line_cells` instead.
 fn line_chars(text: &TextSnapshot, line: usize) -> Vec<char> {
     text.lines
         .get(line)
         .map_or(Vec::new(), |l| l.chars().collect())
 }
-
 fn line_cells(text: &TextSnapshot, line: usize) -> Vec<GraphemeCell> {
     text.lines.get(line).map_or(Vec::new(), |l| cells_of_str(l))
 }
 
 // Char column of the start of the last grapheme cluster on `line`, or 0 for
-// an empty line. The canonical "EOL clamp" for normal-mode cursors — using
-// `line_len - 1` would land mid-cluster on multi-char clusters.
+// an empty line. `line_len - 1` would land mid-cluster on multi-char clusters.
 fn last_cluster_col(text: &TextSnapshot, line: usize) -> usize {
     text.lines.get(line).map_or(0, |l| last_grapheme_column(l))
 }
@@ -2199,30 +2098,16 @@ fn first_non_blank(text: &TextSnapshot, line: usize) -> usize {
     let chars = line_chars(text, line);
     chars.iter().position(|c| !c.is_whitespace()).unwrap_or(0)
 }
-
 fn pos_le(a: &Position, b: &Position) -> bool {
     a.line < b.line || (a.line == b.line && a.column <= b.column)
 }
-
 fn pos_lt(a: &Position, b: &Position) -> bool {
     a.line < b.line || (a.line == b.line && a.column < b.column)
 }
-
-fn ordered(a: Position, b: Position) -> (Position, Position) {
-    if pos_le(&a, &b) {
-        (a, b)
-    } else {
-        (b, a)
-    }
-}
-
-fn ordered_lines(a: usize, b: usize) -> (usize, usize) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
-}
+#[rustfmt::skip]
+fn ordered(a: Position, b: Position) -> (Position, Position) { if pos_le(&a, &b) { (a, b) } else { (b, a) } }
+#[rustfmt::skip]
+fn ordered_lines(a: usize, b: usize) -> (usize, usize) { if a <= b { (a, b) } else { (b, a) } }
 
 /// Advance position by one character (possibly to next line).
 fn advance_pos(text: &TextSnapshot, p: Position) -> Option<Position> {

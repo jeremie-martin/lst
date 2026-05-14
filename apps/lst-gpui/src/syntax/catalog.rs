@@ -122,59 +122,21 @@ struct InjectableGrammar {
     grammar: GrammarId,
 }
 
+#[rustfmt::skip]
 const INJECTABLE_GRAMMARS: &[InjectableGrammar] = &[
-    InjectableGrammar {
-        names: &["rust", "rs"],
-        grammar: GrammarId::Rust,
-    },
-    InjectableGrammar {
-        names: &["python", "py"],
-        grammar: GrammarId::Python,
-    },
-    InjectableGrammar {
-        names: &["javascript", "js"],
-        grammar: GrammarId::JavaScript,
-    },
-    InjectableGrammar {
-        names: &["jsx"],
-        grammar: GrammarId::Jsx,
-    },
-    InjectableGrammar {
-        names: &["typescript", "ts"],
-        grammar: GrammarId::TypeScript,
-    },
-    InjectableGrammar {
-        names: &["tsx"],
-        grammar: GrammarId::Tsx,
-    },
-    InjectableGrammar {
-        names: &["json"],
-        grammar: GrammarId::Json,
-    },
-    InjectableGrammar {
-        names: &["toml"],
-        grammar: GrammarId::Toml,
-    },
-    InjectableGrammar {
-        names: &["yaml", "yml"],
-        grammar: GrammarId::Yaml,
-    },
-    InjectableGrammar {
-        names: &["markdown", "md"],
-        grammar: GrammarId::Markdown,
-    },
-    InjectableGrammar {
-        names: &["markdown_inline", "markdown-inline"],
-        grammar: GrammarId::MarkdownInline,
-    },
-    InjectableGrammar {
-        names: &["html"],
-        grammar: GrammarId::Html,
-    },
-    InjectableGrammar {
-        names: &["css"],
-        grammar: GrammarId::Css,
-    },
+    InjectableGrammar { names: &["rust", "rs"], grammar: GrammarId::Rust },
+    InjectableGrammar { names: &["python", "py"], grammar: GrammarId::Python },
+    InjectableGrammar { names: &["javascript", "js"], grammar: GrammarId::JavaScript },
+    InjectableGrammar { names: &["jsx"], grammar: GrammarId::Jsx },
+    InjectableGrammar { names: &["typescript", "ts"], grammar: GrammarId::TypeScript },
+    InjectableGrammar { names: &["tsx"], grammar: GrammarId::Tsx },
+    InjectableGrammar { names: &["json"], grammar: GrammarId::Json },
+    InjectableGrammar { names: &["toml"], grammar: GrammarId::Toml },
+    InjectableGrammar { names: &["yaml", "yml"], grammar: GrammarId::Yaml },
+    InjectableGrammar { names: &["markdown", "md"], grammar: GrammarId::Markdown },
+    InjectableGrammar { names: &["markdown_inline", "markdown-inline"], grammar: GrammarId::MarkdownInline },
+    InjectableGrammar { names: &["html"], grammar: GrammarId::Html },
+    InjectableGrammar { names: &["css"], grammar: GrammarId::Css },
 ];
 
 static RUST_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {

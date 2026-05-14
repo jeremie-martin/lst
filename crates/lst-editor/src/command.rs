@@ -52,13 +52,13 @@ impl EditorModel {
             CopySelection => self.copy_selection(),
             CutSelection => self.cut_selection(),
             RequestPaste => self.queue_effect(super::EditorEffect::ReadClipboard),
-            MoveHorizontalCollapsed(backward) => self.move_horizontal_collapsed(backward),
+            MoveHorizontalCollapsed(backward) => self.move_with_reveal(super::motion::horizontal_collapsed(self.active_tab(), backward)),
             MoveHorizontal(delta, select) => reveal_if!(self, self.move_horizontal(delta, select), RevealIntent::NearestEdge),
             MoveWord(backward, select) => reveal_if!(self, self.move_boundary(backward, select, previous_word_boundary, next_word_boundary), RevealIntent::NearestEdge),
             MoveSubword(backward, select) => reveal_if!(self, self.move_boundary(backward, select, previous_subword_boundary, next_subword_boundary), RevealIntent::NearestEdge),
-            MoveDocumentBoundary(to_end, select) => self.move_document_boundary(to_end, select),
-            SmartHome(select) => self.smart_home(select),
-            MoveLineBoundary(to_end, select) => self.move_line_boundary(to_end, select),
+            MoveDocumentBoundary(to_end, select) => self.move_with_reveal(super::motion::document_boundary(self.active_tab(), to_end, select)),
+            SmartHome(select) => self.move_with_reveal(super::motion::smart_home(self.active_tab(), select)),
+            MoveLineBoundary(to_end, select) => self.move_with_reveal(super::motion::line_boundary(self.active_tab(), to_end, select)),
             MoveDisplayRows(delta, select, wrap_columns) => self.move_paged(delta, select, wrap_columns, true),
             Page(down, select, wrap_columns) => { let delta = self.viewport.page() as isize; self.move_paged(if down { delta } else { -delta }, select, wrap_columns, true); }
             Backspace => { self.delete_selected_or_previous(); }
@@ -80,12 +80,12 @@ impl EditorModel {
             AddCursorsToSelectedLineEnds => self.add_cursors_to_selected_line_ends(),
             SelectCurrentLine => { let tab = self.active_tab(); self.assign_selection(Selection::from_range(line_range_at_char(tab.buffer(), tab.cursor_char()), false)); }
             SelectCurrentParagraph => { let tab = self.active_tab(); self.assign_selection(Selection::from_range(paragraph_range_at_char(tab.buffer(), tab.cursor_char()), false)); }
-            Undo => { self.undo_active_text_mutation(Some(RevealIntent::NearestEdge)); }
-            Redo => { self.redo_active_text_mutation(Some(RevealIntent::NearestEdge)); }
+            Undo => { self.undo_or_redo(false, Some(RevealIntent::NearestEdge)); }
+            Redo => { self.undo_or_redo(true, Some(RevealIntent::NearestEdge)); }
             SwapRedoBranch => self.swap_redo_branch(),
             ToggleFindPanel(show_replace) => { if self.find.visible && self.find.show_replace == show_replace { self.close_find_panel(); } else { self.open_find_panel(show_replace); } }
-            FindNext => reveal_if!(self, self.find_next(), RevealIntent::Center),
-            FindPrev => reveal_if!(self, self.find_prev(), RevealIntent::Center),
+            FindNext => reveal_if!(self, self.find_step(true), RevealIntent::Center),
+            FindPrev => reveal_if!(self, self.find_step(false), RevealIntent::Center),
             ReplaceCurrentMatch => { self.replace_one(); }
             ReplaceAllMatches => { self.replace_all_matches(); }
             ToggleFindCaseSensitive => { self.find.case_sensitive = !self.find.case_sensitive; self.reindex_find_matches_to_nearest(); }

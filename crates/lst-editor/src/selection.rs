@@ -26,60 +26,41 @@ pub struct Selection {
 }
 
 impl Selection {
-    pub fn collapsed(offset: usize) -> Self {
-        Self {
-            anchor: offset,
-            head: offset,
-        }
-    }
-
-    pub fn new(anchor: usize, head: usize) -> Self {
-        Self { anchor, head }
-    }
+    #[rustfmt::skip]
+    pub fn collapsed(offset: usize) -> Self { Self { anchor: offset, head: offset } }
+    #[rustfmt::skip]
+    pub fn new(anchor: usize, head: usize) -> Self { Self { anchor, head } }
 
     pub fn from_range(range: Range<usize>, reversed: bool) -> Self {
-        if reversed {
-            Self {
-                anchor: range.end,
-                head: range.start,
-            }
+        let (anchor, head) = if reversed {
+            (range.end, range.start)
         } else {
-            Self {
-                anchor: range.start,
-                head: range.end,
-            }
-        }
+            (range.start, range.end)
+        };
+        Self { anchor, head }
     }
-
     pub fn anchor(&self) -> usize {
         self.anchor
     }
-
     pub fn head(&self) -> usize {
         self.head
     }
-
     pub fn cursor(&self) -> usize {
         self.head
     }
-
     pub fn range(&self) -> Range<usize> {
         self.anchor.min(self.head)..self.anchor.max(self.head)
     }
-
     pub fn is_reversed(&self) -> bool {
         self.head < self.anchor
     }
-
     pub fn has_selection(&self) -> bool {
         self.anchor != self.head
     }
-
     pub fn move_to(&mut self, offset: usize) {
         self.anchor = offset;
         self.head = offset;
     }
-
     pub fn select_to(&mut self, offset: usize) {
         self.head = offset;
     }
@@ -100,18 +81,14 @@ pub(crate) enum CursorGoal {
 }
 
 impl CursorGoal {
+    #[rustfmt::skip]
     pub(crate) fn column(self) -> Option<usize> {
-        match self {
-            Self::Column(column) => Some(column),
-            Self::LineEnd => None,
-        }
+        match self { Self::Column(column) => Some(column), Self::LineEnd => None }
     }
 
+    #[rustfmt::skip]
     pub(crate) fn resolve(self, line_len: usize) -> usize {
-        match self {
-            Self::Column(column) => column.min(line_len),
-            Self::LineEnd => line_len,
-        }
+        match self { Self::Column(column) => column.min(line_len), Self::LineEnd => line_len }
     }
 }
 
@@ -166,12 +143,8 @@ pub enum SelectionSetError {
 }
 
 impl SelectionSet {
-    pub fn single(selection: Selection) -> Self {
-        Self {
-            selections: vec![selection],
-            primary: 0,
-        }
-    }
+    #[rustfmt::skip]
+    pub fn single(selection: Selection) -> Self { Self { selections: vec![selection], primary: 0 } }
 
     pub fn from_selections(
         selections: Vec<Selection>,
@@ -183,27 +156,21 @@ impl SelectionSet {
             primary,
         })
     }
-
     pub fn primary(&self) -> Selection {
         self.selections[self.primary]
     }
-
     pub fn as_slice(&self) -> &[Selection] {
         &self.selections
     }
-
     pub fn primary_index(&self) -> usize {
         self.primary
     }
-
     pub fn is_single(&self) -> bool {
         self.selections.len() == 1
     }
-
     pub(crate) fn has_multiple(&self) -> bool {
         self.selections.len() > 1
     }
-
     pub(crate) fn with_added_selection(&self, selection: Selection) -> Self {
         self.with_added_selections([selection])
     }
@@ -344,55 +311,42 @@ impl SelectionSet {
 }
 
 impl SelectionState {
+    #[rustfmt::skip]
     pub(crate) fn single(selection: Selection) -> Self {
-        Self {
-            set: SelectionSet::single(selection),
-            goals: CursorGoals::default(),
-        }
+        Self { set: SelectionSet::single(selection), goals: CursorGoals::default() }
     }
 
     pub(crate) fn single_with_transform(transform: SelectionTransform) -> Self {
         Self {
             set: SelectionSet::single(transform.selection),
             goals: CursorGoals {
-                movement: transform.movement_goal.map(|goal| vec![goal]),
-                visible: transform.visible_column.map(|column| vec![column]),
+                movement: transform.movement_goal.map(|g| vec![g]),
+                visible: transform.visible_column.map(|c| vec![c]),
             },
         }
     }
 
-    pub(crate) fn from_set(set: SelectionSet) -> Self {
-        Self {
-            set,
-            goals: CursorGoals::default(),
-        }
-    }
-
+    #[rustfmt::skip]
+    pub(crate) fn from_set(set: SelectionSet) -> Self { Self { set, goals: CursorGoals::default() } }
     pub(crate) fn selection_set(&self) -> &SelectionSet {
         &self.set
     }
-
     pub(crate) fn primary(&self) -> Selection {
         self.set.primary()
     }
-
     pub(crate) fn as_slice(&self) -> &[Selection] {
         self.set.as_slice()
     }
-
     pub(crate) fn primary_index(&self) -> usize {
         self.set.primary_index()
     }
-
     pub(crate) fn has_multiple(&self) -> bool {
         self.set.has_multiple()
     }
-
     pub(crate) fn set_single(&mut self, selection: Selection) {
         self.set.set_single(selection);
         self.goals.clear();
     }
-
     pub(crate) fn replace_set(&mut self, set: SelectionSet) {
         self.set = set;
         self.goals.clear();
@@ -413,28 +367,22 @@ impl SelectionState {
             Self::from_set(next)
         }
     }
-
     pub(crate) fn with_removed_at(&self, index: usize) -> Option<Self> {
         self.set.with_removed_at(index).map(Self::from_set)
     }
-
     pub(crate) fn movement_goal_for(&self, selection_index: usize) -> Option<CursorGoal> {
         self.goals.movement_for(selection_index)
     }
-
     pub(crate) fn movement_column_for(&self, selection_index: usize) -> Option<usize> {
         self.movement_goal_for(selection_index)
             .and_then(CursorGoal::column)
     }
-
     pub(crate) fn visible_column_for(&self, selection_index: usize) -> Option<usize> {
         self.goals.visible_for(selection_index)
     }
-
     pub(crate) fn set_all_movement_goals(&mut self, goal: Option<CursorGoal>) {
         self.goals.set_all_movement(self.set.as_slice().len(), goal);
     }
-
     pub(crate) fn clear_goals(&mut self) {
         self.goals.clear();
     }
@@ -515,25 +463,16 @@ struct MappedSelection {
 }
 
 impl CursorGoals {
-    fn movement_for(&self, selection_index: usize) -> Option<CursorGoal> {
-        self.movement
-            .as_ref()
-            .and_then(|goals| goals.get(selection_index))
-            .copied()
+    fn movement_for(&self, ix: usize) -> Option<CursorGoal> {
+        self.movement.as_ref().and_then(|g| g.get(ix)).copied()
     }
-
-    fn visible_for(&self, selection_index: usize) -> Option<usize> {
-        self.visible
-            .as_ref()
-            .and_then(|columns| columns.get(selection_index))
-            .copied()
+    fn visible_for(&self, ix: usize) -> Option<usize> {
+        self.visible.as_ref().and_then(|c| c.get(ix)).copied()
     }
-
     fn set_all_movement(&mut self, len: usize, goal: Option<CursorGoal>) {
-        self.movement = goal.map(|goal| vec![goal; len]);
+        self.movement = goal.map(|g| vec![g; len]);
         self.visible = None;
     }
-
     fn clear(&mut self) {
         self.movement = None;
         self.visible = None;
@@ -593,6 +532,7 @@ fn duplicate_cursor(left: Selection, right: Selection) -> bool {
     !left.has_selection() && !right.has_selection() && left.cursor() == right.cursor()
 }
 
+#[rustfmt::skip]
 fn clamped_selection(selection: Selection, len: usize) -> Selection {
     Selection::new(selection.anchor().min(len), selection.head().min(len))
 }
@@ -624,18 +564,13 @@ fn token_class(ch: char) -> TokenClass {
 
 // Vim's "big word" (`W`/`B`/`E`) collapses Symbol into Word — only whitespace
 // breaks a big-word run. With `big = false` this matches `token_class`.
+#[rustfmt::skip]
 pub(crate) fn vim_token_class(ch: char, big: bool) -> TokenClass {
-    if big && !ch.is_whitespace() {
-        TokenClass::Word
-    } else {
-        token_class(ch)
-    }
+    if big && !ch.is_whitespace() { TokenClass::Word } else { token_class(ch) }
 }
-
 pub(crate) fn is_identifier_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
-
 fn is_symbol_char(ch: char) -> bool {
     !ch.is_whitespace() && !is_identifier_char(ch)
 }
@@ -926,31 +861,27 @@ fn next_subword_boundary_cells(cells: &[GraphemeCell], cell_index: usize) -> usi
 
 pub fn previous_word_boundary(buffer: &Rope, char_index: usize) -> usize {
     let cells = cells_of_rope(buffer);
-    let total_chars = buffer.len_chars();
     let target = previous_word_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
-    char_index_at_cell(&cells, target, total_chars)
+    char_index_at_cell(&cells, target, buffer.len_chars())
 }
 
 pub fn previous_subword_boundary(buffer: &Rope, char_index: usize) -> usize {
     let cells = cells_of_rope(buffer);
-    let total_chars = buffer.len_chars();
     let target =
         previous_subword_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
-    char_index_at_cell(&cells, target, total_chars)
+    char_index_at_cell(&cells, target, buffer.len_chars())
 }
 
 pub fn next_word_boundary(buffer: &Rope, char_index: usize) -> usize {
     let cells = cells_of_rope(buffer);
-    let total_chars = buffer.len_chars();
     let target = next_word_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
-    char_index_at_cell(&cells, target, total_chars)
+    char_index_at_cell(&cells, target, buffer.len_chars())
 }
 
 pub fn next_subword_boundary(buffer: &Rope, char_index: usize) -> usize {
     let cells = cells_of_rope(buffer);
-    let total_chars = buffer.len_chars();
     let target = next_subword_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
-    char_index_at_cell(&cells, target, total_chars)
+    char_index_at_cell(&cells, target, buffer.len_chars())
 }
 
 pub fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {

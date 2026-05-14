@@ -44,14 +44,12 @@ impl Viewport {
         (self.rows / 2).max(1)
     }
 
-    /// Rows used for Ctrl-F / Ctrl-B / PageDown / PageUp. Leaves a small
-    /// overlap for orientation.
+    /// Rows used for Ctrl-F / Ctrl-B / PageDown / PageUp. Leaves a small overlap for orientation.
     pub fn page(&self) -> usize {
         self.rows.saturating_sub(2).max(1)
     }
 
-    /// Effective scrolloff — shrinks gracefully when the viewport is too
-    /// small to accommodate `scrolloff` on both sides.
+    /// Effective scrolloff — shrinks gracefully when the viewport is too small to fit on both sides.
     pub fn effective_scrolloff(&self) -> usize {
         if self.rows <= 1 {
             return 0;
@@ -72,8 +70,7 @@ impl Viewport {
 
     /// The visual row a cursor should land on for `L` (screen bottom).
     pub fn screen_bottom_row(&self) -> usize {
-        let scrolloff = self.effective_scrolloff();
-        let bottom = self.top_visual_row + self.rows.saturating_sub(1);
-        bottom.saturating_sub(scrolloff)
+        (self.top_visual_row + self.rows.saturating_sub(1))
+            .saturating_sub(self.effective_scrolloff())
     }
 }

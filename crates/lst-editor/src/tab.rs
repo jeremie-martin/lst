@@ -168,7 +168,6 @@ pub struct EditorTab {
     name_hint: String,
     origin: TabOrigin,
     language: Option<Language>,
-    language_override: Option<Option<Language>>,
     buffer: Rope,
     content_epoch: u64,
     saved_content_epoch: u64,
@@ -185,12 +184,9 @@ pub struct EditorTab {
 }
 
 impl EditorTab {
+    #[rustfmt::skip]
     pub fn empty(id: TabId, name_hint: String) -> Self {
-        Self::from_text(id, name_hint, None, "")
-    }
-
-    pub fn from_path(id: TabId, path: PathBuf, text: &str) -> Self {
-        Self::from_path_with_stamp(id, path, text, None)
+        Self::from_text_with_stamp(id, name_hint, None, "", None)
     }
 
     pub fn from_path_with_stamp(
@@ -201,7 +197,7 @@ impl EditorTab {
     ) -> Self {
         let name_hint = path
             .file_name()
-            .and_then(|name| name.to_str())
+            .and_then(|n| n.to_str())
             .unwrap_or("untitled")
             .to_string();
         Self::from_text_with_stamp(id, name_hint, Some(path), text, file_stamp)
@@ -210,7 +206,7 @@ impl EditorTab {
     pub fn scratchpad_with_stamp(id: TabId, path: PathBuf, file_stamp: FileStamp) -> Self {
         let name_hint = path
             .file_name()
-            .and_then(|name| name.to_str())
+            .and_then(|n| n.to_str())
             .unwrap_or("scratchpad")
             .to_string();
         Self::from_origin(
@@ -221,10 +217,6 @@ impl EditorTab {
         )
     }
 
-    pub fn from_text(id: TabId, name_hint: String, path: Option<PathBuf>, text: &str) -> Self {
-        Self::from_text_with_stamp(id, name_hint, path, text, None)
-    }
-
     fn from_text_with_stamp(
         id: TabId,
         name_hint: String,
@@ -232,10 +224,9 @@ impl EditorTab {
         text: &str,
         file_stamp: Option<FileStamp>,
     ) -> Self {
-        let origin = match path {
-            Some(path) => TabOrigin::saved(path, file_stamp, SaveKind::Regular),
-            None => TabOrigin::Untitled,
-        };
+        let origin = path.map_or(TabOrigin::Untitled, |p| {
+            TabOrigin::saved(p, file_stamp, SaveKind::Regular)
+        });
         Self::from_origin(id, name_hint, origin, text)
     }
 
@@ -247,7 +238,6 @@ impl EditorTab {
             name_hint,
             origin,
             language,
-            language_override: None,
             buffer: Rope::from_str(text),
             content_epoch: 0,
             saved_content_epoch: 0,
@@ -269,67 +259,44 @@ impl EditorTab {
     pub(crate) fn set_id(&mut self, id: TabId) {
         self.id = id;
     }
-
     pub fn path(&self) -> Option<&PathBuf> {
         self.origin.path()
     }
-
     pub fn language(&self) -> Option<Language> {
         self.language
     }
-
     pub fn language_config(&self) -> &'static crate::language::LanguageConfig {
         language::config_for(self.language)
     }
-
-    pub(crate) fn set_language(&mut self, language: Option<Language>) {
-        self.language_override = Some(language);
-        self.language = language;
-        self.touch_content();
-    }
-
     pub fn file_stamp(&self) -> Option<FileStamp> {
         self.origin.file_stamp()
     }
-
     pub fn is_scratchpad(&self) -> bool {
         self.origin.is_scratchpad()
     }
-
     pub fn scratchpad_path(&self) -> Option<&PathBuf> {
         self.is_scratchpad().then(|| self.path()).flatten()
     }
-
     pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
         self.origin.conflict_suppressed_for(stamp)
     }
-
     pub fn buffer(&self) -> &Rope {
         &self.buffer
     }
-
     pub fn selection(&self) -> Selection {
         self.selection.primary()
     }
-
     pub fn selection_set(&self) -> &SelectionSet {
         self.selection.selection_set()
     }
-
     pub(crate) fn selection_state(&self) -> &SelectionState {
         &self.selection
     }
-
     pub fn selection_reversed(&self) -> bool {
         self.selection().is_reversed()
     }
-
     pub fn marked_range(&self) -> Option<&Range<usize>> {
         self.marked_range.as_ref()
-    }
-
-    pub fn bookmarks(&self) -> &[usize] {
-        &self.bookmarks
     }
 
     /// Returns `true` when the line was just bookmarked, `false` when an
@@ -376,44 +343,35 @@ impl EditorTab {
             .find(|line| *line < from_line)
             .or_else(|| self.bookmarks.last().copied())
     }
-
     pub(crate) fn clear_marked_range(&mut self) {
         self.marked_range = None;
     }
-
     pub(crate) fn preferred_goal(&self) -> Option<CursorGoal> {
         self.selection
             .movement_goal_for(self.selection.primary_index())
     }
-
     pub(crate) fn preferred_column(&self) -> Option<usize> {
         self.selection
             .movement_column_for(self.selection.primary_index())
     }
-
     pub(crate) fn preferred_goal_for_selection(
         &self,
         selection_index: usize,
     ) -> Option<CursorGoal> {
         self.selection.movement_goal_for(selection_index)
     }
-
     pub fn visible_column_for_selection(&self, selection_index: usize) -> Option<usize> {
         self.selection.visible_column_for(selection_index)
     }
-
     pub(crate) fn set_preferred_column(&mut self, preferred_column: Option<usize>) {
         self.set_preferred_goal(preferred_column.map(CursorGoal::Column));
     }
-
     pub(crate) fn set_preferred_goal(&mut self, goal: Option<CursorGoal>) {
         self.selection.set_all_movement_goals(goal);
     }
-
     pub(crate) fn clear_preferred_column(&mut self) {
         self.selection.clear_goals();
     }
-
     pub fn modified(&self) -> bool {
         self.content_epoch != self.saved_content_epoch
     }
@@ -421,8 +379,8 @@ impl EditorTab {
     pub fn display_name(&self) -> String {
         self.origin
             .path()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| self.name_hint.clone())
     }
@@ -441,49 +399,37 @@ impl EditorTab {
         self.next_content_epoch = self.next_content_epoch.saturating_add(1);
         self.touch_content();
     }
-
     fn mark_current_content_saved(&mut self) {
         self.saved_content_epoch = self.content_epoch;
     }
-
     pub fn len_chars(&self) -> usize {
         self.buffer.len_chars()
     }
-
     pub fn line_count(&self) -> usize {
         self.buffer.len_lines().max(1)
     }
-
     pub fn buffer_text(&self) -> String {
         self.buffer.to_string()
     }
-
     pub fn is_blank(&self) -> bool {
         self.buffer.chars().all(char::is_whitespace)
     }
-
     pub fn cursor_char(&self) -> usize {
         self.selection().cursor()
     }
-
     pub fn cursor_position(&self) -> Position {
         char_to_position(&self.buffer, self.cursor_char())
     }
-
     pub fn selected_range(&self) -> Range<usize> {
         self.selection().range()
     }
-
     pub fn has_selection(&self) -> bool {
         self.selection().has_selection()
     }
 
     pub fn selected_text(&self) -> Option<String> {
-        if self.has_selection() {
-            Some(self.buffer.slice(self.selection().range()).to_string())
-        } else {
-            None
-        }
+        self.has_selection()
+            .then(|| self.buffer.slice(self.selection().range()).to_string())
     }
 
     pub fn lines(&mut self) -> Arc<[String]> {
@@ -689,43 +635,39 @@ impl EditorTab {
         self.origin.update_file_stamp(file_stamp);
         true
     }
-
     pub(crate) fn suppress_file_conflict(&mut self, stamp: FileStamp) {
         self.origin.suppress_file_conflict(stamp);
     }
 
     fn refresh_language(&mut self) -> bool {
-        if self.language_override.is_some() {
-            return false;
-        }
-
         let language = self.detect_language();
         let changed = self.language != language;
         self.language = language;
         changed
     }
 
+    #[rustfmt::skip]
     fn detect_language(&self) -> Option<Language> {
-        let first_line = first_line_for_detection(&self.buffer);
-        language::detect(self.path().map(PathBuf::as_path), Some(first_line.as_str()))
+        language::detect(self.path().map(PathBuf::as_path), Some(first_line_for_detection(&self.buffer).as_str()))
     }
-
     pub(crate) fn undo(&mut self) -> bool {
-        if let Some(snapshot) = self.history.undo(self.history_snapshot()) {
-            self.restore_history_snapshot(snapshot);
-            true
-        } else {
-            false
-        }
+        self.history_step(false)
+    }
+    pub(crate) fn redo(&mut self) -> bool {
+        self.history_step(true)
     }
 
-    pub(crate) fn redo(&mut self) -> bool {
-        if let Some(snapshot) = self.history.redo(self.history_snapshot()) {
-            self.restore_history_snapshot(snapshot);
-            true
+    fn history_step(&mut self, redo: bool) -> bool {
+        let current = self.history_snapshot();
+        let Some(snapshot) = (if redo {
+            self.history.redo(current)
         } else {
-            false
-        }
+            self.history.undo(current)
+        }) else {
+            return false;
+        };
+        self.restore_history_snapshot(snapshot);
+        true
     }
 
     fn history_snapshot(&self) -> HistorySnapshot {

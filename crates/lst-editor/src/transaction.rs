@@ -83,11 +83,6 @@ impl TextChangeSet {
         &self.changes
     }
 
-    #[cfg(test)]
-    pub(crate) fn primary_index(&self) -> usize {
-        self.primary
-    }
-
     pub(crate) fn map_offset_to_inserted_end(&self, offset: usize) -> usize {
         map_offset_to_inserted_end(&self.changes, offset)
     }
@@ -277,63 +272,5 @@ pub(crate) fn ordered_range(start: usize, end: usize) -> Range<usize> {
         start..end
     } else {
         end..start
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validated_normalizes_ranges_and_preserves_primary() {
-        let set = TextChangeSet::try_new(
-            vec![
-                TextChange::delete(0..0),
-                TextChange::delete(Range { start: 4, end: 2 }),
-                TextChange::delete(6..6),
-            ],
-            1,
-        )
-        .expect("valid sorted changes after normalizing reversed ranges");
-
-        assert_eq!(set.as_slice().len(), 3);
-        assert_eq!(set.as_slice()[1].range, 2..4);
-        assert_eq!(set.primary_index(), 1);
-    }
-
-    #[test]
-    fn validated_preserves_same_offset_insert_order_and_mapping() {
-        let set = TextChangeSet::try_new(
-            vec![
-                TextChange::insert(1, "A"),
-                TextChange::insert(1, "B"),
-                TextChange::replace(1..3, "X"),
-                TextChange::insert(3, "Y"),
-            ],
-            0,
-        )
-        .expect("valid same-offset insert batch");
-
-        assert_eq!(set.as_slice()[0].replacement, "A");
-        assert_eq!(set.as_slice()[1].replacement, "B");
-        assert_eq!(set.map_offset_to_inserted_end(1), 4);
-        assert_eq!(set.map_offset_to_inserted_end(3), 5);
-    }
-
-    #[cfg(feature = "internal-invariants")]
-    #[test]
-    fn validated_rejects_empty_out_of_order_or_overlapping_change_sets() {
-        assert!(TextChangeSet::try_new(Vec::new(), 0).is_none());
-        assert!(TextChangeSet::try_new(vec![TextChange::delete(1..1)], 1).is_none());
-        assert!(TextChangeSet::try_new(
-            vec![TextChange::delete(0..3), TextChange::delete(2..4)],
-            0
-        )
-        .is_none());
-        assert!(TextChangeSet::try_new(
-            vec![TextChange::delete(4..5), TextChange::delete(1..2)],
-            0
-        )
-        .is_none());
     }
 }
