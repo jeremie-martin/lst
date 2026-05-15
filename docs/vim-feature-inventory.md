@@ -37,7 +37,7 @@ The fast black-box suite in `crates/lst-editor/tests/vim_behavior.rs` is the exh
 | Registers | `registers_preserve_charwise_and_linewise_paste_placement`, `paste_placement_covers_charwise_linewise_before_after_and_empty_registers` |
 | X11 bridge | `x11_vim_smoke_specs_run_through_the_editor_model` mirrors the current real-display Vim acceptance cases at model level. |
 
-The generated oracle corpus currently adds 142 Neovim-derived cases across motions, operators, text objects, normal edits, registers, visual operators, and search. It records the nvim version and options used to produce the fixture. Indent commands are generated with lst's Markdown editor indent policy so the oracle checks Vim command semantics rather than the scratch nvim buffer's default `shiftwidth`.
+The generated oracle corpus currently adds 696 Neovim-derived cases across motions, operators, text objects, normal edits, registers, visual operators, and search. It records the nvim version and options used to produce the fixture. Text-object generation covers stock aliases such as `cib`, `ci]`, `ciB`, and `ci>` across multiple cursor positions, count composition, empty-pair changes, no-op boundaries, failed motions, search query state, final visual selections, and exact unnamed-register kind/text where the command should touch the register. Indent commands are generated with lst's Markdown editor indent policy so the oracle checks Vim command semantics rather than the scratch nvim buffer's default `shiftwidth`.
 
 ## Modes And State
 

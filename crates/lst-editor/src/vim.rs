@@ -75,6 +75,9 @@ pub enum VimCommand {
     ChangeLines { first: usize, last: usize },
     YankRange { from: Position, to: Position },
     YankLines { first: usize, last: usize },
+    SetRegister(Register),
+    PasteSelectionRange { from: Position, to: Position, preserve_register: bool },
+    PasteSelectionLines { first: usize, last: usize, preserve_register: bool },
     EnterInsert,
     PasteAfter,
     PasteBefore,
@@ -116,7 +119,7 @@ impl TextSnapshot {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Register {
     Empty,
     Char(String),
@@ -618,6 +621,16 @@ impl VimState {
                 }
                 return vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)];
             }
+            'p' | 'P' => {
+                self.exit_visual();
+                let preserve_register = c == 'P';
+                if is_line {
+                    let (first, last) = ordered_lines(anchor.line, head.line);
+                    return vec![VimCommand::PasteSelectionLines { first, last, preserve_register }];
+                }
+                let (from, to) = ordered(anchor, head);
+                return vec![VimCommand::PasteSelectionRange { from, to, preserve_register }];
+            }
             '>' => {
                 self.exit_visual();
                 let (first, last) = ordered_lines(anchor.line, head.line);
@@ -773,6 +786,12 @@ impl VimState {
                         }
                         return self.range_operator(op, range.0, range.1);
                     }
+                    if inner && op == Operator::Change {
+                        if let Some(at) = empty_inner_text_object_position(text, c) {
+                            self.clear_command_state();
+                            return vec![VimCommand::SetRegister(Register::Char(String::new())), VimCommand::MoveTo(at), VimCommand::EnterInsert];
+                        }
+                    }
                 }
                 self.clear_command_state();
                 vec![VimCommand::Noop]
@@ -922,7 +941,7 @@ impl VimState {
         let count = self.motion_count();
         self.clear_command_state();
 
-        if motion_is_linewise(&motion, count) {
+        if motion_is_linewise(op, &motion, count) {
             let target = compute_motion(&motion, text, count, None);
             let (first, last) = ordered_lines(text.cursor.line, target.line);
             return self.line_operator(op, first, last);
@@ -1181,8 +1200,8 @@ fn char_to_motion(c: char) -> Option<Motion> {
     }
 }
 
-fn motion_is_linewise(motion: &Motion, count: Option<usize>) -> bool {
-    matches!(motion, Motion::Down | Motion::Up | Motion::DocumentStart | Motion::DocumentEnd) || matches!(motion, Motion::LineEnd) && count.unwrap_or(1) > 1 || matches!(motion, Motion::Percent) && count.is_some()
+fn motion_is_linewise(op: Operator, motion: &Motion, count: Option<usize>) -> bool {
+    matches!(motion, Motion::Down | Motion::Up | Motion::DocumentStart | Motion::DocumentEnd) || matches!(motion, Motion::LineEnd) && count.unwrap_or(1) > 1 && op == Operator::Delete || matches!(motion, Motion::Percent) && count.is_some()
 }
 
 fn motion_is_inclusive(motion: &Motion, count: Option<usize>) -> bool {
@@ -1405,6 +1424,22 @@ fn text_object(text: &TextSnapshot, obj: char, inner: bool, count: Option<usize>
         '`' => quote_text_object(text, '`', inner),
         _ => None,
     }
+}
+
+fn empty_inner_text_object_position(text: &TextSnapshot, obj: char) -> Option<Position> {
+    let outer = match obj {
+        '(' | ')' | 'b' => pair_object(text, '(', ')', false),
+        '{' | '}' | 'B' => pair_object(text, '{', '}', false),
+        '[' | ']' => pair_object(text, '[', ']', false),
+        '<' | '>' => pair_object(text, '<', '>', false),
+        '"' => quote_object(text, '"', false),
+        '\'' => quote_object(text, '\'', false),
+        '`' => quote_object(text, '`', false),
+        _ => None,
+    }?;
+    let from = advance_pos(text, outer.0)?;
+    let to = retreat_pos(text, outer.1)?;
+    (pos_lt(&to, &from)).then_some(from)
 }
 
 fn word_object(text: &TextSnapshot, inner: bool, big: bool, count: usize) -> Option<(Position, Position)> {

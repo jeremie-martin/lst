@@ -85,6 +85,31 @@ pub(crate) fn paste(tab: &EditorTab, cursor: Position, register: &vim::Register,
     }
 }
 
+pub(crate) fn paste_over_range(tab: &EditorTab, from: Position, to: Position, register: &vim::Register) -> Option<DeletedEdit> {
+    let paste_text = match register {
+        vim::Register::Empty => return None,
+        vim::Register::Char(text) | vim::Register::Line(text) => text,
+    };
+    let range = position_range(tab.buffer(), from, to)?;
+    let deleted = extract_range(tab, from, to);
+    let change = TextChange::replace(range, paste_text.clone());
+    let cursor = paste_range_cursor(from, paste_text);
+    Some((deleted, EditRequest::single_other_at_position(change, cursor)))
+}
+
+pub(crate) fn paste_over_lines(tab: &EditorTab, first: usize, last: usize, register: &vim::Register) -> Option<DeletedEdit> {
+    let paste_text = match register {
+        vim::Register::Empty => return None,
+        vim::Register::Char(text) | vim::Register::Line(text) => text,
+    };
+    let (first, last) = clamped_line_span(tab, first, last);
+    let deleted = extract_lines(tab, first, last);
+    let inserted_lines: Vec<String> = paste_text.split('\n').map(String::from).collect();
+    let indent = inserted_lines.first().map_or(0, |line| line.chars().take_while(|c| c.is_whitespace()).count());
+    let change = replace_lines_change(tab, first, last, &inserted_lines)?;
+    Some((deleted, EditRequest::single_other_at_position(change, Position::new(first, indent))))
+}
+
 pub(crate) fn open_line(tab: &EditorTab, pos: Position, above: bool) -> Option<EditRequest> {
     let indent = line_indent_prefix(tab.buffer(), pos.line);
     let idx = if above { pos.line } else { pos.line + 1 };
@@ -171,9 +196,21 @@ fn paste_chars(tab: &EditorTab, cursor: Position, paste_text: &str, before: bool
     let insert_at = position_to_char(tab.buffer(), Position::new(cursor.line, insert_col));
     let paste_lines: Vec<&str> = paste_text.split('\n').collect();
     let replacement = paste_lines.join(text_input::preferred_newline(tab));
-    let cursor_position = if paste_lines.len() == 1 { Position::new(cursor.line, insert_col + paste_lines[0].chars().count().saturating_sub(1)) } else { Position::new(cursor.line + paste_lines.len() - 1, paste_lines.last().unwrap_or(&"").chars().count().saturating_sub(1)) };
+    let cursor_position = if paste_lines.len() == 1 { Position::new(cursor.line, insert_col + paste_lines[0].chars().count().saturating_sub(1)) } else { Position::new(cursor.line, insert_col) };
     let change = TextChange::insert(insert_at, replacement);
     Some(EditRequest::single_other_at_position(change, cursor_position))
+}
+
+fn paste_range_cursor(from: Position, paste_text: &str) -> Position {
+    let mut lines = paste_text.split('\n');
+    let first = lines.next().unwrap_or("");
+    let mut line = from.line;
+    let mut column = from.column + first.chars().count().saturating_sub(1);
+    for segment in lines {
+        line += 1;
+        column = segment.chars().count().saturating_sub(1);
+    }
+    Position::new(line, column)
 }
 
 fn paste_lines(tab: &EditorTab, cursor: Position, paste_text: &str, before: bool) -> Option<EditRequest> {

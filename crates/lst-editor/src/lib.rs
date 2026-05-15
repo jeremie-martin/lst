@@ -171,6 +171,9 @@ impl EditorModel {
     pub fn vim_mode(&self) -> vim::Mode {
         self.vim.mode
     }
+    pub fn vim_register(&self) -> &vim::Register {
+        &self.vim.register
+    }
     pub fn vim_pending_display(&self) -> String {
         self.vim.pending_display()
     }
@@ -587,6 +590,9 @@ impl EditorModel {
             C::ChangeLines { first, last } => { self.vim_change_lines(first, last); self.vim.mode = vim::Mode::Insert; }
             C::YankRange { from, to } => self.vim.register = vim::Register::Char(vim_edit::extract_range(self.active_tab(), from, to)),
             C::YankLines { first, last } => self.vim.register = vim::Register::Line(vim_edit::extract_lines(self.active_tab(), first, last)),
+            C::SetRegister(register) => { self.vim.register = register; return false; }
+            C::PasteSelectionRange { from, to, preserve_register } => self.vim_paste_selection_range(from, to, preserve_register),
+            C::PasteSelectionLines { first, last, preserve_register } => self.vim_paste_selection_lines(first, last, preserve_register),
             C::EnterInsert => self.vim.mode = vim::Mode::Insert,
             C::PasteAfter => self.vim_paste(false),
             C::PasteBefore => self.vim_paste(true),
@@ -750,6 +756,26 @@ impl EditorModel {
     fn vim_paste(&mut self, before: bool) {
         let cursor = self.active_cursor_position();
         self.apply_vim_optional(vim_edit::paste(self.active_tab(), cursor, &self.vim.register, before));
+    }
+    fn vim_paste_selection_range(&mut self, from: Position, to: Position, preserve_register: bool) {
+        let register = self.vim.register.clone();
+        let Some((deleted, request)) = vim_edit::paste_over_range(self.active_tab(), from, to, &register) else {
+            return;
+        };
+        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        if !preserve_register {
+            self.vim.register = vim::Register::Char(deleted);
+        }
+    }
+    fn vim_paste_selection_lines(&mut self, first: usize, last: usize, preserve_register: bool) {
+        let register = self.vim.register.clone();
+        let Some((deleted, request)) = vim_edit::paste_over_lines(self.active_tab(), first, last, &register) else {
+            return;
+        };
+        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        if !preserve_register {
+            self.vim.register = vim::Register::Line(deleted);
+        }
     }
     fn vim_open_line(&mut self, above: bool) {
         let pos = self.active_cursor_position();

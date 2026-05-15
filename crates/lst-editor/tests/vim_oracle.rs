@@ -35,6 +35,18 @@ struct ExpectedState {
     text: String,
     cursor: FixturePosition,
     mode: String,
+    #[serde(default)]
+    register: Option<ExpectedRegister>,
+    #[serde(default)]
+    search_query: Option<String>,
+    #[serde(default)]
+    selection: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExpectedRegister {
+    kind: String,
+    text: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,8 +69,29 @@ fn nvim_oracle_fixtures_match_editor_model() {
 
         let expected_cursor = Position { line: case.expected.cursor.line, column: case.expected.cursor.column };
         let expected_mode = parse_mode(&case.expected.mode);
-        if harness.text() != case.expected.text || harness.cursor() != expected_cursor || harness.model.vim_mode() != expected_mode {
-            failures.push(format!("{} ({})\n  keys: {}\n  text: {:?} != {:?}\n  cursor: {:?} != {:?}\n  mode: {:?} != {:?}", case.name, case.area, case.keys, harness.text(), case.expected.text, harness.cursor(), expected_cursor, harness.model.vim_mode(), expected_mode,));
+        let cursor_matches = case.expected.selection.is_some() || harness.cursor() == expected_cursor;
+        let register_matches = case.expected.register.as_ref().is_none_or(|expected| register_matches(harness.model.vim_register(), expected));
+        let search_matches = case.expected.search_query.as_ref().is_none_or(|expected| harness.model.find().query == *expected);
+        let selection_matches = case.expected.selection.as_ref().is_none_or(|expected| harness.selected_text().as_deref() == Some(expected.as_str()));
+        if harness.text() != case.expected.text || !cursor_matches || harness.model.vim_mode() != expected_mode || !register_matches || !search_matches || !selection_matches {
+            failures.push(format!(
+                "{} ({})\n  keys: {}\n  text: {:?} != {:?}\n  cursor: {:?} != {:?}\n  mode: {:?} != {:?}\n  register: {:?} != {:?}\n  search: {:?} != {:?}\n  selection: {:?} != {:?}",
+                case.name,
+                case.area,
+                case.keys,
+                harness.text(),
+                case.expected.text,
+                harness.cursor(),
+                expected_cursor,
+                harness.model.vim_mode(),
+                expected_mode,
+                actual_register(harness.model.vim_register()),
+                case.expected.register.as_ref().map(|expected| (expected.kind.as_str(), expected.text.as_str())),
+                harness.model.find().query,
+                case.expected.search_query,
+                harness.selected_text(),
+                case.expected.selection,
+            ));
         }
     }
 
@@ -67,6 +100,18 @@ fn nvim_oracle_fixtures_match_editor_model() {
     if fixture.metadata.surround_mappings_detected {
         assert!(fixture.cases.iter().any(|case| case.area == "surround"), "surround-enabled oracle fixtures should include surround cases");
     }
+}
+
+fn actual_register(register: &vim::Register) -> (&'static str, &str) {
+    match register {
+        vim::Register::Empty => ("char", ""),
+        vim::Register::Char(text) => ("char", text.as_str()),
+        vim::Register::Line(text) => ("line", text.as_str()),
+    }
+}
+
+fn register_matches(register: &vim::Register, expected: &ExpectedRegister) -> bool {
+    actual_register(register) == (expected.kind.as_str(), expected.text.as_str())
 }
 
 fn parse_mode(mode: &str) -> vim::Mode {
