@@ -223,6 +223,28 @@ impl FindState {
         SelectionSet::from_selections(selections, primary).ok()
     }
 
+    pub(crate) fn next_from(&mut self, position: Position) -> Option<Position> {
+        self.select_relative_from(position, true)
+    }
+
+    pub(crate) fn prev_from(&mut self, position: Position) -> Option<Position> {
+        self.select_relative_from(position, false)
+    }
+
+    pub(crate) fn search_word_from(&mut self, tab: &EditorTab, word: String, position: Position, forward: bool) -> Option<Position> {
+        self.query = word;
+        self.whole_word = true;
+        self.case_sensitive = true;
+        self.use_regex = false;
+        self.scope = FindScope::Document;
+        self.reindex_for_tab(tab);
+        if forward {
+            self.next_from(position)
+        } else {
+            self.prev_from(position)
+        }
+    }
+
     fn align_to_visible_match(&mut self, tab: &EditorTab) {
         if let Some(start) = self.selected_match_start(tab) {
             if self.select_exact(&start) {
@@ -241,6 +263,13 @@ impl FindState {
             return None;
         }
         Some(char_to_position(tab.buffer(), selected.start))
+    }
+
+    fn select_relative_from(&mut self, position: Position, forward: bool) -> Option<Position> {
+        let index = if forward { self.matches.iter().position(|m| m.line > position.line || (m.line == position.line && m.col > position.column)).or_else(|| (!self.matches.is_empty()).then_some(0)) } else { self.matches.iter().rposition(|m| m.line < position.line || (m.line == position.line && m.col < position.column)).or_else(|| self.matches.len().checked_sub(1)) }?;
+        self.active = Some(index);
+        let m = self.matches[index];
+        Some(Position::new(m.line, m.col))
     }
 }
 

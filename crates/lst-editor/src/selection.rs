@@ -150,6 +150,15 @@ impl SelectionSet {
 #[rustfmt::skip]
 impl SelectionState {
     pub(crate) fn single(selection: Selection) -> Self { Self { set: SelectionSet::single(selection), goals: CursorGoals::default() } }
+    pub(crate) fn single_with_transform(transform: SelectionTransform) -> Self {
+        Self {
+            set: SelectionSet::single(transform.selection),
+            goals: CursorGoals {
+                movement: transform.movement_goal.map(|g| vec![g]),
+                visible: transform.visible_column.map(|c| vec![c]),
+            },
+        }
+    }
     pub(crate) fn from_set(set: SelectionSet) -> Self { Self { set, goals: CursorGoals::default() } }
     pub(crate) fn selection_set(&self) -> &SelectionSet { &self.set }
     pub(crate) fn primary(&self) -> Selection { self.set.primary() }
@@ -276,6 +285,15 @@ fn token_class(ch: char) -> TokenClass {
         TokenClass::Word
     } else {
         TokenClass::Symbol
+    }
+}
+// Vim's "big word" (`W`/`B`/`E`) collapses Symbol into Word, so only
+// whitespace breaks a big-word run.
+pub(crate) fn vim_token_class(ch: char, big: bool) -> TokenClass {
+    if big && !ch.is_whitespace() {
+        TokenClass::Word
+    } else {
+        token_class(ch)
     }
 }
 pub(crate) fn is_identifier_char(ch: char) -> bool {

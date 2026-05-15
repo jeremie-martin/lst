@@ -56,6 +56,81 @@ fn vim_surround_inner_word_with_parentheses() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn vim_change_inner_word_replaces_text_object_and_enters_insert() -> TestResult {
+    support::run_x11_test("vim-change-inner-word", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("hello world<esc>0ciwHEY<esc>")?;
+        editor.save_then_expect_file(&path, "HEY world")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_normal_open_join_and_replace_commands_edit_observable_text() -> TestResult {
+    support::run_x11_test("vim-open-join-replace", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("foo<enter>bar<esc>ggOtop<esc>jJ0rx")?;
+        editor.save_then_expect_file(&path, "top\nxoo bar")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_linewise_yank_pastes_after_target_line() -> TestResult {
+    support::run_x11_test("vim-linewise-paste", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("one<enter>two<enter>three<esc>ggyyGp")?;
+        editor.save_then_expect_file(&path, "one\ntwo\nthree\none")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_surround_change_and_delete_update_existing_pair() -> TestResult {
+    support::run_x11_test("vim-surround-change-delete", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("hello<esc>0ysiw)cs)]ds[")?;
+        editor.save_then_expect_file(&path, "hello")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_visual_text_object_uppercases_inner_word() -> TestResult {
+    support::run_x11_test("vim-visual-text-object-case", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("hello world<esc>0viwU")?;
+        editor.save_then_expect_file(&path, "HELLO world")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_star_and_navigate_find_word_under_cursor() -> TestResult {
+    support::run_x11_test("vim-star-search", |session| {
+        let path = session.seed_file("vim-star-search.txt", "foo bar foo baz foo")?;
+        let mut editor = session.open_file("vim-star-search", &path)?;
+
+        editor.keys("<esc>0*")?;
+        editor.expect_cursor_heads(&[(0, 8)])?;
+        editor.keys("n")?;
+        editor.expect_cursor_heads(&[(0, 16)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn vim_compound_commands_survive_long_pauses_between_keystrokes() -> TestResult {
     // **Harness invariant — do not remove this test.**
     //

@@ -115,6 +115,7 @@ pub struct EditorTab {
     revision: u64,
     line_cache: Option<CachedLines>,
     history: EditHistory,
+    last_edit_position: Option<usize>,
     marked_range: Option<Range<usize>>,
     /// Bookmarked logical lines, sorted ascending. Stored as raw line
     /// numbers — no anchor tracking, so bookmarks drift on edits.
@@ -139,7 +140,7 @@ impl EditorTab {
     }
     fn from_origin(id: TabId, name_hint: String, origin: TabOrigin, text: &str) -> Self {
         let language = language::detect(origin.path().map(PathBuf::as_path), text.split('\n').next());
-        Self { id, name_hint, origin, language, buffer: Rope::from_str(text), content_epoch: 0, saved_content_epoch: 0, next_content_epoch: 1, selection: SelectionState::single(Selection::collapsed(0)), revision: 0, line_cache: None, history: EditHistory::new(), marked_range: None, bookmarks: Vec::new() }
+        Self { id, name_hint, origin, language, buffer: Rope::from_str(text), content_epoch: 0, saved_content_epoch: 0, next_content_epoch: 1, selection: SelectionState::single(Selection::collapsed(0)), revision: 0, line_cache: None, history: EditHistory::new(), last_edit_position: None, marked_range: None, bookmarks: Vec::new() }
     }
     pub fn id(&self) -> TabId {
         self.id
@@ -381,8 +382,12 @@ impl EditorTab {
         self.selection.replace_set(selection);
         self.marked_range = marked_range_after_edit(marked_range_after, primary_inserted_range, self.len_chars());
         if changes_text {
+            self.last_edit_position = Some(self.selection().head().min(self.len_chars()));
             self.touch_text_content();
         }
+    }
+    pub fn last_edit_position(&self) -> Option<usize> {
+        self.last_edit_position.map(|pos| pos.min(self.len_chars()))
     }
     pub(crate) fn reset_from_disk(&mut self, text: &str) {
         self.buffer = Rope::from_str(text);
@@ -391,6 +396,7 @@ impl EditorTab {
         self.mark_current_content_saved();
         self.marked_range = None;
         self.history.clear();
+        self.last_edit_position = None;
         self.refresh_language();
     }
     pub(crate) fn reset_from_disk_at_path(&mut self, path: PathBuf, text: &str, file_stamp: FileStamp) {

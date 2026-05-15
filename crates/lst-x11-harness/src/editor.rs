@@ -183,6 +183,7 @@ impl Display {
             }
         };
         display.conn.flush()?;
+        release_stale_modifiers(display)?;
 
         Ok(Editor {
             display,
@@ -220,6 +221,13 @@ fn build_command(display: &Display, opts: SpawnOpts<'_>) -> Command {
         command.arg(arg);
     }
     command
+}
+
+fn release_stale_modifiers(display: &Display) -> Result<()> {
+    input::release_all_modifiers(&display.conn, display.root, &display.keycodes)?;
+    display.conn.flush()?;
+    thread::sleep(input::KEY_PHASE_SETTLE);
+    Ok(())
 }
 
 impl<'a> Editor<'a> {
@@ -1106,6 +1114,7 @@ impl<'a> Editor<'a> {
     pub fn quit(mut self, timeout: Duration) -> Result<ExitStatus> {
         let result = (|| -> Result<ExitStatus> {
             self.press(KeyChord::Ctrl(Key::Char('q')))?;
+            release_stale_modifiers(self.display)?;
             let mut child = self
                 .child
                 .take()

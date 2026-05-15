@@ -274,6 +274,14 @@ pub(crate) fn release_modifiers_with_platform(
     Ok(())
 }
 
+pub(crate) fn release_all_modifiers(
+    conn: &RustConnection,
+    root: Window,
+    kc: &Keycodes,
+) -> Result<()> {
+    release_modifiers_with_platform(conn, root, kc, true, true, true, true)
+}
+
 /// Press and release a single keycode without flushing. Used inside
 /// chord-hold spans where the caller wants to control the surrounding
 /// modifier state explicitly.
