@@ -36,7 +36,6 @@ that is painful to break later — design it once, deliberately.
 ## 3. Editing & selection primitives — ✅ shipped
 
 - [x] **Block-comment toggle** — `LanguageConfig::block_comment` carries the open/close pair; `EditorModel::toggle_block_comment` delegates delimiter transaction construction to `line_edit` (`crates/lst-editor/src/language.rs::LanguageConfig::block_comment`; `crates/lst-editor/src/lib.rs::toggle_block_comment`; `crates/lst-editor/src/line_edit.rs::toggle_block_comment_request`; bindings `ctrl/cmd-shift-/`).
-- [x] **Vim surround (`ys`/`ds`/`cs`)** — `SurroundPhase` state machine drives the three operators; commands are `VimCommand::SurroundRange`, `::DeleteSurround`, `::ChangeSurround`, and edit requests come from `crates/lst-editor/src/vim_edit.rs`.
 - [x] **Soft-tab backspace** — `crates/lst-editor/src/lib.rs::soft_tab_backspace_range` snaps backspace to a full `IndentStyle::indent_unit` when the cursor sits in leading whitespace; falls back to a single grapheme otherwise.
 - [x] **Select line / select paragraph** — `EditorModel::select_current_line` / `::select_current_paragraph` plus `SelectLine` (`ctrl/cmd-l`) and `SelectParagraph` (`ctrl/cmd-shift-p`) actions.
 - [x] **Quad-click paragraph** — `apps/lst-gpui/src/interactions.rs::on_mouse_down` `click_count >= 4` selects the enclosing paragraph via `paragraph_range_at_char`.

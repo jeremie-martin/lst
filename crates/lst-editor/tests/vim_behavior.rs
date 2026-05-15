@@ -9,11 +9,9 @@ fn x11_vim_smoke_specs_run_through_the_editor_model() {
     let cases = [
         ("top line delete", "A<enter>B<enter>C<enter><esc>ggdd", "B\nC\n"),
         ("visual line indent", "alpha<enter>beta<enter>gamma<esc>gg0Vjj><esc>", "  alpha\n  beta\n  gamma"),
-        ("surround inner word", "hello<esc>0ysiw)", "(hello)"),
         ("change inner word", "hello world<esc>0ciwHEY<esc>", "HEY world"),
         ("normal open join replace", "foo<enter>bar<esc>ggOtop<esc>jJ0rx", "top\nxoo bar"),
         ("linewise paste", "one<enter>two<enter>three<esc>ggyyGp", "one\ntwo\nthree\none"),
-        ("surround change delete", "hello<esc>0ysiw)cs)]ds[", "hello"),
         ("visual text object case", "hello world<esc>0viwU", "HELLO world"),
     ];
 
@@ -104,12 +102,6 @@ fn modes_state_pending_and_escape_follow_vim_contracts() {
     harness.keys("y");
     harness.expect_pending("y");
     harness.keys("s");
-    harness.expect_pending("ys");
-    harness.keys("i");
-    harness.expect_pending("ysi");
-    harness.keys("w");
-    harness.expect_pending("ys…");
-    harness.keys("<esc>");
     harness.expect_pending("");
 }
 
@@ -456,44 +448,6 @@ fn text_objects_cover_words_paragraphs_pairs_quotes_counts_and_escapes() {
 }
 
 #[test]
-fn surround_commands_cover_motion_text_object_and_delimiter_variants() {
-    let cases = [
-        ("surround inner word with brackets", "hello", (0, 0), "ysiw]", "[hello]"),
-        ("surround a word includes trailing space", "hello world", (0, 0), "ysaw)", "(hello )world"),
-        ("surround to line end", "hello world", (0, 0), "ys$\"", "\"hello world\""),
-        ("change parens to braces", "(hello)", (0, 1), "cs){", "{hello}"),
-        ("delete brackets", "[hello]", (0, 1), "ds[", "hello"),
-        ("change quotes to backticks", "\"hello\"", (0, 1), "cs\"`", "`hello`"),
-        ("delete quotes before trailing word", "\"hello\" tail", (0, 1), "ds\"", "hello tail"),
-        ("change quotes before trailing word", "\"hello\" tail", (0, 1), "cs\"`", "`hello` tail"),
-        ("delete embedded quotes preserves surroundings", "foo \"bar\", baz", (0, 5), "ds\"", "foo bar, baz"),
-        ("change embedded quotes preserves surroundings", "foo \"bar\", baz", (0, 5), "cs\"`", "foo `bar`, baz"),
-        ("delete backticks", "`hello`", (0, 1), "ds`", "hello"),
-    ];
-
-    run_text_cases(&cases);
-}
-
-#[test]
-fn surround_commands_cover_all_delimiters_aliases_motion_counts_and_noops() {
-    let cases = [
-        ("paren b alias", "hello", (0, 0), "ysiwb", "(hello)"),
-        ("brace B alias", "hello", (0, 0), "ysiwB", "{hello}"),
-        ("angle delimiter", "hello", (0, 0), "ysiw>", "<hello>"),
-        ("single quote delimiter", "hello", (0, 0), "ysiw'", "'hello'"),
-        ("backtick delimiter", "hello", (0, 0), "ysiw`", "`hello`"),
-        ("counted motion surround", "one two three", (0, 0), "ys2w]", "[one two ]three"),
-        ("delete paren alias b", "(hello)", (0, 1), "dsb", "hello"),
-        ("delete brace alias B", "{hello}", (0, 1), "dsB", "hello"),
-        ("change angle to quote", "<hello>", (0, 1), "cs>\"", "\"hello\""),
-        ("missing surround delete is noop", "hello", (0, 0), "ds)", "hello"),
-        ("invalid surround delimiter is noop", "hello", (0, 0), "ysiww", "hello"),
-    ];
-
-    run_text_cases(&cases);
-}
-
-#[test]
 fn registers_preserve_charwise_and_linewise_paste_placement() {
     let mut harness = VimHarness::normal_at("alpha beta", 0, 0);
     harness.keys("yiw$p");
@@ -548,9 +502,6 @@ fn undo_redo_groups_vim_edit_families_as_single_steps() {
         ("join", "alpha\n beta", (0, 0), "J", "alpha beta"),
         ("indent", "alpha\nbeta", (0, 0), ">>", "  alpha\nbeta"),
         ("outdent", "  alpha\nbeta", (0, 0), "<<", "alpha\nbeta"),
-        ("surround add", "alpha beta", (0, 0), "ysiw)", "(alpha) beta"),
-        ("surround delete", "(alpha) beta", (0, 1), "ds)", "alpha beta"),
-        ("surround change", "(alpha) beta", (0, 1), "cs)]", "[alpha] beta"),
     ];
 
     for (name, initial, cursor, keys, edited) in cases {

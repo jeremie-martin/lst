@@ -648,9 +648,6 @@ impl EditorModel {
             C::MoveToScreenTop => self.screen_row(self.viewport.screen_top_row(), self.vim_in_visual(), wrap_columns),
             C::MoveToScreenMiddle => self.screen_row(self.viewport.screen_middle_row(), self.vim_in_visual(), wrap_columns),
             C::MoveToScreenBottom => self.screen_row(self.viewport.screen_bottom_row(), self.vim_in_visual(), wrap_columns),
-            C::SurroundRange { from, to, open, close } => self.vim_surround_range(from, to, open, close),
-            C::DeleteSurround { open } => self.vim_delete_surround(open),
-            C::ChangeSurround { from_open, to_open } => self.vim_change_surround(from_open, to_open),
             C::JumpToLastEdit { enter_insert } => {
                 let Some(target) = self.active_tab().last_edit_position() else { return false };
                 self.active_tab_mut().move_to(target);
@@ -747,33 +744,6 @@ impl EditorModel {
     fn vim_change_lines(&mut self, first: usize, last: usize) {
         self.collapse_vim_edit_snapshot_to(Position::new(first, 0));
         self.apply_vim_capture(vim_edit::change_lines(self.active_tab(), first, last), true);
-    }
-    #[rustfmt::skip]
-    fn vim_surround_range(&mut self, from: Position, to: Position, open: char, close: char) {
-        self.apply_vim_optional(vim_edit::surround_range(self.active_tab(), from, to, open, close));
-    }
-    fn vim_find_surround_or_warn(&mut self, open: char, close: char) -> Option<(Position, Position)> {
-        let snapshot = self.vim_snapshot();
-        let pair = vim::find_surround_pair(&snapshot, open, close);
-        if pair.is_none() {
-            self.status = "No surrounding pair.".to_string();
-        }
-        pair
-    }
-    fn vim_delete_surround(&mut self, open: char) {
-        let (open, close) = vim::surround_pair_for_char(open).expect("validated by resolve_surround");
-        let Some((open_pos, close_pos)) = self.vim_find_surround_or_warn(open, close) else {
-            return;
-        };
-        self.apply_vim_optional(vim_edit::delete_surround(self.active_tab(), open_pos, close_pos));
-    }
-    fn vim_change_surround(&mut self, from_open: char, to_open: char) {
-        let (from_open, from_close) = vim::surround_pair_for_char(from_open).expect("validated by resolve_surround");
-        let (to_open, to_close) = vim::surround_pair_for_char(to_open).expect("validated by resolve_surround");
-        let Some((open_pos, close_pos)) = self.vim_find_surround_or_warn(from_open, from_close) else {
-            return;
-        };
-        self.apply_vim_optional(vim_edit::change_surround(self.active_tab(), open_pos, close_pos, to_open, to_close));
     }
     #[rustfmt::skip]
     fn apply_vim_optional(&mut self, request: Option<EditRequest>) {

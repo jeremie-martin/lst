@@ -42,20 +42,6 @@ fn vim_visual_line_indent_indents_block_by_one_unit() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn vim_surround_inner_word_with_parentheses() -> TestResult {
-    // ysiw)  → "you-surround inner-word with )". With "hello" as the only
-    // word in the buffer, the result is "(hello)".
-    support::run_x11_test("vim-surround-iw", |session| {
-        let (mut editor, path) = session.open("scratch")?;
-
-        editor.keys("hello<esc>0ysiw)")?;
-        editor.save_then_expect_file(&path, "(hello)")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
 fn vim_change_inner_word_replaces_text_object_and_enters_insert() -> TestResult {
     support::run_x11_test("vim-change-inner-word", |session| {
         let (mut editor, path) = session.open("scratch")?;
@@ -86,18 +72,6 @@ fn vim_linewise_yank_pastes_after_target_line() -> TestResult {
 
         editor.keys("one<enter>two<enter>three<esc>ggyyGp")?;
         editor.save_then_expect_file(&path, "one\ntwo\nthree\none")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn vim_surround_change_and_delete_update_existing_pair() -> TestResult {
-    support::run_x11_test("vim-surround-change-delete", |session| {
-        let (mut editor, path) = session.open("scratch")?;
-
-        editor.keys("hello<esc>0ysiw)cs)]ds[")?;
-        editor.save_then_expect_file(&path, "hello")?;
         Ok(())
     })
 }

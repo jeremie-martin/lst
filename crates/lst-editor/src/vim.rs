@@ -102,9 +102,6 @@ pub enum VimCommand {
     MoveToScreenMiddle,
     MoveToScreenBottom,
     ScrollCursor(RevealIntent),
-    SurroundRange { from: Position, to: Position, open: char, close: char },
-    DeleteSurround { open: char },
-    ChangeSurround { from_open: char, to_open: char },
     JumpToLastEdit { enter_insert: bool },
     Noop,
 }
@@ -141,22 +138,11 @@ struct Pending {
     operator: Option<Operator>,
     operator_count: Option<usize>,
     partial: Option<char>,
-    surround: Option<SurroundPhase>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[rustfmt::skip]
 enum Operator { Delete, Change, Yank }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum SurroundPhase {
-    AddAwaitMotion,
-    AddAwaitInner(char),
-    AddAwaitDelim { from: Position, to: Position },
-    DeleteAwaitDelim,
-    ChangeAwaitFrom,
-    ChangeAwaitTo { from_open: char },
-}
 
 #[derive(Clone, Copy)]
 #[rustfmt::skip]
@@ -218,18 +204,6 @@ impl VimState {
         }
         if let Some(p) = self.pending.partial {
             s.push(p);
-        }
-        match &self.pending.surround {
-            Some(SurroundPhase::AddAwaitMotion) => s.push_str("ys"),
-            Some(SurroundPhase::AddAwaitInner(c)) => {
-                s.push_str("ys");
-                s.push(*c);
-            }
-            Some(SurroundPhase::AddAwaitDelim { .. }) => s.push_str("ys…"),
-            Some(SurroundPhase::DeleteAwaitDelim) => s.push_str("ds"),
-            Some(SurroundPhase::ChangeAwaitFrom) => s.push_str("cs"),
-            Some(SurroundPhase::ChangeAwaitTo { .. }) => s.push_str("cs…"),
-            None => {}
         }
         s
     }
@@ -345,10 +319,6 @@ impl VimState {
             _ => return vec![VimCommand::Noop],
         };
 
-        if self.pending.surround.is_some() {
-            return self.resolve_surround(c, text);
-        }
-
         if let Some(partial) = self.pending.partial.take() {
             return self.resolve_partial(partial, c, text);
         }
@@ -366,19 +336,6 @@ impl VimState {
             // Text object prefixes
             if c == 'i' || c == 'a' {
                 self.pending.partial = Some(c);
-                return vec![VimCommand::Noop];
-            }
-
-            // Surround: `ys{motion}{char}`, `ds{char}`, `cs{from}{to}`.
-            if c == 's' {
-                self.pending.operator = None;
-                self.pending.operator_count = None;
-                self.pending.count = None;
-                self.pending.surround = Some(match op {
-                    Operator::Yank => SurroundPhase::AddAwaitMotion,
-                    Operator::Delete => SurroundPhase::DeleteAwaitDelim,
-                    Operator::Change => SurroundPhase::ChangeAwaitFrom,
-                });
                 return vec![VimCommand::Noop];
             }
 
@@ -820,80 +777,6 @@ impl VimState {
                 self.clear_command_state();
                 vec![VimCommand::Noop]
             }
-        }
-    }
-
-    // -- Surround --------------------------------------------------------
-
-    fn resolve_surround(&mut self, c: char, text: &TextSnapshot) -> Vec<VimCommand> {
-        let phase = self.pending.surround.take();
-        match phase {
-            Some(SurroundPhase::AddAwaitMotion) => {
-                if c == 'i' || c == 'a' {
-                    self.pending.surround = Some(SurroundPhase::AddAwaitInner(c));
-                    return vec![VimCommand::Noop];
-                }
-                if c.is_ascii_digit() && (c != '0' || self.pending.count.is_some()) {
-                    let digit = c.to_digit(10).unwrap() as usize;
-                    self.pending.count = Some(self.pending.count.unwrap_or(0) * 10 + digit);
-                    self.pending.surround = Some(SurroundPhase::AddAwaitMotion);
-                    return vec![VimCommand::Noop];
-                }
-                if c == '0' && self.pending.count.is_none() {
-                    let target = compute_motion(&Motion::LineStart, text, None, None);
-                    let (from, to) = surround_motion_endpoints(&Motion::LineStart, text.cursor, target, text);
-                    self.pending.surround = Some(SurroundPhase::AddAwaitDelim { from, to });
-                    return vec![VimCommand::Noop];
-                }
-                if let Some(motion) = char_to_motion(c) {
-                    let count = self.motion_count();
-                    self.clear_preferred_column();
-                    let target = compute_motion(&motion, text, count, None);
-                    let (from, to) = surround_motion_endpoints(&motion, text.cursor, target, text);
-                    self.pending.surround = Some(SurroundPhase::AddAwaitDelim { from, to });
-                    return vec![VimCommand::Noop];
-                }
-                vec![VimCommand::Noop]
-            }
-            Some(SurroundPhase::AddAwaitInner(prefix)) => {
-                let inner = prefix == 'i';
-                if let Some((from, to)) = text_object(text, c, inner, self.motion_count()) {
-                    self.pending.surround = Some(SurroundPhase::AddAwaitDelim { from, to });
-                    return vec![VimCommand::Noop];
-                }
-                self.clear_pending();
-                vec![VimCommand::Noop]
-            }
-            Some(SurroundPhase::AddAwaitDelim { from, to }) => {
-                self.clear_command_state();
-                let Some((open, close)) = surround_pair_for_char(c) else {
-                    return vec![VimCommand::Noop];
-                };
-                vec![VimCommand::SurroundRange { from, to, open, close }]
-            }
-            Some(SurroundPhase::DeleteAwaitDelim) => {
-                self.clear_command_state();
-                let Some((open, _)) = surround_pair_for_char(c) else {
-                    return vec![VimCommand::Noop];
-                };
-                vec![VimCommand::DeleteSurround { open }]
-            }
-            Some(SurroundPhase::ChangeAwaitFrom) => {
-                let Some((from_open, _)) = surround_pair_for_char(c) else {
-                    self.clear_pending();
-                    return vec![VimCommand::Noop];
-                };
-                self.pending.surround = Some(SurroundPhase::ChangeAwaitTo { from_open });
-                vec![VimCommand::Noop]
-            }
-            Some(SurroundPhase::ChangeAwaitTo { from_open }) => {
-                self.clear_command_state();
-                let Some((to_open, _)) = surround_pair_for_char(c) else {
-                    return vec![VimCommand::Noop];
-                };
-                vec![VimCommand::ChangeSurround { from_open, to_open }]
-            }
-            None => vec![VimCommand::Noop],
         }
     }
 
@@ -1393,42 +1276,6 @@ fn word_end(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> (usi
 }
 
 // -- Text objects ------------------------------------------------------------
-
-fn surround_motion_endpoints(motion: &Motion, cursor: Position, target: Position, text: &TextSnapshot) -> (Position, Position) {
-    if cursor == target {
-        return (cursor, cursor);
-    }
-    let (from, mut to) = ordered(cursor, target);
-    let backward = pos_lt(&target, &cursor);
-    if (!motion_is_inclusive(motion, None) || backward) && to != from {
-        if to.column > 0 {
-            to.column -= 1;
-        } else if to.line > from.line {
-            to.line -= 1;
-            to.column = line_len(text, to.line).saturating_sub(1);
-        }
-    }
-    (from, to)
-}
-
-pub fn surround_pair_for_char(c: char) -> Option<(char, char)> {
-    Some(match c {
-        '(' | ')' | 'b' => ('(', ')'),
-        '{' | '}' | 'B' => ('{', '}'),
-        '[' | ']' => ('[', ']'),
-        '<' | '>' => ('<', '>'),
-        '"' | '\'' | '`' => (c, c),
-        _ => return None,
-    })
-}
-
-pub fn find_surround_pair(text: &TextSnapshot, open: char, close: char) -> Option<(Position, Position)> {
-    if open == close {
-        quote_object(text, open, false)
-    } else {
-        pair_object(text, open, close, false)
-    }
-}
 
 fn text_object(text: &TextSnapshot, obj: char, inner: bool, count: Option<usize>) -> Option<(Position, Position)> {
     match obj {

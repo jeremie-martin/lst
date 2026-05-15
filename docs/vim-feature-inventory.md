@@ -9,15 +9,13 @@ This document records the Vim behavior that existed before commit `5e3abbe` rewr
 - Vim has an additional fast model-level black-box parity lane in `crates/lst-editor/tests/vim_behavior.rs`. It drives the public `EditorModel` input surface and asserts observable text, cursor, mode, find, register, and reveal outcomes. This complements, rather than replaces, X11 because exhaustive Vim command coverage would be too slow and fragile through a real display.
 - `crates/lst-editor/tests/vim_oracle.rs` runs a checked-in generated corpus from `crates/lst-editor/tests/fixtures/vim_oracle.json`. Regenerate it with `python3 scripts/generate_vim_oracle_fixtures.py`.
 - Local Neovim 0.9.5 loaded with the user config is the oracle for generated stock Vim behavior. If this inventory disagrees with Neovim for a supported generated case, Neovim takes precedence and this document should be corrected.
-- Surround and enhanced text-object behavior may be checked against local Neovim plugins when present, but only for lst's existing supported surface. The generator detects `ys`/`ds`/`cs`; when no plugin oracle is available, use the restored lst/vim-surround-style behavior recorded here.
 - `modalkit 0.0.25` provides a Vim keybinding machine that emits generic modal editing actions. It is useful as the long-term parser/binding source, but it is not a direct replacement for `EditorModel` execution because lst already owns selections, transactions, find state, wrapping, viewport reveal, registers, and GPUI effects. A safe adapter must translate modalkit actions into lst commands without bypassing those contracts.
-- Surround commands are outside modalkit's default Vim surface and remain lst-specific.
 
 ## Restoration Status
 
 - The parity baseline has been restored by bringing the previous lst Vim state machine, edit helpers, and `EditorModel` command executor back into the GPUI editor path.
 - `modalkit` is restored as a workspace dependency and remains the planned parser/keybinding source once an adapter can translate its `editor-types` actions onto lst's document and transaction contracts with full X11 parity.
-- New accepted X11 coverage now exercises representative restored surfaces: text-object change (`ciw`), open-line/join/replace, linewise yank/paste, surround change/delete, visual text-object case transforms, and `*`/`n` word search.
+- New accepted X11 coverage now exercises representative restored surfaces: text-object change (`ciw`), open-line/join/replace, linewise yank/paste, visual text-object case transforms, and `*`/`n` word search.
 - The tables below record the feature status immediately after compact rewrite commit `5e3abbe`, before the parity restoration.
 
 ## Model-Level Coverage Map
@@ -33,7 +31,6 @@ The fast black-box suite in `crates/lst-editor/tests/vim_behavior.rs` is the exh
 | Visual mode | `visual_mode_covers_charwise_linewise_text_objects_case_and_indentation`, `visual_mode_covers_counts_reverse_selection_search_repeat_and_viewport`, `visual_mode_tracks_anchor_head_and_cursor_shape`, `viewport_page_motions_preserve_visual_state` |
 | Search | `search_commands_cover_word_search_find_panel_and_visual_stepping`, `search_commands_cover_wrap_empty_words_and_find_query_editing` |
 | Text objects | `text_objects_cover_words_paragraphs_pairs_quotes_counts_and_escapes` |
-| Surround | `surround_commands_cover_motion_text_object_and_delimiter_variants`, `surround_commands_cover_all_delimiters_aliases_motion_counts_and_noops` |
 | Registers | `registers_preserve_charwise_and_linewise_paste_placement`, `paste_placement_covers_charwise_linewise_before_after_and_empty_registers` |
 | Undo/redo | `undo_redo_groups_vim_edit_families_as_single_steps` |
 | Unicode/graphemes | `word_and_big_word_motions_cover_counts_punctuation_empty_lines_and_unicode`, `unicode_grapheme_vim_edits_cover_operators_registers_paste_and_case` |
@@ -41,7 +38,7 @@ The fast black-box suite in `crates/lst-editor/tests/vim_behavior.rs` is the exh
 
 The generated oracle corpus currently adds 715 Neovim-derived cases across motions, operators, text objects, normal edits, registers, visual operators, search, and undo. It records the nvim version and options used to produce the fixture. Text-object generation covers stock aliases such as `cib`, `ci]`, `ciB`, and `ci>` across multiple cursor positions, count composition, empty-pair changes, no-op boundaries, failed motions, `/` and `?` search direction, search query state, final visual selections, exact visual anchor/head state, undo outcomes, and exact unnamed-register kind/text where the command should touch the register. Indent commands are generated with lst's Markdown editor indent policy so the oracle checks Vim command semantics rather than the scratch nvim buffer's default `shiftwidth`.
 
-Unsupported Vim surfaces are intentionally outside the current product contract unless added here later. The model suite locks representative unsupported keys such as `.`, `q`, `@`, `"`, `:`, `R`, marks, and `g~`/`gu`/`gU` as Normal-mode no-ops with cleared pending state. Named registers, macros, dot repeat, marks/jumplist, Ex command execution, Visual Block, Replace mode, and full Vim regex option parity should therefore not be inferred from passing tests.
+Unsupported Vim surfaces are intentionally outside the current product contract unless added here later. The model suite locks representative unsupported keys such as `.`, `q`, `@`, `"`, `:`, `R`, marks, and `g~`/`gu`/`gU` as Normal-mode no-ops with cleared pending state. Named registers, macros, dot repeat, marks/jumplist, Ex command execution, Visual Block, Replace mode, Vim surround (`ys`/`ds`/`cs`), and full Vim regex option parity should therefore not be inferred from passing tests.
 
 ## Modes And State
 
@@ -53,7 +50,7 @@ Unsupported Vim surfaces are intentionally outside the current product contract 
 | Visual line mode | `V` starts/toggles linewise selection; operators apply to full touched lines. | Partial |
 | Escape behavior | Insert Escape moves one grapheme left before Normal; Visual Escape collapses to cursor. | Present |
 | Tab switch behavior | Visual state is cancelled when switching tabs. | Present |
-| Pending display | Counts, pending operators, partial commands, and surround state are displayed. | Partial |
+| Pending display | Counts, pending operators, and partial commands are displayed. | Partial |
 | Preferred column | Vertical Vim motions preserve preferred column until a non-vertical motion clears it. | Missing |
 | Last edit position | `g;` jumps to last edit; `gi` jumps to last edit and enters Insert. | Missing |
 
@@ -137,7 +134,7 @@ Unsupported Vim surfaces are intentionally outside the current product contract 
 
 | Keys | Old behavior | Status after compact rewrite |
 | --- | --- | --- |
-| `iw`, `aw` | Inner/a word. | Partial only for `ysiw)` |
+| `iw`, `aw` | Inner/a word. | Partial |
 | `iW`, `aW` | Inner/a big-word. | Missing |
 | `ip`, `ap` | Inner/a paragraph. | Missing |
 | `i(`/`a(`, `i)`/`a)`, `ib`/`ab` | Parentheses object. | Missing |
@@ -146,16 +143,6 @@ Unsupported Vim surfaces are intentionally outside the current product contract 
 | `i<`/`a<`, `i>`/`a>` | Angle-bracket object. | Missing |
 | `i"`/`a"`, `i'`/`a'`, ``i` ``/``a` `` | Quote objects with escape handling. | Missing |
 | Counts | Word object count extends through following objects. | Missing |
-
-## Surround
-
-| Keys | Old behavior | Status after compact rewrite |
-| --- | --- | --- |
-| `ys{motion}{delim}` | Add surrounding delimiter around motion range. | Partial |
-| `ysi{object}{delim}`, `ysa{object}{delim}` | Add surrounding delimiter around text object. | Partial only for `ysiw)` |
-| `ds{delim}` | Delete nearest surrounding delimiter pair. | Missing |
-| `cs{from}{to}` | Change nearest surrounding delimiter pair. | Missing |
-| Delimiters | `()`, `b`, `{}`, `B`, `[]`, `<>`, `"`, `'`, and backtick. | Partial |
 
 ## Registers
 

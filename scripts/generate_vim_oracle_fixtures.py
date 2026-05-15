@@ -21,7 +21,6 @@ def case(
     cursor: tuple[int, int],
     keys: str,
     *,
-    requires_surround: bool = False,
     assert_register: bool = False,
     assert_search: bool = False,
     assert_selection: bool = False,
@@ -32,7 +31,6 @@ def case(
         "initial_text": text,
         "cursor": {"line": cursor[0], "column": cursor[1]},
         "keys": keys,
-        "requires_surround": requires_surround,
         "assert_register": assert_register,
         "assert_search": assert_search,
         "assert_selection": assert_selection,
@@ -613,15 +611,6 @@ def build_cases() -> list[dict]:
     ]:
         cases.append(case(name, "search", text, cursor, keys, assert_search=assert_search))
 
-    for name, text, cursor, keys in [
-        ("surround inner word paren", "hello world", (0, 0), "ysiw)"),
-        ("surround a word bracket", "hello world", (0, 0), "ysaw]"),
-        ("surround to end quote", "hello world", (0, 0), 'ys$"'),
-        ("delete paren surround", "(hello)", (0, 1), "ds)"),
-        ("change paren to bracket", "(hello)", (0, 1), "cs)]"),
-    ]:
-        cases.append(case(name, "surround", text, cursor, keys, requires_surround=True))
-
     for name, text, cursor, keys, assert_register in [
         ("undo insert append", "alpha beta", (0, 0), "aX<esc>u", False),
         ("undo delete word", "alpha beta gamma", (0, 0), "dwu", True),
@@ -639,12 +628,6 @@ def build_cases() -> list[dict]:
         ("undo outdent", "  alpha\nbeta", (0, 0), "<<u", False),
     ]:
         cases.append(case(name, "undo", text, cursor, keys, assert_register=assert_register))
-
-    for name, text, cursor, keys in [
-        ("undo delete surround", "(alpha)", (0, 1), "ds)u"),
-        ("undo change surround", "(alpha)", (0, 1), "cs)]u"),
-    ]:
-        cases.append(case(name, "undo", text, cursor, keys, requires_surround=True))
 
     return cases
 
@@ -752,7 +735,6 @@ local function visual_state(mode)
   }
 end
 
-local surround_mappings_detected = has_map("ys") and has_map("ds") and has_map("cs")
 local version = vim.version()
 
 local out = {
@@ -777,60 +759,57 @@ local out = {
       tabstop = 2,
       softtabstop = 2,
     },
-    surround_mappings_detected = surround_mappings_detected,
   },
   cases = {},
 }
 
 for _, case in ipairs(input.cases) do
-  if not case.requires_surround or surround_mappings_detected then
-    vim.cmd("silent! %bwipeout!")
-    vim.cmd("enew!")
-    vim.bo.buftype = "nofile"
-    vim.bo.bufhidden = "wipe"
-    vim.bo.swapfile = false
-    vim.api.nvim_buf_set_lines(0, 0, -1, true, split_lines(case.initial_text))
-    vim.cmd("setlocal undolevels=-1")
-    vim.cmd("setlocal undolevels=1000")
-    vim.api.nvim_win_set_cursor(0, { case.cursor.line + 1, case.cursor.column })
-    vim.fn.setreg('"', "")
-    vim.fn.setreg("/", "")
-    vim.bo.expandtab = true
-    vim.bo.shiftwidth = 2
-    vim.bo.tabstop = 2
-    vim.bo.softtabstop = 2
+  vim.cmd("silent! %bwipeout!")
+  vim.cmd("enew!")
+  vim.bo.buftype = "nofile"
+  vim.bo.bufhidden = "wipe"
+  vim.bo.swapfile = false
+  vim.api.nvim_buf_set_lines(0, 0, -1, true, split_lines(case.initial_text))
+  vim.cmd("setlocal undolevels=-1")
+  vim.cmd("setlocal undolevels=1000")
+  vim.api.nvim_win_set_cursor(0, { case.cursor.line + 1, case.cursor.column })
+  vim.fn.setreg('"', "")
+  vim.fn.setreg("/", "")
+  vim.bo.expandtab = true
+  vim.bo.shiftwidth = 2
+  vim.bo.tabstop = 2
+  vim.bo.softtabstop = 2
 
-    local keys = vim.api.nvim_replace_termcodes(case.keys, true, true, true)
-    vim.api.nvim_feedkeys(keys, "mx", false)
-    vim.cmd("redraw")
+  local keys = vim.api.nvim_replace_termcodes(case.keys, true, true, true)
+  vim.api.nvim_feedkeys(keys, "mx", false)
+  vim.cmd("redraw")
 
-    local cursor = vim.api.nvim_win_get_cursor(0)
-    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
-    local mode = vim.api.nvim_get_mode().mode
-    local expected = {
-      text = table.concat(lines, "\n"),
-      cursor = { line = cursor[1] - 1, column = cursor[2] },
-      mode = mode_name(mode),
-    }
-    if case.assert_register then
-      expected.register = register_state()
-    end
-    if case.assert_search then
-      expected.search_query = vim.fn.getreg("/")
-    end
-    if case.assert_selection then
-      expected.selection = visual_selection_text(mode, lines)
-      expected.visual_state = visual_state(mode)
-    end
-    table.insert(out.cases, {
-      name = case.name,
-      area = case.area,
-      initial_text = case.initial_text,
-      cursor = case.cursor,
-      keys = case.keys,
-      expected = expected,
-    })
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
+  local mode = vim.api.nvim_get_mode().mode
+  local expected = {
+    text = table.concat(lines, "\n"),
+    cursor = { line = cursor[1] - 1, column = cursor[2] },
+    mode = mode_name(mode),
+  }
+  if case.assert_register then
+    expected.register = register_state()
   end
+  if case.assert_search then
+    expected.search_query = vim.fn.getreg("/")
+  end
+  if case.assert_selection then
+    expected.selection = visual_selection_text(mode, lines)
+    expected.visual_state = visual_state(mode)
+  end
+  table.insert(out.cases, {
+    name = case.name,
+    area = case.area,
+    initial_text = case.initial_text,
+    cursor = case.cursor,
+    keys = case.keys,
+    expected = expected,
+  })
 end
 
 vim.fn.writefile(vim.split(vim.json.encode(out), "\n", { plain = true }), output_path)

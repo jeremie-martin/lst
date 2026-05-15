@@ -17,7 +17,6 @@ struct Fixture {
 struct Metadata {
     oracle_profile: String,
     nvim_version: String,
-    surround_mappings_detected: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,10 +106,6 @@ fn nvim_oracle_fixtures_match_editor_model() {
     }
 
     assert!(failures.is_empty(), "nvim oracle mismatches:\n{}", failures.join("\n\n"));
-
-    if fixture.metadata.surround_mappings_detected {
-        assert!(fixture.cases.iter().any(|case| case.area == "surround"), "surround-enabled oracle fixtures should include surround cases");
-    }
 }
 
 fn actual_register(register: &vim::Register) -> (&'static str, &str) {

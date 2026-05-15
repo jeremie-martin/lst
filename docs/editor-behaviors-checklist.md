@@ -180,7 +180,6 @@ multi-cursor policy is intentionally separate.
 - [x] **Join lines with single-space collapse** - join removes line breaks and collapses surrounding whitespace appropriately.
 - [x] **Transpose** - transpose adjacent characters. X11: `real_x11_transpose_tdd.rs`.
 - [x] **Toggle comment line/block** - line and block comments toggle according to the active language. X11: `real_x11_language.rs`, `real_x11_multi_cursor_spec.rs`.
-- [x] **Surround with brackets/quotes** - selected text can be surrounded with brackets or quotes; Vim surround commands work. X11: `real_x11_vim.rs`.
 - [x] **Auto-pair brackets/quotes** - typing openers inserts matching closers; typing an existing closer steps over it. X11: `real_x11_language.rs`, `real_x11_multi_cursor_tdd.rs`.
 
 ## Clipboard

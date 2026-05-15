@@ -1,5 +1,5 @@
 use crate::{
-    document::{inclusive_position_to_exclusive_char, line_indent_prefix, position_range, position_start_char, position_to_char, EditKind, UndoBoundary},
+    document::{line_indent_prefix, position_range, position_to_char, EditKind, UndoBoundary},
     line_edit::{clamped_line_span, insert_lines_change, replace_lines_change},
     selection::{self, line_display_text, Position},
     tab::EditorTab,
@@ -51,30 +51,6 @@ pub(crate) fn change_lines(tab: &EditorTab, first: usize, last: usize) -> Option
     let deleted = extract_lines(tab, first, last);
     let change = replace_lines_change(tab, first, last, std::slice::from_ref(&indent))?;
     Some((deleted, EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, TextChangeSet::single(change)).with_selection_after(SelectionAfter::CursorPosition(Position::new(first, indent.chars().count())))))
-}
-
-pub(crate) fn surround_range(tab: &EditorTab, from: Position, to: Position, open: char, close: char) -> Option<EditRequest> {
-    if from.line >= tab.line_count() || to.line >= tab.line_count() {
-        return None;
-    }
-    let open_char = position_start_char(tab.buffer(), from);
-    let close_char = inclusive_position_to_exclusive_char(tab.buffer(), to);
-    let changes = vec![TextChange::insert(open_char, open), TextChange::insert(close_char, close)];
-    Some(EditRequest::other_at_position(changes, from))
-}
-
-pub(crate) fn delete_surround(tab: &EditorTab, open_pos: Position, close_pos: Position) -> Option<EditRequest> {
-    let open_range = position_range(tab.buffer(), open_pos, open_pos)?;
-    let close_range = position_range(tab.buffer(), close_pos, close_pos)?;
-    let changes = vec![TextChange::delete(open_range), TextChange::delete(close_range)];
-    Some(EditRequest::other_at_position(changes, open_pos))
-}
-
-pub(crate) fn change_surround(tab: &EditorTab, open_pos: Position, close_pos: Position, to_open: char, to_close: char) -> Option<EditRequest> {
-    let open_range = position_range(tab.buffer(), open_pos, open_pos)?;
-    let close_range = position_range(tab.buffer(), close_pos, close_pos)?;
-    let changes = vec![TextChange::replace(open_range, to_open), TextChange::replace(close_range, to_close)];
-    Some(EditRequest::other_at_position(changes, open_pos))
 }
 
 pub(crate) fn paste(tab: &EditorTab, cursor: Position, register: &vim::Register, before: bool) -> Option<EditRequest> {
