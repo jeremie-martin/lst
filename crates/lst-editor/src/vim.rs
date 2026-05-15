@@ -57,6 +57,7 @@ pub struct VimState {
     pub mode: Mode,
     pub register: Register,
     pub visual_anchor: Option<Position>,
+    visual_head: Option<Position>,
     pending: Pending,
     last_find: Option<Motion>, // for ; and ,
     preferred_column: Option<usize>,
@@ -168,7 +169,7 @@ impl Default for VimState {
 
 impl VimState {
     pub fn new() -> Self {
-        Self { mode: Mode::Insert, register: Register::Empty, visual_anchor: None, pending: Pending::default(), last_find: None, preferred_column: None }
+        Self { mode: Mode::Insert, register: Register::Empty, visual_anchor: None, visual_head: None, pending: Pending::default(), last_find: None, preferred_column: None }
     }
 
     pub fn handle_key(&mut self, key: &Key, mods: Modifiers, text: &TextSnapshot) -> Vec<VimCommand> {
@@ -176,6 +177,14 @@ impl VimState {
             Mode::Normal => self.handle_normal(key, mods, text),
             Mode::Insert => vec![], // caller handles text input
             Mode::Visual | Mode::VisualLine => self.handle_visual(key, mods, text),
+        }
+    }
+
+    pub fn snapshot_cursor(&self, editor_cursor: Position) -> Position {
+        if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+            self.visual_head.unwrap_or(editor_cursor)
+        } else {
+            editor_cursor
         }
     }
 
@@ -226,12 +235,14 @@ impl VimState {
         if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
             self.mode = Mode::Normal;
             self.visual_anchor = None;
+            self.visual_head = None;
         }
     }
 
     fn exit_visual(&mut self) {
         self.mode = Mode::Normal;
         self.visual_anchor = None;
+        self.visual_head = None;
         self.clear_command_state();
     }
 
@@ -302,6 +313,10 @@ impl VimState {
         }
 
         if let Key::Named(named) = key {
+            if let Some(cmd) = named_page_command(named) {
+                self.clear_command_state();
+                return vec![cmd];
+            }
             if let Some(m) = named_key_to_motion(named) {
                 return self.apply_motion(m, text);
             }
@@ -481,11 +496,13 @@ impl VimState {
             'v' => {
                 self.mode = Mode::Visual;
                 self.visual_anchor = Some(text.cursor);
+                self.visual_head = Some(text.cursor);
                 vec![VimCommand::Select { anchor: text.cursor, head: text.cursor }]
             }
             'V' => {
                 self.mode = Mode::VisualLine;
                 self.visual_anchor = Some(text.cursor);
+                self.visual_head = Some(text.cursor);
                 self.visual_select(text.cursor, text)
             }
             '/' => vec![VimCommand::OpenFind],
@@ -520,6 +537,9 @@ impl VimState {
         }
 
         if let Key::Named(named) = key {
+            if let Some(cmd) = named_page_command(named) {
+                return vec![cmd];
+            }
             if let Some(m) = named_key_to_motion(named) {
                 return self.apply_motion(m, text);
             }
@@ -550,6 +570,7 @@ impl VimState {
                 let count = self.pending.count.take();
                 if let Some((from, to)) = text_object(text, c, partial == 'i', count) {
                     self.visual_anchor = Some(from);
+                    self.visual_head = Some(to);
                     self.clear_preferred_column();
                     return vec![VimCommand::Select { anchor: from, head: to }];
                 }
@@ -565,6 +586,7 @@ impl VimState {
         }
 
         let anchor = self.visual_anchor.unwrap_or(text.cursor);
+        let head = self.visual_head.unwrap_or(text.cursor);
         let is_line = self.mode == Mode::VisualLine;
 
         // Operators on selection
@@ -572,38 +594,38 @@ impl VimState {
             'd' | 'x' => {
                 self.exit_visual();
                 if is_line {
-                    let (first, last) = ordered_lines(anchor.line, text.cursor.line);
+                    let (first, last) = ordered_lines(anchor.line, head.line);
                     return vec![VimCommand::DeleteLines { first, last }];
                 }
-                let (from, to) = ordered(anchor, text.cursor);
+                let (from, to) = ordered(anchor, head);
                 return vec![VimCommand::DeleteRange { from, to }];
             }
             'c' | 's' => {
                 self.exit_visual();
                 if is_line {
-                    let (first, last) = ordered_lines(anchor.line, text.cursor.line);
+                    let (first, last) = ordered_lines(anchor.line, head.line);
                     return vec![VimCommand::ChangeLines { first, last }, VimCommand::EnterInsert];
                 }
-                let (from, to) = ordered(anchor, text.cursor);
+                let (from, to) = ordered(anchor, head);
                 return vec![VimCommand::ChangeRange { from, to }, VimCommand::EnterInsert];
             }
             'y' => {
                 self.exit_visual();
-                let (from, to) = ordered(anchor, text.cursor);
+                let (from, to) = ordered(anchor, head);
                 if is_line {
-                    let (first, last) = ordered_lines(anchor.line, text.cursor.line);
+                    let (first, last) = ordered_lines(anchor.line, head.line);
                     return vec![VimCommand::YankLines { first, last }, VimCommand::MoveTo(pos(first, 0))];
                 }
                 return vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)];
             }
             '>' => {
                 self.exit_visual();
-                let (first, last) = ordered_lines(anchor.line, text.cursor.line);
+                let (first, last) = ordered_lines(anchor.line, head.line);
                 return vec![VimCommand::IndentLines { first, last }, VimCommand::MoveTo(pos(first, 0))];
             }
             '<' => {
                 self.exit_visual();
-                let (first, last) = ordered_lines(anchor.line, text.cursor.line);
+                let (first, last) = ordered_lines(anchor.line, head.line);
                 return vec![VimCommand::OutdentLines { first, last }, VimCommand::MoveTo(pos(first, 0))];
             }
             'v' => {
@@ -630,10 +652,10 @@ impl VimState {
                 self.exit_visual();
                 let uppercase = c == 'U';
                 if is_line {
-                    let (first, last) = ordered_lines(anchor.line, text.cursor.line);
+                    let (first, last) = ordered_lines(anchor.line, head.line);
                     return vec![VimCommand::TransformCaseLines { first, last, uppercase }];
                 }
-                let (from, to) = ordered(anchor, text.cursor);
+                let (from, to) = ordered(anchor, head);
                 return vec![VimCommand::TransformCaseRange { from, to, uppercase }];
             }
             _ => {}
@@ -682,8 +704,9 @@ impl VimState {
         vec![VimCommand::Noop]
     }
 
-    pub fn selection_command(&self, head: Position, text: &TextSnapshot) -> VimCommand {
+    pub fn selection_command(&mut self, head: Position, text: &TextSnapshot) -> VimCommand {
         let anchor = self.visual_anchor.unwrap_or(text.cursor);
+        self.visual_head = Some(head);
         if self.mode == Mode::VisualLine {
             let (first, last) = ordered_lines(anchor.line, head.line);
             let last_col = line_len(text, last).saturating_sub(1);
@@ -693,7 +716,7 @@ impl VimState {
         }
     }
 
-    fn visual_select(&self, head: Position, text: &TextSnapshot) -> Vec<VimCommand> {
+    fn visual_select(&mut self, head: Position, text: &TextSnapshot) -> Vec<VimCommand> {
         vec![self.selection_command(head, text)]
     }
 
@@ -769,6 +792,18 @@ impl VimState {
             Some(SurroundPhase::AddAwaitMotion) => {
                 if c == 'i' || c == 'a' {
                     self.pending.surround = Some(SurroundPhase::AddAwaitInner(c));
+                    return vec![VimCommand::Noop];
+                }
+                if c.is_ascii_digit() && (c != '0' || self.pending.count.is_some()) {
+                    let digit = c.to_digit(10).unwrap() as usize;
+                    self.pending.count = Some(self.pending.count.unwrap_or(0) * 10 + digit);
+                    self.pending.surround = Some(SurroundPhase::AddAwaitMotion);
+                    return vec![VimCommand::Noop];
+                }
+                if c == '0' && self.pending.count.is_none() {
+                    let target = compute_motion(&Motion::LineStart, text, None, None);
+                    let (from, to) = surround_motion_endpoints(&Motion::LineStart, text.cursor, target, text);
+                    self.pending.surround = Some(SurroundPhase::AddAwaitDelim { from, to });
                     return vec![VimCommand::Noop];
                 }
                 if let Some(motion) = char_to_motion(c) {
@@ -1089,6 +1124,14 @@ fn named_key_to_motion(named: &NamedKey) -> Option<Motion> {
         NamedKey::ArrowDown => Some(Motion::Down),
         NamedKey::Home => Some(Motion::LineStart),
         NamedKey::End => Some(Motion::LineEnd),
+        _ => None,
+    }
+}
+
+fn named_page_command(named: &NamedKey) -> Option<VimCommand> {
+    match named {
+        NamedKey::PageDown => Some(VimCommand::PageDown),
+        NamedKey::PageUp => Some(VimCommand::PageUp),
         _ => None,
     }
 }

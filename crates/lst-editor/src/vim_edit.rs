@@ -31,6 +31,13 @@ pub(crate) fn delete_range(tab: &EditorTab, from: Position, to: Position) -> Opt
     Some((deleted, EditRequest::other_break(TextChangeSet::single(change)).with_selection_after(SelectionAfter::CursorPositionBeforeLineEnd(from))))
 }
 
+pub(crate) fn change_range(tab: &EditorTab, from: Position, to: Position) -> Option<DeletedEdit> {
+    let range = position_range(tab.buffer(), from, to)?;
+    let deleted = extract_range(tab, from, to);
+    let change = TextChange::delete(range);
+    Some((deleted, EditRequest::other_break(TextChangeSet::single(change)).with_selection_after(SelectionAfter::CursorPosition(from))))
+}
+
 pub(crate) fn delete_lines(tab: &EditorTab, first: usize, last: usize) -> Option<DeletedEdit> {
     let (first, last) = clamped_line_span(tab, first, last);
     let deleted = extract_lines(tab, first, last);

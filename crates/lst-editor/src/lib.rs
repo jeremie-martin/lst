@@ -379,7 +379,11 @@ impl EditorModel {
         let Some((start, _end)) = self.find.current_match_range() else {
             return false;
         };
-        self.active_tab_mut().set_cursor_position(start, None);
+        if self.vim_in_visual() {
+            self.move_to_vim_search_target(start);
+        } else {
+            self.active_tab_mut().set_cursor_position(start, None);
+        }
         true
     }
     fn apply_active_edit_request(&mut self, request: EditRequest, reveal: Option<RevealIntent>) -> EditOutcome {
@@ -541,7 +545,7 @@ impl EditorModel {
         self.queue_effect(EditorEffect::WritePrimary(text));
     }
     fn vim_snapshot(&mut self) -> vim::TextSnapshot {
-        let cursor = self.active_cursor_position();
+        let cursor = self.vim.snapshot_cursor(self.active_cursor_position());
         let lines = self.active_tab_mut().lines();
         vim::TextSnapshot { lines, cursor }
     }
@@ -579,7 +583,7 @@ impl EditorModel {
             C::Select { anchor, head } => self.apply_vim_select(anchor, head),
             C::DeleteRange { from, to } => self.vim_delete_range(from, to),
             C::DeleteLines { first, last } => self.vim_delete_lines(first, last),
-            C::ChangeRange { from, to } => { self.vim_delete_range(from, to); self.vim.mode = vim::Mode::Insert; }
+            C::ChangeRange { from, to } => { self.vim_change_range(from, to); self.vim.mode = vim::Mode::Insert; }
             C::ChangeLines { first, last } => { self.vim_change_lines(first, last); self.vim.mode = vim::Mode::Insert; }
             C::YankRange { from, to } => self.vim.register = vim::Register::Char(vim_edit::extract_range(self.active_tab(), from, to)),
             C::YankLines { first, last } => self.vim.register = vim::Register::Line(vim_edit::extract_lines(self.active_tab(), first, last)),
@@ -592,7 +596,7 @@ impl EditorModel {
             C::ReplaceChar { ch, count } => self.vim_replace_char(ch, count),
             C::Undo => { self.undo_or_redo(false, None); }
             C::Redo => { self.undo_or_redo(true, None); }
-            C::OpenFind => self.open_find_panel(false),
+            C::OpenFind => self.open_vim_find_panel(),
             C::FindNext => self.vim_find_step(true),
             C::FindPrev => self.vim_find_step(false),
             C::SearchWordUnderCursor { word, forward } => {
@@ -631,11 +635,18 @@ impl EditorModel {
     }
     fn vim_find_step(&mut self, forward: bool) {
         self.ensure_find_matches_current();
-        let cursor = self.active_cursor_position();
+        let cursor = self.vim.snapshot_cursor(self.active_cursor_position());
         let target = if forward { self.find.next_from(cursor) } else { self.find.prev_from(cursor) };
         if let Some(target) = target {
             self.move_to_vim_search_target(target);
         }
+    }
+    fn open_vim_find_panel(&mut self) {
+        self.find.visible = true;
+        self.find.show_replace = false;
+        self.find.query.clear();
+        self.reindex_find_matches_to_nearest();
+        self.queue_focus(FocusTarget::FindQuery);
     }
     fn queue_primary_selection(&mut self) {
         if let Some(text) = self.active_tab().selected_text() {
@@ -684,6 +695,9 @@ impl EditorModel {
     }
     fn vim_delete_range(&mut self, from: Position, to: Position) {
         self.apply_vim_capture(vim_edit::delete_range(self.active_tab(), from, to), false);
+    }
+    fn vim_change_range(&mut self, from: Position, to: Position) {
+        self.apply_vim_capture(vim_edit::change_range(self.active_tab(), from, to), false);
     }
     fn vim_delete_lines(&mut self, first: usize, last: usize) {
         self.apply_vim_capture(vim_edit::delete_lines(self.active_tab(), first, last), true);

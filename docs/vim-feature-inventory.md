@@ -6,6 +6,9 @@ This document records the Vim behavior that existed before commit `5e3abbe` rewr
 
 - Treat every item in this file as product behavior once restored.
 - Prefer X11 tests for user-visible behavior; keep source-only tests only for pure parser/motion invariants that cannot naturally be driven through the GPUI app.
+- Vim has an additional fast model-level black-box parity lane in `crates/lst-editor/tests/vim_behavior.rs`. It drives the public `EditorModel` input surface and asserts observable text, cursor, mode, find, register, and reveal outcomes. This complements, rather than replaces, X11 because exhaustive Vim command coverage would be too slow and fragile through a real display.
+- Local Neovim 0.9.5 is the oracle for stock Vim behavior. If this inventory disagrees with Neovim, Neovim takes precedence and this document should be corrected.
+- Surround and enhanced text-object behavior may be checked against local Neovim plugins when present, but only for lst's existing supported surface. When no plugin oracle is available, use the restored lst/vim-surround-style behavior recorded here.
 - `modalkit 0.0.25` provides a Vim keybinding machine that emits generic modal editing actions. It is useful as the long-term parser/binding source, but it is not a direct replacement for `EditorModel` execution because lst already owns selections, transactions, find state, wrapping, viewport reveal, registers, and GPUI effects. A safe adapter must translate modalkit actions into lst commands without bypassing those contracts.
 - Surround commands are outside modalkit's default Vim surface and remain lst-specific.
 
@@ -15,6 +18,23 @@ This document records the Vim behavior that existed before commit `5e3abbe` rewr
 - `modalkit` is restored as a workspace dependency and remains the planned parser/keybinding source once an adapter can translate its `editor-types` actions onto lst's document and transaction contracts with full X11 parity.
 - New accepted X11 coverage now exercises representative restored surfaces: text-object change (`ciw`), open-line/join/replace, linewise yank/paste, surround change/delete, visual text-object case transforms, and `*`/`n` word search.
 - The tables below record the feature status immediately after compact rewrite commit `5e3abbe`, before the parity restoration.
+
+## Model-Level Coverage Map
+
+The fast black-box suite in `crates/lst-editor/tests/vim_behavior.rs` is the exhaustive parity lane for the restored Vim surface:
+
+| Inventory area | Model-level coverage |
+| --- | --- |
+| Modes and state | `modes_state_pending_and_escape_follow_vim_contracts`, `vertical_motions_preserve_preferred_column`, `undo_redo_and_last_edit_jump_track_vim_edits` |
+| Motions | `normal_motions_cover_words_lines_char_search_and_brackets`, `named_and_page_motions_cover_keyboard_boundary_paths`, `word_and_big_word_motions_cover_counts_punctuation_empty_lines_and_unicode`, `viewport_commands_emit_reveal_effects_and_move_to_visible_rows` |
+| Operators | `operators_cover_motion_ranges_text_objects_counts_and_lines`, `operators_cover_linewise_inclusive_exclusive_and_register_edges` |
+| Normal edits | `normal_edits_cover_insert_positions_substitute_join_replace_paste_and_indent`, `normal_edits_cover_counts_boundaries_empty_lines_and_noops` |
+| Visual mode | `visual_mode_covers_charwise_linewise_text_objects_case_and_indentation`, `visual_mode_covers_counts_reverse_selection_search_repeat_and_viewport`, `viewport_page_motions_preserve_visual_state` |
+| Search | `search_commands_cover_word_search_find_panel_and_visual_stepping`, `search_commands_cover_wrap_empty_words_and_find_query_editing` |
+| Text objects | `text_objects_cover_words_paragraphs_pairs_quotes_counts_and_escapes` |
+| Surround | `surround_commands_cover_motion_text_object_and_delimiter_variants`, `surround_commands_cover_all_delimiters_aliases_motion_counts_and_noops` |
+| Registers | `registers_preserve_charwise_and_linewise_paste_placement`, `paste_placement_covers_charwise_linewise_before_after_and_empty_registers` |
+| X11 bridge | `x11_vim_smoke_specs_run_through_the_editor_model` mirrors the current real-display Vim acceptance cases at model level. |
 
 ## Modes And State
 

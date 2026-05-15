@@ -52,9 +52,9 @@ impl Viewport {
         self.scrolloff.min((self.rows - 1) / 2)
     }
 
-    /// The visual row a cursor should land on for `H` (screen top).
+    /// The visual row a cursor should land on for Vim `H` (screen top).
     pub fn screen_top_row(&self) -> usize {
-        self.top_visual_row.saturating_add(self.effective_scrolloff())
+        self.top_visual_row
     }
 
     /// The visual row a cursor should land on for `M` (screen middle).
@@ -62,8 +62,8 @@ impl Viewport {
         self.top_visual_row + self.rows.saturating_sub(1) / 2
     }
 
-    /// The visual row a cursor should land on for `L` (screen bottom).
+    /// The visual row a cursor should land on for Vim `L` (screen bottom).
     pub fn screen_bottom_row(&self) -> usize {
-        (self.top_visual_row + self.rows.saturating_sub(1)).saturating_sub(self.effective_scrolloff())
+        self.top_visual_row + self.rows.saturating_sub(1)
     }
 }
