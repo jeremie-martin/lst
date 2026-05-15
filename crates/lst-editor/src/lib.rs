@@ -94,6 +94,7 @@ pub struct EditorModel {
     show_wrap: bool,
     gutter_mode: GutterMode,
     find: FindState,
+    find_submit: FindSubmit,
     goto_line: Option<String>,
     status: String,
     vim: vim::VimState,
@@ -101,9 +102,14 @@ pub struct EditorModel {
     effects: Vec<EditorEffect>,
     overtype: bool,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FindSubmit {
+    Panel,
+    Vim { backward: bool },
+}
 impl EditorModel {
     pub fn from_tabs(first: EditorTab, rest: Vec<EditorTab>, status: String) -> Self {
-        Self { tabs: TabSet::new(first, rest), next_untitled_id: 2, show_gutter: true, show_wrap: true, gutter_mode: GutterMode::Absolute, find: FindState::new(), goto_line: None, status, vim: vim::VimState::new(), viewport: Viewport::default(), effects: Vec::new(), overtype: false }
+        Self { tabs: TabSet::new(first, rest), next_untitled_id: 2, show_gutter: true, show_wrap: true, gutter_mode: GutterMode::Absolute, find: FindState::new(), find_submit: FindSubmit::Panel, goto_line: None, status, vim: vim::VimState::new(), viewport: Viewport::default(), effects: Vec::new(), overtype: false }
     }
     fn alloc_tab_id(&mut self) -> TabId {
         self.tabs.alloc_tab_id()
@@ -174,6 +180,9 @@ impl EditorModel {
     pub fn vim_register(&self) -> &vim::Register {
         &self.vim.register
     }
+    pub fn vim_visual_state(&self) -> Option<vim::VisualState> {
+        self.vim.visual_state()
+    }
     pub fn vim_pending_display(&self) -> String {
         self.vim.pending_display()
     }
@@ -234,6 +243,7 @@ impl EditorModel {
     pub fn open_find_panel(&mut self, show_replace: bool) {
         self.find.visible = true;
         self.find.show_replace = show_replace;
+        self.find_submit = FindSubmit::Panel;
         if let Some(text) = self.active_tab().selected_text() {
             if !text.contains('\n') {
                 self.find.query = text;
@@ -245,6 +255,7 @@ impl EditorModel {
     pub fn close_find_panel(&mut self) {
         self.find.visible = false;
         self.find.show_replace = false;
+        self.find_submit = FindSubmit::Panel;
         self.queue_focus(FocusTarget::Editor);
     }
     pub fn open_goto_line_panel(&mut self) {
@@ -260,6 +271,23 @@ impl EditorModel {
         self.reindex_find_matches_to_nearest();
         if self.move_to_current_find_match() {
             self.queue_reveal(RevealIntent::Center);
+        }
+    }
+    pub fn submit_find_query(&mut self) {
+        match self.find_submit {
+            FindSubmit::Panel => {
+                self.execute(EditorCommand::FindNext);
+            }
+            FindSubmit::Vim { backward } => {
+                if !matches!(self.vim.mode, vim::Mode::Visual | vim::Mode::VisualLine) {
+                    if backward {
+                        self.execute(EditorCommand::FindPrev);
+                    } else {
+                        self.execute(EditorCommand::FindNext);
+                    }
+                }
+                self.close_find_panel();
+            }
         }
     }
     pub fn update_find_replacement(&mut self, text: String) {
@@ -602,7 +630,7 @@ impl EditorModel {
             C::ReplaceChar { ch, count } => self.vim_replace_char(ch, count),
             C::Undo => { self.undo_or_redo(false, None); }
             C::Redo => { self.undo_or_redo(true, None); }
-            C::OpenFind => self.open_vim_find_panel(),
+            C::OpenFind { backward } => self.open_vim_find_panel(backward),
             C::FindNext => self.vim_find_step(true),
             C::FindPrev => self.vim_find_step(false),
             C::SearchWordUnderCursor { word, forward } => {
@@ -647,9 +675,10 @@ impl EditorModel {
             self.move_to_vim_search_target(target);
         }
     }
-    fn open_vim_find_panel(&mut self) {
+    fn open_vim_find_panel(&mut self, backward: bool) {
         self.find.visible = true;
         self.find.show_replace = false;
+        self.find_submit = FindSubmit::Vim { backward };
         self.find.query.clear();
         self.reindex_find_matches_to_nearest();
         self.queue_focus(FocusTarget::FindQuery);
@@ -699,16 +728,24 @@ impl EditorModel {
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
         self.vim.register = make(deleted);
     }
+    fn collapse_vim_edit_snapshot_to(&mut self, position: Position) {
+        let cursor = position_to_char(self.active_tab().buffer(), position);
+        self.active_tab_mut().set_selection(Selection::collapsed(cursor));
+    }
     fn vim_delete_range(&mut self, from: Position, to: Position) {
+        self.collapse_vim_edit_snapshot_to(from);
         self.apply_vim_capture(vim_edit::delete_range(self.active_tab(), from, to), false);
     }
     fn vim_change_range(&mut self, from: Position, to: Position) {
+        self.collapse_vim_edit_snapshot_to(from);
         self.apply_vim_capture(vim_edit::change_range(self.active_tab(), from, to), false);
     }
     fn vim_delete_lines(&mut self, first: usize, last: usize) {
+        self.collapse_vim_edit_snapshot_to(Position::new(first, 0));
         self.apply_vim_capture(vim_edit::delete_lines(self.active_tab(), first, last), true);
     }
     fn vim_change_lines(&mut self, first: usize, last: usize) {
+        self.collapse_vim_edit_snapshot_to(Position::new(first, 0));
         self.apply_vim_capture(vim_edit::change_lines(self.active_tab(), first, last), true);
     }
     #[rustfmt::skip]
@@ -759,6 +796,7 @@ impl EditorModel {
     }
     fn vim_paste_selection_range(&mut self, from: Position, to: Position, preserve_register: bool) {
         let register = self.vim.register.clone();
+        self.collapse_vim_edit_snapshot_to(from);
         let Some((deleted, request)) = vim_edit::paste_over_range(self.active_tab(), from, to, &register) else {
             return;
         };
@@ -769,6 +807,7 @@ impl EditorModel {
     }
     fn vim_paste_selection_lines(&mut self, first: usize, last: usize, preserve_register: bool) {
         let register = self.vim.register.clone();
+        self.collapse_vim_edit_snapshot_to(Position::new(first, 0));
         let Some((deleted, request)) = vim_edit::paste_over_lines(self.active_tab(), first, last, &register) else {
             return;
         };

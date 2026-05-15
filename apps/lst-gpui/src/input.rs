@@ -568,6 +568,10 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if !self.editor_input_is_focused() {
+            return false;
+        }
+
         let effective_modifiers = self.effective_modifier_chord(event.keystroke.modifiers);
         let mods = gpui_modifiers_to_vim(effective_modifiers);
         let key = gpui_key_to_vim(event);

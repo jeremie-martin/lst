@@ -166,6 +166,30 @@ fn word_and_big_word_motions_cover_counts_punctuation_empty_lines_and_unicode() 
 }
 
 #[test]
+fn unicode_grapheme_vim_edits_cover_operators_registers_paste_and_case() {
+    let cases = [
+        ("delete combining grapheme under cursor", "a\u{301}bc", (0, 0), "x", "bc"),
+        ("replace combining grapheme under cursor", "a\u{301}bc", (0, 0), "rX", "Xbc"),
+        ("substitute combining grapheme under cursor", "a\u{301}bc", (0, 0), "sX<esc>", "Xbc"),
+        ("paste deleted combining grapheme", "a\u{301}bc", (0, 0), "x$p", "bca\u{301}"),
+        ("delete emoji grapheme under cursor", "😀abc", (0, 0), "x", "abc"),
+        ("unicode inner word delete", "éclair cafe", (0, 0), "diw", " cafe"),
+        ("unicode inner word paste", "éclair cafe", (0, 0), "yiw$p", "éclair cafeéclair"),
+        ("unicode visual uppercase word", "éclair cafe", (0, 0), "viwU", "ÉCLAIR cafe"),
+    ];
+
+    run_text_cases(&cases);
+
+    let mut harness = VimHarness::normal_at("a\u{301}bc", 0, 0);
+    harness.keys("x");
+    harness.expect_char_register("a\u{301}");
+
+    let mut harness = VimHarness::normal_at("éclair cafe", 0, 0);
+    harness.keys("diw");
+    harness.expect_char_register("éclair");
+}
+
+#[test]
 fn operators_cover_motion_ranges_text_objects_counts_and_lines() {
     let cases = [
         ("delete word", "alpha beta", (0, 0), "dw", "beta"),
@@ -319,6 +343,30 @@ fn visual_mode_covers_counts_reverse_selection_search_repeat_and_viewport() {
 }
 
 #[test]
+fn visual_mode_tracks_anchor_head_and_cursor_shape() {
+    let mut harness = VimHarness::normal_at("alpha beta gamma", 0, 0);
+    harness.keys("v2w");
+    harness.expect_selection("alpha beta g");
+    harness.expect_visual_state((0, 0), (0, 11));
+
+    let mut harness = VimHarness::normal_at("alpha beta gamma", 0, 11);
+    harness.keys("vb");
+    harness.expect_selection("beta g");
+    harness.expect_visual_state((0, 11), (0, 6));
+
+    let mut harness = VimHarness::normal_at("alpha\nbeta\ngamma", 0, 0);
+    harness.keys("Vj");
+    harness.expect_mode(vim::Mode::VisualLine);
+    harness.expect_selection("alpha\nbeta");
+    harness.expect_visual_state((0, 0), (1, 0));
+
+    harness.keys("v");
+    harness.expect_mode(vim::Mode::Visual);
+    harness.expect_selection("alpha\nb");
+    harness.expect_visual_state((0, 0), (1, 0));
+}
+
+#[test]
 fn search_commands_cover_word_search_find_panel_and_visual_stepping() {
     let mut harness = VimHarness::normal_at("foo bar foo baz foo", 0, 0);
     harness.keys("*");
@@ -359,6 +407,28 @@ fn search_commands_cover_wrap_empty_words_and_find_query_editing() {
     let mut harness = VimHarness::normal_at("foo bar baz", 0, 0);
     harness.keys("/baq<bs>r<enter>");
     assert_eq!(harness.model.find().query, "bar");
+    harness.expect_cursor(0, 4);
+
+    let mut harness = VimHarness::normal_at("foo bar foo baz foo", 0, 16);
+    harness.keys("?foo<enter>");
+    assert_eq!(harness.model.find().query, "foo");
+    harness.expect_cursor(0, 8);
+    harness.keys("n");
+    harness.expect_cursor(0, 0);
+    harness.keys("N");
+    harness.expect_cursor(0, 8);
+
+    let mut harness = VimHarness::normal_at("foo bar foo baz foo", 0, 16);
+    harness.keys("#");
+    assert_eq!(harness.model.find().query, "foo");
+    assert!(harness.model.find().whole_word);
+    harness.expect_cursor(0, 8);
+    harness.keys("n");
+    harness.expect_cursor(0, 0);
+
+    let mut harness = VimHarness::normal_at("foo bar foo", 0, 4);
+    harness.keys("/foo<esc>");
+    assert_eq!(harness.focus, FocusTarget::Editor);
     harness.expect_cursor(0, 4);
 }
 
@@ -463,6 +533,46 @@ fn undo_redo_and_last_edit_jump_track_vim_edits() {
     harness.expect_cursor(0, 6);
     harness.keys("gi?<esc>");
     harness.expect_text("alpha!?\nbeta");
+}
+
+#[test]
+fn undo_redo_groups_vim_edit_families_as_single_steps() {
+    let cases = [
+        ("change word", "alpha beta", (0, 0), "cwX<esc>", "X beta"),
+        ("change line", "alpha\nbeta", (0, 0), "ccX<esc>", "X\nbeta"),
+        ("substitute char", "alpha beta", (0, 0), "sX<esc>", "Xlpha beta"),
+        ("visual delete", "alpha beta gamma", (0, 0), "vwd", "eta gamma"),
+        ("visual change", "alpha beta gamma", (0, 0), "viwcX<esc>", "X beta gamma"),
+        ("visual paste", "one two three", (0, 0), "yiwwviwp", "one one three"),
+        ("paste", "alpha beta", (0, 0), "yiw$p", "alpha betaalpha"),
+        ("join", "alpha\n beta", (0, 0), "J", "alpha beta"),
+        ("indent", "alpha\nbeta", (0, 0), ">>", "  alpha\nbeta"),
+        ("outdent", "  alpha\nbeta", (0, 0), "<<", "alpha\nbeta"),
+        ("surround add", "alpha beta", (0, 0), "ysiw)", "(alpha) beta"),
+        ("surround delete", "(alpha) beta", (0, 1), "ds)", "alpha beta"),
+        ("surround change", "(alpha) beta", (0, 1), "cs)]", "[alpha] beta"),
+    ];
+
+    for (name, initial, cursor, keys, edited) in cases {
+        let mut harness = VimHarness::normal_at(initial, cursor.0, cursor.1);
+        harness.keys(keys);
+        assert_eq!(harness.text(), edited, "{name} edit");
+        harness.keys("u");
+        assert_eq!(harness.text(), initial, "{name} undo");
+        harness.keys("<cmd-r>");
+        assert_eq!(harness.text(), edited, "{name} redo");
+    }
+}
+
+#[test]
+fn unsupported_vim_commands_are_intentional_noops() {
+    for keys in [".", "q", "@", "\"", ":", "R", "m", "'", "`", "g~", "gu", "gU"] {
+        let mut harness = VimHarness::normal_at("alpha beta", 0, 0);
+        harness.keys(keys);
+        harness.expect_text("alpha beta");
+        harness.expect_mode(vim::Mode::Normal);
+        harness.expect_pending("");
+    }
 }
 
 #[test]

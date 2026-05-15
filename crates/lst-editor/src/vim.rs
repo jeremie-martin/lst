@@ -60,6 +60,7 @@ pub struct VimState {
     visual_head: Option<Position>,
     pending: Pending,
     last_find: Option<Motion>, // for ; and ,
+    last_search_backward: bool,
     preferred_column: Option<usize>,
 }
 
@@ -87,7 +88,7 @@ pub enum VimCommand {
     ReplaceChar { ch: char, count: usize },
     Undo,
     Redo,
-    OpenFind,
+    OpenFind { backward: bool },
     FindNext,
     FindPrev,
     SearchWordUnderCursor { word: String, forward: bool },
@@ -124,6 +125,12 @@ pub enum Register {
     Empty,
     Char(String),
     Line(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisualState {
+    pub anchor: Position,
+    pub head: Position,
 }
 
 // -- Private types -----------------------------------------------------------
@@ -172,7 +179,7 @@ impl Default for VimState {
 
 impl VimState {
     pub fn new() -> Self {
-        Self { mode: Mode::Insert, register: Register::Empty, visual_anchor: None, visual_head: None, pending: Pending::default(), last_find: None, preferred_column: None }
+        Self { mode: Mode::Insert, register: Register::Empty, visual_anchor: None, visual_head: None, pending: Pending::default(), last_find: None, last_search_backward: false, preferred_column: None }
     }
 
     pub fn handle_key(&mut self, key: &Key, mods: Modifiers, text: &TextSnapshot) -> Vec<VimCommand> {
@@ -189,6 +196,10 @@ impl VimState {
         } else {
             editor_cursor
         }
+    }
+
+    pub fn visual_state(&self) -> Option<VisualState> {
+        matches!(self.mode, Mode::Visual | Mode::VisualLine).then_some(VisualState { anchor: self.visual_anchor?, head: self.visual_head? })
     }
 
     pub fn pending_display(&self) -> String {
@@ -508,11 +519,19 @@ impl VimState {
                 self.visual_head = Some(text.cursor);
                 self.visual_select(text.cursor, text)
             }
-            '/' => vec![VimCommand::OpenFind],
-            'n' => vec![VimCommand::FindNext],
-            'N' => vec![VimCommand::FindPrev],
+            '/' => {
+                self.last_search_backward = false;
+                vec![VimCommand::OpenFind { backward: false }]
+            }
+            '?' => {
+                self.last_search_backward = true;
+                vec![VimCommand::OpenFind { backward: true }]
+            }
+            'n' => vec![if self.last_search_backward { VimCommand::FindPrev } else { VimCommand::FindNext }],
+            'N' => vec![if self.last_search_backward { VimCommand::FindNext } else { VimCommand::FindPrev }],
             '*' | '#' => {
                 if let Some(word) = word_under_cursor(text) {
+                    self.last_search_backward = c == '#';
                     vec![VimCommand::SearchWordUnderCursor { word, forward: c == '*' }]
                 } else {
                     vec![VimCommand::Noop]
@@ -699,17 +718,18 @@ impl VimState {
 
         // Search
         match c {
-            '/' => {
+            '/' | '?' => {
                 self.clear_preferred_column();
-                return vec![VimCommand::OpenFind];
+                self.last_search_backward = c == '?';
+                return vec![VimCommand::OpenFind { backward: c == '?' }];
             }
             'n' => {
                 self.clear_preferred_column();
-                return vec![VimCommand::FindNext];
+                return vec![if self.last_search_backward { VimCommand::FindPrev } else { VimCommand::FindNext }];
             }
             'N' => {
                 self.clear_preferred_column();
-                return vec![VimCommand::FindPrev];
+                return vec![if self.last_search_backward { VimCommand::FindNext } else { VimCommand::FindPrev }];
             }
             _ => {}
         }

@@ -1,5 +1,5 @@
 use crate::{
-    document::{inclusive_position_to_exclusive_char, line_indent_prefix, position_range, position_start_char, position_to_char},
+    document::{inclusive_position_to_exclusive_char, line_indent_prefix, position_range, position_start_char, position_to_char, EditKind, UndoBoundary},
     line_edit::{clamped_line_span, insert_lines_change, replace_lines_change},
     selection::{self, line_display_text, Position},
     tab::EditorTab,
@@ -35,7 +35,7 @@ pub(crate) fn change_range(tab: &EditorTab, from: Position, to: Position) -> Opt
     let range = position_range(tab.buffer(), from, to)?;
     let deleted = extract_range(tab, from, to);
     let change = TextChange::delete(range);
-    Some((deleted, EditRequest::other_break(TextChangeSet::single(change)).with_selection_after(SelectionAfter::CursorPosition(from))))
+    Some((deleted, EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, TextChangeSet::single(change)).with_selection_after(SelectionAfter::CursorPosition(from))))
 }
 
 pub(crate) fn delete_lines(tab: &EditorTab, first: usize, last: usize) -> Option<DeletedEdit> {
@@ -50,7 +50,7 @@ pub(crate) fn change_lines(tab: &EditorTab, first: usize, last: usize) -> Option
     let indent = line_indent_prefix(tab.buffer(), first);
     let deleted = extract_lines(tab, first, last);
     let change = replace_lines_change(tab, first, last, std::slice::from_ref(&indent))?;
-    Some((deleted, EditRequest::single_other_at_position(change, Position::new(first, indent.chars().count()))))
+    Some((deleted, EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, TextChangeSet::single(change)).with_selection_after(SelectionAfter::CursorPosition(Position::new(first, indent.chars().count())))))
 }
 
 pub(crate) fn surround_range(tab: &EditorTab, from: Position, to: Position, open: char, close: char) -> Option<EditRequest> {

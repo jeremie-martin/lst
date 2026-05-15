@@ -26,18 +26,22 @@ The fast black-box suite in `crates/lst-editor/tests/vim_behavior.rs` is the exh
 
 | Inventory area | Model-level coverage |
 | --- | --- |
-| Modes and state | `modes_state_pending_and_escape_follow_vim_contracts`, `vertical_motions_preserve_preferred_column`, `undo_redo_and_last_edit_jump_track_vim_edits` |
+| Modes and state | `modes_state_pending_and_escape_follow_vim_contracts`, `vertical_motions_preserve_preferred_column`, `undo_redo_and_last_edit_jump_track_vim_edits`, `unsupported_vim_commands_are_intentional_noops` |
 | Motions | `normal_motions_cover_words_lines_char_search_and_brackets`, `named_and_page_motions_cover_keyboard_boundary_paths`, `word_and_big_word_motions_cover_counts_punctuation_empty_lines_and_unicode`, `viewport_commands_emit_reveal_effects_and_move_to_visible_rows` |
 | Operators | `operators_cover_motion_ranges_text_objects_counts_and_lines`, `operators_cover_linewise_inclusive_exclusive_and_register_edges` |
 | Normal edits | `normal_edits_cover_insert_positions_substitute_join_replace_paste_and_indent`, `normal_edits_cover_counts_boundaries_empty_lines_and_noops` |
-| Visual mode | `visual_mode_covers_charwise_linewise_text_objects_case_and_indentation`, `visual_mode_covers_counts_reverse_selection_search_repeat_and_viewport`, `viewport_page_motions_preserve_visual_state` |
+| Visual mode | `visual_mode_covers_charwise_linewise_text_objects_case_and_indentation`, `visual_mode_covers_counts_reverse_selection_search_repeat_and_viewport`, `visual_mode_tracks_anchor_head_and_cursor_shape`, `viewport_page_motions_preserve_visual_state` |
 | Search | `search_commands_cover_word_search_find_panel_and_visual_stepping`, `search_commands_cover_wrap_empty_words_and_find_query_editing` |
 | Text objects | `text_objects_cover_words_paragraphs_pairs_quotes_counts_and_escapes` |
 | Surround | `surround_commands_cover_motion_text_object_and_delimiter_variants`, `surround_commands_cover_all_delimiters_aliases_motion_counts_and_noops` |
 | Registers | `registers_preserve_charwise_and_linewise_paste_placement`, `paste_placement_covers_charwise_linewise_before_after_and_empty_registers` |
+| Undo/redo | `undo_redo_groups_vim_edit_families_as_single_steps` |
+| Unicode/graphemes | `word_and_big_word_motions_cover_counts_punctuation_empty_lines_and_unicode`, `unicode_grapheme_vim_edits_cover_operators_registers_paste_and_case` |
 | X11 bridge | `x11_vim_smoke_specs_run_through_the_editor_model` mirrors the current real-display Vim acceptance cases at model level. |
 
-The generated oracle corpus currently adds 696 Neovim-derived cases across motions, operators, text objects, normal edits, registers, visual operators, and search. It records the nvim version and options used to produce the fixture. Text-object generation covers stock aliases such as `cib`, `ci]`, `ciB`, and `ci>` across multiple cursor positions, count composition, empty-pair changes, no-op boundaries, failed motions, search query state, final visual selections, and exact unnamed-register kind/text where the command should touch the register. Indent commands are generated with lst's Markdown editor indent policy so the oracle checks Vim command semantics rather than the scratch nvim buffer's default `shiftwidth`.
+The generated oracle corpus currently adds 715 Neovim-derived cases across motions, operators, text objects, normal edits, registers, visual operators, search, and undo. It records the nvim version and options used to produce the fixture. Text-object generation covers stock aliases such as `cib`, `ci]`, `ciB`, and `ci>` across multiple cursor positions, count composition, empty-pair changes, no-op boundaries, failed motions, `/` and `?` search direction, search query state, final visual selections, exact visual anchor/head state, undo outcomes, and exact unnamed-register kind/text where the command should touch the register. Indent commands are generated with lst's Markdown editor indent policy so the oracle checks Vim command semantics rather than the scratch nvim buffer's default `shiftwidth`.
+
+Unsupported Vim surfaces are intentionally outside the current product contract unless added here later. The model suite locks representative unsupported keys such as `.`, `q`, `@`, `"`, `:`, `R`, marks, and `g~`/`gu`/`gU` as Normal-mode no-ops with cleared pending state. Named registers, macros, dot repeat, marks/jumplist, Ex command execution, Visual Block, Replace mode, and full Vim regex option parity should therefore not be inferred from passing tests.
 
 ## Modes And State
 

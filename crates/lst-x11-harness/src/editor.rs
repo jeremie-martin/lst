@@ -1477,7 +1477,7 @@ fn vim_key_context_changes_state(chord: &KeyChordSingle, state: &StateTraceRecor
     }
     match chord.key {
         Key::Escape => !state.vim_pending.is_empty() || state.vim_mode != "NORMAL",
-        Key::Char('g' | 'd' | 'y' | 'c' | 'z') => state.vim_mode == "NORMAL",
+        Key::Char('/' | '?' | 'g' | 'd' | 'y' | 'c' | 'z') => state.vim_mode == "NORMAL",
         Key::Char('v') => state.vim_mode == "NORMAL",
         _ => false,
     }

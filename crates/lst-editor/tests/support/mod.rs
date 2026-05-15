@@ -118,10 +118,11 @@ impl VimHarness {
                 let query = self.deferred_find_query.take().unwrap_or_else(|| self.model.find().query.clone());
                 let was_visual = matches!(self.model.vim_mode(), vim::Mode::Visual | vim::Mode::VisualLine);
                 self.model.update_find_query_and_activate(query);
-                if !was_visual {
-                    self.model.execute(EditorCommand::FindNext);
+                if was_visual {
+                    self.model.close_find_panel();
+                } else {
+                    self.model.submit_find_query();
                 }
-                self.model.close_find_panel();
             }
             _ => {}
         }
@@ -184,6 +185,23 @@ impl VimHarness {
     #[track_caller]
     pub fn expect_no_selection(&self) {
         assert_eq!(self.selected_text(), None);
+    }
+
+    #[track_caller]
+    pub fn expect_char_register(&self, expected: &str) {
+        assert_eq!(self.model.vim_register(), &vim::Register::Char(expected.to_string()));
+    }
+
+    #[track_caller]
+    pub fn expect_line_register(&self, expected: &str) {
+        assert_eq!(self.model.vim_register(), &vim::Register::Line(expected.to_string()));
+    }
+
+    #[track_caller]
+    pub fn expect_visual_state(&self, anchor: (usize, usize), head: (usize, usize)) {
+        let state = self.model.vim_visual_state().expect("visual state");
+        assert_eq!(state.anchor, Position { line: anchor.0, column: anchor.1 });
+        assert_eq!(state.head, Position { line: head.0, column: head.1 });
     }
 
     #[track_caller]

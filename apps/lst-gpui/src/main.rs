@@ -494,7 +494,7 @@ impl LstGpuiApp {
                 self.record_find_metrics(elapsed_ms(reindex_started));
             }
             InputFieldEvent::Submitted => {
-                self.execute_model_command(cx, Command::FindNext);
+                self.update_model(cx, true, EditorModel::submit_find_query);
             }
             InputFieldEvent::Cancelled => {
                 self.update_model(cx, true, EditorModel::close_find_panel);

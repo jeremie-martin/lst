@@ -131,6 +131,45 @@ fn vim_star_and_navigate_find_word_under_cursor() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn vim_question_search_repeats_backward() -> TestResult {
+    support::run_x11_test("vim-question-search", |session| {
+        let path = session.seed_file("vim-question-search.txt", "foo bar foo baz foo")?;
+        let mut editor = session.open_file("vim-question-search", &path)?;
+
+        editor.keys("<esc>gg$")?;
+        editor.expect_cursor_heads(&[(0, 18)])?;
+        editor.keys("?")?;
+        editor.wait_state("vim question find query focus", secs(2), |record| {
+            record.find.visible && record.focused_input == "find_query"
+        })?;
+        editor.keys("foo<enter>")?;
+        editor.wait_state("vim question search submitted", secs(5), |record| {
+            !record.find.visible
+                && record.focused_input == "editor"
+                && matches!(record.cursors.as_slice(), [cursor] if cursor.head_pos() == (0, 16))
+        })?;
+        editor.keys("n")?;
+        editor.expect_cursor_heads(&[(0, 8)])?;
+        editor.keys("N")?;
+        editor.expect_cursor_heads(&[(0, 16)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_change_undo_is_single_step() -> TestResult {
+    support::run_x11_test("vim-change-undo", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("alpha beta<esc>0cwX<esc>u")?;
+        editor.save_then_expect_file(&path, "alpha beta")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn vim_compound_commands_survive_long_pauses_between_keystrokes() -> TestResult {
     // **Harness invariant — do not remove this test.**
     //

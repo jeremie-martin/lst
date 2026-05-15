@@ -596,10 +596,15 @@ def build_cases() -> list[dict]:
     for name, text, cursor, keys, assert_search in [
         ("search forward wraps", "foo bar foo", (0, 8), "/foo<enter>n", True),
         ("search backward wraps", "foo bar foo", (0, 0), "/foo<enter>N", True),
+        ("question search backward", "foo bar foo baz foo", (0, 16), "?foo<enter>", True),
+        ("question search repeat backward", "foo bar foo baz foo", (0, 16), "?foo<enter>n", True),
+        ("question search opposite repeat", "foo bar foo baz foo", (0, 16), "?foo<enter>N", True),
         ("search not found keeps cursor", "foo bar baz", (0, 4), "/zzz<enter>", True),
+        ("question search not found keeps cursor", "foo bar baz", (0, 4), "?zzz<enter>", True),
         ("search query backspace editing", "foo bar baz", (0, 0), "/baq<bs>r<enter>", True),
         ("search multiline forward", "foo\nbar\nfoo\nbaz", (0, 0), "/foo<enter>n", True),
         ("search multiline backward", "foo\nbar\nfoo\nbaz", (2, 0), "/foo<enter>N", True),
+        ("question search multiline backward", "foo\nbar\nfoo\nbaz", (2, 0), "?foo<enter>", True),
         ("search punctuation literal", "a+b a+b axb", (0, 0), "/a+b<enter>n", True),
         ("search repeat without query is noop", "foo bar foo", (0, 0), "n", False),
         ("search reverse repeat without query is noop", "foo bar foo", (0, 0), "N", False),
@@ -616,6 +621,30 @@ def build_cases() -> list[dict]:
         ("change paren to bracket", "(hello)", (0, 1), "cs)]"),
     ]:
         cases.append(case(name, "surround", text, cursor, keys, requires_surround=True))
+
+    for name, text, cursor, keys, assert_register in [
+        ("undo insert append", "alpha beta", (0, 0), "aX<esc>u", False),
+        ("undo delete word", "alpha beta gamma", (0, 0), "dwu", True),
+        ("undo change word", "alpha beta gamma", (0, 0), "cwX<esc>u", True),
+        ("undo yank paste", "alpha beta gamma", (0, 0), "yw$pu", True),
+        ("undo delete line", "one\ntwo\nthree", (0, 0), "ddu", True),
+        ("undo change line", "one\ntwo\nthree", (0, 0), "ccX<esc>u", True),
+        ("undo visual delete", "alpha beta gamma", (0, 0), "vwdu", True),
+        ("undo visual change", "alpha beta gamma", (0, 0), "viwcX<esc>u", True),
+        ("undo visual paste", "one two three", (0, 0), "yiwwviwpu", True),
+        ("undo substitute", "alpha beta", (0, 0), "sX<esc>u", True),
+        ("undo replace", "alpha beta", (0, 0), "rXu", False),
+        ("undo join", "alpha\n beta", (0, 0), "Ju", False),
+        ("undo indent", "alpha\nbeta", (0, 0), ">>u", False),
+        ("undo outdent", "  alpha\nbeta", (0, 0), "<<u", False),
+    ]:
+        cases.append(case(name, "undo", text, cursor, keys, assert_register=assert_register))
+
+    for name, text, cursor, keys in [
+        ("undo delete surround", "(alpha)", (0, 1), "ds)u"),
+        ("undo change surround", "(alpha)", (0, 1), "cs)]u"),
+    ]:
+        cases.append(case(name, "undo", text, cursor, keys, requires_surround=True))
 
     return cases
 
@@ -711,6 +740,18 @@ local function visual_selection_text(mode, lines)
   return table.concat(selected, "\n")
 end
 
+local function visual_state(mode)
+  if mode ~= "v" and mode ~= "V" then
+    return nil
+  end
+  local anchor = vim.fn.getpos("v")
+  local head = vim.api.nvim_win_get_cursor(0)
+  return {
+    anchor = { line = anchor[2] - 1, column = anchor[3] - 1 },
+    head = { line = head[1] - 1, column = head[2] },
+  }
+end
+
 local surround_mappings_detected = has_map("ys") and has_map("ds") and has_map("cs")
 local version = vim.version()
 
@@ -749,6 +790,8 @@ for _, case in ipairs(input.cases) do
     vim.bo.bufhidden = "wipe"
     vim.bo.swapfile = false
     vim.api.nvim_buf_set_lines(0, 0, -1, true, split_lines(case.initial_text))
+    vim.cmd("setlocal undolevels=-1")
+    vim.cmd("setlocal undolevels=1000")
     vim.api.nvim_win_set_cursor(0, { case.cursor.line + 1, case.cursor.column })
     vim.fn.setreg('"', "")
     vim.fn.setreg("/", "")
@@ -777,6 +820,7 @@ for _, case in ipairs(input.cases) do
     end
     if case.assert_selection then
       expected.selection = visual_selection_text(mode, lines)
+      expected.visual_state = visual_state(mode)
     end
     table.insert(out.cases, {
       name = case.name,
