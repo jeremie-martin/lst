@@ -2,11 +2,7 @@ use crate::{
     document::{char_to_position, line_indent_prefix, EditKind, UndoBoundary},
     language::LanguageConfig,
     multi_selection::{self, request_for_each, SelectionEdit},
-    selection::{
-        ceil_grapheme_boundary, display_line_char_len, floor_grapheme_boundary, is_identifier_char,
-        next_grapheme_boundary, next_word_boundary, previous_grapheme_boundary,
-        previous_word_boundary,
-    },
+    selection::{ceil_grapheme_boundary, display_line_char_len, floor_grapheme_boundary, is_identifier_char, next_grapheme_boundary, next_word_boundary, previous_grapheme_boundary, previous_word_boundary},
     tab::EditorTab,
     transaction::{EditRequest, SelectionAfter},
 };
@@ -14,18 +10,10 @@ use std::ops::Range;
 
 pub(crate) enum TextInputAction {
     MoveCursor(usize),
-    Edit {
-        request: EditRequest,
-        align_find_current: bool,
-    },
+    Edit { request: EditRequest, align_find_current: bool },
 }
 
-pub(crate) fn edit_action(
-    tab: &EditorTab,
-    range: Option<Range<usize>>,
-    text: String,
-    boundary: UndoBoundary,
-) -> TextInputAction {
+pub(crate) fn edit_action(tab: &EditorTab, range: Option<Range<usize>>, text: String, boundary: UndoBoundary) -> TextInputAction {
     if let Some(action) = multi_edit_action(tab, range.as_ref(), &text, boundary) {
         return action;
     }
@@ -35,59 +23,20 @@ pub(crate) fn edit_action(
         return TextInputAction::MoveCursor(new_cursor);
     }
     if let Some(dedent_range) = auto_dedent_close_brace_range(tab, &resolved_range, &text) {
-        return TextInputAction::Edit {
-            request: EditRequest::single(EditKind::Insert, UndoBoundary::Break, dedent_range, text),
-            align_find_current: false,
-        };
+        return TextInputAction::Edit { request: EditRequest::single(EditKind::Insert, UndoBoundary::Break, dedent_range, text), align_find_current: false };
     }
-    if let Some((edit_range, replacement, new_selection)) =
-        auto_pair_surround_edit(tab, &resolved_range, &text)
-    {
+    if let Some((edit_range, replacement, new_selection)) = auto_pair_surround_edit(tab, &resolved_range, &text) {
         let reversed = tab.selection_reversed();
-        let relative_selection = new_selection.start.saturating_sub(edit_range.start)
-            ..new_selection.end.saturating_sub(edit_range.start);
-        return TextInputAction::Edit {
-            request: EditRequest::single(
-                EditKind::Insert,
-                UndoBoundary::Break,
-                edit_range,
-                replacement,
-            )
-            .with_selection_after(SelectionAfter::InsertedRange {
-                range: relative_selection,
-                reversed,
-            }),
-            align_find_current: true,
-        };
+        let relative_selection = new_selection.start.saturating_sub(edit_range.start)..new_selection.end.saturating_sub(edit_range.start);
+        return TextInputAction::Edit { request: EditRequest::single(EditKind::Insert, UndoBoundary::Break, edit_range, replacement).with_selection_after(SelectionAfter::InsertedRange { range: relative_selection, reversed }), align_find_current: true };
     }
-    if let Some((edit_range, replacement, caret)) =
-        auto_pair_insert_edit(tab, &resolved_range, &text)
-    {
+    if let Some((edit_range, replacement, caret)) = auto_pair_insert_edit(tab, &resolved_range, &text) {
         let relative_caret = caret.saturating_sub(edit_range.start);
-        return TextInputAction::Edit {
-            request: EditRequest::single(
-                EditKind::Insert,
-                UndoBoundary::Break,
-                edit_range,
-                replacement,
-            )
-            .with_selection_after(SelectionAfter::InsertedRange {
-                range: relative_caret..relative_caret,
-                reversed: false,
-            }),
-            align_find_current: true,
-        };
+        return TextInputAction::Edit { request: EditRequest::single(EditKind::Insert, UndoBoundary::Break, edit_range, replacement).with_selection_after(SelectionAfter::InsertedRange { range: relative_caret..relative_caret, reversed: false }), align_find_current: true };
     }
 
-    let kind = if text.is_empty() {
-        EditKind::Delete
-    } else {
-        EditKind::Insert
-    };
-    TextInputAction::Edit {
-        request: EditRequest::single(kind, boundary, resolved_range, text),
-        align_find_current: false,
-    }
+    let kind = if text.is_empty() { EditKind::Delete } else { EditKind::Insert };
+    TextInputAction::Edit { request: EditRequest::single(kind, boundary, resolved_range, text), align_find_current: false }
 }
 
 #[rustfmt::skip]
@@ -112,18 +61,11 @@ pub(crate) fn delete_selected_or_previous_request(tab: &EditorTab) -> Option<Edi
 }
 
 pub(crate) fn delete_selected_or_next_request(tab: &EditorTab) -> Option<EditRequest> {
-    delete_request(tab, UndoBoundary::Merge, |tab, cursor| {
-        (cursor < tab.len_chars()).then(|| cursor..next_grapheme_boundary(tab.buffer(), cursor))
-    })
+    delete_request(tab, UndoBoundary::Merge, |tab, cursor| (cursor < tab.len_chars()).then(|| cursor..next_grapheme_boundary(tab.buffer(), cursor)))
 }
 
-pub(crate) fn delete_selected_or_word_request(
-    tab: &EditorTab,
-    backward: bool,
-) -> Option<EditRequest> {
-    delete_request(tab, UndoBoundary::Break, |tab, cursor| {
-        delete_word_range_at(tab, cursor, backward)
-    })
+pub(crate) fn delete_selected_or_word_request(tab: &EditorTab, backward: bool) -> Option<EditRequest> {
+    delete_request(tab, UndoBoundary::Break, |tab, cursor| delete_word_range_at(tab, cursor, backward))
 }
 
 #[rustfmt::skip]
@@ -189,87 +131,40 @@ pub(crate) fn transpose_request(tab: &EditorTab) -> Option<EditRequest> {
     )
 }
 
-fn multi_edit_action(
-    tab: &EditorTab,
-    range: Option<&Range<usize>>,
-    text: &str,
-    boundary: UndoBoundary,
-) -> Option<TextInputAction> {
+fn multi_edit_action(tab: &EditorTab, range: Option<&Range<usize>>, text: &str, boundary: UndoBoundary) -> Option<TextInputAction> {
     if range.is_some_and(|range| *range != tab.selected_range()) {
         return None;
     }
 
-    let edit = |request, align_find_current| TextInputAction::Edit {
-        request,
-        align_find_current,
-    };
+    let edit = |request, align_find_current| TextInputAction::Edit { request, align_find_current };
 
-    if let Some(request) = request_for_each(
-        tab,
-        EditKind::Other,
-        UndoBoundary::Merge,
-        |_index, selection| {
-            // Overtype skips a closer rather than inserting text. The empty change
-            // keeps each selection in the change-set delta accounting; the cursor
-            // is then redirected past the existing closer via AbsoluteCursor.
-            let cursor = auto_pair_overtype_cursor(tab, &selection.range(), text)?;
-            Some(SelectionEdit::insert_with_absolute_cursor(
-                selection.cursor(),
-                cursor,
-            ))
-        },
-    ) {
+    if let Some(request) = request_for_each(tab, EditKind::Other, UndoBoundary::Merge, |_index, selection| {
+        // Overtype skips a closer rather than inserting text. The empty change
+        // keeps each selection in the change-set delta accounting; the cursor
+        // is then redirected past the existing closer via AbsoluteCursor.
+        let cursor = auto_pair_overtype_cursor(tab, &selection.range(), text)?;
+        Some(SelectionEdit::insert_with_absolute_cursor(selection.cursor(), cursor))
+    }) {
         return Some(edit(request, true));
     }
-    if let Some(request) = request_for_each(
-        tab,
-        EditKind::Insert,
-        UndoBoundary::Break,
-        |_index, selection| {
-            let range = auto_dedent_close_brace_range(tab, &selection.range(), text)?;
-            Some(SelectionEdit::replace_with_collapsed_end(
-                range,
-                text.to_string(),
-            ))
-        },
-    ) {
+    if let Some(request) = request_for_each(tab, EditKind::Insert, UndoBoundary::Break, |_index, selection| {
+        let range = auto_dedent_close_brace_range(tab, &selection.range(), text)?;
+        Some(SelectionEdit::replace_with_collapsed_end(range, text.to_string()))
+    }) {
         return Some(edit(request, false));
     }
-    if let Some(request) = request_for_each(
-        tab,
-        EditKind::Insert,
-        UndoBoundary::Break,
-        |_index, selection| {
-            let (edit_range, replacement, new_selection) =
-                auto_pair_surround_edit(tab, &selection.range(), text)?;
-            let relative_selection = new_selection.start.saturating_sub(edit_range.start)
-                ..new_selection.end.saturating_sub(edit_range.start);
-            Some(SelectionEdit::replace_with_inserted_range(
-                edit_range,
-                replacement,
-                relative_selection,
-                selection.is_reversed(),
-            ))
-        },
-    ) {
+    if let Some(request) = request_for_each(tab, EditKind::Insert, UndoBoundary::Break, |_index, selection| {
+        let (edit_range, replacement, new_selection) = auto_pair_surround_edit(tab, &selection.range(), text)?;
+        let relative_selection = new_selection.start.saturating_sub(edit_range.start)..new_selection.end.saturating_sub(edit_range.start);
+        Some(SelectionEdit::replace_with_inserted_range(edit_range, replacement, relative_selection, selection.is_reversed()))
+    }) {
         return Some(edit(request, true));
     }
-    if let Some(request) = request_for_each(
-        tab,
-        EditKind::Insert,
-        UndoBoundary::Break,
-        |_index, selection| {
-            let (edit_range, replacement, caret) =
-                auto_pair_insert_edit(tab, &selection.range(), text)?;
-            let relative_caret = caret.saturating_sub(edit_range.start);
-            Some(SelectionEdit::replace_with_inserted_range(
-                edit_range,
-                replacement,
-                relative_caret..relative_caret,
-                false,
-            ))
-        },
-    ) {
+    if let Some(request) = request_for_each(tab, EditKind::Insert, UndoBoundary::Break, |_index, selection| {
+        let (edit_range, replacement, caret) = auto_pair_insert_edit(tab, &selection.range(), text)?;
+        let relative_caret = caret.saturating_sub(edit_range.start);
+        Some(SelectionEdit::replace_with_inserted_range(edit_range, replacement, relative_caret..relative_caret, false))
+    }) {
         return Some(edit(request, true));
     }
 
@@ -278,29 +173,15 @@ fn multi_edit_action(
 }
 
 pub(crate) fn resolve_range(tab: &EditorTab, range: Option<Range<usize>>) -> Range<usize> {
-    let range = range
-        .or_else(|| tab.marked_range().cloned())
-        .unwrap_or_else(|| tab.selected_range());
-    floor_grapheme_boundary(tab.buffer(), range.start)
-        ..ceil_grapheme_boundary(tab.buffer(), range.end)
+    let range = range.or_else(|| tab.marked_range().cloned()).unwrap_or_else(|| tab.selected_range());
+    floor_grapheme_boundary(tab.buffer(), range.start)..ceil_grapheme_boundary(tab.buffer(), range.end)
 }
 
-pub(crate) fn marked_text_request(
-    tab: &EditorTab,
-    range: Option<Range<usize>>,
-    text: String,
-    selected_range: Option<Range<usize>>,
-) -> EditRequest {
+pub(crate) fn marked_text_request(tab: &EditorTab, range: Option<Range<usize>>, text: String, selected_range: Option<Range<usize>>) -> EditRequest {
     let range = resolve_range(tab, range);
     let inserted_chars = text.chars().count();
-    let selection_after = selected_range
-        .map(|range| SelectionAfter::InsertedRange {
-            range,
-            reversed: false,
-        })
-        .unwrap_or(SelectionAfter::CollapseToInsertedEnd);
-    let request = EditRequest::single(EditKind::Other, UndoBoundary::Break, range, text)
-        .with_selection_after(selection_after);
+    let selection_after = selected_range.map(|range| SelectionAfter::InsertedRange { range, reversed: false }).unwrap_or(SelectionAfter::CollapseToInsertedEnd);
+    let request = EditRequest::single(EditKind::Other, UndoBoundary::Break, range, text).with_selection_after(selection_after);
     if inserted_chars == 0 {
         request
     } else {
@@ -416,11 +297,7 @@ fn horizontal_whitespace_end(buffer: &ropey::Rope, mut end: usize, len: usize) -
     end
 }
 
-fn auto_dedent_close_brace_range(
-    tab: &EditorTab,
-    range: &Range<usize>,
-    text: &str,
-) -> Option<Range<usize>> {
+fn auto_dedent_close_brace_range(tab: &EditorTab, range: &Range<usize>, text: &str) -> Option<Range<usize>> {
     let ch = single_char(text)?;
     let config = tab.language_config();
     if !config.auto_dedent_closers.contains(&ch) {
@@ -438,11 +315,7 @@ fn auto_dedent_close_brace_range(
 
     let line_start = buffer.line_to_char(line);
     let line_end = line_start + display_line_char_len(buffer, line);
-    if !buffer
-        .slice(line_start..line_end)
-        .chars()
-        .all(|ch| ch == ' ')
-    {
+    if !buffer.slice(line_start..line_end).chars().all(|ch| ch == ' ') {
         return None;
     }
 
@@ -473,11 +346,7 @@ fn auto_pair_overtype_cursor(tab: &EditorTab, range: &Range<usize>, text: &str) 
     Some(range.end + 1)
 }
 
-fn auto_pair_surround_edit(
-    tab: &EditorTab,
-    range: &Range<usize>,
-    text: &str,
-) -> Option<(Range<usize>, String, Range<usize>)> {
+fn auto_pair_surround_edit(tab: &EditorTab, range: &Range<usize>, text: &str) -> Option<(Range<usize>, String, Range<usize>)> {
     if range.start >= range.end {
         return None;
     }
@@ -491,18 +360,10 @@ fn auto_pair_surround_edit(
     replacement.push(opener);
     replacement.push_str(&selected);
     replacement.push(closer);
-    Some((
-        range.clone(),
-        replacement,
-        (range.start + 1)..(range.end + 1),
-    ))
+    Some((range.clone(), replacement, (range.start + 1)..(range.end + 1)))
 }
 
-fn auto_pair_insert_edit(
-    tab: &EditorTab,
-    range: &Range<usize>,
-    text: &str,
-) -> Option<(Range<usize>, String, usize)> {
+fn auto_pair_insert_edit(tab: &EditorTab, range: &Range<usize>, text: &str) -> Option<(Range<usize>, String, usize)> {
     if range.start != range.end {
         return None;
     }
@@ -547,11 +408,7 @@ fn auto_pair_pair_for(config: &LanguageConfig, ch: char) -> Option<(char, char)>
     if is_auto_pair_quote(ch) && config.auto_pair_suppress_quotes.contains(&ch) {
         return None;
     }
-    config
-        .auto_pairs
-        .iter()
-        .copied()
-        .find(|(opener, closer)| *opener == ch || *closer == ch)
+    config.auto_pairs.iter().copied().find(|(opener, closer)| *opener == ch || *closer == ch)
 }
 
 fn is_auto_pair_quote(ch: char) -> bool {

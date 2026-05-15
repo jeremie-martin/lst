@@ -816,11 +816,7 @@ impl LstGpuiApp {
         }
     }
 
-    fn apply_autosave_completion(
-        &mut self,
-        completion: FileWriteOutcome,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply_autosave_completion(&mut self, completion: FileWriteOutcome, cx: &mut Context<Self>) {
         match completion {
             FileWriteOutcome::Written {
                 tab_id,

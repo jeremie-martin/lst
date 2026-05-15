@@ -27,12 +27,7 @@ pub(crate) struct EditHistory {
 
 impl EditHistory {
     pub(crate) fn new() -> Self {
-        Self {
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            redo_branches: Vec::new(),
-            last_edit_kind: None,
-        }
+        Self { undo_stack: Vec::new(), redo_stack: Vec::new(), redo_branches: Vec::new(), last_edit_kind: None }
     }
 
     pub(crate) fn clear(&mut self) {
@@ -46,12 +41,7 @@ impl EditHistory {
         self.last_edit_kind = None;
     }
 
-    pub(crate) fn record_edit(
-        &mut self,
-        kind: EditKind,
-        boundary: UndoBoundary,
-        snapshot_before: HistorySnapshot,
-    ) {
+    pub(crate) fn record_edit(&mut self, kind: EditKind, boundary: UndoBoundary, snapshot_before: HistorySnapshot) {
         if self.should_start_undo_group(kind, boundary) {
             self.preserve_redo_branch();
             self.undo_stack.push(snapshot_before);

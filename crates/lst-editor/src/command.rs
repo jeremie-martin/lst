@@ -1,8 +1,5 @@
 use crate::{
-    selection::{
-        line_range_at_char, next_subword_boundary, next_word_boundary, paragraph_range_at_char,
-        previous_subword_boundary, previous_word_boundary,
-    },
+    selection::{line_range_at_char, next_subword_boundary, next_word_boundary, paragraph_range_at_char, previous_subword_boundary, previous_word_boundary},
     EditorModel, RevealIntent, Selection,
 };
 

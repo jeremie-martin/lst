@@ -14,11 +14,7 @@ impl TabSet {
         tabs.extend(rest);
         repair_duplicate_tab_ids(&mut tabs);
         let next_tab_id = next_id_after(&tabs);
-        Self {
-            tabs,
-            active: 0,
-            next_tab_id,
-        }
+        Self { tabs, active: 0, next_tab_id }
     }
 
     pub(crate) fn alloc_tab_id(&mut self) -> TabId {
@@ -130,9 +126,5 @@ fn repair_duplicate_tab_ids(tabs: &mut [EditorTab]) {
 }
 
 fn next_id_after(tabs: &[EditorTab]) -> u64 {
-    tabs.iter()
-        .map(|tab| tab.id().get())
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1)
+    tabs.iter().map(|tab| tab.id().get()).max().unwrap_or(0).saturating_add(1)
 }

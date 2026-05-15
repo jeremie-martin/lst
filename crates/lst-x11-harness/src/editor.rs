@@ -1491,6 +1491,9 @@ fn plain_insert_text_key_changes_state(chord: &KeyChordSingle, state: &StateTrac
     if state.focused_input == "editor" && state.vim_mode != "INSERT" {
         return false;
     }
+    if state.focused_input == "recent_query" && matches!(chord.key, Key::Enter) {
+        return state.recent_panel_selected_path.is_some();
+    }
     matches!(chord.key, Key::Char(_) | Key::Space | Key::Tab | Key::Enter)
 }
 

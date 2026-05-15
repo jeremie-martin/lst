@@ -1,9 +1,6 @@
 use crate::{
     document::{char_to_position, position_to_char},
-    selection::{
-        next_grapheme_boundary, previous_grapheme_boundary, CursorGoal, Position, Selection,
-        SelectionState, SelectionTransform,
-    },
+    selection::{next_grapheme_boundary, previous_grapheme_boundary, CursorGoal, Position, Selection, SelectionState, SelectionTransform},
     tab::EditorTab,
     wrap,
 };
@@ -80,37 +77,6 @@ pub(crate) fn display_rows(
         let goal = if tab.selection_set().has_multiple() { goal } else { CursorGoal::Column(preferred) };
         transform_with_goal(tab, selection, target, select, goal)
     })
-}
-
-#[rustfmt::skip]
-pub(crate) fn visual_row(
-    tab: &EditorTab,
-    lines: Option<&[String]>,
-    show_wrap: bool,
-    target_row: usize,
-    select: bool,
-    wrap_columns: usize,
-) -> Option<SelectionState> {
-    if !show_wrap {
-        let current = tab.cursor_position().line;
-        return (target_row != current).then(|| vertical(tab, target_row as isize - current as isize, select, true)).flatten();
-    }
-    let lines = lines?;
-    let position = tab.cursor_position();
-    let layout = wrap::build_wrap_layout(lines, wrap_columns, true);
-    let current_row = wrap::visual_row_for_position(lines, position.line, position.column, &layout).unwrap_or(position.line);
-    let row_target = (target_row != current_row)
-        .then(|| wrap::display_row_target(lines, position.line, position.column, tab.preferred_column(), target_row as isize - current_row as isize, &layout))??;
-    let selection = selection_to(
-        tab.selection(),
-        position_to_char(tab.buffer(), Position::new(row_target.line, row_target.column)),
-        select,
-    );
-    Some(SelectionState::single_with_transform(SelectionTransform::with_columns(
-        selection,
-        CursorGoal::Column(row_target.preferred_column),
-        (!selection.has_selection()).then_some(row_target.preferred_column),
-    )))
 }
 
 #[rustfmt::skip]
@@ -226,10 +192,5 @@ fn display_line_char_len(tab: &EditorTab, line_ix: usize) -> usize {
 }
 
 fn first_non_blank_column(tab: &EditorTab, line_ix: usize) -> usize {
-    tab.buffer()
-        .line(line_ix.min(tab.buffer().len_lines().saturating_sub(1)))
-        .chars()
-        .take_while(|ch| *ch != '\n' && *ch != '\r')
-        .position(|ch| !ch.is_whitespace())
-        .unwrap_or(0)
+    tab.buffer().line(line_ix.min(tab.buffer().len_lines().saturating_sub(1))).chars().take_while(|ch| *ch != '\n' && *ch != '\r').position(|ch| !ch.is_whitespace()).unwrap_or(0)
 }

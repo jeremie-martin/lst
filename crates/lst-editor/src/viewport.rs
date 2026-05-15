@@ -29,12 +29,7 @@ pub struct Viewport {
 
 impl Default for Viewport {
     fn default() -> Self {
-        Self {
-            rows: DEFAULT_VIEWPORT_ROWS,
-            top_visual_row: 0,
-            scrolloff: DEFAULT_SCROLLOFF,
-            sidescrolloff: DEFAULT_SIDESCROLLOFF,
-        }
+        Self { rows: DEFAULT_VIEWPORT_ROWS, top_visual_row: 0, scrolloff: DEFAULT_SCROLLOFF, sidescrolloff: DEFAULT_SIDESCROLLOFF }
     }
 }
 
@@ -59,8 +54,7 @@ impl Viewport {
 
     /// The visual row a cursor should land on for `H` (screen top).
     pub fn screen_top_row(&self) -> usize {
-        self.top_visual_row
-            .saturating_add(self.effective_scrolloff())
+        self.top_visual_row.saturating_add(self.effective_scrolloff())
     }
 
     /// The visual row a cursor should land on for `M` (screen middle).
@@ -70,7 +64,6 @@ impl Viewport {
 
     /// The visual row a cursor should land on for `L` (screen bottom).
     pub fn screen_bottom_row(&self) -> usize {
-        (self.top_visual_row + self.rows.saturating_sub(1))
-            .saturating_sub(self.effective_scrolloff())
+        (self.top_visual_row + self.rows.saturating_sub(1)).saturating_sub(self.effective_scrolloff())
     }
 }
