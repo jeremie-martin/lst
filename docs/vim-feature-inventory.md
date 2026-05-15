@@ -7,8 +7,9 @@ This document records the Vim behavior that existed before commit `5e3abbe` rewr
 - Treat every item in this file as product behavior once restored.
 - Prefer X11 tests for user-visible behavior; keep source-only tests only for pure parser/motion invariants that cannot naturally be driven through the GPUI app.
 - Vim has an additional fast model-level black-box parity lane in `crates/lst-editor/tests/vim_behavior.rs`. It drives the public `EditorModel` input surface and asserts observable text, cursor, mode, find, register, and reveal outcomes. This complements, rather than replaces, X11 because exhaustive Vim command coverage would be too slow and fragile through a real display.
-- Local Neovim 0.9.5 is the oracle for stock Vim behavior. If this inventory disagrees with Neovim, Neovim takes precedence and this document should be corrected.
-- Surround and enhanced text-object behavior may be checked against local Neovim plugins when present, but only for lst's existing supported surface. When no plugin oracle is available, use the restored lst/vim-surround-style behavior recorded here.
+- `crates/lst-editor/tests/vim_oracle.rs` runs a checked-in generated corpus from `crates/lst-editor/tests/fixtures/vim_oracle.json`. Regenerate it with `python3 scripts/generate_vim_oracle_fixtures.py`.
+- Local Neovim 0.9.5 loaded with the user config is the oracle for generated stock Vim behavior. If this inventory disagrees with Neovim for a supported generated case, Neovim takes precedence and this document should be corrected.
+- Surround and enhanced text-object behavior may be checked against local Neovim plugins when present, but only for lst's existing supported surface. The generator detects `ys`/`ds`/`cs`; when no plugin oracle is available, use the restored lst/vim-surround-style behavior recorded here.
 - `modalkit 0.0.25` provides a Vim keybinding machine that emits generic modal editing actions. It is useful as the long-term parser/binding source, but it is not a direct replacement for `EditorModel` execution because lst already owns selections, transactions, find state, wrapping, viewport reveal, registers, and GPUI effects. A safe adapter must translate modalkit actions into lst commands without bypassing those contracts.
 - Surround commands are outside modalkit's default Vim surface and remain lst-specific.
 
@@ -35,6 +36,8 @@ The fast black-box suite in `crates/lst-editor/tests/vim_behavior.rs` is the exh
 | Surround | `surround_commands_cover_motion_text_object_and_delimiter_variants`, `surround_commands_cover_all_delimiters_aliases_motion_counts_and_noops` |
 | Registers | `registers_preserve_charwise_and_linewise_paste_placement`, `paste_placement_covers_charwise_linewise_before_after_and_empty_registers` |
 | X11 bridge | `x11_vim_smoke_specs_run_through_the_editor_model` mirrors the current real-display Vim acceptance cases at model level. |
+
+The generated oracle corpus currently adds 142 Neovim-derived cases across motions, operators, text objects, normal edits, registers, visual operators, and search. It records the nvim version and options used to produce the fixture. Indent commands are generated with lst's Markdown editor indent policy so the oracle checks Vim command semantics rather than the scratch nvim buffer's default `shiftwidth`.
 
 ## Modes And State
 

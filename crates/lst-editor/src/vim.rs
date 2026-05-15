@@ -1053,18 +1053,18 @@ fn compute_motion(motion: &Motion, text: &TextSnapshot, count: Option<usize>, pr
         Motion::DocumentStart => match count {
             Some(n) => {
                 let line = n.saturating_sub(1).min(text.line_count().saturating_sub(1));
-                pos(line, first_non_blank(text, line))
+                pos(line, text.cursor.column.min(line_len(text, line).saturating_sub(1)))
             }
-            None => pos(0, first_non_blank(text, 0)),
+            None => pos(0, text.cursor.column.min(line_len(text, 0).saturating_sub(1))),
         },
         Motion::DocumentEnd => match count {
             Some(n) => {
                 let line = n.saturating_sub(1).min(text.line_count().saturating_sub(1));
-                pos(line, first_non_blank(text, line))
+                pos(line, text.cursor.column.min(line_len(text, line).saturating_sub(1)))
             }
             None => {
                 let line = text.line_count().saturating_sub(1);
-                pos(line, first_non_blank(text, line))
+                pos(line, text.cursor.column.min(line_len(text, line).saturating_sub(1)))
             }
         },
         Motion::FindChar(ch) => find_char(text, *ch, n, true, false),
@@ -1076,7 +1076,7 @@ fn compute_motion(motion: &Motion, text: &TextSnapshot, count: Option<usize>, pr
                 let total = text.line_count().max(1);
                 let pct = n.clamp(1, 100);
                 let line = ((pct * total).saturating_add(99) / 100).saturating_sub(1);
-                pos(line, first_non_blank(text, line))
+                pos(line, text.cursor.column.min(line_len(text, line).saturating_sub(1)))
             }
             None => match_bracket(text).unwrap_or(text.cursor),
         },
@@ -1400,9 +1400,9 @@ fn text_object(text: &TextSnapshot, obj: char, inner: bool, count: Option<usize>
         '{' | '}' | 'B' => pair_object(text, '{', '}', inner),
         '[' | ']' => pair_object(text, '[', ']', inner),
         '<' | '>' => pair_object(text, '<', '>', inner),
-        '"' => quote_object(text, '"', inner),
-        '\'' => quote_object(text, '\'', inner),
-        '`' => quote_object(text, '`', inner),
+        '"' => quote_text_object(text, '"', inner),
+        '\'' => quote_text_object(text, '\'', inner),
+        '`' => quote_text_object(text, '`', inner),
         _ => None,
     }
 }
@@ -1604,6 +1604,27 @@ fn quote_object(text: &TextSnapshot, quote: char, inner: bool) -> Option<(Positi
     } else {
         Some((pos(line, start), pos(line, end)))
     }
+}
+
+fn quote_text_object(text: &TextSnapshot, quote: char, inner: bool) -> Option<(Position, Position)> {
+    let (from, to) = quote_object(text, quote, inner)?;
+    if inner {
+        return Some((from, to));
+    }
+
+    let chars = line_chars(text, from.line);
+    let mut start = from.column;
+    let mut end = to.column;
+    if end + 1 < chars.len() && chars[end + 1].is_whitespace() {
+        while end + 1 < chars.len() && chars[end + 1].is_whitespace() {
+            end += 1;
+        }
+    } else if start > 0 && chars[start - 1].is_whitespace() {
+        while start > 0 && chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+    }
+    Some((pos(from.line, start), pos(to.line, end)))
 }
 
 fn next_non_space_range(cells: &[GraphemeCell], mut start: usize, big: bool) -> Option<(usize, usize)> {

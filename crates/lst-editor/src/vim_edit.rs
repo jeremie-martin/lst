@@ -99,16 +99,20 @@ pub(crate) fn join_lines(tab: &EditorTab, pos: Position, count: usize) -> Option
 
     let join_end = (pos.line + count).min(tab.line_count() - 1);
     let mut joined = line_display_text(tab.buffer(), pos.line).trim_end().to_string();
-    let join_col = joined.chars().count();
-    for line in (pos.line + 1)..=join_end {
-        let line = line_display_text(tab.buffer(), line);
+    let mut join_col = joined.chars().count();
+    for line_ix in (pos.line + 1)..=join_end {
+        let line = line_display_text(tab.buffer(), line_ix);
         let trimmed = line.trim_start();
+        if line_ix == join_end {
+            join_col = joined.chars().count();
+        }
         if !trimmed.is_empty() {
             joined.push(' ');
             joined.push_str(trimmed);
         }
     }
-    let change = replace_lines_change(tab, pos.line, join_end, std::slice::from_ref(&joined))?;
+    join_col = join_col.min(joined.chars().count().saturating_sub(1));
+    let change = if join_end + 1 >= tab.line_count() && line_display_text(tab.buffer(), join_end).trim().is_empty() { TextChange::replace(tab.buffer().line_to_char(pos.line)..tab.buffer().len_chars(), joined) } else { replace_lines_change(tab, pos.line, join_end, std::slice::from_ref(&joined))? };
     Some(EditRequest::single_other_at_position(change, Position::new(pos.line, join_col)))
 }
 

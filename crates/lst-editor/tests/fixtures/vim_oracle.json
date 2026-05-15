@@ -1,0 +1,2583 @@
+{
+  "metadata": {
+    "nvim_version": "NVIM v0.9.5",
+    "surround_mappings_detected": false,
+    "options": {
+      "virtualedit": "",
+      "whichwrap": "b,s",
+      "iskeyword": "@,48-57,_,192-255",
+      "expandtab": false,
+      "shiftwidth": 8,
+      "tabstop": 8,
+      "softtabstop": 0,
+      "selection": "inclusive",
+      "selectmode": ""
+    },
+    "generator": "scripts/generate_vim_oracle_fixtures.py",
+    "oracle_profile": "user_config",
+    "editor_indent_policy": {
+      "shiftwidth": 2,
+      "tabstop": 2,
+      "softtabstop": 2,
+      "expandtab": true
+    }
+  },
+  "cases": [
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 10,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "0",
+      "name": "motion 0 line start"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 10,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "^",
+      "name": "motion first nonblank"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 17,
+          "line": 0
+        }
+      },
+      "keys": "$",
+      "name": "motion line end"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "w",
+      "name": "motion word forward"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 13,
+          "line": 0
+        }
+      },
+      "keys": "2w",
+      "name": "motion counted word forward"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 6,
+          "line": 0
+        }
+      },
+      "keys": "e",
+      "name": "motion word end"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 11,
+          "line": 0
+        }
+      },
+      "keys": "2e",
+      "name": "motion counted word end"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 13,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "b",
+      "name": "motion word backward"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 13,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "2b",
+      "name": "motion counted word backward"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "W",
+      "name": "motion big word forward"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 6,
+          "line": 0
+        }
+      },
+      "keys": "E",
+      "name": "motion big word end"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 13,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "B",
+      "name": "motion big word backward"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 8,
+        "line": 2
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "gg",
+      "name": "motion document start"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 1
+        }
+      },
+      "keys": "2gg",
+      "name": "motion counted gg"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 2
+        }
+      },
+      "keys": "G",
+      "name": "motion document end"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 1
+        }
+      },
+      "keys": "2G",
+      "name": "motion counted G"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 1
+        }
+      },
+      "keys": "50%",
+      "name": "motion percentage"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 4,
+        "line": 2
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 13,
+          "line": 2
+        }
+      },
+      "keys": "%",
+      "name": "motion matching paren"
+    },
+    {
+      "initial_text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+      "cursor": {
+        "column": 8,
+        "line": 2
+      },
+      "area": "motions",
+      "expected": {
+        "text": "  alpha beta gamma\none two three\ncall(foo[bar])",
+        "mode": "Normal",
+        "cursor": {
+          "column": 12,
+          "line": 2
+        }
+      },
+      "keys": "%",
+      "name": "motion matching bracket"
+    },
+    {
+      "initial_text": "abc abc abc",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "abc abc abc",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "fc",
+      "name": "char find forward"
+    },
+    {
+      "initial_text": "abc abc abc",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "abc abc abc",
+        "mode": "Normal",
+        "cursor": {
+          "column": 1,
+          "line": 0
+        }
+      },
+      "keys": "tc",
+      "name": "char till forward"
+    },
+    {
+      "initial_text": "abc abc abc",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "abc abc abc",
+        "mode": "Normal",
+        "cursor": {
+          "column": 5,
+          "line": 0
+        }
+      },
+      "keys": "2fb",
+      "name": "char counted find forward"
+    },
+    {
+      "initial_text": "abc abc abc",
+      "cursor": {
+        "column": 10,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "abc abc abc",
+        "mode": "Normal",
+        "cursor": {
+          "column": 9,
+          "line": 0
+        }
+      },
+      "keys": "Fb",
+      "name": "char find backward"
+    },
+    {
+      "initial_text": "abc abc abc",
+      "cursor": {
+        "column": 10,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "abc abc abc",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "T ",
+      "name": "char till backward"
+    },
+    {
+      "initial_text": "abc abc abc",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "abc abc abc",
+        "mode": "Normal",
+        "cursor": {
+          "column": 6,
+          "line": 0
+        }
+      },
+      "keys": "fc;",
+      "name": "char repeat forward"
+    },
+    {
+      "initial_text": "abc abc abc",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "motions",
+      "expected": {
+        "text": "abc abc abc",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "fc;,",
+      "name": "char reverse repeat"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "beta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "dw",
+      "name": "delete word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "X beta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "cwX<esc>",
+      "name": "change word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha beta gamma deltaalpha ",
+        "mode": "Normal",
+        "cursor": {
+          "column": 27,
+          "line": 0
+        }
+      },
+      "keys": "yw$p",
+      "name": "yank paste word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": " beta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "de",
+      "name": "delete word end"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "X beta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "ceX<esc>",
+      "name": "change word end"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha beta gamma deltaalpha",
+        "mode": "Normal",
+        "cursor": {
+          "column": 26,
+          "line": 0
+        }
+      },
+      "keys": "ye$p",
+      "name": "yank paste word end"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "d2w",
+      "name": "delete counted word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "X gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "c2wX<esc>",
+      "name": "change counted word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha beta gamma deltaalpha beta ",
+        "mode": "Normal",
+        "cursor": {
+          "column": 32,
+          "line": 0
+        }
+      },
+      "keys": "y2w$p",
+      "name": "yank paste counted word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "d$",
+      "name": "delete line end"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "X",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "c$X<esc>",
+      "name": "change line end"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha beta gamma deltaalpha beta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 43,
+          "line": 0
+        }
+      },
+      "keys": "y$$p",
+      "name": "yank paste line end"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "eta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "dfb",
+      "name": "delete find char"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "Xeta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "cfbX<esc>",
+      "name": "change find char"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha beta gamma deltaalpha b",
+        "mode": "Normal",
+        "cursor": {
+          "column": 28,
+          "line": 0
+        }
+      },
+      "keys": "yfb$p",
+      "name": "yank paste find char"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "beta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "dtb",
+      "name": "delete till char"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "Xbeta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "ctbX<esc>",
+      "name": "change till char"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha beta gamma deltaalpha ",
+        "mode": "Normal",
+        "cursor": {
+          "column": 27,
+          "line": 0
+        }
+      },
+      "keys": "ytb$p",
+      "name": "yank paste till char"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": " beta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "diw",
+      "name": "delete inner word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "X beta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "ciwX<esc>",
+      "name": "change inner word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha beta gamma deltaalpha",
+        "mode": "Normal",
+        "cursor": {
+          "column": 26,
+          "line": 0
+        }
+      },
+      "keys": "yiw$p",
+      "name": "yank paste inner word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "beta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "daw",
+      "name": "delete a word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "Xbeta gamma delta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "cawX<esc>",
+      "name": "change a word"
+    },
+    {
+      "initial_text": "alpha beta gamma delta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha beta gamma deltaalpha ",
+        "mode": "Normal",
+        "cursor": {
+          "column": 27,
+          "line": 0
+        }
+      },
+      "keys": "yaw$p",
+      "name": "yank paste a word"
+    },
+    {
+      "initial_text": "alpha beta gamma",
+      "cursor": {
+        "column": 11,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha gamma",
+        "mode": "Normal",
+        "cursor": {
+          "column": 6,
+          "line": 0
+        }
+      },
+      "keys": "db",
+      "name": "delete backward word"
+    },
+    {
+      "initial_text": "alpha beta gamma",
+      "cursor": {
+        "column": 11,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha Xgamma",
+        "mode": "Normal",
+        "cursor": {
+          "column": 6,
+          "line": 0
+        }
+      },
+      "keys": "cbX<esc>",
+      "name": "change backward word"
+    },
+    {
+      "initial_text": "alpha beta gamma",
+      "cursor": {
+        "column": 11,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "alpha beta gammabeta ",
+        "mode": "Normal",
+        "cursor": {
+          "column": 20,
+          "line": 0
+        }
+      },
+      "keys": "yb$p",
+      "name": "yank backward word paste"
+    },
+    {
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "two\nthree\nfour",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "dd",
+      "name": "delete current line"
+    },
+    {
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "three\nfour",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "2dd",
+      "name": "delete counted lines"
+    },
+    {
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "X\ntwo\nthree\nfour",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "ccX<esc>",
+      "name": "change current line"
+    },
+    {
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "X\nthree\nfour",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "2ccX<esc>",
+      "name": "change counted lines"
+    },
+    {
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "one\ntwo\nthree\nfour\none",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 4
+        }
+      },
+      "keys": "yyGp",
+      "name": "yank line paste after"
+    },
+    {
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "one\ntwo\nthree\nfour\none\ntwo",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 4
+        }
+      },
+      "keys": "2yyGp",
+      "name": "yank counted lines paste after"
+    },
+    {
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "three\nfour",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "dj",
+      "name": "delete line motion down"
+    },
+    {
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "dG",
+      "name": "delete line motion to end"
+    },
+    {
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "X\nthree\nfour",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "cjX<esc>",
+      "name": "change line motion down"
+    },
+    {
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "operators",
+      "expected": {
+        "text": "one\ntwo\nthree\nfour\none\ntwo",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 4
+        }
+      },
+      "keys": "yjGp",
+      "name": "yank line motion down paste"
+    },
+    {
+      "initial_text": "prefix \"alpha beta\" tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix \"\" tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "di\"",
+      "name": "delete inner quote"
+    },
+    {
+      "initial_text": "prefix \"alpha beta\" tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix \"X\" tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "ci\"X<esc>",
+      "name": "change inner quote"
+    },
+    {
+      "initial_text": "prefix \"alpha beta\" tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix \"alpha beta\" tailalpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 33,
+          "line": 0
+        }
+      },
+      "keys": "yi\"$p",
+      "name": "yank inner paste quote"
+    },
+    {
+      "initial_text": "prefix \"alpha beta\" tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 7,
+          "line": 0
+        }
+      },
+      "keys": "da\"",
+      "name": "delete a quote"
+    },
+    {
+      "initial_text": "prefix \"alpha beta\" tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix Xtail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 7,
+          "line": 0
+        }
+      },
+      "keys": "ca\"X<esc>",
+      "name": "change a quote"
+    },
+    {
+      "initial_text": "prefix 'alpha beta' tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix '' tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "di'",
+      "name": "delete inner single quote"
+    },
+    {
+      "initial_text": "prefix 'alpha beta' tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix 'X' tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "ci'X<esc>",
+      "name": "change inner single quote"
+    },
+    {
+      "initial_text": "prefix 'alpha beta' tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix 'alpha beta' tailalpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 33,
+          "line": 0
+        }
+      },
+      "keys": "yi'$p",
+      "name": "yank inner paste single quote"
+    },
+    {
+      "initial_text": "prefix 'alpha beta' tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 7,
+          "line": 0
+        }
+      },
+      "keys": "da'",
+      "name": "delete a single quote"
+    },
+    {
+      "initial_text": "prefix 'alpha beta' tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix Xtail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 7,
+          "line": 0
+        }
+      },
+      "keys": "ca'X<esc>",
+      "name": "change a single quote"
+    },
+    {
+      "initial_text": "prefix `alpha beta` tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix `` tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "di`",
+      "name": "delete inner backtick"
+    },
+    {
+      "initial_text": "prefix `alpha beta` tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix `X` tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "ci`X<esc>",
+      "name": "change inner backtick"
+    },
+    {
+      "initial_text": "prefix `alpha beta` tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix `alpha beta` tailalpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 33,
+          "line": 0
+        }
+      },
+      "keys": "yi`$p",
+      "name": "yank inner paste backtick"
+    },
+    {
+      "initial_text": "prefix `alpha beta` tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 7,
+          "line": 0
+        }
+      },
+      "keys": "da`",
+      "name": "delete a backtick"
+    },
+    {
+      "initial_text": "prefix `alpha beta` tail",
+      "cursor": {
+        "column": 9,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "prefix Xtail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 7,
+          "line": 0
+        }
+      },
+      "keys": "ca`X<esc>",
+      "name": "change a backtick"
+    },
+    {
+      "initial_text": "call(alpha, beta) tail",
+      "cursor": {
+        "column": 7,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "call() tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 5,
+          "line": 0
+        }
+      },
+      "keys": "di(",
+      "name": "delete inner paren"
+    },
+    {
+      "initial_text": "call(alpha, beta) tail",
+      "cursor": {
+        "column": 7,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "call(X) tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 5,
+          "line": 0
+        }
+      },
+      "keys": "ci(X<esc>",
+      "name": "change inner paren"
+    },
+    {
+      "initial_text": "call(alpha, beta) tail",
+      "cursor": {
+        "column": 7,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "call(alpha, beta) tailalpha, beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 32,
+          "line": 0
+        }
+      },
+      "keys": "yi($p",
+      "name": "yank inner paste paren"
+    },
+    {
+      "initial_text": "call(alpha, beta) tail",
+      "cursor": {
+        "column": 7,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "call tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 4,
+          "line": 0
+        }
+      },
+      "keys": "da(",
+      "name": "delete a paren"
+    },
+    {
+      "initial_text": "call(alpha, beta) tail",
+      "cursor": {
+        "column": 7,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "callX tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 4,
+          "line": 0
+        }
+      },
+      "keys": "ca(X<esc>",
+      "name": "change a paren"
+    },
+    {
+      "initial_text": "items[alpha, beta] tail",
+      "cursor": {
+        "column": 8,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "items[] tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 6,
+          "line": 0
+        }
+      },
+      "keys": "di[",
+      "name": "delete inner bracket"
+    },
+    {
+      "initial_text": "items[alpha, beta] tail",
+      "cursor": {
+        "column": 8,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "items[X] tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 6,
+          "line": 0
+        }
+      },
+      "keys": "ci[X<esc>",
+      "name": "change inner bracket"
+    },
+    {
+      "initial_text": "items[alpha, beta] tail",
+      "cursor": {
+        "column": 8,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "items[alpha, beta] tailalpha, beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 33,
+          "line": 0
+        }
+      },
+      "keys": "yi[$p",
+      "name": "yank inner paste bracket"
+    },
+    {
+      "initial_text": "items[alpha, beta] tail",
+      "cursor": {
+        "column": 8,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "items tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 5,
+          "line": 0
+        }
+      },
+      "keys": "da[",
+      "name": "delete a bracket"
+    },
+    {
+      "initial_text": "items[alpha, beta] tail",
+      "cursor": {
+        "column": 8,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "itemsX tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 5,
+          "line": 0
+        }
+      },
+      "keys": "ca[X<esc>",
+      "name": "change a bracket"
+    },
+    {
+      "initial_text": "fn { alpha beta } tail",
+      "cursor": {
+        "column": 6,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "fn {} tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 4,
+          "line": 0
+        }
+      },
+      "keys": "di{",
+      "name": "delete inner brace"
+    },
+    {
+      "initial_text": "fn { alpha beta } tail",
+      "cursor": {
+        "column": 6,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "fn {X} tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 4,
+          "line": 0
+        }
+      },
+      "keys": "ci{X<esc>",
+      "name": "change inner brace"
+    },
+    {
+      "initial_text": "fn { alpha beta } tail",
+      "cursor": {
+        "column": 6,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "fn { alpha beta } tail alpha beta ",
+        "mode": "Normal",
+        "cursor": {
+          "column": 33,
+          "line": 0
+        }
+      },
+      "keys": "yi{$p",
+      "name": "yank inner paste brace"
+    },
+    {
+      "initial_text": "fn { alpha beta } tail",
+      "cursor": {
+        "column": 6,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "fn  tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 3,
+          "line": 0
+        }
+      },
+      "keys": "da{",
+      "name": "delete a brace"
+    },
+    {
+      "initial_text": "fn { alpha beta } tail",
+      "cursor": {
+        "column": 6,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "fn X tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 3,
+          "line": 0
+        }
+      },
+      "keys": "ca{X<esc>",
+      "name": "change a brace"
+    },
+    {
+      "initial_text": "tag<alpha beta> tail",
+      "cursor": {
+        "column": 5,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "tag<> tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 4,
+          "line": 0
+        }
+      },
+      "keys": "di>",
+      "name": "delete inner angle"
+    },
+    {
+      "initial_text": "tag<alpha beta> tail",
+      "cursor": {
+        "column": 5,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "tag<X> tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 4,
+          "line": 0
+        }
+      },
+      "keys": "ci>X<esc>",
+      "name": "change inner angle"
+    },
+    {
+      "initial_text": "tag<alpha beta> tail",
+      "cursor": {
+        "column": 5,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "tag<alpha beta> tailalpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 29,
+          "line": 0
+        }
+      },
+      "keys": "yi>$p",
+      "name": "yank inner paste angle"
+    },
+    {
+      "initial_text": "tag<alpha beta> tail",
+      "cursor": {
+        "column": 5,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "tag tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 3,
+          "line": 0
+        }
+      },
+      "keys": "da>",
+      "name": "delete a angle"
+    },
+    {
+      "initial_text": "tag<alpha beta> tail",
+      "cursor": {
+        "column": 5,
+        "line": 0
+      },
+      "area": "text_objects",
+      "expected": {
+        "text": "tagX tail",
+        "mode": "Normal",
+        "cursor": {
+          "column": 3,
+          "line": 0
+        }
+      },
+      "keys": "ca>X<esc>",
+      "name": "change a angle"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  aXlpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 3,
+          "line": 0
+        }
+      },
+      "keys": "aX<esc>",
+      "name": "append after cursor"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  Xalpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "iX<esc>",
+      "name": "insert before cursor"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  Xalpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "IX<esc>",
+      "name": "insert first nonblank"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  alpha betaX",
+        "mode": "Normal",
+        "cursor": {
+          "column": 12,
+          "line": 0
+        }
+      },
+      "keys": "AX<esc>",
+      "name": "append line end"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  lpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "x",
+      "name": "delete char"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  ha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "3x",
+      "name": "delete counted chars"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": " alpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 1,
+          "line": 0
+        }
+      },
+      "keys": "X",
+      "name": "delete before cursor"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  Xlpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "sX<esc>",
+      "name": "substitute char"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  Xha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "3sX<esc>",
+      "name": "substitute counted chars"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  ",
+        "mode": "Normal",
+        "cursor": {
+          "column": 1,
+          "line": 0
+        }
+      },
+      "keys": "D",
+      "name": "delete to end"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  X",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "CX<esc>",
+      "name": "change to end"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  Xlpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "rX",
+      "name": "replace char"
+    },
+    {
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  XXXha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 4,
+          "line": 0
+        }
+      },
+      "keys": "3rX",
+      "name": "replace counted chars"
+    },
+    {
+      "initial_text": "  alpha\nbeta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  alpha\n  X\nbeta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 1
+        }
+      },
+      "keys": "oX<esc>",
+      "name": "open line below"
+    },
+    {
+      "initial_text": "  alpha\nbeta",
+      "cursor": {
+        "column": 0,
+        "line": 1
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  alpha\nX\nbeta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 1
+        }
+      },
+      "keys": "OX<esc>",
+      "name": "open line above"
+    },
+    {
+      "initial_text": "  alpha\nbeta",
+      "cursor": {
+        "column": 2,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  new\nbeta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 4,
+          "line": 0
+        }
+      },
+      "keys": "Snew<esc>",
+      "name": "change full line"
+    },
+    {
+      "initial_text": "alpha\n beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "alpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 5,
+          "line": 0
+        }
+      },
+      "keys": "J",
+      "name": "join following line"
+    },
+    {
+      "initial_text": "a\n b\n c\nd",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "a b c\nd",
+        "mode": "Normal",
+        "cursor": {
+          "column": 3,
+          "line": 0
+        }
+      },
+      "keys": "3J",
+      "name": "join counted lines"
+    },
+    {
+      "initial_text": "a\n b\n",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "a b",
+        "mode": "Normal",
+        "cursor": {
+          "column": 2,
+          "line": 0
+        }
+      },
+      "keys": "3J",
+      "name": "join counted lines with final blank"
+    },
+    {
+      "initial_text": "alpha\nbeta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  alpha\nbeta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": ">>",
+      "name": "indent current line"
+    },
+    {
+      "initial_text": "alpha\nbeta\ngamma",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "  alpha\n  beta\ngamma",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "2>>",
+      "name": "indent counted lines"
+    },
+    {
+      "initial_text": "  alpha\n  beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "alpha\n  beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "<<",
+      "name": "outdent current line"
+    },
+    {
+      "initial_text": "  alpha\n  beta\ngamma",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "normal_edits",
+      "expected": {
+        "text": "alpha\nbeta\ngamma",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "2<<",
+      "name": "outdent counted lines"
+    },
+    {
+      "initial_text": "alpha beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "registers",
+      "expected": {
+        "text": "betaalpha ",
+        "mode": "Normal",
+        "cursor": {
+          "column": 9,
+          "line": 0
+        }
+      },
+      "keys": "dw$p",
+      "name": "char delete paste after"
+    },
+    {
+      "initial_text": "alpha beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "registers",
+      "expected": {
+        "text": "alpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 5,
+          "line": 0
+        }
+      },
+      "keys": "dwP",
+      "name": "char delete paste before"
+    },
+    {
+      "initial_text": "alpha beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "registers",
+      "expected": {
+        "text": "alpha betaalpha",
+        "mode": "Normal",
+        "cursor": {
+          "column": 14,
+          "line": 0
+        }
+      },
+      "keys": "yiw$p",
+      "name": "inner word yank paste after"
+    },
+    {
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "registers",
+      "expected": {
+        "text": "two\nthree\none",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 2
+        }
+      },
+      "keys": "ddGp",
+      "name": "line delete paste after"
+    },
+    {
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "column": 0,
+        "line": 1
+      },
+      "area": "registers",
+      "expected": {
+        "text": "two\none\nthree",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "ddggP",
+      "name": "line delete paste before"
+    },
+    {
+      "initial_text": "alpha beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "registers",
+      "expected": {
+        "text": "alpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "p",
+      "name": "empty paste after"
+    },
+    {
+      "initial_text": "alpha beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "registers",
+      "expected": {
+        "text": "alpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "P",
+      "name": "empty paste before"
+    },
+    {
+      "initial_text": "alpha beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "visual",
+      "expected": {
+        "text": " beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "viwd",
+      "name": "visual delete inner word"
+    },
+    {
+      "initial_text": "alpha beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "visual",
+      "expected": {
+        "text": "X beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "viwcX<esc>",
+      "name": "visual change inner word"
+    },
+    {
+      "initial_text": "alpha beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "visual",
+      "expected": {
+        "text": "ALPHA beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "viwU",
+      "name": "visual uppercase inner word"
+    },
+    {
+      "initial_text": "ALPHA beta",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "visual",
+      "expected": {
+        "text": "alpha beta",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "viwu",
+      "name": "visual lowercase inner word"
+    },
+    {
+      "initial_text": "alpha beta gamma",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "visual",
+      "expected": {
+        "text": "eta gamma",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "vwd",
+      "name": "visual delete forward word"
+    },
+    {
+      "initial_text": "alpha beta gamma",
+      "cursor": {
+        "column": 11,
+        "line": 0
+      },
+      "area": "visual",
+      "expected": {
+        "text": "alpha BETA Gamma",
+        "mode": "Normal",
+        "cursor": {
+          "column": 6,
+          "line": 0
+        }
+      },
+      "keys": "vbU",
+      "name": "visual uppercase backward word"
+    },
+    {
+      "initial_text": "alpha\nbeta\ngamma",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "visual",
+      "expected": {
+        "text": "gamma",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "Vjd",
+      "name": "visual line delete"
+    },
+    {
+      "initial_text": "alpha\nbeta\ngamma",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "visual",
+      "expected": {
+        "text": "X\ngamma",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "VjcX<esc>",
+      "name": "visual line change"
+    },
+    {
+      "initial_text": "alpha\nbeta\ngamma",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "visual",
+      "expected": {
+        "text": "  alpha\n  beta\ngamma",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "Vj>",
+      "name": "visual line indent"
+    },
+    {
+      "initial_text": "  alpha\n  beta\ngamma",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "visual",
+      "expected": {
+        "text": "alpha\nbeta\ngamma",
+        "mode": "Normal",
+        "cursor": {
+          "column": 0,
+          "line": 0
+        }
+      },
+      "keys": "Vj<",
+      "name": "visual line outdent"
+    },
+    {
+      "initial_text": "foo bar foo baz foo",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "search",
+      "expected": {
+        "text": "foo bar foo baz foo",
+        "mode": "Normal",
+        "cursor": {
+          "column": 16,
+          "line": 0
+        }
+      },
+      "keys": "/foo<enter>n",
+      "name": "search forward and repeat"
+    },
+    {
+      "initial_text": "foo bar foo baz foo",
+      "cursor": {
+        "column": 16,
+        "line": 0
+      },
+      "area": "search",
+      "expected": {
+        "text": "foo bar foo baz foo",
+        "mode": "Normal",
+        "cursor": {
+          "column": 16,
+          "line": 0
+        }
+      },
+      "keys": "/foo<enter>N",
+      "name": "search backward repeat"
+    },
+    {
+      "initial_text": "foo bar foo baz foo",
+      "cursor": {
+        "column": 0,
+        "line": 0
+      },
+      "area": "search",
+      "expected": {
+        "text": "foo bar foo baz foo",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "*",
+      "name": "star search"
+    },
+    {
+      "initial_text": "foo bar foo baz foo",
+      "cursor": {
+        "column": 16,
+        "line": 0
+      },
+      "area": "search",
+      "expected": {
+        "text": "foo bar foo baz foo",
+        "mode": "Normal",
+        "cursor": {
+          "column": 8,
+          "line": 0
+        }
+      },
+      "keys": "#",
+      "name": "hash search"
+    }
+  ]
+}
