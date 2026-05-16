@@ -17,6 +17,8 @@ const COPY_PASTE_CYCLES: usize = 16;
 const SEARCH_NEXT_STEPS: usize = 512;
 const SEARCH_WORD_CYCLES: usize = 32;
 const DELETE_ALL_UNDO_CYCLES: usize = 8;
+const EDIT_AFTER_MUTATION_LINES: usize = 65_536;
+const EDIT_AFTER_MUTATION_CYCLES: usize = 16;
 const ORACLE_FIXTURE: &str = include_str!("../tests/fixtures/vim_oracle.json");
 
 fn bench_vim_motion(c: &mut Criterion) {
@@ -107,6 +109,29 @@ fn bench_vim_edit(c: &mut Criterion) {
             },
         );
     }
+
+    group.finish();
+}
+
+fn bench_vim_edit_after_mutation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("vim_edit_after_mutation");
+    let text = generated_vim_corpus(EDIT_AFTER_MUTATION_LINES);
+    let line = EDIT_AFTER_MUTATION_LINES / 2;
+
+    group.throughput(Throughput::Bytes((text.len() * EDIT_AFTER_MUTATION_CYCLES) as u64));
+    group.bench_function("delete_then_next_key_huge", |b| {
+        b.iter_batched(
+            || VimDriver::normal_at(&text, line, 0),
+            |mut driver| {
+                for _ in 0..EDIT_AFTER_MUTATION_CYCLES {
+                    driver.set_cursor(line, 0);
+                    driver.keys("dwju");
+                }
+                black_box(driver.text_len());
+            },
+            BatchSize::LargeInput,
+        );
+    });
 
     group.finish();
 }
@@ -615,6 +640,7 @@ criterion_group! {
     targets =
         bench_vim_motion,
         bench_vim_edit,
+        bench_vim_edit_after_mutation,
         bench_vim_visual,
         bench_vim_copy_paste,
         bench_vim_search,

@@ -696,19 +696,26 @@ impl EditorModel {
         self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
         self.queue_effect(EditorEffect::WritePrimary(text));
     }
-    fn vim_snapshot(&mut self) -> vim::TextSnapshot {
-        let cursor = self.vim.snapshot_cursor(self.active_cursor_position());
-        let lines = self.active_tab_mut().lines();
-        vim::TextSnapshot { lines, cursor }
-    }
     pub fn handle_vim_key(&mut self, key: vim::Key, mods: vim::Modifiers, wrap_columns: usize) -> bool {
-        let snapshot = self.vim_snapshot();
-        let commands = self.vim.handle_key(&key, mods, &snapshot);
+        let tab = self.tabs.active();
+        let cursor = self.vim.snapshot_cursor(tab.cursor_position());
+        let text = vim::VimText {
+            buffer: tab.buffer(),
+            cached_lines: tab.cached_lines(),
+            cursor,
+        };
+        let commands = self.vim.handle_key(&key, mods, &text);
         self.execute_vim_commands(commands, wrap_columns)
     }
     pub fn handle_vim_escape(&mut self) -> bool {
-        let snapshot = self.vim_snapshot();
-        let commands = self.vim.enter_normal_from_escape(snapshot.cursor, &snapshot);
+        let cursor = self.vim.snapshot_cursor(self.tabs.active().cursor_position());
+        let cached_lines = self.tabs.active_mut().lines();
+        let text = vim::VimText {
+            buffer: self.tabs.active().buffer(),
+            cached_lines: Some(cached_lines.as_ref()),
+            cursor,
+        };
+        let commands = self.vim.enter_normal_from_escape(cursor, &text);
         self.execute_vim_commands(commands, 0)
     }
     fn execute_vim_commands(&mut self, commands: Vec<vim::VimCommand>, wrap_columns: usize) -> bool {
@@ -904,8 +911,14 @@ impl EditorModel {
     }
     fn move_to_vim_search_target(&mut self, target: Position) {
         if matches!(self.vim.mode, vim::Mode::Visual | vim::Mode::VisualLine) {
-            let snapshot = self.vim_snapshot();
-            if let vim::VimCommand::Select(selection) = self.vim.selection_command(target, &snapshot) {
+            let tab = self.tabs.active();
+            let cursor = self.vim.snapshot_cursor(tab.cursor_position());
+            let text = vim::VimText {
+                buffer: tab.buffer(),
+                cached_lines: tab.cached_lines(),
+                cursor,
+            };
+            if let vim::VimCommand::Select(selection) = self.vim.selection_command(target, &text) {
                 self.apply_vim_select(selection.anchor, selection.head);
             }
         } else {

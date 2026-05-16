@@ -403,6 +403,12 @@ impl EditorTab {
         });
         lines
     }
+    pub(crate) fn cached_lines(&self) -> Option<&[String]> {
+        self.line_cache
+            .as_ref()
+            .filter(|cache| cache.revision == self.revision)
+            .map(|cache| cache.lines.as_ref())
+    }
     pub(crate) fn select_all(&mut self) {
         let end = self.len_chars();
         self.selection.set_single(Selection::from_range(0..end, false));
