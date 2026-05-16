@@ -5,7 +5,7 @@ use gpui::{
 use lst_editor::{
     selection::{drag_selection_range, line_range_at_char, paragraph_range_at_char, word_range_at_char},
     vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
-    EditorCommand as Command, RevealIntent, Selection,
+    RevealIntent, Selection,
 };
 use ropey::Rope;
 use std::{ops::Range, time::Instant};
@@ -14,6 +14,7 @@ use crate::{
     elapsed_ms,
     ui::theme::metrics,
     viewport::{code_origin_x, row_contains_cursor, scroll_left_for, scroll_to_top, scroll_top_for, x_for_global_char},
+    workspace_action::workspace_fallback_command,
     FocusTarget, LstGpuiApp,
 };
 
@@ -370,6 +371,7 @@ impl LstGpuiApp {
     pub(crate) fn maybe_handle_recent_modifier_key_action(
         &mut self,
         event: &KeyDownEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         if !self.editor_input_is_focused() {
@@ -395,89 +397,18 @@ impl LstGpuiApp {
             return false;
         }
 
-        macro_rules! run_command {
-            ($command:expr) => {{
-                self.execute_model_command(cx, $command);
-                true
-            }};
-        }
-
-        let mut preserves_ctrl_k_pending = false;
-        let handled = if modifiers.control && modifiers.shift && modifiers.alt && !modifiers.platform {
-            match key.as_str() {
-                "down" | "up" => run_command!(Command::DuplicateLine),
-                _ => false,
-            }
-        } else if modifiers.control && modifiers.shift && !modifiers.alt && !modifiers.platform {
-            match key.as_str() {
-                "left" => run_command!(Command::MoveWord(true, true)),
-                "right" => run_command!(Command::MoveWord(false, true)),
-                "l" => run_command!(Command::SelectAllOccurrences),
-                _ => false,
-            }
-        } else if modifiers.control && !modifiers.shift && !modifiers.alt && !modifiers.platform {
-            match key.as_str() {
-                "a" => run_command!(Command::SelectAll),
-                "d" => {
-                    let skip = self.x11_ctrl_k_pending;
-                    self.x11_ctrl_k_pending = false;
-                    run_command!(if skip {
-                        Command::SkipNextOccurrence
-                    } else {
-                        Command::SelectNextOccurrence
-                    })
-                }
-                "g" => {
-                    self.x11_ctrl_k_pending = false;
-                    run_command!(Command::ToggleGotoLinePanel)
-                }
-                "k" => {
-                    self.x11_ctrl_k_pending = true;
-                    preserves_ctrl_k_pending = true;
-                    cx.notify();
-                    true
-                }
-                _ => {
-                    self.x11_ctrl_k_pending = false;
-                    false
-                }
-            }
-        } else if modifiers.shift && !modifiers.control && !modifiers.alt && !modifiers.platform {
-            match key.as_str() {
-                "left" => run_command!(Command::MoveHorizontal(-1, true)),
-                "right" => run_command!(Command::MoveHorizontal(1, true)),
-                "tab" => run_command!(Command::Outdent),
-                _ => false,
-            }
-        } else if modifiers.platform && modifiers.shift && !modifiers.control && !modifiers.alt {
-            match key.as_str() {
-                "left" | "home" => run_command!(Command::MoveLineBoundary(false, true)),
-                "right" | "end" => run_command!(Command::MoveLineBoundary(true, true)),
-                _ => false,
-            }
-        } else if modifiers.alt && modifiers.shift && !modifiers.control && !modifiers.platform {
-            match key.as_str() {
-                "up" => run_command!(Command::AddCursorAbove),
-                "down" => run_command!(Command::AddCursorBelow),
-                _ => false,
-            }
+        if let Some(command) = workspace_fallback_command(&key, modifiers) {
+            self.dispatch_workspace_command(command, window, cx);
+            cx.stop_propagation();
+            true
         } else {
-            false
-        };
-
-        if handled {
-            self.recent_modifier_chord = None;
-            self.modifier_chord_accumulated = Modifiers::default();
-            if !preserves_ctrl_k_pending {
+            if !modifiers.shift || modifiers.control || modifiers.alt || modifiers.platform {
+                self.recent_modifier_chord = None;
+                self.modifier_chord_accumulated = Modifiers::default();
                 self.x11_ctrl_k_pending = false;
             }
-            cx.stop_propagation();
-        } else if !modifiers.shift || modifiers.control || modifiers.alt || modifiers.platform {
-            self.recent_modifier_chord = None;
-            self.modifier_chord_accumulated = Modifiers::default();
-            self.x11_ctrl_k_pending = false;
+            false
         }
-        handled
     }
 
     pub(crate) fn maybe_handle_unmodified_key_action(
@@ -494,16 +425,12 @@ impl LstGpuiApp {
             return false;
         }
 
-        match event.keystroke.key.as_str() {
-            "pageup" | "pagedown" => {
-                let down = event.keystroke.key == "pagedown";
-                let wrap_columns = self.active_wrap_columns(window, cx);
-                self.x11_ctrl_k_pending = false;
-                self.execute_model_command(cx, Command::Page(down, false, wrap_columns));
-                cx.stop_propagation();
-                true
-            }
-            _ => false,
+        if let Some(command) = workspace_fallback_command(event.keystroke.key.as_str(), Modifiers::default()) {
+            self.dispatch_workspace_command(command, window, cx);
+            cx.stop_propagation();
+            true
+        } else {
+            false
         }
     }
 

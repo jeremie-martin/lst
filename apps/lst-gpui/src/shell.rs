@@ -10,7 +10,6 @@ use gpui::{
 };
 use lst_editor::EditorCommand as Command;
 
-use crate::actions::attach_workspace_actions;
 use crate::recent::RecentPreviewState;
 use crate::syntax::syntax_mode_for_language;
 use crate::viewport::{
@@ -18,6 +17,7 @@ use crate::viewport::{
     paint_viewport, prepare_viewport_paint_state, scroll_left_for, ViewportPaintInput, ViewportPreparation,
     WrapLayoutInput,
 };
+use crate::workspace_action::attach_workspace_actions;
 use crate::{FocusTarget, LstGpuiApp, RECENT_CARD_BASIS};
 
 impl LstGpuiApp {
@@ -662,7 +662,7 @@ impl LstGpuiApp {
             }
         }
 
-        if self.maybe_handle_recent_modifier_key_action(event, cx) {
+        if self.maybe_handle_recent_modifier_key_action(event, window, cx) {
             return;
         }
         if self.maybe_handle_unmodified_key_action(event, window, cx) {

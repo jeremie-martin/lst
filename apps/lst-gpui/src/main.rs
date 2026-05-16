@@ -1,13 +1,11 @@
 use gpui::{
-    actions, prelude::*, px, size, App, Application, Bounds, Context, Entity, FocusHandle, Focusable, Modifiers,
-    Pixels, ScrollHandle, Subscription, Window, WindowBounds, WindowOptions,
+    prelude::*, px, size, App, Application, Bounds, Context, Entity, FocusHandle, Focusable, Modifiers, Pixels,
+    ScrollHandle, Subscription, Window, WindowBounds, WindowOptions,
 };
 
-mod actions;
 mod diagnostics;
 mod editor_view;
 mod input;
-mod keymap;
 mod launch;
 mod llm;
 mod recent;
@@ -17,6 +15,7 @@ mod state_trace;
 mod syntax;
 mod ui;
 mod viewport;
+mod workspace_action;
 
 use crate::ui::{
     input_keybindings,
@@ -24,7 +23,6 @@ use crate::ui::{
     InputField, InputFieldEvent,
 };
 use input::ActiveDragSelection;
-use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
     EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FocusTarget, Position, RevealIntent, TabId,
@@ -48,108 +46,9 @@ use syntax::{
     SyntaxSpan,
 };
 use viewport::{scroll_to_left, ViewportCache, ViewportGeometry};
+use workspace_action::editor_keybindings;
 
 pub(crate) const RECENT_CARD_BASIS: f32 = 260.0;
-actions!(
-    lst_gpui,
-    [
-        NewTab,
-        OpenFile,
-        SaveFile,
-        SaveFileAs,
-        CloseActiveTab,
-        NextTab,
-        PrevTab,
-        MoveTabLeft,
-        MoveTabRight,
-        ToggleWrap,
-        ToggleLineNumberMode,
-        ToggleTheme,
-        CopySelection,
-        CutSelection,
-        PasteClipboard,
-        MoveLeft,
-        MoveRight,
-        MoveUp,
-        MoveDown,
-        MoveWordLeft,
-        MoveWordRight,
-        MoveSubwordLeft,
-        MoveSubwordRight,
-        MovePageUp,
-        MovePageDown,
-        MoveDocumentStart,
-        MoveDocumentEnd,
-        SelectLeft,
-        SelectRight,
-        SelectUp,
-        SelectDown,
-        SelectWordLeft,
-        SelectWordRight,
-        SelectSubwordLeft,
-        SelectSubwordRight,
-        SelectPageUp,
-        SelectPageDown,
-        SelectDocumentStart,
-        SelectDocumentEnd,
-        MoveSmartHome,
-        MoveLineStart,
-        MoveLineEnd,
-        SelectSmartHome,
-        SelectLineStart,
-        SelectLineEnd,
-        Backspace,
-        DeleteForward,
-        DeleteWordBackward,
-        DeleteWordForward,
-        InsertNewline,
-        InsertTab,
-        OutdentSelection,
-        SelectAll,
-        SelectNextOccurrence,
-        SelectAllOccurrences,
-        SelectFindMatches,
-        SkipNextOccurrence,
-        PopSelectionCursor,
-        AddCursorAbove,
-        AddCursorBelow,
-        AddCursorsToLineEnds,
-        SelectLine,
-        SelectParagraph,
-        Undo,
-        Redo,
-        SwapRedoBranch,
-        FindOpen,
-        FindOpenReplace,
-        FindNext,
-        FindPrev,
-        ReplaceOne,
-        ReplaceAll,
-        ToggleFindCase,
-        ToggleFindWholeWord,
-        ToggleFindRegex,
-        ToggleFindInSelection,
-        GotoLineOpen,
-        DeleteLine,
-        MoveLineUp,
-        MoveLineDown,
-        DuplicateLine,
-        ToggleComment,
-        ToggleBlockComment,
-        TransposeChars,
-        ToggleOvertype,
-        ToggleBookmark,
-        NextBookmark,
-        PreviousBookmark,
-        ReopenClosedTab,
-        CleanupText,
-        ToggleRecentFiles,
-        ZoomIn,
-        ZoomOut,
-        ZoomReset,
-        Quit,
-    ]
-);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingAfterSave {

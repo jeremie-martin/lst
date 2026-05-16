@@ -156,6 +156,19 @@ fn named_and_page_motions_cover_keyboard_boundary_paths() {
 }
 
 #[test]
+fn command_modified_named_keys_are_left_for_the_caller() {
+    let mut harness = VimHarness::normal_at("abcdef\nline 2\nline 3\nline 4", 2, 3);
+
+    harness.keys("d<cmd-left>");
+    harness.expect_cursor(2, 3);
+    harness.expect_pending("d");
+
+    harness.keys("<cmd-pageup>");
+    harness.expect_cursor(2, 3);
+    harness.expect_pending("d");
+}
+
+#[test]
 fn word_and_big_word_motions_cover_counts_punctuation_empty_lines_and_unicode() {
     let cases = [
         ("counted word forward", "aa bb cc", (0, 0), "2w", (0, 6)),

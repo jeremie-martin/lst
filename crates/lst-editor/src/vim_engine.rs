@@ -35,12 +35,7 @@ struct PositionRange {
 
 impl EditorModel {
     pub(crate) fn vim_handle_key(&mut self, key: Key, mods: vim::Modifiers, _wrap_columns: usize) -> bool {
-        if mods.command && key == Key::Character("r".into()) {
-            self.execute(EditorCommand::Redo);
-            self.vim_collapse_restored_selection();
-            return true;
-        }
-        if mods.command {
+        if mods.command && !mods.control && matches!(&key, Key::Named(_)) {
             return false;
         }
         if !mods.control {
@@ -80,6 +75,14 @@ impl EditorModel {
         let Some(ch) = text.chars().next() else { return false };
         if mods.control {
             return self.vim_control(ch);
+        }
+        if mods.command && ch == 'r' {
+            self.execute(EditorCommand::Redo);
+            self.vim_collapse_restored_selection();
+            return true;
+        }
+        if mods.command {
+            return false;
         }
         if self.vim.mode == vim::Mode::Insert {
             return false;
