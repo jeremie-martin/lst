@@ -96,49 +96,25 @@ pub enum VimCommand {
     Select(VisualState),
     Delete(SelectionSpan),
     Change(SelectionSpan),
-    Yank {
-        span: SelectionSpan,
-        move_after: bool,
-    },
+    Yank(SelectionSpan, bool),
     SetRegister(Register),
-    Shift {
-        span: SelectionSpan,
-        indent: bool,
-        move_after: bool,
-    },
-    PasteSelection {
-        span: SelectionSpan,
-        preserve_register: bool,
-    },
-    TransformCase {
-        span: SelectionSpan,
-        uppercase: bool,
-    },
+    Shift(SelectionSpan, bool, bool),
+    PasteSelection(SelectionSpan, bool),
+    TransformCase(SelectionSpan, bool),
     EnterInsert,
-    PasteAfter,
-    PasteBefore,
-    OpenLineBelow,
-    OpenLineAbove,
+    Paste(bool),
+    OpenLine(bool),
     JoinLines(usize),
     ReplaceChar(char, usize),
     Undo,
     Redo,
-    OpenFind {
-        backward: bool,
-    },
-    FindNext,
-    FindPrev,
+    OpenFind(bool),
+    Find(bool),
     SearchWordUnderCursor(String, bool),
-    HalfPageDown,
-    HalfPageUp,
-    PageDown,
-    PageUp,
-    MoveToScreenTop,
-    MoveToScreenMiddle,
-    MoveToScreenBottom,
+    Page(bool, bool),
+    MoveToScreen(ScreenRow),
     ScrollCursor(RevealIntent),
     JumpToLastEdit(bool),
-    Noop,
 }
 
 pub struct TextSnapshot {
@@ -157,6 +133,13 @@ pub enum Register {
 pub struct VisualState {
     pub anchor: Position,
     pub head: Position,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScreenRow {
+    Top,
+    Middle,
+    Bottom,
 }
 
 // -- Supporting types --------------------------------------------------------
@@ -183,22 +166,15 @@ impl SelectionSpan {
     }
 
     fn paste(self, preserve_register: bool) -> Vec<VimCommand> {
-        vec![VimCommand::PasteSelection {
-            span: self,
-            preserve_register,
-        }]
+        vec![VimCommand::PasteSelection(self, preserve_register)]
     }
 
     fn shift(self, indent: bool) -> Vec<VimCommand> {
-        vec![VimCommand::Shift {
-            span: self,
-            indent,
-            move_after: true,
-        }]
+        vec![VimCommand::Shift(self, indent, true)]
     }
 
     fn transform_case(self, uppercase: bool) -> Vec<VimCommand> {
-        vec![VimCommand::TransformCase { span: self, uppercase }]
+        vec![VimCommand::TransformCase(self, uppercase)]
     }
 }
 
@@ -577,18 +553,10 @@ impl VimState {
         match c {
             '/' | '?' => {
                 self.last_search_backward = c == '?';
-                Some(VimCommand::OpenFind { backward: c == '?' })
+                Some(VimCommand::OpenFind(c == '?'))
             }
-            'n' => Some(if self.last_search_backward {
-                VimCommand::FindPrev
-            } else {
-                VimCommand::FindNext
-            }),
-            'N' => Some(if self.last_search_backward {
-                VimCommand::FindNext
-            } else {
-                VimCommand::FindPrev
-            }),
+            'n' => Some(VimCommand::Find(!self.last_search_backward)),
+            'N' => Some(VimCommand::Find(self.last_search_backward)),
             _ => None,
         }
     }
@@ -623,7 +591,7 @@ impl VimState {
                 if col != cursor.column {
                     vec![VimCommand::MoveTo(pos(cursor.line, col))]
                 } else {
-                    vec![VimCommand::Noop]
+                    vec![]
                 }
             }
             Mode::Visual | Mode::VisualLine => {
@@ -632,7 +600,7 @@ impl VimState {
             }
             Mode::Normal => {
                 self.clear_command_state();
-                vec![VimCommand::Noop]
+                vec![]
             }
         }
     }
@@ -652,7 +620,7 @@ impl VimState {
                     return vec![VimCommand::Redo];
                 }
             }
-            return vec![VimCommand::Noop];
+            return vec![];
         }
 
         if let Some(action) = named_key_action(key) {
@@ -660,7 +628,7 @@ impl VimState {
         }
 
         let Some(c) = key_char(key) else {
-            return vec![VimCommand::Noop];
+            return vec![];
         };
 
         if let Some(prefix) = self.pending.take_prefix() {
@@ -673,7 +641,7 @@ impl VimState {
         if c.is_ascii_digit() {
             let digit = c.to_digit(10).unwrap() as usize;
             self.pending.add_digit(digit);
-            return vec![VimCommand::Noop];
+            return vec![];
         }
 
         if let Some(op) = self.pending.operator() {
@@ -689,11 +657,11 @@ impl VimState {
 
             if let Some(prefix) = Prefix::start(c, PrefixContext::Operator) {
                 self.pending.start_operator_prefix(prefix);
-                return vec![VimCommand::Noop];
+                return vec![];
             }
 
             self.clear_pending();
-            return vec![VimCommand::Noop];
+            return vec![];
         }
 
         if let Some(motion) = self.char_motion(c) {
@@ -703,13 +671,13 @@ impl VimState {
         // Operators
         if let Some(op) = Operator::from_char(c) {
             self.pending.start_operator(op);
-            return vec![VimCommand::Noop];
+            return vec![];
         }
 
         // Two-char sequence starters
         if let Some(prefix) = Prefix::start(c, PrefixContext::Normal) {
             self.pending.start_normal_prefix(prefix);
-            return vec![VimCommand::Noop];
+            return vec![];
         }
 
         let count = self.pending.take_count().unwrap_or(1);
@@ -719,9 +687,9 @@ impl VimState {
         }
 
         match c {
-            'H' => vec![VimCommand::MoveToScreenTop],
-            'M' => vec![VimCommand::MoveToScreenMiddle],
-            'L' => vec![VimCommand::MoveToScreenBottom],
+            'H' => vec![VimCommand::MoveToScreen(ScreenRow::Top)],
+            'M' => vec![VimCommand::MoveToScreen(ScreenRow::Middle)],
+            'L' => vec![VimCommand::MoveToScreen(ScreenRow::Bottom)],
             'i' => vec![VimCommand::EnterInsert],
             'a' => {
                 let col = (text.cursor.column + 1).min(line_len(text, text.cursor.line));
@@ -735,17 +703,17 @@ impl VimState {
                 let col = line_len(text, text.cursor.line);
                 vec![VimCommand::MoveTo(pos(text.cursor.line, col)), VimCommand::EnterInsert]
             }
-            'o' => vec![VimCommand::OpenLineBelow, VimCommand::EnterInsert],
-            'O' => vec![VimCommand::OpenLineAbove, VimCommand::EnterInsert],
-            'x' => range_operator_or(Operator::Delete, counted_forward_range(text, count), VimCommand::Noop),
-            'X' => range_operator_or(Operator::Delete, counted_backward_range(text, count), VimCommand::Noop),
+            'o' => vec![VimCommand::OpenLine(false)],
+            'O' => vec![VimCommand::OpenLine(true)],
+            'x' => range_operator_or(Operator::Delete, counted_forward_range(text, count), None),
+            'X' => range_operator_or(Operator::Delete, counted_backward_range(text, count), None),
             's' => range_operator_or(
                 Operator::Change,
                 counted_forward_range(text, count),
-                VimCommand::EnterInsert,
+                Some(VimCommand::EnterInsert),
             ),
-            'D' => range_operator_or(Operator::Delete, line_tail_range(text), VimCommand::Noop),
-            'C' => range_operator_or(Operator::Change, line_tail_range(text), VimCommand::EnterInsert),
+            'D' => range_operator_or(Operator::Delete, line_tail_range(text), None),
+            'C' => range_operator_or(Operator::Change, line_tail_range(text), Some(VimCommand::EnterInsert)),
             'J' => {
                 // vim: J = join 2 lines (1 op), 3J = join 3 lines (2 ops)
                 let joins = if count <= 1 { 1 } else { count - 1 };
@@ -755,8 +723,8 @@ impl VimState {
                 let last = (text.cursor.line + count - 1).min(text.lines.len().saturating_sub(1));
                 line_operator(Operator::Change, text.cursor.line, last, false)
             }
-            'p' => vec![VimCommand::PasteAfter],
-            'P' => vec![VimCommand::PasteBefore],
+            'p' => vec![VimCommand::Paste(false)],
+            'P' => vec![VimCommand::Paste(true)],
             'u' => vec![VimCommand::Undo],
             'v' => {
                 self.mode = Mode::Visual;
@@ -778,10 +746,10 @@ impl VimState {
                     self.last_search_backward = c == '#';
                     vec![VimCommand::SearchWordUnderCursor(word, c == '*')]
                 } else {
-                    vec![VimCommand::Noop]
+                    vec![]
                 }
             }
-            _ => vec![VimCommand::Noop],
+            _ => vec![],
         }
     }
 
@@ -798,7 +766,7 @@ impl VimState {
                     return self.exit_visual_with(vec![VimCommand::Redo]);
                 }
             }
-            return vec![VimCommand::Noop];
+            return vec![];
         }
 
         if let Some(action) = named_key_action(key) {
@@ -806,7 +774,7 @@ impl VimState {
         }
 
         let Some(c) = key_char(key) else {
-            return vec![VimCommand::Noop];
+            return vec![];
         };
 
         if let Some(prefix) = self.pending.take_prefix() {
@@ -817,7 +785,7 @@ impl VimState {
         if c.is_ascii_digit() && (c != '0' || self.pending.has_count()) {
             let digit = c.to_digit(10).unwrap() as usize;
             self.pending.add_digit(digit);
-            return vec![VimCommand::Noop];
+            return vec![];
         }
 
         let anchor = self.visual_anchor.unwrap_or(text.cursor);
@@ -863,13 +831,13 @@ impl VimState {
 
         if let Some(prefix) = Prefix::start(c, PrefixContext::Visual) {
             self.pending.start_normal_prefix(prefix);
-            return vec![VimCommand::Noop];
+            return vec![];
         }
 
         match c {
-            'H' => return vec![VimCommand::MoveToScreenTop],
-            'M' => return vec![VimCommand::MoveToScreenMiddle],
-            'L' => return vec![VimCommand::MoveToScreenBottom],
+            'H' => return vec![VimCommand::MoveToScreen(ScreenRow::Top)],
+            'M' => return vec![VimCommand::MoveToScreen(ScreenRow::Middle)],
+            'L' => return vec![VimCommand::MoveToScreen(ScreenRow::Bottom)],
             _ => {}
         }
 
@@ -886,7 +854,7 @@ impl VimState {
             return vec![cmd];
         }
 
-        vec![VimCommand::Noop]
+        vec![]
     }
 
     pub fn selection_command(&mut self, head: Position, text: &TextSnapshot) -> VimCommand {
@@ -918,7 +886,7 @@ impl VimState {
             self.clear_command_state();
             return match resolve_z_intent(c) {
                 Some(intent) => vec![VimCommand::ScrollCursor(intent)],
-                None => vec![VimCommand::Noop],
+                None => vec![],
             };
         }
         match prefix {
@@ -926,7 +894,7 @@ impl VimState {
                 let count = self.pending.take_count().unwrap_or(1);
                 self.clear_command_state();
                 if c == '\n' || line_len(text, text.cursor.line) == 0 {
-                    vec![VimCommand::Noop]
+                    vec![]
                 } else {
                     vec![VimCommand::ReplaceChar(c, count)]
                 }
@@ -936,7 +904,7 @@ impl VimState {
                 match c {
                     ';' => vec![VimCommand::JumpToLastEdit(false)],
                     'i' => vec![VimCommand::JumpToLastEdit(true)],
-                    _ => vec![VimCommand::Noop],
+                    _ => vec![],
                 }
             }
             Prefix::Indent | Prefix::Outdent if c == prefix.as_char() => {
@@ -956,7 +924,7 @@ impl VimState {
                         return vec![VimCommand::Select(VisualState { anchor: from, head: to })];
                     }
                     self.clear_command_state();
-                    return vec![VimCommand::Noop];
+                    return vec![];
                 }
                 if let Some((op, count)) = self.pending.take_operator() {
                     if let Some(range) = text_object(text, c, inner, count) {
@@ -979,11 +947,11 @@ impl VimState {
                     }
                 }
                 self.clear_command_state();
-                vec![VimCommand::Noop]
+                vec![]
             }
             _ => {
                 self.clear_command_state();
-                vec![VimCommand::Noop]
+                vec![]
             }
         }
     }
@@ -1059,7 +1027,7 @@ impl VimState {
         // Forward motions that return cursor due to clamping (l at EOL, e at EOF, etc.)
         // should still operate on the char at cursor.
         if target == text.cursor && semantics.noop_on_same {
-            return vec![VimCommand::Noop];
+            return vec![];
         }
 
         let backward = pos_lt(&target, &text.cursor);
@@ -1105,7 +1073,7 @@ impl VimState {
                 to.column = line_len(text, to.line).saturating_sub(1);
             }
             if pos_lt(&to, &from) {
-                return vec![VimCommand::Noop];
+                return vec![];
             }
         }
 
@@ -1125,25 +1093,26 @@ fn operator_commands(op: Operator, span: SelectionSpan, move_after_yank: bool) -
     vec![match op {
         Operator::Delete => VimCommand::Delete(span),
         Operator::Change => VimCommand::Change(span),
-        Operator::Yank => VimCommand::Yank {
-            span,
-            move_after: move_after_yank,
-        },
+        Operator::Yank => VimCommand::Yank(span, move_after_yank),
     }]
 }
 
 fn shift_lines(first: usize, last: usize, indent: bool, move_after: bool) -> Vec<VimCommand> {
-    vec![VimCommand::Shift {
-        span: SelectionSpan::Lines { first, last },
+    vec![VimCommand::Shift(
+        SelectionSpan::Lines { first, last },
         indent,
         move_after,
-    }]
+    )]
 }
 
-fn range_operator_or(op: Operator, range: Option<(Position, Position)>, fallback: VimCommand) -> Vec<VimCommand> {
+fn range_operator_or(
+    op: Operator,
+    range: Option<(Position, Position)>,
+    fallback: Option<VimCommand>,
+) -> Vec<VimCommand> {
     match range {
         Some((from, to)) => range_operator(op, from, to),
-        None => vec![fallback],
+        None => fallback.into_iter().collect(),
     }
 }
 
@@ -1372,8 +1341,8 @@ fn named_key_to_motion(named: &NamedKey) -> Option<Motion> {
 
 fn named_page_command(named: &NamedKey) -> Option<VimCommand> {
     match named {
-        NamedKey::PageDown => Some(VimCommand::PageDown),
-        NamedKey::PageUp => Some(VimCommand::PageUp),
+        NamedKey::PageDown => Some(VimCommand::Page(false, true)),
+        NamedKey::PageUp => Some(VimCommand::Page(false, false)),
         _ => None,
     }
 }
@@ -1386,10 +1355,10 @@ fn ctrl_page_command(key: &Key, mods: Modifiers) -> Option<VimCommand> {
         return None;
     };
     match c.as_str() {
-        "d" => Some(VimCommand::HalfPageDown),
-        "u" => Some(VimCommand::HalfPageUp),
-        "f" => Some(VimCommand::PageDown),
-        "b" => Some(VimCommand::PageUp),
+        "d" => Some(VimCommand::Page(true, true)),
+        "u" => Some(VimCommand::Page(true, false)),
+        "f" => Some(VimCommand::Page(false, true)),
+        "b" => Some(VimCommand::Page(false, false)),
         _ => None,
     }
 }

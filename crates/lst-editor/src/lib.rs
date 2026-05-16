@@ -728,7 +728,6 @@ impl EditorModel {
     fn execute_vim_command(&mut self, cmd: vim::VimCommand, wrap_columns: usize) -> bool {
         use vim::VimCommand as C;
         match cmd {
-            C::Noop => return false,
             C::ScrollCursor(intent) => {
                 self.queue_reveal(intent);
                 return false;
@@ -739,30 +738,18 @@ impl EditorModel {
             C::Select(selection) => self.apply_vim_select(selection.anchor, selection.head),
             C::Delete(span) => self.apply_vim_delete(span),
             C::Change(span) => self.apply_vim_change(span),
-            C::Yank { span, move_after } => self.apply_vim_yank(span, move_after),
+            C::Yank(span, move_after) => self.apply_vim_yank(span, move_after),
             C::SetRegister(register) => {
                 self.vim.register = register;
                 return false;
             }
-            C::Shift {
-                span,
-                indent,
-                move_after,
-            } => self.apply_vim_shift(span, indent, move_after),
-            C::PasteSelection {
-                span,
-                preserve_register,
-            } => self.apply_vim_selection_paste(span, preserve_register),
-            C::TransformCase { span, uppercase } => self.apply_vim_transform_case(span, uppercase),
+            C::Shift(span, indent, move_after) => self.apply_vim_shift(span, indent, move_after),
+            C::PasteSelection(span, preserve_register) => self.apply_vim_selection_paste(span, preserve_register),
+            C::TransformCase(span, uppercase) => self.apply_vim_transform_case(span, uppercase),
             C::EnterInsert => self.vim.mode = vim::Mode::Insert,
-            C::PasteAfter => self.vim_paste(false),
-            C::PasteBefore => self.vim_paste(true),
-            C::OpenLineBelow => {
-                self.vim_open_line(false);
-                self.vim.mode = vim::Mode::Insert;
-            }
-            C::OpenLineAbove => {
-                self.vim_open_line(true);
+            C::Paste(before) => self.vim_paste(before),
+            C::OpenLine(above) => {
+                self.vim_open_line(above);
                 self.vim.mode = vim::Mode::Insert;
             }
             C::JoinLines(count) => self.vim_join_lines(count),
@@ -773,25 +760,30 @@ impl EditorModel {
             C::Redo => {
                 self.undo_or_redo(true, None);
             }
-            C::OpenFind { backward } => self.open_vim_find_panel(backward),
-            C::FindNext => self.vim_find_step(true),
-            C::FindPrev => self.vim_find_step(false),
+            C::OpenFind(backward) => self.open_vim_find_panel(backward),
+            C::Find(forward) => self.vim_find_step(forward),
             C::SearchWordUnderCursor(word, forward) => {
                 let cursor = self.active_cursor_position();
                 if let Some(target) = self.find.search_word_from(self.tabs.active(), word, cursor, forward) {
                     self.move_to_vim_search_target(target);
                 }
             }
-            C::HalfPageDown => self.vim_paged(self.viewport.half_page() as isize, wrap_columns),
-            C::HalfPageUp => self.vim_paged(-(self.viewport.half_page() as isize), wrap_columns),
-            C::PageDown => self.vim_paged(self.viewport.page() as isize, wrap_columns),
-            C::PageUp => self.vim_paged(-(self.viewport.page() as isize), wrap_columns),
-            C::MoveToScreenTop => self.screen_row(self.viewport.screen_top_row(), self.vim_in_visual(), wrap_columns),
-            C::MoveToScreenMiddle => {
-                self.screen_row(self.viewport.screen_middle_row(), self.vim_in_visual(), wrap_columns)
+            C::Page(half, down) => {
+                let rows = if half {
+                    self.viewport.half_page()
+                } else {
+                    self.viewport.page()
+                };
+                let delta = if down { rows as isize } else { -(rows as isize) };
+                self.vim_paged(delta, wrap_columns);
             }
-            C::MoveToScreenBottom => {
-                self.screen_row(self.viewport.screen_bottom_row(), self.vim_in_visual(), wrap_columns)
+            C::MoveToScreen(row) => {
+                let row = match row {
+                    vim::ScreenRow::Top => self.viewport.screen_top_row(),
+                    vim::ScreenRow::Middle => self.viewport.screen_middle_row(),
+                    vim::ScreenRow::Bottom => self.viewport.screen_bottom_row(),
+                };
+                self.screen_row(row, self.vim_in_visual(), wrap_columns);
             }
             C::JumpToLastEdit(enter_insert) => {
                 let Some(target) = self.active_tab().last_edit_position() else {
