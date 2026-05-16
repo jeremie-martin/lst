@@ -804,31 +804,31 @@ impl EditorModel {
         }
         true
     }
-    fn apply_vim_delete(&mut self, span: vim::SelectionSpan) {
+    fn apply_vim_delete(&mut self, span: vim::RangeTarget) {
         match span {
-            vim::SelectionSpan::Range { from, to } => self.vim_delete_range(from, to),
-            vim::SelectionSpan::Lines { first, last } => self.vim_delete_lines(first, last),
+            vim::RangeTarget::Range { from, to } => self.vim_delete_range(from, to),
+            vim::RangeTarget::Lines { first, last } => self.vim_delete_lines(first, last),
         }
     }
-    fn apply_vim_change(&mut self, span: vim::SelectionSpan) {
+    fn apply_vim_change(&mut self, span: vim::RangeTarget) {
         match span {
-            vim::SelectionSpan::Range { from, to } => {
+            vim::RangeTarget::Range { from, to } => {
                 self.vim_change_range(from, to);
                 self.vim.mode = vim::Mode::Insert;
             }
-            vim::SelectionSpan::Lines { first, last } => {
+            vim::RangeTarget::Lines { first, last } => {
                 self.vim_change_lines(first, last);
                 self.vim.mode = vim::Mode::Insert;
             }
         }
     }
-    fn apply_vim_yank(&mut self, span: vim::SelectionSpan, move_after: bool) {
+    fn apply_vim_yank(&mut self, span: vim::RangeTarget, move_after: bool) {
         match span {
-            vim::SelectionSpan::Range { from, to } => {
+            vim::RangeTarget::Range { from, to } => {
                 self.vim.register = vim::Register::Char(vim_edit::extract_range(self.active_tab(), from, to));
                 self.active_tab_mut().set_cursor_position(from, None);
             }
-            vim::SelectionSpan::Lines { first, last } => {
+            vim::RangeTarget::Lines { first, last } => {
                 self.vim.register = vim::Register::Line(vim_edit::extract_lines(self.active_tab(), first, last));
                 if move_after {
                     self.active_tab_mut().set_cursor_position(Position::new(first, 0), None);
@@ -836,10 +836,10 @@ impl EditorModel {
             }
         }
     }
-    fn apply_vim_shift(&mut self, span: vim::SelectionSpan, indent: bool, move_after: bool) {
+    fn apply_vim_shift(&mut self, span: vim::RangeTarget, indent: bool, move_after: bool) {
         let (first, last) = match span {
-            vim::SelectionSpan::Range { from, to } => ordered_lines_for_vim(from.line, to.line),
-            vim::SelectionSpan::Lines { first, last } => (first, last),
+            vim::RangeTarget::Range { from, to } => ordered_lines_for_vim(from.line, to.line),
+            vim::RangeTarget::Lines { first, last } => (first, last),
         };
         if indent {
             self.indent_selected_lines(first, last);
@@ -850,20 +850,20 @@ impl EditorModel {
             self.active_tab_mut().set_cursor_position(Position::new(first, 0), None);
         }
     }
-    fn apply_vim_selection_paste(&mut self, span: vim::SelectionSpan, preserve_register: bool) {
+    fn apply_vim_selection_paste(&mut self, span: vim::RangeTarget, preserve_register: bool) {
         match span {
-            vim::SelectionSpan::Range { from, to } => {
+            vim::RangeTarget::Range { from, to } => {
                 self.vim_paste_selection_range(from, to, preserve_register);
             }
-            vim::SelectionSpan::Lines { first, last } => {
+            vim::RangeTarget::Lines { first, last } => {
                 self.vim_paste_selection_lines(first, last, preserve_register);
             }
         }
     }
-    fn apply_vim_transform_case(&mut self, span: vim::SelectionSpan, uppercase: bool) {
+    fn apply_vim_transform_case(&mut self, span: vim::RangeTarget, uppercase: bool) {
         match span {
-            vim::SelectionSpan::Range { from, to } => self.vim_transform_case_range(from, to, uppercase),
-            vim::SelectionSpan::Lines { first, last } => self.vim_transform_case_lines(first, last, uppercase),
+            vim::RangeTarget::Range { from, to } => self.vim_transform_case_range(from, to, uppercase),
+            vim::RangeTarget::Lines { first, last } => self.vim_transform_case_lines(first, last, uppercase),
         }
     }
     fn vim_paged(&mut self, delta: isize, wrap_columns: usize) {

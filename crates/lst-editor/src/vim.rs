@@ -95,13 +95,13 @@ pub struct VimState {
 pub enum VimCommand {
     MoveTo(Position),
     Select(VisualState),
-    Delete(SelectionSpan),
-    Change(SelectionSpan),
-    Yank(SelectionSpan, bool),
+    Delete(RangeTarget),
+    Change(RangeTarget),
+    Yank(RangeTarget, bool),
     SetRegister(Register),
-    Shift(SelectionSpan, bool, bool),
-    PasteSelection(SelectionSpan, bool),
-    TransformCase(SelectionSpan, bool),
+    Shift(RangeTarget, bool, bool),
+    PasteSelection(RangeTarget, bool),
+    TransformCase(RangeTarget, bool),
     EnterInsert,
     Paste(bool),
     OpenLine(bool),
@@ -156,8 +156,6 @@ pub enum ScreenRow {
 }
 
 // -- Supporting types --------------------------------------------------------
-
-pub type SelectionSpan = RangeTarget;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
