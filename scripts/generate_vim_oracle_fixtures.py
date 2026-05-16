@@ -234,6 +234,8 @@ def build_cases() -> list[dict]:
     linewise_operator_motions = [
         ("down", "j", (0, 0)),
         ("up", "k", (2, 0)),
+        ("to document start", "gg", (2, 0)),
+        ("counted gg", "2gg", (3, 0)),
         ("to document end", "G", (1, 0)),
         ("counted G", "2G", (0, 0)),
         ("percentage", "50%", (0, 0)),
@@ -328,6 +330,7 @@ def build_cases() -> list[dict]:
         ("missing paren object preserves register", "alpha beta gamma", (0, 0), "yiwdi("),
         ("left at bol operator is noop", "alpha beta", (0, 0), "yiwdh"),
         ("line start at bol operator is noop", "alpha beta", (0, 0), "yiwd0"),
+        ("delete from end to start then undo restores document", line_text, (0, 0), "Gdggu"),
     ]:
         cases.append(case(name, "operators", text, cursor, keys, assert_register=True))
 

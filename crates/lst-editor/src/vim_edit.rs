@@ -30,50 +30,51 @@ pub(crate) fn extract_lines(tab: &EditorTab, first: usize, last: usize) -> Strin
 }
 
 pub(crate) fn delete_range(tab: &EditorTab, from: Position, to: Position) -> Option<DeletedEdit> {
-    let range = position_range(tab.buffer(), from, to)?;
-    let deleted = extract_range(tab, from, to);
-    let change = TextChange::delete(range);
-    Some((
-        deleted,
-        EditRequest::other_break(TextChangeSet::single(change))
-            .with_selection_after(SelectionAfter::CursorPositionBeforeLineEnd(from)),
-    ))
+    capture_range(tab, from, to, false)
 }
 
 pub(crate) fn change_range(tab: &EditorTab, from: Position, to: Position) -> Option<DeletedEdit> {
+    capture_range(tab, from, to, true)
+}
+
+fn capture_range(tab: &EditorTab, from: Position, to: Position, insert: bool) -> Option<DeletedEdit> {
     let range = position_range(tab.buffer(), from, to)?;
     let deleted = extract_range(tab, from, to);
     let change = TextChange::delete(range);
-    Some((
-        deleted,
-        EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, TextChangeSet::single(change))
-            .with_selection_after(SelectionAfter::CursorPosition(from)),
-    ))
+    let change = TextChangeSet::single(change);
+    let request = if insert {
+        EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, change)
+            .with_selection_after(SelectionAfter::CursorPosition(from))
+    } else {
+        EditRequest::other_break(change).with_selection_after(SelectionAfter::CursorPositionBeforeLineEnd(from))
+    };
+    Some((deleted, request))
 }
 
 pub(crate) fn delete_lines(tab: &EditorTab, first: usize, last: usize) -> Option<DeletedEdit> {
-    let (first, last) = clamped_line_span(tab, first, last);
-    let deleted = extract_lines(tab, first, last);
-    let change = replace_lines_change(tab, first, last, &[])?;
-    Some((
-        deleted,
-        EditRequest::single_other_at_position(change, Position::new(first, 0)),
-    ))
+    capture_lines(tab, first, last, false)
 }
 
 pub(crate) fn change_lines(tab: &EditorTab, first: usize, last: usize) -> Option<DeletedEdit> {
+    capture_lines(tab, first, last, true)
+}
+
+fn capture_lines(tab: &EditorTab, first: usize, last: usize, insert: bool) -> Option<DeletedEdit> {
     let (first, last) = clamped_line_span(tab, first, last);
-    let indent = line_indent_prefix(tab.buffer(), first);
     let deleted = extract_lines(tab, first, last);
-    let change = replace_lines_change(tab, first, last, std::slice::from_ref(&indent))?;
-    Some((
-        deleted,
+    let indent = insert.then(|| line_indent_prefix(tab.buffer(), first));
+    let replacement = indent.as_slice();
+    let change = replace_lines_change(tab, first, last, replacement)?;
+    let request = if let Some(indent) = indent {
         EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, TextChangeSet::single(change))
             .with_selection_after(SelectionAfter::CursorPosition(Position::new(
                 first,
                 indent.chars().count(),
-            ))),
-    ))
+            )))
+    } else {
+        EditRequest::single_other_at_position(change, Position::new(first, 0))
+    };
+    Some((deleted, request))
 }
 
 pub(crate) fn paste(tab: &EditorTab, cursor: Position, register: &vim::Register, before: bool) -> Option<EditRequest> {

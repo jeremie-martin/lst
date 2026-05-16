@@ -213,12 +213,178 @@ pub struct VisualState {
 
 // -- Private types -----------------------------------------------------------
 
-#[derive(Default)]
-struct Pending {
-    count: Option<usize>,
-    operator: Option<Operator>,
-    operator_count: Option<usize>,
-    partial: Option<char>,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Pending {
+    #[default]
+    Empty,
+    Count(usize),
+    NormalPartial {
+        count: Option<usize>,
+        prefix: Prefix,
+    },
+    Operator {
+        op: Operator,
+        op_count: Option<usize>,
+        count: Option<usize>,
+    },
+    OperatorPartial {
+        op: Operator,
+        op_count: Option<usize>,
+        count: Option<usize>,
+        prefix: Prefix,
+    },
+}
+
+impl Pending {
+    fn display(self) -> String {
+        let mut s = String::new();
+        match self {
+            Pending::Empty => {}
+            Pending::Count(count) => s.push_str(&count.to_string()),
+            Pending::NormalPartial { count, prefix } => {
+                if let Some(count) = count {
+                    s.push_str(&count.to_string());
+                }
+                s.push(prefix.as_char());
+            }
+            Pending::Operator { op, op_count, count } => {
+                append_operator_display(&mut s, op, op_count, count);
+            }
+            Pending::OperatorPartial {
+                op,
+                op_count,
+                count,
+                prefix,
+            } => {
+                append_operator_display(&mut s, op, op_count, count);
+                s.push(prefix.as_char());
+            }
+        }
+        s
+    }
+
+    fn has_count(self) -> bool {
+        matches!(self, Pending::Count(_) | Pending::Operator { count: Some(_), .. })
+    }
+
+    fn add_digit(&mut self, digit: usize) {
+        match self {
+            Pending::Empty => *self = Pending::Count(digit),
+            Pending::Count(count) => *count = *count * 10 + digit,
+            Pending::Operator { count, .. } => append_count(count, digit),
+            _ => {}
+        }
+    }
+
+    fn start_normal_prefix(&mut self, prefix: Prefix) {
+        let count = match *self {
+            Pending::Count(count) => Some(count),
+            _ => None,
+        };
+        *self = Pending::NormalPartial { count, prefix };
+    }
+
+    fn start_operator(&mut self, op: Operator) {
+        let op_count = match *self {
+            Pending::Count(count) => Some(count),
+            _ => None,
+        };
+        *self = Pending::Operator {
+            op,
+            op_count,
+            count: None,
+        };
+    }
+
+    fn start_operator_prefix(&mut self, prefix: Prefix) {
+        if let Pending::Operator { op, op_count, count } = *self {
+            *self = Pending::OperatorPartial {
+                op,
+                op_count,
+                count,
+                prefix,
+            };
+        }
+    }
+
+    fn take_prefix(&mut self) -> Option<Prefix> {
+        match *self {
+            Pending::NormalPartial { count, prefix } => {
+                *self = count.map(Pending::Count).unwrap_or_default();
+                Some(prefix)
+            }
+            Pending::OperatorPartial {
+                op,
+                op_count,
+                count,
+                prefix,
+            } => {
+                *self = Pending::Operator { op, op_count, count };
+                Some(prefix)
+            }
+            _ => None,
+        }
+    }
+
+    fn operator(self) -> Option<Operator> {
+        match self {
+            Pending::Operator { op, .. } => Some(op),
+            _ => None,
+        }
+    }
+
+    fn take_count(&mut self) -> Option<usize> {
+        match *self {
+            Pending::Count(count) => {
+                *self = Pending::Empty;
+                Some(count)
+            }
+            _ => None,
+        }
+    }
+
+    fn take_operator_count(&mut self) -> Option<usize> {
+        match *self {
+            Pending::Operator { op_count, count, .. } => {
+                *self = Pending::Empty;
+                combine_counts(op_count, count)
+            }
+            _ => None,
+        }
+    }
+
+    fn take_operator(&mut self) -> Option<(Operator, Option<usize>)> {
+        match *self {
+            Pending::Operator { op, op_count, count } => {
+                *self = Pending::Empty;
+                Some((op, combine_counts(op_count, count)))
+            }
+            _ => None,
+        }
+    }
+}
+
+fn append_operator_display(s: &mut String, op: Operator, op_count: Option<usize>, count: Option<usize>) {
+    if let Some(op_count) = op_count {
+        s.push_str(&op_count.to_string());
+    }
+    s.push(op.as_char());
+    if let Some(count) = count {
+        s.push_str(&count.to_string());
+    }
+}
+
+fn append_count(count: &mut Option<usize>, digit: usize) {
+    *count = Some(count.unwrap_or(0) * 10 + digit);
+}
+
+fn combine_counts(operator_count: Option<usize>, motion_count: Option<usize>) -> Option<usize> {
+    match (operator_count, motion_count) {
+        (None, None) => None,
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (Some(a), Some(b)) => Some(a * b),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,6 +392,91 @@ enum Operator {
     Delete,
     Change,
     Yank,
+}
+
+impl Operator {
+    fn as_char(self) -> char {
+        match self {
+            Operator::Delete => 'd',
+            Operator::Change => 'c',
+            Operator::Yank => 'y',
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Prefix {
+    Go,
+    FindChar,
+    TillChar,
+    FindCharBack,
+    TillCharBack,
+    Replace,
+    Scroll,
+    Indent,
+    Outdent,
+    TextObjectInner,
+    TextObjectAround,
+}
+
+impl Prefix {
+    fn normal_start(c: char) -> Option<Self> {
+        match c {
+            'g' => Some(Self::Go),
+            'f' => Some(Self::FindChar),
+            't' => Some(Self::TillChar),
+            'F' => Some(Self::FindCharBack),
+            'T' => Some(Self::TillCharBack),
+            'r' => Some(Self::Replace),
+            'z' => Some(Self::Scroll),
+            '>' => Some(Self::Indent),
+            '<' => Some(Self::Outdent),
+            _ => None,
+        }
+    }
+
+    fn operator_start(c: char) -> Option<Self> {
+        match c {
+            'g' => Some(Self::Go),
+            'f' => Some(Self::FindChar),
+            't' => Some(Self::TillChar),
+            'F' => Some(Self::FindCharBack),
+            'T' => Some(Self::TillCharBack),
+            'i' => Some(Self::TextObjectInner),
+            'a' => Some(Self::TextObjectAround),
+            _ => None,
+        }
+    }
+
+    fn visual_start(c: char) -> Option<Self> {
+        match c {
+            'g' => Some(Self::Go),
+            'f' => Some(Self::FindChar),
+            't' => Some(Self::TillChar),
+            'F' => Some(Self::FindCharBack),
+            'T' => Some(Self::TillCharBack),
+            'i' => Some(Self::TextObjectInner),
+            'a' => Some(Self::TextObjectAround),
+            'z' => Some(Self::Scroll),
+            _ => None,
+        }
+    }
+
+    fn as_char(self) -> char {
+        match self {
+            Prefix::Go => 'g',
+            Prefix::FindChar => 'f',
+            Prefix::TillChar => 't',
+            Prefix::FindCharBack => 'F',
+            Prefix::TillCharBack => 'T',
+            Prefix::Replace => 'r',
+            Prefix::Scroll => 'z',
+            Prefix::Indent => '>',
+            Prefix::Outdent => '<',
+            Prefix::TextObjectInner => 'i',
+            Prefix::TextObjectAround => 'a',
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -298,23 +549,7 @@ impl VimState {
     }
 
     pub fn pending_display(&self) -> String {
-        let mut s = String::new();
-        if let Some(n) = self.pending.operator_count {
-            s.push_str(&n.to_string());
-        }
-        match self.pending.operator {
-            Some(Operator::Delete) => s.push('d'),
-            Some(Operator::Change) => s.push('c'),
-            Some(Operator::Yank) => s.push('y'),
-            None => {}
-        }
-        if let Some(n) = self.pending.count {
-            s.push_str(&n.to_string());
-        }
-        if let Some(p) = self.pending.partial {
-            s.push(p);
-        }
-        s
+        self.pending.display()
     }
     fn clear_pending(&mut self) {
         self.pending = Pending::default();
@@ -351,13 +586,13 @@ impl VimState {
         Some(if c == ';' { last } else { reverse_find(last) })
     }
 
-    fn resolve_find_partial(&mut self, partial: char, c: char) -> Option<Motion> {
-        let motion = match partial {
-            'f' => Motion::FindChar(c),
-            't' => Motion::TillChar(c),
-            'F' => Motion::FindCharBack(c),
-            'T' => Motion::TillCharBack(c),
-            'g' if c == 'g' => return Some(Motion::DocumentStart),
+    fn resolve_prefix_motion(&mut self, prefix: Prefix, c: char) -> Option<Motion> {
+        let motion = match prefix {
+            Prefix::FindChar => Motion::FindChar(c),
+            Prefix::TillChar => Motion::TillChar(c),
+            Prefix::FindCharBack => Motion::FindCharBack(c),
+            Prefix::TillCharBack => Motion::TillCharBack(c),
+            Prefix::Go if c == 'g' => return Some(Motion::DocumentStart),
             _ => return None,
         };
         self.last_find = Some(motion);
@@ -432,23 +667,23 @@ impl VimState {
             _ => return vec![VimCommand::Noop],
         };
 
-        if let Some(partial) = self.pending.partial.take() {
-            return self.resolve_partial(partial, c, text);
+        if let Some(prefix) = self.pending.take_prefix() {
+            return self.resolve_partial(prefix, c, text);
         }
 
-        if c == '0' && self.pending.count.is_none() {
+        if c == '0' && !self.pending.has_count() {
             return self.apply_motion(Motion::LineStart, text);
         }
         if c.is_ascii_digit() {
             let digit = c.to_digit(10).unwrap() as usize;
-            self.pending.count = Some(self.pending.count.unwrap_or(0) * 10 + digit);
+            self.pending.add_digit(digit);
             return vec![VimCommand::Noop];
         }
 
-        if let Some(op) = self.pending.operator {
+        if let Some(op) = self.pending.operator() {
             // Text object prefixes
             if c == 'i' || c == 'a' {
-                self.pending.partial = Some(c);
+                self.pending.start_operator_prefix(Prefix::operator_start(c).unwrap());
                 return vec![VimCommand::Noop];
             }
 
@@ -457,8 +692,7 @@ impl VimState {
                 (Operator::Delete, 'd') | (Operator::Change, 'c') | (Operator::Yank, 'y')
             );
             if doubled {
-                let count = self.motion_count().unwrap_or(1);
-                self.pending.operator = None;
+                let count = self.pending.take_operator_count().unwrap_or(1);
                 let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
                 return self.line_operator(op, text.cursor.line, last);
             }
@@ -469,8 +703,8 @@ impl VimState {
             }
 
             // Two-char sequence starters
-            if matches!(c, 'g' | 'f' | 't' | 'F' | 'T') {
-                self.pending.partial = Some(c);
+            if let Some(prefix) = Prefix::operator_start(c) {
+                self.pending.start_operator_prefix(prefix);
                 return vec![VimCommand::Noop];
             }
 
@@ -493,23 +727,22 @@ impl VimState {
 
         // Operators
         if matches!(c, 'd' | 'c' | 'y') {
-            self.pending.operator = Some(match c {
+            self.pending.start_operator(match c {
                 'd' => Operator::Delete,
                 'c' => Operator::Change,
                 'y' => Operator::Yank,
                 _ => unreachable!(),
             });
-            self.pending.operator_count = self.pending.count.take();
             return vec![VimCommand::Noop];
         }
 
         // Two-char sequence starters
-        if matches!(c, 'g' | 'f' | 't' | 'F' | 'T' | 'r' | 'z' | '>' | '<') {
-            self.pending.partial = Some(c);
+        if let Some(prefix) = Prefix::normal_start(c) {
+            self.pending.start_normal_prefix(prefix);
             return vec![VimCommand::Noop];
         }
 
-        let count = self.motion_count().unwrap_or(1);
+        let count = self.pending.take_count().unwrap_or(1);
         self.clear_command_state();
 
         match c {
@@ -684,11 +917,11 @@ impl VimState {
             _ => return vec![VimCommand::Noop],
         };
 
-        if let Some(partial) = self.pending.partial.take() {
-            if let Some(motion) = self.resolve_find_partial(partial, c) {
+        if let Some(prefix) = self.pending.take_prefix() {
+            if let Some(motion) = self.resolve_prefix_motion(prefix, c) {
                 return self.apply_motion(motion, text);
             }
-            if partial == 'z' {
+            if prefix == Prefix::Scroll {
                 self.clear_preferred_column();
                 return match resolve_z_intent(c) {
                     Some(intent) => vec![VimCommand::ScrollCursor(intent)],
@@ -696,9 +929,9 @@ impl VimState {
                 };
             }
             // Text objects in Visual mode (viw, vi", vab, etc.)
-            if partial == 'i' || partial == 'a' {
-                let count = self.pending.count.take();
-                if let Some((from, to)) = text_object(text, c, partial == 'i', count) {
+            if matches!(prefix, Prefix::TextObjectInner | Prefix::TextObjectAround) {
+                let count = self.pending.take_count();
+                if let Some((from, to)) = text_object(text, c, prefix == Prefix::TextObjectInner, count) {
                     self.visual_anchor = Some(from);
                     self.visual_head = Some(to);
                     self.clear_preferred_column();
@@ -709,9 +942,9 @@ impl VimState {
         }
 
         // Digits for count
-        if c.is_ascii_digit() && (c != '0' || self.pending.count.is_some()) {
+        if c.is_ascii_digit() && (c != '0' || self.pending.has_count()) {
             let digit = c.to_digit(10).unwrap() as usize;
-            self.pending.count = Some(self.pending.count.unwrap_or(0) * 10 + digit);
+            self.pending.add_digit(digit);
             return vec![VimCommand::Noop];
         }
 
@@ -818,8 +1051,8 @@ impl VimState {
             _ => {}
         }
 
-        if matches!(c, 'g' | 'f' | 't' | 'F' | 'T' | 'i' | 'a' | 'z') {
-            self.pending.partial = Some(c);
+        if let Some(prefix) = Prefix::visual_start(c) {
+            self.pending.start_normal_prefix(prefix);
             return vec![VimCommand::Noop];
         }
 
@@ -831,7 +1064,7 @@ impl VimState {
         }
 
         // Try as motion - extend selection
-        if c == '0' && self.pending.count.is_none() {
+        if c == '0' && !self.pending.has_count() {
             return self.apply_motion(Motion::LineStart, text);
         }
         if let Some(motion) = char_to_motion(c) {
@@ -891,20 +1124,20 @@ impl VimState {
 
     // -- Partial resolution ----------------------------------------------
 
-    fn resolve_partial(&mut self, partial: char, c: char, text: &TextSnapshot) -> Vec<VimCommand> {
-        if let Some(motion) = self.resolve_find_partial(partial, c) {
+    fn resolve_partial(&mut self, prefix: Prefix, c: char, text: &TextSnapshot) -> Vec<VimCommand> {
+        if let Some(motion) = self.resolve_prefix_motion(prefix, c) {
             return self.apply_motion(motion, text);
         }
-        if partial == 'z' {
+        if prefix == Prefix::Scroll {
             self.clear_command_state();
             return match resolve_z_intent(c) {
                 Some(intent) => vec![VimCommand::ScrollCursor(intent)],
                 None => vec![VimCommand::Noop],
             };
         }
-        match partial {
-            'r' => {
-                let count = self.motion_count().unwrap_or(1);
+        match prefix {
+            Prefix::Replace => {
+                let count = self.pending.take_count().unwrap_or(1);
                 self.clear_command_state();
                 if c == '\n' || line_len(text, text.cursor.line) == 0 {
                     vec![VimCommand::Noop]
@@ -912,7 +1145,7 @@ impl VimState {
                     vec![VimCommand::ReplaceChar { ch: c, count }]
                 }
             }
-            'g' => {
+            Prefix::Go => {
                 self.clear_command_state();
                 match c {
                     ';' => vec![VimCommand::JumpToLastEdit { enter_insert: false }],
@@ -920,11 +1153,11 @@ impl VimState {
                     _ => vec![VimCommand::Noop],
                 }
             }
-            '>' | '<' if c == partial => {
-                let count = self.motion_count().unwrap_or(1);
+            Prefix::Indent | Prefix::Outdent if c == prefix.as_char() => {
+                let count = self.pending.take_count().unwrap_or(1);
                 self.clear_command_state();
                 let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
-                if partial == '>' {
+                if prefix == Prefix::Indent {
                     vec![VimCommand::IndentLines {
                         first: text.cursor.line,
                         last,
@@ -936,10 +1169,9 @@ impl VimState {
                     }]
                 }
             }
-            'i' | 'a' => {
-                let inner = partial == 'i';
-                let count = self.motion_count();
-                if let Some(op) = self.pending.operator.take() {
+            Prefix::TextObjectInner | Prefix::TextObjectAround => {
+                let inner = prefix == Prefix::TextObjectInner;
+                if let Some((op, count)) = self.pending.take_operator() {
                     if let Some(range) = text_object(text, c, inner, count) {
                         self.clear_command_state();
                         // Paragraph text objects are linewise
@@ -971,17 +1203,6 @@ impl VimState {
 
     // -- Motion + operator helpers ---------------------------------------
 
-    fn motion_count(&mut self) -> Option<usize> {
-        let oc = self.pending.operator_count.take();
-        let mc = self.pending.count.take();
-        match (oc, mc) {
-            (None, None) => None,
-            (Some(a), None) => Some(a),
-            (None, Some(b)) => Some(b),
-            (Some(a), Some(b)) => Some(a * b),
-        }
-    }
-
     fn cursor_motion_target(&mut self, motion: &Motion, text: &TextSnapshot, count: Option<usize>) -> Position {
         let preferred_column = if matches!(motion, Motion::Down | Motion::Up) {
             let preferred = self.preferred_column.unwrap_or(text.cursor.column);
@@ -995,10 +1216,10 @@ impl VimState {
     }
 
     fn apply_motion(&mut self, motion: Motion, text: &TextSnapshot) -> Vec<VimCommand> {
-        if let Some(op) = self.pending.operator.take() {
-            self.operator_with_computed_motion(op, motion, text)
+        if let Some((op, count)) = self.pending.take_operator() {
+            self.operator_with_computed_motion(op, motion, text, count)
         } else {
-            let count = self.motion_count();
+            let count = self.pending.take_count();
             self.clear_pending();
             let target = self.cursor_motion_target(&motion, text, count);
             if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
@@ -1009,7 +1230,13 @@ impl VimState {
         }
     }
 
-    fn operator_with_computed_motion(&mut self, op: Operator, motion: Motion, text: &TextSnapshot) -> Vec<VimCommand> {
+    fn operator_with_computed_motion(
+        &mut self,
+        op: Operator,
+        motion: Motion,
+        text: &TextSnapshot,
+        count: Option<usize>,
+    ) -> Vec<VimCommand> {
         // vim: cw/cW behave like ce/cE when cursor is on a non-whitespace char
         let motion = if op == Operator::Change {
             let cursor_on_non_space = {
@@ -1030,10 +1257,11 @@ impl VimState {
             motion
         };
 
-        let count = self.motion_count();
         self.clear_command_state();
 
-        if motion_is_linewise(op, &motion, count) {
+        let semantics = motion_semantics(op, &motion, count);
+
+        if semantics.linewise {
             let target = compute_motion(&motion, text, count, None);
             let (first, last) = ordered_lines(text.cursor.line, target.line);
             return self.line_operator(op, first, last);
@@ -1044,7 +1272,7 @@ impl VimState {
         // Motions that return cursor on failure (no match / no bracket) are true no-ops.
         // Forward motions that return cursor due to clamping (l at EOL, e at EOF, etc.)
         // should still operate on the char at cursor.
-        if target == text.cursor && motion_noop_on_same_pos(&motion) {
+        if target == text.cursor && semantics.noop_on_same {
             return vec![VimCommand::Noop];
         }
 
@@ -1083,7 +1311,7 @@ impl VimState {
         // - exclusive motions (standard vim rule), OR
         // - backward motions (cursor char is never included for backward ops)
         // Skip when eol_clamped (already adjusted to be inclusive)
-        if (!motion_is_inclusive(&motion, count) || backward) && !eol_clamped {
+        if (!semantics.inclusive || backward) && !eol_clamped {
             if to.column > 0 {
                 to.column -= 1;
             } else if to.line > from.line {
@@ -1112,6 +1340,46 @@ impl VimState {
             Operator::Change => vec![VimCommand::ChangeRange { from, to }, VimCommand::EnterInsert],
             Operator::Yank => vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)],
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MotionSemantics {
+    linewise: bool,
+    inclusive: bool,
+    noop_on_same: bool,
+}
+
+fn motion_semantics(op: Operator, motion: &Motion, count: Option<usize>) -> MotionSemantics {
+    MotionSemantics {
+        linewise: matches!(
+            motion,
+            Motion::Down | Motion::Up | Motion::DocumentStart | Motion::DocumentEnd
+        ) || matches!(motion, Motion::LineEnd) && count.unwrap_or(1) > 1 && op == Operator::Delete
+            || matches!(motion, Motion::Percent) && count.is_some(),
+        inclusive: matches!(
+            motion,
+            Motion::WordEnd
+                | Motion::BigWordEnd
+                | Motion::LineEnd
+                | Motion::FindChar(_)
+                | Motion::FindCharBack(_)
+                | Motion::TillChar(_)
+                | Motion::TillCharBack(_)
+        ) || matches!(motion, Motion::Percent) && count.is_none(),
+        noop_on_same: matches!(
+            motion,
+            Motion::Left
+                | Motion::WordBackward
+                | Motion::BigWordBackward
+                | Motion::LineStart
+                | Motion::FirstNonBlank
+                | Motion::FindChar(_)
+                | Motion::TillChar(_)
+                | Motion::FindCharBack(_)
+                | Motion::TillCharBack(_)
+                | Motion::Percent
+        ),
     }
 }
 
@@ -1315,46 +1583,6 @@ fn char_to_motion(c: char) -> Option<Motion> {
         '%' => Some(Motion::Percent),
         _ => None,
     }
-}
-
-fn motion_is_linewise(op: Operator, motion: &Motion, count: Option<usize>) -> bool {
-    matches!(
-        motion,
-        Motion::Down | Motion::Up | Motion::DocumentStart | Motion::DocumentEnd
-    ) || matches!(motion, Motion::LineEnd) && count.unwrap_or(1) > 1 && op == Operator::Delete
-        || matches!(motion, Motion::Percent) && count.is_some()
-}
-
-fn motion_is_inclusive(motion: &Motion, count: Option<usize>) -> bool {
-    matches!(
-        motion,
-        Motion::WordEnd
-            | Motion::BigWordEnd
-            | Motion::LineEnd
-            | Motion::FindChar(_)
-            | Motion::FindCharBack(_)
-            | Motion::TillChar(_)
-            | Motion::TillCharBack(_)
-    ) || matches!(motion, Motion::Percent) && count.is_none()
-}
-
-/// Motions where target == cursor means "failed to find" (no-op), NOT "clamped at boundary".
-/// Forward motions clamped at boundary (l at EOL, e at EOF, $ at end) should still operate
-/// on the cursor character, so they are NOT listed here.
-fn motion_noop_on_same_pos(motion: &Motion) -> bool {
-    matches!(
-        motion,
-        Motion::Left
-            | Motion::WordBackward
-            | Motion::BigWordBackward
-            | Motion::LineStart
-            | Motion::FirstNonBlank
-            | Motion::FindChar(_)
-            | Motion::TillChar(_)
-            | Motion::FindCharBack(_)
-            | Motion::TillCharBack(_)
-            | Motion::Percent
-    )
 }
 
 fn reverse_find(motion: Motion) -> Motion {

@@ -327,6 +327,8 @@ fn operators_cover_linewise_inclusive_exclusive_and_register_edges() {
     let cases = [
         ("delete down is linewise", "a\nb\nc", (0, 0), "dj", "c"),
         ("delete up is linewise", "a\nb\nc", (2, 0), "dk", "a"),
+        ("delete to document start is linewise", "a\nb\nc", (2, 0), "dgg", ""),
+        ("delete counted gg is linewise", "a\nb\nc\nd", (3, 0), "d2gg", "a"),
         ("delete counted line end is linewise", "a\nb\nc", (0, 0), "d2$", "c"),
         (
             "delete percentage count is linewise",
@@ -341,6 +343,20 @@ fn operators_cover_linewise_inclusive_exclusive_and_register_edges() {
             (0, 6),
             "cbX<esc>",
             "Xbeta",
+        ),
+        (
+            "change to document start is linewise",
+            "a\nb\nc",
+            (2, 0),
+            "cggX<esc>",
+            "X",
+        ),
+        (
+            "yank to document start pastes linewise",
+            "one\ntwo\nthree",
+            (2, 0),
+            "yggGp",
+            "one\ntwo\nthree\none\ntwo\nthree",
         ),
         ("delete char find is inclusive", "abc def", (0, 0), "dfc", " def"),
         (
@@ -371,6 +387,13 @@ fn operators_cover_linewise_inclusive_exclusive_and_register_edges() {
             (1, 0),
             "ddP",
             "one\n\ntwo",
+        ),
+        (
+            "delete from end to start restores as one undo step",
+            "one\ntwo\nthree",
+            (0, 0),
+            "Gdggu",
+            "one\ntwo\nthree",
         ),
     ];
 
