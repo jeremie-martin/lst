@@ -93,65 +93,34 @@ pub struct VimState {
 #[derive(Debug, Clone, PartialEq)]
 pub enum VimCommand {
     MoveTo(Position),
-    Select {
-        anchor: Position,
-        head: Position,
-    },
-    DeleteRange {
-        from: Position,
-        to: Position,
-    },
-    DeleteLines {
-        first: usize,
-        last: usize,
-    },
-    IndentLines {
-        first: usize,
-        last: usize,
-    },
-    OutdentLines {
-        first: usize,
-        last: usize,
-    },
-    ChangeRange {
-        from: Position,
-        to: Position,
-    },
-    ChangeLines {
-        first: usize,
-        last: usize,
-    },
-    YankRange {
-        from: Position,
-        to: Position,
-    },
-    YankLines {
-        first: usize,
-        last: usize,
+    Select(VisualState),
+    Delete(SelectionSpan),
+    Change(SelectionSpan),
+    Yank {
+        span: SelectionSpan,
+        move_after: bool,
     },
     SetRegister(Register),
-    PasteSelectionRange {
-        from: Position,
-        to: Position,
+    Shift {
+        span: SelectionSpan,
+        indent: bool,
+        move_after: bool,
+    },
+    PasteSelection {
+        span: SelectionSpan,
         preserve_register: bool,
     },
-    PasteSelectionLines {
-        first: usize,
-        last: usize,
-        preserve_register: bool,
+    TransformCase {
+        span: SelectionSpan,
+        uppercase: bool,
     },
     EnterInsert,
     PasteAfter,
     PasteBefore,
     OpenLineBelow,
     OpenLineAbove,
-    JoinLines {
-        count: usize,
-    },
-    ReplaceChar {
-        ch: char,
-        count: usize,
-    },
+    JoinLines(usize),
+    ReplaceChar(char, usize),
     Undo,
     Redo,
     OpenFind {
@@ -159,20 +128,7 @@ pub enum VimCommand {
     },
     FindNext,
     FindPrev,
-    SearchWordUnderCursor {
-        word: String,
-        forward: bool,
-    },
-    TransformCaseRange {
-        from: Position,
-        to: Position,
-        uppercase: bool,
-    },
-    TransformCaseLines {
-        first: usize,
-        last: usize,
-        uppercase: bool,
-    },
+    SearchWordUnderCursor(String, bool),
     HalfPageDown,
     HalfPageUp,
     PageDown,
@@ -181,21 +137,13 @@ pub enum VimCommand {
     MoveToScreenMiddle,
     MoveToScreenBottom,
     ScrollCursor(RevealIntent),
-    JumpToLastEdit {
-        enter_insert: bool,
-    },
+    JumpToLastEdit(bool),
     Noop,
 }
 
 pub struct TextSnapshot {
     pub lines: Arc<[String]>,
     pub cursor: Position,
-}
-
-impl TextSnapshot {
-    pub fn line_count(&self) -> usize {
-        self.lines.len()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -211,10 +159,10 @@ pub struct VisualState {
     pub head: Position,
 }
 
-// -- Private types -----------------------------------------------------------
+// -- Supporting types --------------------------------------------------------
 
-#[derive(Clone, Copy)]
-enum SelectionSpan {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectionSpan {
     Range { from: Position, to: Position },
     Lines { first: usize, last: usize },
 }
@@ -230,45 +178,27 @@ impl SelectionSpan {
         }
     }
 
-    fn line_span(self) -> (usize, usize) {
-        match self {
-            SelectionSpan::Range { from, to } => ordered_lines(from.line, to.line),
-            SelectionSpan::Lines { first, last } => (first, last),
-        }
-    }
-
     fn operator(self, op: Operator) -> Vec<VimCommand> {
-        match self {
-            SelectionSpan::Range { from, to } => range_operator(op, from, to),
-            SelectionSpan::Lines { first, last } => line_operator(op, first, last, true),
-        }
+        operator_commands(op, self, true)
     }
 
     fn paste(self, preserve_register: bool) -> Vec<VimCommand> {
-        match self {
-            SelectionSpan::Range { from, to } => vec![VimCommand::PasteSelectionRange {
-                from,
-                to,
-                preserve_register,
-            }],
-            SelectionSpan::Lines { first, last } => vec![VimCommand::PasteSelectionLines {
-                first,
-                last,
-                preserve_register,
-            }],
-        }
+        vec![VimCommand::PasteSelection {
+            span: self,
+            preserve_register,
+        }]
     }
 
     fn shift(self, indent: bool) -> Vec<VimCommand> {
-        let (first, last) = self.line_span();
-        shift_lines(first, last, indent, true)
+        vec![VimCommand::Shift {
+            span: self,
+            indent,
+            move_after: true,
+        }]
     }
 
     fn transform_case(self, uppercase: bool) -> Vec<VimCommand> {
-        match self {
-            SelectionSpan::Range { from, to } => vec![VimCommand::TransformCaseRange { from, to, uppercase }],
-            SelectionSpan::Lines { first, last } => vec![VimCommand::TransformCaseLines { first, last, uppercase }],
-        }
+        vec![VimCommand::TransformCase { span: self, uppercase }]
     }
 }
 
@@ -467,46 +397,21 @@ enum Prefix {
 }
 
 impl Prefix {
-    fn normal_start(c: char) -> Option<Self> {
-        match c {
-            'g' => Some(Self::Go),
-            'f' => Some(Self::FindChar),
-            't' => Some(Self::TillChar),
-            'F' => Some(Self::FindCharBack),
-            'T' => Some(Self::TillCharBack),
-            'r' => Some(Self::Replace),
-            'z' => Some(Self::Scroll),
-            '>' => Some(Self::Indent),
-            '<' => Some(Self::Outdent),
-            _ => None,
-        }
-    }
-
-    fn operator_start(c: char) -> Option<Self> {
-        match c {
-            'g' => Some(Self::Go),
-            'f' => Some(Self::FindChar),
-            't' => Some(Self::TillChar),
-            'F' => Some(Self::FindCharBack),
-            'T' => Some(Self::TillCharBack),
-            'i' => Some(Self::TextObjectInner),
-            'a' => Some(Self::TextObjectAround),
-            _ => None,
-        }
-    }
-
-    fn visual_start(c: char) -> Option<Self> {
-        match c {
-            'g' => Some(Self::Go),
-            'f' => Some(Self::FindChar),
-            't' => Some(Self::TillChar),
-            'F' => Some(Self::FindCharBack),
-            'T' => Some(Self::TillCharBack),
-            'i' => Some(Self::TextObjectInner),
-            'a' => Some(Self::TextObjectAround),
-            'z' => Some(Self::Scroll),
-            _ => None,
-        }
+    fn start(c: char, context: PrefixContext) -> Option<Self> {
+        Some(match c {
+            'g' => Self::Go,
+            'f' => Self::FindChar,
+            't' => Self::TillChar,
+            'F' => Self::FindCharBack,
+            'T' => Self::TillCharBack,
+            'r' if context == PrefixContext::Normal => Self::Replace,
+            'z' if context != PrefixContext::Operator => Self::Scroll,
+            '>' if context == PrefixContext::Normal => Self::Indent,
+            '<' if context == PrefixContext::Normal => Self::Outdent,
+            'i' if context != PrefixContext::Normal => Self::TextObjectInner,
+            'a' if context != PrefixContext::Normal => Self::TextObjectAround,
+            _ => return None,
+        })
     }
 
     fn as_char(self) -> char {
@@ -526,18 +431,20 @@ impl Prefix {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrefixContext {
+    Normal,
+    Operator,
+    Visual,
+}
+
 #[derive(Clone, Copy)]
 enum Motion {
     Left,
     Right,
     Down,
     Up,
-    WordForward,
-    WordBackward,
-    WordEnd,
-    BigWordForward,
-    BigWordBackward,
-    BigWordEnd,
+    Word(WordMotion, bool),
     LineStart,
     LineEnd,
     FirstNonBlank,
@@ -548,6 +455,13 @@ enum Motion {
     FindCharBack(char),
     TillCharBack(char),
     Percent,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordMotion {
+    Forward,
+    Backward,
+    End,
 }
 
 enum KeyAction {
@@ -765,7 +679,7 @@ impl VimState {
         if let Some(op) = self.pending.operator() {
             if Some(op) == Operator::from_char(c) {
                 let count = self.pending.take_operator_count().unwrap_or(1);
-                let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
+                let last = (text.cursor.line + count - 1).min(text.lines.len().saturating_sub(1));
                 return line_operator(op, text.cursor.line, last, false);
             }
 
@@ -773,7 +687,7 @@ impl VimState {
                 return self.apply_motion(motion, text);
             }
 
-            if let Some(prefix) = Prefix::operator_start(c) {
+            if let Some(prefix) = Prefix::start(c, PrefixContext::Operator) {
                 self.pending.start_operator_prefix(prefix);
                 return vec![VimCommand::Noop];
             }
@@ -793,7 +707,7 @@ impl VimState {
         }
 
         // Two-char sequence starters
-        if let Some(prefix) = Prefix::normal_start(c) {
+        if let Some(prefix) = Prefix::start(c, PrefixContext::Normal) {
             self.pending.start_normal_prefix(prefix);
             return vec![VimCommand::Noop];
         }
@@ -835,10 +749,10 @@ impl VimState {
             'J' => {
                 // vim: J = join 2 lines (1 op), 3J = join 3 lines (2 ops)
                 let joins = if count <= 1 { 1 } else { count - 1 };
-                vec![VimCommand::JoinLines { count: joins }]
+                vec![VimCommand::JoinLines(joins)]
             }
             'S' => {
-                let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
+                let last = (text.cursor.line + count - 1).min(text.lines.len().saturating_sub(1));
                 line_operator(Operator::Change, text.cursor.line, last, false)
             }
             'p' => vec![VimCommand::PasteAfter],
@@ -848,10 +762,10 @@ impl VimState {
                 self.mode = Mode::Visual;
                 self.visual_anchor = Some(text.cursor);
                 self.visual_head = Some(text.cursor);
-                vec![VimCommand::Select {
+                vec![VimCommand::Select(VisualState {
                     anchor: text.cursor,
                     head: text.cursor,
-                }]
+                })]
             }
             'V' => {
                 self.mode = Mode::VisualLine;
@@ -862,10 +776,7 @@ impl VimState {
             '*' | '#' => {
                 if let Some(word) = word_under_cursor(text) {
                     self.last_search_backward = c == '#';
-                    vec![VimCommand::SearchWordUnderCursor {
-                        word,
-                        forward: c == '*',
-                    }]
+                    vec![VimCommand::SearchWordUnderCursor(word, c == '*')]
                 } else {
                     vec![VimCommand::Noop]
                 }
@@ -899,27 +810,7 @@ impl VimState {
         };
 
         if let Some(prefix) = self.pending.take_prefix() {
-            if let Some(motion) = self.resolve_prefix_motion(prefix, c) {
-                return self.apply_motion(motion, text);
-            }
-            if prefix == Prefix::Scroll {
-                self.clear_preferred_column();
-                return match resolve_z_intent(c) {
-                    Some(intent) => vec![VimCommand::ScrollCursor(intent)],
-                    None => vec![VimCommand::Noop],
-                };
-            }
-            // Text objects in Visual mode (viw, vi", vab, etc.)
-            if matches!(prefix, Prefix::TextObjectInner | Prefix::TextObjectAround) {
-                let count = self.pending.take_count();
-                if let Some((from, to)) = text_object(text, c, prefix == Prefix::TextObjectInner, count) {
-                    self.visual_anchor = Some(from);
-                    self.visual_head = Some(to);
-                    self.clear_preferred_column();
-                    return vec![VimCommand::Select { anchor: from, head: to }];
-                }
-            }
-            return vec![VimCommand::Noop];
+            return self.resolve_partial(prefix, c, text);
         }
 
         // Digits for count
@@ -949,10 +840,10 @@ impl VimState {
                 } else {
                     self.mode = Mode::Visual;
                     self.clear_preferred_column();
-                    return vec![VimCommand::Select {
+                    return vec![VimCommand::Select(VisualState {
                         anchor,
                         head: text.cursor,
-                    }];
+                    })];
                 }
             }
             'V' => {
@@ -970,7 +861,7 @@ impl VimState {
             _ => {}
         }
 
-        if let Some(prefix) = Prefix::visual_start(c) {
+        if let Some(prefix) = Prefix::start(c, PrefixContext::Visual) {
             self.pending.start_normal_prefix(prefix);
             return vec![VimCommand::Noop];
         }
@@ -1004,12 +895,12 @@ impl VimState {
         if self.mode == Mode::VisualLine {
             let (first, last) = ordered_lines(anchor.line, head.line);
             let last_col = line_len(text, last).saturating_sub(1);
-            VimCommand::Select {
+            VimCommand::Select(VisualState {
                 anchor: pos(first, 0),
                 head: pos(last, last_col),
-            }
+            })
         } else {
-            VimCommand::Select { anchor, head }
+            VimCommand::Select(VisualState { anchor, head })
         }
     }
 
@@ -1037,25 +928,36 @@ impl VimState {
                 if c == '\n' || line_len(text, text.cursor.line) == 0 {
                     vec![VimCommand::Noop]
                 } else {
-                    vec![VimCommand::ReplaceChar { ch: c, count }]
+                    vec![VimCommand::ReplaceChar(c, count)]
                 }
             }
             Prefix::Go => {
                 self.clear_command_state();
                 match c {
-                    ';' => vec![VimCommand::JumpToLastEdit { enter_insert: false }],
-                    'i' => vec![VimCommand::JumpToLastEdit { enter_insert: true }],
+                    ';' => vec![VimCommand::JumpToLastEdit(false)],
+                    'i' => vec![VimCommand::JumpToLastEdit(true)],
                     _ => vec![VimCommand::Noop],
                 }
             }
             Prefix::Indent | Prefix::Outdent if c == prefix.as_char() => {
                 let count = self.pending.take_count().unwrap_or(1);
                 self.clear_command_state();
-                let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
+                let last = (text.cursor.line + count - 1).min(text.lines.len().saturating_sub(1));
                 shift_lines(text.cursor.line, last, prefix == Prefix::Indent, false)
             }
             Prefix::TextObjectInner | Prefix::TextObjectAround => {
                 let inner = prefix == Prefix::TextObjectInner;
+                if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
+                    let count = self.pending.take_count();
+                    if let Some((from, to)) = text_object(text, c, inner, count) {
+                        self.visual_anchor = Some(from);
+                        self.visual_head = Some(to);
+                        self.clear_preferred_column();
+                        return vec![VimCommand::Select(VisualState { anchor: from, head: to })];
+                    }
+                    self.clear_command_state();
+                    return vec![VimCommand::Noop];
+                }
                 if let Some((op, count)) = self.pending.take_operator() {
                     if let Some(range) = text_object(text, c, inner, count) {
                         self.clear_command_state();
@@ -1131,8 +1033,7 @@ impl VimState {
             };
             if cursor_on_non_space {
                 match motion {
-                    Motion::WordForward => Motion::WordEnd,
-                    Motion::BigWordForward => Motion::BigWordEnd,
+                    Motion::Word(WordMotion::Forward, big) => Motion::Word(WordMotion::End, big),
                     _ => motion,
                 }
             } else {
@@ -1166,12 +1067,12 @@ impl VimState {
         // vim: dw at end of line stops at EOL (doesn't eat newline)
         // vim: w at end of file can't find next word start - treat as inclusive
         let mut eol_clamped = false;
-        let target = if matches!(motion, Motion::WordForward | Motion::BigWordForward) {
+        let target = if matches!(motion, Motion::Word(WordMotion::Forward, _)) {
             if op == Operator::Delete && target.line > text.cursor.line {
                 eol_clamped = true;
                 let ll = line_len(text, text.cursor.line);
                 pos(text.cursor.line, ll.saturating_sub(1))
-            } else if target.line == text.line_count().saturating_sub(1)
+            } else if target.line == text.lines.len().saturating_sub(1)
                 && line_len(text, target.line) > 0
                 && target.column == line_len(text, target.line).saturating_sub(1)
             {
@@ -1213,33 +1114,30 @@ impl VimState {
 }
 
 fn line_operator(op: Operator, first: usize, last: usize, move_after_yank: bool) -> Vec<VimCommand> {
-    match (op, move_after_yank) {
-        (Operator::Delete, _) => vec![VimCommand::DeleteLines { first, last }],
-        (Operator::Change, _) => vec![VimCommand::ChangeLines { first, last }, VimCommand::EnterInsert],
-        (Operator::Yank, false) => vec![VimCommand::YankLines { first, last }],
-        (Operator::Yank, true) => vec![VimCommand::YankLines { first, last }, VimCommand::MoveTo(pos(first, 0))],
-    }
+    operator_commands(op, SelectionSpan::Lines { first, last }, move_after_yank)
 }
 
 fn range_operator(op: Operator, from: Position, to: Position) -> Vec<VimCommand> {
-    match op {
-        Operator::Delete => vec![VimCommand::DeleteRange { from, to }],
-        Operator::Change => vec![VimCommand::ChangeRange { from, to }, VimCommand::EnterInsert],
-        Operator::Yank => vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)],
-    }
+    operator_commands(op, SelectionSpan::Range { from, to }, false)
+}
+
+fn operator_commands(op: Operator, span: SelectionSpan, move_after_yank: bool) -> Vec<VimCommand> {
+    vec![match op {
+        Operator::Delete => VimCommand::Delete(span),
+        Operator::Change => VimCommand::Change(span),
+        Operator::Yank => VimCommand::Yank {
+            span,
+            move_after: move_after_yank,
+        },
+    }]
 }
 
 fn shift_lines(first: usize, last: usize, indent: bool, move_after: bool) -> Vec<VimCommand> {
-    let command = if indent {
-        VimCommand::IndentLines { first, last }
-    } else {
-        VimCommand::OutdentLines { first, last }
-    };
-    if move_after {
-        vec![command, VimCommand::MoveTo(pos(first, 0))]
-    } else {
-        vec![command]
-    }
+    vec![VimCommand::Shift {
+        span: SelectionSpan::Lines { first, last },
+        indent,
+        move_after,
+    }]
 }
 
 fn range_operator_or(op: Operator, range: Option<(Position, Position)>, fallback: VimCommand) -> Vec<VimCommand> {
@@ -1288,8 +1186,7 @@ fn motion_semantics(op: Operator, motion: &Motion, count: Option<usize>) -> Moti
             || matches!(motion, Motion::Percent) && count.is_some(),
         inclusive: matches!(
             motion,
-            Motion::WordEnd
-                | Motion::BigWordEnd
+            Motion::Word(WordMotion::End, _)
                 | Motion::LineEnd
                 | Motion::FindChar(_)
                 | Motion::FindCharBack(_)
@@ -1299,8 +1196,7 @@ fn motion_semantics(op: Operator, motion: &Motion, count: Option<usize>) -> Moti
         noop_on_same: matches!(
             motion,
             Motion::Left
-                | Motion::WordBackward
-                | Motion::BigWordBackward
+                | Motion::Word(WordMotion::Backward, _)
                 | Motion::LineStart
                 | Motion::FirstNonBlank
                 | Motion::FindChar(_)
@@ -1348,7 +1244,7 @@ fn compute_motion(
             pos(text.cursor.line, col)
         }
         Motion::Down => {
-            let line = (text.cursor.line + n).min(text.line_count().saturating_sub(1));
+            let line = (text.cursor.line + n).min(text.lines.len().saturating_sub(1));
             let col = preferred_column
                 .unwrap_or(text.cursor.column)
                 .min(line_len(text, line).saturating_sub(1));
@@ -1361,43 +1257,40 @@ fn compute_motion(
                 .min(line_len(text, line).saturating_sub(1));
             pos(line, col)
         }
-        Motion::WordForward => repeat_word(text, n, false, word_forward),
-        Motion::WordBackward => repeat_word(text, n, false, word_backward),
-        Motion::WordEnd => repeat_word(text, n, false, word_end),
-        Motion::BigWordForward => repeat_word(text, n, true, word_forward),
-        Motion::BigWordBackward => repeat_word(text, n, true, word_backward),
-        Motion::BigWordEnd => repeat_word(text, n, true, word_end),
+        Motion::Word(kind, big) => repeat_word(
+            text,
+            n,
+            *big,
+            match kind {
+                WordMotion::Forward => word_forward,
+                WordMotion::Backward => word_backward,
+                WordMotion::End => word_end,
+            },
+        ),
         Motion::LineStart => pos(text.cursor.line, 0),
         Motion::LineEnd => {
-            let line = (text.cursor.line + n.saturating_sub(1)).min(text.line_count().saturating_sub(1));
+            let line = (text.cursor.line + n.saturating_sub(1)).min(text.lines.len().saturating_sub(1));
             let ll = line_len(text, line);
             pos(line, ll.saturating_sub(1))
         }
         Motion::FirstNonBlank => pos(text.cursor.line, first_non_blank(text, text.cursor.line)),
-        Motion::DocumentStart => match count {
-            Some(n) => {
-                let line = n.saturating_sub(1).min(text.line_count().saturating_sub(1));
-                pos(line, text.cursor.column.min(line_len(text, line).saturating_sub(1)))
-            }
-            None => pos(0, text.cursor.column.min(line_len(text, 0).saturating_sub(1))),
-        },
-        Motion::DocumentEnd => match count {
-            Some(n) => {
-                let line = n.saturating_sub(1).min(text.line_count().saturating_sub(1));
-                pos(line, text.cursor.column.min(line_len(text, line).saturating_sub(1)))
-            }
-            None => {
-                let line = text.line_count().saturating_sub(1);
-                pos(line, text.cursor.column.min(line_len(text, line).saturating_sub(1)))
-            }
-        },
+        Motion::DocumentStart | Motion::DocumentEnd => {
+            let last = text.lines.len().saturating_sub(1);
+            let default = if matches!(motion, Motion::DocumentStart) {
+                0
+            } else {
+                last
+            };
+            let line = count.map_or(default, |n| n.saturating_sub(1).min(last));
+            pos(line, text.cursor.column.min(line_len(text, line).saturating_sub(1)))
+        }
         Motion::FindChar(ch) => find_char(text, *ch, n, true, false),
         Motion::TillChar(ch) => find_char(text, *ch, n, true, true),
         Motion::FindCharBack(ch) => find_char(text, *ch, n, false, false),
         Motion::TillCharBack(ch) => find_char(text, *ch, n, false, true),
         Motion::Percent => match count {
             Some(n) => {
-                let total = text.line_count().max(1);
+                let total = text.lines.len().max(1);
                 let pct = n.clamp(1, 100);
                 let line = ((pct * total).saturating_add(99) / 100).saturating_sub(1);
                 pos(line, text.cursor.column.min(line_len(text, line).saturating_sub(1)))
@@ -1516,12 +1409,12 @@ fn char_to_motion(c: char) -> Option<Motion> {
         'l' => Some(Motion::Right),
         'j' => Some(Motion::Down),
         'k' => Some(Motion::Up),
-        'w' => Some(Motion::WordForward),
-        'b' => Some(Motion::WordBackward),
-        'e' => Some(Motion::WordEnd),
-        'W' => Some(Motion::BigWordForward),
-        'B' => Some(Motion::BigWordBackward),
-        'E' => Some(Motion::BigWordEnd),
+        'w' => Some(Motion::Word(WordMotion::Forward, false)),
+        'b' => Some(Motion::Word(WordMotion::Backward, false)),
+        'e' => Some(Motion::Word(WordMotion::End, false)),
+        'W' => Some(Motion::Word(WordMotion::Forward, true)),
+        'B' => Some(Motion::Word(WordMotion::Backward, true)),
+        'E' => Some(Motion::Word(WordMotion::End, true)),
         '$' => Some(Motion::LineEnd),
         '^' => Some(Motion::FirstNonBlank),
         'G' => Some(Motion::DocumentEnd),
@@ -1545,14 +1438,13 @@ fn reverse_find(motion: Motion) -> Motion {
 fn word_forward(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> (usize, usize) {
     let mut cells = line_cells(text, line);
     if cells.is_empty() {
-        if line + 1 < text.line_count() {
+        if line + 1 < text.lines.len() {
             return (line + 1, 0);
         }
         return (line, 0);
     }
 
     let containing = cell_containing_char(&cells, col);
-    let start_class = vim_token_class(cells[containing].repr, big);
     // If the cursor is past EOL we start advancing from one-past-end so the
     // class-skip loop falls through to the next line; otherwise advance from
     // the containing cluster.
@@ -1562,20 +1454,18 @@ fn word_forward(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> 
         containing
     };
 
-    if start_class != TokenClass::Whitespace {
-        while cell_ix < cells.len() && vim_token_class(cells[cell_ix].repr, big) == start_class {
-            cell_ix += 1;
-        }
+    if cell_ix < cells.len() && cell_class(&cells, cell_ix, big) != TokenClass::Whitespace {
+        cell_ix = cell_run(&cells, cell_ix, big).1 + 1;
     }
 
     loop {
-        while cell_ix < cells.len() && vim_token_class(cells[cell_ix].repr, big) == TokenClass::Whitespace {
+        while cell_ix < cells.len() && cell_class(&cells, cell_ix, big) == TokenClass::Whitespace {
             cell_ix += 1;
         }
         if cell_ix < cells.len() {
             return (line, cells[cell_ix].char_start);
         }
-        if line + 1 < text.line_count() {
+        if line + 1 < text.lines.len() {
             line += 1;
             cells = line_cells(text, line);
             cell_ix = 0;
@@ -1615,10 +1505,10 @@ fn word_backward(text: &TextSnapshot, mut line: usize, col: usize, big: bool) ->
 
     loop {
         if !cells.is_empty() {
-            while cell_ix > 0 && vim_token_class(cells[cell_ix].repr, big) == TokenClass::Whitespace {
+            while cell_ix > 0 && cell_class(&cells, cell_ix, big) == TokenClass::Whitespace {
                 cell_ix -= 1;
             }
-            if vim_token_class(cells[cell_ix].repr, big) != TokenClass::Whitespace {
+            if cell_class(&cells, cell_ix, big) != TokenClass::Whitespace {
                 break;
             }
         }
@@ -1633,11 +1523,7 @@ fn word_backward(text: &TextSnapshot, mut line: usize, col: usize, big: bool) ->
         cell_ix = cells.len() - 1;
     }
 
-    let word_class = vim_token_class(cells[cell_ix].repr, big);
-    while cell_ix > 0 && vim_token_class(cells[cell_ix - 1].repr, big) == word_class {
-        cell_ix -= 1;
-    }
-
+    cell_ix = cell_run(&cells, cell_ix, big).0;
     (line, cells[cell_ix].char_start)
 }
 
@@ -1647,7 +1533,7 @@ fn word_end(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> (usi
     // Step right by one cluster, possibly crossing to the next line. The next
     // cell is the one just past the cluster currently containing the cursor.
     let mut cell_ix = if cells.is_empty() {
-        if line + 1 < text.line_count() {
+        if line + 1 < text.lines.len() {
             line += 1;
             cells = line_cells(text, line);
             0
@@ -1658,7 +1544,7 @@ fn word_end(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> (usi
         let containing = cell_containing_char(&cells, col);
         if containing + 1 < cells.len() {
             containing + 1
-        } else if line + 1 < text.line_count() {
+        } else if line + 1 < text.lines.len() {
             line += 1;
             cells = line_cells(text, line);
             0
@@ -1669,14 +1555,14 @@ fn word_end(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> (usi
 
     loop {
         if !cells.is_empty() {
-            while cell_ix < cells.len() && vim_token_class(cells[cell_ix].repr, big) == TokenClass::Whitespace {
+            while cell_ix < cells.len() && cell_class(&cells, cell_ix, big) == TokenClass::Whitespace {
                 cell_ix += 1;
             }
             if cell_ix < cells.len() {
                 break;
             }
         }
-        if line + 1 < text.line_count() {
+        if line + 1 < text.lines.len() {
             line += 1;
             cells = line_cells(text, line);
             cell_ix = 0;
@@ -1685,11 +1571,7 @@ fn word_end(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> (usi
         }
     }
 
-    let word_class = vim_token_class(cells[cell_ix].repr, big);
-    while cell_ix + 1 < cells.len() && vim_token_class(cells[cell_ix + 1].repr, big) == word_class {
-        cell_ix += 1;
-    }
-
+    cell_ix = cell_run(&cells, cell_ix, big).1;
     // The cursor sits on the cluster, so the "end of word" target is the
     // cluster's start column — never an interior char column.
     (line, cells[cell_ix].char_start)
@@ -1751,53 +1633,34 @@ fn word_object_at(text: &TextSnapshot, cursor: Position, inner: bool, big: bool)
     }
     let col = cursor.column.min(line_len(text, line).saturating_sub(1));
     let cell_ix = cell_containing_char(&cells, col);
-    let cur_class = vim_token_class(cells[cell_ix].repr, big);
-
-    let mut start = cell_ix;
-    while start > 0 && vim_token_class(cells[start - 1].repr, big) == cur_class {
-        start -= 1;
-    }
-
-    let mut end = cell_ix;
-    while end + 1 < cells.len() && vim_token_class(cells[end + 1].repr, big) == cur_class {
-        end += 1;
-    }
+    let cur_class = cell_class(&cells, cell_ix, big);
+    let (mut start, mut end) = cell_run(&cells, cell_ix, big);
 
     if inner {
-        return Some((pos(line, cells[start].char_start), pos(line, cells[end].char_start)));
+        return Some(cell_positions(line, &cells, start, end));
     }
 
     if cur_class == TokenClass::Whitespace {
-        if let Some((_, next_end)) = next_non_space_range(&cells, end + 1, big) {
-            return Some((
-                pos(line, cells[start].char_start),
-                pos(line, cells[next_end].char_start),
-            ));
+        if let Some((_, next_end)) = adjacent_word_run(&cells, end + 1, big, true) {
+            return Some(cell_positions(line, &cells, start, next_end));
         }
-        if let Some((prev_start, _)) = prev_non_space_range(&cells, start, big) {
-            return Some((
-                pos(line, cells[prev_start].char_start),
-                pos(line, cells[end].char_start),
-            ));
+        if let Some((prev_start, _)) = adjacent_word_run(&cells, start, big, false) {
+            return Some(cell_positions(line, &cells, prev_start, end));
         }
-        return Some((pos(line, cells[start].char_start), pos(line, cells[end].char_start)));
+        return Some(cell_positions(line, &cells, start, end));
     }
 
-    if end + 1 < cells.len() && vim_token_class(cells[end + 1].repr, big) == TokenClass::Whitespace {
-        while end + 1 < cells.len() && vim_token_class(cells[end + 1].repr, big) == TokenClass::Whitespace {
-            end += 1;
-        }
-    } else if start > 0 && vim_token_class(cells[start - 1].repr, big) == TokenClass::Whitespace {
-        while start > 0 && vim_token_class(cells[start - 1].repr, big) == TokenClass::Whitespace {
-            start -= 1;
-        }
+    if end + 1 < cells.len() && cell_class(&cells, end + 1, big) == TokenClass::Whitespace {
+        end = cell_run(&cells, end + 1, big).1;
+    } else if start > 0 && cell_class(&cells, start - 1, big) == TokenClass::Whitespace {
+        start = cell_run(&cells, start - 1, big).0;
     }
 
-    Some((pos(line, cells[start].char_start), pos(line, cells[end].char_start)))
+    Some(cell_positions(line, &cells, start, end))
 }
 
 fn paragraph_object(text: &TextSnapshot, inner: bool) -> Option<(Position, Position)> {
-    let total = text.line_count();
+    let total = text.lines.len();
     if total == 0 {
         return None;
     }
@@ -1824,80 +1687,23 @@ fn paragraph_object(text: &TextSnapshot, inner: bool) -> Option<(Position, Posit
 }
 
 fn pair_object(text: &TextSnapshot, open: char, close: char, inner: bool) -> Option<(Position, Position)> {
-    // Scan backward for unmatched opener
-    // If cursor is on the close delimiter, skip it (we're looking for its match)
-    let open_pos = {
-        let mut line = text.cursor.line;
-        let mut chars = line_chars(text, line);
-        let mut col = text.cursor.column.min(chars.len().saturating_sub(1));
-        let on_close = col < chars.len() && chars[col] == close;
-        let mut depth = if on_close { -1 } else { 0i32 };
-        loop {
-            if col < chars.len() {
-                let ch = chars[col];
-                if ch == close {
-                    depth += 1;
-                }
-                if ch == open {
-                    if depth == 0 {
-                        break Some(pos(line, col));
-                    }
-                    depth -= 1;
-                }
-            }
-            if col > 0 {
-                col -= 1;
-            } else if line > 0 {
-                line -= 1;
-                chars = line_chars(text, line);
-                col = chars.len().saturating_sub(1);
-            } else {
-                break None;
-            }
-        }
-    }?;
-
-    // Scan forward from opener for matching closer
-    let close_pos = {
-        let mut line = open_pos.line;
-        let mut chars = line_chars(text, line);
-        let mut col = open_pos.column;
-        let mut depth = 0i32;
-        loop {
-            if col < chars.len() {
-                let ch = chars[col];
-                if ch == open {
-                    depth += 1;
-                }
-                if ch == close {
-                    depth -= 1;
-                    if depth == 0 {
-                        break Some(pos(line, col));
-                    }
-                }
-            }
-            col += 1;
-            if col >= chars.len() {
-                line += 1;
-                if line >= text.line_count() {
-                    break None;
-                }
-                chars = line_chars(text, line);
-                col = 0;
-            }
-        }
-    }?;
+    let start_col = text
+        .cursor
+        .column
+        .min(line_len(text, text.cursor.line).saturating_sub(1));
+    let start_chars = line_chars(text, text.cursor.line);
+    let depth = if start_chars.get(start_col) == Some(&close) {
+        -1
+    } else {
+        0
+    };
+    let open_pos = scan_pair(text, pos(text.cursor.line, start_col), close, open, false, true, depth)?;
+    let close_pos = scan_pair(text, open_pos, open, close, true, false, 0)?;
 
     if inner {
-        // Between delimiters (exclusive of delimiters)
         let from = advance_pos(text, open_pos)?;
         let to = retreat_pos(text, close_pos)?;
-        if pos_le(&from, &to) {
-            Some((from, to))
-        } else {
-            // Empty interior (e.g., `()`) - no-op
-            None
-        }
+        pos_le(&from, &to).then_some((from, to))
     } else {
         Some((open_pos, close_pos))
     }
@@ -1960,42 +1766,35 @@ fn quote_text_object(text: &TextSnapshot, quote: char, inner: bool) -> Option<(P
     Some((pos(from.line, start), pos(to.line, end)))
 }
 
-fn next_non_space_range(cells: &[GraphemeCell], mut start: usize, big: bool) -> Option<(usize, usize)> {
-    while start < cells.len() && vim_token_class(cells[start].repr, big) == TokenClass::Whitespace {
-        start += 1;
-    }
-    if start >= cells.len() {
-        return None;
-    }
-    let class = vim_token_class(cells[start].repr, big);
-    let mut end = start;
-    while end + 1 < cells.len() && vim_token_class(cells[end + 1].repr, big) == class {
-        end += 1;
-    }
-    Some((start, end))
+fn cell_class(cells: &[GraphemeCell], ix: usize, big: bool) -> TokenClass {
+    vim_token_class(cells[ix].repr, big)
 }
 
-fn prev_non_space_range(cells: &[GraphemeCell], start: usize, big: bool) -> Option<(usize, usize)> {
-    if start == 0 {
-        return None;
-    }
-    let mut end = start - 1;
-    loop {
-        if vim_token_class(cells[end].repr, big) != TokenClass::Whitespace {
-            break;
-        }
-        if end == 0 {
-            return None;
-        }
-        end -= 1;
-    }
+fn cell_run(cells: &[GraphemeCell], ix: usize, big: bool) -> (usize, usize) {
+    let class = cell_class(cells, ix, big);
+    let start = (0..ix)
+        .rev()
+        .find(|&i| cell_class(cells, i, big) != class)
+        .map_or(0, |i| i + 1);
+    let end = (ix + 1..cells.len())
+        .find(|&i| cell_class(cells, i, big) != class)
+        .map_or(cells.len() - 1, |i| i - 1);
+    (start, end)
+}
 
-    let class = vim_token_class(cells[end].repr, big);
-    let mut range_start = end;
-    while range_start > 0 && vim_token_class(cells[range_start - 1].repr, big) == class {
-        range_start -= 1;
-    }
-    Some((range_start, end))
+fn adjacent_word_run(cells: &[GraphemeCell], start: usize, big: bool, forward: bool) -> Option<(usize, usize)> {
+    let ix = if forward {
+        (start..cells.len()).find(|&i| cell_class(cells, i, big) != TokenClass::Whitespace)?
+    } else {
+        (0..start)
+            .rev()
+            .find(|&i| cell_class(cells, i, big) != TokenClass::Whitespace)?
+    };
+    Some(cell_run(cells, ix, big))
+}
+
+fn cell_positions(line: usize, cells: &[GraphemeCell], start: usize, end: usize) -> (Position, Position) {
+    (pos(line, cells[start].char_start), pos(line, cells[end].char_start))
 }
 
 fn is_escaped_quote(chars: &[char], idx: usize) -> bool {
@@ -2029,18 +1828,8 @@ fn quote_neighbor_is_wordish(ch: char) -> bool {
 fn match_bracket(text: &TextSnapshot) -> Option<Position> {
     let line = text.cursor.line;
     let chars = line_chars(text, line);
-
-    // Find bracket at or after cursor on current line
-    let mut col = text.cursor.column;
-    let bracket = loop {
-        if col >= chars.len() {
-            return None;
-        }
-        if is_bracket(chars[col]) {
-            break chars[col];
-        }
-        col += 1;
-    };
+    let col = (text.cursor.column..chars.len()).find(|&col| is_bracket(chars[col]))?;
+    let bracket = chars[col];
 
     let (inc, dec, forward) = match bracket {
         '(' => ('(', ')', true),
@@ -2052,21 +1841,22 @@ fn match_bracket(text: &TextSnapshot) -> Option<Position> {
         _ => return None,
     };
 
-    find_match(text, line, col, inc, dec, forward)
+    scan_pair(text, pos(line, col), inc, dec, forward, false, 0)
 }
 
-fn find_match(
+fn scan_pair(
     text: &TextSnapshot,
-    start_line: usize,
-    start_col: usize,
+    start: Position,
     inc: char,
     dec: char,
     forward: bool,
+    return_before_dec: bool,
+    initial_depth: i32,
 ) -> Option<Position> {
-    let mut depth = 0i32;
-    let mut line = start_line;
+    let mut depth = initial_depth;
+    let mut line = start.line;
     let mut chars = line_chars(text, line);
-    let mut col = start_col;
+    let mut col = start.column;
 
     loop {
         if col < chars.len() {
@@ -2075,9 +1865,12 @@ fn find_match(
                 depth += 1;
             }
             if ch == dec {
+                if return_before_dec && depth == 0 {
+                    return Some(pos(line, col));
+                }
                 depth -= 1;
             }
-            if depth == 0 {
+            if !return_before_dec && depth == 0 {
                 return Some(pos(line, col));
             }
         }
@@ -2086,7 +1879,7 @@ fn find_match(
             col += 1;
             if col >= chars.len() {
                 line += 1;
-                if line >= text.line_count() {
+                if line >= text.lines.len() {
                     return None;
                 }
                 chars = line_chars(text, line);
@@ -2175,11 +1968,7 @@ fn ordered(a: Position, b: Position) -> (Position, Position) {
     }
 }
 fn ordered_lines(a: usize, b: usize) -> (usize, usize) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    (a.min(b), a.max(b))
 }
 
 /// Advance position by one character (possibly to next line).
@@ -2187,7 +1976,7 @@ fn advance_pos(text: &TextSnapshot, p: Position) -> Option<Position> {
     let ll = line_len(text, p.line);
     if p.column + 1 < ll {
         Some(pos(p.line, p.column + 1))
-    } else if p.line + 1 < text.line_count() {
+    } else if p.line + 1 < text.lines.len() {
         Some(pos(p.line + 1, 0))
     } else {
         None
