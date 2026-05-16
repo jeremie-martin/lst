@@ -115,6 +115,12 @@ fn modes_state_pending_and_escape_follow_vim_contracts() {
     harness.expect_pending("y");
     harness.keys("s");
     harness.expect_pending("");
+
+    let mut harness = VimHarness::normal_at("abcdef", 0, 0);
+    harness.keys("df<right>");
+    harness.expect_text("abcdef");
+    harness.expect_cursor(0, 1);
+    harness.expect_pending("");
 }
 
 #[test]

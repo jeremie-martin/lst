@@ -213,26 +213,83 @@ pub struct VisualState {
 
 // -- Private types -----------------------------------------------------------
 
+#[derive(Clone, Copy)]
+enum SelectionSpan {
+    Range { from: Position, to: Position },
+    Lines { first: usize, last: usize },
+}
+
+impl SelectionSpan {
+    fn visual(anchor: Position, head: Position, linewise: bool) -> Self {
+        if linewise {
+            let (first, last) = ordered_lines(anchor.line, head.line);
+            Self::Lines { first, last }
+        } else {
+            let (from, to) = ordered(anchor, head);
+            Self::Range { from, to }
+        }
+    }
+
+    fn line_span(self) -> (usize, usize) {
+        match self {
+            SelectionSpan::Range { from, to } => ordered_lines(from.line, to.line),
+            SelectionSpan::Lines { first, last } => (first, last),
+        }
+    }
+
+    fn operator(self, op: Operator) -> Vec<VimCommand> {
+        match self {
+            SelectionSpan::Range { from, to } => range_operator(op, from, to),
+            SelectionSpan::Lines { first, last } => line_operator(op, first, last, true),
+        }
+    }
+
+    fn paste(self, preserve_register: bool) -> Vec<VimCommand> {
+        match self {
+            SelectionSpan::Range { from, to } => vec![VimCommand::PasteSelectionRange {
+                from,
+                to,
+                preserve_register,
+            }],
+            SelectionSpan::Lines { first, last } => vec![VimCommand::PasteSelectionLines {
+                first,
+                last,
+                preserve_register,
+            }],
+        }
+    }
+
+    fn shift(self, indent: bool) -> Vec<VimCommand> {
+        let (first, last) = self.line_span();
+        shift_lines(first, last, indent, true)
+    }
+
+    fn transform_case(self, uppercase: bool) -> Vec<VimCommand> {
+        match self {
+            SelectionSpan::Range { from, to } => vec![VimCommand::TransformCaseRange { from, to, uppercase }],
+            SelectionSpan::Lines { first, last } => vec![VimCommand::TransformCaseLines { first, last, uppercase }],
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Pending {
     #[default]
     Empty,
     Count(usize),
-    NormalPartial {
+    Prefix {
         count: Option<usize>,
         prefix: Prefix,
     },
-    Operator {
-        op: Operator,
-        op_count: Option<usize>,
-        count: Option<usize>,
-    },
-    OperatorPartial {
-        op: Operator,
-        op_count: Option<usize>,
-        count: Option<usize>,
-        prefix: Prefix,
-    },
+    Operator(OperatorPending),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OperatorPending {
+    op: Operator,
+    op_count: Option<usize>,
+    count: Option<usize>,
+    prefix: Option<Prefix>,
 }
 
 impl Pending {
@@ -241,37 +298,42 @@ impl Pending {
         match self {
             Pending::Empty => {}
             Pending::Count(count) => s.push_str(&count.to_string()),
-            Pending::NormalPartial { count, prefix } => {
+            Pending::Prefix { count, prefix } => {
                 if let Some(count) = count {
                     s.push_str(&count.to_string());
                 }
                 s.push(prefix.as_char());
             }
-            Pending::Operator { op, op_count, count } => {
-                append_operator_display(&mut s, op, op_count, count);
-            }
-            Pending::OperatorPartial {
-                op,
-                op_count,
-                count,
-                prefix,
-            } => {
-                append_operator_display(&mut s, op, op_count, count);
-                s.push(prefix.as_char());
+            Pending::Operator(pending) => {
+                if let Some(op_count) = pending.op_count {
+                    s.push_str(&op_count.to_string());
+                }
+                s.push(pending.op.as_char());
+                if let Some(count) = pending.count {
+                    s.push_str(&count.to_string());
+                }
+                if let Some(prefix) = pending.prefix {
+                    s.push(prefix.as_char());
+                }
             }
         }
         s
     }
 
     fn has_count(self) -> bool {
-        matches!(self, Pending::Count(_) | Pending::Operator { count: Some(_), .. })
+        matches!(
+            self,
+            Pending::Count(_) | Pending::Operator(OperatorPending { count: Some(_), .. })
+        )
     }
 
     fn add_digit(&mut self, digit: usize) {
         match self {
             Pending::Empty => *self = Pending::Count(digit),
             Pending::Count(count) => *count = *count * 10 + digit,
-            Pending::Operator { count, .. } => append_count(count, digit),
+            Pending::Operator(pending) if pending.prefix.is_none() => {
+                pending.count = Some(pending.count.unwrap_or(0) * 10 + digit);
+            }
             _ => {}
         }
     }
@@ -281,7 +343,7 @@ impl Pending {
             Pending::Count(count) => Some(count),
             _ => None,
         };
-        *self = Pending::NormalPartial { count, prefix };
+        *self = Pending::Prefix { count, prefix };
     }
 
     fn start_operator(&mut self, op: Operator) {
@@ -289,46 +351,36 @@ impl Pending {
             Pending::Count(count) => Some(count),
             _ => None,
         };
-        *self = Pending::Operator {
+        *self = Pending::Operator(OperatorPending {
             op,
             op_count,
             count: None,
-        };
+            prefix: None,
+        });
     }
 
     fn start_operator_prefix(&mut self, prefix: Prefix) {
-        if let Pending::Operator { op, op_count, count } = *self {
-            *self = Pending::OperatorPartial {
-                op,
-                op_count,
-                count,
-                prefix,
-            };
+        if let Pending::Operator(pending) = self {
+            pending.prefix = Some(prefix);
         }
     }
 
     fn take_prefix(&mut self) -> Option<Prefix> {
-        match *self {
-            Pending::NormalPartial { count, prefix } => {
+        match self {
+            Pending::Prefix { count, prefix } => {
+                let count = *count;
+                let prefix = *prefix;
                 *self = count.map(Pending::Count).unwrap_or_default();
                 Some(prefix)
             }
-            Pending::OperatorPartial {
-                op,
-                op_count,
-                count,
-                prefix,
-            } => {
-                *self = Pending::Operator { op, op_count, count };
-                Some(prefix)
-            }
+            Pending::Operator(pending) => pending.prefix.take(),
             _ => None,
         }
     }
 
     fn operator(self) -> Option<Operator> {
         match self {
-            Pending::Operator { op, .. } => Some(op),
+            Pending::Operator(OperatorPending { op, prefix: None, .. }) => Some(op),
             _ => None,
         }
     }
@@ -345,9 +397,9 @@ impl Pending {
 
     fn take_operator_count(&mut self) -> Option<usize> {
         match *self {
-            Pending::Operator { op_count, count, .. } => {
+            Pending::Operator(pending) if pending.prefix.is_none() => {
                 *self = Pending::Empty;
-                combine_counts(op_count, count)
+                combine_counts(pending.op_count, pending.count)
             }
             _ => None,
         }
@@ -355,27 +407,13 @@ impl Pending {
 
     fn take_operator(&mut self) -> Option<(Operator, Option<usize>)> {
         match *self {
-            Pending::Operator { op, op_count, count } => {
+            Pending::Operator(pending) if pending.prefix.is_none() => {
                 *self = Pending::Empty;
-                Some((op, combine_counts(op_count, count)))
+                Some((pending.op, combine_counts(pending.op_count, pending.count)))
             }
             _ => None,
         }
     }
-}
-
-fn append_operator_display(s: &mut String, op: Operator, op_count: Option<usize>, count: Option<usize>) {
-    if let Some(op_count) = op_count {
-        s.push_str(&op_count.to_string());
-    }
-    s.push(op.as_char());
-    if let Some(count) = count {
-        s.push_str(&count.to_string());
-    }
-}
-
-fn append_count(count: &mut Option<usize>, digit: usize) {
-    *count = Some(count.unwrap_or(0) * 10 + digit);
 }
 
 fn combine_counts(operator_count: Option<usize>, motion_count: Option<usize>) -> Option<usize> {
@@ -395,6 +433,15 @@ enum Operator {
 }
 
 impl Operator {
+    fn from_char(c: char) -> Option<Self> {
+        match c {
+            'd' => Some(Self::Delete),
+            'c' => Some(Self::Change),
+            'y' => Some(Self::Yank),
+            _ => None,
+        }
+    }
+
     fn as_char(self) -> char {
         match self {
             Operator::Delete => 'd',
@@ -503,6 +550,11 @@ enum Motion {
     Percent,
 }
 
+enum KeyAction {
+    Command(VimCommand),
+    Motion(Motion),
+}
+
 // -- VimState ----------------------------------------------------------------
 
 impl Default for VimState {
@@ -578,12 +630,53 @@ impl VimState {
         self.clear_command_state();
     }
 
+    fn exit_visual_with(&mut self, commands: Vec<VimCommand>) -> Vec<VimCommand> {
+        self.exit_visual();
+        commands
+    }
+
     fn repeat_find(&self, c: char) -> Option<Motion> {
         if c != ';' && c != ',' {
             return None;
         }
         let last = self.last_find?;
         Some(if c == ';' { last } else { reverse_find(last) })
+    }
+
+    fn char_motion(&self, c: char) -> Option<Motion> {
+        char_to_motion(c).or_else(|| self.repeat_find(c))
+    }
+
+    fn apply_key_action(&mut self, action: KeyAction, text: &TextSnapshot, clear_commands: bool) -> Vec<VimCommand> {
+        match action {
+            KeyAction::Command(cmd) => {
+                if clear_commands {
+                    self.clear_command_state();
+                }
+                vec![cmd]
+            }
+            KeyAction::Motion(motion) => self.apply_motion(motion, text),
+        }
+    }
+
+    fn search_command(&mut self, c: char) -> Option<VimCommand> {
+        match c {
+            '/' | '?' => {
+                self.last_search_backward = c == '?';
+                Some(VimCommand::OpenFind { backward: c == '?' })
+            }
+            'n' => Some(if self.last_search_backward {
+                VimCommand::FindPrev
+            } else {
+                VimCommand::FindNext
+            }),
+            'N' => Some(if self.last_search_backward {
+                VimCommand::FindNext
+            } else {
+                VimCommand::FindPrev
+            }),
+            _ => None,
+        }
     }
 
     fn resolve_prefix_motion(&mut self, prefix: Prefix, c: char) -> Option<Motion> {
@@ -648,23 +741,12 @@ impl VimState {
             return vec![VimCommand::Noop];
         }
 
-        if let Key::Named(named) = key {
-            if let Some(cmd) = named_page_command(named) {
-                self.clear_command_state();
-                return vec![cmd];
-            }
-            if let Some(m) = named_key_to_motion(named) {
-                return self.apply_motion(m, text);
-            }
-            return vec![VimCommand::Noop];
+        if let Some(action) = named_key_action(key) {
+            return self.apply_key_action(action, text, true);
         }
 
-        let c = match key {
-            Key::Character(s) => match s.as_str().chars().next() {
-                Some(c) => c,
-                None => return vec![VimCommand::Noop],
-            },
-            _ => return vec![VimCommand::Noop],
+        let Some(c) = key_char(key) else {
+            return vec![VimCommand::Noop];
         };
 
         if let Some(prefix) = self.pending.take_prefix() {
@@ -681,58 +763,32 @@ impl VimState {
         }
 
         if let Some(op) = self.pending.operator() {
-            // Text object prefixes
-            if c == 'i' || c == 'a' {
-                self.pending.start_operator_prefix(Prefix::operator_start(c).unwrap());
-                return vec![VimCommand::Noop];
-            }
-
-            let doubled = matches!(
-                (op, c),
-                (Operator::Delete, 'd') | (Operator::Change, 'c') | (Operator::Yank, 'y')
-            );
-            if doubled {
+            if Some(op) == Operator::from_char(c) {
                 let count = self.pending.take_operator_count().unwrap_or(1);
                 let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
-                return self.line_operator(op, text.cursor.line, last);
+                return line_operator(op, text.cursor.line, last, false);
             }
 
-            // Try as motion
-            if let Some(motion) = char_to_motion(c) {
+            if let Some(motion) = self.char_motion(c) {
                 return self.apply_motion(motion, text);
             }
 
-            // Two-char sequence starters
             if let Some(prefix) = Prefix::operator_start(c) {
                 self.pending.start_operator_prefix(prefix);
                 return vec![VimCommand::Noop];
             }
 
-            if let Some(motion) = self.repeat_find(c) {
-                return self.apply_motion(motion, text);
-            }
-
-            // Unknown - cancel
             self.clear_pending();
             return vec![VimCommand::Noop];
         }
 
-        if let Some(motion) = char_to_motion(c) {
-            return self.apply_motion(motion, text);
-        }
-
-        if let Some(motion) = self.repeat_find(c) {
+        if let Some(motion) = self.char_motion(c) {
             return self.apply_motion(motion, text);
         }
 
         // Operators
-        if matches!(c, 'd' | 'c' | 'y') {
-            self.pending.start_operator(match c {
-                'd' => Operator::Delete,
-                'c' => Operator::Change,
-                'y' => Operator::Yank,
-                _ => unreachable!(),
-            });
+        if let Some(op) = Operator::from_char(c) {
+            self.pending.start_operator(op);
             return vec![VimCommand::Noop];
         }
 
@@ -744,6 +800,9 @@ impl VimState {
 
         let count = self.pending.take_count().unwrap_or(1);
         self.clear_command_state();
+        if let Some(cmd) = self.search_command(c) {
+            return vec![cmd];
+        }
 
         match c {
             'H' => vec![VimCommand::MoveToScreenTop],
@@ -764,64 +823,15 @@ impl VimState {
             }
             'o' => vec![VimCommand::OpenLineBelow, VimCommand::EnterInsert],
             'O' => vec![VimCommand::OpenLineAbove, VimCommand::EnterInsert],
-            'x' => {
-                let ll = line_len(text, text.cursor.line);
-                if ll == 0 {
-                    return vec![VimCommand::Noop];
-                }
-                let end = (text.cursor.column + count - 1).min(ll.saturating_sub(1));
-                vec![VimCommand::DeleteRange {
-                    from: text.cursor,
-                    to: pos(text.cursor.line, end),
-                }]
-            }
-            'X' => {
-                if text.cursor.column == 0 {
-                    return vec![VimCommand::Noop];
-                }
-                let start = text.cursor.column.saturating_sub(count);
-                vec![VimCommand::DeleteRange {
-                    from: pos(text.cursor.line, start),
-                    to: pos(text.cursor.line, text.cursor.column - 1),
-                }]
-            }
-            's' => {
-                let ll = line_len(text, text.cursor.line);
-                if ll == 0 {
-                    return vec![VimCommand::EnterInsert];
-                }
-                let end = (text.cursor.column + count - 1).min(ll.saturating_sub(1));
-                vec![
-                    VimCommand::ChangeRange {
-                        from: text.cursor,
-                        to: pos(text.cursor.line, end),
-                    },
-                    VimCommand::EnterInsert,
-                ]
-            }
-            'D' => {
-                let ll = line_len(text, text.cursor.line);
-                if ll == 0 || text.cursor.column >= ll {
-                    return vec![VimCommand::Noop];
-                }
-                vec![VimCommand::DeleteRange {
-                    from: text.cursor,
-                    to: pos(text.cursor.line, ll - 1),
-                }]
-            }
-            'C' => {
-                let ll = line_len(text, text.cursor.line);
-                if ll == 0 || text.cursor.column >= ll {
-                    return vec![VimCommand::EnterInsert];
-                }
-                vec![
-                    VimCommand::ChangeRange {
-                        from: text.cursor,
-                        to: pos(text.cursor.line, ll - 1),
-                    },
-                    VimCommand::EnterInsert,
-                ]
-            }
+            'x' => range_operator_or(Operator::Delete, counted_forward_range(text, count), VimCommand::Noop),
+            'X' => range_operator_or(Operator::Delete, counted_backward_range(text, count), VimCommand::Noop),
+            's' => range_operator_or(
+                Operator::Change,
+                counted_forward_range(text, count),
+                VimCommand::EnterInsert,
+            ),
+            'D' => range_operator_or(Operator::Delete, line_tail_range(text), VimCommand::Noop),
+            'C' => range_operator_or(Operator::Change, line_tail_range(text), VimCommand::EnterInsert),
             'J' => {
                 // vim: J = join 2 lines (1 op), 3J = join 3 lines (2 ops)
                 let joins = if count <= 1 { 1 } else { count - 1 };
@@ -829,7 +839,7 @@ impl VimState {
             }
             'S' => {
                 let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
-                self.line_operator(Operator::Change, text.cursor.line, last)
+                line_operator(Operator::Change, text.cursor.line, last, false)
             }
             'p' => vec![VimCommand::PasteAfter],
             'P' => vec![VimCommand::PasteBefore],
@@ -849,24 +859,6 @@ impl VimState {
                 self.visual_head = Some(text.cursor);
                 self.visual_select(text.cursor, text)
             }
-            '/' => {
-                self.last_search_backward = false;
-                vec![VimCommand::OpenFind { backward: false }]
-            }
-            '?' => {
-                self.last_search_backward = true;
-                vec![VimCommand::OpenFind { backward: true }]
-            }
-            'n' => vec![if self.last_search_backward {
-                VimCommand::FindPrev
-            } else {
-                VimCommand::FindNext
-            }],
-            'N' => vec![if self.last_search_backward {
-                VimCommand::FindNext
-            } else {
-                VimCommand::FindPrev
-            }],
             '*' | '#' => {
                 if let Some(word) = word_under_cursor(text) {
                     self.last_search_backward = c == '#';
@@ -892,29 +884,18 @@ impl VimState {
         if mods.command() {
             if let Key::Character(c) = key {
                 if c.as_str() == "r" {
-                    self.exit_visual();
-                    return vec![VimCommand::Redo];
+                    return self.exit_visual_with(vec![VimCommand::Redo]);
                 }
             }
             return vec![VimCommand::Noop];
         }
 
-        if let Key::Named(named) = key {
-            if let Some(cmd) = named_page_command(named) {
-                return vec![cmd];
-            }
-            if let Some(m) = named_key_to_motion(named) {
-                return self.apply_motion(m, text);
-            }
-            return vec![VimCommand::Noop];
+        if let Some(action) = named_key_action(key) {
+            return self.apply_key_action(action, text, false);
         }
 
-        let c = match key {
-            Key::Character(s) => match s.as_str().chars().next() {
-                Some(c) => c,
-                None => return vec![VimCommand::Noop],
-            },
-            _ => return vec![VimCommand::Noop],
+        let Some(c) = key_char(key) else {
+            return vec![VimCommand::Noop];
         };
 
         if let Some(prefix) = self.pending.take_prefix() {
@@ -950,75 +931,21 @@ impl VimState {
 
         let anchor = self.visual_anchor.unwrap_or(text.cursor);
         let head = self.visual_head.unwrap_or(text.cursor);
-        let is_line = self.mode == Mode::VisualLine;
+        let span = SelectionSpan::visual(anchor, head, self.mode == Mode::VisualLine);
 
         // Operators on selection
         match c {
-            'd' | 'x' => {
-                self.exit_visual();
-                if is_line {
-                    let (first, last) = ordered_lines(anchor.line, head.line);
-                    return vec![VimCommand::DeleteLines { first, last }];
-                }
-                let (from, to) = ordered(anchor, head);
-                return vec![VimCommand::DeleteRange { from, to }];
-            }
-            'c' | 's' => {
-                self.exit_visual();
-                if is_line {
-                    let (first, last) = ordered_lines(anchor.line, head.line);
-                    return vec![VimCommand::ChangeLines { first, last }, VimCommand::EnterInsert];
-                }
-                let (from, to) = ordered(anchor, head);
-                return vec![VimCommand::ChangeRange { from, to }, VimCommand::EnterInsert];
-            }
-            'y' => {
-                self.exit_visual();
-                let (from, to) = ordered(anchor, head);
-                if is_line {
-                    let (first, last) = ordered_lines(anchor.line, head.line);
-                    return vec![VimCommand::YankLines { first, last }, VimCommand::MoveTo(pos(first, 0))];
-                }
-                return vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)];
-            }
+            'd' | 'x' => return self.exit_visual_with(span.operator(Operator::Delete)),
+            'c' | 's' => return self.exit_visual_with(span.operator(Operator::Change)),
+            'y' => return self.exit_visual_with(span.operator(Operator::Yank)),
             'p' | 'P' => {
-                self.exit_visual();
-                let preserve_register = c == 'P';
-                if is_line {
-                    let (first, last) = ordered_lines(anchor.line, head.line);
-                    return vec![VimCommand::PasteSelectionLines {
-                        first,
-                        last,
-                        preserve_register,
-                    }];
-                }
-                let (from, to) = ordered(anchor, head);
-                return vec![VimCommand::PasteSelectionRange {
-                    from,
-                    to,
-                    preserve_register,
-                }];
+                return self.exit_visual_with(span.paste(c == 'P'));
             }
-            '>' => {
-                self.exit_visual();
-                let (first, last) = ordered_lines(anchor.line, head.line);
-                return vec![
-                    VimCommand::IndentLines { first, last },
-                    VimCommand::MoveTo(pos(first, 0)),
-                ];
-            }
-            '<' => {
-                self.exit_visual();
-                let (first, last) = ordered_lines(anchor.line, head.line);
-                return vec![
-                    VimCommand::OutdentLines { first, last },
-                    VimCommand::MoveTo(pos(first, 0)),
-                ];
-            }
+            '>' => return self.exit_visual_with(span.shift(true)),
+            '<' => return self.exit_visual_with(span.shift(false)),
             'v' => {
                 if self.mode == Mode::Visual {
-                    self.exit_visual();
-                    return vec![VimCommand::MoveTo(text.cursor)];
+                    return self.exit_visual_with(vec![VimCommand::MoveTo(text.cursor)]);
                 } else {
                     self.mode = Mode::Visual;
                     self.clear_preferred_column();
@@ -1030,8 +957,7 @@ impl VimState {
             }
             'V' => {
                 if self.mode == Mode::VisualLine {
-                    self.exit_visual();
-                    return vec![VimCommand::MoveTo(text.cursor)];
+                    return self.exit_visual_with(vec![VimCommand::MoveTo(text.cursor)]);
                 } else {
                     self.mode = Mode::VisualLine;
                     self.clear_preferred_column();
@@ -1039,14 +965,7 @@ impl VimState {
                 }
             }
             'u' | 'U' => {
-                self.exit_visual();
-                let uppercase = c == 'U';
-                if is_line {
-                    let (first, last) = ordered_lines(anchor.line, head.line);
-                    return vec![VimCommand::TransformCaseLines { first, last, uppercase }];
-                }
-                let (from, to) = ordered(anchor, head);
-                return vec![VimCommand::TransformCaseRange { from, to, uppercase }];
+                return self.exit_visual_with(span.transform_case(c == 'U'));
             }
             _ => {}
         }
@@ -1067,37 +986,13 @@ impl VimState {
         if c == '0' && !self.pending.has_count() {
             return self.apply_motion(Motion::LineStart, text);
         }
-        if let Some(motion) = char_to_motion(c) {
-            return self.apply_motion(motion, text);
-        }
-        if let Some(motion) = self.repeat_find(c) {
+        if let Some(motion) = self.char_motion(c) {
             return self.apply_motion(motion, text);
         }
 
-        // Search
-        match c {
-            '/' | '?' => {
-                self.clear_preferred_column();
-                self.last_search_backward = c == '?';
-                return vec![VimCommand::OpenFind { backward: c == '?' }];
-            }
-            'n' => {
-                self.clear_preferred_column();
-                return vec![if self.last_search_backward {
-                    VimCommand::FindPrev
-                } else {
-                    VimCommand::FindNext
-                }];
-            }
-            'N' => {
-                self.clear_preferred_column();
-                return vec![if self.last_search_backward {
-                    VimCommand::FindNext
-                } else {
-                    VimCommand::FindPrev
-                }];
-            }
-            _ => {}
+        if let Some(cmd) = self.search_command(c) {
+            self.clear_preferred_column();
+            return vec![cmd];
         }
 
         vec![VimCommand::Noop]
@@ -1157,17 +1052,7 @@ impl VimState {
                 let count = self.pending.take_count().unwrap_or(1);
                 self.clear_command_state();
                 let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
-                if prefix == Prefix::Indent {
-                    vec![VimCommand::IndentLines {
-                        first: text.cursor.line,
-                        last,
-                    }]
-                } else {
-                    vec![VimCommand::OutdentLines {
-                        first: text.cursor.line,
-                        last,
-                    }]
-                }
+                shift_lines(text.cursor.line, last, prefix == Prefix::Indent, false)
             }
             Prefix::TextObjectInner | Prefix::TextObjectAround => {
                 let inner = prefix == Prefix::TextObjectInner;
@@ -1176,9 +1061,9 @@ impl VimState {
                         self.clear_command_state();
                         // Paragraph text objects are linewise
                         if c == 'p' {
-                            return self.line_operator(op, range.0.line, range.1.line);
+                            return line_operator(op, range.0.line, range.1.line, false);
                         }
-                        return self.range_operator(op, range.0, range.1);
+                        return range_operator(op, range.0, range.1);
                     }
                     if inner && op == Operator::Change {
                         if let Some(at) = empty_inner_text_object_position(text, c) {
@@ -1264,7 +1149,7 @@ impl VimState {
         if semantics.linewise {
             let target = compute_motion(&motion, text, count, None);
             let (first, last) = ordered_lines(text.cursor.line, target.line);
-            return self.line_operator(op, first, last);
+            return line_operator(op, first, last, false);
         }
 
         let target = compute_motion(&motion, text, count, None);
@@ -1323,24 +1208,68 @@ impl VimState {
             }
         }
 
-        self.range_operator(op, from, to)
+        range_operator(op, from, to)
     }
+}
 
-    fn line_operator(&self, op: Operator, first: usize, last: usize) -> Vec<VimCommand> {
-        match op {
-            Operator::Delete => vec![VimCommand::DeleteLines { first, last }],
-            Operator::Change => vec![VimCommand::ChangeLines { first, last }, VimCommand::EnterInsert],
-            Operator::Yank => vec![VimCommand::YankLines { first, last }],
-        }
+fn line_operator(op: Operator, first: usize, last: usize, move_after_yank: bool) -> Vec<VimCommand> {
+    match (op, move_after_yank) {
+        (Operator::Delete, _) => vec![VimCommand::DeleteLines { first, last }],
+        (Operator::Change, _) => vec![VimCommand::ChangeLines { first, last }, VimCommand::EnterInsert],
+        (Operator::Yank, false) => vec![VimCommand::YankLines { first, last }],
+        (Operator::Yank, true) => vec![VimCommand::YankLines { first, last }, VimCommand::MoveTo(pos(first, 0))],
     }
+}
 
-    fn range_operator(&self, op: Operator, from: Position, to: Position) -> Vec<VimCommand> {
-        match op {
-            Operator::Delete => vec![VimCommand::DeleteRange { from, to }],
-            Operator::Change => vec![VimCommand::ChangeRange { from, to }, VimCommand::EnterInsert],
-            Operator::Yank => vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)],
-        }
+fn range_operator(op: Operator, from: Position, to: Position) -> Vec<VimCommand> {
+    match op {
+        Operator::Delete => vec![VimCommand::DeleteRange { from, to }],
+        Operator::Change => vec![VimCommand::ChangeRange { from, to }, VimCommand::EnterInsert],
+        Operator::Yank => vec![VimCommand::YankRange { from, to }, VimCommand::MoveTo(from)],
     }
+}
+
+fn shift_lines(first: usize, last: usize, indent: bool, move_after: bool) -> Vec<VimCommand> {
+    let command = if indent {
+        VimCommand::IndentLines { first, last }
+    } else {
+        VimCommand::OutdentLines { first, last }
+    };
+    if move_after {
+        vec![command, VimCommand::MoveTo(pos(first, 0))]
+    } else {
+        vec![command]
+    }
+}
+
+fn range_operator_or(op: Operator, range: Option<(Position, Position)>, fallback: VimCommand) -> Vec<VimCommand> {
+    match range {
+        Some((from, to)) => range_operator(op, from, to),
+        None => vec![fallback],
+    }
+}
+
+fn counted_forward_range(text: &TextSnapshot, count: usize) -> Option<(Position, Position)> {
+    let ll = line_len(text, text.cursor.line);
+    (ll > 0).then(|| {
+        let end = (text.cursor.column + count - 1).min(ll.saturating_sub(1));
+        (text.cursor, pos(text.cursor.line, end))
+    })
+}
+
+fn counted_backward_range(text: &TextSnapshot, count: usize) -> Option<(Position, Position)> {
+    (text.cursor.column > 0).then(|| {
+        let start = text.cursor.column.saturating_sub(count);
+        (
+            pos(text.cursor.line, start),
+            pos(text.cursor.line, text.cursor.column - 1),
+        )
+    })
+}
+
+fn line_tail_range(text: &TextSnapshot) -> Option<(Position, Position)> {
+    let ll = line_len(text, text.cursor.line);
+    (ll > 0 && text.cursor.column < ll).then(|| (text.cursor, pos(text.cursor.line, ll - 1)))
 }
 
 #[derive(Clone, Copy)]
@@ -1518,6 +1447,22 @@ fn repeat_word(
         c = nc;
     }
     pos(l, c)
+}
+
+fn key_char(key: &Key) -> Option<char> {
+    match key {
+        Key::Character(s) => s.as_str().chars().next(),
+        _ => None,
+    }
+}
+
+fn named_key_action(key: &Key) -> Option<KeyAction> {
+    let Key::Named(named) = key else {
+        return None;
+    };
+    named_page_command(named)
+        .map(KeyAction::Command)
+        .or_else(|| named_key_to_motion(named).map(KeyAction::Motion))
 }
 
 fn named_key_to_motion(named: &NamedKey) -> Option<Motion> {
