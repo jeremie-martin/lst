@@ -72,6 +72,55 @@ The GPUI app writes internal benchmark trace values only when
 `LST_BENCH_TRACE_FILE` is set by the runner. Normal editor runs do not create
 trace files.
 
+## Vim Model Benchmark
+
+`lst-editor` also has a non-X11 Criterion benchmark for Vim model behavior. It
+does not launch GPUI, synthesize desktop input, wait for redraws, touch the
+clipboard, or save files. It drives `EditorModel` through the same public Vim
+input surface used by the model-level behavior tests, so it isolates Vim
+state-machine and editor-model costs.
+
+Run the Vim benchmark:
+
+```bash
+cargo bench -p lst-editor --bench vim_model
+```
+
+Run it with a named Criterion baseline:
+
+```bash
+CARGO_TARGET_DIR=/tmp/lst-vim-bench-target cargo bench -p lst-editor --bench vim_model -- --save-baseline current
+```
+
+To compare the current implementation with the rewrite workspace:
+
+1. Create a patch containing only the Vim benchmark changes.
+2. Apply that patch to clean temporary worktrees for
+   `/home/holo/lst-vim-rewrite-codex` commits `2e1daaf` and `a604285`.
+3. Run the same command in each worktree, using distinct baseline names such as
+   `rewrite-baseline` and `rewrite-modalkit`.
+4. Record the commit SHA, host/CPU, command, Criterion baseline name, and the
+   primary timings for each workload.
+
+The most useful workloads for identifying whole-document overhead are:
+
+- `vim_motion/word`: repeated word motions across generated documents.
+- `vim_edit/delete_word_undo`: repeated `dw` followed by `u`.
+- `vim_edit/change_inner_word_escape_undo`: repeated `ciw`, insertion,
+  escape, and undo.
+- `vim_copy_paste/yank_paste_undo_lines`: repeated counted `yy`, `p`, and `u`
+  with 16, 128, or 512 copied lines depending on document size.
+- `vim_search/submit_query`: `/needle<Enter>` over the whole document.
+- `vim_search/next_matches`: `/needle<Enter>` setup followed by repeated `n`.
+- `vim_search/word_under_cursor`: repeated `*`, which reindexes the word under
+  the cursor.
+- `vim_whole_document/dgg_undo_from_end`: repeated `Gdggu`, deleting from the
+  document end back to the top and restoring it through undo.
+- `vim_oracle/replay_fixture`: replay of the generated Neovim oracle fixture.
+
+Use the `small`, `medium`, and `large` variants to distinguish constant costs
+from document-size scaling.
+
 ## Baselines
 
 Do not keep stale baseline numbers in this document. Record comparison numbers
