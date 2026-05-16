@@ -1,11 +1,9 @@
 use gpui::{
-    point, px, Bounds, Context, EntityInputHandler, KeyDownEvent, Modifiers, ModifiersChangedEvent,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, UTF16Selection, Window,
+    point, px, Bounds, Context, EntityInputHandler, KeyDownEvent, Modifiers, ModifiersChangedEvent, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, UTF16Selection, Window,
 };
 use lst_editor::{
-    selection::{
-        drag_selection_range, line_range_at_char, paragraph_range_at_char, word_range_at_char,
-    },
+    selection::{drag_selection_range, line_range_at_char, paragraph_range_at_char, word_range_at_char},
     vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
     EditorCommand as Command, RevealIntent, Selection,
 };
@@ -15,10 +13,7 @@ use std::{ops::Range, time::Instant};
 use crate::{
     elapsed_ms,
     ui::theme::metrics,
-    viewport::{
-        code_origin_x, row_contains_cursor, scroll_left_for, scroll_to_top, scroll_top_for,
-        x_for_global_char,
-    },
+    viewport::{code_origin_x, row_contains_cursor, scroll_left_for, scroll_to_top, scroll_top_for, x_for_global_char},
     FocusTarget, LstGpuiApp,
 };
 
@@ -51,12 +46,7 @@ impl ActiveDragSelection {
 }
 
 impl LstGpuiApp {
-    pub(crate) fn on_mouse_down(
-        &mut self,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);
         if !event.modifiers.alt
@@ -83,9 +73,7 @@ impl LstGpuiApp {
                 return;
             }
 
-            if let Some((_mode, range)) =
-                self.click_selection_mode_and_range(event.click_count, index)
-            {
+            if let Some((_mode, range)) = self.click_selection_mode_and_range(event.click_count, index) {
                 self.cancel_drag_selection();
                 self.add_active_range(range, false, cx);
                 self.sync_primary_selection(cx);
@@ -150,12 +138,7 @@ impl LstGpuiApp {
         None
     }
 
-    pub(crate) fn on_middle_mouse_down(
-        &mut self,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn on_middle_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);
         self.cancel_drag_selection();
@@ -176,21 +159,11 @@ impl LstGpuiApp {
         }
     }
 
-    pub(crate) fn on_mouse_move(
-        &mut self,
-        event: &MouseMoveEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.update_drag_selection(event, window, cx);
     }
 
-    pub(crate) fn on_mouse_up(
-        &mut self,
-        _event: &MouseUpEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn on_mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         self.finish_drag_selection(cx);
     }
 
@@ -198,12 +171,7 @@ impl LstGpuiApp {
         self.selection_drag = Some(ActiveDragSelection::new(mode, point));
     }
 
-    fn update_drag_selection(
-        &mut self,
-        event: &MouseMoveEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn update_drag_selection(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !event.dragging() {
             self.cancel_drag_selection();
             return;
@@ -231,11 +199,7 @@ impl LstGpuiApp {
         self.selection_drag = None;
     }
 
-    fn apply_drag_selection_at_point(
-        &mut self,
-        position: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    fn apply_drag_selection_at_point(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) -> bool {
         let index = self.active_char_index_for_point(position);
         let mode = self.selection_drag.as_ref().map(|drag| drag.mode.clone());
         match mode {
@@ -268,12 +232,7 @@ impl LstGpuiApp {
         true
     }
 
-    fn column_drag_head_index(
-        &self,
-        anchor: usize,
-        index: usize,
-        position: Point<Pixels>,
-    ) -> usize {
+    fn column_drag_head_index(&self, anchor: usize, index: usize, position: Point<Pixels>) -> usize {
         let Some(drag) = self.selection_drag.as_ref() else {
             return index;
         };
@@ -351,12 +310,7 @@ impl LstGpuiApp {
         });
     }
 
-    fn select_active_drag_range(
-        &mut self,
-        anchor: Range<usize>,
-        current: Range<usize>,
-        cx: &mut Context<Self>,
-    ) {
+    fn select_active_drag_range(&mut self, anchor: Range<usize>, current: Range<usize>, cx: &mut Context<Self>) {
         let (selection, reversed) = drag_selection_range(anchor, current);
         self.update_model(cx, true, |model| {
             model.set_selection(Selection::from_range(selection, reversed));
@@ -364,11 +318,7 @@ impl LstGpuiApp {
     }
 }
 
-pub(crate) fn drag_autoscroll_delta(
-    position: Point<Pixels>,
-    bounds: Bounds<Pixels>,
-    scale: f32,
-) -> Option<Pixels> {
+pub(crate) fn drag_autoscroll_delta(position: Point<Pixels>, bounds: Bounds<Pixels>, scale: f32) -> Option<Pixels> {
     const EDGE_PX: f32 = 36.0;
     let edge = metrics::px_for_scale(EDGE_PX, scale);
     let top_edge = bounds.top() + edge;
@@ -409,8 +359,7 @@ impl LstGpuiApp {
 
     pub(crate) fn note_modifiers_changed_for_text_input(&mut self, event: &ModifiersChangedEvent) {
         if modifiers_active(event.modifiers) {
-            self.modifier_chord_accumulated =
-                merge_modifiers(self.modifier_chord_accumulated, event.modifiers);
+            self.modifier_chord_accumulated = merge_modifiers(self.modifier_chord_accumulated, event.modifiers);
             self.recent_modifier_chord = None;
         } else if modifiers_active(self.modifier_chord_accumulated) {
             self.recent_modifier_chord = Some((self.modifier_chord_accumulated, Instant::now()));
@@ -454,11 +403,7 @@ impl LstGpuiApp {
         }
 
         let mut preserves_ctrl_k_pending = false;
-        let handled = if modifiers.control
-            && modifiers.shift
-            && modifiers.alt
-            && !modifiers.platform
-        {
+        let handled = if modifiers.control && modifiers.shift && modifiers.alt && !modifiers.platform {
             match key.as_str() {
                 "down" | "up" => run_command!(Command::DuplicateLine),
                 _ => false,
@@ -575,12 +520,10 @@ impl LstGpuiApp {
         let effective_modifiers = self.effective_modifier_chord(event.keystroke.modifiers);
         let mods = gpui_modifiers_to_vim(effective_modifiers);
         let key = gpui_key_to_vim(event);
-        let plain_vim_key = !effective_modifiers.control
-            && !effective_modifiers.alt
-            && !effective_modifiers.platform;
-        let redo_key = key.as_ref().is_some_and(|key| {
-            matches!(key, VimKey::Character(value) if value == "r") && mods.command()
-        });
+        let plain_vim_key = !effective_modifiers.control && !effective_modifiers.alt && !effective_modifiers.platform;
+        let redo_key = key
+            .as_ref()
+            .is_some_and(|key| matches!(key, VimKey::Character(value) if value == "r") && mods.command());
         let ctrl_vim_motion = key.as_ref().is_some_and(|key| {
             mods.control()
                 && matches!(
@@ -652,11 +595,7 @@ impl EntityInputHandler for LstGpuiApp {
         })
     }
 
-    fn marked_text_range(
-        &self,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<Range<usize>> {
+    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
         let tab = self.active_tab();
         tab.marked_range()
             .map(|range| char_range_to_utf16_range(tab.buffer(), range))
@@ -742,11 +681,9 @@ impl EntityInputHandler for LstGpuiApp {
             self.ui_scale(),
             scroll_left_for(&active_view.scroll),
         );
-        let start_x =
-            origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| gpui::px(0.0));
-        let end_x = origin_x
-            + x_for_global_char(row, range.end.min(row.display_end_char))
-                .unwrap_or_else(|| gpui::px(0.0));
+        let start_x = origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| gpui::px(0.0));
+        let end_x =
+            origin_x + x_for_global_char(row, range.end.min(row.display_end_char)).unwrap_or_else(|| gpui::px(0.0));
         Some(Bounds::from_corners(
             point(start_x, row.row_top),
             point(
@@ -783,9 +720,7 @@ impl LstGpuiApp {
 
     fn recent_modifier_chord(&self) -> Option<Modifiers> {
         self.recent_modifier_chord
-            .filter(|(_, released_at)| {
-                released_at.elapsed().as_millis() <= X11_SYNTHETIC_MODIFIER_CHORD_WINDOW_MS
-            })
+            .filter(|(_, released_at)| released_at.elapsed().as_millis() <= X11_SYNTHETIC_MODIFIER_CHORD_WINDOW_MS)
             .map(|(modifiers, _)| modifiers)
     }
 

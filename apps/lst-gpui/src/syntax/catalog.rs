@@ -121,22 +121,59 @@ struct InjectableGrammar {
     names: &'static [&'static str],
     grammar: GrammarId,
 }
-
-#[rustfmt::skip]
 const INJECTABLE_GRAMMARS: &[InjectableGrammar] = &[
-    InjectableGrammar { names: &["rust", "rs"], grammar: GrammarId::Rust },
-    InjectableGrammar { names: &["python", "py"], grammar: GrammarId::Python },
-    InjectableGrammar { names: &["javascript", "js"], grammar: GrammarId::JavaScript },
-    InjectableGrammar { names: &["jsx"], grammar: GrammarId::Jsx },
-    InjectableGrammar { names: &["typescript", "ts"], grammar: GrammarId::TypeScript },
-    InjectableGrammar { names: &["tsx"], grammar: GrammarId::Tsx },
-    InjectableGrammar { names: &["json"], grammar: GrammarId::Json },
-    InjectableGrammar { names: &["toml"], grammar: GrammarId::Toml },
-    InjectableGrammar { names: &["yaml", "yml"], grammar: GrammarId::Yaml },
-    InjectableGrammar { names: &["markdown", "md"], grammar: GrammarId::Markdown },
-    InjectableGrammar { names: &["markdown_inline", "markdown-inline"], grammar: GrammarId::MarkdownInline },
-    InjectableGrammar { names: &["html"], grammar: GrammarId::Html },
-    InjectableGrammar { names: &["css"], grammar: GrammarId::Css },
+    InjectableGrammar {
+        names: &["rust", "rs"],
+        grammar: GrammarId::Rust,
+    },
+    InjectableGrammar {
+        names: &["python", "py"],
+        grammar: GrammarId::Python,
+    },
+    InjectableGrammar {
+        names: &["javascript", "js"],
+        grammar: GrammarId::JavaScript,
+    },
+    InjectableGrammar {
+        names: &["jsx"],
+        grammar: GrammarId::Jsx,
+    },
+    InjectableGrammar {
+        names: &["typescript", "ts"],
+        grammar: GrammarId::TypeScript,
+    },
+    InjectableGrammar {
+        names: &["tsx"],
+        grammar: GrammarId::Tsx,
+    },
+    InjectableGrammar {
+        names: &["json"],
+        grammar: GrammarId::Json,
+    },
+    InjectableGrammar {
+        names: &["toml"],
+        grammar: GrammarId::Toml,
+    },
+    InjectableGrammar {
+        names: &["yaml", "yml"],
+        grammar: GrammarId::Yaml,
+    },
+    InjectableGrammar {
+        names: &["markdown", "md"],
+        grammar: GrammarId::Markdown,
+    },
+    InjectableGrammar {
+        names: &["markdown_inline", "markdown-inline"],
+        grammar: GrammarId::MarkdownInline,
+    },
+    InjectableGrammar {
+        names: &["html"],
+        grammar: GrammarId::Html,
+    },
+    InjectableGrammar {
+        names: &["css"],
+        grammar: GrammarId::Css,
+    },
 ];
 
 static RUST_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
@@ -339,8 +376,7 @@ pub(super) fn injection_config(name: &str) -> Option<&'static HighlightConfigura
 
 pub(super) fn required_injections_are_registered(spec: &SyntaxSpec) -> bool {
     spec.required_injections.iter().all(|injection| {
-        injection_config(injection.name)
-            .is_some_and(|resolved| std::ptr::eq(resolved, config(injection.grammar)))
+        injection_config(injection.name).is_some_and(|resolved| std::ptr::eq(resolved, config(injection.grammar)))
     })
 }
 
@@ -355,25 +391,20 @@ fn highlight_config(
     injections_query: &str,
     locals_query: &str,
 ) -> HighlightConfiguration {
-    let mut config = HighlightConfiguration::new(
-        language,
-        name,
-        highlights_query,
-        injections_query,
-        locals_query,
-    )
-    .unwrap_or_else(|error| panic!("embedded tree-sitter {name} highlight query invalid: {error}"));
+    let mut config = HighlightConfiguration::new(language, name, highlights_query, injections_query, locals_query)
+        .unwrap_or_else(|error| panic!("embedded tree-sitter {name} highlight query invalid: {error}"));
     config.configure(CAPTURE_NAMES);
     config
 }
 
 fn markdown_block_injections_query() -> String {
-    let inline_injection =
-        "((inline) @injection.content\n  (#set! injection.language \"markdown_inline\"))";
-    let inline_injection_with_children =
-        "((inline) @injection.content\n  (#set! injection.language \"markdown_inline\")\n  (#set! injection.include-children))";
-    let injections = tree_sitter_md::INJECTION_QUERY_BLOCK
-        .replace(inline_injection, inline_injection_with_children);
+    let inline_injection = "((inline) @injection.content\n  (#set! injection.language \"markdown_inline\"))";
+    let inline_injection_with_children = concat!(
+        "((inline) @injection.content\n",
+        "  (#set! injection.language \"markdown_inline\")\n",
+        "  (#set! injection.include-children))"
+    );
+    let injections = tree_sitter_md::INJECTION_QUERY_BLOCK.replace(inline_injection, inline_injection_with_children);
     assert_ne!(
         injections,
         tree_sitter_md::INJECTION_QUERY_BLOCK,

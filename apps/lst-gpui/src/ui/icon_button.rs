@@ -1,6 +1,6 @@
 use gpui::{
-    div, prelude::FluentBuilder, rgb, App, CursorStyle, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, Stateful, StatefulInteractiveElement, Styled,
+    div, prelude::FluentBuilder, rgb, App, CursorStyle, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    Stateful, StatefulInteractiveElement, Styled,
 };
 
 use crate::ui::theme::{metrics, Theme};

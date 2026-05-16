@@ -16,33 +16,49 @@ pub(crate) enum VimEditAction {
 pub(crate) type DeletedEdit = (String, EditRequest);
 
 pub(crate) fn extract_range(tab: &EditorTab, from: Position, to: Position) -> String {
-    position_range(tab.buffer(), from, to).map(|range| tab.buffer().slice(range).to_string()).unwrap_or_default()
+    position_range(tab.buffer(), from, to)
+        .map(|range| tab.buffer().slice(range).to_string())
+        .unwrap_or_default()
 }
 
 pub(crate) fn extract_lines(tab: &EditorTab, first: usize, last: usize) -> String {
     let (first, last) = clamped_line_span(tab, first, last);
-    (first..=last).map(|line| line_display_text(tab.buffer(), line)).collect::<Vec<_>>().join("\n")
+    (first..=last)
+        .map(|line| line_display_text(tab.buffer(), line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn delete_range(tab: &EditorTab, from: Position, to: Position) -> Option<DeletedEdit> {
     let range = position_range(tab.buffer(), from, to)?;
     let deleted = extract_range(tab, from, to);
     let change = TextChange::delete(range);
-    Some((deleted, EditRequest::other_break(TextChangeSet::single(change)).with_selection_after(SelectionAfter::CursorPositionBeforeLineEnd(from))))
+    Some((
+        deleted,
+        EditRequest::other_break(TextChangeSet::single(change))
+            .with_selection_after(SelectionAfter::CursorPositionBeforeLineEnd(from)),
+    ))
 }
 
 pub(crate) fn change_range(tab: &EditorTab, from: Position, to: Position) -> Option<DeletedEdit> {
     let range = position_range(tab.buffer(), from, to)?;
     let deleted = extract_range(tab, from, to);
     let change = TextChange::delete(range);
-    Some((deleted, EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, TextChangeSet::single(change)).with_selection_after(SelectionAfter::CursorPosition(from))))
+    Some((
+        deleted,
+        EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, TextChangeSet::single(change))
+            .with_selection_after(SelectionAfter::CursorPosition(from)),
+    ))
 }
 
 pub(crate) fn delete_lines(tab: &EditorTab, first: usize, last: usize) -> Option<DeletedEdit> {
     let (first, last) = clamped_line_span(tab, first, last);
     let deleted = extract_lines(tab, first, last);
     let change = replace_lines_change(tab, first, last, &[])?;
-    Some((deleted, EditRequest::single_other_at_position(change, Position::new(first, 0))))
+    Some((
+        deleted,
+        EditRequest::single_other_at_position(change, Position::new(first, 0)),
+    ))
 }
 
 pub(crate) fn change_lines(tab: &EditorTab, first: usize, last: usize) -> Option<DeletedEdit> {
@@ -50,7 +66,14 @@ pub(crate) fn change_lines(tab: &EditorTab, first: usize, last: usize) -> Option
     let indent = line_indent_prefix(tab.buffer(), first);
     let deleted = extract_lines(tab, first, last);
     let change = replace_lines_change(tab, first, last, std::slice::from_ref(&indent))?;
-    Some((deleted, EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, TextChangeSet::single(change)).with_selection_after(SelectionAfter::CursorPosition(Position::new(first, indent.chars().count())))))
+    Some((
+        deleted,
+        EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, TextChangeSet::single(change))
+            .with_selection_after(SelectionAfter::CursorPosition(Position::new(
+                first,
+                indent.chars().count(),
+            ))),
+    ))
 }
 
 pub(crate) fn paste(tab: &EditorTab, cursor: Position, register: &vim::Register, before: bool) -> Option<EditRequest> {
@@ -61,7 +84,12 @@ pub(crate) fn paste(tab: &EditorTab, cursor: Position, register: &vim::Register,
     }
 }
 
-pub(crate) fn paste_over_range(tab: &EditorTab, from: Position, to: Position, register: &vim::Register) -> Option<DeletedEdit> {
+pub(crate) fn paste_over_range(
+    tab: &EditorTab,
+    from: Position,
+    to: Position,
+    register: &vim::Register,
+) -> Option<DeletedEdit> {
     let paste_text = match register {
         vim::Register::Empty => return None,
         vim::Register::Char(text) | vim::Register::Line(text) => text,
@@ -73,7 +101,12 @@ pub(crate) fn paste_over_range(tab: &EditorTab, from: Position, to: Position, re
     Some((deleted, EditRequest::single_other_at_position(change, cursor)))
 }
 
-pub(crate) fn paste_over_lines(tab: &EditorTab, first: usize, last: usize, register: &vim::Register) -> Option<DeletedEdit> {
+pub(crate) fn paste_over_lines(
+    tab: &EditorTab,
+    first: usize,
+    last: usize,
+    register: &vim::Register,
+) -> Option<DeletedEdit> {
     let paste_text = match register {
         vim::Register::Empty => return None,
         vim::Register::Char(text) | vim::Register::Line(text) => text,
@@ -81,16 +114,24 @@ pub(crate) fn paste_over_lines(tab: &EditorTab, first: usize, last: usize, regis
     let (first, last) = clamped_line_span(tab, first, last);
     let deleted = extract_lines(tab, first, last);
     let inserted_lines: Vec<String> = paste_text.split('\n').map(String::from).collect();
-    let indent = inserted_lines.first().map_or(0, |line| line.chars().take_while(|c| c.is_whitespace()).count());
+    let indent = inserted_lines
+        .first()
+        .map_or(0, |line| line.chars().take_while(|c| c.is_whitespace()).count());
     let change = replace_lines_change(tab, first, last, &inserted_lines)?;
-    Some((deleted, EditRequest::single_other_at_position(change, Position::new(first, indent))))
+    Some((
+        deleted,
+        EditRequest::single_other_at_position(change, Position::new(first, indent)),
+    ))
 }
 
 pub(crate) fn open_line(tab: &EditorTab, pos: Position, above: bool) -> Option<EditRequest> {
     let indent = line_indent_prefix(tab.buffer(), pos.line);
     let idx = if above { pos.line } else { pos.line + 1 };
     let change = insert_lines_change(tab, idx, std::slice::from_ref(&indent))?;
-    Some(EditRequest::single_other_at_position(change, Position::new(idx, indent.chars().count())))
+    Some(EditRequest::single_other_at_position(
+        change,
+        Position::new(idx, indent.chars().count()),
+    ))
 }
 
 pub(crate) fn join_lines(tab: &EditorTab, pos: Position, count: usize) -> Option<EditRequest> {
@@ -113,8 +154,15 @@ pub(crate) fn join_lines(tab: &EditorTab, pos: Position, count: usize) -> Option
         }
     }
     join_col = join_col.min(joined.chars().count().saturating_sub(1));
-    let change = if join_end + 1 >= tab.line_count() && line_display_text(tab.buffer(), join_end).trim().is_empty() { TextChange::replace(tab.buffer().line_to_char(pos.line)..tab.buffer().len_chars(), joined) } else { replace_lines_change(tab, pos.line, join_end, std::slice::from_ref(&joined))? };
-    Some(EditRequest::single_other_at_position(change, Position::new(pos.line, join_col)))
+    let change = if join_end + 1 >= tab.line_count() && line_display_text(tab.buffer(), join_end).trim().is_empty() {
+        TextChange::replace(tab.buffer().line_to_char(pos.line)..tab.buffer().len_chars(), joined)
+    } else {
+        replace_lines_change(tab, pos.line, join_end, std::slice::from_ref(&joined))?
+    };
+    Some(EditRequest::single_other_at_position(
+        change,
+        Position::new(pos.line, join_col),
+    ))
 }
 
 pub(crate) fn replace_char(tab: &EditorTab, pos: Position, ch: char, count: usize) -> Option<EditRequest> {
@@ -130,21 +178,35 @@ pub(crate) fn replace_char(tab: &EditorTab, pos: Position, ch: char, count: usiz
     }
     let line_start = tab.buffer().line_to_char(pos.line);
     let start = line_start + cells[start_cell].char_start;
-    let end = line_start + cells.get(end_cell).map_or_else(|| line.chars().count(), |cell| cell.char_start);
+    let end = line_start
+        + cells
+            .get(end_cell)
+            .map_or_else(|| line.chars().count(), |cell| cell.char_start);
     let replacement: String = std::iter::repeat_n(ch, count).collect();
     let cursor_col = cells[start_cell].char_start + count - 1;
     let change = TextChange::replace(start..end, replacement);
-    Some(EditRequest::single_other_at_position(change, Position::new(pos.line, cursor_col)))
+    Some(EditRequest::single_other_at_position(
+        change,
+        Position::new(pos.line, cursor_col),
+    ))
 }
 
-pub(crate) fn transform_case_range(tab: &EditorTab, from: Position, to: Position, uppercase: bool) -> Option<VimEditAction> {
+pub(crate) fn transform_case_range(
+    tab: &EditorTab,
+    from: Position,
+    to: Position,
+    uppercase: bool,
+) -> Option<VimEditAction> {
     let range = position_range(tab.buffer(), from, to)?;
     let text = tab.buffer().slice(range.clone()).to_string();
     let replacement = transform_case_text(&text, uppercase);
     if text == replacement {
         return Some(VimEditAction::MoveCursor(from));
     }
-    Some(VimEditAction::Edit(EditRequest::single_other_at_position(TextChange::replace(range, replacement), from)))
+    Some(VimEditAction::Edit(EditRequest::single_other_at_position(
+        TextChange::replace(range, replacement),
+        from,
+    )))
 }
 
 pub(crate) fn transform_case_lines(tab: &EditorTab, first: usize, last: usize, uppercase: bool) -> VimEditAction {
@@ -168,11 +230,22 @@ pub(crate) fn transform_case_lines(tab: &EditorTab, first: usize, last: usize, u
 
 fn paste_chars(tab: &EditorTab, cursor: Position, paste_text: &str, before: bool) -> Option<EditRequest> {
     let line_len = selection::display_line_char_len(tab.buffer(), cursor.line);
-    let insert_col = if before { cursor.column.min(line_len) } else { (cursor.column + 1).min(line_len) };
+    let insert_col = if before {
+        cursor.column.min(line_len)
+    } else {
+        (cursor.column + 1).min(line_len)
+    };
     let insert_at = position_to_char(tab.buffer(), Position::new(cursor.line, insert_col));
     let paste_lines: Vec<&str> = paste_text.split('\n').collect();
     let replacement = paste_lines.join(text_input::preferred_newline(tab));
-    let cursor_position = if paste_lines.len() == 1 { Position::new(cursor.line, insert_col + paste_lines[0].chars().count().saturating_sub(1)) } else { Position::new(cursor.line, insert_col) };
+    let cursor_position = if paste_lines.len() == 1 {
+        Position::new(
+            cursor.line,
+            insert_col + paste_lines[0].chars().count().saturating_sub(1),
+        )
+    } else {
+        Position::new(cursor.line, insert_col)
+    };
     let change = TextChange::insert(insert_at, replacement);
     Some(EditRequest::single_other_at_position(change, cursor_position))
 }
@@ -192,9 +265,14 @@ fn paste_range_cursor(from: Position, paste_text: &str) -> Position {
 fn paste_lines(tab: &EditorTab, cursor: Position, paste_text: &str, before: bool) -> Option<EditRequest> {
     let insert_at = if before { cursor.line } else { cursor.line + 1 };
     let inserted_lines: Vec<String> = paste_text.split('\n').map(String::from).collect();
-    let indent = inserted_lines.first().map_or(0, |line| line.chars().take_while(|c| c.is_whitespace()).count());
+    let indent = inserted_lines
+        .first()
+        .map_or(0, |line| line.chars().take_while(|c| c.is_whitespace()).count());
     let change = insert_lines_change(tab, insert_at, &inserted_lines)?;
-    Some(EditRequest::single_other_at_position(change, Position::new(insert_at, indent)))
+    Some(EditRequest::single_other_at_position(
+        change,
+        Position::new(insert_at, indent),
+    ))
 }
 
 fn transform_case_text(text: &str, uppercase: bool) -> String {

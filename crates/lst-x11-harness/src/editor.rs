@@ -16,9 +16,7 @@ use x11rb::NONE;
 use crate::display::Display;
 use crate::state_trace::{StateTraceReader, StateTraceRecord};
 use crate::x11::damage as damage_wait;
-use crate::x11::input::{
-    self, BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_WHEEL_DOWN, BUTTON_WHEEL_UP, POINTER_SETTLE,
-};
+use crate::x11::input::{self, BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_WHEEL_DOWN, BUTTON_WHEEL_UP, POINTER_SETTLE};
 use crate::x11::keycodes::Keycodes;
 use crate::x11::window::{self, WindowInfo};
 use crate::Result;
@@ -106,10 +104,7 @@ pub struct FileWaitOpts {
 
 impl FileWaitOpts {
     pub fn new(timeout: Duration, stable_for: Duration) -> Self {
-        Self {
-            stable_for,
-            timeout,
-        }
+        Self { stable_for, timeout }
     }
 }
 
@@ -171,11 +166,7 @@ impl Display {
         // Reborrow `self` immutably; DAMAGE wrapper holds &display.conn for
         // its full lifetime, and the Editor stores &display alongside.
         let display: &'a Display = self;
-        let damage = match damage::DamageWrapper::create(
-            &display.conn,
-            info.id,
-            damage::ReportLevel::NON_EMPTY,
-        ) {
+        let damage = match damage::DamageWrapper::create(&display.conn, info.id, damage::ReportLevel::NON_EMPTY) {
             Ok(damage) => damage,
             Err(error) => {
                 terminate(&mut child);
@@ -240,11 +231,9 @@ impl<'a> Editor<'a> {
     }
 
     fn focus_for_keyboard(&mut self) -> Result<()> {
-        self.display.conn.set_input_focus(
-            xproto::InputFocus::PARENT,
-            self.window.id,
-            x11rb::CURRENT_TIME,
-        )?;
+        self.display
+            .conn
+            .set_input_focus(xproto::InputFocus::PARENT, self.window.id, x11rb::CURRENT_TIME)?;
         self.display.conn.flush()?;
         thread::sleep(POINTER_SETTLE);
         Ok(())
@@ -257,13 +246,7 @@ impl<'a> Editor<'a> {
     }
 
     pub fn click_at(&mut self, local_x: i32, local_y: i32) -> Result<()> {
-        input::move_pointer_to_window_point(
-            &self.display.conn,
-            self.display.root,
-            &self.window,
-            local_x,
-            local_y,
-        )?;
+        input::move_pointer_to_window_point(&self.display.conn, self.display.root, &self.window, local_x, local_y)?;
         thread::sleep(POINTER_SETTLE);
         input::click_button(&self.display.conn, self.display.root, BUTTON_LEFT)
     }
@@ -274,69 +257,27 @@ impl<'a> Editor<'a> {
     /// scroll-into-view first, or the viewport must have painted at least
     /// once.
     pub fn click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
-        self.mouse_click_at_text(
-            line,
-            col,
-            ChordMods::default(),
-            BUTTON_LEFT,
-            1,
-            "click_at_text",
-        )
+        self.mouse_click_at_text(line, col, ChordMods::default(), BUTTON_LEFT, 1, "click_at_text")
     }
 
     pub fn shift_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
-        self.mouse_click_at_text(
-            line,
-            col,
-            ChordMods::SHIFT,
-            BUTTON_LEFT,
-            1,
-            "shift_click_at_text",
-        )
+        self.mouse_click_at_text(line, col, ChordMods::SHIFT, BUTTON_LEFT, 1, "shift_click_at_text")
     }
 
     pub fn alt_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
-        self.mouse_click_at_text(
-            line,
-            col,
-            ChordMods::ALT,
-            BUTTON_LEFT,
-            1,
-            "alt_click_at_text",
-        )
+        self.mouse_click_at_text(line, col, ChordMods::ALT, BUTTON_LEFT, 1, "alt_click_at_text")
     }
 
     pub fn double_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
-        self.mouse_click_at_text(
-            line,
-            col,
-            ChordMods::default(),
-            BUTTON_LEFT,
-            2,
-            "double_click_at_text",
-        )
+        self.mouse_click_at_text(line, col, ChordMods::default(), BUTTON_LEFT, 2, "double_click_at_text")
     }
 
     pub fn triple_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
-        self.mouse_click_at_text(
-            line,
-            col,
-            ChordMods::default(),
-            BUTTON_LEFT,
-            3,
-            "triple_click_at_text",
-        )
+        self.mouse_click_at_text(line, col, ChordMods::default(), BUTTON_LEFT, 3, "triple_click_at_text")
     }
 
     pub fn quad_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
-        self.mouse_click_at_text(
-            line,
-            col,
-            ChordMods::default(),
-            BUTTON_LEFT,
-            4,
-            "quad_click_at_text",
-        )
+        self.mouse_click_at_text(line, col, ChordMods::default(), BUTTON_LEFT, 4, "quad_click_at_text")
     }
 
     pub fn middle_click_at_text(&mut self, line: usize, col: usize) -> Result<()> {
@@ -352,18 +293,10 @@ impl<'a> Editor<'a> {
 
     /// Press at `from`, drag to `to` with optional held modifiers, release.
     /// Both endpoints must currently be in the painted-rows window.
-    pub fn drag_text(
-        &mut self,
-        from: (usize, usize),
-        to: (usize, usize),
-        mods: ChordMods,
-    ) -> Result<()> {
+    pub fn drag_text(&mut self, from: (usize, usize), to: (usize, usize), mods: ChordMods) -> Result<()> {
         let result: Result<()> = (|| {
             let state = self.wait_state("drag_text viewport", TEXT_VIEWPORT_TIMEOUT, |state| {
-                state
-                    .viewport
-                    .text_to_window_local(from.0, from.1)
-                    .is_some()
+                state.viewport.text_to_window_local(from.0, from.1).is_some()
                     && state.viewport.text_to_window_local(to.0, to.1).is_some()
             })?;
             let before_seq = state.seq;
@@ -375,15 +308,7 @@ impl<'a> Editor<'a> {
             let kc = &self.display.keycodes;
             input::move_pointer_to_window_point(conn, root, &self.window, from_x, from_y)?;
             thread::sleep(POINTER_SETTLE);
-            input::press_modifiers_with_platform(
-                conn,
-                root,
-                kc,
-                mods.ctrl,
-                mods.alt,
-                mods.shift,
-                mods.platform,
-            )?;
+            input::press_modifiers_with_platform(conn, root, kc, mods.ctrl, mods.alt, mods.shift, mods.platform)?;
             if !mods.is_empty() {
                 conn.flush()?;
                 thread::sleep(POINTER_SETTLE);
@@ -396,15 +321,7 @@ impl<'a> Editor<'a> {
             conn.flush()?;
             thread::sleep(POINTER_SETTLE);
             input::button_release(conn, root, BUTTON_LEFT)?;
-            input::release_modifiers_with_platform(
-                conn,
-                root,
-                kc,
-                mods.ctrl,
-                mods.alt,
-                mods.shift,
-                mods.platform,
-            )?;
+            input::release_modifiers_with_platform(conn, root, kc, mods.ctrl, mods.alt, mods.shift, mods.platform)?;
             conn.flush()?;
             let damage_id = self.damage.damage();
             let window_id = self.window.id;
@@ -420,8 +337,7 @@ impl<'a> Editor<'a> {
             self.wait_state("drag_text selection", TEXT_VIEWPORT_TIMEOUT, |state| {
                 state.seq > before_seq
                     && state_cursor_signature(state) != before_cursors
-                    && (state.cursors.len() > 1
-                        || state.cursors.iter().any(|cursor| !cursor.is_collapsed()))
+                    && (state.cursors.len() > 1 || state.cursors.iter().any(|cursor| !cursor.is_collapsed()))
             })?;
             Ok(())
         })();
@@ -457,29 +373,13 @@ impl<'a> Editor<'a> {
             let kc = &self.display.keycodes;
             input::move_pointer_to_window_point(conn, root, &self.window, x, y)?;
             thread::sleep(POINTER_SETTLE);
-            input::press_modifiers_with_platform(
-                conn,
-                root,
-                kc,
-                mods.ctrl,
-                mods.alt,
-                mods.shift,
-                mods.platform,
-            )?;
+            input::press_modifiers_with_platform(conn, root, kc, mods.ctrl, mods.alt, mods.shift, mods.platform)?;
             if !mods.is_empty() {
                 conn.flush()?;
                 thread::sleep(POINTER_SETTLE);
             }
             input::multi_click_button(conn, root, button, click_count)?;
-            input::release_modifiers_with_platform(
-                conn,
-                root,
-                kc,
-                mods.ctrl,
-                mods.alt,
-                mods.shift,
-                mods.platform,
-            )?;
+            input::release_modifiers_with_platform(conn, root, kc, mods.ctrl, mods.alt, mods.shift, mods.platform)?;
             conn.flush()?;
             let damage_id = self.damage.damage();
             let window_id = self.window.id;
@@ -495,15 +395,9 @@ impl<'a> Editor<'a> {
             if click_count > 1 {
                 self.wait_state(label, TEXT_VIEWPORT_TIMEOUT, |state| {
                     state.seq > before_seq
-                        && multi_click_selection_reached(
-                            state,
-                            clicked_row,
-                            quad_min_end,
-                            click_count,
-                        )
+                        && multi_click_selection_reached(state, clicked_row, quad_min_end, click_count)
                 })?;
-            } else if mouse_click_expects_state_change(&state, line, col, mods, button, click_count)
-            {
+            } else if mouse_click_expects_state_change(&state, line, col, mods, button, click_count) {
                 self.wait_state(label, TEXT_VIEWPORT_TIMEOUT, |state| {
                     state.seq > before_seq && state_cursor_signature(state) != before_cursors
                 })?;
@@ -589,10 +483,7 @@ impl<'a> Editor<'a> {
     pub fn send_keys(&mut self, sequence: &str) -> Result<()> {
         let result: Result<()> = (|| {
             let tokens = parse_keys(sequence)?;
-            let mut observed_state = self
-                .state_trace
-                .as_mut()
-                .and_then(|reader| reader.latest().ok());
+            let mut observed_state = self.state_trace.as_mut().and_then(|reader| reader.latest().ok());
             let mut pending_text_anchor: Option<StateTraceRecord> = None;
             for token in tokens {
                 let before_state = observed_state.clone();
@@ -618,9 +509,7 @@ impl<'a> Editor<'a> {
                                 observed_state = Some(changed);
                                 continue;
                             }
-                            if let Ok(changed) =
-                                self.wait_state_change_after_without_consuming(before)
-                            {
+                            if let Ok(changed) = self.wait_state_change_after_without_consuming(before) {
                                 observed_state = Some(changed);
                                 continue;
                             }
@@ -664,14 +553,7 @@ impl<'a> Editor<'a> {
                 SEND_KEYS_TIMEOUT,
             )?;
         } else {
-            damage_wait::wait_quiet(
-                conn,
-                damage_id,
-                window_id,
-                child,
-                SEND_KEYS_QUIET,
-                SEND_KEYS_TIMEOUT,
-            )?;
+            damage_wait::wait_quiet(conn, damage_id, window_id, child, SEND_KEYS_QUIET, SEND_KEYS_TIMEOUT)?;
         }
         Ok(())
     }
@@ -723,35 +605,16 @@ impl<'a> Editor<'a> {
     pub fn key_after_released_modifiers(&mut self, mods: ChordMods, key: Key) -> Result<()> {
         let result: Result<()> = (|| {
             if mods.is_empty() {
-                return Err(io::Error::other(
-                    "key_after_released_modifiers requires at least one modifier",
-                )
-                .into());
+                return Err(io::Error::other("key_after_released_modifiers requires at least one modifier").into());
             }
             self.focus_for_keyboard()?;
             let conn = &self.display.conn;
             let root = self.display.root;
             let kc = &self.display.keycodes;
-            input::press_modifiers_with_platform(
-                conn,
-                root,
-                kc,
-                mods.ctrl,
-                mods.alt,
-                mods.shift,
-                mods.platform,
-            )?;
+            input::press_modifiers_with_platform(conn, root, kc, mods.ctrl, mods.alt, mods.shift, mods.platform)?;
             conn.flush()?;
             thread::sleep(input::KEY_PHASE_SETTLE);
-            input::release_modifiers_with_platform(
-                conn,
-                root,
-                kc,
-                mods.ctrl,
-                mods.alt,
-                mods.shift,
-                mods.platform,
-            )?;
+            input::release_modifiers_with_platform(conn, root, kc, mods.ctrl, mods.alt, mods.shift, mods.platform)?;
             conn.flush()?;
             thread::sleep(input::KEY_PHASE_SETTLE);
 
@@ -898,16 +761,13 @@ impl<'a> Editor<'a> {
             let mut latest = None;
             loop {
                 if let Some(status) = child_mut(&mut self.child)?.try_wait()? {
-                    return Err(io::Error::other(format!(
-                        "editor exited while waiting for state {label}: {status}"
-                    ))
-                    .into());
+                    return Err(
+                        io::Error::other(format!("editor exited while waiting for state {label}: {status}")).into(),
+                    );
                 }
 
                 let reader = self.state_trace.as_mut().ok_or_else(|| {
-                    io::Error::other(
-                        "state trace not configured; pass `SpawnOpts::state_trace_path` at spawn time",
-                    )
+                    io::Error::other("state trace not configured; pass `SpawnOpts::state_trace_path` at spawn time")
                 })?;
                 let records = reader.read_new_records()?;
                 for record in records {
@@ -928,10 +788,7 @@ impl<'a> Editor<'a> {
                         .as_ref()
                         .and_then(|record| serde_json::to_string_pretty(record).ok())
                         .unwrap_or_else(|| "<no state-trace record observed>".to_string());
-                    return Err(io::Error::other(format!(
-                        "timed out waiting for state {label}\n{detail}"
-                    ))
-                    .into());
+                    return Err(io::Error::other(format!("timed out waiting for state {label}\n{detail}")).into());
                 }
                 thread::sleep(STATE_POLL);
             }
@@ -939,10 +796,7 @@ impl<'a> Editor<'a> {
         self.attach_stderr_context(result, "wait_state")
     }
 
-    fn wait_state_change_after_without_consuming(
-        &mut self,
-        before: &StateTraceRecord,
-    ) -> Result<StateTraceRecord> {
+    fn wait_state_change_after_without_consuming(&mut self, before: &StateTraceRecord) -> Result<StateTraceRecord> {
         let deadline = Instant::now() + SEND_KEYS_TIMEOUT;
         let mut latest = None;
         loop {
@@ -954,9 +808,7 @@ impl<'a> Editor<'a> {
             }
 
             let reader = self.state_trace.as_mut().ok_or_else(|| {
-                io::Error::other(
-                    "state trace not configured; pass `SpawnOpts::state_trace_path` at spawn time",
-                )
+                io::Error::other("state trace not configured; pass `SpawnOpts::state_trace_path` at spawn time")
             })?;
             for record in reader.peek_new_records()? {
                 latest = Some(record.clone());
@@ -970,19 +822,13 @@ impl<'a> Editor<'a> {
                     .as_ref()
                     .and_then(|record| serde_json::to_string_pretty(record).ok())
                     .unwrap_or_else(|| "<no state-trace record observed>".to_string());
-                return Err(io::Error::other(format!(
-                    "timed out waiting for send_keys state change\n{detail}"
-                ))
-                .into());
+                return Err(io::Error::other(format!("timed out waiting for send_keys state change\n{detail}")).into());
             }
             thread::sleep(STATE_POLL);
         }
     }
 
-    fn peek_latest_context_after(
-        &mut self,
-        before: Option<&StateTraceRecord>,
-    ) -> Result<Option<StateTraceRecord>> {
+    fn peek_latest_context_after(&mut self, before: Option<&StateTraceRecord>) -> Result<Option<StateTraceRecord>> {
         let Some(reader) = self.state_trace.as_mut() else {
             return Ok(None);
         };
@@ -996,20 +842,11 @@ impl<'a> Editor<'a> {
             .iter()
             .rfind(|record| is_candidate(record))
             .cloned()
-            .or_else(|| {
-                reader
-                    .last_observed()
-                    .filter(|record| is_candidate(record))
-                    .cloned()
-            }))
+            .or_else(|| reader.last_observed().filter(|record| is_candidate(record)).cloned()))
     }
 
     pub fn wait_text_viewport(&mut self, timeout: Duration) -> Result<StateTraceRecord> {
-        self.wait_state(
-            "text viewport geometry",
-            timeout,
-            viewport_geometry_is_ready,
-        )
+        self.wait_state("text viewport geometry", timeout, viewport_geometry_is_ready)
     }
 
     /// Drain any new state-trace records and return the most recent one.
@@ -1041,9 +878,8 @@ impl<'a> Editor<'a> {
         if predicate(&record) {
             Ok(record)
         } else {
-            let pretty = serde_json::to_string_pretty(&record).unwrap_or_else(|_| {
-                "<state-trace record could not be re-serialized for diagnostics>".to_string()
-            });
+            let pretty = serde_json::to_string_pretty(&record)
+                .unwrap_or_else(|_| "<state-trace record could not be re-serialized for diagnostics>".to_string());
             Err(format!("expect_state {label}: predicate returned false\n{pretty}").into())
         }
     }
@@ -1062,36 +898,18 @@ impl<'a> Editor<'a> {
         self.attach_stderr_context(result, "drain_state_records")
     }
 
-    pub fn wait_file_text(
-        &mut self,
-        path: &Path,
-        expected: &str,
-        opts: FileWaitOpts,
-    ) -> Result<FileWaitOutcome> {
+    pub fn wait_file_text(&mut self, path: &Path, expected: &str, opts: FileWaitOpts) -> Result<FileWaitOutcome> {
         let result = (|| {
             let display = self.display;
             let damage_id = self.damage.damage();
             let window_id = self.window.id;
             let child = child_mut(&mut self.child)?;
-            wait_file_text_impl(
-                &display.conn,
-                damage_id,
-                window_id,
-                child,
-                path,
-                expected,
-                opts,
-            )
+            wait_file_text_impl(&display.conn, damage_id, window_id, child, path, expected, opts)
         })();
         self.attach_stderr_context(result, "wait_file_text")
     }
 
-    pub fn wait_file_stable(
-        &mut self,
-        path: &Path,
-        stable_for: Duration,
-        timeout: Duration,
-    ) -> Result<FileStats> {
+    pub fn wait_file_stable(&mut self, path: &Path, stable_for: Duration, timeout: Duration) -> Result<FileStats> {
         let result = (|| {
             let child = child_mut(&mut self.child)?;
             wait_file_stable_impl(child, path, stable_for, timeout)
@@ -1115,10 +933,7 @@ impl<'a> Editor<'a> {
         let result = (|| -> Result<ExitStatus> {
             self.press(KeyChord::Ctrl(Key::Char('q')))?;
             release_stale_modifiers(self.display)?;
-            let mut child = self
-                .child
-                .take()
-                .expect("child still present at quit entry");
+            let mut child = self.child.take().expect("child still present at quit entry");
             match wait_child(&mut child, timeout) {
                 Ok(status) => Ok(status),
                 Err(error) => {
@@ -1172,21 +987,19 @@ fn dispatchable_single_chord(chord: &KeyChordSingle) -> KeyChordSingle {
     *chord
 }
 
-fn resolve_text_pixels(
-    state: &StateTraceRecord,
-    line: usize,
-    col: usize,
-    label: &str,
-) -> Result<(i32, i32)> {
-    state
-        .viewport
-        .text_to_window_local(line, col)
-        .ok_or_else(|| {
-            io::Error::other(format!(
-                "{label}: line {line} col {col} not in painted viewport (rows: {}); scroll-into-view first or wait for first paint",
-                state.viewport.rows.len(),
-            ))
-            .into()
+fn resolve_text_pixels(state: &StateTraceRecord, line: usize, col: usize, label: &str) -> Result<(i32, i32)> {
+    state.viewport.text_to_window_local(line, col).ok_or_else(|| {
+        io::Error::other(format!(
+            concat!(
+                "{}: line {} col {} not in painted viewport (rows: {}); ",
+                "scroll-into-view first or wait for first paint"
+            ),
+            label,
+            line,
+            col,
+            state.viewport.rows.len(),
+        ))
+        .into()
     })
 }
 
@@ -1458,11 +1271,7 @@ fn adjacent_cursor_chord_changes_state(chord: &KeyChordSingle, state: &StateTrac
         let target_col = state
             .viewport
             .first_row_for_line(target_line)
-            .map(|row| {
-                cursor
-                    .head_col
-                    .min(row.display_end_char - row.line_start_char)
-            })
+            .map(|row| cursor.head_col.min(row.display_end_char - row.line_start_char))
             .unwrap_or(cursor.head_col);
         !state
             .cursors
@@ -1520,8 +1329,7 @@ fn state_key_context_changed_after(before: &StateTraceRecord, after: &StateTrace
             || after.recent_panel_query != before.recent_panel_query
             || after.recent_panel_selected_path != before.recent_panel_selected_path
             || after.recent_panel_empty_message != before.recent_panel_empty_message
-            || after.recent_panel_content_search_pending
-                != before.recent_panel_content_search_pending)
+            || after.recent_panel_content_search_pending != before.recent_panel_content_search_pending)
 }
 
 fn state_cursor_signature(record: &StateTraceRecord) -> Vec<(usize, usize, usize, usize)> {
@@ -1540,19 +1348,14 @@ fn state_cursor_signature(record: &StateTraceRecord) -> Vec<(usize, usize, usize
 }
 
 fn viewport_geometry_is_ready(record: &StateTraceRecord) -> bool {
-    !record.viewport.rows.is_empty()
-        && record.viewport.char_width_px > 0.0
-        && record.viewport.line_height_px > 0.0
+    !record.viewport.rows.is_empty() && record.viewport.char_width_px > 0.0 && record.viewport.line_height_px > 0.0
 }
 
 fn tail_log(path: &Path, max_lines: usize) -> String {
     let Ok(text) = fs::read_to_string(path) else {
         return String::new();
     };
-    let lines: Vec<&str> = text
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
+    let lines: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
     let start = lines.len().saturating_sub(max_lines);
     lines[start..].join("\n")
 }
@@ -1774,8 +1577,7 @@ fn parse_single_escape(spec: &str) -> Result<KeyChordSingle> {
     let key = if tail.chars().count() == 1 {
         Key::Char(tail.chars().next().unwrap())
     } else {
-        parse_special_name(tail)
-            .ok_or_else(|| io::Error::other(format!("unknown key escape '<{spec}>'")))?
+        parse_special_name(tail).ok_or_else(|| io::Error::other(format!("unknown key escape '<{spec}>'")))?
     };
     Ok(KeyChordSingle {
         ctrl,
@@ -1790,9 +1592,7 @@ fn parse_held_escape(spec: &str, brace_idx: usize) -> Result<KeyToken> {
     let prefix = &spec[..brace_idx];
     let body = &spec[brace_idx..];
     if !body.ends_with('}') {
-        return Err(
-            io::Error::other(format!("chord-hold escape must end with '}}': '<{spec}>'")).into(),
-        );
+        return Err(io::Error::other(format!("chord-hold escape must end with '}}': '<{spec}>'")).into());
     }
     let inner_raw = &body[1..body.len() - 1];
 
@@ -1817,23 +1617,15 @@ fn parse_held_escape(spec: &str, brace_idx: usize) -> Result<KeyToken> {
         }
     }
     if !tail.is_empty() {
-        return Err(io::Error::other(format!(
-            "unexpected text before chord-hold body in '<{spec}>'"
-        ))
-        .into());
+        return Err(io::Error::other(format!("unexpected text before chord-hold body in '<{spec}>'")).into());
     }
     if mods.is_empty() {
-        return Err(io::Error::other(format!(
-            "chord-hold requires at least one held modifier: '<{spec}>'"
-        ))
-        .into());
+        return Err(io::Error::other(format!("chord-hold requires at least one held modifier: '<{spec}>'")).into());
     }
 
     let inner = parse_held_inner(inner_raw, spec)?;
     if inner.is_empty() {
-        return Err(
-            io::Error::other(format!("chord-hold body cannot be empty: '<{spec}>'")).into(),
-        );
+        return Err(io::Error::other(format!("chord-hold body cannot be empty: '<{spec}>'")).into());
     }
     Ok(KeyToken::Held(KeyChordHeld { mods, inner }))
 }
@@ -1841,11 +1633,8 @@ fn parse_held_escape(spec: &str, brace_idx: usize) -> Result<KeyToken> {
 fn parse_held_inner(inner_raw: &str, spec: &str) -> Result<Vec<HeldInnerKey>> {
     let mut inner = Vec::new();
     for piece in inner_raw.split_whitespace() {
-        let parsed = parse_keys(piece).map_err(|err| {
-            io::Error::other(format!(
-                "invalid inner piece {piece:?} in '<{spec}>': {err}"
-            ))
-        })?;
+        let parsed = parse_keys(piece)
+            .map_err(|err| io::Error::other(format!("invalid inner piece {piece:?} in '<{spec}>': {err}")))?;
         if parsed.len() != 1 {
             return Err(io::Error::other(format!(
                 "each inner piece in chord-hold must be exactly one key (got {} from {piece:?}): '<{spec}>'",
@@ -1857,7 +1646,11 @@ fn parse_held_inner(inner_raw: &str, spec: &str) -> Result<Vec<HeldInnerKey>> {
             KeyToken::Single(s) => {
                 if s.ctrl || s.alt {
                     return Err(io::Error::other(format!(
-                        "inner key in chord-hold cannot carry ctrl/alt; held modifiers go on the outer prefix: '<{spec}>'"
+                        concat!(
+                            "inner key in chord-hold cannot carry ctrl/alt; held modifiers go on the outer ",
+                            "prefix: '<{}>'"
+                        ),
+                        spec
                     ))
                     .into());
                 }
@@ -1867,10 +1660,7 @@ fn parse_held_inner(inner_raw: &str, spec: &str) -> Result<Vec<HeldInnerKey>> {
                 });
             }
             KeyToken::Held(_) => {
-                return Err(io::Error::other(format!(
-                    "nested chord-hold not supported: '<{spec}>'"
-                ))
-                .into());
+                return Err(io::Error::other(format!("nested chord-hold not supported: '<{spec}>'")).into());
             }
         }
     }
@@ -1920,10 +1710,7 @@ fn wait_file_text_impl(
 
     loop {
         if let Some(status) = child.try_wait()? {
-            return Err(io::Error::other(format!(
-                "editor exited while waiting for file contents: {status}"
-            ))
-            .into());
+            return Err(io::Error::other(format!("editor exited while waiting for file contents: {status}")).into());
         }
 
         while let Some(event) = conn.poll_for_event()? {
@@ -1955,11 +1742,7 @@ fn wait_file_text_impl(
 
         if Instant::now() >= deadline {
             let observed = match &last_text {
-                Some(text) => format!(
-                    "{} bytes, preview {:?}",
-                    text.len(),
-                    preview_text(text, 120)
-                ),
+                Some(text) => format!("{} bytes, preview {:?}", text.len(), preview_text(text, 120)),
                 None => "missing file".to_string(),
             };
             return Err(io::Error::other(format!(
@@ -1994,22 +1777,14 @@ fn preview_text(text: &str, max_chars: usize) -> String {
     preview
 }
 
-fn wait_file_stable_impl(
-    child: &mut Child,
-    path: &Path,
-    stable_for: Duration,
-    timeout: Duration,
-) -> Result<FileStats> {
+fn wait_file_stable_impl(child: &mut Child, path: &Path, stable_for: Duration, timeout: Duration) -> Result<FileStats> {
     let deadline = Instant::now() + timeout;
     let mut last_text = read_optional_text(path)?;
     let mut last_change = Instant::now();
 
     loop {
         if let Some(status) = child.try_wait()? {
-            return Err(io::Error::other(format!(
-                "editor exited while waiting for file: {status}"
-            ))
-            .into());
+            return Err(io::Error::other(format!("editor exited while waiting for file: {status}")).into());
         }
         let current = read_optional_text(path)?;
         if current != last_text {
@@ -2026,11 +1801,7 @@ fn wait_file_stable_impl(
         }
         if Instant::now() >= deadline {
             let observed = match &last_text {
-                Some(text) => format!(
-                    "{} bytes, preview {:?}",
-                    text.len(),
-                    preview_text(text, 120)
-                ),
+                Some(text) => format!("{} bytes, preview {:?}", text.len(), preview_text(text, 120)),
                 None => "missing file".to_string(),
             };
             return Err(io::Error::other(format!(
@@ -2098,13 +1869,7 @@ mod tests {
         single_with_platform(ctrl, alt, shift, false, key)
     }
 
-    fn single_with_platform(
-        ctrl: bool,
-        alt: bool,
-        shift: bool,
-        platform: bool,
-        key: Key,
-    ) -> KeyToken {
+    fn single_with_platform(ctrl: bool, alt: bool, shift: bool, platform: bool, key: Key) -> KeyToken {
         KeyToken::Single(KeyChordSingle {
             ctrl,
             alt,
@@ -2137,8 +1902,7 @@ mod tests {
                         assert_eq!(ai.shift, bi.shift, "{input:?}");
                         assert!(
                             matches!((ai.key, bi.key), (Key::Char(x), Key::Char(y)) if x == y)
-                                || std::mem::discriminant(&ai.key)
-                                    == std::mem::discriminant(&bi.key),
+                                || std::mem::discriminant(&ai.key) == std::mem::discriminant(&bi.key),
                             "{input:?}: inner {ai:?} vs {bi:?}",
                         );
                     }

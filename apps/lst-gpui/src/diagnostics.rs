@@ -21,13 +21,7 @@ pub(crate) fn record_usize(label: &str, value: usize) {
     record_line(label, format_args!("{value}"));
 }
 
-pub(crate) fn record_operation(
-    label: &str,
-    bytes: usize,
-    lines: usize,
-    clipboard_read_ms: Option<f64>,
-    apply_ms: f64,
-) {
+pub(crate) fn record_operation(label: &str, bytes: usize, lines: usize, clipboard_read_ms: Option<f64>, apply_ms: f64) {
     let Some(path) = trace_path() else {
         return;
     };
@@ -131,11 +125,7 @@ fn format_session_header(when: OffsetDateTime, pid: u32, version: &str) -> Strin
 
 fn format_panic_entry(when: OffsetDateTime, thread: &str, info: &str, backtrace: &str) -> String {
     let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "\n--- PANIC at {} (thread {thread}) ---",
-        format_timestamp(when),
-    );
+    let _ = writeln!(out, "\n--- PANIC at {} (thread {thread}) ---", format_timestamp(when),);
     let _ = writeln!(out, "{info}");
     let _ = writeln!(out, "backtrace:\n{backtrace}");
     out

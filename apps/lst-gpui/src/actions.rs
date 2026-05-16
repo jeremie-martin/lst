@@ -2,22 +2,19 @@ use gpui::{Context, Div, InteractiveElement, Window};
 use lst_editor::EditorCommand as Command;
 
 use crate::{
-    AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, Backspace, CleanupText, CloseActiveTab,
-    CopySelection, CutSelection, DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward,
-    DuplicateLine, FindNext, FindOpen, FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline,
-    InsertTab, LstGpuiApp, MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown,
-    MoveLineEnd, MoveLineStart, MoveLineUp, MovePageDown, MovePageUp, MoveRight, MoveSmartHome,
-    MoveSubwordLeft, MoveSubwordRight, MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft,
-    MoveWordRight, NewTab, NextBookmark, NextTab, OpenFile, OutdentSelection, PasteClipboard,
-    PopSelectionCursor, PrevTab, PreviousBookmark, Quit, Redo, ReopenClosedTab, ReplaceAll,
-    ReplaceOne, SaveFile, SaveFileAs, SelectAll, SelectAllOccurrences, SelectDocumentEnd,
-    SelectDocumentStart, SelectDown, SelectFindMatches, SelectLeft, SelectLine, SelectLineEnd,
-    SelectLineStart, SelectNextOccurrence, SelectPageDown, SelectPageUp, SelectParagraph,
-    SelectRight, SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft,
-    SelectWordRight, SkipNextOccurrence, SwapRedoBranch, ToggleBlockComment, ToggleBookmark,
-    ToggleComment, ToggleFindCase, ToggleFindInSelection, ToggleFindRegex, ToggleFindWholeWord,
-    ToggleLineNumberMode, ToggleOvertype, ToggleRecentFiles, ToggleTheme, ToggleWrap,
-    TransposeChars, Undo, ZoomIn, ZoomOut, ZoomReset,
+    AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, Backspace, CleanupText, CloseActiveTab, CopySelection,
+    CutSelection, DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward, DuplicateLine, FindNext, FindOpen,
+    FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline, InsertTab, LstGpuiApp, MoveDocumentEnd, MoveDocumentStart,
+    MoveDown, MoveLeft, MoveLineDown, MoveLineEnd, MoveLineStart, MoveLineUp, MovePageDown, MovePageUp, MoveRight,
+    MoveSmartHome, MoveSubwordLeft, MoveSubwordRight, MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft, MoveWordRight,
+    NewTab, NextBookmark, NextTab, OpenFile, OutdentSelection, PasteClipboard, PopSelectionCursor, PrevTab,
+    PreviousBookmark, Quit, Redo, ReopenClosedTab, ReplaceAll, ReplaceOne, SaveFile, SaveFileAs, SelectAll,
+    SelectAllOccurrences, SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectFindMatches, SelectLeft,
+    SelectLine, SelectLineEnd, SelectLineStart, SelectNextOccurrence, SelectPageDown, SelectPageUp, SelectParagraph,
+    SelectRight, SelectSmartHome, SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight,
+    SkipNextOccurrence, SwapRedoBranch, ToggleBlockComment, ToggleBookmark, ToggleComment, ToggleFindCase,
+    ToggleFindInSelection, ToggleFindRegex, ToggleFindWholeWord, ToggleLineNumberMode, ToggleOvertype,
+    ToggleRecentFiles, ToggleTheme, ToggleWrap, TransposeChars, Undo, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
@@ -148,20 +145,18 @@ pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) 
     // so a `ctrl-k ctrl-d` chord routes to SkipNextOccurrence instead of
     // SelectNextOccurrence. The cmd! / call! macros above clear chord state
     // first, which would race the flag away.
-    let root = root.on_action(
-        cx.listener(|this, _: &SelectNextOccurrence, _: &mut Window, cx| {
-            let skip = this.x11_ctrl_k_pending;
-            this.clear_x11_modifier_chord_state();
-            this.update_model(cx, true, |model| {
-                model.execute(if skip {
-                    Command::SkipNextOccurrence
-                } else {
-                    Command::SelectNextOccurrence
-                });
+    let root = root.on_action(cx.listener(|this, _: &SelectNextOccurrence, _: &mut Window, cx| {
+        let skip = this.x11_ctrl_k_pending;
+        this.clear_x11_modifier_chord_state();
+        this.update_model(cx, true, |model| {
+            model.execute(if skip {
+                Command::SkipNextOccurrence
+            } else {
+                Command::SelectNextOccurrence
             });
-            cx.stop_propagation();
-        }),
-    );
+        });
+        cx.stop_propagation();
+    }));
 
     root
 }

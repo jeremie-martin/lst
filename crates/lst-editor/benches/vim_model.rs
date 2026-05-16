@@ -86,22 +86,26 @@ fn bench_vim_edit(c: &mut Criterion) {
         });
 
         group.throughput(Throughput::Elements(CHANGE_UNDO_CYCLES as u64));
-        group.bench_with_input(BenchmarkId::new("change_inner_word_escape_undo", size.label()), &size, |b, _| {
-            b.iter_batched(
-                || VimDriver::normal_at(&text, line, 2),
-                |mut driver| {
-                    for _ in 0..CHANGE_UNDO_CYCLES {
-                        driver.set_cursor(line, 2);
-                        driver.keys("ciw");
-                        driver.insert_text("replacement");
-                        driver.escape();
-                        driver.keys("u");
-                    }
-                    black_box(driver.text_len());
-                },
-                BatchSize::LargeInput,
-            );
-        });
+        group.bench_with_input(
+            BenchmarkId::new("change_inner_word_escape_undo", size.label()),
+            &size,
+            |b, _| {
+                b.iter_batched(
+                    || VimDriver::normal_at(&text, line, 2),
+                    |mut driver| {
+                        for _ in 0..CHANGE_UNDO_CYCLES {
+                            driver.set_cursor(line, 2);
+                            driver.keys("ciw");
+                            driver.insert_text("replacement");
+                            driver.escape();
+                            driver.keys("u");
+                        }
+                        black_box(driver.text_len());
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
     }
 
     group.finish();
@@ -142,19 +146,23 @@ fn bench_vim_copy_paste(c: &mut Criterion) {
         let sequence = format!("{}yypu", size.copy_paste_lines());
 
         group.throughput(Throughput::Bytes((copied_bytes * COPY_PASTE_CYCLES) as u64));
-        group.bench_with_input(BenchmarkId::new("yank_paste_undo_lines", size.label()), &size, |b, _| {
-            b.iter_batched(
-                || VimDriver::normal_at(&text, 0, 0),
-                |mut driver| {
-                    for _ in 0..COPY_PASTE_CYCLES {
-                        driver.set_cursor(0, 0);
-                        driver.keys(&sequence);
-                    }
-                    black_box(driver.text_len());
-                },
-                BatchSize::LargeInput,
-            );
-        });
+        group.bench_with_input(
+            BenchmarkId::new("yank_paste_undo_lines", size.label()),
+            &size,
+            |b, _| {
+                b.iter_batched(
+                    || VimDriver::normal_at(&text, 0, 0),
+                    |mut driver| {
+                        for _ in 0..COPY_PASTE_CYCLES {
+                            driver.set_cursor(0, 0);
+                            driver.keys(&sequence);
+                        }
+                        black_box(driver.text_len());
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
     }
 
     group.finish();
@@ -253,7 +261,10 @@ fn bench_vim_oracle(c: &mut Criterion) {
                 for case in cases.iter_mut() {
                     case.driver.keys(&case.keys);
                     let cursor = case.driver.cursor();
-                    checksum = checksum.wrapping_add(cursor.line).wrapping_add(cursor.column).wrapping_add(case.driver.text_len());
+                    checksum = checksum
+                        .wrapping_add(cursor.line)
+                        .wrapping_add(cursor.column)
+                        .wrapping_add(case.driver.text_len());
                 }
                 black_box(checksum);
             },
@@ -318,7 +329,11 @@ struct VimDriver {
 impl VimDriver {
     fn new(text: &str) -> Self {
         let tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("vim-bench.md"), text, None);
-        let mut driver = Self { model: EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string()), focus: FocusTarget::Editor, deferred_find_query: None };
+        let mut driver = Self {
+            model: EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string()),
+            focus: FocusTarget::Editor,
+            deferred_find_query: None,
+        };
         driver.sync_effects();
         driver
     }
@@ -392,15 +407,23 @@ impl VimDriver {
                 self.model.close_find_panel();
             }
             Key::Character(text) => {
-                self.deferred_find_query.get_or_insert_with(|| self.model.find().query.clone()).push_str(&text);
+                self.deferred_find_query
+                    .get_or_insert_with(|| self.model.find().query.clone())
+                    .push_str(&text);
             }
             Key::Named(NamedKey::Backspace) => {
-                let mut query = self.deferred_find_query.take().unwrap_or_else(|| self.model.find().query.clone());
+                let mut query = self
+                    .deferred_find_query
+                    .take()
+                    .unwrap_or_else(|| self.model.find().query.clone());
                 query.pop();
                 self.deferred_find_query = Some(query);
             }
             Key::Named(NamedKey::Enter) => {
-                let query = self.deferred_find_query.take().unwrap_or_else(|| self.model.find().query.clone());
+                let query = self
+                    .deferred_find_query
+                    .take()
+                    .unwrap_or_else(|| self.model.find().query.clone());
                 let was_visual = matches!(self.model.vim_mode(), vim::Mode::Visual | vim::Mode::VisualLine);
                 self.model.update_find_query_and_activate(query);
                 if was_visual {
@@ -476,11 +499,19 @@ struct OracleReplayCase {
 }
 
 fn oracle_specs() -> Vec<OracleCaseSpec> {
-    serde_json::from_str::<Fixture>(ORACLE_FIXTURE).expect("valid vim oracle fixture").cases
+    serde_json::from_str::<Fixture>(ORACLE_FIXTURE)
+        .expect("valid vim oracle fixture")
+        .cases
 }
 
 fn oracle_batch(specs: &[OracleCaseSpec]) -> Vec<OracleReplayCase> {
-    specs.iter().map(|case| OracleReplayCase { driver: VimDriver::normal_at(&case.initial_text, case.cursor.line, case.cursor.column), keys: case.keys.clone() }).collect()
+    specs
+        .iter()
+        .map(|case| OracleReplayCase {
+            driver: VimDriver::normal_at(&case.initial_text, case.cursor.line, case.cursor.column),
+            keys: case.keys.clone(),
+        })
+        .collect()
 }
 
 fn generated_vim_corpus(lines: usize) -> String {
@@ -500,9 +531,13 @@ fn generated_search_corpus(lines: usize) -> String {
     let mut text = String::new();
     for line in 0..lines {
         if line % 8 == 0 {
-            text.push_str(&format!("needle alpha{line:05} haystack repeated search target payload tail\n"));
+            text.push_str(&format!(
+                "needle alpha{line:05} haystack repeated search target payload tail\n"
+            ));
         } else {
-            text.push_str(&format!("plain alpha{line:05} haystack repeated search target payload tail\n"));
+            text.push_str(&format!(
+                "plain alpha{line:05} haystack repeated search target payload tail\n"
+            ));
         }
     }
     text
@@ -534,7 +569,11 @@ fn parse_token(token: &str) -> (Key, vim::Modifiers) {
         if let Some(stripped) = rest.strip_prefix("c-").or_else(|| rest.strip_prefix("ctrl-")) {
             modifiers.control = true;
             rest = stripped.to_string();
-        } else if let Some(stripped) = rest.strip_prefix("cmd-").or_else(|| rest.strip_prefix("command-")).or_else(|| rest.strip_prefix("super-")) {
+        } else if let Some(stripped) = rest
+            .strip_prefix("cmd-")
+            .or_else(|| rest.strip_prefix("command-"))
+            .or_else(|| rest.strip_prefix("super-"))
+        {
             modifiers.command = true;
             rest = stripped.to_string();
         } else {
@@ -564,12 +603,22 @@ fn parse_token(token: &str) -> (Key, vim::Modifiers) {
 }
 
 fn criterion_config() -> Criterion {
-    Criterion::default().warm_up_time(Duration::from_millis(500)).measurement_time(Duration::from_secs(5)).sample_size(20)
+    Criterion::default()
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(5))
+        .sample_size(20)
 }
 
 criterion_group! {
     name = benches;
     config = criterion_config();
-    targets = bench_vim_motion, bench_vim_edit, bench_vim_visual, bench_vim_copy_paste, bench_vim_search, bench_vim_whole_document, bench_vim_oracle
+    targets =
+        bench_vim_motion,
+        bench_vim_edit,
+        bench_vim_visual,
+        bench_vim_copy_paste,
+        bench_vim_search,
+        bench_vim_whole_document,
+        bench_vim_oracle
 }
 criterion_main!(benches);

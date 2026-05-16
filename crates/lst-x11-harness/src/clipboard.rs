@@ -106,10 +106,7 @@ fn read_clipboard_bytes(sel: Selection) -> Option<u64> {
         .stderr(Stdio::null())
         .output()
         .ok()?;
-    output
-        .status
-        .success()
-        .then_some(output.stdout.len() as u64)
+    output.status.success().then_some(output.stdout.len() as u64)
 }
 
 pub(crate) fn require_xclip() -> Result<()> {

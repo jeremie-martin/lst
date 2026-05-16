@@ -29,10 +29,7 @@ pub(crate) fn find(
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait()? {
-            return Err(io::Error::other(format!(
-                "editor exited before its window appeared: {status}"
-            ))
-            .into());
+            return Err(io::Error::other(format!("editor exited before its window appeared: {status}")).into());
         }
         if let Some(info) = find_recursive(conn, root, atoms, pid, title)? {
             return Ok(info);
@@ -93,13 +90,7 @@ fn find_recursive(
     Ok(None)
 }
 
-fn matches(
-    conn: &RustConnection,
-    window: Window,
-    atoms: &Atoms,
-    pid: u32,
-    title: &str,
-) -> Result<bool> {
+fn matches(conn: &RustConnection, window: Window, atoms: &Atoms, pid: u32, title: &str) -> Result<bool> {
     let Some(window_pid) = read_pid(conn, window, atoms)? else {
         return Ok(false);
     };

@@ -48,9 +48,7 @@ fn replace_all_in_selection_only_mutates_inside_selection() -> TestResult {
         // range is the selection we just made (not the empty post-typing
         // caret position).
         editor.keys("<A-s>")?;
-        editor.wait_state("scope captured", secs(2), |record| {
-            record.find.scope == "selection"
-        })?;
+        editor.wait_state("scope captured", secs(2), |record| record.find.scope == "selection")?;
 
         // Type query, advance to replace input, type replacement, fire.
         editor.keys("foo<tab>bar<C-A-enter>")?;
@@ -71,9 +69,7 @@ fn replace_all_with_document_scope_mutates_every_match() -> TestResult {
         editor.place_cursor_at_document_start()?;
         editor.keys("<C-h>")?;
         editor.wait_state("find query focus", secs(2), |record| {
-            record.focused_input == "find_query"
-                && record.find.show_replace
-                && record.find.scope == "document"
+            record.focused_input == "find_query" && record.find.show_replace && record.find.scope == "document"
         })?;
 
         editor.keys("foo<tab>bar<C-A-enter>")?;
@@ -104,19 +100,14 @@ fn replace_all_in_selection_preserves_outside_text_byte_for_byte() -> TestResult
         })?;
 
         editor.keys("<A-s>")?;
-        editor.wait_state("scope captured", secs(2), |record| {
-            record.find.scope == "selection"
-        })?;
+        editor.wait_state("scope captured", secs(2), |record| record.find.scope == "selection")?;
 
         editor.keys("foo<tab>bar<C-A-enter>")?;
         // Inside-selection "foo" instances become "bar". Trailing two spaces
         // on the outside lines must survive — this catches an implementation
         // that accidentally normalizes trailing whitespace as part of the
         // replace pipeline.
-        editor.save_then_expect_file(
-            &path,
-            "leading foo  \nselected bar and bar\ntrailing foo  \n",
-        )?;
+        editor.save_then_expect_file(&path, "leading foo  \nselected bar and bar\ntrailing foo  \n")?;
         Ok(())
     })
 }

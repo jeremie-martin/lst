@@ -64,9 +64,7 @@ fn ctrl_f2_selects_all_occurrences_of_current_word() -> TestResult {
         let record = editor.wait_state("Ctrl-F2 selections", secs(5), |record| {
             record.cursors.len() == 3
                 && record.cursors.iter().all(|cursor| {
-                    cursor.head_char.max(cursor.anchor_char)
-                        - cursor.head_char.min(cursor.anchor_char)
-                        == 3
+                    cursor.head_char.max(cursor.anchor_char) - cursor.head_char.min(cursor.anchor_char) == 3
                 })
         })?;
         assert_eq!(record.cursors.len(), 3, "{record:?}");
@@ -92,9 +90,7 @@ fn alt_enter_selects_all_current_find_matches() -> TestResult {
         let record = editor.wait_state("Alt-Enter find selections", secs(5), |record| {
             record.cursors.len() == 3
                 && record.cursors.iter().all(|cursor| {
-                    cursor.head_char.max(cursor.anchor_char)
-                        - cursor.head_char.min(cursor.anchor_char)
-                        == 3
+                    cursor.head_char.max(cursor.anchor_char) - cursor.head_char.min(cursor.anchor_char) == 3
                 })
         })?;
         assert_eq!(record.cursors.len(), 3, "{record:?}");
@@ -359,12 +355,8 @@ fn ctrl_d_grows_selection_set_to_three_occurrences_of_foo() -> TestResult {
         let record = editor.read_state()?;
         assert_eq!(record.cursors.len(), 3, "{:?}", record.cursors);
         for (idx, cursor) in record.cursors.iter().enumerate() {
-            let span =
-                cursor.head_char.max(cursor.anchor_char) - cursor.head_char.min(cursor.anchor_char);
-            assert_eq!(
-                span, 3,
-                "cursor #{idx} should cover 3 chars (\"foo\"); got {cursor:?}"
-            );
+            let span = cursor.head_char.max(cursor.anchor_char) - cursor.head_char.min(cursor.anchor_char);
+            assert_eq!(span, 3, "cursor #{idx} should cover 3 chars (\"foo\"); got {cursor:?}");
         }
         Ok(())
     })
@@ -382,8 +374,7 @@ fn ctrl_shift_l_creates_one_selection_per_occurrence_via_state() -> TestResult {
         let record = editor.read_state()?;
         assert_eq!(record.cursors.len(), 3, "{:?}", record.cursors);
         for cursor in &record.cursors {
-            let span =
-                cursor.head_char.max(cursor.anchor_char) - cursor.head_char.min(cursor.anchor_char);
+            let span = cursor.head_char.max(cursor.anchor_char) - cursor.head_char.min(cursor.anchor_char);
             assert_eq!(span, 3, "{cursor:?} should select 3 chars (\"foo\")");
         }
         Ok(())

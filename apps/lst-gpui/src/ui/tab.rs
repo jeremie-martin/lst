@@ -1,6 +1,6 @@
 use gpui::{
-    div, px, rgb, AnyElement, App, CursorStyle, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    div, px, rgb, AnyElement, App, CursorStyle, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    SharedString, Stateful, StatefulInteractiveElement, Styled,
 };
 use smallvec::SmallVec;
 

@@ -23,9 +23,7 @@ use std::ops::Range;
 mod scratchpad;
 
 pub(crate) use scratchpad::create_scratchpad_note;
-use scratchpad::{
-    remove_previous_scratchpad_after_save_as, remove_scratchpad_file_if_unreferenced,
-};
+use scratchpad::{remove_previous_scratchpad_after_save_as, remove_scratchpad_file_if_unreferenced};
 
 #[derive(Clone, Debug)]
 struct AutosaveJob {
@@ -70,15 +68,10 @@ impl SaveTicket {
 }
 
 fn lock_generation(generation: &Mutex<u64>) -> MutexGuard<'_, u64> {
-    generation
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    generation.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-type OpenFileResults = (
-    Vec<(PathBuf, String, Option<FileStamp>)>,
-    Vec<(PathBuf, String)>,
-);
+type OpenFileResults = (Vec<(PathBuf, String, Option<FileStamp>)>, Vec<(PathBuf, String)>);
 
 /// Outcome of a single file-write attempt (save, save-as, or autosave).
 ///
@@ -137,20 +130,12 @@ enum ConflictWrite {
 
 #[derive(Debug)]
 enum SaveKind {
-    Save {
-        expected_stamp: Option<FileStamp>,
-    },
-    SaveAs {
-        previous_scratchpad: Option<PathBuf>,
-    },
+    Save { expected_stamp: Option<FileStamp> },
+    SaveAs { previous_scratchpad: Option<PathBuf> },
 }
 
 impl LstGpuiApp {
-    pub(crate) fn handle_model_effects(
-        &mut self,
-        effects: Vec<EditorEffect>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn handle_model_effects(&mut self, effects: Vec<EditorEffect>, cx: &mut Context<Self>) {
         for effect in effects {
             match effect {
                 EditorEffect::Focus(target) => self.set_focus(target),
@@ -169,11 +154,7 @@ impl LstGpuiApp {
                         self.update_model(cx, true, |model| {
                             model.paste_text(text);
                         });
-                        self.record_operation(
-                            "paste_clipboard",
-                            Some(clipboard_read_ms),
-                            elapsed_ms(apply_started),
-                        );
+                        self.record_operation("paste_clipboard", Some(clipboard_read_ms), elapsed_ms(apply_started));
                     } else {
                         self.update_model(cx, true, |model| {
                             model.clipboard_unavailable();
@@ -187,14 +168,7 @@ impl LstGpuiApp {
                     body,
                     revision,
                     expected_stamp,
-                } => self.spawn_save_job(
-                    tab_id,
-                    path,
-                    body,
-                    revision,
-                    SaveKind::Save { expected_stamp },
-                    cx,
-                ),
+                } => self.spawn_save_job(tab_id, path, body, revision, SaveKind::Save { expected_stamp }, cx),
                 EditorEffect::SaveFileAs {
                     tab_id,
                     suggested_name,
@@ -202,8 +176,7 @@ impl LstGpuiApp {
                     revision,
                     previous_scratchpad_path,
                 } => {
-                    let Some(path) = FileDialog::new().set_file_name(&suggested_name).save_file()
-                    else {
+                    let Some(path) = FileDialog::new().set_file_name(&suggested_name).save_file() else {
                         self.finish_pending_after_save(tab_id, false, cx);
                         continue;
                     };
@@ -244,9 +217,7 @@ impl LstGpuiApp {
         let view = cx.entity();
         window
             .spawn(cx, async move |cx| loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(500))
-                    .await;
+                cx.background_executor().timer(Duration::from_millis(500)).await;
                 if view
                     .update(cx, |view, cx| {
                         view.check_external_file_changes(cx);
@@ -271,13 +242,7 @@ impl LstGpuiApp {
         expected_stamp: Option<FileStamp>,
         cx: &mut Context<Self>,
     ) {
-        if !can_start_autosave_job(
-            self.model.tabs(),
-            &self.autosave_inflight,
-            tab_id,
-            &path,
-            revision,
-        ) {
+        if !can_start_autosave_job(self.model.tabs(), &self.autosave_inflight, tab_id, &path, revision) {
             return;
         }
         match file_conflict_stamp(&path, expected_stamp) {
@@ -290,13 +255,7 @@ impl LstGpuiApp {
                 return;
             }
             Ok(Some(disk_stamp)) => {
-                self.handle_file_conflict(
-                    tab_id,
-                    path,
-                    disk_stamp,
-                    ConflictWrite::Autosave { revision },
-                    cx,
-                );
+                self.handle_file_conflict(tab_id, path, disk_stamp, ConflictWrite::Autosave { revision }, cx);
                 return;
             }
             Ok(None) => {}
@@ -335,12 +294,7 @@ impl LstGpuiApp {
         .detach();
     }
 
-    fn finish_autosave(
-        &mut self,
-        job: AutosaveJob,
-        result: std::io::Result<PathBuf>,
-        cx: &mut Context<Self>,
-    ) {
+    fn finish_autosave(&mut self, job: AutosaveJob, result: std::io::Result<PathBuf>, cx: &mut Context<Self>) {
         self.autosave_inflight.remove(&job.path);
         if let Some(completion) = autosave_completion(self.model.tabs(), job, result) {
             self.apply_autosave_completion(completion, cx);
@@ -367,9 +321,7 @@ impl LstGpuiApp {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    save_file_result(tab_id, path, body, revision, expected_stamp, ticket)
-                })
+                .spawn(async move { save_file_result(tab_id, path, body, revision, expected_stamp, ticket) })
                 .await;
             let _ = this.update(cx, |view, cx| {
                 view.apply_save_outcome(result, kind, cx);
@@ -404,14 +356,7 @@ impl LstGpuiApp {
             .model
             .tabs()
             .iter()
-            .filter_map(|tab| {
-                Some((
-                    tab.id(),
-                    tab.path()?.clone(),
-                    tab.file_stamp()?,
-                    tab.modified(),
-                ))
-            })
+            .filter_map(|tab| Some((tab.id(), tab.path()?.clone(), tab.file_stamp()?, tab.modified())))
             .collect::<Vec<_>>();
 
         for (tab_id, path, expected_stamp, modified) in requests {
@@ -492,17 +437,12 @@ impl LstGpuiApp {
                         path,
                         body,
                         revision,
-                        SaveKind::Save {
-                            expected_stamp: None,
-                        },
+                        SaveKind::Save { expected_stamp: None },
                         cx,
                     );
                 }
                 ConflictWrite::Autosave { revision } => {
-                    self.apply_autosave_completion(
-                        write_autosave_body_result(tab_id, path, body, revision, None),
-                        cx,
-                    );
+                    self.apply_autosave_completion(write_autosave_body_result(tab_id, path, body, revision, None), cx);
                 }
             },
             FileConflictDecision::Cancel => {
@@ -529,12 +469,8 @@ impl LstGpuiApp {
                 let mut saved = false;
                 let mut record_recent = false;
                 self.update_model(cx, true, |model| {
-                    saved =
-                        model.save_finished_for_tab(tab_id, path, revision, disk_stamp, saved_body);
-                    record_recent = saved
-                        && model
-                            .tab_by_id(tab_id)
-                            .is_some_and(|tab| !tab.is_scratchpad());
+                    saved = model.save_finished_for_tab(tab_id, path, revision, disk_stamp, saved_body);
+                    record_recent = saved && model.tab_by_id(tab_id).is_some_and(|tab| !tab.is_scratchpad());
                 });
                 if record_recent {
                     self.recent.record(&recent_path);
@@ -656,21 +592,14 @@ impl LstGpuiApp {
             self.finish_quit(cx);
             return;
         };
-        let Some(TabCloseRequest::SaveAndClose { tab_id }) =
-            self.model.close_request_for_tab(tab_id)
-        else {
+        let Some(TabCloseRequest::SaveAndClose { tab_id }) = self.model.close_request_for_tab(tab_id) else {
             self.finish_quit(cx);
             return;
         };
         self.start_save_for_pending(tab_id, PendingAfterSave::Quit, cx);
     }
 
-    fn start_save_for_pending(
-        &mut self,
-        tab_id: TabId,
-        pending: PendingAfterSave,
-        cx: &mut Context<Self>,
-    ) {
+    fn start_save_for_pending(&mut self, tab_id: TabId, pending: PendingAfterSave, cx: &mut Context<Self>) {
         self.pending_after_save = Some(pending);
         self.update_model(cx, true, |model| {
             model.request_save_tab(tab_id);
@@ -720,11 +649,7 @@ impl LstGpuiApp {
         }
     }
 
-    fn apply_open_file_results(
-        &mut self,
-        (opened, failed): OpenFileResults,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply_open_file_results(&mut self, (opened, failed): OpenFileResults, cx: &mut Context<Self>) {
         for (path, message) in failed {
             self.update_model(cx, true, |model| model.open_file_failed(path, message));
         }
@@ -737,12 +662,7 @@ impl LstGpuiApp {
         }
     }
 
-    fn apply_save_outcome(
-        &mut self,
-        result: FileWriteOutcome,
-        kind: SaveKind,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply_save_outcome(&mut self, result: FileWriteOutcome, kind: SaveKind, cx: &mut Context<Self>) {
         let inflight_path = result.path().to_path_buf();
         self.finish_save_inflight(&inflight_path);
         let is_save_as = matches!(kind, SaveKind::SaveAs { .. });
@@ -763,34 +683,20 @@ impl LstGpuiApp {
                     } else {
                         model.save_finished_for_tab(tab_id, path, revision, stamp, body)
                     };
-                    record_recent = saved
-                        && (is_save_as
-                            || model
-                                .tab_by_id(tab_id)
-                                .is_some_and(|tab| !tab.is_scratchpad()));
+                    record_recent =
+                        saved && (is_save_as || model.tab_by_id(tab_id).is_some_and(|tab| !tab.is_scratchpad()));
                 });
                 if record_recent {
                     self.recent.record(&saved_path);
                 }
-                if let SaveKind::SaveAs {
-                    previous_scratchpad,
-                } = kind
-                {
+                if let SaveKind::SaveAs { previous_scratchpad } = kind {
                     if saved {
-                        remove_previous_scratchpad_after_save_as(
-                            previous_scratchpad,
-                            &saved_path,
-                            self.model.tabs(),
-                        );
+                        remove_previous_scratchpad_after_save_as(previous_scratchpad, &saved_path, self.model.tabs());
                     }
                 }
                 self.finish_pending_after_save(tab_id, saved, cx);
             }
-            FileWriteOutcome::Failed {
-                tab_id,
-                path,
-                message,
-            } => {
+            FileWriteOutcome::Failed { tab_id, path, message } => {
                 self.update_model(cx, true, |model| {
                     model.save_failed(path, message);
                 });
@@ -802,13 +708,7 @@ impl LstGpuiApp {
                 revision,
                 disk_stamp,
             } => {
-                self.handle_file_conflict(
-                    tab_id,
-                    path,
-                    disk_stamp,
-                    ConflictWrite::Save { revision },
-                    cx,
-                );
+                self.handle_file_conflict(tab_id, path, disk_stamp, ConflictWrite::Save { revision }, cx);
             }
             FileWriteOutcome::Stale { .. } => {
                 cx.notify();
@@ -828,11 +728,8 @@ impl LstGpuiApp {
                 let recent_path = path.clone();
                 let mut record_recent = false;
                 self.update_model(cx, true, |model| {
-                    record_recent = model
-                        .autosave_finished_for_tab(tab_id, path, revision, stamp, body)
-                        && model
-                            .tab_by_id(tab_id)
-                            .is_some_and(|tab| !tab.is_scratchpad());
+                    record_recent = model.autosave_finished_for_tab(tab_id, path, revision, stamp, body)
+                        && model.tab_by_id(tab_id).is_some_and(|tab| !tab.is_scratchpad());
                 });
                 if record_recent {
                     self.recent.record(&recent_path);
@@ -852,13 +749,7 @@ impl LstGpuiApp {
                 path,
                 revision,
                 disk_stamp,
-            } => self.handle_file_conflict(
-                tab_id,
-                path,
-                disk_stamp,
-                ConflictWrite::Autosave { revision },
-                cx,
-            ),
+            } => self.handle_file_conflict(tab_id, path, disk_stamp, ConflictWrite::Autosave { revision }, cx),
             // Autosave is not ticket-gated, so it never emits `Stale`.
             FileWriteOutcome::Stale { .. } => {}
         }
@@ -981,10 +872,7 @@ impl LstGpuiApp {
 }
 
 fn autosave_temp_path(path: &Path, revision: u64) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("buffer");
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("buffer");
     path.with_file_name(format!(
         ".{file_name}.lst-gpui-autosave-{}-{revision}.tmp",
         process::id()
@@ -1014,9 +902,7 @@ fn write_file_with_guards(
     }
 
     let write_target = write_target_for_path(path)?;
-    let permissions = fs::metadata(path)
-        .ok()
-        .map(|metadata| metadata.permissions());
+    let permissions = fs::metadata(path).ok().map(|metadata| metadata.permissions());
     let temp_path = write_temp_replacement(&write_target, bytes, permissions)?;
 
     let _current = match ticket {
@@ -1089,25 +975,14 @@ fn resolve_link_target(link_path: &Path, target: PathBuf) -> PathBuf {
     if target.is_absolute() {
         return target;
     }
-    link_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(target)
+    link_path.parent().unwrap_or_else(|| Path::new(".")).join(target)
 }
 
-fn write_temp_replacement(
-    target: &Path,
-    bytes: &[u8],
-    permissions: Option<fs::Permissions>,
-) -> io::Result<PathBuf> {
+fn write_temp_replacement(target: &Path, bytes: &[u8], permissions: Option<fs::Permissions>) -> io::Result<PathBuf> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     for _ in 0..128 {
         let temp_path = replacement_temp_path(parent, target.file_name());
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-        {
+        match fs::OpenOptions::new().write(true).create_new(true).open(&temp_path) {
             Ok(mut file) => {
                 let result = (|| {
                     file.write_all(bytes)?;
@@ -1154,11 +1029,7 @@ fn remove_temp_file(path: &Path) {
 }
 
 fn stale_save_result(tab_id: TabId, path: PathBuf, revision: u64) -> FileWriteOutcome {
-    FileWriteOutcome::Stale {
-        tab_id,
-        path,
-        revision,
-    }
+    FileWriteOutcome::Stale { tab_id, path, revision }
 }
 
 fn saved_body_for_conflict(write: ConflictWrite, body: &str) -> String {
@@ -1385,12 +1256,7 @@ fn autosave_completion(
     ))
 }
 
-pub(crate) fn autosave_revision_is_current(
-    tabs: &[ModelEditorTab],
-    tab_id: TabId,
-    path: &Path,
-    revision: u64,
-) -> bool {
+pub(crate) fn autosave_revision_is_current(tabs: &[ModelEditorTab], tab_id: TabId, path: &Path, revision: u64) -> bool {
     let open_tabs_for_path = tabs
         .iter()
         .filter(|tab| tab.path().map(PathBuf::as_path) == Some(path))
@@ -1411,10 +1277,7 @@ fn file_stamp(path: &Path) -> std::io::Result<FileStamp> {
     fs::metadata(path).map(|metadata| FileStamp::from_metadata(&metadata))
 }
 
-fn file_conflict_stamp(
-    path: &Path,
-    expected_stamp: Option<FileStamp>,
-) -> std::io::Result<Option<FileStamp>> {
+fn file_conflict_stamp(path: &Path, expected_stamp: Option<FileStamp>) -> std::io::Result<Option<FileStamp>> {
     let Some(expected_stamp) = expected_stamp else {
         return Ok(None);
     };
@@ -1445,9 +1308,7 @@ fn prompt_file_conflict_decision(title: &str) -> FileConflictDecision {
         .show()
     {
         MessageDialogResult::Custom(label) if label == "Reload" => FileConflictDecision::Reload,
-        MessageDialogResult::Custom(label) if label == "Overwrite" => {
-            FileConflictDecision::Overwrite
-        }
+        MessageDialogResult::Custom(label) if label == "Overwrite" => FileConflictDecision::Overwrite,
         MessageDialogResult::Yes => FileConflictDecision::Reload,
         MessageDialogResult::No => FileConflictDecision::Overwrite,
         _ => FileConflictDecision::Cancel,
@@ -1525,8 +1386,7 @@ impl LstGpuiApp {
             None => true,
         };
         if stale {
-            self.cleanup_message =
-                Some("Buffer changed during cleanup; result discarded.".to_string());
+            self.cleanup_message = Some("Buffer changed during cleanup; result discarded.".to_string());
             cx.notify();
             return;
         }
@@ -1543,10 +1403,7 @@ impl LstGpuiApp {
 }
 
 fn build_llm_client() -> Result<Box<dyn crate::llm::LlmClient>, String> {
-    if let Some(canned) = std::env::var("LST_LLM_FAKE_RESPONSE")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(canned) = std::env::var("LST_LLM_FAKE_RESPONSE").ok().filter(|s| !s.is_empty()) {
         let delay_ms = std::env::var("LST_LLM_FAKE_DELAY_MS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
@@ -1565,7 +1422,5 @@ fn build_llm_client() -> Result<Box<dyn crate::llm::LlmClient>, String> {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| crate::llm::DEFAULT_DEEPSEEK_MODEL.to_string());
-    Ok(Box::new(crate::llm::DeepSeekClient::new(
-        api_key, model_name,
-    )))
+    Ok(Box::new(crate::llm::DeepSeekClient::new(api_key, model_name)))
 }

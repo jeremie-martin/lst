@@ -4,10 +4,9 @@ use crate::ui::{
     IconButton, IconKind, Tab as UiTab, TabBar,
 };
 use gpui::{
-    canvas, div, prelude::*, px, rgb, AnyElement, App, Bounds, Context, CursorStyle,
-    ElementInputHandler, InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton,
-    MouseUpEvent, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
-    Window,
+    canvas, div, prelude::*, px, rgb, AnyElement, App, Bounds, Context, CursorStyle, ElementInputHandler,
+    InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseUpEvent, ParentElement, Pixels, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window,
 };
 use lst_editor::EditorCommand as Command;
 
@@ -15,9 +14,9 @@ use crate::actions::attach_workspace_actions;
 use crate::recent::RecentPreviewState;
 use crate::syntax::syntax_mode_for_language;
 use crate::viewport::{
-    buffer_content_height, code_char_width, code_origin_pad, ensure_wrap_layout,
-    max_unwrapped_line_width, paint_viewport, prepare_viewport_paint_state, scroll_left_for,
-    ViewportPaintInput, ViewportPreparation, WrapLayoutInput,
+    buffer_content_height, code_char_width, code_origin_pad, ensure_wrap_layout, max_unwrapped_line_width,
+    paint_viewport, prepare_viewport_paint_state, scroll_left_for, ViewportPaintInput, ViewportPreparation,
+    WrapLayoutInput,
 };
 use crate::{FocusTarget, LstGpuiApp, RECENT_CARD_BASIS};
 
@@ -314,10 +313,7 @@ impl LstGpuiApp {
                                 div()
                                     .flex_none()
                                     .text_size(metrics::px_for_scale(metrics::TAB_TEXT_SIZE, scale))
-                                    .line_height(metrics::px_for_scale(
-                                        metrics::TAB_TEXT_LINE_HEIGHT,
-                                        scale,
-                                    ))
+                                    .line_height(metrics::px_for_scale(metrics::TAB_TEXT_LINE_HEIGHT, scale))
                                     .text_color(rgb(theme.role.text))
                                     .child("Recent Files"),
                             )
@@ -327,10 +323,7 @@ impl LstGpuiApp {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(metrics::px_for_scale(
-                                        metrics::INPUT_TEXT_SIZE,
-                                        scale,
-                                    ))
+                                    .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
                                     .text_color(rgb(theme.role.text_muted))
                                     .child(count_label),
                             )
@@ -338,21 +331,17 @@ impl LstGpuiApp {
                                 row.child(
                                     div()
                                         .flex_none()
-                                        .text_size(metrics::px_for_scale(
-                                            metrics::INPUT_TEXT_SIZE,
-                                            scale,
-                                        ))
+                                        .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
                                         .text_color(rgb(theme.role.text_subtle))
                                         .child("Searching contents..."),
                                 )
                             })
-                            .child(
-                                IconButton::new("recent-files-close", IconKind::Close, theme)
-                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.close_recent_files_panel(cx);
-                                        cx.stop_propagation();
-                                    })),
-                            ),
+                            .child(IconButton::new("recent-files-close", IconKind::Close, theme).on_click(
+                                cx.listener(|this, _, _window, cx| {
+                                    this.close_recent_files_panel(cx);
+                                    cx.stop_propagation();
+                                }),
+                            )),
                     )
                     .child(
                         div()
@@ -366,9 +355,7 @@ impl LstGpuiApp {
                                     .on_children_prepainted({
                                         let entity = entity.clone();
                                         let recent_scroll = recent_scroll.clone();
-                                        move |bounds: Vec<Bounds<Pixels>>,
-                                              _window: &mut Window,
-                                              cx: &mut App| {
+                                        move |bounds: Vec<Bounds<Pixels>>, _window: &mut Window, cx: &mut App| {
                                             let scroll_offset = recent_scroll.offset();
                                             let card_bounds = bounds
                                                 .into_iter()
@@ -392,19 +379,14 @@ impl LstGpuiApp {
                                         grid.child(
                                             div()
                                                 .flex_none()
-                                                .text_size(metrics::px_for_scale(
-                                                    metrics::INPUT_TEXT_SIZE,
-                                                    scale,
-                                                ))
+                                                .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
                                                 .text_color(rgb(theme.role.text_muted))
                                                 .child(message),
                                         )
                                     }),
                             ),
                     )
-                    .when(has_more, |panel| {
-                        panel.child(self.render_recent_load_more_button(cx))
-                    }),
+                    .when(has_more, |panel| panel.child(self.render_recent_load_more_button(cx))),
             )
     }
 
@@ -428,10 +410,9 @@ impl LstGpuiApp {
             .unwrap_or_default();
         let (preview_text, preview_color) = match self.recent.preview(&path) {
             Some(RecentPreviewState::Loaded(text)) => (text.clone(), theme.role.text_subtle),
-            Some(RecentPreviewState::Failed(message)) => (
-                format!("Preview unavailable: {message}"),
-                theme.role.error_text,
-            ),
+            Some(RecentPreviewState::Failed(message)) => {
+                (format!("Preview unavailable: {message}"), theme.role.error_text)
+            }
             _ => ("Loading preview...".to_string(), theme.role.text_muted),
         };
         let background = if selected {
@@ -444,11 +425,7 @@ impl LstGpuiApp {
         } else {
             theme.role.control_bg
         };
-        let border = if selected {
-            theme.role.accent
-        } else {
-            theme.role.border
-        };
+        let border = if selected { theme.role.accent } else { theme.role.border };
 
         div()
             .id(("recent-file-card", ix))
@@ -604,14 +581,12 @@ impl LstGpuiApp {
                         let entity = cx.entity();
                         div()
                             .flex_none()
-                            .on_children_prepainted(
-                                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
-                                    let captured = bounds.first().copied();
-                                    entity.update(cx, |this, _| {
-                                        this.cleanup_button_bounds_px = captured;
-                                    });
-                                },
-                            )
+                            .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                                let captured = bounds.first().copied();
+                                entity.update(cx, |this, _| {
+                                    this.cleanup_button_bounds_px = captured;
+                                });
+                            })
                             .child(
                                 IconButton::new("cleanup-button", IconKind::Sparkle, theme)
                                     .disabled(self.cleanup_in_flight)
@@ -625,21 +600,18 @@ impl LstGpuiApp {
                         let entity = cx.entity();
                         div()
                             .flex_none()
-                            .on_children_prepainted(
-                                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
-                                    let captured = bounds.first().copied();
-                                    entity.update(cx, |this, _| {
-                                        this.theme_button_bounds_px = captured;
-                                    });
-                                },
-                            )
-                            .child(
-                                IconButton::new("theme-toggle-button", IconKind::Theme, theme)
-                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.cycle_theme(cx);
-                                        cx.stop_propagation();
-                                    })),
-                            )
+                            .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                                let captured = bounds.first().copied();
+                                entity.update(cx, |this, _| {
+                                    this.theme_button_bounds_px = captured;
+                                });
+                            })
+                            .child(IconButton::new("theme-toggle-button", IconKind::Theme, theme).on_click(
+                                cx.listener(|this, _, _window, cx| {
+                                    this.cycle_theme(cx);
+                                    cx.stop_propagation();
+                                }),
+                            ))
                     })
                     .child(
                         div()
@@ -699,12 +671,7 @@ impl LstGpuiApp {
         let _ = self.maybe_handle_vim_key(event, window, cx);
     }
 
-    fn on_modifiers_changed(
-        &mut self,
-        event: &ModifiersChangedEvent,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
+    fn on_modifiers_changed(&mut self, event: &ModifiersChangedEvent, _window: &mut Window, _cx: &mut Context<Self>) {
         self.note_modifiers_changed_for_text_input(event);
     }
 }
@@ -815,14 +782,8 @@ impl Render for LstGpuiApp {
                     .flex_grow()
                     .flex()
                     .flex_col()
-                    .px(metrics::px_for_scale(
-                        metrics::SHELL_EDGE_PAD,
-                        self.ui_scale(),
-                    ))
-                    .py(metrics::px_for_scale(
-                        metrics::SHELL_EDGE_PAD,
-                        self.ui_scale(),
-                    ))
+                    .px(metrics::px_for_scale(metrics::SHELL_EDGE_PAD, self.ui_scale()))
+                    .py(metrics::px_for_scale(metrics::SHELL_EDGE_PAD, self.ui_scale()))
                     .gap_2()
                     .child(self.render_tab_strip(cx))
                     .child(
@@ -843,14 +804,8 @@ impl Render for LstGpuiApp {
                                     .border_color(rgb(theme.role.border))
                                     .bg(rgb(theme.role.editor_bg))
                                     .font(typography::primary_font())
-                                    .text_size(metrics::px_for_scale(
-                                        metrics::CODE_FONT_SIZE,
-                                        self.ui_scale(),
-                                    ))
-                                    .line_height(metrics::px_for_scale(
-                                        metrics::ROW_HEIGHT,
-                                        self.ui_scale(),
-                                    ))
+                                    .text_size(metrics::px_for_scale(metrics::CODE_FONT_SIZE, self.ui_scale()))
+                                    .line_height(metrics::px_for_scale(metrics::ROW_HEIGHT, self.ui_scale()))
                                     .when(self.recent.is_open(), |viewport| {
                                         viewport.child(self.render_recent_files_view(cx))
                                     })
@@ -867,12 +822,8 @@ impl Render for LstGpuiApp {
                                                     .overflow_y_scroll()
                                                     .track_scroll(&viewport_scroll)
                                                     .child(match total_content_width {
-                                                        Some(width) => {
-                                                            div().h(total_content_height).w(width)
-                                                        }
-                                                        None => {
-                                                            div().h(total_content_height).w_full()
-                                                        }
+                                                        Some(width) => div().h(total_content_height).w(width),
+                                                        None => div().h(total_content_height).w_full(),
                                                     }),
                                             )
                                             .child(
@@ -884,116 +835,81 @@ impl Render for LstGpuiApp {
                                                     .size_full()
                                                     .cursor(CursorStyle::IBeam)
                                                     .block_mouse_except_scroll()
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        cx.listener(Self::on_mouse_down),
-                                                    )
+                                                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
                                                     .on_mouse_down(
                                                         MouseButton::Middle,
                                                         cx.listener(Self::on_middle_mouse_down),
                                                     )
-                                                    .on_mouse_up(
-                                                        MouseButton::Left,
-                                                        cx.listener(Self::on_mouse_up),
-                                                    )
-                                                    .on_mouse_up_out(
-                                                        MouseButton::Left,
-                                                        cx.listener(Self::on_mouse_up),
-                                                    )
+                                                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                                                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
                                                     .on_mouse_move(cx.listener(Self::on_mouse_move))
                                                     .child(
                                                         canvas(
                                                             {
-                                                                let viewport_scroll =
-                                                                    viewport_scroll.clone();
+                                                                let viewport_scroll = viewport_scroll.clone();
                                                                 move |bounds, window, cx| {
                                                                     let previous_wrap_columns =
-                                                                        viewport_geometry
-                                                                            .borrow()
-                                                                            .painted_wrap_columns;
-                                                                    let paint_state =
-                                                                        prepare_viewport_paint_state(
-                                                                            ViewportPreparation {
-                                                                                buffer: &buffer,
-                                                                                lines:
-                                                                                    line_texts
-                                                                                        .as_ref(),
-                                                                                revision,
-                                                                                syntax_mode,
-                                                                                show_gutter,
-                                                                                gutter_mode,
-                                                                                cursor_line,
-                                                                                cursor_lines:
-                                                                                    &cursor_lines,
-                                                                                show_wrap,
-                                                                                viewport_scroll:
-                                                                                    &viewport_scroll,
-                                                                                viewport_cache:
-                                                                                    &viewport_cache,
-                                                                                viewport_geometry:
-                                                                                    &viewport_geometry,
-                                                                                bounds,
-                                                                                char_width,
-                                                                                scale: ui_scale,
-                                                                                theme,
-                                                                            },
-                                                                            window,
-                                                                        );
+                                                                        viewport_geometry.borrow().painted_wrap_columns;
+                                                                    let paint_state = prepare_viewport_paint_state(
+                                                                        ViewportPreparation {
+                                                                            buffer: &buffer,
+                                                                            lines: line_texts.as_ref(),
+                                                                            revision,
+                                                                            syntax_mode,
+                                                                            show_gutter,
+                                                                            gutter_mode,
+                                                                            cursor_line,
+                                                                            cursor_lines: &cursor_lines,
+                                                                            show_wrap,
+                                                                            viewport_scroll: &viewport_scroll,
+                                                                            viewport_cache: &viewport_cache,
+                                                                            viewport_geometry: &viewport_geometry,
+                                                                            bounds,
+                                                                            char_width,
+                                                                            scale: ui_scale,
+                                                                            theme,
+                                                                        },
+                                                                        window,
+                                                                    );
                                                                     if previous_wrap_columns
                                                                         != viewport_geometry
                                                                             .borrow()
                                                                             .painted_wrap_columns
                                                                     {
-                                                                        cx.notify(
-                                                                            prepare_entity
-                                                                                .entity_id(),
-                                                                        );
+                                                                        cx.notify(prepare_entity.entity_id());
                                                                     }
-                                                                    prepare_entity.update(
-                                                                        cx,
-                                                                        |this, cx| {
-                                                                            if this.status_details()
-                                                                                != this.status_details_rendered
-                                                                            {
-                                                                                cx.notify();
-                                                                            }
-                                                                            this.emit_state_trace(window);
-                                                                        },
-                                                                    );
+                                                                    prepare_entity.update(cx, |this, cx| {
+                                                                        if this.status_details()
+                                                                            != this.status_details_rendered
+                                                                        {
+                                                                            cx.notify();
+                                                                        }
+                                                                        this.emit_state_trace(window);
+                                                                    });
                                                                     paint_state
                                                                 }
                                                             },
                                                             move |bounds, paint_state, window, cx| {
                                                                 window.handle_input(
                                                                     &focus_handle,
-                                                                    ElementInputHandler::new(
-                                                                        bounds,
-                                                                        entity.clone(),
-                                                                    ),
+                                                                    ElementInputHandler::new(bounds, entity.clone()),
                                                                     cx,
                                                                 );
-                                                                let horizontal_scroll =
-                                                                    if show_wrap {
-                                                                        px(0.0)
-                                                                    } else {
-                                                                        scroll_left_for(
-                                                                            &viewport_scroll,
-                                                                        )
-                                                                    };
+                                                                let horizontal_scroll = if show_wrap {
+                                                                    px(0.0)
+                                                                } else {
+                                                                    scroll_left_for(&viewport_scroll)
+                                                                };
                                                                 paint_viewport(
                                                                     ViewportPaintInput {
                                                                         bounds,
                                                                         show_gutter,
-                                                                        selection_set:
-                                                                            selection_set.clone(),
-                                                                        search_matches:
-                                                                            &search_matches,
-                                                                        active_search_match:
-                                                                            active_search_match
-                                                                                .as_ref(),
+                                                                        selection_set: selection_set.clone(),
+                                                                        search_matches: &search_matches,
+                                                                        active_search_match: active_search_match
+                                                                            .as_ref(),
                                                                         vim_mode,
-                                                                        focused: focus_handle
-                                                                            .is_focused(window),
+                                                                        focused: focus_handle.is_focused(window),
                                                                         paint_state,
                                                                         scale: ui_scale,
                                                                         horizontal_scroll,
@@ -1013,22 +929,17 @@ impl Render for LstGpuiApp {
                                                 cx,
                                             ))
                                             .when(!show_wrap, |viewport| {
-                                                viewport.child(
-                                                    self.render_editor_scrollbar(
-                                                        ScrollbarAxis::Horizontal,
-                                                        h_scrollbar_scroll,
-                                                        cx,
-                                                    ),
-                                                )
+                                                viewport.child(self.render_editor_scrollbar(
+                                                    ScrollbarAxis::Horizontal,
+                                                    h_scrollbar_scroll,
+                                                    cx,
+                                                ))
                                             })
                                             .when(
-                                                self.model.find().visible
-                                                    || self.model.goto_line().is_some(),
-                                                |viewport| {
-                                                    viewport.child(self.render_editor_overlays(cx))
-                                                },
+                                                self.model.find().visible || self.model.goto_line().is_some(),
+                                                |viewport| viewport.child(self.render_editor_overlays(cx)),
                                             )
-                                    })
+                                    }),
                             ),
                     )
                     .child(self.render_status_bar(cx)),

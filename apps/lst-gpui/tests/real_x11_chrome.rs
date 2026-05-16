@@ -31,9 +31,7 @@ fn line_number_modes_render_absolute_relative_and_hybrid_text() -> TestResult {
         editor.expect_cursor_heads(&[(1, 0)])?;
 
         let absolute = editor.wait_state("absolute gutter text", secs(2), |record| {
-            visible_gutter(record, 0) == "1"
-                && visible_gutter(record, 1) == "2"
-                && visible_gutter(record, 2) == "3"
+            visible_gutter(record, 0) == "1" && visible_gutter(record, 1) == "2" && visible_gutter(record, 2) == "3"
         })?;
         assert_eq!(visible_gutter(&absolute, 1), "2", "{absolute:?}");
 
@@ -77,14 +75,10 @@ fn theme_button_cycles_visible_theme_label() -> TestResult {
         })?;
 
         editor.click_theme_button()?;
-        editor.wait_state("light theme", secs(2), |record| {
-            record.theme_name == "Light"
-        })?;
+        editor.wait_state("light theme", secs(2), |record| record.theme_name == "Light")?;
 
         editor.click_theme_button()?;
-        editor.wait_state("dark theme restored", secs(2), |record| {
-            record.theme_name == "Dark"
-        })?;
+        editor.wait_state("dark theme restored", secs(2), |record| record.theme_name == "Dark")?;
         Ok(())
     })
 }
@@ -96,9 +90,7 @@ fn zoom_shortcuts_update_visible_zoom_status_and_reset() -> TestResult {
         let (mut editor, _path) = session.open("scratch")?;
 
         editor.press(KeyChord::Ctrl(Key::Char('=')))?;
-        editor.wait_state("zoom in", secs(2), |record| {
-            record.status_bar.contains("Zoom 110%")
-        })?;
+        editor.wait_state("zoom in", secs(2), |record| record.status_bar.contains("Zoom 110%"))?;
 
         editor.press(KeyChord::Ctrl(Key::Char('=')))?;
         editor.wait_state("zoom in again", secs(2), |record| {
@@ -106,14 +98,10 @@ fn zoom_shortcuts_update_visible_zoom_status_and_reset() -> TestResult {
         })?;
 
         editor.press(KeyChord::Ctrl(Key::Char('-')))?;
-        editor.wait_state("zoom out", secs(2), |record| {
-            record.status_bar.contains("Zoom 110%")
-        })?;
+        editor.wait_state("zoom out", secs(2), |record| record.status_bar.contains("Zoom 110%"))?;
 
         editor.press(KeyChord::Ctrl(Key::Char('0')))?;
-        editor.wait_state("zoom reset", secs(2), |record| {
-            !record.status_bar.contains("Zoom")
-        })?;
+        editor.wait_state("zoom reset", secs(2), |record| !record.status_bar.contains("Zoom"))?;
         Ok(())
     })
 }

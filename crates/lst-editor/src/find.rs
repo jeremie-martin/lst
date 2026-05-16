@@ -18,8 +18,20 @@ pub struct MatchPos {
 
 impl MatchPos {
     pub(crate) fn char_range_in(self, buffer: &Rope) -> Range<usize> {
-        let start = position_to_char(buffer, Position { line: self.line, column: self.col });
-        let end = position_to_char(buffer, Position { line: self.line, column: self.col + self.char_len });
+        let start = position_to_char(
+            buffer,
+            Position {
+                line: self.line,
+                column: self.col,
+            },
+        );
+        let end = position_to_char(
+            buffer,
+            Position {
+                line: self.line,
+                column: self.col + self.char_len,
+            },
+        );
         start..end
     }
 }
@@ -29,7 +41,11 @@ impl MatchPos {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FindScope {
     Document,
-    Selection { tab_id: TabId, start_char: usize, end_char: usize },
+    Selection {
+        tab_id: TabId,
+        start_char: usize,
+        end_char: usize,
+    },
 }
 
 impl FindScope {
@@ -39,7 +55,11 @@ impl FindScope {
 
     fn selection_range_for(self, tab_id: TabId) -> Option<Range<usize>> {
         match self {
-            FindScope::Selection { tab_id: owner, start_char, end_char } if owner == tab_id => Some(start_char..end_char),
+            FindScope::Selection {
+                tab_id: owner,
+                start_char,
+                end_char,
+            } if owner == tab_id => Some(start_char..end_char),
             _ => None,
         }
     }
@@ -63,7 +83,20 @@ pub struct FindState {
 
 impl FindState {
     pub fn new() -> Self {
-        Self { visible: false, show_replace: false, query: String::new(), replacement: String::new(), matches: Vec::new(), active: None, case_sensitive: false, whole_word: false, use_regex: false, scope: FindScope::Document, error: None, indexed_revision: None }
+        Self {
+            visible: false,
+            show_replace: false,
+            query: String::new(),
+            replacement: String::new(),
+            matches: Vec::new(),
+            active: None,
+            case_sensitive: false,
+            whole_word: false,
+            use_regex: false,
+            scope: FindScope::Document,
+            error: None,
+            indexed_revision: None,
+        }
     }
 
     fn clear_results(&mut self) {
@@ -111,22 +144,43 @@ impl FindState {
                 }
                 let start_idx = cell_partition_by_byte(&cells, abs_byte);
                 let end_idx = cell_partition_by_byte(&cells, end_byte);
-                let start_aligned = cells.get(start_idx).map_or(abs_byte == line_byte_len, |c| c.byte_start == abs_byte);
-                let end_aligned = cells.get(end_idx).map_or(end_byte == line_byte_len, |c| c.byte_start == end_byte);
+                let start_aligned = cells
+                    .get(start_idx)
+                    .map_or(abs_byte == line_byte_len, |c| c.byte_start == abs_byte);
+                let end_aligned = cells
+                    .get(end_idx)
+                    .map_or(end_byte == line_byte_len, |c| c.byte_start == end_byte);
                 if !(start_aligned && end_aligned) {
                     continue;
                 }
                 let col = cells.get(start_idx).map_or(line_char_len, |c| c.char_start);
                 let end_col = cells.get(end_idx).map_or(line_char_len, |c| c.char_start);
-                self.matches.push(MatchPos { line: line_idx, col, char_len: end_col - col });
+                self.matches.push(MatchPos {
+                    line: line_idx,
+                    col,
+                    char_len: end_col - col,
+                });
             }
         }
-        self.active = if self.matches.is_empty() { None } else { Some(previous_active.unwrap_or(0).min(self.matches.len() - 1)) };
+        self.active = if self.matches.is_empty() {
+            None
+        } else {
+            Some(previous_active.unwrap_or(0).min(self.matches.len() - 1))
+        };
     }
 
     pub fn current_match_range(&self) -> Option<(Position, Position)> {
         let m = self.matches.get(self.active?)?;
-        Some((Position { line: m.line, column: m.col }, Position { line: m.line, column: m.col + m.char_len }))
+        Some((
+            Position {
+                line: m.line,
+                column: m.col,
+            },
+            Position {
+                line: m.line,
+                column: m.col + m.char_len,
+            },
+        ))
     }
 
     pub fn next(&mut self) {
@@ -161,7 +215,11 @@ impl FindState {
     }
 
     fn select_exact(&mut self, position: &Position) -> bool {
-        let Some(index) = self.matches.iter().position(|m| m.line == position.line && m.col == position.column) else {
+        let Some(index) = self
+            .matches
+            .iter()
+            .position(|m| m.line == position.line && m.col == position.column)
+        else {
             return false;
         };
         self.active = Some(index);
@@ -181,7 +239,8 @@ impl FindState {
             let buffer = tab.buffer();
             let len = buffer.len_chars();
             let scope = scope.start.min(len)..scope.end.min(len);
-            self.matches.retain(|m| scope_contains(&scope, &m.char_range_in(buffer)));
+            self.matches
+                .retain(|m| scope_contains(&scope, &m.char_range_in(buffer)));
             match (self.matches.is_empty(), self.active) {
                 (true, _) => self.active = None,
                 (false, Some(index)) => self.active = Some(index.min(self.matches.len() - 1)),
@@ -197,20 +256,22 @@ impl FindState {
             self.align_to_visible_match(tab);
         }
     }
-
-    #[rustfmt::skip]
     pub(crate) fn ensure_current(&mut self, tab: &EditorTab) {
-        if self.is_stale(tab.revision()) { self.reindex_for_tab(tab); }
+        if self.is_stale(tab.revision()) {
+            self.reindex_for_tab(tab);
+        }
     }
-
-    #[rustfmt::skip]
     pub(crate) fn sync_with_tab(&mut self, tab: &EditorTab) {
-        if self.query.is_empty() { self.clear_results(); } else { self.reindex_to_nearest(tab); }
+        if self.query.is_empty() {
+            self.clear_results();
+        } else {
+            self.reindex_to_nearest(tab);
+        }
     }
-
-    #[rustfmt::skip]
     pub(crate) fn sync_after_edit(&mut self, tab: &EditorTab) {
-        if !self.query.is_empty() { self.reindex_to_nearest(tab); }
+        if !self.query.is_empty() {
+            self.reindex_to_nearest(tab);
+        }
     }
 
     pub(crate) fn active_selection_set(&self, tab: &EditorTab) -> Option<SelectionSet> {
@@ -218,7 +279,11 @@ impl FindState {
             return None;
         }
         let buffer = tab.buffer();
-        let selections: Vec<_> = self.matches.iter().map(|m| Selection::from_range(m.char_range_in(buffer), false)).collect();
+        let selections: Vec<_> = self
+            .matches
+            .iter()
+            .map(|m| Selection::from_range(m.char_range_in(buffer), false))
+            .collect();
         let primary = self.active.unwrap_or(0).min(selections.len() - 1);
         SelectionSet::from_selections(selections, primary).ok()
     }
@@ -231,7 +296,13 @@ impl FindState {
         self.select_relative_from(position, false)
     }
 
-    pub(crate) fn search_word_from(&mut self, tab: &EditorTab, word: String, position: Position, forward: bool) -> Option<Position> {
+    pub(crate) fn search_word_from(
+        &mut self,
+        tab: &EditorTab,
+        word: String,
+        position: Position,
+        forward: bool,
+    ) -> Option<Position> {
         self.query = word;
         self.whole_word = true;
         self.case_sensitive = true;
@@ -266,7 +337,17 @@ impl FindState {
     }
 
     fn select_relative_from(&mut self, position: Position, forward: bool) -> Option<Position> {
-        let index = if forward { self.matches.iter().position(|m| m.line > position.line || (m.line == position.line && m.col > position.column)).or_else(|| (!self.matches.is_empty()).then_some(0)) } else { self.matches.iter().rposition(|m| m.line < position.line || (m.line == position.line && m.col < position.column)).or_else(|| self.matches.len().checked_sub(1)) }?;
+        let index = if forward {
+            self.matches
+                .iter()
+                .position(|m| m.line > position.line || (m.line == position.line && m.col > position.column))
+                .or_else(|| (!self.matches.is_empty()).then_some(0))
+        } else {
+            self.matches
+                .iter()
+                .rposition(|m| m.line < position.line || (m.line == position.line && m.col < position.column))
+                .or_else(|| self.matches.len().checked_sub(1))
+        }?;
         self.active = Some(index);
         let m = self.matches[index];
         Some(Position::new(m.line, m.col))
@@ -287,10 +368,23 @@ impl Default for FindState {
 /// toggles plus the smart-case fallback (lowercase queries are
 /// case-insensitive). Shared between the find panel and cursor-add
 /// gestures so flag semantics stay consistent across surfaces.
-pub(crate) fn build_query_regex(query: &str, case_sensitive: bool, whole_word: bool, use_regex: bool) -> Result<Regex, regex::Error> {
+pub(crate) fn build_query_regex(
+    query: &str,
+    case_sensitive: bool,
+    whole_word: bool,
+    use_regex: bool,
+) -> Result<Regex, regex::Error> {
     let ignore_case = !case_sensitive && !query.chars().any(|c| c.is_uppercase());
-    let core = if use_regex { query.to_string() } else { regex::escape(query) };
-    let pattern = if whole_word { format!(r"(?:\b(?:{core})\b)") } else { core };
+    let core = if use_regex {
+        query.to_string()
+    } else {
+        regex::escape(query)
+    };
+    let pattern = if whole_word {
+        format!(r"(?:\b(?:{core})\b)")
+    } else {
+        core
+    };
     RegexBuilder::new(&pattern).case_insensitive(ignore_case).build()
 }
 
@@ -302,9 +396,19 @@ pub(crate) fn replace_one_request(tab: &EditorTab, find: &FindState) -> Option<E
     let range = position_to_char(buffer, start)..position_to_char(buffer, end);
     let replacement = regex.map_or(template.clone(), |re| {
         let line_start = buffer.char_to_byte(buffer.line_to_char(start.line));
-        expand_match_replacement(&re, &line_display_text(buffer, start.line), buffer.char_to_byte(range.start) - line_start, &template)
+        expand_match_replacement(
+            &re,
+            &line_display_text(buffer, start.line),
+            buffer.char_to_byte(range.start) - line_start,
+            &template,
+        )
     });
-    Some(EditRequest::single(EditKind::Other, UndoBoundary::Break, range, replacement))
+    Some(EditRequest::single(
+        EditKind::Other,
+        UndoBoundary::Break,
+        range,
+        replacement,
+    ))
 }
 
 pub(crate) fn replace_all_request(tab: &EditorTab, find: &FindState, cursor: Position) -> Option<EditRequest> {
@@ -326,7 +430,12 @@ pub(crate) fn replace_all_request(tab: &EditorTab, find: &FindState, cursor: Pos
             |re| {
                 let line_start = buffer.char_to_byte(buffer.line_to_char(m.line));
                 let match_start = buffer.char_to_byte(range.start);
-                expand_match_replacement(re, &line_display_text(buffer, m.line), match_start - line_start, &find.replacement)
+                expand_match_replacement(
+                    re,
+                    &line_display_text(buffer, m.line),
+                    match_start - line_start,
+                    &find.replacement,
+                )
             },
         );
         if buffer.slice(range.clone()) != replacement.as_str() {

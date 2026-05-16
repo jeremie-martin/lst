@@ -3,7 +3,10 @@
 //! Pure keystroke to command translation. The caller executes commands against
 //! whatever editor surface owns the document state.
 
-use crate::selection::{cell_containing_char, cell_partition_by_char, cells_of_str, is_identifier_char, last_grapheme_column, next_grapheme_column, previous_grapheme_column, vim_token_class, GraphemeCell, Position, TokenClass};
+use crate::selection::{
+    cell_containing_char, cell_partition_by_char, cells_of_str, is_identifier_char, last_grapheme_column,
+    next_grapheme_column, previous_grapheme_column, vim_token_class, GraphemeCell, Position, TokenClass,
+};
 use crate::RevealIntent;
 use std::sync::Arc;
 
@@ -14,10 +17,19 @@ pub enum Key {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[rustfmt::skip]
 pub enum NamedKey {
-    ArrowLeft, ArrowRight, ArrowUp, ArrowDown,
-    Home, End, PageUp, PageDown, Backspace, Delete, Tab, Enter,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    ArrowDown,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Backspace,
+    Delete,
+    Tab,
+    Enter,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -27,8 +39,14 @@ pub struct Modifiers {
 }
 
 impl Modifiers {
-    pub const COMMAND: Self = Self { command: true, control: false };
-    pub const CONTROL: Self = Self { command: false, control: true };
+    pub const COMMAND: Self = Self {
+        command: true,
+        control: false,
+    };
+    pub const CONTROL: Self = Self {
+        command: false,
+        control: true,
+    };
     pub fn command(self) -> bool {
         self.command
     }
@@ -36,20 +54,28 @@ impl Modifiers {
         self.control
     }
 }
-
-#[rustfmt::skip]
-fn pos(line: usize, column: usize) -> Position { Position { line, column } }
+fn pos(line: usize, column: usize) -> Position {
+    Position { line, column }
+}
 
 // -- Public types ------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[rustfmt::skip]
-pub enum Mode { Normal, Insert, Visual, VisualLine }
+pub enum Mode {
+    Normal,
+    Insert,
+    Visual,
+    VisualLine,
+}
 
 impl Mode {
-    #[rustfmt::skip]
     pub fn label(self) -> &'static str {
-        match self { Mode::Normal => "NORMAL", Mode::Insert => "INSERT", Mode::Visual => "VISUAL", Mode::VisualLine => "V-LINE" }
+        match self {
+            Mode::Normal => "NORMAL",
+            Mode::Insert => "INSERT",
+            Mode::Visual => "VISUAL",
+            Mode::VisualLine => "V-LINE",
+        }
     }
 }
 
@@ -67,33 +93,86 @@ pub struct VimState {
 #[derive(Debug, Clone, PartialEq)]
 pub enum VimCommand {
     MoveTo(Position),
-    Select { anchor: Position, head: Position },
-    DeleteRange { from: Position, to: Position },
-    DeleteLines { first: usize, last: usize },
-    IndentLines { first: usize, last: usize },
-    OutdentLines { first: usize, last: usize },
-    ChangeRange { from: Position, to: Position },
-    ChangeLines { first: usize, last: usize },
-    YankRange { from: Position, to: Position },
-    YankLines { first: usize, last: usize },
+    Select {
+        anchor: Position,
+        head: Position,
+    },
+    DeleteRange {
+        from: Position,
+        to: Position,
+    },
+    DeleteLines {
+        first: usize,
+        last: usize,
+    },
+    IndentLines {
+        first: usize,
+        last: usize,
+    },
+    OutdentLines {
+        first: usize,
+        last: usize,
+    },
+    ChangeRange {
+        from: Position,
+        to: Position,
+    },
+    ChangeLines {
+        first: usize,
+        last: usize,
+    },
+    YankRange {
+        from: Position,
+        to: Position,
+    },
+    YankLines {
+        first: usize,
+        last: usize,
+    },
     SetRegister(Register),
-    PasteSelectionRange { from: Position, to: Position, preserve_register: bool },
-    PasteSelectionLines { first: usize, last: usize, preserve_register: bool },
+    PasteSelectionRange {
+        from: Position,
+        to: Position,
+        preserve_register: bool,
+    },
+    PasteSelectionLines {
+        first: usize,
+        last: usize,
+        preserve_register: bool,
+    },
     EnterInsert,
     PasteAfter,
     PasteBefore,
     OpenLineBelow,
     OpenLineAbove,
-    JoinLines { count: usize },
-    ReplaceChar { ch: char, count: usize },
+    JoinLines {
+        count: usize,
+    },
+    ReplaceChar {
+        ch: char,
+        count: usize,
+    },
     Undo,
     Redo,
-    OpenFind { backward: bool },
+    OpenFind {
+        backward: bool,
+    },
     FindNext,
     FindPrev,
-    SearchWordUnderCursor { word: String, forward: bool },
-    TransformCaseRange { from: Position, to: Position, uppercase: bool },
-    TransformCaseLines { first: usize, last: usize, uppercase: bool },
+    SearchWordUnderCursor {
+        word: String,
+        forward: bool,
+    },
+    TransformCaseRange {
+        from: Position,
+        to: Position,
+        uppercase: bool,
+    },
+    TransformCaseLines {
+        first: usize,
+        last: usize,
+        uppercase: bool,
+    },
     HalfPageDown,
     HalfPageUp,
     PageDown,
@@ -102,7 +181,9 @@ pub enum VimCommand {
     MoveToScreenMiddle,
     MoveToScreenBottom,
     ScrollCursor(RevealIntent),
-    JumpToLastEdit { enter_insert: bool },
+    JumpToLastEdit {
+        enter_insert: bool,
+    },
     Noop,
 }
 
@@ -141,17 +222,33 @@ struct Pending {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[rustfmt::skip]
-enum Operator { Delete, Change, Yank }
+enum Operator {
+    Delete,
+    Change,
+    Yank,
+}
 
 #[derive(Clone, Copy)]
-#[rustfmt::skip]
 enum Motion {
-    Left, Right, Down, Up,
-    WordForward, WordBackward, WordEnd,
-    BigWordForward, BigWordBackward, BigWordEnd,
-    LineStart, LineEnd, FirstNonBlank, DocumentStart, DocumentEnd,
-    FindChar(char), TillChar(char), FindCharBack(char), TillCharBack(char),
+    Left,
+    Right,
+    Down,
+    Up,
+    WordForward,
+    WordBackward,
+    WordEnd,
+    BigWordForward,
+    BigWordBackward,
+    BigWordEnd,
+    LineStart,
+    LineEnd,
+    FirstNonBlank,
+    DocumentStart,
+    DocumentEnd,
+    FindChar(char),
+    TillChar(char),
+    FindCharBack(char),
+    TillCharBack(char),
     Percent,
 }
 
@@ -165,7 +262,16 @@ impl Default for VimState {
 
 impl VimState {
     pub fn new() -> Self {
-        Self { mode: Mode::Insert, register: Register::Empty, visual_anchor: None, visual_head: None, pending: Pending::default(), last_find: None, last_search_backward: false, preferred_column: None }
+        Self {
+            mode: Mode::Insert,
+            register: Register::Empty,
+            visual_anchor: None,
+            visual_head: None,
+            pending: Pending::default(),
+            last_find: None,
+            last_search_backward: false,
+            preferred_column: None,
+        }
     }
 
     pub fn handle_key(&mut self, key: &Key, mods: Modifiers, text: &TextSnapshot) -> Vec<VimCommand> {
@@ -185,7 +291,10 @@ impl VimState {
     }
 
     pub fn visual_state(&self) -> Option<VisualState> {
-        matches!(self.mode, Mode::Visual | Mode::VisualLine).then_some(VisualState { anchor: self.visual_anchor?, head: self.visual_head? })
+        matches!(self.mode, Mode::Visual | Mode::VisualLine).then_some(VisualState {
+            anchor: self.visual_anchor?,
+            head: self.visual_head?,
+        })
     }
 
     pub fn pending_display(&self) -> String {
@@ -264,7 +373,11 @@ impl VimState {
                 // Step by grapheme cluster, then clamp to the start of the last
                 // cluster so we never land mid-cluster on a multi-char grapheme.
                 let line_text = text.lines.get(cursor.line).map(String::as_str).unwrap_or("");
-                let col = if cursor.column > 0 { previous_grapheme_column(line_text, cursor.column).min(last_cluster_col(text, cursor.line)) } else { 0 };
+                let col = if cursor.column > 0 {
+                    previous_grapheme_column(line_text, cursor.column).min(last_cluster_col(text, cursor.line))
+                } else {
+                    0
+                };
                 if col != cursor.column {
                     vec![VimCommand::MoveTo(pos(cursor.line, col))]
                 } else {
@@ -339,7 +452,10 @@ impl VimState {
                 return vec![VimCommand::Noop];
             }
 
-            let doubled = matches!((op, c), (Operator::Delete, 'd') | (Operator::Change, 'c') | (Operator::Yank, 'y'));
+            let doubled = matches!(
+                (op, c),
+                (Operator::Delete, 'd') | (Operator::Change, 'c') | (Operator::Yank, 'y')
+            );
             if doubled {
                 let count = self.motion_count().unwrap_or(1);
                 self.pending.operator = None;
@@ -421,14 +537,20 @@ impl VimState {
                     return vec![VimCommand::Noop];
                 }
                 let end = (text.cursor.column + count - 1).min(ll.saturating_sub(1));
-                vec![VimCommand::DeleteRange { from: text.cursor, to: pos(text.cursor.line, end) }]
+                vec![VimCommand::DeleteRange {
+                    from: text.cursor,
+                    to: pos(text.cursor.line, end),
+                }]
             }
             'X' => {
                 if text.cursor.column == 0 {
                     return vec![VimCommand::Noop];
                 }
                 let start = text.cursor.column.saturating_sub(count);
-                vec![VimCommand::DeleteRange { from: pos(text.cursor.line, start), to: pos(text.cursor.line, text.cursor.column - 1) }]
+                vec![VimCommand::DeleteRange {
+                    from: pos(text.cursor.line, start),
+                    to: pos(text.cursor.line, text.cursor.column - 1),
+                }]
             }
             's' => {
                 let ll = line_len(text, text.cursor.line);
@@ -436,21 +558,36 @@ impl VimState {
                     return vec![VimCommand::EnterInsert];
                 }
                 let end = (text.cursor.column + count - 1).min(ll.saturating_sub(1));
-                vec![VimCommand::ChangeRange { from: text.cursor, to: pos(text.cursor.line, end) }, VimCommand::EnterInsert]
+                vec![
+                    VimCommand::ChangeRange {
+                        from: text.cursor,
+                        to: pos(text.cursor.line, end),
+                    },
+                    VimCommand::EnterInsert,
+                ]
             }
             'D' => {
                 let ll = line_len(text, text.cursor.line);
                 if ll == 0 || text.cursor.column >= ll {
                     return vec![VimCommand::Noop];
                 }
-                vec![VimCommand::DeleteRange { from: text.cursor, to: pos(text.cursor.line, ll - 1) }]
+                vec![VimCommand::DeleteRange {
+                    from: text.cursor,
+                    to: pos(text.cursor.line, ll - 1),
+                }]
             }
             'C' => {
                 let ll = line_len(text, text.cursor.line);
                 if ll == 0 || text.cursor.column >= ll {
                     return vec![VimCommand::EnterInsert];
                 }
-                vec![VimCommand::ChangeRange { from: text.cursor, to: pos(text.cursor.line, ll - 1) }, VimCommand::EnterInsert]
+                vec![
+                    VimCommand::ChangeRange {
+                        from: text.cursor,
+                        to: pos(text.cursor.line, ll - 1),
+                    },
+                    VimCommand::EnterInsert,
+                ]
             }
             'J' => {
                 // vim: J = join 2 lines (1 op), 3J = join 3 lines (2 ops)
@@ -468,7 +605,10 @@ impl VimState {
                 self.mode = Mode::Visual;
                 self.visual_anchor = Some(text.cursor);
                 self.visual_head = Some(text.cursor);
-                vec![VimCommand::Select { anchor: text.cursor, head: text.cursor }]
+                vec![VimCommand::Select {
+                    anchor: text.cursor,
+                    head: text.cursor,
+                }]
             }
             'V' => {
                 self.mode = Mode::VisualLine;
@@ -484,12 +624,23 @@ impl VimState {
                 self.last_search_backward = true;
                 vec![VimCommand::OpenFind { backward: true }]
             }
-            'n' => vec![if self.last_search_backward { VimCommand::FindPrev } else { VimCommand::FindNext }],
-            'N' => vec![if self.last_search_backward { VimCommand::FindNext } else { VimCommand::FindPrev }],
+            'n' => vec![if self.last_search_backward {
+                VimCommand::FindPrev
+            } else {
+                VimCommand::FindNext
+            }],
+            'N' => vec![if self.last_search_backward {
+                VimCommand::FindNext
+            } else {
+                VimCommand::FindPrev
+            }],
             '*' | '#' => {
                 if let Some(word) = word_under_cursor(text) {
                     self.last_search_backward = c == '#';
-                    vec![VimCommand::SearchWordUnderCursor { word, forward: c == '*' }]
+                    vec![VimCommand::SearchWordUnderCursor {
+                        word,
+                        forward: c == '*',
+                    }]
                 } else {
                     vec![VimCommand::Noop]
                 }
@@ -602,20 +753,34 @@ impl VimState {
                 let preserve_register = c == 'P';
                 if is_line {
                     let (first, last) = ordered_lines(anchor.line, head.line);
-                    return vec![VimCommand::PasteSelectionLines { first, last, preserve_register }];
+                    return vec![VimCommand::PasteSelectionLines {
+                        first,
+                        last,
+                        preserve_register,
+                    }];
                 }
                 let (from, to) = ordered(anchor, head);
-                return vec![VimCommand::PasteSelectionRange { from, to, preserve_register }];
+                return vec![VimCommand::PasteSelectionRange {
+                    from,
+                    to,
+                    preserve_register,
+                }];
             }
             '>' => {
                 self.exit_visual();
                 let (first, last) = ordered_lines(anchor.line, head.line);
-                return vec![VimCommand::IndentLines { first, last }, VimCommand::MoveTo(pos(first, 0))];
+                return vec![
+                    VimCommand::IndentLines { first, last },
+                    VimCommand::MoveTo(pos(first, 0)),
+                ];
             }
             '<' => {
                 self.exit_visual();
                 let (first, last) = ordered_lines(anchor.line, head.line);
-                return vec![VimCommand::OutdentLines { first, last }, VimCommand::MoveTo(pos(first, 0))];
+                return vec![
+                    VimCommand::OutdentLines { first, last },
+                    VimCommand::MoveTo(pos(first, 0)),
+                ];
             }
             'v' => {
                 if self.mode == Mode::Visual {
@@ -624,7 +789,10 @@ impl VimState {
                 } else {
                     self.mode = Mode::Visual;
                     self.clear_preferred_column();
-                    return vec![VimCommand::Select { anchor, head: text.cursor }];
+                    return vec![VimCommand::Select {
+                        anchor,
+                        head: text.cursor,
+                    }];
                 }
             }
             'V' => {
@@ -682,11 +850,19 @@ impl VimState {
             }
             'n' => {
                 self.clear_preferred_column();
-                return vec![if self.last_search_backward { VimCommand::FindPrev } else { VimCommand::FindNext }];
+                return vec![if self.last_search_backward {
+                    VimCommand::FindPrev
+                } else {
+                    VimCommand::FindNext
+                }];
             }
             'N' => {
                 self.clear_preferred_column();
-                return vec![if self.last_search_backward { VimCommand::FindNext } else { VimCommand::FindPrev }];
+                return vec![if self.last_search_backward {
+                    VimCommand::FindNext
+                } else {
+                    VimCommand::FindPrev
+                }];
             }
             _ => {}
         }
@@ -700,7 +876,10 @@ impl VimState {
         if self.mode == Mode::VisualLine {
             let (first, last) = ordered_lines(anchor.line, head.line);
             let last_col = line_len(text, last).saturating_sub(1);
-            VimCommand::Select { anchor: pos(first, 0), head: pos(last, last_col) }
+            VimCommand::Select {
+                anchor: pos(first, 0),
+                head: pos(last, last_col),
+            }
         } else {
             VimCommand::Select { anchor, head }
         }
@@ -746,9 +925,15 @@ impl VimState {
                 self.clear_command_state();
                 let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
                 if partial == '>' {
-                    vec![VimCommand::IndentLines { first: text.cursor.line, last }]
+                    vec![VimCommand::IndentLines {
+                        first: text.cursor.line,
+                        last,
+                    }]
                 } else {
-                    vec![VimCommand::OutdentLines { first: text.cursor.line, last }]
+                    vec![VimCommand::OutdentLines {
+                        first: text.cursor.line,
+                        last,
+                    }]
                 }
             }
             'i' | 'a' => {
@@ -766,7 +951,11 @@ impl VimState {
                     if inner && op == Operator::Change {
                         if let Some(at) = empty_inner_text_object_position(text, c) {
                             self.clear_command_state();
-                            return vec![VimCommand::SetRegister(Register::Char(String::new())), VimCommand::MoveTo(at), VimCommand::EnterInsert];
+                            return vec![
+                                VimCommand::SetRegister(Register::Char(String::new())),
+                                VimCommand::MoveTo(at),
+                                VimCommand::EnterInsert,
+                            ];
                         }
                     }
                 }
@@ -869,7 +1058,10 @@ impl VimState {
                 eol_clamped = true;
                 let ll = line_len(text, text.cursor.line);
                 pos(text.cursor.line, ll.saturating_sub(1))
-            } else if target.line == text.line_count().saturating_sub(1) && line_len(text, target.line) > 0 && target.column == line_len(text, target.line).saturating_sub(1) {
+            } else if target.line == text.line_count().saturating_sub(1)
+                && line_len(text, target.line) > 0
+                && target.column == line_len(text, target.line).saturating_sub(1)
+            {
                 // w landed at last char of last line - no next word exists
                 eol_clamped = true;
                 target
@@ -880,7 +1072,11 @@ impl VimState {
             target
         };
 
-        let (from, to) = if eol_clamped && target == text.cursor { (text.cursor, text.cursor) } else { ordered(text.cursor, target) };
+        let (from, to) = if eol_clamped && target == text.cursor {
+            (text.cursor, text.cursor)
+        } else {
+            ordered(text.cursor, target)
+        };
         let mut to = to;
 
         // Shrink `to` by one character when:
@@ -921,7 +1117,12 @@ impl VimState {
 
 // -- Motion computation ------------------------------------------------------
 
-fn compute_motion(motion: &Motion, text: &TextSnapshot, count: Option<usize>, preferred_column: Option<usize>) -> Position {
+fn compute_motion(
+    motion: &Motion,
+    text: &TextSnapshot,
+    count: Option<usize>,
+    preferred_column: Option<usize>,
+) -> Position {
     let n = count.unwrap_or(1);
     match motion {
         Motion::Left => {
@@ -951,12 +1152,16 @@ fn compute_motion(motion: &Motion, text: &TextSnapshot, count: Option<usize>, pr
         }
         Motion::Down => {
             let line = (text.cursor.line + n).min(text.line_count().saturating_sub(1));
-            let col = preferred_column.unwrap_or(text.cursor.column).min(line_len(text, line).saturating_sub(1));
+            let col = preferred_column
+                .unwrap_or(text.cursor.column)
+                .min(line_len(text, line).saturating_sub(1));
             pos(line, col)
         }
         Motion::Up => {
             let line = text.cursor.line.saturating_sub(n);
-            let col = preferred_column.unwrap_or(text.cursor.column).min(line_len(text, line).saturating_sub(1));
+            let col = preferred_column
+                .unwrap_or(text.cursor.column)
+                .min(line_len(text, line).saturating_sub(1));
             pos(line, col)
         }
         Motion::WordForward => repeat_word(text, n, false, word_forward),
@@ -1009,7 +1214,11 @@ fn find_char(text: &TextSnapshot, ch: char, n: usize, forward: bool, till: bool)
     let chars = line_chars(text, text.cursor.line);
     let col = text.cursor.column;
     let mut found = 0;
-    let positions: Box<dyn Iterator<Item = usize>> = if forward { Box::new(col.saturating_add(1)..chars.len()) } else { Box::new((0..col.min(chars.len())).rev()) };
+    let positions: Box<dyn Iterator<Item = usize>> = if forward {
+        Box::new(col.saturating_add(1)..chars.len())
+    } else {
+        Box::new((0..col.min(chars.len())).rev())
+    };
     for i in positions {
         if chars[i] == ch {
             found += 1;
@@ -1028,7 +1237,12 @@ fn find_char(text: &TextSnapshot, ch: char, n: usize, forward: bool, till: bool)
     text.cursor
 }
 
-fn repeat_word(text: &TextSnapshot, n: usize, big: bool, step: fn(&TextSnapshot, usize, usize, bool) -> (usize, usize)) -> Position {
+fn repeat_word(
+    text: &TextSnapshot,
+    n: usize,
+    big: bool,
+    step: fn(&TextSnapshot, usize, usize, bool) -> (usize, usize),
+) -> Position {
     let (mut l, mut c) = (text.cursor.line, text.cursor.column);
     for _ in 0..n {
         let (nl, nc) = step(text, l, c, big);
@@ -1104,18 +1318,43 @@ fn char_to_motion(c: char) -> Option<Motion> {
 }
 
 fn motion_is_linewise(op: Operator, motion: &Motion, count: Option<usize>) -> bool {
-    matches!(motion, Motion::Down | Motion::Up | Motion::DocumentStart | Motion::DocumentEnd) || matches!(motion, Motion::LineEnd) && count.unwrap_or(1) > 1 && op == Operator::Delete || matches!(motion, Motion::Percent) && count.is_some()
+    matches!(
+        motion,
+        Motion::Down | Motion::Up | Motion::DocumentStart | Motion::DocumentEnd
+    ) || matches!(motion, Motion::LineEnd) && count.unwrap_or(1) > 1 && op == Operator::Delete
+        || matches!(motion, Motion::Percent) && count.is_some()
 }
 
 fn motion_is_inclusive(motion: &Motion, count: Option<usize>) -> bool {
-    matches!(motion, Motion::WordEnd | Motion::BigWordEnd | Motion::LineEnd | Motion::FindChar(_) | Motion::FindCharBack(_) | Motion::TillChar(_) | Motion::TillCharBack(_)) || matches!(motion, Motion::Percent) && count.is_none()
+    matches!(
+        motion,
+        Motion::WordEnd
+            | Motion::BigWordEnd
+            | Motion::LineEnd
+            | Motion::FindChar(_)
+            | Motion::FindCharBack(_)
+            | Motion::TillChar(_)
+            | Motion::TillCharBack(_)
+    ) || matches!(motion, Motion::Percent) && count.is_none()
 }
 
 /// Motions where target == cursor means "failed to find" (no-op), NOT "clamped at boundary".
 /// Forward motions clamped at boundary (l at EOL, e at EOF, $ at end) should still operate
 /// on the cursor character, so they are NOT listed here.
 fn motion_noop_on_same_pos(motion: &Motion) -> bool {
-    matches!(motion, Motion::Left | Motion::WordBackward | Motion::BigWordBackward | Motion::LineStart | Motion::FirstNonBlank | Motion::FindChar(_) | Motion::TillChar(_) | Motion::FindCharBack(_) | Motion::TillCharBack(_) | Motion::Percent)
+    matches!(
+        motion,
+        Motion::Left
+            | Motion::WordBackward
+            | Motion::BigWordBackward
+            | Motion::LineStart
+            | Motion::FirstNonBlank
+            | Motion::FindChar(_)
+            | Motion::TillChar(_)
+            | Motion::FindCharBack(_)
+            | Motion::TillCharBack(_)
+            | Motion::Percent
+    )
 }
 
 fn reverse_find(motion: Motion) -> Motion {
@@ -1144,7 +1383,11 @@ fn word_forward(text: &TextSnapshot, mut line: usize, col: usize, big: bool) -> 
     // If the cursor is past EOL we start advancing from one-past-end so the
     // class-skip loop falls through to the next line; otherwise advance from
     // the containing cluster.
-    let mut cell_ix = if col >= line_len(text, line) { cells.len() } else { containing };
+    let mut cell_ix = if col >= line_len(text, line) {
+        cells.len()
+    } else {
+        containing
+    };
 
     if start_class != TokenClass::Whitespace {
         while cell_ix < cells.len() && vim_token_class(cells[cell_ix].repr, big) == start_class {
@@ -1178,7 +1421,11 @@ fn word_backward(text: &TextSnapshot, mut line: usize, col: usize, big: bool) ->
     // Step left by one cluster, possibly crossing to the previous line. A
     // mid-cluster column rounds back to the cluster start (defensive: cursors
     // are normally grapheme-aligned).
-    let mut cell_ix = if cells.is_empty() { None } else { cell_partition_by_char(&cells, col).checked_sub(1) };
+    let mut cell_ix = if cells.is_empty() {
+        None
+    } else {
+        cell_partition_by_char(&cells, col).checked_sub(1)
+    };
 
     if cell_ix.is_none() {
         if line == 0 {
@@ -1349,10 +1596,16 @@ fn word_object_at(text: &TextSnapshot, cursor: Position, inner: bool, big: bool)
 
     if cur_class == TokenClass::Whitespace {
         if let Some((_, next_end)) = next_non_space_range(&cells, end + 1, big) {
-            return Some((pos(line, cells[start].char_start), pos(line, cells[next_end].char_start)));
+            return Some((
+                pos(line, cells[start].char_start),
+                pos(line, cells[next_end].char_start),
+            ));
         }
         if let Some((prev_start, _)) = prev_non_space_range(&cells, start, big) {
-            return Some((pos(line, cells[prev_start].char_start), pos(line, cells[end].char_start)));
+            return Some((
+                pos(line, cells[prev_start].char_start),
+                pos(line, cells[end].char_start),
+            ));
         }
         return Some((pos(line, cells[start].char_start), pos(line, cells[end].char_start)));
     }
@@ -1482,7 +1735,12 @@ fn quote_object(text: &TextSnapshot, quote: char, inner: bool) -> Option<(Positi
     let chars = line_chars(text, line);
     let col = text.cursor.column;
 
-    let quotes: Vec<usize> = chars.iter().enumerate().filter(|(i, &c)| c == quote && !is_escaped_quote(&chars, *i)).map(|(i, _)| i).collect();
+    let quotes: Vec<usize> = chars
+        .iter()
+        .enumerate()
+        .filter(|(i, &c)| c == quote && !is_escaped_quote(&chars, *i))
+        .map(|(i, _)| i)
+        .collect();
 
     let (start, end) = quotes
         .windows(2)
@@ -1624,7 +1882,14 @@ fn match_bracket(text: &TextSnapshot) -> Option<Position> {
     find_match(text, line, col, inc, dec, forward)
 }
 
-fn find_match(text: &TextSnapshot, start_line: usize, start_col: usize, inc: char, dec: char, forward: bool) -> Option<Position> {
+fn find_match(
+    text: &TextSnapshot,
+    start_line: usize,
+    start_col: usize,
+    inc: char,
+    dec: char,
+    forward: bool,
+) -> Option<Position> {
     let mut depth = 0i32;
     let mut line = start_line;
     let mut chars = line_chars(text, line);
@@ -1668,9 +1933,9 @@ fn find_match(text: &TextSnapshot, start_line: usize, start_col: usize, inc: cha
         }
     }
 }
-
-#[rustfmt::skip]
-fn is_bracket(c: char) -> bool { matches!(c, '(' | ')' | '[' | ']' | '{' | '}') }
+fn is_bracket(c: char) -> bool {
+    matches!(c, '(' | ')' | '[' | ']' | '{' | '}')
+}
 
 // -- Helpers -----------------------------------------------------------------
 fn line_len(text: &TextSnapshot, line: usize) -> usize {
@@ -1698,7 +1963,10 @@ fn word_under_cursor(text: &TextSnapshot) -> Option<String> {
     if cells.is_empty() {
         return None;
     }
-    let col = text.cursor.column.min(line_len(text, text.cursor.line).saturating_sub(1));
+    let col = text
+        .cursor
+        .column
+        .min(line_len(text, text.cursor.line).saturating_sub(1));
     let cell_ix = cell_containing_char(&cells, col);
     if !is_identifier_char(cells[cell_ix].repr) {
         return None;
@@ -1726,10 +1994,20 @@ fn pos_le(a: &Position, b: &Position) -> bool {
 fn pos_lt(a: &Position, b: &Position) -> bool {
     a.line < b.line || (a.line == b.line && a.column < b.column)
 }
-#[rustfmt::skip]
-fn ordered(a: Position, b: Position) -> (Position, Position) { if pos_le(&a, &b) { (a, b) } else { (b, a) } }
-#[rustfmt::skip]
-fn ordered_lines(a: usize, b: usize) -> (usize, usize) { if a <= b { (a, b) } else { (b, a) } }
+fn ordered(a: Position, b: Position) -> (Position, Position) {
+    if pos_le(&a, &b) {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+fn ordered_lines(a: usize, b: usize) -> (usize, usize) {
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
 
 /// Advance position by one character (possibly to next line).
 fn advance_pos(text: &TextSnapshot, p: Position) -> Option<Position> {

@@ -82,18 +82,15 @@ impl StateTraceEmitter {
         let record = build(seq);
         self.seq.set(seq + 1);
         if let Err(error) = append_record(path, &record) {
-            eprintln!(
-                "lst_gpui state-trace: failed to append to {}: {error}",
-                path.display()
-            );
+            eprintln!("lst_gpui state-trace: failed to append to {}: {error}", path.display());
         }
         self.emitting.set(false);
     }
 }
 
 fn append_record(path: &PathBuf, record: &StateTraceRecord) -> io::Result<()> {
-    let mut line = serde_json::to_vec(record)
-        .map_err(|err| io::Error::other(format!("serialize state trace: {err}")))?;
+    let mut line =
+        serde_json::to_vec(record).map_err(|err| io::Error::other(format!("serialize state trace: {err}")))?;
     line.push(b'\n');
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(&line)
@@ -288,10 +285,7 @@ impl LstGpuiApp {
             },
             goto_line_input: self.model.goto_line().map(ToOwned::to_owned),
             recent_panel_open: self.recent.is_open(),
-            recent_panel_query: self
-                .recent
-                .is_open()
-                .then(|| self.recent.query().to_string()),
+            recent_panel_query: self.recent.is_open().then(|| self.recent.query().to_string()),
             recent_panel_selected_path,
             recent_panel_empty_message,
             recent_panel_content_search_pending: self.recent.content_search_pending(),

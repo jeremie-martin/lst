@@ -77,10 +77,7 @@ fn ctrl_shift_t_with_empty_history_is_a_visible_noop() -> TestResult {
         let before_cursor = before.cursors[0].head_pos();
 
         editor.keys("<C-S-t>")?;
-        editor.wait_quiet(
-            std::time::Duration::from_millis(75),
-            std::time::Duration::from_secs(2),
-        )?;
+        editor.wait_quiet(std::time::Duration::from_millis(75), std::time::Duration::from_secs(2))?;
 
         let after = editor.read_state()?;
         assert_eq!(

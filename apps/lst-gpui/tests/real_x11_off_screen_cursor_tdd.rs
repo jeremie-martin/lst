@@ -29,10 +29,7 @@ use lst_x11_harness::StateTraceRecord;
 use support::{EditorTestExt, TestResult};
 
 fn hundred_line_fixture() -> String {
-    (0..100)
-        .map(|i| format!("line{i:03}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    (0..100).map(|i| format!("line{i:03}")).collect::<Vec<_>>().join("\n")
 }
 
 /// Returns the smallest and largest logical line currently painted in the
@@ -88,11 +85,7 @@ fn status_bar_shows_count_when_secondary_cursors_are_below_viewport() -> TestRes
         assert!(
             below > 0,
             "test setup did not produce below-viewport cursors; viewport {painted:?}, cursors {:?}",
-            record
-                .cursors
-                .iter()
-                .map(|c| c.head_line)
-                .collect::<Vec<_>>()
+            record.cursors.iter().map(|c| c.head_line).collect::<Vec<_>>()
         );
 
         let expected = format!("▼{below}");
@@ -127,11 +120,7 @@ fn status_bar_shows_count_when_secondary_cursors_are_above_viewport() -> TestRes
         assert!(
             above > 0,
             "test setup did not produce above-viewport cursors; viewport {painted:?}, cursors {:?}",
-            record
-                .cursors
-                .iter()
-                .map(|c| c.head_line)
-                .collect::<Vec<_>>()
+            record.cursors.iter().map(|c| c.head_line).collect::<Vec<_>>()
         );
 
         let expected = format!("▲{above}");
@@ -162,11 +151,7 @@ fn shift_alt_down_keeps_bottom_most_cursor_visible_after_extending_past_viewport
         }
 
         let record = editor.read_state()?;
-        let bottom_cursor_line = record
-            .cursors
-            .last()
-            .expect("at least one cursor")
-            .head_line;
+        let bottom_cursor_line = record.cursors.last().expect("at least one cursor").head_line;
         let visible = record
             .viewport
             .rows

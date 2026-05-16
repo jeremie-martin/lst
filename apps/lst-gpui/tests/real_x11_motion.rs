@@ -144,10 +144,7 @@ fn page_down_at_eof_lands_on_last_line() -> TestResult {
     // which key was used. Assert the weaker invariant: after enough page
     // downs, the cursor's head_line is the last line in the buffer.
     support::run_x11_test("motion-page-down-eof", |session| {
-        let body = (0..40)
-            .map(|i| format!("line {i:02}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let body = (0..40).map(|i| format!("line {i:02}")).collect::<Vec<_>>().join("\n");
         let path = session.seed_file("eof.txt", &body)?;
         let mut editor = session.open_file("eof", &path)?;
 

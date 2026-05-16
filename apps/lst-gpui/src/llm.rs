@@ -4,15 +4,17 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::json;
 
-pub(crate) const SYSTEM_PROMPT: &str = "You are a careful copy editor. The input is text that may contain transcription artifacts: filler words (\"um\", \"uh\", \"like\", \"you know\"), repetitions, false starts, and occasional misrecognized words. Your job is to produce a cleaned version that:
-
-- preserves the original meaning, voice, and content;
-- preserves paragraph and line-break structure;
-- does not add headings, bullet points, bold, or any markdown not present in the input;
-- does not summarize, expand, or restyle;
-- keeps the same language as the input.
-
-Output only the cleaned text. No preamble, no commentary, no code fences.";
+pub(crate) const SYSTEM_PROMPT: &str = concat!(
+    "You are a careful copy editor. The input is text that may contain transcription artifacts: filler words ",
+    "(\"um\", \"uh\", \"like\", \"you know\"), repetitions, false starts, and occasional misrecognized words. ",
+    "Your job is to produce a cleaned version that:\n\n",
+    "- preserves the original meaning, voice, and content;\n",
+    "- preserves paragraph and line-break structure;\n",
+    "- does not add headings, bullet points, bold, or any markdown not present in the input;\n",
+    "- does not summarize, expand, or restyle;\n",
+    "- keeps the same language as the input.\n\n",
+    "Output only the cleaned text. No preamble, no commentary, no code fences."
+);
 
 const DEEPSEEK_ENDPOINT: &str = "https://api.deepseek.com/v1/chat/completions";
 pub(crate) const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-flash";
@@ -88,9 +90,7 @@ impl LlmClient for DeepSeekClient {
             Err(err) => return Err(LlmError::Transport(err.to_string())),
         };
 
-        let payload: ChatResponse = response
-            .into_json()
-            .map_err(|err| LlmError::Parse(err.to_string()))?;
+        let payload: ChatResponse = response.into_json().map_err(|err| LlmError::Parse(err.to_string()))?;
 
         let content = payload
             .choices

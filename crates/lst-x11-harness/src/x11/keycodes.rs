@@ -60,9 +60,7 @@ impl Keycodes {
     pub(crate) fn resolve(conn: &RustConnection) -> Result<Self> {
         let setup = conn.setup();
         let count = setup.max_keycode - setup.min_keycode + 1;
-        let reply = conn
-            .get_keyboard_mapping(setup.min_keycode, count)?
-            .reply()?;
+        let reply = conn.get_keyboard_mapping(setup.min_keycode, count)?.reply()?;
         let active_group = active_group(conn)?;
 
         let mut chars = HashMap::new();
@@ -156,15 +154,8 @@ fn level_in_window(group: &[u32], keysym: u32, start: usize) -> Option<usize> {
     None
 }
 
-fn require(
-    reply: &GetKeyboardMappingReply,
-    min_keycode: Keycode,
-    keysym: u32,
-    active_group: usize,
-) -> Result<Keycode> {
+fn require(reply: &GetKeyboardMappingReply, min_keycode: Keycode, keysym: u32, active_group: usize) -> Result<Keycode> {
     lookup(reply, min_keycode, keysym, active_group)
         .map(|(kc, _)| kc)
-        .ok_or_else(|| {
-            io::Error::other(format!("could not resolve X11 keysym 0x{keysym:x}")).into()
-        })
+        .ok_or_else(|| io::Error::other(format!("could not resolve X11 keysym 0x{keysym:x}")).into())
 }

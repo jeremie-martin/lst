@@ -1,6 +1,6 @@
 use gpui::{
-    div, rgb, AnyElement, App, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    ScrollHandle, StatefulInteractiveElement, Styled,
+    div, rgb, AnyElement, App, InteractiveElement, IntoElement, ParentElement, RenderOnce, ScrollHandle,
+    StatefulInteractiveElement, Styled,
 };
 use smallvec::SmallVec;
 
@@ -91,13 +91,6 @@ impl RenderOnce for TabBar {
                         .into_any_element(),
                 ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .overflow_hidden()
-                    .child(tabs_scroll),
-            )
+            .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(tabs_scroll))
     }
 }

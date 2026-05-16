@@ -153,9 +153,7 @@ fn undo_after_save_marks_buffer_dirty_again() -> TestResult {
 
         editor.keys("new ")?;
         editor.save()?;
-        editor.wait_state("save clears dirty", secs(5), |record| {
-            !record.active_tab_modified
-        })?;
+        editor.wait_state("save clears dirty", secs(5), |record| !record.active_tab_modified)?;
         editor.keys("<C-z>")?;
         editor.wait_state("undo after save dirties buffer", secs(5), |record| {
             record.active_tab_modified
@@ -226,11 +224,7 @@ fn failed_safe_save_keeps_existing_file_contents() -> TestResult {
 
         editor.keys("new ")?;
         editor.save()?;
-        editor.wait_file_text(
-            &path,
-            "old\n",
-            FileWaitOpts::new(secs(2), Duration::from_millis(300)),
-        )?;
+        editor.wait_file_text(&path, "old\n", FileWaitOpts::new(secs(2), Duration::from_millis(300)))?;
         let record = editor.read_state()?;
         let text = std::fs::read_to_string(&path)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))?;

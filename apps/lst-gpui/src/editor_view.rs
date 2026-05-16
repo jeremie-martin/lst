@@ -1,23 +1,19 @@
 use gpui::{
-    canvas, div, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle,
-    InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
-    Pixels, Point, ScrollHandle, Styled, Window,
+    canvas, div, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, InteractiveElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, ScrollHandle, Styled, Window,
 };
 use lst_editor::{EditorCommand as Command, EditorTab as ModelEditorTab, RevealIntent};
 
 use crate::{
     char_to_line_col, diagnostics,
     ui::{
-        scrollbar::{
-            paint_scrollbar, scroll_for_thumb_drag, scroll_for_track_click, scrollbar_layout,
-            ScrollbarAxis,
-        },
+        scrollbar::{paint_scrollbar, scroll_for_thumb_drag, scroll_for_track_click, scrollbar_layout, ScrollbarAxis},
         theme::metrics,
     },
     viewport::{
-        byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout,
-        line_display_text, max_scroll_left, max_scroll_top, scroll_left_for, scroll_to_left,
-        scroll_to_top, scroll_top_for, visual_row_for_char, x_for_display_char, WrapLayoutInput,
+        byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, line_display_text, max_scroll_left,
+        max_scroll_top, scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for, visual_row_for_char,
+        x_for_display_char, WrapLayoutInput,
     },
     EditorScrollbarDrag, EditorTabView, FocusTarget, LstGpuiApp,
 };
@@ -33,12 +29,7 @@ impl LstGpuiApp {
         diagnostics::record_usize("find_query_len", self.model.find().query.chars().count());
     }
 
-    pub(crate) fn record_operation(
-        &self,
-        label: &'static str,
-        clipboard_read_ms: Option<f64>,
-        apply_ms: f64,
-    ) {
+    pub(crate) fn record_operation(&self, label: &'static str, clipboard_read_ms: Option<f64>, apply_ms: f64) {
         let tab = self.active_tab();
         diagnostics::record_operation(
             label,
@@ -164,21 +155,12 @@ impl LstGpuiApp {
             } else {
                 self.model.find().active.map_or(0, |index| index + 1)
             };
-            parts.push(format!(
-                "Match {current}/{}",
-                self.model.find().matches.len()
-            ));
+            parts.push(format!("Match {current}/{}", self.model.find().matches.len()));
         }
         parts.join("  ")
     }
 
-    pub(crate) fn move_vertical(
-        &mut self,
-        delta: isize,
-        select: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn move_vertical(&mut self, delta: isize, select: bool, window: &mut Window, cx: &mut Context<Self>) {
         let wrap_columns = self.active_wrap_columns(window, cx);
         self.execute_model_command(cx, Command::MoveDisplayRows(delta, select, wrap_columns));
     }
@@ -218,13 +200,7 @@ impl LstGpuiApp {
         layout.wrap_columns
     }
 
-    pub(crate) fn move_page(
-        &mut self,
-        down: bool,
-        select: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn move_page(&mut self, down: bool, select: bool, window: &mut Window, cx: &mut Context<Self>) {
         let wrap_columns = self.active_wrap_columns(window, cx);
         self.execute_model_command(cx, Command::Page(down, select, wrap_columns));
     }
@@ -291,12 +267,7 @@ impl LstGpuiApp {
         }
     }
 
-    fn try_reveal_active_cursor(
-        &self,
-        intent: RevealIntent,
-        window: &mut Window,
-        cx: &App,
-    ) -> bool {
+    fn try_reveal_active_cursor(&self, intent: RevealIntent, window: &mut Window, cx: &App) -> bool {
         let view = self.active_view();
         let viewport_bounds = {
             let geometry = view.geometry.borrow();
@@ -401,12 +372,7 @@ impl LstGpuiApp {
         true
     }
 
-    fn active_cursor_rendered_x(
-        &self,
-        char_width: Pixels,
-        window: &mut Window,
-        cx: &App,
-    ) -> Pixels {
+    fn active_cursor_rendered_x(&self, char_width: Pixels, window: &mut Window, cx: &App) -> Pixels {
         let tab = self.active_tab();
         let cursor = tab.cursor_char().min(tab.buffer().len_chars());
         let line = tab.buffer().char_to_line(cursor);
@@ -450,15 +416,12 @@ impl LstGpuiApp {
         let current_scroll_top = scroll_top_for(&active_view.scroll);
         let current_scroll_left = scroll_left_for(&active_view.scroll);
         if self.selection_drag.is_none()
-            && ((current_scroll_top - geometry.scroll_top_at_paint).abs()
-                > px(SCROLL_STALE_THRESHOLD)
-                || (current_scroll_left - geometry.scroll_left_at_paint).abs()
-                    > px(SCROLL_STALE_THRESHOLD))
+            && ((current_scroll_top - geometry.scroll_top_at_paint).abs() > px(SCROLL_STALE_THRESHOLD)
+                || (current_scroll_left - geometry.scroll_left_at_paint).abs() > px(SCROLL_STALE_THRESHOLD))
         {
             return self.active_tab().cursor_char();
         }
-        let code_origin_x =
-            bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
+        let code_origin_x = bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
 
         let row_height = self.ui_px(metrics::ROW_HEIGHT);
         let row = if geometry.rows.is_empty() {
@@ -552,134 +515,127 @@ impl LstGpuiApp {
                 .h(track_size),
         };
 
-        bar.when(has_overflow, |bar| bar.cursor(CursorStyle::Arrow))
-            .child(
-                canvas(
-                    move |bounds, _, _| {
-                        scrollbar_layout(
-                            axis,
-                            bounds,
-                            scrollbar_current_offset(axis, &prepare_scroll),
-                            scrollbar_max_offset(axis, &prepare_scroll),
-                            scale,
+        bar.when(has_overflow, |bar| bar.cursor(CursorStyle::Arrow)).child(
+            canvas(
+                move |bounds, _, _| {
+                    scrollbar_layout(
+                        axis,
+                        bounds,
+                        scrollbar_current_offset(axis, &prepare_scroll),
+                        scrollbar_max_offset(axis, &prepare_scroll),
+                        scale,
+                    )
+                },
+                move |_, layout, window, cx| {
+                    let Some(layout) = layout else {
+                        return;
+                    };
+
+                    let (active, hovered) = {
+                        let app = entity.read(cx);
+                        (
+                            app.scrollbar_drag(axis).is_some(),
+                            app.scrollbar_hovered(axis) || layout.thumb_bounds.contains(&window.mouse_position()),
                         )
-                    },
-                    move |_, layout, window, cx| {
-                        let Some(layout) = layout else {
+                    };
+                    paint_scrollbar(&layout, active, hovered, scale, theme, window);
+
+                    let entity_for_down = entity.clone();
+                    let scroll_for_down = paint_scroll.clone();
+                    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                        if !phase.bubble()
+                            || event.button != MouseButton::Left
+                            || !layout.track_bounds.contains(&event.position)
+                        {
                             return;
+                        }
+
+                        let focus_handle = entity_for_down.read(cx).focus_handle.clone();
+                        window.focus(&focus_handle);
+                        let pointer = axis.pointer_offset(event.position);
+                        let current = scrollbar_current_offset(axis, &scroll_for_down);
+                        let on_thumb = layout.thumb_bounds.contains(&event.position);
+                        let drag = if on_thumb {
+                            Some(EditorScrollbarDrag {
+                                grab_offset: pointer - axis.pointer_offset(layout.thumb_bounds.origin),
+                            })
+                        } else {
+                            scroll_editor_to(
+                                axis,
+                                &scroll_for_down,
+                                scroll_for_track_click(&layout, pointer, current),
+                            );
+                            None
                         };
-
-                        let (active, hovered) = {
-                            let app = entity.read(cx);
-                            (
-                                app.scrollbar_drag(axis).is_some(),
-                                app.scrollbar_hovered(axis)
-                                    || layout.thumb_bounds.contains(&window.mouse_position()),
-                            )
-                        };
-                        paint_scrollbar(&layout, active, hovered, scale, theme, window);
-
-                        let entity_for_down = entity.clone();
-                        let scroll_for_down = paint_scroll.clone();
-                        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-                            if !phase.bubble()
-                                || event.button != MouseButton::Left
-                                || !layout.track_bounds.contains(&event.position)
-                            {
-                                return;
-                            }
-
-                            let focus_handle = entity_for_down.read(cx).focus_handle.clone();
-                            window.focus(&focus_handle);
-                            let pointer = axis.pointer_offset(event.position);
-                            let current = scrollbar_current_offset(axis, &scroll_for_down);
-                            let on_thumb = layout.thumb_bounds.contains(&event.position);
-                            let drag = if on_thumb {
-                                Some(EditorScrollbarDrag {
-                                    grab_offset: pointer
-                                        - axis.pointer_offset(layout.thumb_bounds.origin),
-                                })
-                            } else {
-                                scroll_editor_to(
-                                    axis,
-                                    &scroll_for_down,
-                                    scroll_for_track_click(&layout, pointer, current),
-                                );
-                                None
-                            };
-                            entity_for_down.update(cx, |this, _| {
-                                this.set_focus(FocusTarget::Editor);
-                                this.selection_drag = None;
-                                this.set_scrollbar_hovered(axis, on_thumb);
-                                this.set_scrollbar_drag(axis, drag);
-                            });
-                            cx.stop_propagation();
-                            cx.notify(entity_for_down.entity_id());
+                        entity_for_down.update(cx, |this, _| {
+                            this.set_focus(FocusTarget::Editor);
+                            this.selection_drag = None;
+                            this.set_scrollbar_hovered(axis, on_thumb);
+                            this.set_scrollbar_drag(axis, drag);
                         });
+                        cx.stop_propagation();
+                        cx.notify(entity_for_down.entity_id());
+                    });
 
-                        let entity_for_move = entity.clone();
-                        let scroll_for_move = paint_scroll.clone();
-                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                            if !phase.bubble() {
-                                return;
-                            }
+                    let entity_for_move = entity.clone();
+                    let scroll_for_move = paint_scroll.clone();
+                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                        if !phase.bubble() {
+                            return;
+                        }
 
-                            let drag = entity_for_move.read(cx).scrollbar_drag(axis);
-                            if let Some(drag) = drag {
-                                if event.dragging() {
-                                    let target = scroll_for_thumb_drag(
-                                        &layout,
-                                        axis.pointer_offset(event.position),
-                                        drag.grab_offset,
-                                    );
-                                    scroll_editor_to(axis, &scroll_for_move, target);
-                                    entity_for_move.update(cx, |this, _| {
-                                        this.set_scrollbar_hovered(axis, true);
-                                    });
-                                    cx.stop_propagation();
-                                    cx.notify(entity_for_move.entity_id());
-                                } else {
-                                    entity_for_move.update(cx, |this, _| {
-                                        this.set_scrollbar_drag(axis, None);
-                                    });
-                                    cx.notify(entity_for_move.entity_id());
-                                }
-                                return;
-                            }
-
-                            let hovered = layout.thumb_bounds.contains(&event.position);
-                            if entity_for_move.read(cx).scrollbar_hovered(axis) != hovered {
+                        let drag = entity_for_move.read(cx).scrollbar_drag(axis);
+                        if let Some(drag) = drag {
+                            if event.dragging() {
+                                let target = scroll_for_thumb_drag(
+                                    &layout,
+                                    axis.pointer_offset(event.position),
+                                    drag.grab_offset,
+                                );
+                                scroll_editor_to(axis, &scroll_for_move, target);
                                 entity_for_move.update(cx, |this, _| {
-                                    this.set_scrollbar_hovered(axis, hovered);
+                                    this.set_scrollbar_hovered(axis, true);
+                                });
+                                cx.stop_propagation();
+                                cx.notify(entity_for_move.entity_id());
+                            } else {
+                                entity_for_move.update(cx, |this, _| {
+                                    this.set_scrollbar_drag(axis, None);
                                 });
                                 cx.notify(entity_for_move.entity_id());
                             }
-                        });
+                            return;
+                        }
 
-                        let entity_for_up = entity.clone();
-                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                            if !phase.bubble() || event.button != MouseButton::Left {
-                                return;
-                            }
+                        let hovered = layout.thumb_bounds.contains(&event.position);
+                        if entity_for_move.read(cx).scrollbar_hovered(axis) != hovered {
+                            entity_for_move.update(cx, |this, _| {
+                                this.set_scrollbar_hovered(axis, hovered);
+                            });
+                            cx.notify(entity_for_move.entity_id());
+                        }
+                    });
 
-                            let was_dragging =
-                                entity_for_up.read(cx).scrollbar_drag(axis).is_some();
-                            if was_dragging || layout.track_bounds.contains(&event.position) {
-                                entity_for_up.update(cx, |this, _| {
-                                    this.set_scrollbar_drag(axis, None);
-                                    this.set_scrollbar_hovered(
-                                        axis,
-                                        layout.thumb_bounds.contains(&event.position),
-                                    );
-                                });
-                                cx.stop_propagation();
-                                cx.notify(entity_for_up.entity_id());
-                            }
-                        });
-                    },
-                )
-                .size_full(),
+                    let entity_for_up = entity.clone();
+                    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                        if !phase.bubble() || event.button != MouseButton::Left {
+                            return;
+                        }
+
+                        let was_dragging = entity_for_up.read(cx).scrollbar_drag(axis).is_some();
+                        if was_dragging || layout.track_bounds.contains(&event.position) {
+                            entity_for_up.update(cx, |this, _| {
+                                this.set_scrollbar_drag(axis, None);
+                                this.set_scrollbar_hovered(axis, layout.thumb_bounds.contains(&event.position));
+                            });
+                            cx.stop_propagation();
+                            cx.notify(entity_for_up.entity_id());
+                        }
+                    });
+                },
             )
+            .size_full(),
+        )
     }
 
     fn scrollbar_drag(&self, axis: ScrollbarAxis) -> Option<EditorScrollbarDrag> {

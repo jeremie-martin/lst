@@ -16,22 +16,49 @@ pub struct Selection {
     anchor: usize,
     head: usize,
 }
-#[rustfmt::skip]
 impl Selection {
-    pub fn collapsed(offset: usize) -> Self { Self { anchor: offset, head: offset } }
-    pub fn new(anchor: usize, head: usize) -> Self { Self { anchor, head } }
-    pub fn from_range(range: Range<usize>, reversed: bool) -> Self {
-        let (anchor, head) = if reversed { (range.end, range.start) } else { (range.start, range.end) };
+    pub fn collapsed(offset: usize) -> Self {
+        Self {
+            anchor: offset,
+            head: offset,
+        }
+    }
+    pub fn new(anchor: usize, head: usize) -> Self {
         Self { anchor, head }
     }
-    pub fn anchor(&self) -> usize { self.anchor }
-    pub fn head(&self) -> usize { self.head }
-    pub fn cursor(&self) -> usize { self.head }
-    pub fn range(&self) -> Range<usize> { self.anchor.min(self.head)..self.anchor.max(self.head) }
-    pub fn is_reversed(&self) -> bool { self.head < self.anchor }
-    pub fn has_selection(&self) -> bool { self.anchor != self.head }
-    pub fn move_to(&mut self, offset: usize) { self.anchor = offset; self.head = offset; }
-    pub fn select_to(&mut self, offset: usize) { self.head = offset; }
+    pub fn from_range(range: Range<usize>, reversed: bool) -> Self {
+        let (anchor, head) = if reversed {
+            (range.end, range.start)
+        } else {
+            (range.start, range.end)
+        };
+        Self { anchor, head }
+    }
+    pub fn anchor(&self) -> usize {
+        self.anchor
+    }
+    pub fn head(&self) -> usize {
+        self.head
+    }
+    pub fn cursor(&self) -> usize {
+        self.head
+    }
+    pub fn range(&self) -> Range<usize> {
+        self.anchor.min(self.head)..self.anchor.max(self.head)
+    }
+    pub fn is_reversed(&self) -> bool {
+        self.head < self.anchor
+    }
+    pub fn has_selection(&self) -> bool {
+        self.anchor != self.head
+    }
+    pub fn move_to(&mut self, offset: usize) {
+        self.anchor = offset;
+        self.head = offset;
+    }
+    pub fn select_to(&mut self, offset: usize) {
+        self.head = offset;
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectionSet {
@@ -43,10 +70,19 @@ pub(crate) enum CursorGoal {
     Column(usize),
     LineEnd,
 }
-#[rustfmt::skip]
 impl CursorGoal {
-    pub(crate) fn column(self) -> Option<usize> { match self { Self::Column(column) => Some(column), Self::LineEnd => None } }
-    pub(crate) fn resolve(self, line_len: usize) -> usize { match self { Self::Column(column) => column.min(line_len), Self::LineEnd => line_len } }
+    pub(crate) fn column(self) -> Option<usize> {
+        match self {
+            Self::Column(column) => Some(column),
+            Self::LineEnd => None,
+        }
+    }
+    pub(crate) fn resolve(self, line_len: usize) -> usize {
+        match self {
+            Self::Column(column) => column.min(line_len),
+            Self::LineEnd => line_len,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SelectionState {
@@ -59,10 +95,21 @@ pub(crate) struct SelectionTransform {
     pub(crate) movement_goal: Option<CursorGoal>,
     pub(crate) visible_column: Option<usize>,
 }
-#[rustfmt::skip]
 impl SelectionTransform {
-    pub(crate) fn new(selection: Selection) -> Self { Self { selection, movement_goal: None, visible_column: None } }
-    pub(crate) fn with_columns(selection: Selection, movement_goal: CursorGoal, visible_column: Option<usize>) -> Self { Self { selection, movement_goal: Some(movement_goal), visible_column } }
+    pub(crate) fn new(selection: Selection) -> Self {
+        Self {
+            selection,
+            movement_goal: None,
+            visible_column: None,
+        }
+    }
+    pub(crate) fn with_columns(selection: Selection, movement_goal: CursorGoal, visible_column: Option<usize>) -> Self {
+        Self {
+            selection,
+            movement_goal: Some(movement_goal),
+            visible_column,
+        }
+    }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct CursorGoals {
@@ -76,43 +123,87 @@ pub enum SelectionSetError {
     Unordered,
     Overlapping,
 }
-#[rustfmt::skip]
 impl SelectionSet {
-    pub fn single(selection: Selection) -> Self { Self { selections: vec![selection], primary: 0 } }
+    pub fn single(selection: Selection) -> Self {
+        Self {
+            selections: vec![selection],
+            primary: 0,
+        }
+    }
     pub fn from_selections(selections: Vec<Selection>, primary: usize) -> Result<Self, SelectionSetError> {
         validate_selection_set(&selections, primary)?;
         Ok(Self { selections, primary })
     }
-    pub fn primary(&self) -> Selection { self.selections[self.primary] }
-    pub fn as_slice(&self) -> &[Selection] { &self.selections }
-    pub fn primary_index(&self) -> usize { self.primary }
-    pub fn is_single(&self) -> bool { self.selections.len() == 1 }
-    pub(crate) fn has_multiple(&self) -> bool { self.selections.len() > 1 }
-    pub(crate) fn with_added_selection(&self, selection: Selection) -> Self { self.with_added_selections([selection]) }
+    pub fn primary(&self) -> Selection {
+        self.selections[self.primary]
+    }
+    pub fn as_slice(&self) -> &[Selection] {
+        &self.selections
+    }
+    pub fn primary_index(&self) -> usize {
+        self.primary
+    }
+    pub fn is_single(&self) -> bool {
+        self.selections.len() == 1
+    }
+    pub(crate) fn has_multiple(&self) -> bool {
+        self.selections.len() > 1
+    }
+    pub(crate) fn with_added_selection(&self, selection: Selection) -> Self {
+        self.with_added_selections([selection])
+    }
     pub(crate) fn with_added_selections<I>(&self, additions: I) -> Self
     where
         I: IntoIterator<Item = Selection>,
     {
-        let mut selections: Vec<_> = self.selections.iter().copied().enumerate().map(|(index, selection)| (selection, if index == self.primary { SelectionOrigin::ExistingPrimary } else { SelectionOrigin::Existing })).collect();
-        selections.extend(additions.into_iter().map(|selection| (selection, SelectionOrigin::Added)));
+        let mut selections: Vec<_> = self
+            .selections
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, selection)| {
+                (
+                    selection,
+                    if index == self.primary {
+                        SelectionOrigin::ExistingPrimary
+                    } else {
+                        SelectionOrigin::Existing
+                    },
+                )
+            })
+            .collect();
+        selections.extend(
+            additions
+                .into_iter()
+                .map(|selection| (selection, SelectionOrigin::Added)),
+        );
         Self::from_unordered_intent(selections).unwrap_or_else(|| self.clone())
     }
-    pub(crate) fn from_selections_coalescing_cursors(selections: Vec<Selection>, primary: usize) -> Result<Self, SelectionSetError> {
+    pub(crate) fn from_selections_coalescing_cursors(
+        selections: Vec<Selection>,
+        primary: usize,
+    ) -> Result<Self, SelectionSetError> {
         validate_primary(&selections, primary)?;
         let mut coalesced = Vec::with_capacity(selections.len());
         let mut coalesced_primary = None;
         for (index, selection) in selections.into_iter().enumerate() {
             if coalesced.last().is_some_and(|last| duplicate_cursor(*last, selection)) {
-                if index == primary { coalesced_primary = coalesced.len().checked_sub(1); }
+                if index == primary {
+                    coalesced_primary = coalesced.len().checked_sub(1);
+                }
                 continue;
             }
-            if index == primary { coalesced_primary = Some(coalesced.len()); }
+            if index == primary {
+                coalesced_primary = Some(coalesced.len());
+            }
             coalesced.push(selection);
         }
         Self::from_selections(coalesced, coalesced_primary.unwrap_or(0))
     }
     fn from_unordered_intent(mut selections: Vec<(Selection, SelectionOrigin)>) -> Option<Self> {
-        if selections.is_empty() { return None; }
+        if selections.is_empty() {
+            return None;
+        }
         selections.sort_by_key(|(selection, origin)| {
             let range = selection.range();
             (range.start, range.end, origin.sort_key())
@@ -120,36 +211,70 @@ impl SelectionSet {
         let added_index = (0..selections.len())
             .rev()
             .find(|&i| {
-                if selections[i].1 != SelectionOrigin::Added { return false; }
+                if selections[i].1 != SelectionOrigin::Added {
+                    return false;
+                }
                 let range = selections[i].0.range();
-                let prev_dup = i.checked_sub(1).is_some_and(|j| selections[j].0.range() == range && selections[j].1 != SelectionOrigin::Added);
-                let next_dup = selections.get(i + 1).is_some_and(|(selection, origin)| selection.range() == range && *origin != SelectionOrigin::Added);
+                let prev_dup = i
+                    .checked_sub(1)
+                    .is_some_and(|j| selections[j].0.range() == range && selections[j].1 != SelectionOrigin::Added);
+                let next_dup = selections
+                    .get(i + 1)
+                    .is_some_and(|(selection, origin)| selection.range() == range && *origin != SelectionOrigin::Added);
                 !(prev_dup || next_dup)
             })
-            .or_else(|| selections.iter().rposition(|(_, origin)| *origin == SelectionOrigin::Added));
+            .or_else(|| {
+                selections
+                    .iter()
+                    .rposition(|(_, origin)| *origin == SelectionOrigin::Added)
+            });
         let primary = added_index
-            .or_else(|| selections.iter().position(|(_, origin)| *origin == SelectionOrigin::ExistingPrimary))
+            .or_else(|| {
+                selections
+                    .iter()
+                    .position(|(_, origin)| *origin == SelectionOrigin::ExistingPrimary)
+            })
             .unwrap_or(0);
         let selections: Vec<_> = selections.into_iter().map(|(selection, _)| selection).collect();
         Self::from_selections_coalescing_cursors(selections, primary).ok()
     }
-    pub(crate) fn set_single(&mut self, selection: Selection) { self.selections.clear(); self.selections.push(selection); self.primary = 0; }
+    pub(crate) fn set_single(&mut self, selection: Selection) {
+        self.selections.clear();
+        self.selections.push(selection);
+        self.primary = 0;
+    }
     pub(crate) fn with_removed_at(&self, index: usize) -> Option<Self> {
-        if index >= self.selections.len() || self.selections.len() <= 1 { return None; }
+        if index >= self.selections.len() || self.selections.len() <= 1 {
+            return None;
+        }
         let mut selections = self.selections.clone();
         selections.remove(index);
-        let primary = if self.primary == index { index.min(selections.len() - 1) } else if self.primary > index { self.primary - 1 } else { self.primary };
+        let primary = if self.primary == index {
+            index.min(selections.len() - 1)
+        } else if self.primary > index {
+            self.primary - 1
+        } else {
+            self.primary
+        };
         Some(Self { selections, primary })
     }
     pub(crate) fn clamped_to_len(&self, len: usize) -> Self {
-        let selections: Vec<_> = self.selections.iter().map(|selection| clamped_selection(*selection, len)).collect();
+        let selections: Vec<_> = self
+            .selections
+            .iter()
+            .map(|selection| clamped_selection(*selection, len))
+            .collect();
         Self::from_selections_coalescing_cursors(selections, self.primary)
             .expect("clamping a valid selection set preserves selection-set invariants")
     }
 }
-#[rustfmt::skip]
 impl SelectionState {
-    pub(crate) fn single(selection: Selection) -> Self { Self { set: SelectionSet::single(selection), goals: CursorGoals::default() } }
+    pub(crate) fn single(selection: Selection) -> Self {
+        Self {
+            set: SelectionSet::single(selection),
+            goals: CursorGoals::default(),
+        }
+    }
     pub(crate) fn single_with_transform(transform: SelectionTransform) -> Self {
         Self {
             set: SelectionSet::single(transform.selection),
@@ -159,33 +284,82 @@ impl SelectionState {
             },
         }
     }
-    pub(crate) fn from_set(set: SelectionSet) -> Self { Self { set, goals: CursorGoals::default() } }
-    pub(crate) fn selection_set(&self) -> &SelectionSet { &self.set }
-    pub(crate) fn primary(&self) -> Selection { self.set.primary() }
-    pub(crate) fn as_slice(&self) -> &[Selection] { self.set.as_slice() }
-    pub(crate) fn primary_index(&self) -> usize { self.set.primary_index() }
-    pub(crate) fn has_multiple(&self) -> bool { self.set.has_multiple() }
-    pub(crate) fn set_single(&mut self, selection: Selection) { self.set.set_single(selection); self.goals.clear(); }
-    pub(crate) fn replace_set(&mut self, set: SelectionSet) { self.set = set; self.goals.clear(); }
-    pub(crate) fn with_added_selection(&self, selection: Selection) -> Self { self.with_added_selections([selection]) }
+    pub(crate) fn from_set(set: SelectionSet) -> Self {
+        Self {
+            set,
+            goals: CursorGoals::default(),
+        }
+    }
+    pub(crate) fn selection_set(&self) -> &SelectionSet {
+        &self.set
+    }
+    pub(crate) fn primary(&self) -> Selection {
+        self.set.primary()
+    }
+    pub(crate) fn as_slice(&self) -> &[Selection] {
+        self.set.as_slice()
+    }
+    pub(crate) fn primary_index(&self) -> usize {
+        self.set.primary_index()
+    }
+    pub(crate) fn has_multiple(&self) -> bool {
+        self.set.has_multiple()
+    }
+    pub(crate) fn set_single(&mut self, selection: Selection) {
+        self.set.set_single(selection);
+        self.goals.clear();
+    }
+    pub(crate) fn replace_set(&mut self, set: SelectionSet) {
+        self.set = set;
+        self.goals.clear();
+    }
+    pub(crate) fn with_added_selection(&self, selection: Selection) -> Self {
+        self.with_added_selections([selection])
+    }
     pub(crate) fn with_added_selections<I>(&self, additions: I) -> Self
     where
         I: IntoIterator<Item = Selection>,
     {
         let next = self.set.with_added_selections(additions);
-        if next == self.set { self.clone() } else { Self::from_set(next) }
+        if next == self.set {
+            self.clone()
+        } else {
+            Self::from_set(next)
+        }
     }
-    pub(crate) fn with_removed_at(&self, index: usize) -> Option<Self> { self.set.with_removed_at(index).map(Self::from_set) }
-    pub(crate) fn movement_goal_for(&self, selection_index: usize) -> Option<CursorGoal> { self.goals.movement_for(selection_index) }
-    pub(crate) fn movement_column_for(&self, selection_index: usize) -> Option<usize> { self.movement_goal_for(selection_index).and_then(CursorGoal::column) }
-    pub(crate) fn visible_column_for(&self, selection_index: usize) -> Option<usize> { self.goals.visible_for(selection_index) }
-    pub(crate) fn set_all_movement_goals(&mut self, goal: Option<CursorGoal>) { self.goals.set_all_movement(self.set.as_slice().len(), goal); }
-    pub(crate) fn clear_goals(&mut self) { self.goals.clear(); }
+    pub(crate) fn with_removed_at(&self, index: usize) -> Option<Self> {
+        self.set.with_removed_at(index).map(Self::from_set)
+    }
+    pub(crate) fn movement_goal_for(&self, selection_index: usize) -> Option<CursorGoal> {
+        self.goals.movement_for(selection_index)
+    }
+    pub(crate) fn movement_column_for(&self, selection_index: usize) -> Option<usize> {
+        self.movement_goal_for(selection_index).and_then(CursorGoal::column)
+    }
+    pub(crate) fn visible_column_for(&self, selection_index: usize) -> Option<usize> {
+        self.goals.visible_for(selection_index)
+    }
+    pub(crate) fn set_all_movement_goals(&mut self, goal: Option<CursorGoal>) {
+        self.goals.set_all_movement(self.set.as_slice().len(), goal);
+    }
+    pub(crate) fn clear_goals(&mut self) {
+        self.goals.clear();
+    }
     pub(crate) fn map<F>(&self, mut f: F) -> Option<Self>
     where
         F: FnMut(usize, Selection) -> SelectionTransform,
     {
-        let mut entries = self.set.as_slice().iter().copied().enumerate().map(|(index, selection)| MappedSelection { transform: f(index, selection), is_primary: index == self.set.primary_index() }).collect::<Vec<_>>();
+        let mut entries = self
+            .set
+            .as_slice()
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, selection)| MappedSelection {
+                transform: f(index, selection),
+                is_primary: index == self.set.primary_index(),
+            })
+            .collect::<Vec<_>>();
         SelectionState::from_mapped_entries(&mut entries)
     }
     fn from_mapped_entries(entries: &mut [MappedSelection]) -> Option<Self> {
@@ -196,20 +370,29 @@ impl SelectionState {
         let mut mapped = Vec::with_capacity(entries.len());
         let mut primary = None;
         for entry in entries.iter().copied() {
-            if mapped.last().is_some_and(|last: &MappedSelection| duplicate_cursor(last.transform.selection, entry.transform.selection)) {
+            if mapped.last().is_some_and(|last: &MappedSelection| {
+                duplicate_cursor(last.transform.selection, entry.transform.selection)
+            }) {
                 if entry.is_primary {
                     primary = mapped.len().checked_sub(1);
-                    if let Some(index) = primary { mapped[index] = entry; }
+                    if let Some(index) = primary {
+                        mapped[index] = entry;
+                    }
                 }
                 continue;
             }
-            if entry.is_primary { primary = Some(mapped.len()); }
+            if entry.is_primary {
+                primary = Some(mapped.len());
+            }
             mapped.push(entry);
         }
         let primary = primary.unwrap_or(0);
         let selections = mapped.iter().map(|entry| entry.transform.selection).collect();
         let set = SelectionSet::from_selections(selections, primary).ok()?;
-        let goals = CursorGoals { movement: mapped.iter().map(|entry| entry.transform.movement_goal).collect(), visible: mapped.iter().map(|entry| entry.transform.visible_column).collect() };
+        let goals = CursorGoals {
+            movement: mapped.iter().map(|entry| entry.transform.movement_goal).collect(),
+            visible: mapped.iter().map(|entry| entry.transform.visible_column).collect(),
+        };
         Some(Self { set, goals })
     }
 }
@@ -218,14 +401,21 @@ struct MappedSelection {
     transform: SelectionTransform,
     is_primary: bool,
 }
-#[rustfmt::skip]
 impl CursorGoals {
-    fn movement_for(&self, ix: usize) -> Option<CursorGoal> { self.movement.as_ref().and_then(|g| g.get(ix)).copied() }
-    fn visible_for(&self, ix: usize) -> Option<usize> { self.visible.as_ref().and_then(|c| c.get(ix)).copied() }
-    fn set_all_movement(&mut self, len: usize, goal: Option<CursorGoal>) {
-        self.movement = goal.map(|g| vec![g; len]); self.visible = None;
+    fn movement_for(&self, ix: usize) -> Option<CursorGoal> {
+        self.movement.as_ref().and_then(|g| g.get(ix)).copied()
     }
-    fn clear(&mut self) { self.movement = None; self.visible = None; }
+    fn visible_for(&self, ix: usize) -> Option<usize> {
+        self.visible.as_ref().and_then(|c| c.get(ix)).copied()
+    }
+    fn set_all_movement(&mut self, len: usize, goal: Option<CursorGoal>) {
+        self.movement = goal.map(|g| vec![g; len]);
+        self.visible = None;
+    }
+    fn clear(&mut self) {
+        self.movement = None;
+        self.visible = None;
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectionOrigin {
@@ -233,27 +423,36 @@ enum SelectionOrigin {
     ExistingPrimary,
     Added,
 }
-#[rustfmt::skip]
 impl SelectionOrigin {
     fn sort_key(self) -> u8 {
-        match self { Self::Existing => 0, Self::ExistingPrimary => 1, Self::Added => 2 }
+        match self {
+            Self::Existing => 0,
+            Self::ExistingPrimary => 1,
+            Self::Added => 2,
+        }
     }
 }
-#[rustfmt::skip]
 fn validate_primary(selections: &[Selection], primary: usize) -> Result<(), SelectionSetError> {
-    if selections.is_empty() { return Err(SelectionSetError::Empty); }
-    if primary >= selections.len() { return Err(SelectionSetError::InvalidPrimary); }
+    if selections.is_empty() {
+        return Err(SelectionSetError::Empty);
+    }
+    if primary >= selections.len() {
+        return Err(SelectionSetError::InvalidPrimary);
+    }
     Ok(())
 }
-#[rustfmt::skip]
 fn validate_selection_set(selections: &[Selection], primary: usize) -> Result<(), SelectionSetError> {
     validate_primary(selections, primary)?;
     let mut previous: Option<Range<usize>> = None;
     for selection in selections {
         let range = selection.range();
         if let Some(previous) = previous {
-            if (range.start, range.end) < (previous.start, previous.end) { return Err(SelectionSetError::Unordered); }
-            if previous.end > range.start || previous == range { return Err(SelectionSetError::Overlapping); }
+            if (range.start, range.end) < (previous.start, previous.end) {
+                return Err(SelectionSetError::Unordered);
+            }
+            if previous.end > range.start || previous == range {
+                return Err(SelectionSetError::Overlapping);
+            }
         }
         previous = Some(range);
     }
@@ -339,7 +538,12 @@ pub(crate) fn cells_of_str(text: &str) -> Vec<GraphemeCell> {
         };
         let char_len = 1 + chars.count();
         debug_assert!(char_len <= u8::MAX as usize);
-        cells.push(GraphemeCell { byte_start, char_start, char_len: char_len as u8, repr });
+        cells.push(GraphemeCell {
+            byte_start,
+            char_start,
+            char_len: char_len as u8,
+            repr,
+        });
         char_start += char_len;
     }
     cells
@@ -366,10 +570,14 @@ pub(crate) fn cell_partition_by_byte(cells: &[GraphemeCell], byte_offset: usize)
 // MUST pre-check `cells.is_empty()` — when there are no cells this returns 0
 // and indexing the result would panic.
 pub(crate) fn cell_containing_char(cells: &[GraphemeCell], char_index: usize) -> usize {
-    cells.partition_point(|cell| cell.char_start <= char_index).saturating_sub(1)
+    cells
+        .partition_point(|cell| cell.char_start <= char_index)
+        .saturating_sub(1)
 }
 fn cell_containing_byte(cells: &[GraphemeCell], byte_offset: usize) -> usize {
-    cells.partition_point(|cell| cell.byte_start <= byte_offset).saturating_sub(1)
+    cells
+        .partition_point(|cell| cell.byte_start <= byte_offset)
+        .saturating_sub(1)
 }
 fn char_index_at_cell(cells: &[GraphemeCell], cell_ix: usize, total_chars: usize) -> usize {
     cells.get(cell_ix).map(|cell| cell.char_start).unwrap_or(total_chars)
@@ -504,7 +712,10 @@ fn previous_subword_boundary_cells(cells: &[GraphemeCell], cell_index: usize) ->
     let run_end = identifier_run_end_cells(cells, index - 1);
     let chunks = subword_chunks(&cells[run_start..run_end]);
     let relative = index - run_start;
-    chunks.iter().rfind(|chunk| chunk.start < relative).map_or(run_start, |chunk| run_start + chunk.start)
+    chunks
+        .iter()
+        .rfind(|chunk| chunk.start < relative)
+        .map_or(run_start, |chunk| run_start + chunk.start)
 }
 fn next_subword_boundary_cells(cells: &[GraphemeCell], cell_index: usize) -> usize {
     let mut index = cell_index.min(cells.len());
@@ -530,7 +741,10 @@ fn next_subword_boundary_cells(cells: &[GraphemeCell], cell_index: usize) -> usi
     let run_end = identifier_run_end_cells(cells, index);
     let chunks = subword_chunks(&cells[run_start..run_end]);
     let relative = index - run_start;
-    chunks.iter().find(|chunk| chunk.start <= relative && relative < chunk.end).map_or(run_end, |chunk| run_start + chunk.end)
+    chunks
+        .iter()
+        .find(|chunk| chunk.start <= relative && relative < chunk.end)
+        .map_or(run_end, |chunk| run_start + chunk.end)
 }
 pub fn previous_word_boundary(buffer: &Rope, char_index: usize) -> usize {
     let cells = cells_of_rope(buffer);
@@ -580,7 +794,10 @@ pub fn next_grapheme_column(line: &str, column: usize) -> usize {
         return total;
     }
     let local_byte = byte_of_char_index(line, column);
-    let next_byte = line.grapheme_indices(true).find_map(|(b, _)| (b > local_byte).then_some(b)).unwrap_or(line.len());
+    let next_byte = line
+        .grapheme_indices(true)
+        .find_map(|(b, _)| (b > local_byte).then_some(b))
+        .unwrap_or(line.len());
     line[..next_byte].chars().count()
 }
 pub fn previous_grapheme_column(line: &str, column: usize) -> usize {
@@ -589,12 +806,22 @@ pub fn previous_grapheme_column(line: &str, column: usize) -> usize {
     }
     let total = line.chars().count();
     let column = column.min(total);
-    let local_byte = if column == total { line.len() } else { byte_of_char_index(line, column) };
-    let prev_byte = line.grapheme_indices(true).rev().find_map(|(b, _)| (b < local_byte).then_some(b)).unwrap_or(0);
+    let local_byte = if column == total {
+        line.len()
+    } else {
+        byte_of_char_index(line, column)
+    };
+    let prev_byte = line
+        .grapheme_indices(true)
+        .rev()
+        .find_map(|(b, _)| (b < local_byte).then_some(b))
+        .unwrap_or(0);
     line[..prev_byte].chars().count()
 }
 pub fn last_grapheme_column(line: &str) -> usize {
-    line.grapheme_indices(true).next_back().map_or(0, |(b, _)| line[..b].chars().count())
+    line.grapheme_indices(true)
+        .next_back()
+        .map_or(0, |(b, _)| line[..b].chars().count())
 }
 pub fn next_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
     let total = buffer.len_chars();
@@ -607,7 +834,11 @@ pub fn next_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
     let body = line_display_text(buffer, line);
     let local_ci = ci - line_start;
     if local_ci >= body.chars().count() {
-        return if line + 1 < buffer.len_lines() { buffer.line_to_char(line + 1) } else { total };
+        return if line + 1 < buffer.len_lines() {
+            buffer.line_to_char(line + 1)
+        } else {
+            total
+        };
     }
     line_start + next_grapheme_column(&body, local_ci)
 }
@@ -690,7 +921,11 @@ pub fn line_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     let clamped = char_index.min(buffer.len_chars());
     let line = buffer.char_to_line(clamped);
     let start = buffer.line_to_char(line);
-    let end = if line + 1 < buffer.len_lines() { buffer.line_to_char(line + 1) } else { buffer.len_chars() };
+    let end = if line + 1 < buffer.len_lines() {
+        buffer.line_to_char(line + 1)
+    } else {
+        buffer.len_chars()
+    };
     start..end
 }
 /// Maximal run of lines around `char_index` whose blank/non-blank state matches
@@ -711,7 +946,11 @@ pub fn paragraph_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize>
         last += 1;
     }
     let start = buffer.line_to_char(first);
-    let end = if last + 1 < total_lines { buffer.line_to_char(last + 1) } else { buffer.len_chars() };
+    let end = if last + 1 < total_lines {
+        buffer.line_to_char(last + 1)
+    } else {
+        buffer.len_chars()
+    };
     start..end
 }
 fn is_blank_line(buffer: &Rope, line_ix: usize) -> bool {
@@ -745,7 +984,11 @@ pub fn word_range_in_text(text: &str, offset: usize) -> Range<usize> {
     if cells.is_empty() {
         return 0..0;
     }
-    let local = if offset >= text.len() { cells.len() - 1 } else { cell_containing_byte(&cells, offset) };
+    let local = if offset >= text.len() {
+        cells.len() - 1
+    } else {
+        cell_containing_byte(&cells, offset)
+    };
     let class = token_class(cells[local].repr);
     let mut start = local;
     while start > 0 && token_class(cells[start - 1].repr) == class {
@@ -767,17 +1010,26 @@ pub fn drag_selection_range(anchor: Range<usize>, current: Range<usize>) -> (Ran
     }
 }
 fn byte_of_char_index(text: &str, char_index: usize) -> usize {
-    text.char_indices().nth(char_index).map(|(byte, _)| byte).unwrap_or(text.len())
+    text.char_indices()
+        .nth(char_index)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len())
 }
 pub(crate) fn line_display_text(buffer: &Rope, line_ix: usize) -> String {
-    let mut line = buffer.line(line_ix.min(buffer.len_lines().saturating_sub(1))).to_string();
+    let mut line = buffer
+        .line(line_ix.min(buffer.len_lines().saturating_sub(1)))
+        .to_string();
     while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
         line.pop();
     }
     line
 }
 pub(crate) fn display_line_char_len(buffer: &Rope, line_ix: usize) -> usize {
-    buffer.line(line_ix.min(buffer.len_lines().saturating_sub(1))).chars().take_while(|ch| *ch != '\n' && *ch != '\r').count()
+    buffer
+        .line(line_ix.min(buffer.len_lines().saturating_sub(1)))
+        .chars()
+        .take_while(|ch| *ch != '\n' && *ch != '\r')
+        .count()
 }
 pub(crate) fn char_at_line_column(buffer: &Rope, line_ix: usize, column: usize) -> usize {
     let line = line_ix.min(buffer.len_lines().saturating_sub(1));

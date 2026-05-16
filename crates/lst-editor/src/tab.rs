@@ -3,7 +3,10 @@ use crate::{
     history::{EditHistory, HistorySnapshot},
     language::{self, Language},
     selection::{CursorGoal, Position, Selection, SelectionSet, SelectionState},
-    transaction::{apply_change_to_buffer, clamped_range, inserted_relative_range, EditOutcome, EditRequest, SelectionAfter, TextChange},
+    transaction::{
+        apply_change_to_buffer, clamped_range, inserted_relative_range, EditOutcome, EditRequest, SelectionAfter,
+        TextChange,
+    },
 };
 use ropey::Rope;
 use std::{
@@ -20,10 +23,16 @@ pub struct FileStamp {
 }
 impl FileStamp {
     pub const fn from_raw(len: u64, modified_unix_nanos: Option<i128>) -> Self {
-        Self { len, modified_unix_nanos }
+        Self {
+            len,
+            modified_unix_nanos,
+        }
     }
     pub fn from_metadata(metadata: &Metadata) -> Self {
-        Self { len: metadata.len(), modified_unix_nanos: metadata.modified().ok().map(system_time_to_unix_nanos) }
+        Self {
+            len: metadata.len(),
+            modified_unix_nanos: metadata.modified().ok().map(system_time_to_unix_nanos),
+        }
     }
 }
 fn system_time_to_unix_nanos(time: SystemTime) -> i128 {
@@ -55,11 +64,21 @@ pub enum SaveKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TabOrigin {
     Untitled,
-    Saved { path: PathBuf, file_stamp: Option<FileStamp>, kind: SaveKind, suppressed_conflict_stamp: Option<FileStamp> },
+    Saved {
+        path: PathBuf,
+        file_stamp: Option<FileStamp>,
+        kind: SaveKind,
+        suppressed_conflict_stamp: Option<FileStamp>,
+    },
 }
 impl TabOrigin {
     fn saved(path: PathBuf, file_stamp: Option<FileStamp>, kind: SaveKind) -> Self {
-        Self::Saved { path, file_stamp, kind, suppressed_conflict_stamp: None }
+        Self::Saved {
+            path,
+            file_stamp,
+            kind,
+            suppressed_conflict_stamp: None,
+        }
     }
     pub fn path(&self) -> Option<&PathBuf> {
         match self {
@@ -74,29 +93,51 @@ impl TabOrigin {
         }
     }
     pub fn is_scratchpad(&self) -> bool {
-        matches!(self, Self::Saved { kind: SaveKind::Scratchpad, .. })
+        matches!(
+            self,
+            Self::Saved {
+                kind: SaveKind::Scratchpad,
+                ..
+            }
+        )
     }
     pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
         match self {
             Self::Untitled => false,
-            Self::Saved { suppressed_conflict_stamp, .. } => *suppressed_conflict_stamp == Some(stamp),
+            Self::Saved {
+                suppressed_conflict_stamp,
+                ..
+            } => *suppressed_conflict_stamp == Some(stamp),
         }
     }
     fn mark_saved(&mut self, path: PathBuf, file_stamp: FileStamp) {
-        let kind = if self.is_scratchpad() { SaveKind::Scratchpad } else { SaveKind::Regular };
+        let kind = if self.is_scratchpad() {
+            SaveKind::Scratchpad
+        } else {
+            SaveKind::Regular
+        };
         *self = Self::saved(path, Some(file_stamp), kind);
     }
     fn mark_saved_as(&mut self, path: PathBuf, file_stamp: FileStamp) {
         *self = Self::saved(path, Some(file_stamp), SaveKind::Regular);
     }
     fn update_file_stamp(&mut self, file_stamp: FileStamp) {
-        if let Self::Saved { file_stamp: stamp, suppressed_conflict_stamp, .. } = self {
+        if let Self::Saved {
+            file_stamp: stamp,
+            suppressed_conflict_stamp,
+            ..
+        } = self
+        {
             *stamp = Some(file_stamp);
             *suppressed_conflict_stamp = None;
         }
     }
     fn suppress_file_conflict(&mut self, stamp: FileStamp) {
-        if let Self::Saved { suppressed_conflict_stamp, .. } = self {
+        if let Self::Saved {
+            suppressed_conflict_stamp,
+            ..
+        } = self
+        {
             *suppressed_conflict_stamp = Some(stamp);
         }
     }
@@ -122,25 +163,61 @@ pub struct EditorTab {
     bookmarks: Vec<usize>,
 }
 impl EditorTab {
-    #[rustfmt::skip]
     pub fn empty(id: TabId, name_hint: String) -> Self {
         Self::from_text_with_stamp(id, name_hint, None, "", None)
     }
     pub fn from_path_with_stamp(id: TabId, path: PathBuf, text: &str, file_stamp: Option<FileStamp>) -> Self {
-        let name_hint = path.file_name().and_then(|n| n.to_str()).unwrap_or("untitled").to_string();
+        let name_hint = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("untitled")
+            .to_string();
         Self::from_text_with_stamp(id, name_hint, Some(path), text, file_stamp)
     }
     pub fn scratchpad_with_stamp(id: TabId, path: PathBuf, file_stamp: FileStamp) -> Self {
-        let name_hint = path.file_name().and_then(|n| n.to_str()).unwrap_or("scratchpad").to_string();
-        Self::from_origin(id, name_hint, TabOrigin::saved(path, Some(file_stamp), SaveKind::Scratchpad), "")
+        let name_hint = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("scratchpad")
+            .to_string();
+        Self::from_origin(
+            id,
+            name_hint,
+            TabOrigin::saved(path, Some(file_stamp), SaveKind::Scratchpad),
+            "",
+        )
     }
-    fn from_text_with_stamp(id: TabId, name_hint: String, path: Option<PathBuf>, text: &str, file_stamp: Option<FileStamp>) -> Self {
-        let origin = path.map_or(TabOrigin::Untitled, |p| TabOrigin::saved(p, file_stamp, SaveKind::Regular));
+    fn from_text_with_stamp(
+        id: TabId,
+        name_hint: String,
+        path: Option<PathBuf>,
+        text: &str,
+        file_stamp: Option<FileStamp>,
+    ) -> Self {
+        let origin = path.map_or(TabOrigin::Untitled, |p| {
+            TabOrigin::saved(p, file_stamp, SaveKind::Regular)
+        });
         Self::from_origin(id, name_hint, origin, text)
     }
     fn from_origin(id: TabId, name_hint: String, origin: TabOrigin, text: &str) -> Self {
         let language = language::detect(origin.path().map(PathBuf::as_path), text.split('\n').next());
-        Self { id, name_hint, origin, language, buffer: Rope::from_str(text), content_epoch: 0, saved_content_epoch: 0, next_content_epoch: 1, selection: SelectionState::single(Selection::collapsed(0)), revision: 0, line_cache: None, history: EditHistory::new(), last_edit_position: None, marked_range: None, bookmarks: Vec::new() }
+        Self {
+            id,
+            name_hint,
+            origin,
+            language,
+            buffer: Rope::from_str(text),
+            content_epoch: 0,
+            saved_content_epoch: 0,
+            next_content_epoch: 1,
+            selection: SelectionState::single(Selection::collapsed(0)),
+            revision: 0,
+            line_cache: None,
+            history: EditHistory::new(),
+            last_edit_position: None,
+            marked_range: None,
+            bookmarks: Vec::new(),
+        }
     }
     pub fn id(&self) -> TabId {
         self.id
@@ -209,7 +286,11 @@ impl EditorTab {
         if self.bookmarks.is_empty() {
             return None;
         }
-        self.bookmarks.iter().copied().find(|line| *line > from_line).or_else(|| self.bookmarks.first().copied())
+        self.bookmarks
+            .iter()
+            .copied()
+            .find(|line| *line > from_line)
+            .or_else(|| self.bookmarks.first().copied())
     }
     /// Bookmark line strictly before `from_line`, wrapping to the last
     /// bookmark when none lies before the cursor. Returns `None` when no
@@ -218,7 +299,12 @@ impl EditorTab {
         if self.bookmarks.is_empty() {
             return None;
         }
-        self.bookmarks.iter().copied().rev().find(|line| *line < from_line).or_else(|| self.bookmarks.last().copied())
+        self.bookmarks
+            .iter()
+            .copied()
+            .rev()
+            .find(|line| *line < from_line)
+            .or_else(|| self.bookmarks.last().copied())
     }
     pub(crate) fn clear_marked_range(&mut self) {
         self.marked_range = None;
@@ -248,7 +334,12 @@ impl EditorTab {
         self.content_epoch != self.saved_content_epoch
     }
     pub fn display_name(&self) -> String {
-        self.origin.path().and_then(|p| p.file_name()).and_then(|n| n.to_str()).map(ToOwned::to_owned).unwrap_or_else(|| self.name_hint.clone())
+        self.origin
+            .path()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| self.name_hint.clone())
     }
     pub fn revision(&self) -> u64 {
         self.revision
@@ -290,7 +381,8 @@ impl EditorTab {
         self.selection().has_selection()
     }
     pub fn selected_text(&self) -> Option<String> {
-        self.has_selection().then(|| self.buffer.slice(self.selection().range()).to_string())
+        self.has_selection()
+            .then(|| self.buffer.slice(self.selection().range()).to_string())
     }
     pub fn lines(&mut self) -> Arc<[String]> {
         if let Some(cache) = &self.line_cache {
@@ -298,8 +390,17 @@ impl EditorTab {
                 return Arc::clone(&cache.lines);
             }
         }
-        let lines: Arc<[String]> = self.buffer.to_string().split('\n').map(|line| line.strip_suffix('\r').unwrap_or(line).to_string()).collect::<Vec<_>>().into();
-        self.line_cache = Some(CachedLines { revision: self.revision, lines: Arc::clone(&lines) });
+        let lines: Arc<[String]> = self
+            .buffer
+            .to_string()
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+            .collect::<Vec<_>>()
+            .into();
+        self.line_cache = Some(CachedLines {
+            revision: self.revision,
+            lines: Arc::clone(&lines),
+        });
         lines
     }
     pub(crate) fn select_all(&mut self) {
@@ -313,7 +414,10 @@ impl EditorTab {
         match select_from {
             Some(anchor) => {
                 let anchor = position_to_char(&self.buffer, anchor);
-                self.selection.set_single(normalized_selection_for_buffer(&self.buffer, Selection::new(anchor, head)));
+                self.selection.set_single(normalized_selection_for_buffer(
+                    &self.buffer,
+                    Selection::new(anchor, head),
+                ));
             }
             None => self.move_to(head),
         }
@@ -321,12 +425,14 @@ impl EditorTab {
         self.history.break_current_group();
     }
     pub(crate) fn set_selection(&mut self, selection: Selection) {
-        self.selection.set_single(normalized_selection_for_buffer(&self.buffer, selection));
+        self.selection
+            .set_single(normalized_selection_for_buffer(&self.buffer, selection));
         self.marked_range = None;
         self.history.break_current_group();
     }
     pub(crate) fn set_selection_set(&mut self, selection_set: SelectionSet) {
-        self.selection.replace_set(normalized_selection_set_for_buffer(&self.buffer, selection_set));
+        self.selection
+            .replace_set(normalized_selection_set_for_buffer(&self.buffer, selection_set));
         self.marked_range = None;
         self.history.break_current_group();
     }
@@ -354,7 +460,8 @@ impl EditorTab {
         let offset = crate::selection::floor_grapheme_boundary(&self.buffer, offset);
         let mut selection = self.selection();
         selection.select_to(offset);
-        self.selection.set_single(normalized_selection_for_buffer(&self.buffer, selection));
+        self.selection
+            .set_single(normalized_selection_for_buffer(&self.buffer, selection));
         self.marked_range = None;
         self.history.break_current_group();
     }
@@ -366,12 +473,30 @@ impl EditorTab {
         let selection_before = self.selection.clone();
         let marked_range_before = self.marked_range.clone();
         if changes_text {
-            self.history.record_edit(request.kind, request.boundary, self.history_snapshot());
+            self.history
+                .record_edit(request.kind, request.boundary, self.history_snapshot());
         }
-        self.apply_normalized_change(changes, changes_text, normalized_changes.primary_inserted_range(), request.selection_after, request.marked_range_after);
-        EditOutcome { text_changed: changes_text, selection_changed: self.selection != selection_before, marked_range_changed: self.marked_range != marked_range_before }
+        self.apply_normalized_change(
+            changes,
+            changes_text,
+            normalized_changes.primary_inserted_range(),
+            request.selection_after,
+            request.marked_range_after,
+        );
+        EditOutcome {
+            text_changed: changes_text,
+            selection_changed: self.selection != selection_before,
+            marked_range_changed: self.marked_range != marked_range_before,
+        }
     }
-    fn apply_normalized_change(&mut self, changes: Vec<TextChange>, changes_text: bool, primary_inserted_range: Range<usize>, selection_after: SelectionAfter, marked_range_after: Option<Range<usize>>) {
+    fn apply_normalized_change(
+        &mut self,
+        changes: Vec<TextChange>,
+        changes_text: bool,
+        primary_inserted_range: Range<usize>,
+        selection_after: SelectionAfter,
+        marked_range_after: Option<Range<usize>>,
+    ) {
         if changes_text {
             remap_bookmarks_after_changes(&self.buffer, &mut self.bookmarks, &changes);
             for change in changes.iter().rev() {
@@ -424,9 +549,11 @@ impl EditorTab {
         self.language = language;
         changed
     }
-    #[rustfmt::skip]
     fn detect_language(&self) -> Option<Language> {
-        language::detect(self.path().map(PathBuf::as_path), Some(first_line_for_detection(&self.buffer).as_str()))
+        language::detect(
+            self.path().map(PathBuf::as_path),
+            Some(first_line_for_detection(&self.buffer).as_str()),
+        )
     }
     pub(crate) fn undo(&mut self) -> bool {
         self.history_step(false)
@@ -436,14 +563,23 @@ impl EditorTab {
     }
     fn history_step(&mut self, redo: bool) -> bool {
         let current = self.history_snapshot();
-        let Some(snapshot) = (if redo { self.history.redo(current) } else { self.history.undo(current) }) else {
+        let Some(snapshot) = (if redo {
+            self.history.redo(current)
+        } else {
+            self.history.undo(current)
+        }) else {
             return false;
         };
         self.restore_history_snapshot(snapshot);
         true
     }
     fn history_snapshot(&self) -> HistorySnapshot {
-        HistorySnapshot { text: self.buffer_text(), selection: self.selection.clone(), content_epoch: self.content_epoch, bookmarks: self.bookmarks.clone() }
+        HistorySnapshot {
+            text: self.buffer_text(),
+            selection: self.selection.clone(),
+            content_epoch: self.content_epoch,
+            bookmarks: self.bookmarks.clone(),
+        }
     }
     fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
         self.buffer = Rope::from_str(&snapshot.text);
@@ -454,7 +590,13 @@ impl EditorTab {
         self.marked_range = None;
         self.touch_content();
     }
-    pub(crate) fn mark_saved_if_current(&mut self, path: PathBuf, revision: u64, file_stamp: FileStamp, saved_body: &str) -> bool {
+    pub(crate) fn mark_saved_if_current(
+        &mut self,
+        path: PathBuf,
+        revision: u64,
+        file_stamp: FileStamp,
+        saved_body: &str,
+    ) -> bool {
         if self.revision != revision || self.path() != Some(&path) {
             return false;
         }
@@ -464,7 +606,13 @@ impl EditorTab {
         self.mark_current_content_saved();
         true
     }
-    pub(crate) fn mark_saved_as_if_current(&mut self, path: PathBuf, revision: u64, file_stamp: FileStamp, saved_body: &str) -> bool {
+    pub(crate) fn mark_saved_as_if_current(
+        &mut self,
+        path: PathBuf,
+        revision: u64,
+        file_stamp: FileStamp,
+        saved_body: &str,
+    ) -> bool {
         if self.revision != revision {
             return false;
         }
@@ -488,7 +636,9 @@ fn first_line_for_detection(buffer: &Rope) -> String {
     buffer.line(0).to_string().trim_end_matches(['\r', '\n']).to_string()
 }
 fn changes_modify_text(buffer: &Rope, changes: &[TextChange]) -> bool {
-    changes.iter().any(|change| buffer.slice(change.range.clone()) != change.replacement.as_str())
+    changes
+        .iter()
+        .any(|change| buffer.slice(change.range.clone()) != change.replacement.as_str())
 }
 fn remap_bookmarks_after_changes(buffer: &Rope, bookmarks: &mut Vec<usize>, changes: &[TextChange]) {
     if bookmarks.is_empty() {
@@ -524,7 +674,11 @@ fn remap_bookmarks_after_changes(buffer: &Rope, bookmarks: &mut Vec<usize>, chan
     }
     let line_count = (buffer.len_lines() as isize + line_delta).max(1) as usize;
     let last_line = line_count.saturating_sub(1);
-    *bookmarks = mapped.into_iter().filter(|line| *line >= 0).map(|line| (line as usize).min(last_line)).collect();
+    *bookmarks = mapped
+        .into_iter()
+        .filter(|line| *line >= 0)
+        .map(|line| (line as usize).min(last_line))
+        .collect();
     bookmarks.sort_unstable();
     bookmarks.dedup();
 }
@@ -538,8 +692,13 @@ fn normalized_selection_for_buffer(buffer: &Rope, selection: Selection) -> Selec
     Selection::from_range(start..end, selection.is_reversed())
 }
 fn normalized_selection_set_for_buffer(buffer: &Rope, selection_set: SelectionSet) -> SelectionSet {
-    let selections = selection_set.as_slice().iter().map(|selection| normalized_selection_for_buffer(buffer, *selection)).collect::<Vec<_>>();
-    SelectionSet::from_selections_coalescing_cursors(selections, selection_set.primary_index()).unwrap_or_else(|_| coalesced_normalized_selection_set(buffer, selection_set))
+    let selections = selection_set
+        .as_slice()
+        .iter()
+        .map(|selection| normalized_selection_for_buffer(buffer, *selection))
+        .collect::<Vec<_>>();
+    SelectionSet::from_selections_coalescing_cursors(selections, selection_set.primary_index())
+        .unwrap_or_else(|_| coalesced_normalized_selection_set(buffer, selection_set))
 }
 fn coalesced_normalized_selection_set(buffer: &Rope, selection_set: SelectionSet) -> SelectionSet {
     let mut merged: Vec<(Range<usize>, bool, bool)> = Vec::new();
@@ -560,7 +719,10 @@ fn coalesced_normalized_selection_set(buffer: &Rope, selection_set: SelectionSet
         merged.push((range, normalized.is_reversed(), is_primary));
     }
     let primary = merged.iter().position(|(_, _, is_primary)| *is_primary).unwrap_or(0);
-    let selections = merged.into_iter().map(|(range, reversed, _)| Selection::from_range(range, reversed)).collect::<Vec<_>>();
+    let selections = merged
+        .into_iter()
+        .map(|(range, reversed, _)| Selection::from_range(range, reversed))
+        .collect::<Vec<_>>();
     SelectionSet::from_selections(selections, primary).unwrap_or_else(|_| SelectionSet::single(Selection::collapsed(0)))
 }
 fn normalized_selection_state_for_buffer(buffer: &Rope, selection_state: SelectionState) -> SelectionState {
@@ -574,19 +736,38 @@ fn normalized_selection_state_for_buffer(buffer: &Rope, selection_state: Selecti
 fn selection_after_edit(selection_after: SelectionAfter, inserted_range: Range<usize>, buffer: &Rope) -> SelectionSet {
     let len = buffer.len_chars();
     match selection_after {
-        SelectionAfter::CollapseToInsertedEnd => SelectionSet::single(Selection::collapsed(inserted_range.end.min(len))),
+        SelectionAfter::CollapseToInsertedEnd => {
+            SelectionSet::single(Selection::collapsed(inserted_range.end.min(len)))
+        }
         SelectionAfter::Exact(selection_set) => selection_set.clamped_to_len(len),
-        SelectionAfter::CursorPosition(position) => SelectionSet::single(Selection::collapsed(position_to_char(buffer, position))),
+        SelectionAfter::CursorPosition(position) => {
+            SelectionSet::single(Selection::collapsed(position_to_char(buffer, position)))
+        }
         SelectionAfter::CursorPositionBeforeLineEnd(position) => {
             let line = position.line.min(buffer.len_lines().saturating_sub(1));
-            let column = position.column.min(crate::selection::display_line_char_len(buffer, line).saturating_sub(1));
-            SelectionSet::single(Selection::collapsed(position_to_char(buffer, Position { line, column })))
+            let column = position
+                .column
+                .min(crate::selection::display_line_char_len(buffer, line).saturating_sub(1));
+            SelectionSet::single(Selection::collapsed(position_to_char(
+                buffer,
+                Position { line, column },
+            )))
         }
-        SelectionAfter::PositionRange { start, end, reversed } => SelectionSet::single(Selection::from_range(position_to_char(buffer, start)..position_to_char(buffer, end), reversed)),
-        SelectionAfter::InsertedRange { range, reversed } => SelectionSet::single(Selection::from_range(inserted_relative_range(inserted_range, range), reversed)),
+        SelectionAfter::PositionRange { start, end, reversed } => SelectionSet::single(Selection::from_range(
+            position_to_char(buffer, start)..position_to_char(buffer, end),
+            reversed,
+        )),
+        SelectionAfter::InsertedRange { range, reversed } => SelectionSet::single(Selection::from_range(
+            inserted_relative_range(inserted_range, range),
+            reversed,
+        )),
     }
 }
-fn marked_range_after_edit(marked_range_after: Option<Range<usize>>, inserted_range: Range<usize>, len: usize) -> Option<Range<usize>> {
+fn marked_range_after_edit(
+    marked_range_after: Option<Range<usize>>,
+    inserted_range: Range<usize>,
+    len: usize,
+) -> Option<Range<usize>> {
     let range = inserted_relative_range(inserted_range, marked_range_after?);
     let range = clamped_range(range, len);
     (range.start < range.end).then_some(range)

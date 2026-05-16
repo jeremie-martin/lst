@@ -44,9 +44,27 @@ pub enum EditorEffect {
     WritePrimary(String),
     ReadClipboard,
     OpenFiles,
-    SaveFile { tab_id: TabId, path: PathBuf, body: String, revision: u64, expected_stamp: Option<FileStamp> },
-    SaveFileAs { tab_id: TabId, suggested_name: String, body: String, revision: u64, previous_scratchpad_path: Option<PathBuf> },
-    AutosaveFile { tab_id: TabId, path: PathBuf, body: String, revision: u64, expected_stamp: Option<FileStamp> },
+    SaveFile {
+        tab_id: TabId,
+        path: PathBuf,
+        body: String,
+        revision: u64,
+        expected_stamp: Option<FileStamp>,
+    },
+    SaveFileAs {
+        tab_id: TabId,
+        suggested_name: String,
+        body: String,
+        revision: u64,
+        previous_scratchpad_path: Option<PathBuf>,
+    },
+    AutosaveFile {
+        tab_id: TabId,
+        path: PathBuf,
+        body: String,
+        revision: u64,
+        expected_stamp: Option<FileStamp>,
+    },
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GutterMode {
@@ -56,13 +74,19 @@ pub enum GutterMode {
     Hybrid,
 }
 impl GutterMode {
-    #[rustfmt::skip]
     pub fn label(self) -> &'static str {
-        match self { Self::Absolute => "Absolute", Self::Relative => "Relative", Self::Hybrid => "Hybrid" }
+        match self {
+            Self::Absolute => "Absolute",
+            Self::Relative => "Relative",
+            Self::Hybrid => "Hybrid",
+        }
     }
-    #[rustfmt::skip]
     fn cycle(self) -> Self {
-        match self { Self::Absolute => Self::Relative, Self::Relative => Self::Hybrid, Self::Hybrid => Self::Absolute }
+        match self {
+            Self::Absolute => Self::Relative,
+            Self::Relative => Self::Hybrid,
+            Self::Hybrid => Self::Absolute,
+        }
     }
     pub fn format(self, line_ix: usize, cursor_line: usize, cursor_lines: &[usize]) -> String {
         match self {
@@ -76,7 +100,10 @@ impl GutterMode {
 use crate::{
     document::{char_to_position, inclusive_position_to_exclusive_char, position_to_char},
     find::{FindScope, FindState},
-    selection::{char_at_line_column, display_line_char_len as buffer_display_line_char_len, line_range_at_char, word_range_at_char, CursorGoal, SelectionTransform},
+    selection::{
+        char_at_line_column, display_line_char_len as buffer_display_line_char_len, line_range_at_char,
+        word_range_at_char, CursorGoal, SelectionTransform,
+    },
     tab_set::TabSet,
     transaction::{EditOutcome, EditRequest},
 };
@@ -109,7 +136,21 @@ enum FindSubmit {
 }
 impl EditorModel {
     pub fn from_tabs(first: EditorTab, rest: Vec<EditorTab>, status: String) -> Self {
-        Self { tabs: TabSet::new(first, rest), next_untitled_id: 2, show_gutter: true, show_wrap: true, gutter_mode: GutterMode::Absolute, find: FindState::new(), find_submit: FindSubmit::Panel, goto_line: None, status, vim: vim::VimState::new(), viewport: Viewport::default(), effects: Vec::new(), overtype: false }
+        Self {
+            tabs: TabSet::new(first, rest),
+            next_untitled_id: 2,
+            show_gutter: true,
+            show_wrap: true,
+            gutter_mode: GutterMode::Absolute,
+            find: FindState::new(),
+            find_submit: FindSubmit::Panel,
+            goto_line: None,
+            status,
+            vim: vim::VimState::new(),
+            viewport: Viewport::default(),
+            effects: Vec::new(),
+            overtype: false,
+        }
     }
     fn alloc_tab_id(&mut self) -> TabId {
         self.tabs.alloc_tab_id()
@@ -161,7 +202,12 @@ impl EditorModel {
     }
     pub fn find_match_ranges(&self) -> Vec<Range<usize>> {
         let buffer = self.active_tab().buffer();
-        self.find.matches.iter().copied().map(|m| m.char_range_in(buffer)).collect()
+        self.find
+            .matches
+            .iter()
+            .copied()
+            .map(|m| m.char_range_in(buffer))
+            .collect()
     }
     pub fn active_find_match_range(&self) -> Option<Range<usize>> {
         let active = self.find.active?;
@@ -303,7 +349,11 @@ impl EditorModel {
         }
         let sel = self.active_tab().selected_range();
         if sel.start < sel.end {
-            self.find.scope = FindScope::Selection { tab_id: active_tab_id, start_char: sel.start, end_char: sel.end };
+            self.find.scope = FindScope::Selection {
+                tab_id: active_tab_id,
+                start_char: sel.start,
+                end_char: sel.end,
+            };
             self.reindex_find_matches_to_nearest();
         }
     }
@@ -372,18 +422,28 @@ impl EditorModel {
             self.close_goto_line_panel();
             return;
         };
-        let target_line = line_one_based.saturating_sub(1).min(self.active_tab().line_count().saturating_sub(1));
+        let target_line = line_one_based
+            .saturating_sub(1)
+            .min(self.active_tab().line_count().saturating_sub(1));
         let target_column = match column_text {
             Some(column_text) => {
                 let Ok(column_one_based) = column_text.parse::<usize>() else {
                     self.close_goto_line_panel();
                     return;
                 };
-                column_one_based.saturating_sub(1).min(display_line_char_len(self.active_tab(), target_line))
+                column_one_based
+                    .saturating_sub(1)
+                    .min(display_line_char_len(self.active_tab(), target_line))
             }
             None => 0,
         };
-        self.active_tab_mut().set_cursor_position(Position { line: target_line, column: target_column }, None);
+        self.active_tab_mut().set_cursor_position(
+            Position {
+                line: target_line,
+                column: target_column,
+            },
+            None,
+        );
         self.close_goto_line_panel();
         self.queue_reveal(RevealIntent::Center);
     }
@@ -438,12 +498,20 @@ impl EditorModel {
         let request = text_input::replace_request(self.active_tab(), range, text, boundary);
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
     }
-    pub fn replace_and_mark_text(&mut self, range: Option<Range<usize>>, text: String, selected_range: Option<Range<usize>>) {
+    pub fn replace_and_mark_text(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: String,
+        selected_range: Option<Range<usize>>,
+    ) {
         let request = text_input::marked_text_request(self.active_tab(), range, text, selected_range);
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
     }
     fn delete_selected_or_word(&mut self, backward: bool) -> bool {
-        self.apply_optional_edit_request(text_input::delete_selected_or_word_request(self.active_tab(), backward), Some(RevealIntent::NearestEdge))
+        self.apply_optional_edit_request(
+            text_input::delete_selected_or_word_request(self.active_tab(), backward),
+            Some(RevealIntent::NearestEdge),
+        )
     }
     fn insert_newline(&mut self) {
         let request = text_input::newline_request(self.active_tab());
@@ -457,7 +525,11 @@ impl EditorModel {
         self.apply_selection_transform(|tab, _, selection| {
             let selection = motion(tab, selection);
             match goal {
-                Some(goal) => SelectionTransform::with_columns(selection, goal, (!selection.has_selection()).then_some(preferred_column.unwrap())),
+                Some(goal) => SelectionTransform::with_columns(
+                    selection,
+                    goal,
+                    (!selection.has_selection()).then_some(preferred_column.unwrap()),
+                ),
                 None => SelectionTransform::new(selection),
             }
         })
@@ -490,16 +562,37 @@ impl EditorModel {
     fn move_horizontal(&mut self, delta: isize, select: bool) -> bool {
         self.apply_selection_state(motion::horizontal(self.active_tab(), delta, select))
     }
-    fn move_boundary(&mut self, backward: bool, select: bool, prev_fn: fn(&ropey::Rope, usize) -> usize, next_fn: fn(&ropey::Rope, usize) -> usize) -> bool {
+    fn move_boundary(
+        &mut self,
+        backward: bool,
+        select: bool,
+        prev_fn: fn(&ropey::Rope, usize) -> usize,
+        next_fn: fn(&ropey::Rope, usize) -> usize,
+    ) -> bool {
         self.apply_selection_state(motion::boundary(self.active_tab(), backward, select, prev_fn, next_fn))
     }
     fn move_display_rows(&mut self, delta: isize, select: bool, wrap_columns: usize, snap: bool) -> bool {
         let lines = self.show_wrap.then(|| self.active_tab_lines());
-        self.apply_selection_state(motion::display_rows(self.active_tab(), lines.as_deref(), self.show_wrap, delta, select, wrap_columns, snap))
+        self.apply_selection_state(motion::display_rows(
+            self.active_tab(),
+            lines.as_deref(),
+            self.show_wrap,
+            delta,
+            select,
+            wrap_columns,
+            snap,
+        ))
     }
     fn move_to_visual_row(&mut self, target: usize, select: bool, wrap_columns: usize) -> bool {
         let lines = self.show_wrap.then(|| self.active_tab_lines());
-        self.apply_selection_state(motion::visual_row(self.active_tab(), lines.as_deref(), self.show_wrap, target, select, wrap_columns))
+        self.apply_selection_state(motion::visual_row(
+            self.active_tab(),
+            lines.as_deref(),
+            self.show_wrap,
+            target,
+            select,
+            wrap_columns,
+        ))
     }
     fn move_paged(&mut self, delta: isize, select: bool, wrap_columns: usize, snap: bool) {
         if self.move_display_rows(delta, select, wrap_columns, snap) {
@@ -517,20 +610,37 @@ impl EditorModel {
         }
     }
     fn move_active_cursor(&mut self, cursor_line: usize, cursor_col: usize, select: bool) {
-        let position = Position { line: cursor_line, column: cursor_col };
-        let anchor = if select { Some(self.active_cursor_position()) } else { None };
+        let position = Position {
+            line: cursor_line,
+            column: cursor_col,
+        };
+        let anchor = if select {
+            Some(self.active_cursor_position())
+        } else {
+            None
+        };
         self.active_tab_mut().set_cursor_position(position, anchor);
     }
     fn delete_selected_or_previous(&mut self) -> bool {
-        self.apply_optional_edit_request(text_input::delete_selected_or_previous_request(self.active_tab()), Some(RevealIntent::NearestEdge))
+        self.apply_optional_edit_request(
+            text_input::delete_selected_or_previous_request(self.active_tab()),
+            Some(RevealIntent::NearestEdge),
+        )
     }
     fn delete_selected_or_next(&mut self) -> bool {
-        self.apply_optional_edit_request(text_input::delete_selected_or_next_request(self.active_tab()), Some(RevealIntent::NearestEdge))
+        self.apply_optional_edit_request(
+            text_input::delete_selected_or_next_request(self.active_tab()),
+            Some(RevealIntent::NearestEdge),
+        )
     }
     fn selection_or_current_line(&self) -> (Range<usize>, String, bool) {
         let tab = self.active_tab();
         let use_current_line = !tab.has_selection();
-        let range = if use_current_line { linewise_range_at_char(tab.buffer(), tab.cursor_char()) } else { tab.selected_range() };
+        let range = if use_current_line {
+            linewise_range_at_char(tab.buffer(), tab.cursor_char())
+        } else {
+            tab.selected_range()
+        };
         let text = tab.buffer().slice(range.clone()).to_string();
         (range, text, use_current_line)
     }
@@ -548,7 +658,11 @@ impl EditorModel {
             return;
         }
         self.queue_clipboard_copy(text);
-        self.status = if whole_line { "Copied line.".to_string() } else { "Copied selection.".to_string() };
+        self.status = if whole_line {
+            "Copied line.".to_string()
+        } else {
+            "Copied selection.".to_string()
+        };
     }
     fn cut_selection(&mut self) {
         if let Some(text) = multi_selection::selected_text_joined(self.active_tab()) {
@@ -556,7 +670,10 @@ impl EditorModel {
                 return;
             }
             self.queue_clipboard_copy(text);
-            let deleted = self.apply_optional_edit_request(multi_selection::delete_request(self.active_tab(), UndoBoundary::Break, |_tab, _| None), Some(RevealIntent::NearestEdge));
+            let deleted = self.apply_optional_edit_request(
+                multi_selection::delete_request(self.active_tab(), UndoBoundary::Break, |_tab, _| None),
+                Some(RevealIntent::NearestEdge),
+            );
             if deleted {
                 self.status = "Cut selections.".to_string();
             }
@@ -569,7 +686,11 @@ impl EditorModel {
         self.queue_clipboard_copy(text);
         let request = text_input::replace_request(self.active_tab(), Some(range), String::new(), UndoBoundary::Break);
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-        self.status = if whole_line { "Cut line.".to_string() } else { "Cut selection.".to_string() };
+        self.status = if whole_line {
+            "Cut line.".to_string()
+        } else {
+            "Cut selection.".to_string()
+        };
     }
     fn queue_clipboard_copy(&mut self, text: String) {
         self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
@@ -604,32 +725,67 @@ impl EditorModel {
         }
         true
     }
-    #[rustfmt::skip]
     fn execute_vim_command(&mut self, cmd: vim::VimCommand, wrap_columns: usize) -> bool {
         use vim::VimCommand as C;
         match cmd {
             C::Noop => return false,
-            C::ScrollCursor(intent) => { self.queue_reveal(intent); return false; }
-            C::MoveTo(p) => { self.active_tab_mut().set_cursor_position(p, None); }
+            C::ScrollCursor(intent) => {
+                self.queue_reveal(intent);
+                return false;
+            }
+            C::MoveTo(p) => {
+                self.active_tab_mut().set_cursor_position(p, None);
+            }
             C::Select { anchor, head } => self.apply_vim_select(anchor, head),
             C::DeleteRange { from, to } => self.vim_delete_range(from, to),
             C::DeleteLines { first, last } => self.vim_delete_lines(first, last),
-            C::ChangeRange { from, to } => { self.vim_change_range(from, to); self.vim.mode = vim::Mode::Insert; }
-            C::ChangeLines { first, last } => { self.vim_change_lines(first, last); self.vim.mode = vim::Mode::Insert; }
-            C::YankRange { from, to } => self.vim.register = vim::Register::Char(vim_edit::extract_range(self.active_tab(), from, to)),
-            C::YankLines { first, last } => self.vim.register = vim::Register::Line(vim_edit::extract_lines(self.active_tab(), first, last)),
-            C::SetRegister(register) => { self.vim.register = register; return false; }
-            C::PasteSelectionRange { from, to, preserve_register } => self.vim_paste_selection_range(from, to, preserve_register),
-            C::PasteSelectionLines { first, last, preserve_register } => self.vim_paste_selection_lines(first, last, preserve_register),
+            C::ChangeRange { from, to } => {
+                self.vim_change_range(from, to);
+                self.vim.mode = vim::Mode::Insert;
+            }
+            C::ChangeLines { first, last } => {
+                self.vim_change_lines(first, last);
+                self.vim.mode = vim::Mode::Insert;
+            }
+            C::YankRange { from, to } => {
+                self.vim.register = vim::Register::Char(vim_edit::extract_range(self.active_tab(), from, to))
+            }
+            C::YankLines { first, last } => {
+                self.vim.register = vim::Register::Line(vim_edit::extract_lines(self.active_tab(), first, last))
+            }
+            C::SetRegister(register) => {
+                self.vim.register = register;
+                return false;
+            }
+            C::PasteSelectionRange {
+                from,
+                to,
+                preserve_register,
+            } => self.vim_paste_selection_range(from, to, preserve_register),
+            C::PasteSelectionLines {
+                first,
+                last,
+                preserve_register,
+            } => self.vim_paste_selection_lines(first, last, preserve_register),
             C::EnterInsert => self.vim.mode = vim::Mode::Insert,
             C::PasteAfter => self.vim_paste(false),
             C::PasteBefore => self.vim_paste(true),
-            C::OpenLineBelow => { self.vim_open_line(false); self.vim.mode = vim::Mode::Insert; }
-            C::OpenLineAbove => { self.vim_open_line(true); self.vim.mode = vim::Mode::Insert; }
+            C::OpenLineBelow => {
+                self.vim_open_line(false);
+                self.vim.mode = vim::Mode::Insert;
+            }
+            C::OpenLineAbove => {
+                self.vim_open_line(true);
+                self.vim.mode = vim::Mode::Insert;
+            }
             C::JoinLines { count } => self.vim_join_lines(count),
             C::ReplaceChar { ch, count } => self.vim_replace_char(ch, count),
-            C::Undo => { self.undo_or_redo(false, None); }
-            C::Redo => { self.undo_or_redo(true, None); }
+            C::Undo => {
+                self.undo_or_redo(false, None);
+            }
+            C::Redo => {
+                self.undo_or_redo(true, None);
+            }
             C::OpenFind { backward } => self.open_vim_find_panel(backward),
             C::FindNext => self.vim_find_step(true),
             C::FindPrev => self.vim_find_step(false),
@@ -646,10 +802,16 @@ impl EditorModel {
             C::PageDown => self.vim_paged(self.viewport.page() as isize, wrap_columns),
             C::PageUp => self.vim_paged(-(self.viewport.page() as isize), wrap_columns),
             C::MoveToScreenTop => self.screen_row(self.viewport.screen_top_row(), self.vim_in_visual(), wrap_columns),
-            C::MoveToScreenMiddle => self.screen_row(self.viewport.screen_middle_row(), self.vim_in_visual(), wrap_columns),
-            C::MoveToScreenBottom => self.screen_row(self.viewport.screen_bottom_row(), self.vim_in_visual(), wrap_columns),
+            C::MoveToScreenMiddle => {
+                self.screen_row(self.viewport.screen_middle_row(), self.vim_in_visual(), wrap_columns)
+            }
+            C::MoveToScreenBottom => {
+                self.screen_row(self.viewport.screen_bottom_row(), self.vim_in_visual(), wrap_columns)
+            }
             C::JumpToLastEdit { enter_insert } => {
-                let Some(target) = self.active_tab().last_edit_position() else { return false };
+                let Some(target) = self.active_tab().last_edit_position() else {
+                    return false;
+                };
                 self.active_tab_mut().move_to(target);
                 if enter_insert {
                     self.vim.mode = vim::Mode::Insert;
@@ -660,14 +822,17 @@ impl EditorModel {
         }
         true
     }
-    #[rustfmt::skip]
     fn vim_paged(&mut self, delta: isize, wrap_columns: usize) {
         self.move_paged(delta, self.vim_in_visual(), wrap_columns, false);
     }
     fn vim_find_step(&mut self, forward: bool) {
         self.ensure_find_matches_current();
         let cursor = self.vim.snapshot_cursor(self.active_cursor_position());
-        let target = if forward { self.find.next_from(cursor) } else { self.find.prev_from(cursor) };
+        let target = if forward {
+            self.find.next_from(cursor)
+        } else {
+            self.find.prev_from(cursor)
+        };
         if let Some(target) = target {
             self.move_to_vim_search_target(target);
         }
@@ -745,7 +910,6 @@ impl EditorModel {
         self.collapse_vim_edit_snapshot_to(Position::new(first, 0));
         self.apply_vim_capture(vim_edit::change_lines(self.active_tab(), first, last), true);
     }
-    #[rustfmt::skip]
     fn apply_vim_optional(&mut self, request: Option<EditRequest>) {
         self.apply_optional_edit_request(request, Some(RevealIntent::NearestEdge));
     }
@@ -808,7 +972,11 @@ impl EditorModel {
         self.apply_vim_edit_action(action);
     }
     pub fn replace_text_from_input(&mut self, range: Option<Range<usize>>, text: String) {
-        let boundary = if text.chars().any(char::is_whitespace) { UndoBoundary::Break } else { UndoBoundary::Merge };
+        let boundary = if text.chars().any(char::is_whitespace) {
+            UndoBoundary::Break
+        } else {
+            UndoBoundary::Merge
+        };
         self.apply_text_input(range, text, boundary);
     }
     pub fn clear_marked_text(&mut self) {
@@ -847,7 +1015,10 @@ impl EditorModel {
                 self.assign_selection(Selection::collapsed(new_cursor));
                 self.queue_reveal(RevealIntent::NearestEdge);
             }
-            text_input::TextInputAction::Edit { request, align_find_current } => {
+            text_input::TextInputAction::Edit {
+                request,
+                align_find_current,
+            } => {
                 let outcome = self.apply_active_edit_request(request, None);
                 if align_find_current && outcome.text_changed {
                     self.find.reindex_to_nearest(self.tabs.active());
@@ -874,7 +1045,11 @@ impl EditorModel {
     pub fn close_request_for_tab(&self, tab_id: TabId) -> Option<TabCloseRequest> {
         let tab = self.tab_by_id(tab_id)?;
         let tab_id = tab.id();
-        Some(if tab.modified() { TabCloseRequest::SaveAndClose { tab_id } } else { TabCloseRequest::Close { tab_id } })
+        Some(if tab.modified() {
+            TabCloseRequest::SaveAndClose { tab_id }
+        } else {
+            TabCloseRequest::Close { tab_id }
+        })
     }
     pub fn tab_id_at(&self, index: usize) -> Option<TabId> {
         self.tabs.get(index).map(EditorTab::id)
@@ -946,9 +1121,14 @@ impl EditorModel {
         let set = self.active_tab().selection_state();
         let any_extent = set.as_slice().iter().any(Selection::has_selection);
         if any_extent {
-            let collapsed: Vec<Selection> = set.as_slice().iter().map(|selection| Selection::collapsed(selection.cursor())).collect();
+            let collapsed: Vec<Selection> = set
+                .as_slice()
+                .iter()
+                .map(|selection| Selection::collapsed(selection.cursor()))
+                .collect();
             let primary = set.primary_index();
-            let next = SelectionSet::from_selections_coalescing_cursors(collapsed, primary).expect("collapsing each selection to a caret preserves invariants");
+            let next = SelectionSet::from_selections_coalescing_cursors(collapsed, primary)
+                .expect("collapsing each selection to a caret preserves invariants");
             self.active_tab_mut().set_selection_set(next);
             self.queue_reveal(RevealIntent::NearestEdge);
             return true;
@@ -987,7 +1167,8 @@ impl EditorModel {
     }
     pub fn add_selection_range(&mut self, range: Range<usize>, reversed: bool) {
         let buffer = self.active_tab().buffer();
-        let range = selection::floor_grapheme_boundary(buffer, range.start)..selection::ceil_grapheme_boundary(buffer, range.end);
+        let range = selection::floor_grapheme_boundary(buffer, range.start)
+            ..selection::ceil_grapheme_boundary(buffer, range.end);
         self.add_selection_to_active_set(Selection::from_range(range, reversed));
     }
     fn add_selection_to_active_set(&mut self, selection: Selection) {
@@ -1003,8 +1184,17 @@ impl EditorModel {
             let tab = self.active_tab();
             let current_position = tab.cursor_position();
             let current_line_end = display_line_char_len(tab, current_position.line);
-            let line_end_sticky = tab.preferred_goal() == Some(CursorGoal::LineEnd) || (!tab.selection_set().has_multiple() && current_line_end > 0 && current_position.column == current_line_end);
-            let preferred_goal = if line_end_sticky { Some(CursorGoal::LineEnd) } else { tab.preferred_goal().or_else(|| (!tab.selection_set().has_multiple()).then_some(CursorGoal::Column(current_position.column))) };
+            let line_end_sticky = tab.preferred_goal() == Some(CursorGoal::LineEnd)
+                || (!tab.selection_set().has_multiple()
+                    && current_line_end > 0
+                    && current_position.column == current_line_end);
+            let preferred_goal = if line_end_sticky {
+                Some(CursorGoal::LineEnd)
+            } else {
+                tab.preferred_goal().or_else(|| {
+                    (!tab.selection_set().has_multiple()).then_some(CursorGoal::Column(current_position.column))
+                })
+            };
             let last_line = tab.line_count().saturating_sub(1);
             let additions: Vec<Selection> = tab
                 .selection_set()
@@ -1012,8 +1202,14 @@ impl EditorModel {
                 .iter()
                 .filter_map(|selection| {
                     let position = char_to_position(tab.buffer(), selection.cursor());
-                    let target_line = if delta.is_negative() { position.line.checked_sub(delta.unsigned_abs())? } else { (position.line + delta as usize <= last_line).then_some(position.line + delta as usize)? };
-                    let column = preferred_goal.unwrap_or(CursorGoal::Column(position.column)).resolve(display_line_char_len(tab, target_line));
+                    let target_line = if delta.is_negative() {
+                        position.line.checked_sub(delta.unsigned_abs())?
+                    } else {
+                        (position.line + delta as usize <= last_line).then_some(position.line + delta as usize)?
+                    };
+                    let column = preferred_goal
+                        .unwrap_or(CursorGoal::Column(position.column))
+                        .resolve(display_line_char_len(tab, target_line));
                     let target = char_at_line_column(tab.buffer(), target_line, column);
                     Some(Selection::collapsed(target))
                 })
@@ -1078,7 +1274,11 @@ impl EditorModel {
             return;
         };
         let with_addition = self.active_tab().selection_set().with_added_selection(addition);
-        let Some(skipped_index) = with_addition.as_slice().iter().position(|selection| *selection == skipped) else {
+        let Some(skipped_index) = with_addition
+            .as_slice()
+            .iter()
+            .position(|selection| *selection == skipped)
+        else {
             return;
         };
         let Some(after) = with_addition.with_removed_at(skipped_index) else {
@@ -1097,10 +1297,12 @@ impl EditorModel {
     }
     fn add_cursors_to_selected_line_ends(&mut self) {
         let tab = self.active_tab();
-        let (first, last) = selection_line_span(tab).map(|(first, last, _)| (first, last)).unwrap_or_else(|| {
-            let line = tab.cursor_position().line;
-            (line, line)
-        });
+        let (first, last) = selection_line_span(tab)
+            .map(|(first, last, _)| (first, last))
+            .unwrap_or_else(|| {
+                let line = tab.cursor_position().line;
+                (line, line)
+            });
         let selections = (first..=last)
             .map(|line| {
                 let end = tab.buffer().line_to_char(line) + display_line_char_len(tab, line);
@@ -1111,12 +1313,18 @@ impl EditorModel {
             return;
         }
         let primary = selections.len() - 1;
-        let selection_set = SelectionSet::from_selections_coalescing_cursors(selections, primary).expect("line-end cursors are sorted and non-overlapping");
+        let selection_set = SelectionSet::from_selections_coalescing_cursors(selections, primary)
+            .expect("line-end cursors are sorted and non-overlapping");
         self.active_tab_mut().set_selection_set(selection_set);
         self.queue_reveal(RevealIntent::NearestEdge);
     }
     fn insert_tab_at_cursor(&mut self) {
-        if self.active_tab().selection_set().has_multiple() && self.apply_optional_edit_request(line_edit::indent_selection_set_request(self.active_tab()), Some(RevealIntent::NearestEdge)) {
+        if self.active_tab().selection_set().has_multiple()
+            && self.apply_optional_edit_request(
+                line_edit::indent_selection_set_request(self.active_tab()),
+                Some(RevealIntent::NearestEdge),
+            )
+        {
             return;
         }
         match selection_line_span(self.active_tab()) {
@@ -1128,34 +1336,51 @@ impl EditorModel {
         }
     }
     fn outdent_at_cursor(&mut self) {
-        if self.active_tab().selection_set().has_multiple() && self.apply_optional_edit_request(line_edit::outdent_selection_set_request(self.active_tab()), Some(RevealIntent::NearestEdge)) {
+        if self.active_tab().selection_set().has_multiple()
+            && self.apply_optional_edit_request(
+                line_edit::outdent_selection_set_request(self.active_tab()),
+                Some(RevealIntent::NearestEdge),
+            )
+        {
             return;
         }
-        let (first, last) = selection_line_span(self.active_tab()).map(|(first, last, _)| (first, last)).unwrap_or_else(|| {
-            let line = self.active_cursor_position().line;
-            (line, line)
-        });
+        let (first, last) = selection_line_span(self.active_tab())
+            .map(|(first, last, _)| (first, last))
+            .unwrap_or_else(|| {
+                let line = self.active_cursor_position().line;
+                (line, line)
+            });
         self.outdent_selected_lines(first, last);
     }
-    #[rustfmt::skip]
     fn indent_selected_lines(&mut self, first: usize, last: usize) {
-        self.apply_optional_edit_request(line_edit::indent_request(self.active_tab(), first, last), Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            line_edit::indent_request(self.active_tab(), first, last),
+            Some(RevealIntent::NearestEdge),
+        );
     }
-    #[rustfmt::skip]
     fn outdent_selected_lines(&mut self, first: usize, last: usize) {
-        self.apply_optional_edit_request(line_edit::outdent_request(self.active_tab(), first, last), Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            line_edit::outdent_request(self.active_tab(), first, last),
+            Some(RevealIntent::NearestEdge),
+        );
     }
-    #[rustfmt::skip]
     fn delete_line(&mut self) {
-        self.apply_optional_edit_request(line_edit::delete_lines_request(self.active_tab(), self.active_cursor_position()), Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            line_edit::delete_lines_request(self.active_tab(), self.active_cursor_position()),
+            Some(RevealIntent::NearestEdge),
+        );
     }
-    #[rustfmt::skip]
     fn move_line(&mut self, up: bool) {
-        self.apply_optional_edit_request(line_edit::move_lines_request(self.active_tab(), self.active_cursor_position(), up), Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            line_edit::move_lines_request(self.active_tab(), self.active_cursor_position(), up),
+            Some(RevealIntent::NearestEdge),
+        );
     }
-    #[rustfmt::skip]
     fn duplicate_line(&mut self) {
-        self.apply_optional_edit_request(line_edit::duplicate_lines_request(self.active_tab(), self.active_cursor_position()), Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            line_edit::duplicate_lines_request(self.active_tab(), self.active_cursor_position()),
+            Some(RevealIntent::NearestEdge),
+        );
     }
     fn toggle_comment(&mut self) {
         let Some(prefix) = self.active_tab().language_config().line_comment else {
@@ -1178,7 +1403,10 @@ impl EditorModel {
             self.status = "No block-comment syntax for this language.".to_string();
             return;
         };
-        self.apply_optional_edit_request(line_edit::toggle_block_comment_request(self.active_tab(), open, close), Some(RevealIntent::NearestEdge));
+        self.apply_optional_edit_request(
+            line_edit::toggle_block_comment_request(self.active_tab(), open, close),
+            Some(RevealIntent::NearestEdge),
+        );
     }
     pub fn clipboard_unavailable(&mut self) {
         self.status = "Clipboard does not currently contain plain text.".to_string();
@@ -1197,19 +1425,32 @@ impl EditorModel {
     }
     fn toggle_bookmark(&mut self) {
         let added = self.active_tab_mut().toggle_bookmark_at_cursor();
-        self.status = if added { "Bookmark added.".to_string() } else { "Bookmark cleared.".to_string() };
+        self.status = if added {
+            "Bookmark added.".to_string()
+        } else {
+            "Bookmark cleared.".to_string()
+        };
     }
     fn jump_bookmark(&mut self, next: bool) {
         let cursor_line = self.active_cursor_position().line;
-        let target = if next { self.active_tab().next_bookmark_line(cursor_line) } else { self.active_tab().previous_bookmark_line(cursor_line) };
+        let target = if next {
+            self.active_tab().next_bookmark_line(cursor_line)
+        } else {
+            self.active_tab().previous_bookmark_line(cursor_line)
+        };
         let Some(line) = target else {
             return;
         };
-        self.active_tab_mut().set_cursor_position(Position { line, column: 0 }, None);
+        self.active_tab_mut()
+            .set_cursor_position(Position { line, column: 0 }, None);
         self.queue_reveal(RevealIntent::Center);
     }
     fn undo_or_redo(&mut self, redo: bool, reveal: Option<RevealIntent>) -> bool {
-        let changed = if redo { self.active_tab_mut().redo() } else { self.active_tab_mut().undo() };
+        let changed = if redo {
+            self.active_tab_mut().redo()
+        } else {
+            self.active_tab_mut().undo()
+        };
         if !changed {
             return false;
         }
@@ -1221,7 +1462,10 @@ impl EditorModel {
     }
     fn swap_redo_branch(&mut self) {
         if self.active_tab_mut().swap_redo_branch() {
-            self.status = format!("Switched to alternate redo branch ({} more saved).", self.active_tab().redo_branch_count(),);
+            self.status = format!(
+                "Switched to alternate redo branch ({} more saved).",
+                self.active_tab().redo_branch_count(),
+            );
         } else {
             self.status = "No saved redo branches.".to_string();
         }
@@ -1236,7 +1480,11 @@ fn selection_line_span(tab: &EditorTab) -> Option<(usize, usize, bool)> {
     let start = char_to_position(buffer, selection.start);
     let end = char_to_position(buffer, selection.end);
     let spans = start.line != end.line;
-    let last = if end.column == 0 && end.line > start.line { end.line - 1 } else { end.line };
+    let last = if end.column == 0 && end.line > start.line {
+        end.line - 1
+    } else {
+        end.line
+    };
     Some((start.line, last.max(start.line), spans))
 }
 fn smart_expanded_selection(buffer: &ropey::Rope, selection: Selection) -> Selection {
@@ -1284,7 +1532,10 @@ fn rope_char(buffer: &ropey::Rope, char_index: usize) -> Option<char> {
     (char_index < buffer.len_chars()).then(|| buffer.char(char_index))
 }
 fn matching_delimiter(open: char, close: char) -> bool {
-    matches!((open, close), ('(', ')') | ('[', ']') | ('{', '}') | ('"', '"') | ('\'', '\'') | ('`', '`'))
+    matches!(
+        (open, close),
+        ('(', ')') | ('[', ']') | ('{', '}') | ('"', '"') | ('\'', '\'') | ('`', '`')
+    )
 }
 fn display_line_char_len(tab: &EditorTab, line_ix: usize) -> usize {
     buffer_display_line_char_len(tab.buffer(), line_ix)

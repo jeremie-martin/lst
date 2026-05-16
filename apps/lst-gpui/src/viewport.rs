@@ -1,11 +1,7 @@
 use crate::ui::theme::{metrics, typography, Theme};
-use gpui::{
-    fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString,
-    TextRun, Window,
-};
+use gpui::{fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString, TextRun, Window};
 use lst_editor::wrap::{
-    build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, wrap_segments, WrapLayout,
-    WrappedSegment,
+    build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, wrap_segments, WrapLayout, WrappedSegment,
 };
 use lst_editor::{vim, EditorTab, GutterMode, SelectionSet};
 use ropey::Rope;
@@ -140,8 +136,6 @@ pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) horizontal_scroll: Pixels,
     pub(crate) theme: Theme,
 }
-
-#[rustfmt::skip]
 pub(crate) fn buffer_content_height(visual_rows: usize, scale: f32) -> Pixels {
     metrics::px_for_scale((visual_rows.max(1) as f32) * metrics::ROW_HEIGHT, scale)
 }
@@ -190,10 +184,7 @@ fn char_to_byte_index(text: &str, char_ix: usize) -> usize {
     if char_ix == 0 {
         return 0;
     }
-    text.char_indices()
-        .nth(char_ix)
-        .map(|(b, _)| b)
-        .unwrap_or(text.len())
+    text.char_indices().nth(char_ix).map(|(b, _)| b).unwrap_or(text.len())
 }
 
 fn line_syntax_spans(
@@ -287,12 +278,7 @@ pub(crate) fn code_origin_pad(show_gutter: bool, scale: f32) -> Pixels {
 }
 
 /// X coordinate (in window-space pixels) where the code area begins.
-pub(crate) fn code_origin_x(
-    element_left: Pixels,
-    show_gutter: bool,
-    scale: f32,
-    horizontal_scroll: Pixels,
-) -> Pixels {
+pub(crate) fn code_origin_x(element_left: Pixels, show_gutter: bool, scale: f32, horizontal_scroll: Pixels) -> Pixels {
     element_left + code_origin_pad(show_gutter, scale) - horizontal_scroll
 }
 
@@ -353,10 +339,7 @@ pub(crate) fn max_unwrapped_line_width(
 ) -> Pixels {
     let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
     if let Some(cached) = cache.max_unwrapped_line_width {
-        if cached.revision == revision
-            && cached.char_width == char_width
-            && cached.font_size == font_size
-        {
+        if cached.revision == revision && cached.char_width == char_width && cached.font_size == font_size {
             return cached.width;
         }
     }
@@ -367,8 +350,7 @@ pub(crate) fn max_unwrapped_line_width(
         let line_width = if is_plain_monospace_text(display_line) {
             char_width * display_line.chars().count() as f32
         } else {
-            shape_display_line(display_line, scale, theme, window)
-                .map_or(px(0.0), |line| line.width)
+            shape_display_line(display_line, scale, theme, window).map_or(px(0.0), |line| line.width)
         };
         width = width.max(line_width);
     }
@@ -386,12 +368,7 @@ fn is_plain_monospace_text(text: &str) -> bool {
     text.bytes().all(|byte| byte.is_ascii() && byte != b'\t')
 }
 
-fn shape_display_line(
-    text: &str,
-    scale: f32,
-    theme: Theme,
-    window: &mut Window,
-) -> Option<ShapedLine> {
+fn shape_display_line(text: &str, scale: f32, theme: Theme, window: &mut Window) -> Option<ShapedLine> {
     if text.is_empty() {
         return None;
     }
@@ -425,18 +402,14 @@ fn wrap_columns_for_viewport(
         return usize::MAX;
     }
 
-    let content_width = (viewport_width
-        - code_origin_pad(show_gutter, scale)
-        - metrics::px_for_scale(metrics::CURSOR_WIDTH, scale))
-    .max(px(1.0));
+    let content_width =
+        (viewport_width - code_origin_pad(show_gutter, scale) - metrics::px_for_scale(metrics::CURSOR_WIDTH, scale))
+            .max(px(1.0));
     let char_width = (char_width / px(1.0)).max(metrics::WRAP_CHAR_WIDTH_FALLBACK * scale);
     ((content_width / px(1.0)) / char_width).floor().max(1.0) as usize
 }
 
-pub(crate) fn ensure_wrap_layout(
-    cache: &mut ViewportCache,
-    input: WrapLayoutInput<'_>,
-) -> WrapLayout {
+pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInput<'_>) -> WrapLayout {
     let WrapLayoutInput {
         lines,
         revision,
@@ -446,8 +419,7 @@ pub(crate) fn ensure_wrap_layout(
         show_wrap,
         scale,
     } = input;
-    let wrap_columns =
-        wrap_columns_for_viewport(viewport_width, char_width, show_gutter, show_wrap, scale);
+    let wrap_columns = wrap_columns_for_viewport(viewport_width, char_width, show_gutter, show_wrap, scale);
     if let Some(layout) = cache.wrap_layout.as_ref() {
         if layout.revision == revision
             && layout.layout.wrap_columns == wrap_columns
@@ -474,8 +446,7 @@ fn visible_visual_row_range(
     total_rows: usize,
     row_height: Pixels,
 ) -> std::ops::Range<usize> {
-    let start = ((scroll_top / row_height).floor() as usize)
-        .saturating_sub(metrics::VIEWPORT_OVERSCAN_LINES);
+    let start = ((scroll_top / row_height).floor() as usize).saturating_sub(metrics::VIEWPORT_OVERSCAN_LINES);
     let end = (((scroll_top + viewport_height) / row_height).ceil() as usize)
         .saturating_add(metrics::VIEWPORT_OVERSCAN_LINES)
         .min(total_rows.max(1));
@@ -541,9 +512,7 @@ fn shape_cached_segment(
         }
     }
 
-    let shaped = window
-        .text_system()
-        .shape_line(text.clone(), font_size, runs, None);
+    let shaped = window.text_system().shape_line(text.clone(), font_size, runs, None);
 
     cache.insert(
         key,
@@ -556,10 +525,7 @@ fn shape_cached_segment(
     Some(shaped)
 }
 
-pub(crate) fn prepare_viewport_paint_state(
-    input: ViewportPreparation<'_>,
-    window: &mut Window,
-) -> ViewportPaintState {
+pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, window: &mut Window) -> ViewportPaintState {
     let ViewportPreparation {
         buffer,
         lines,
@@ -618,16 +584,15 @@ pub(crate) fn prepare_viewport_paint_state(
             scale,
         },
     );
-    let visible_rows =
-        visible_visual_row_range(scroll_top, viewport_height, layout.total_rows, row_height);
+    let visible_rows = visible_visual_row_range(scroll_top, viewport_height, layout.total_rows, row_height);
     let first_line = line_for_visual_row(&layout, visible_rows.start);
     let last_visible_line = line_for_visual_row(&layout, visible_rows.end.saturating_sub(1));
     cache
         .code_lines
         .retain(|(line_ix, _, _), _| *line_ix >= first_line && *line_ix <= last_visible_line);
-    cache.gutter_lines.retain(|line_ix, _| {
-        show_gutter && *line_ix >= first_line && *line_ix <= last_visible_line
-    });
+    cache
+        .gutter_lines
+        .retain(|line_ix, _| show_gutter && *line_ix >= first_line && *line_ix <= last_visible_line);
 
     let mut rows = Vec::new();
     for (line_ix, line) in lines
@@ -710,8 +675,7 @@ pub(crate) fn prepare_viewport_paint_state(
                 } else {
                     segment_end_char
                 },
-                cursor_end_inclusive: segment_ix + 1 == segment_count
-                    && logical_end_char == segment_end_char,
+                cursor_end_inclusive: segment_ix + 1 == segment_count && logical_end_char == segment_end_char,
                 code_line,
                 gutter_line,
                 gutter_text,
@@ -742,17 +706,11 @@ fn paint_range_background(
     color: u32,
     window: &mut Window,
 ) {
-    if range.start == range.end
-        || range.end <= row.line_start_char
-        || range.start >= row.logical_end_char
-    {
+    if range.start == range.end || range.end <= row.line_start_char || range.start >= row.logical_end_char {
         return;
     }
 
-    let start = range
-        .start
-        .max(row.line_start_char)
-        .min(row.display_end_char);
+    let start = range.start.max(row.line_start_char).min(row.display_end_char);
     let end = range.end.min(row.display_end_char);
     if end <= start {
         return;
@@ -772,14 +730,10 @@ fn paint_range_background(
     ));
 }
 
-fn search_matches_for_row<'a>(
-    search_matches: &'a [Range<usize>],
-    row: &PaintedRow,
-) -> &'a [Range<usize>] {
+fn search_matches_for_row<'a>(search_matches: &'a [Range<usize>], row: &PaintedRow) -> &'a [Range<usize>] {
     // FindState emits document-order, non-overlapping ranges.
     let first = search_matches.partition_point(|range| range.end <= row.line_start_char);
-    let last =
-        first + search_matches[first..].partition_point(|range| range.start < row.logical_end_char);
+    let last = first + search_matches[first..].partition_point(|range| range.start < row.logical_end_char);
     &search_matches[first..last]
 }
 
@@ -819,21 +773,13 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
     let line_height = window.line_height();
     let row_height = metrics::px_for_scale(metrics::ROW_HEIGHT, scale);
     let gutter_origin_x = bounds.left() + metrics::px_for_scale(metrics::GUTTER_LEFT_PAD, scale);
-    let gutter_width = metrics::px_for_scale(
-        metrics::GUTTER_WIDTH - metrics::GUTTER_LEFT_PAD - 8.0,
-        scale,
-    );
+    let gutter_width = metrics::px_for_scale(metrics::GUTTER_WIDTH - metrics::GUTTER_LEFT_PAD - 8.0, scale);
     let code_origin_x = code_origin_x(bounds.left(), show_gutter, scale, horizontal_scroll);
     let cursors = paint_cursors(&selection_set);
 
     for row in paint_state.rows {
-        let selection_head_in_row = cursors
-            .iter()
-            .any(|cursor| row_contains_cursor(&row, cursor.char));
-        let row_bounds = Bounds::new(
-            point(bounds.left(), row.row_top),
-            size(bounds.size.width, row_height),
-        );
+        let selection_head_in_row = cursors.iter().any(|cursor| row_contains_cursor(&row, cursor.char));
+        let row_bounds = Bounds::new(point(bounds.left(), row.row_top), size(bounds.size.width, row_height));
         window.paint_quad(fill(
             row_bounds,
             if selection_head_in_row {
@@ -884,26 +830,16 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         }
 
         if focused {
-            for cursor in cursors
-                .iter()
-                .filter(|cursor| row_contains_cursor(&row, cursor.char))
-            {
+            for cursor in cursors.iter().filter(|cursor| row_contains_cursor(&row, cursor.char)) {
                 let cursor_char = cursor.char;
                 let block_cursor = vim_mode == vim::Mode::Normal && cursor.collapsed;
                 let cursor_x = code_origin_x
-                    + x_for_global_char(&row, cursor_char.min(row.display_end_char))
-                        .unwrap_or_else(|| px(0.0));
+                    + x_for_global_char(&row, cursor_char.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
                 let cursor_width = if block_cursor {
                     let next_x = code_origin_x
-                        + x_for_global_char(
-                            &row,
-                            (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)),
-                        )
-                        .unwrap_or_else(|| {
-                            cursor_x + metrics::px_for_scale(metrics::CODE_FONT_SIZE * 0.55, scale)
-                        });
-                    (next_x - cursor_x)
-                        .max(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale))
+                        + x_for_global_char(&row, (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)))
+                            .unwrap_or_else(|| cursor_x + metrics::px_for_scale(metrics::CODE_FONT_SIZE * 0.55, scale));
+                    (next_x - cursor_x).max(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale))
                 } else {
                     metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)
                 };
@@ -922,10 +858,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             window.paint_quad(fill(
                 Bounds::new(
                     point(bounds.left(), row.row_top),
-                    size(
-                        metrics::px_for_scale(metrics::GUTTER_WIDTH, scale),
-                        row_height,
-                    ),
+                    size(metrics::px_for_scale(metrics::GUTTER_WIDTH, scale), row_height),
                 ),
                 rgb(theme.role.gutter_bg),
             ));
@@ -942,27 +875,20 @@ pub(crate) fn visual_row_for_char(tab: &EditorTab, layout: &WrapLayout) -> Optio
     let line = tab.buffer().char_to_line(cursor);
     let line_start = tab.buffer().line_to_char(line);
     let display_text = line_display_text(tab.buffer(), line);
-    let column = cursor
-        .saturating_sub(line_start)
-        .min(display_text.chars().count());
+    let column = cursor.saturating_sub(line_start).min(display_text.chars().count());
     let row_in_line = if layout.show_wrap {
         cursor_visual_row_in_line(display_text.as_ref(), column, layout.wrap_columns)
     } else {
         0
     };
-    layout
-        .line_row_starts
-        .get(line)
-        .copied()
-        .map(|row| row + row_in_line)
+    layout.line_row_starts.get(line).copied().map(|row| row + row_in_line)
 }
 
 pub(crate) fn row_contains_cursor(row: &PaintedRow, cursor_char: usize) -> bool {
     if cursor_char < row.line_start_char {
         return false;
     }
-    cursor_char < row.logical_end_char
-        || (row.cursor_end_inclusive && cursor_char == row.logical_end_char)
+    cursor_char < row.logical_end_char || (row.cursor_end_inclusive && cursor_char == row.logical_end_char)
 }
 
 pub(crate) fn x_for_global_char(row: &PaintedRow, global_char: usize) -> Option<Pixels> {
@@ -970,13 +896,12 @@ pub(crate) fn x_for_global_char(row: &PaintedRow, global_char: usize) -> Option<
     let code_line = row.code_line.as_ref()?;
     Some(code_line.x_for_index(char_to_byte(code_line.text.as_ref(), local_char)))
 }
-
-#[rustfmt::skip]
 fn char_to_byte(text: &str, char_offset: usize) -> usize {
-    text.char_indices().nth(char_offset).map(|(i, _)| i).unwrap_or(text.len())
+    text.char_indices()
+        .nth(char_offset)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len())
 }
-
-#[rustfmt::skip]
 pub(crate) fn byte_index_to_char(text: &str, byte_index: usize) -> usize {
     text[..byte_index.min(text.len())].chars().count()
 }

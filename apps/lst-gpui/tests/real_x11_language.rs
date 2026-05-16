@@ -8,13 +8,7 @@ mod support;
 
 use support::{EditorTestExt, TestResult};
 
-fn expect_edit(
-    label: &str,
-    file_name: &str,
-    initial: &str,
-    keys: &str,
-    expected: &str,
-) -> TestResult {
+fn expect_edit(label: &str, file_name: &str, initial: &str, keys: &str, expected: &str) -> TestResult {
     support::run_x11_test(label, |session| {
         let path = session.seed_file(file_name, initial)?;
         let mut editor = session.open_file(label, &path)?;
@@ -28,13 +22,7 @@ fn expect_edit(
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
 fn line_comment_uses_python_hash_prefix() -> TestResult {
-    expect_edit(
-        "language-line-comment-python",
-        "script.py",
-        "x = 1",
-        "<C-/>",
-        "# x = 1",
-    )
+    expect_edit("language-line-comment-python", "script.py", "x = 1", "<C-/>", "# x = 1")
 }
 
 #[test]

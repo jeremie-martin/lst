@@ -141,8 +141,8 @@ fn resolve_session_env() -> Result<SessionEnv> {
             xauthority: vars.get("XAUTHORITY").cloned(),
             dbus_session_bus_address: vars.get("DBUS_SESSION_BUS_ADDRESS").cloned(),
         };
-        let score = usize::from(candidate.xauthority.is_some())
-            + usize::from(candidate.dbus_session_bus_address.is_some());
+        let score =
+            usize::from(candidate.xauthority.is_some()) + usize::from(candidate.dbus_session_bus_address.is_some());
         if best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
             best = Some((score, candidate));
         }
@@ -262,9 +262,7 @@ impl LayoutSnapshot {
             .output()?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(
-                format!("setxkbmap -query exited with {}: {stderr}", output.status,).into(),
-            );
+            return Err(format!("setxkbmap -query exited with {}: {stderr}", output.status,).into());
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut layout: Option<String> = None;
@@ -282,9 +280,8 @@ impl LayoutSnapshot {
                 _ => {}
             }
         }
-        let layout = layout.ok_or_else(|| {
-            format!("setxkbmap -query did not include a `layout:` line; got: {stdout}",)
-        })?;
+        let layout =
+            layout.ok_or_else(|| format!("setxkbmap -query did not include a `layout:` line; got: {stdout}",))?;
         Ok(Self {
             layout,
             variant,

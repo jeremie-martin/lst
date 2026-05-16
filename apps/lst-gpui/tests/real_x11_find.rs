@@ -91,10 +91,7 @@ fn whole_word_chip_restricts_matches_to_word_boundaries() -> TestResult {
 
         editor.click_find_chip(FindChip::WholeWord)?;
         let record = editor.wait_state("whole-word find", secs(5), |record| {
-            record.find.visible
-                && record.find.query == "foo"
-                && record.find.whole_word
-                && record.find.match_count == 3
+            record.find.visible && record.find.query == "foo" && record.find.whole_word && record.find.match_count == 3
         })?;
         assert!(record.find.whole_word, "{record:?}");
         Ok(())
@@ -113,10 +110,7 @@ fn regex_chip_treats_query_as_pattern() -> TestResult {
 
         editor.click_find_chip(FindChip::Regex)?;
         let record = editor.wait_state("regex find", secs(5), |record| {
-            record.find.visible
-                && record.find.query == "fo."
-                && record.find.use_regex
-                && record.find.match_count == 3
+            record.find.visible && record.find.query == "fo." && record.find.use_regex && record.find.match_count == 3
         })?;
         assert!(record.find.use_regex, "{record:?}");
         Ok(())

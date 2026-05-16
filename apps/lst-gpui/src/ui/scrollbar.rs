@@ -77,9 +77,7 @@ pub(crate) fn scrollbar_layout(
 
     let content_extent = track_extent + max_scroll;
     let proportional_extent = available * (track_extent / content_extent);
-    let thumb_extent = proportional_extent
-        .max(min_thumb_extent.min(available))
-        .min(available);
+    let thumb_extent = proportional_extent.max(min_thumb_extent.min(available)).min(available);
     let thumb_travel = (available - thumb_extent).max(px(0.0));
     let scroll_ratio = if max_scroll > px(0.0) {
         (scroll_offset.max(px(0.0)).min(max_scroll) / max_scroll).clamp(0.0, 1.0)
@@ -94,13 +92,7 @@ pub(crate) fn scrollbar_layout(
 
     Some(ScrollbarLayout {
         track_bounds,
-        thumb_bounds: axis.thumb_bounds(
-            track_bounds,
-            edge_pad,
-            thickness,
-            thumb_start,
-            thumb_extent,
-        ),
+        thumb_bounds: axis.thumb_bounds(track_bounds, edge_pad, thickness, thumb_start, thumb_extent),
         max_scroll,
         thumb_min,
         thumb_travel,
@@ -108,11 +100,7 @@ pub(crate) fn scrollbar_layout(
     })
 }
 
-pub(crate) fn scroll_for_thumb_drag(
-    layout: &ScrollbarLayout,
-    pointer_offset: Pixels,
-    grab_offset: Pixels,
-) -> Pixels {
+pub(crate) fn scroll_for_thumb_drag(layout: &ScrollbarLayout, pointer_offset: Pixels, grab_offset: Pixels) -> Pixels {
     if layout.max_scroll <= px(0.0) || layout.thumb_travel <= px(0.0) {
         return px(0.0);
     }

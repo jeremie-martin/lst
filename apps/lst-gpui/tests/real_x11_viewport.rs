@@ -6,9 +6,11 @@ mod support;
 use support::{secs, EditorTestExt, TestResult};
 
 fn row_covers_char(record: &lst_x11_harness::StateTraceRecord, line: usize, ch: usize) -> bool {
-    record.viewport.rows.iter().any(|row| {
-        row.logical_line == line && row.line_start_char <= ch && ch <= row.display_end_char
-    })
+    record
+        .viewport
+        .rows
+        .iter()
+        .any(|row| row.logical_line == line && row.line_start_char <= ch && ch <= row.display_end_char)
 }
 
 #[test]
@@ -23,22 +25,12 @@ fn overlays_do_not_resize_text_viewport() -> TestResult {
             .expect("initial text viewport should have bounds");
 
         editor.keys("<C-g>")?;
-        let goto = editor.wait_state("goto overlay open", secs(5), |record| {
-            record.goto_line_input.is_some()
-        })?;
-        assert_eq!(
-            goto.viewport.bounds_size_px,
-            Some(baseline_size),
-            "{goto:?}"
-        );
+        let goto = editor.wait_state("goto overlay open", secs(5), |record| record.goto_line_input.is_some())?;
+        assert_eq!(goto.viewport.bounds_size_px, Some(baseline_size), "{goto:?}");
 
         editor.keys("<C-f>")?;
         let find = editor.wait_state("find overlay open", secs(5), |record| record.find.visible)?;
-        assert_eq!(
-            find.viewport.bounds_size_px,
-            Some(baseline_size),
-            "{find:?}"
-        );
+        assert_eq!(find.viewport.bounds_size_px, Some(baseline_size), "{find:?}");
         Ok(())
     })
 }
@@ -85,13 +77,12 @@ fn typing_at_wrapped_line_end_keeps_cursor_visible() -> TestResult {
         let mut editor = session.open_file("viewport-wrapped-eof-typing", &path)?;
 
         editor.keys("<C-end>")?;
-        let before =
-            editor.wait_state("wrapped eof visible before typing", secs(10), |record| {
-                matches!(record.cursors.as_slice(), [cursor]
+        let before = editor.wait_state("wrapped eof visible before typing", secs(10), |record| {
+            matches!(record.cursors.as_slice(), [cursor]
                 if cursor.head_line == 0
                     && cursor.head_char >= 30_000
                     && row_covers_char(record, cursor.head_line, cursor.head_char))
-            })?;
+        })?;
         assert!(
             before.viewport.scroll_top_px > before.viewport.line_height_px,
             "{before:?}"
@@ -105,8 +96,7 @@ fn typing_at_wrapped_line_end_keeps_cursor_visible() -> TestResult {
                     && row_covers_char(record, cursor.head_line, cursor.head_char))
         })?;
         assert!(
-            after.viewport.scroll_top_px + after.viewport.line_height_px * 2.0
-                >= before.viewport.scroll_top_px,
+            after.viewport.scroll_top_px + after.viewport.line_height_px * 2.0 >= before.viewport.scroll_top_px,
             "typing at wrapped EOF should not jump back toward the top; before={before:?}, after={after:?}"
         );
         Ok(())

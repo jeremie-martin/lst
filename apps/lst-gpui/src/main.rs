@@ -1,6 +1,6 @@
 use gpui::{
-    actions, prelude::*, px, size, App, Application, Bounds, Context, Entity, FocusHandle,
-    Focusable, Modifiers, Pixels, ScrollHandle, Subscription, Window, WindowBounds, WindowOptions,
+    actions, prelude::*, px, size, App, Application, Bounds, Context, Entity, FocusHandle, Focusable, Modifiers,
+    Pixels, ScrollHandle, Subscription, Window, WindowBounds, WindowOptions,
 };
 
 mod actions;
@@ -27,8 +27,8 @@ use input::ActiveDragSelection;
 use keymap::editor_keybindings;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
-    EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FocusTarget, Position,
-    RevealIntent, TabId, UNTITLED_PREFIX,
+    EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FocusTarget, Position, RevealIntent, TabId,
+    UNTITLED_PREFIX,
 };
 use recent::default_recent_files_path;
 use recent::RecentView;
@@ -44,34 +44,110 @@ use std::{
     time::Instant,
 };
 use syntax::{
-    compute_syntax_highlights, syntax_mode_for_language, CachedSyntaxHighlights,
-    SyntaxHighlightJobKey, SyntaxMode, SyntaxSpan,
+    compute_syntax_highlights, syntax_mode_for_language, CachedSyntaxHighlights, SyntaxHighlightJobKey, SyntaxMode,
+    SyntaxSpan,
 };
 use viewport::{scroll_to_left, ViewportCache, ViewportGeometry};
 
 pub(crate) const RECENT_CARD_BASIS: f32 = 260.0;
-
-#[rustfmt::skip]
 actions!(
     lst_gpui,
     [
-        NewTab, OpenFile, SaveFile, SaveFileAs, CloseActiveTab, NextTab, PrevTab, MoveTabLeft,
-        MoveTabRight, ToggleWrap, ToggleLineNumberMode, ToggleTheme, CopySelection, CutSelection,
-        PasteClipboard, MoveLeft, MoveRight, MoveUp, MoveDown, MoveWordLeft, MoveWordRight,
-        MoveSubwordLeft, MoveSubwordRight, MovePageUp, MovePageDown, MoveDocumentStart,
-        MoveDocumentEnd, SelectLeft, SelectRight, SelectUp, SelectDown, SelectWordLeft,
-        SelectWordRight, SelectSubwordLeft, SelectSubwordRight, SelectPageUp, SelectPageDown,
-        SelectDocumentStart, SelectDocumentEnd, MoveSmartHome, MoveLineStart, MoveLineEnd,
-        SelectSmartHome, SelectLineStart, SelectLineEnd, Backspace, DeleteForward,
-        DeleteWordBackward, DeleteWordForward, InsertNewline, InsertTab, OutdentSelection,
-        SelectAll, SelectNextOccurrence, SelectAllOccurrences, SelectFindMatches, SkipNextOccurrence,
-        PopSelectionCursor, AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, SelectLine,
-        SelectParagraph, Undo, Redo, SwapRedoBranch, FindOpen, FindOpenReplace, FindNext, FindPrev,
-        ReplaceOne, ReplaceAll, ToggleFindCase, ToggleFindWholeWord, ToggleFindRegex,
-        ToggleFindInSelection, GotoLineOpen, DeleteLine, MoveLineUp, MoveLineDown, DuplicateLine,
-        ToggleComment, ToggleBlockComment, TransposeChars, ToggleOvertype, ToggleBookmark,
-        NextBookmark, PreviousBookmark, ReopenClosedTab, CleanupText, ToggleRecentFiles, ZoomIn,
-        ZoomOut, ZoomReset, Quit,
+        NewTab,
+        OpenFile,
+        SaveFile,
+        SaveFileAs,
+        CloseActiveTab,
+        NextTab,
+        PrevTab,
+        MoveTabLeft,
+        MoveTabRight,
+        ToggleWrap,
+        ToggleLineNumberMode,
+        ToggleTheme,
+        CopySelection,
+        CutSelection,
+        PasteClipboard,
+        MoveLeft,
+        MoveRight,
+        MoveUp,
+        MoveDown,
+        MoveWordLeft,
+        MoveWordRight,
+        MoveSubwordLeft,
+        MoveSubwordRight,
+        MovePageUp,
+        MovePageDown,
+        MoveDocumentStart,
+        MoveDocumentEnd,
+        SelectLeft,
+        SelectRight,
+        SelectUp,
+        SelectDown,
+        SelectWordLeft,
+        SelectWordRight,
+        SelectSubwordLeft,
+        SelectSubwordRight,
+        SelectPageUp,
+        SelectPageDown,
+        SelectDocumentStart,
+        SelectDocumentEnd,
+        MoveSmartHome,
+        MoveLineStart,
+        MoveLineEnd,
+        SelectSmartHome,
+        SelectLineStart,
+        SelectLineEnd,
+        Backspace,
+        DeleteForward,
+        DeleteWordBackward,
+        DeleteWordForward,
+        InsertNewline,
+        InsertTab,
+        OutdentSelection,
+        SelectAll,
+        SelectNextOccurrence,
+        SelectAllOccurrences,
+        SelectFindMatches,
+        SkipNextOccurrence,
+        PopSelectionCursor,
+        AddCursorAbove,
+        AddCursorBelow,
+        AddCursorsToLineEnds,
+        SelectLine,
+        SelectParagraph,
+        Undo,
+        Redo,
+        SwapRedoBranch,
+        FindOpen,
+        FindOpenReplace,
+        FindNext,
+        FindPrev,
+        ReplaceOne,
+        ReplaceAll,
+        ToggleFindCase,
+        ToggleFindWholeWord,
+        ToggleFindRegex,
+        ToggleFindInSelection,
+        GotoLineOpen,
+        DeleteLine,
+        MoveLineUp,
+        MoveLineDown,
+        DuplicateLine,
+        ToggleComment,
+        ToggleBlockComment,
+        TransposeChars,
+        ToggleOvertype,
+        ToggleBookmark,
+        NextBookmark,
+        PreviousBookmark,
+        ReopenClosedTab,
+        CleanupText,
+        ToggleRecentFiles,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset,
+        Quit,
     ]
 );
 
@@ -181,8 +257,7 @@ impl LstGpuiApp {
         let find_query_input = cx.new(|cx| InputField::new(cx, "Find"));
         let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace"));
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line[:Column]"));
-        let recent_query_input =
-            cx.new(|cx| InputField::new(cx, "Search recent files").with_vertical_navigation());
+        let recent_query_input = cx.new(|cx| InputField::new(cx, "Search recent files").with_vertical_navigation());
         let recent_files_path = default_recent_files_path();
         let scratchpad_dir = launch.scratchpad_dir.clone();
         let model = initial_model_from_launch(launch);
@@ -242,24 +317,24 @@ impl LstGpuiApp {
         let show_wrap = app.model.show_wrap();
         app.sync_tab_views(show_wrap);
 
-        app._shell_subscriptions.push(
-            cx.subscribe(&find_query_input, |this, _, event: &InputFieldEvent, cx| {
+        app._shell_subscriptions
+            .push(cx.subscribe(&find_query_input, |this, _, event: &InputFieldEvent, cx| {
                 this.handle_find_query_input_event(event, cx)
-            }),
-        );
-        app._shell_subscriptions.push(cx.subscribe(
-            &find_replace_input,
-            |this, _, event: &InputFieldEvent, cx| this.handle_find_replace_input_event(event, cx),
-        ));
+            }));
         app._shell_subscriptions.push(
-            cx.subscribe(&goto_line_input, |this, _, event: &InputFieldEvent, cx| {
-                this.handle_goto_line_input_event(event, cx)
+            cx.subscribe(&find_replace_input, |this, _, event: &InputFieldEvent, cx| {
+                this.handle_find_replace_input_event(event, cx)
             }),
         );
-        app._shell_subscriptions.push(cx.subscribe(
-            &recent_query_input,
-            |this, _, event: &InputFieldEvent, cx| this.handle_recent_query_input_event(event, cx),
-        ));
+        app._shell_subscriptions
+            .push(cx.subscribe(&goto_line_input, |this, _, event: &InputFieldEvent, cx| {
+                this.handle_goto_line_input_event(event, cx)
+            }));
+        app._shell_subscriptions.push(
+            cx.subscribe(&recent_query_input, |this, _, event: &InputFieldEvent, cx| {
+                this.handle_recent_query_input_event(event, cx)
+            }),
+        );
 
         app
     }
@@ -389,10 +464,7 @@ impl LstGpuiApp {
                 }
             }
         }
-        if self
-            .hovered_tab
-            .is_some_and(|ix| ix >= self.model.tab_count())
-        {
+        if self.hovered_tab.is_some_and(|ix| ix >= self.model.tab_count()) {
             self.hovered_tab = None;
         }
     }
@@ -431,11 +503,7 @@ impl LstGpuiApp {
     /// On panel open / show_replace flip, select the prefilled query so
     /// typing replaces it (VS Code "selection becomes search term, ready
     /// to overwrite" parity).
-    fn select_query_after_panel_open(
-        &mut self,
-        old_find_state: (bool, bool, String, String),
-        cx: &mut Context<Self>,
-    ) {
+    fn select_query_after_panel_open(&mut self, old_find_state: (bool, bool, String, String), cx: &mut Context<Self>) {
         let (old_visible, old_show_replace, _, _) = old_find_state;
         let now_visible = self.model.find().visible;
         let now_show_replace = self.model.find().show_replace;
@@ -446,15 +514,13 @@ impl LstGpuiApp {
         if self.model.find().query.is_empty() {
             return;
         }
-        self.find_query_input
-            .update(cx, |input, cx| input.select_all(cx));
+        self.find_query_input.update(cx, |input, cx| input.select_all(cx));
     }
 
     fn sync_find_inputs(&mut self, cx: &mut Context<Self>) {
         let query = self.model.find().query.clone();
         let replacement = self.model.find().replacement.clone();
-        self.find_query_input
-            .update(cx, |input, cx| input.set_text(&query, cx));
+        self.find_query_input.update(cx, |input, cx| input.set_text(&query, cx));
         self.find_replace_input
             .update(cx, |input, cx| input.set_text(&replacement, cx));
     }
@@ -468,11 +534,7 @@ impl LstGpuiApp {
         )
     }
 
-    fn sync_find_inputs_if_changed(
-        &mut self,
-        old_state: (bool, bool, String, String),
-        cx: &mut Context<Self>,
-    ) {
+    fn sync_find_inputs_if_changed(&mut self, old_state: (bool, bool, String, String), cx: &mut Context<Self>) {
         if self.find_input_state() != old_state {
             self.sync_find_inputs(cx);
         }
@@ -480,8 +542,7 @@ impl LstGpuiApp {
 
     fn sync_goto_input(&mut self, cx: &mut Context<Self>) {
         let text = self.model.goto_line().unwrap_or_default().to_string();
-        self.goto_line_input
-            .update(cx, |input, cx| input.set_text(&text, cx));
+        self.goto_line_input.update(cx, |input, cx| input.set_text(&text, cx));
     }
 
     fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
@@ -565,9 +626,7 @@ impl LstGpuiApp {
             if cache_ref
                 .syntax_highlights
                 .as_ref()
-                .is_some_and(|highlights| {
-                    highlights.revision == revision && highlights.language == language
-                })
+                .is_some_and(|highlights| highlights.revision == revision && highlights.language == language)
             {
                 return;
             }
@@ -731,8 +790,7 @@ fn main() {
     diagnostics::install();
 
     let launch = parse_launch_args();
-    let has_graphical_env =
-        std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let has_graphical_env = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
 
     if !has_graphical_env {
         eprintln!("lst requires a graphical session. Run it from a real X11 or Wayland desktop.");
@@ -749,16 +807,9 @@ fn main() {
         })
         .detach();
 
-        let bounds = Bounds::centered(
-            None,
-            size(px(metrics::WINDOW_WIDTH), px(metrics::WINDOW_HEIGHT)),
-            cx,
-        );
+        let bounds = Bounds::centered(None, size(px(metrics::WINDOW_WIDTH), px(metrics::WINDOW_HEIGHT)), cx);
         let launch = launch.clone();
-        let window_title = launch
-            .window_title
-            .clone()
-            .unwrap_or_else(|| "lst".into());
+        let window_title = launch.window_title.clone().unwrap_or_else(|| "lst".into());
         let window = match cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -777,7 +828,8 @@ fn main() {
             Ok(window) => window,
             Err(err) => {
                 eprintln!(
-                    "lst failed to open a GPUI window: {err}. On this host, Xvfb is not sufficient because GPUI surface creation requires a real presentation backend."
+                    "lst failed to open a GPUI window: {err}. On this host, Xvfb is not sufficient because GPUI \
+                     surface creation requires a real presentation backend."
                 );
                 process::exit(1);
             }

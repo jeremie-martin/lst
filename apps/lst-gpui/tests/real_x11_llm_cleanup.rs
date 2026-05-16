@@ -33,9 +33,7 @@ fn cleanup_replaces_whole_buffer_inline_with_atomic_undo() -> TestResult {
 
         let before = editor.read_state()?;
         editor.keys("<C-S-r>")?;
-        editor.wait_state("cleanup applied", secs(5), |record| {
-            record.revision > before.revision
-        })?;
+        editor.wait_state("cleanup applied", secs(5), |record| record.revision > before.revision)?;
         editor.save_then_expect_file(&path, canned)?;
 
         editor.keys("<C-z>")?;
@@ -58,9 +56,7 @@ fn status_bar_sparkle_button_drives_cleanup_with_atomic_undo() -> TestResult {
 
         let before = editor.read_state()?;
         editor.click_cleanup_button()?;
-        editor.wait_state("cleanup applied", secs(5), |record| {
-            record.revision > before.revision
-        })?;
+        editor.wait_state("cleanup applied", secs(5), |record| record.revision > before.revision)?;
         editor.save_then_expect_file(&path, canned)?;
 
         editor.keys("<C-z>")?;
@@ -87,9 +83,7 @@ fn cleanup_replaces_only_the_selection_with_atomic_undo() -> TestResult {
 
         let before = editor.read_state()?;
         editor.keys("<C-S-r>")?;
-        editor.wait_state("cleanup applied", secs(5), |record| {
-            record.revision > before.revision
-        })?;
+        editor.wait_state("cleanup applied", secs(5), |record| record.revision > before.revision)?;
         editor.save_then_expect_file(&path, cleaned)?;
 
         editor.keys("<C-z>")?;

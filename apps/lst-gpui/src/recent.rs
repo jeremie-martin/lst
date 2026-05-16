@@ -82,10 +82,7 @@ impl RecentFiles {
             .as_deref()
             .and_then(|path| read_entries(path).ok())
             .unwrap_or_default();
-        Self {
-            state_path,
-            entries,
-        }
+        Self { state_path, entries }
     }
     pub(crate) fn entries(&self) -> &[PathBuf] {
         &self.entries
@@ -229,15 +226,12 @@ impl RecentView {
     }
 
     pub(crate) fn content_search_pending(&self) -> bool {
-        self.panel
-            .as_ref()
-            .is_some_and(|panel| panel.content_search_pending)
+        self.panel.as_ref().is_some_and(|panel| panel.content_search_pending)
     }
 
     pub(crate) fn search_still_relevant(&self, generation: u64, query: &str) -> bool {
         self.panel.as_ref().is_some_and(|panel| {
-            panel.content_search_generation == generation
-                && panel.query.trim().to_lowercase() == query
+            panel.content_search_generation == generation && panel.query.trim().to_lowercase() == query
         })
     }
 
@@ -299,10 +293,8 @@ impl RecentView {
                 Self::row_target(&panel.card_bounds, current, visible_paths.len(), false)
                     .unwrap_or_else(|| current.saturating_sub(1))
             }
-            RecentSelectionMove::RowNext => {
-                Self::row_target(&panel.card_bounds, current, visible_paths.len(), true)
-                    .unwrap_or_else(|| (current + 1).min(last))
-            }
+            RecentSelectionMove::RowNext => Self::row_target(&panel.card_bounds, current, visible_paths.len(), true)
+                .unwrap_or_else(|| (current + 1).min(last)),
         };
 
         panel.selection = visible_paths.get(next).cloned();
@@ -310,9 +302,7 @@ impl RecentView {
     }
 
     pub(crate) fn card_bounds_for(&self, index: usize) -> Option<Bounds<Pixels>> {
-        self.panel
-            .as_ref()
-            .and_then(|p| p.card_bounds.get(index).copied())
+        self.panel.as_ref().and_then(|p| p.card_bounds.get(index).copied())
     }
 
     pub(crate) fn set_card_bounds(&mut self, bounds: Vec<Bounds<Pixels>>) {
@@ -382,9 +372,7 @@ impl RecentView {
             if panel.previews.contains_key(&path) || panel.preview_jobs.contains(&path) {
                 continue;
             }
-            panel
-                .previews
-                .insert(path.clone(), RecentPreviewState::Loading);
+            panel.previews.insert(path.clone(), RecentPreviewState::Loading);
             panel.preview_jobs.insert(path.clone());
             to_load.push(path);
         }
@@ -393,11 +381,7 @@ impl RecentView {
 
     /// Records the result of a preview read. `Missing` prunes from
     /// `RecentFiles` even when the panel is closed.
-    pub(crate) fn apply_preview(
-        &mut self,
-        path: PathBuf,
-        result: RecentPreviewRead,
-    ) -> ApplyPreviewOutcome {
+    pub(crate) fn apply_preview(&mut self, path: PathBuf, result: RecentPreviewRead) -> ApplyPreviewOutcome {
         let state = match result {
             RecentPreviewRead::Loaded(preview) => RecentPreviewState::Loaded(preview),
             RecentPreviewRead::Failed(message) => RecentPreviewState::Failed(message),
@@ -476,12 +460,7 @@ impl RecentView {
             )
     }
 
-    fn row_target(
-        bounds: &[Bounds<Pixels>],
-        current: usize,
-        visible_len: usize,
-        row_next: bool,
-    ) -> Option<usize> {
+    fn row_target(bounds: &[Bounds<Pixels>], current: usize, visible_len: usize, row_next: bool) -> Option<usize> {
         let current_bounds = *bounds.get(current)?;
         let current_top = current_bounds.top();
         let current_center_x = bounds_center_x(current_bounds);
@@ -593,9 +572,7 @@ fn recent_file_content_matches(path: &Path, query: &str) -> bool {
     if file.take(SEARCH_BYTES).read_to_end(&mut bytes).is_err() {
         return false;
     }
-    String::from_utf8_lossy(&bytes)
-        .to_lowercase()
-        .contains(query)
+    String::from_utf8_lossy(&bytes).to_lowercase().contains(query)
 }
 
 fn preview_from_bytes(bytes: &[u8]) -> String {
@@ -740,11 +717,7 @@ fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
 }
 
 impl LstGpuiApp {
-    pub(crate) fn toggle_recent_files_panel(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn toggle_recent_files_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.recent.is_open() {
             self.close_recent_files_panel(cx);
             return;
@@ -772,11 +745,7 @@ impl LstGpuiApp {
         }
     }
 
-    pub(crate) fn handle_recent_query_input_event(
-        &mut self,
-        event: &InputFieldEvent,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn handle_recent_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
         match event {
             InputFieldEvent::Changed(text) => {
                 self.update_recent_query(text.clone(), cx);
@@ -868,9 +837,7 @@ impl LstGpuiApp {
             return;
         }
         cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(recent_content_search_debounce())
-                .await;
+            cx.background_executor().timer(recent_content_search_debounce()).await;
             let _ = this.update(cx, |view, cx| {
                 if view.recent.search_still_relevant(generation, &query) {
                     view.start_recent_content_search(query, cx);
@@ -899,28 +866,15 @@ impl LstGpuiApp {
         .detach();
     }
 
-    fn finish_recent_content_search(
-        &mut self,
-        query: String,
-        matches: Vec<PathBuf>,
-        cx: &mut Context<Self>,
-    ) {
+    fn finish_recent_content_search(&mut self, query: String, matches: Vec<PathBuf>, cx: &mut Context<Self>) {
         if self.recent.finish_content_search(query, matches) {
             self.spawn_recent_previews(cx);
             cx.notify();
         }
     }
 
-    fn finish_recent_preview(
-        &mut self,
-        path: PathBuf,
-        result: RecentPreviewRead,
-        cx: &mut Context<Self>,
-    ) {
-        if matches!(
-            self.recent.apply_preview(path, result),
-            ApplyPreviewOutcome::Pruned
-        ) {
+    fn finish_recent_preview(&mut self, path: PathBuf, result: RecentPreviewRead, cx: &mut Context<Self>) {
+        if matches!(self.recent.apply_preview(path, result), ApplyPreviewOutcome::Pruned) {
             self.spawn_recent_previews(cx);
         }
         cx.notify();

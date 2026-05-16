@@ -89,10 +89,7 @@ pub(crate) fn syntax_mode_for_language(language: Option<Language>) -> SyntaxMode
         .unwrap_or(SyntaxMode::Plain)
 }
 
-pub(crate) fn compute_syntax_highlights(
-    language: SyntaxLanguage,
-    source: &str,
-) -> Vec<Vec<SyntaxSpan>> {
+pub(crate) fn compute_syntax_highlights(language: SyntaxLanguage, source: &str) -> Vec<Vec<SyntaxSpan>> {
     highlight::highlight_source(language, source)
 }
 
@@ -126,10 +123,7 @@ mod tests {
 
         for (path, language) in cases {
             let detected = lst_editor::language::detect(Some(&PathBuf::from(path)), None);
-            assert_eq!(
-                syntax_mode_for_language(detected),
-                SyntaxMode::TreeSitter(language)
-            );
+            assert_eq!(syntax_mode_for_language(detected), SyntaxMode::TreeSitter(language));
         }
         let detected = lst_editor::language::detect(Some(&PathBuf::from("example.txt")), None);
         assert_eq!(syntax_mode_for_language(detected), SyntaxMode::Plain);

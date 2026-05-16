@@ -6,9 +6,7 @@ use std::{
 };
 use time::OffsetDateTime;
 
-pub(crate) fn create_scratchpad_note(
-    scratchpad_dir_override: Option<&Path>,
-) -> io::Result<(PathBuf, FileStamp)> {
+pub(crate) fn create_scratchpad_note(scratchpad_dir_override: Option<&Path>) -> io::Result<(PathBuf, FileStamp)> {
     create_scratchpad_note_with_timestamp(scratchpad_dir_override, scratchpad_timestamp())
 }
 
@@ -72,28 +70,20 @@ pub(super) fn remove_previous_scratchpad_after_save_as(
     path: &Path,
     open_tabs: &[ModelEditorTab],
 ) {
-    if let Some(old) = previous_scratchpad_path.filter(|old| {
-        !paths_refer_to_same_file(old, path) && !path_is_open_in_another_tab(open_tabs, old, None)
-    }) {
+    if let Some(old) = previous_scratchpad_path
+        .filter(|old| !paths_refer_to_same_file(old, path) && !path_is_open_in_another_tab(open_tabs, old, None))
+    {
         remove_file_best_effort(&old);
     }
 }
 
-pub(super) fn remove_scratchpad_file_if_unreferenced(
-    open_tabs: &[ModelEditorTab],
-    tab_id: TabId,
-    path: &Path,
-) {
+pub(super) fn remove_scratchpad_file_if_unreferenced(open_tabs: &[ModelEditorTab], tab_id: TabId, path: &Path) {
     if !path_is_open_in_another_tab(open_tabs, path, Some(tab_id)) {
         remove_file_best_effort(path);
     }
 }
 
-fn path_is_open_in_another_tab(
-    open_tabs: &[ModelEditorTab],
-    path: &Path,
-    ignored_tab_id: Option<TabId>,
-) -> bool {
+fn path_is_open_in_another_tab(open_tabs: &[ModelEditorTab], path: &Path, ignored_tab_id: Option<TabId>) -> bool {
     open_tabs.iter().any(|tab| {
         ignored_tab_id != Some(tab.id())
             && tab

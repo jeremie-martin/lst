@@ -20,7 +20,10 @@ pub(crate) struct SelectionEdit {
 
 impl SelectionEdit {
     pub(crate) fn insert_with_absolute_cursor(offset: usize, cursor: usize) -> Self {
-        Self { change: TextChange::insert(offset, ""), selection_after: SelectionEditAfter::AbsoluteCursor(cursor) }
+        Self {
+            change: TextChange::insert(offset, ""),
+            selection_after: SelectionEditAfter::AbsoluteCursor(cursor),
+        }
     }
 
     pub(crate) fn replace_with_collapsed_end(range: Range<usize>, replacement: String) -> Self {
@@ -28,12 +31,25 @@ impl SelectionEdit {
         Self::replace_with_inserted_range(range, replacement, len..len, false)
     }
 
-    pub(crate) fn replace_with_inserted_range(range: Range<usize>, replacement: String, selection_after: Range<usize>, reversed: bool) -> Self {
-        Self { change: TextChange::replace(range, replacement), selection_after: SelectionEditAfter::InsertedRange(selection_after, reversed) }
+    pub(crate) fn replace_with_inserted_range(
+        range: Range<usize>,
+        replacement: String,
+        selection_after: Range<usize>,
+        reversed: bool,
+    ) -> Self {
+        Self {
+            change: TextChange::replace(range, replacement),
+            selection_after: SelectionEditAfter::InsertedRange(selection_after, reversed),
+        }
     }
 }
 
-pub(crate) fn request_for_each<F>(tab: &EditorTab, kind: EditKind, boundary: UndoBoundary, per_selection: F) -> Option<EditRequest>
+pub(crate) fn request_for_each<F>(
+    tab: &EditorTab,
+    kind: EditKind,
+    boundary: UndoBoundary,
+    per_selection: F,
+) -> Option<EditRequest>
 where
     F: Fn(usize, Selection) -> Option<SelectionEdit>,
 {
@@ -42,7 +58,13 @@ where
         return None;
     }
 
-    let edits = selection_set.as_slice().iter().copied().enumerate().map(|(index, selection)| per_selection(index, selection)).collect::<Option<Vec<_>>>()?;
+    let edits = selection_set
+        .as_slice()
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, selection)| per_selection(index, selection))
+        .collect::<Option<Vec<_>>>()?;
 
     let mut delta = 0isize;
     let mut changes = Vec::with_capacity(edits.len());
@@ -66,9 +88,13 @@ where
     }
 
     let changes = TextChangeSet::try_new(changes, selection_set.primary_index())?;
-    let selections_after = SelectionSet::from_selections_coalescing_cursors(selections_after, selection_set.primary_index()).ok()?;
+    let selections_after =
+        SelectionSet::from_selections_coalescing_cursors(selections_after, selection_set.primary_index()).ok()?;
 
-    Some(EditRequest::from_changes(kind, boundary, changes).with_selection_after(SelectionAfter::Exact(selections_after)))
+    Some(
+        EditRequest::from_changes(kind, boundary, changes)
+            .with_selection_after(SelectionAfter::Exact(selections_after)),
+    )
 }
 
 pub(crate) fn replacement_request(tab: &EditorTab, text: String, boundary: UndoBoundary) -> Option<EditRequest> {
@@ -89,14 +115,29 @@ pub(crate) fn paste_request(tab: &EditorTab, text: String, boundary: UndoBoundar
     }
 }
 
-pub(crate) fn replacement_request_by_index<F>(tab: &EditorTab, replacement_for: F, boundary: UndoBoundary) -> Option<EditRequest>
+pub(crate) fn replacement_request_by_index<F>(
+    tab: &EditorTab,
+    replacement_for: F,
+    boundary: UndoBoundary,
+) -> Option<EditRequest>
 where
     F: Fn(usize) -> String,
 {
     let selection_set = tab.selection_set();
-    let replacements = (0..selection_set.as_slice().len()).map(replacement_for).collect::<Vec<_>>();
-    let kind = if replacements.iter().all(String::is_empty) { EditKind::Delete } else { EditKind::Insert };
-    request_for_each(tab, kind, boundary, |index, selection| Some(SelectionEdit::replace_with_collapsed_end(selection.range(), replacements[index].clone())))
+    let replacements = (0..selection_set.as_slice().len())
+        .map(replacement_for)
+        .collect::<Vec<_>>();
+    let kind = if replacements.iter().all(String::is_empty) {
+        EditKind::Delete
+    } else {
+        EditKind::Insert
+    };
+    request_for_each(tab, kind, boundary, |index, selection| {
+        Some(SelectionEdit::replace_with_collapsed_end(
+            selection.range(),
+            replacements[index].clone(),
+        ))
+    })
 }
 
 pub(crate) fn selected_text_joined(tab: &EditorTab) -> Option<String> {
@@ -105,11 +146,21 @@ pub(crate) fn selected_text_joined(tab: &EditorTab) -> Option<String> {
         return None;
     }
 
-    Some(selections.iter().map(|selection| tab.buffer().slice(selection.range()).to_string()).collect::<Vec<_>>().join("\n"))
+    Some(
+        selections
+            .iter()
+            .map(|selection| tab.buffer().slice(selection.range()).to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 fn clipboard_lines_for_distribution(text: &str) -> Vec<String> {
-    text.strip_suffix('\n').unwrap_or(text).split('\n').map(|line| line.strip_suffix('\r').unwrap_or(line).to_string()).collect()
+    text.strip_suffix('\n')
+        .unwrap_or(text)
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        .collect()
 }
 
 pub(crate) fn delete_request<F>(tab: &EditorTab, boundary: UndoBoundary, cursor_range: F) -> Option<EditRequest>
@@ -126,7 +177,11 @@ where
     let mut caret_offsets = Vec::with_capacity(selection_set.as_slice().len());
 
     for (selection_index, selection) in selection_set.as_slice().iter().copied().enumerate() {
-        let range = if selection.has_selection() { Some(selection.range()) } else { cursor_range(tab, selection.cursor()) };
+        let range = if selection.has_selection() {
+            Some(selection.range())
+        } else {
+            cursor_range(tab, selection.cursor())
+        };
 
         if let Some(range) = range.filter(|range| range.start < range.end) {
             caret_offsets.push(range.start);
@@ -143,12 +198,27 @@ where
     requested_ranges.sort_by_key(|(_, range)| (range.start, range.end));
     let merged_ranges = merge_delete_ranges(requested_ranges.iter().map(|(_, range)| range.clone()));
     let changes: Vec<TextChange> = merged_ranges.iter().cloned().map(TextChange::delete).collect();
-    let primary_change = requested_ranges.iter().find(|(selection_index, _)| *selection_index == primary).and_then(|(_, range)| merged_ranges.iter().position(|merged| merged.start <= range.start && range.end <= merged.end)).unwrap_or(0);
+    let primary_change = requested_ranges
+        .iter()
+        .find(|(selection_index, _)| *selection_index == primary)
+        .and_then(|(_, range)| {
+            merged_ranges
+                .iter()
+                .position(|merged| merged.start <= range.start && range.end <= merged.end)
+        })
+        .unwrap_or(0);
 
     let changes = TextChangeSet::new(changes, primary_change);
-    let selections_after: Vec<Selection> = caret_offsets.into_iter().map(|offset| Selection::collapsed(changes.map_offset_to_inserted_end(offset))).collect();
-    let selection_after = SelectionSet::from_selections_coalescing_cursors(selections_after, primary).expect("multi-selection delete preserves a valid selection set");
-    Some(EditRequest::from_changes(EditKind::Delete, boundary, changes).with_selection_after(SelectionAfter::Exact(selection_after)))
+    let selections_after: Vec<Selection> = caret_offsets
+        .into_iter()
+        .map(|offset| Selection::collapsed(changes.map_offset_to_inserted_end(offset)))
+        .collect();
+    let selection_after = SelectionSet::from_selections_coalescing_cursors(selections_after, primary)
+        .expect("multi-selection delete preserves a valid selection set");
+    Some(
+        EditRequest::from_changes(EditKind::Delete, boundary, changes)
+            .with_selection_after(SelectionAfter::Exact(selection_after)),
+    )
 }
 
 fn merge_delete_ranges(ranges: impl IntoIterator<Item = Range<usize>>) -> Vec<Range<usize>> {
@@ -214,12 +284,19 @@ pub(crate) fn all_occurrences_set(tab: &EditorTab, find: &FindState) -> Option<S
         return None;
     }
     let primary = ranges.iter().position(|range| *range == query_range).unwrap_or(0);
-    let selections = ranges.into_iter().map(|range| Selection::from_range(range, false)).collect();
+    let selections = ranges
+        .into_iter()
+        .map(|range| Selection::from_range(range, false))
+        .collect();
     SelectionSet::from_selections(selections, primary).ok()
 }
 
 fn occurrence_query(tab: &EditorTab) -> Option<(String, Range<usize>)> {
-    let range = if tab.selection().has_selection() { tab.selection().range() } else { occurrence_word_range_at_cursor(tab) };
+    let range = if tab.selection().has_selection() {
+        tab.selection().range()
+    } else {
+        occurrence_word_range_at_cursor(tab)
+    };
     if range.start == range.end {
         return None;
     }

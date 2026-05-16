@@ -1,15 +1,14 @@
 use std::ops::Range;
 
 use gpui::{
-    actions, div, fill, point, prelude::*, px, relative, rgb, size, App, Bounds, ClipboardItem,
-    Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
-    SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
+    actions, div, fill, point, prelude::*, px, relative, rgb, size, App, Bounds, ClipboardItem, Context, CursorStyle,
+    Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    GlobalElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    Pixels, Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
 };
 use lst_editor::selection::{
-    drag_selection_range, next_subword_boundary_in_text, next_word_boundary_in_text,
-    previous_subword_boundary_in_text, previous_word_boundary_in_text, word_range_in_text,
+    drag_selection_range, next_subword_boundary_in_text, next_word_boundary_in_text, previous_subword_boundary_in_text,
+    previous_word_boundary_in_text, word_range_in_text,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -80,21 +79,9 @@ pub fn input_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-left", FieldSelectLeft, Some("InlineInput")),
         KeyBinding::new("shift-right", FieldSelectRight, Some("InlineInput")),
         KeyBinding::new("ctrl-shift-left", FieldSelectWordLeft, Some("InlineInput")),
-        KeyBinding::new(
-            "ctrl-shift-right",
-            FieldSelectWordRight,
-            Some("InlineInput"),
-        ),
-        KeyBinding::new(
-            "alt-shift-left",
-            FieldSelectSubwordLeft,
-            Some("InlineInput"),
-        ),
-        KeyBinding::new(
-            "alt-shift-right",
-            FieldSelectSubwordRight,
-            Some("InlineInput"),
-        ),
+        KeyBinding::new("ctrl-shift-right", FieldSelectWordRight, Some("InlineInput")),
+        KeyBinding::new("alt-shift-left", FieldSelectSubwordLeft, Some("InlineInput")),
+        KeyBinding::new("alt-shift-right", FieldSelectSubwordRight, Some("InlineInput")),
         KeyBinding::new("shift-home", FieldSelectHome, Some("InlineInput")),
         KeyBinding::new("shift-end", FieldSelectEnd, Some("InlineInput")),
         KeyBinding::new("cmd-shift-left", FieldSelectHome, Some("InlineInput")),
@@ -209,8 +196,7 @@ impl InputText {
     }
 
     fn select_range(&mut self, range: Range<usize>, reversed: bool) {
-        self.selected_range =
-            range.start.min(self.content.len())..range.end.min(self.content.len());
+        self.selected_range = range.start.min(self.content.len())..range.end.min(self.content.len());
         self.selection_reversed = reversed;
         self.marked_range = None;
     }
@@ -266,9 +252,9 @@ impl InputText {
     fn move_cursor(&mut self, movement: TextMovement, select: bool) {
         let target = if !select && !self.selected_range.is_empty() {
             match movement {
-                TextMovement::PreviousGrapheme
-                | TextMovement::PreviousSubword
-                | TextMovement::PreviousWord => self.selected_range.start,
+                TextMovement::PreviousGrapheme | TextMovement::PreviousSubword | TextMovement::PreviousWord => {
+                    self.selected_range.start
+                }
                 TextMovement::NextGrapheme | TextMovement::NextSubword | TextMovement::NextWord => {
                     self.selected_range.end
                 }
@@ -287,8 +273,7 @@ impl InputText {
     }
 
     fn selected_text(&self) -> Option<String> {
-        (!self.selected_range.is_empty())
-            .then(|| self.content[self.selected_range.clone()].to_string())
+        (!self.selected_range.is_empty()).then(|| self.content[self.selected_range.clone()].to_string())
     }
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
@@ -335,9 +320,7 @@ impl InputText {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
+        self.content = (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..]).into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.selection_reversed = false;
         self.marked_range = None;
@@ -354,11 +337,8 @@ impl InputText {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
-        self.marked_range =
-            (!new_text.is_empty()).then_some(range.start..range.start + new_text.len());
+        self.content = (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..]).into();
+        self.marked_range = (!new_text.is_empty()).then_some(range.start..range.start + new_text.len());
         self.selected_range = new_selected_range_utf16
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .map(|new_range| new_range.start + range.start..new_range.end + range.start)
@@ -415,8 +395,7 @@ impl InputField {
             return 0;
         }
 
-        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
-        else {
+        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref()) else {
             return 0;
         };
         if position.y < bounds.top() {
@@ -451,36 +430,16 @@ impl InputField {
     fn select_right(&mut self, _: &FieldSelectRight, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::NextGrapheme, true, cx);
     }
-    fn select_word_left(
-        &mut self,
-        _: &FieldSelectWordLeft,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn select_word_left(&mut self, _: &FieldSelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::PreviousWord, true, cx);
     }
-    fn select_word_right(
-        &mut self,
-        _: &FieldSelectWordRight,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn select_word_right(&mut self, _: &FieldSelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::NextWord, true, cx);
     }
-    fn select_subword_left(
-        &mut self,
-        _: &FieldSelectSubwordLeft,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn select_subword_left(&mut self, _: &FieldSelectSubwordLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::PreviousSubword, true, cx);
     }
-    fn select_subword_right(
-        &mut self,
-        _: &FieldSelectSubwordRight,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn select_subword_right(&mut self, _: &FieldSelectSubwordRight, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::NextSubword, true, cx);
     }
     fn select_all_action(&mut self, _: &FieldSelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -545,17 +504,18 @@ impl InputField {
     fn previous(&mut self, _: &FieldPrevious, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(InputFieldEvent::PreviousRequested);
     }
-    #[rustfmt::skip]
-    fn up(&mut self, _: &FieldUp, _: &mut Window, cx: &mut Context<Self>) { if self.vertical_navigation { cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Up)); } }
-    #[rustfmt::skip]
-    fn down(&mut self, _: &FieldDown, _: &mut Window, cx: &mut Context<Self>) { if self.vertical_navigation { cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Down)); } }
+    fn up(&mut self, _: &FieldUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.vertical_navigation {
+            cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Up));
+        }
+    }
+    fn down(&mut self, _: &FieldDown, _: &mut Window, cx: &mut Context<Self>) {
+        if self.vertical_navigation {
+            cx.emit(InputFieldEvent::Navigate(InputFieldNavigation::Down));
+        }
+    }
 
-    fn on_mouse_down(
-        &mut self,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         window.focus(&self.focus_handle);
         let offset = self.index_for_mouse_position(event.position);
@@ -650,11 +610,7 @@ impl EntityInputHandler for InputField {
         })
     }
 
-    fn marked_text_range(
-        &self,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<Range<usize>> {
+    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
         self.text
             .marked_range
             .as_ref()
@@ -686,11 +642,8 @@ impl EntityInputHandler for InputField {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.text.replace_and_mark_text(
-            range_utf16.as_ref(),
-            new_text,
-            new_selected_range_utf16.as_ref(),
-        );
+        self.text
+            .replace_and_mark_text(range_utf16.as_ref(), new_text, new_selected_range_utf16.as_ref());
         self.last_layout = None;
         self.emit_changed(cx);
         cx.notify();
@@ -706,14 +659,8 @@ impl EntityInputHandler for InputField {
         let last_layout = self.last_layout.as_ref()?;
         let range = self.text.range_from_utf16(&range_utf16);
         Some(Bounds::from_corners(
-            point(
-                bounds.left() + last_layout.x_for_index(range.start),
-                bounds.top(),
-            ),
-            point(
-                bounds.left() + last_layout.x_for_index(range.end),
-                bounds.bottom(),
-            ),
+            point(bounds.left() + last_layout.x_for_index(range.start), bounds.top()),
+            point(bounds.left() + last_layout.x_for_index(range.end), bounds.bottom()),
         ))
     }
 
@@ -831,9 +778,7 @@ impl Element for TextElement {
         };
 
         let font_size = metrics::px_for_rem(metrics::INPUT_TEXT_SIZE, window.rem_size());
-        let line = window
-            .text_system()
-            .shape_line(display_text, font_size, &runs, None);
+        let line = window.text_system().shape_line(display_text, font_size, &runs, None);
 
         let cursor_pos = line.x_for_index(cursor);
         let (selection, cursor) = if selected_range.is_empty() {
@@ -854,14 +799,8 @@ impl Element for TextElement {
             (
                 Some(fill(
                     Bounds::from_corners(
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.start),
-                            bounds.top(),
-                        ),
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.end),
-                            bounds.bottom(),
-                        ),
+                        point(bounds.left() + line.x_for_index(selected_range.start), bounds.top()),
+                        point(bounds.left() + line.x_for_index(selected_range.end), bounds.bottom()),
                     ),
                     rgb(theme.role.selection_bg),
                 )),
@@ -887,11 +826,7 @@ impl Element for TextElement {
         cx: &mut App,
     ) {
         let focus_handle = self.input.read(cx).focus_handle.clone();
-        window.handle_input(
-            &focus_handle,
-            ElementInputHandler::new(bounds, self.input.clone()),
-            cx,
-        );
+        window.handle_input(&focus_handle, ElementInputHandler::new(bounds, self.input.clone()), cx);
         if let Some(selection) = prepaint.selection.take() {
             window.paint_quad(selection);
         }
@@ -961,20 +896,11 @@ impl Render for InputField {
             .relative()
             .flex()
             .w_full()
-            .h(metrics::px_for_rem(
-                metrics::INPUT_HEIGHT,
-                window.rem_size(),
-            ))
-            .px(metrics::px_for_rem(
-                metrics::INPUT_HORIZONTAL_PAD,
-                window.rem_size(),
-            ))
+            .h(metrics::px_for_rem(metrics::INPUT_HEIGHT, window.rem_size()))
+            .px(metrics::px_for_rem(metrics::INPUT_HORIZONTAL_PAD, window.rem_size()))
             .items_center()
             .overflow_hidden()
-            .line_height(metrics::px_for_rem(
-                metrics::INPUT_TEXT_LINE_HEIGHT,
-                window.rem_size(),
-            ))
+            .line_height(metrics::px_for_rem(metrics::INPUT_TEXT_LINE_HEIGHT, window.rem_size()))
             .rounded_sm()
             .bg(if focused {
                 rgb(theme.role.control_bg_hover)

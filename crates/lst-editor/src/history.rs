@@ -27,7 +27,12 @@ pub(crate) struct EditHistory {
 
 impl EditHistory {
     pub(crate) fn new() -> Self {
-        Self { undo_stack: Vec::new(), redo_stack: Vec::new(), redo_branches: Vec::new(), last_edit_kind: None }
+        Self {
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            redo_branches: Vec::new(),
+            last_edit_kind: None,
+        }
     }
 
     pub(crate) fn clear(&mut self) {

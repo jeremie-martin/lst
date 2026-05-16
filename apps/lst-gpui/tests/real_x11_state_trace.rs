@@ -180,9 +180,7 @@ fn ctrl_d_on_buffer_without_occurrence_leaves_cursor_state_unchanged() -> TestRe
         // Ctrl+D with no current word and no current selection should leave
         // the visible cursor set unchanged. A repaint is allowed; that is not
         // part of the user-facing no-op contract.
-        editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char(
-            'd',
-        )))?;
+        editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char('d')))?;
         editor.wait_quiet(Duration::from_millis(75), Duration::from_secs(2))?;
 
         // The visible cursor state remains the baseline.
@@ -205,9 +203,7 @@ fn ctrl_s_on_unmodified_buffer_leaves_visible_state_unchanged() -> TestResult {
 
         let baseline = editor.read_state()?;
 
-        editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char(
-            's',
-        )))?;
+        editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char('s')))?;
         editor.wait_quiet(Duration::from_millis(75), Duration::from_secs(2))?;
         let after = editor.read_state()?;
         assert_eq!(

@@ -20,15 +20,7 @@ pub(crate) fn wait_quiet(
     quiet_for: Duration,
     timeout: Duration,
 ) -> Result<u64> {
-    wait_impl(
-        conn,
-        damage_id,
-        window,
-        child,
-        quiet_for,
-        timeout,
-        RequireDamage::No,
-    )
+    wait_impl(conn, damage_id, window, child, quiet_for, timeout, RequireDamage::No)
 }
 
 pub(crate) fn wait_for_damage_then_quiet(
@@ -39,15 +31,7 @@ pub(crate) fn wait_for_damage_then_quiet(
     quiet_for: Duration,
     timeout: Duration,
 ) -> Result<u64> {
-    wait_impl(
-        conn,
-        damage_id,
-        window,
-        child,
-        quiet_for,
-        timeout,
-        RequireDamage::Yes,
-    )
+    wait_impl(conn, damage_id, window, child, quiet_for, timeout, RequireDamage::Yes)
 }
 
 fn wait_impl(
@@ -65,10 +49,9 @@ fn wait_impl(
 
     loop {
         if let Some(status) = child.try_wait()? {
-            return Err(io::Error::other(format!(
-                "editor exited while waiting for redraws to finish: {status}"
-            ))
-            .into());
+            return Err(
+                io::Error::other(format!("editor exited while waiting for redraws to finish: {status}")).into(),
+            );
         }
 
         while let Some(event) = conn.poll_for_event()? {
@@ -91,10 +74,7 @@ fn wait_impl(
             } else {
                 ""
             };
-            return Err(io::Error::other(format!(
-                "timed out waiting for redraw quiet period{detail}"
-            ))
-            .into());
+            return Err(io::Error::other(format!("timed out waiting for redraw quiet period{detail}")).into());
         }
         thread::sleep(Duration::from_millis(5));
     }
@@ -118,11 +98,7 @@ impl RequireDamage {
 /// Drain any pending damage events without waiting. Used to clear the slate
 /// before an "expect no damage" assertion so prior unrelated paints do not
 /// pollute the observation.
-pub(crate) fn drain_pending(
-    conn: &RustConnection,
-    damage_id: damage::Damage,
-    window: Window,
-) -> Result<u64> {
+pub(crate) fn drain_pending(conn: &RustConnection, damage_id: damage::Damage, window: Window) -> Result<u64> {
     let mut count = 0u64;
     while let Some(event) = conn.poll_for_event()? {
         if let Event::DamageNotify(notify) = event {
@@ -149,18 +125,13 @@ pub(crate) fn expect_no_damage(
     let end = Instant::now() + deadline;
     loop {
         if let Some(status) = child.try_wait()? {
-            return Err(io::Error::other(format!(
-                "editor exited while expecting no damage: {status}"
-            ))
-            .into());
+            return Err(io::Error::other(format!("editor exited while expecting no damage: {status}")).into());
         }
         while let Some(event) = conn.poll_for_event()? {
             if let Event::DamageNotify(notify) = event {
                 if notify.damage == damage_id && notify.drawable == window {
                     conn.damage_subtract(damage_id, NONE, NONE)?;
-                    return Err(
-                        io::Error::other("expected no damage but observed a DamageNotify").into(),
-                    );
+                    return Err(io::Error::other("expected no damage but observed a DamageNotify").into());
                 }
             }
         }

@@ -130,10 +130,7 @@ impl ScratchpadSession {
     /// return the focused [`Editor`] handle.
     pub fn open_files(&mut self, name: &str, files: &[PathBuf]) -> SupportResult<Editor<'_>> {
         let title = unique_title(name);
-        let args = files
-            .iter()
-            .map(|file| file.as_os_str())
-            .collect::<Vec<_>>();
+        let args = files.iter().map(|file| file.as_os_str()).collect::<Vec<_>>();
         let stderr_log_path = self.stderr_log_path(name);
         let state_trace_path = self.state_trace_path(name);
         let (stdout, stderr) = self.log_stdio(name)?;
@@ -205,10 +202,7 @@ impl ScratchpadSession {
     }
 
     fn preserve(&mut self, reason: &str) {
-        eprintln!(
-            "support: preserving temp dir after {reason}: {}",
-            self.root.display()
-        );
+        eprintln!("support: preserving temp dir after {reason}: {}", self.root.display());
         self.drop_handled = true;
     }
 
@@ -255,10 +249,7 @@ impl Drop for ScratchpadSession {
     }
 }
 
-pub fn run_x11_test(
-    label: &str,
-    test: impl FnOnce(&mut ScratchpadSession) -> TestResult,
-) -> TestResult {
+pub fn run_x11_test(label: &str, test: impl FnOnce(&mut ScratchpadSession) -> TestResult) -> TestResult {
     let mut session = ScratchpadSession::new(label)?;
     let result = test(&mut session);
     match result {
@@ -307,17 +298,10 @@ pub trait EditorTestExt {
     /// `cursors.len()` cursors at the given (line, col) head positions in
     /// document order. Useful for proving a multi-cursor creation gesture
     /// landed correctly without typing-and-inspecting-the-file.
-    fn expect_cursor_heads(
-        &mut self,
-        cursors: &[(usize, usize)],
-    ) -> SupportResult<StateTraceRecord>;
+    fn expect_cursor_heads(&mut self, cursors: &[(usize, usize)]) -> SupportResult<StateTraceRecord>;
 
     /// Assert the find panel is visible with the given query and match count.
-    fn expect_find_state(
-        &mut self,
-        query: &str,
-        match_count: usize,
-    ) -> SupportResult<StateTraceRecord>;
+    fn expect_find_state(&mut self, query: &str, match_count: usize) -> SupportResult<StateTraceRecord>;
 
     /// Click one of the visible find-panel option chips.
     fn click_find_chip(&mut self, chip: FindChip) -> SupportResult<()>;
@@ -341,11 +325,7 @@ impl EditorTestExt for Editor<'_> {
     }
 
     fn expect_file(&mut self, path: &Path, expected: &str) -> SupportResult<()> {
-        let result = self.wait_file_text(
-            path,
-            expected,
-            FileWaitOpts::new(FILE_WAIT_TIMEOUT, FILE_STABLE),
-        );
+        let result = self.wait_file_text(path, expected, FileWaitOpts::new(FILE_WAIT_TIMEOUT, FILE_STABLE));
         with_window_artifact(self, "expect-file", result)?;
         Ok(())
     }
@@ -378,29 +358,16 @@ impl EditorTestExt for Editor<'_> {
         self.wait_state("vim mode", FOCUS_TIMEOUT, |record| record.vim_mode == mode)
     }
 
-    fn expect_cursor_heads(
-        &mut self,
-        cursors: &[(usize, usize)],
-    ) -> SupportResult<StateTraceRecord> {
+    fn expect_cursor_heads(&mut self, cursors: &[(usize, usize)]) -> SupportResult<StateTraceRecord> {
         self.wait_state("cursor heads", FOCUS_TIMEOUT, |record| {
-            let actual: Vec<(usize, usize)> = record
-                .cursors
-                .iter()
-                .map(|c| (c.head_line, c.head_col))
-                .collect();
+            let actual: Vec<(usize, usize)> = record.cursors.iter().map(|c| (c.head_line, c.head_col)).collect();
             actual.as_slice() == cursors
         })
     }
 
-    fn expect_find_state(
-        &mut self,
-        query: &str,
-        match_count: usize,
-    ) -> SupportResult<StateTraceRecord> {
+    fn expect_find_state(&mut self, query: &str, match_count: usize) -> SupportResult<StateTraceRecord> {
         self.wait_state("find state", FOCUS_TIMEOUT, |record| {
-            record.find.visible
-                && record.find.query == query
-                && record.find.match_count == match_count
+            record.find.visible && record.find.query == query && record.find.match_count == match_count
         })
     }
 
@@ -408,8 +375,7 @@ impl EditorTestExt for Editor<'_> {
         let record = self.wait_state("find chip bounds", FOCUS_TIMEOUT, |state| {
             state.find.visible && find_chip_bounds(state, chip).is_some()
         })?;
-        let (ox, oy, w, h) =
-            find_chip_bounds(&record, chip).ok_or("find chip bounds missing after wait")?;
+        let (ox, oy, w, h) = find_chip_bounds(&record, chip).ok_or("find chip bounds missing after wait")?;
         let scale = if record.viewport.scale_factor > 0.0 {
             record.viewport.scale_factor
         } else {
@@ -528,10 +494,7 @@ pub fn editor_binary() -> SupportResult<PathBuf> {
             return Ok(fallback);
         }
     }
-    Err(
-        "could not find lst binary; run `cargo build -p lst-gpui --bin lst` or set LST_GPUI_BIN"
-            .into(),
-    )
+    Err("could not find lst binary; run `cargo build -p lst-gpui --bin lst` or set LST_GPUI_BIN".into())
 }
 
 pub fn wait_for_single_file(dir: &Path, timeout: Duration) -> SupportResult<PathBuf> {

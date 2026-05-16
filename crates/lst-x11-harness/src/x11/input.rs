@@ -56,11 +56,7 @@ pub(crate) fn move_pointer_to_window_point(
     Ok(())
 }
 
-pub(crate) fn move_pointer_to_window_center(
-    conn: &RustConnection,
-    root: Window,
-    window: &WindowInfo,
-) -> Result<()> {
+pub(crate) fn move_pointer_to_window_center(conn: &RustConnection, root: Window, window: &WindowInfo) -> Result<()> {
     move_pointer_to_window_point(
         conn,
         root,
@@ -98,12 +94,7 @@ pub(crate) fn button_release(conn: &RustConnection, root: Window, button: u8) ->
 /// fail the click-count promotion. Sleep briefly between pairs — well
 /// inside the typical click-interval threshold (~200ms) but long enough for
 /// the application to observe distinct click phases reliably under load.
-pub(crate) fn multi_click_button(
-    conn: &RustConnection,
-    root: Window,
-    button: u8,
-    count: usize,
-) -> Result<()> {
+pub(crate) fn multi_click_button(conn: &RustConnection, root: Window, button: u8, count: usize) -> Result<()> {
     for index in 0..count {
         if index > 0 {
             conn.flush()?;
@@ -274,11 +265,7 @@ pub(crate) fn release_modifiers_with_platform(
     Ok(())
 }
 
-pub(crate) fn release_all_modifiers(
-    conn: &RustConnection,
-    root: Window,
-    kc: &Keycodes,
-) -> Result<()> {
+pub(crate) fn release_all_modifiers(conn: &RustConnection, root: Window, kc: &Keycodes) -> Result<()> {
     release_modifiers_with_platform(conn, root, kc, true, true, true, true)
 }
 

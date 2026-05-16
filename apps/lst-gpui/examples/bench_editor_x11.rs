@@ -49,10 +49,7 @@ const KEYSYM_TAB: u32 = 0xff09;
 const KEYSYM_SPACE: u32 = 0x20;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    if env::args()
-        .skip(1)
-        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
-    {
+    if env::args().skip(1).any(|arg| matches!(arg.as_str(), "-h" | "--help")) {
         print_usage();
         return Ok(());
     }
@@ -310,12 +307,8 @@ impl Bench {
                 Scenario::ScrollHighlighted | Scenario::ScrollPlain => {
                     self.run_scroll(scenario, &corpus, run_index, args.keep_temp_on_failure)?
                 }
-                Scenario::OpenLarge => {
-                    self.run_open_large(scenario, &corpus, run_index, args.keep_temp_on_failure)?
-                }
-                Scenario::SearchLarge => {
-                    self.run_search(scenario, &corpus, run_index, args.keep_temp_on_failure)?
-                }
+                Scenario::OpenLarge => self.run_open_large(scenario, &corpus, run_index, args.keep_temp_on_failure)?,
+                Scenario::SearchLarge => self.run_search(scenario, &corpus, run_index, args.keep_temp_on_failure)?,
             };
 
             if let Some((width, height)) = expected_window {
@@ -341,14 +334,7 @@ impl Bench {
             }
         }
 
-        emit_summary(
-            scenario,
-            args,
-            &self.session_env,
-            &corpus,
-            expected_window,
-            &runs,
-        )
+        emit_summary(scenario, args, &self.session_env, &corpus, expected_window, &runs)
     }
 
     fn run_large_paste(
@@ -380,11 +366,7 @@ impl Bench {
                 &mut child,
                 Duration::from_millis(WINDOW_DISCOVERY_TIMEOUT_MS),
             )?;
-            let damage = damage::DamageWrapper::create(
-                &self.conn,
-                window.id,
-                damage::ReportLevel::NON_EMPTY,
-            )?;
+            let damage = damage::DamageWrapper::create(&self.conn, window.id, damage::ReportLevel::NON_EMPTY)?;
             self.conn.flush()?;
             let _ = wait_for_damage_quiet(
                 &self.conn,
@@ -410,12 +392,7 @@ impl Bench {
             let trace_started = Instant::now();
 
             let select_all_started = Instant::now();
-            inject_ctrl_chord(
-                &self.conn,
-                self.root,
-                self.keycodes.control_l,
-                self.keycodes.a,
-            )?;
+            inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.a)?;
             let mut damage_events = wait_for_damage_quiet(
                 &self.conn,
                 damage.damage(),
@@ -427,22 +404,12 @@ impl Bench {
             let select_all_ms = elapsed_ms(select_all_started);
 
             let copy_started = Instant::now();
-            inject_ctrl_chord(
-                &self.conn,
-                self.root,
-                self.keycodes.control_l,
-                self.keycodes.c,
-            )?;
+            inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.c)?;
             wait_for_clipboard_bytes(corpus.bytes, Duration::from_millis(CLIPBOARD_TIMEOUT_MS))?;
             let copy_clipboard_ms = elapsed_ms(copy_started);
 
             let tab_started = Instant::now();
-            inject_ctrl_chord(
-                &self.conn,
-                self.root,
-                self.keycodes.control_l,
-                self.keycodes.tab,
-            )?;
+            inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.tab)?;
             damage_events += wait_for_damage_quiet(
                 &self.conn,
                 damage.damage(),
@@ -454,12 +421,7 @@ impl Bench {
             let tab_switch_ms = elapsed_ms(tab_started);
 
             let paste_started = Instant::now();
-            inject_ctrl_chord(
-                &self.conn,
-                self.root,
-                self.keycodes.control_l,
-                self.keycodes.v,
-            )?;
+            inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.v)?;
             let (paste_damage_events, save_retry_count, final_stats) =
                 wait_for_file_text_with_save_retry(FileTextWait {
                     conn: &self.conn,
@@ -493,12 +455,7 @@ impl Bench {
             metrics.set("final_file_bytes", final_stats.bytes as f64);
             metrics.set("final_file_lines", final_stats.lines as f64);
             add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
-            add_trace_last(
-                &mut metrics,
-                &trace,
-                "paste_clipboard_apply_ms",
-                "paste_apply_ms",
-            );
+            add_trace_last(&mut metrics, &trace, "paste_clipboard_apply_ms", "paste_apply_ms");
             add_trace_last(
                 &mut metrics,
                 &trace,
@@ -548,11 +505,7 @@ impl Bench {
                 &mut child,
                 Duration::from_millis(WINDOW_DISCOVERY_TIMEOUT_MS),
             )?;
-            let damage = damage::DamageWrapper::create(
-                &self.conn,
-                window.id,
-                damage::ReportLevel::NON_EMPTY,
-            )?;
+            let damage = damage::DamageWrapper::create(&self.conn, window.id, damage::ReportLevel::NON_EMPTY)?;
             self.conn.flush()?;
             let _ = wait_for_damage_quiet(
                 &self.conn,
@@ -624,10 +577,7 @@ impl Bench {
         })();
 
         let terminate_result = terminate_child(&mut child);
-        cleanup_paths_if(
-            [file_path, trace_path],
-            result.is_ok() || !keep_temp_on_failure,
-        );
+        cleanup_paths_if([file_path, trace_path], result.is_ok() || !keep_temp_on_failure);
         terminate_result?;
         result
     }
@@ -658,11 +608,7 @@ impl Bench {
                 &mut child,
                 Duration::from_millis(WINDOW_DISCOVERY_TIMEOUT_MS),
             )?;
-            let damage = damage::DamageWrapper::create(
-                &self.conn,
-                window.id,
-                damage::ReportLevel::NON_EMPTY,
-            )?;
+            let damage = damage::DamageWrapper::create(&self.conn, window.id, damage::ReportLevel::NON_EMPTY)?;
             self.conn.flush()?;
             let _ = wait_for_damage_quiet(
                 &self.conn,
@@ -675,13 +621,7 @@ impl Bench {
             let startup_ms = elapsed_ms(startup_started);
 
             focus_window(&self.conn, self.root, &window)?;
-            inject_wheel_burst(
-                &self.conn,
-                self.root,
-                BUTTON_WHEEL_DOWN,
-                20,
-                Duration::from_millis(150),
-            )?;
+            inject_wheel_burst(&self.conn, self.root, BUTTON_WHEEL_DOWN, 20, Duration::from_millis(150))?;
             let _ = wait_for_damage_quiet(
                 &self.conn,
                 damage.damage(),
@@ -725,10 +665,7 @@ impl Bench {
             metrics.set("trace_wall_ms", trace_wall_ms);
             metrics.set("scroll_overrun_ms", (trace_wall_ms - scheduled_ms).max(0.0));
             metrics.set("damage_events", damage_events as f64);
-            metrics.set(
-                "damage_hz_proxy",
-                damage_hz_proxy(damage_events, trace_wall_ms),
-            );
+            metrics.set("damage_hz_proxy", damage_hz_proxy(damage_events, trace_wall_ms));
             add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
             Ok(metrics)
         })();
@@ -767,11 +704,7 @@ impl Bench {
                 &mut child,
                 Duration::from_millis(WINDOW_DISCOVERY_TIMEOUT_MS),
             )?;
-            let damage = damage::DamageWrapper::create(
-                &self.conn,
-                window.id,
-                damage::ReportLevel::NON_EMPTY,
-            )?;
+            let damage = damage::DamageWrapper::create(&self.conn, window.id, damage::ReportLevel::NON_EMPTY)?;
             self.conn.flush()?;
             let damage_events = wait_for_damage_quiet(
                 &self.conn,
@@ -826,11 +759,7 @@ impl Bench {
                 &mut child,
                 Duration::from_millis(WINDOW_DISCOVERY_TIMEOUT_MS),
             )?;
-            let damage = damage::DamageWrapper::create(
-                &self.conn,
-                window.id,
-                damage::ReportLevel::NON_EMPTY,
-            )?;
+            let damage = damage::DamageWrapper::create(&self.conn, window.id, damage::ReportLevel::NON_EMPTY)?;
             self.conn.flush()?;
             let _ = wait_for_damage_quiet(
                 &self.conn,
@@ -845,12 +774,7 @@ impl Bench {
             focus_window(&self.conn, self.root, &window)?;
             let before = proc_sample(pid)?;
             let trace_started = Instant::now();
-            inject_ctrl_chord(
-                &self.conn,
-                self.root,
-                self.keycodes.control_l,
-                self.keycodes.f,
-            )?;
+            inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.f)?;
             let _ = wait_for_damage_quiet(
                 &self.conn,
                 damage.damage(),
@@ -923,20 +847,12 @@ impl Bench {
         })();
 
         let terminate_result = terminate_child(&mut child);
-        cleanup_paths_if(
-            [file_path, trace_path],
-            result.is_ok() || !keep_temp_on_failure,
-        );
+        cleanup_paths_if([file_path, trace_path], result.is_ok() || !keep_temp_on_failure);
         terminate_result?;
         result
     }
 
-    fn spawn_editor(
-        &self,
-        files: &[&Path],
-        title: &str,
-        trace_path: Option<&Path>,
-    ) -> Result<Child, Box<dyn Error>> {
+    fn spawn_editor(&self, files: &[&Path], title: &str, trace_path: Option<&Path>) -> Result<Child, Box<dyn Error>> {
         let mut command = Command::new(&self.editor);
         command
             .arg("--title")
@@ -984,12 +900,8 @@ struct Corpus {
 impl Corpus {
     fn load(kind: CorpusKind) -> Self {
         let text = match kind {
-            CorpusKind::MediumRust => {
-                generated_rust_corpus(MEDIUM_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE)
-            }
-            CorpusKind::LargeRust => {
-                generated_rust_corpus(LARGE_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE)
-            }
+            CorpusKind::MediumRust => generated_rust_corpus(MEDIUM_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
+            CorpusKind::LargeRust => generated_rust_corpus(LARGE_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
             CorpusKind::LargePlain => generated_plain_corpus(LARGE_PLAIN_LINES),
         };
         Self {
@@ -1039,9 +951,7 @@ fn generated_rust_corpus(module_count: usize, functions_per_module: usize) -> St
 
 fn generated_plain_corpus(lines: usize) -> String {
     let mut text = String::new();
-    text.push_str(
-        "Generated plain-text benchmark corpus for scrolling without syntax highlighting.\n",
-    );
+    text.push_str("Generated plain-text benchmark corpus for scrolling without syntax highlighting.\n");
     for line_ix in 0..lines {
         text.push_str(&format!(
             "row {line_ix:05}: viewport measurement text with numbers {} {} {}\n",
@@ -1216,12 +1126,7 @@ fn join_metric_runs(runs: &[RunMetrics], metric: &str) -> Result<String, Box<dyn
 }
 
 fn median_metric(runs: &[RunMetrics], metric: &str) -> Result<f64, Box<dyn Error>> {
-    median_f64(
-        &runs
-            .iter()
-            .map(|run| run.get(metric))
-            .collect::<Result<Vec<_>, _>>()?,
-    )
+    median_f64(&runs.iter().map(|run| run.get(metric)).collect::<Result<Vec<_>, _>>()?)
 }
 
 fn is_integer_metric(metric: &str) -> bool {
@@ -1233,20 +1138,9 @@ fn is_integer_metric(metric: &str) -> bool {
         || metric.ends_with("_len")
 }
 
-fn add_process_metrics(
-    metrics: &mut RunMetrics,
-    before: &ProcSample,
-    after: &ProcSample,
-    ticks_per_second: u64,
-) {
-    let user_cpu_ms = ticks_to_ms(
-        after.utime_ticks.saturating_sub(before.utime_ticks),
-        ticks_per_second,
-    );
-    let sys_cpu_ms = ticks_to_ms(
-        after.stime_ticks.saturating_sub(before.stime_ticks),
-        ticks_per_second,
-    );
+fn add_process_metrics(metrics: &mut RunMetrics, before: &ProcSample, after: &ProcSample, ticks_per_second: u64) {
+    let user_cpu_ms = ticks_to_ms(after.utime_ticks.saturating_sub(before.utime_ticks), ticks_per_second);
+    let sys_cpu_ms = ticks_to_ms(after.stime_ticks.saturating_sub(before.stime_ticks), ticks_per_second);
     metrics.set("user_cpu_ms", user_cpu_ms);
     metrics.set("sys_cpu_ms", sys_cpu_ms);
     metrics.set("cpu_ms", user_cpu_ms + sys_cpu_ms);
@@ -1295,9 +1189,7 @@ impl EditorTrace {
                 continue;
             };
             let Ok(value) = value.parse::<f64>() else {
-                trace
-                    .last_labels
-                    .insert(label.to_string(), value.to_string());
+                trace.last_labels.insert(label.to_string(), value.to_string());
                 continue;
             };
             trace.last_values.insert(label.to_string(), value);
@@ -1342,12 +1234,7 @@ fn read_editor_trace(path: &Path) -> Result<EditorTrace, Box<dyn Error>> {
     Ok(EditorTrace::parse(&contents))
 }
 
-fn wait_for_trace_label(
-    path: &Path,
-    label: &str,
-    expected: &str,
-    timeout: Duration,
-) -> Result<(), Box<dyn Error>> {
+fn wait_for_trace_label(path: &Path, label: &str, expected: &str, timeout: Duration) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
 
     loop {
@@ -1356,10 +1243,7 @@ fn wait_for_trace_label(
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(io::Error::other(format!(
-                "timed out waiting for trace {label}={expected}"
-            ))
-            .into());
+            return Err(io::Error::other(format!("timed out waiting for trace {label}={expected}")).into());
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -1378,10 +1262,7 @@ fn find_window(
 
     loop {
         if let Some(status) = child.try_wait()? {
-            return Err(io::Error::other(format!(
-                "editor exited before its window appeared: {status}"
-            ))
-            .into());
+            return Err(io::Error::other(format!("editor exited before its window appeared: {status}")).into());
         }
 
         if let Some(info) = find_window_recursive(conn, root, root, atoms, pid, title)? {
@@ -1462,11 +1343,7 @@ fn window_matches(
     Ok(window_title(conn, window, atoms)?.as_deref() == Some(title))
 }
 
-fn window_pid(
-    conn: &RustConnection,
-    window: xproto::Window,
-    atoms: &Atoms,
-) -> Result<Option<u32>, Box<dyn Error>> {
+fn window_pid(conn: &RustConnection, window: xproto::Window, atoms: &Atoms) -> Result<Option<u32>, Box<dyn Error>> {
     let reply = match conn
         .get_property(false, window, atoms.net_wm_pid, AtomEnum::CARDINAL, 0, 1)?
         .reply()
@@ -1517,11 +1394,7 @@ fn is_stale_window_error(error: &ReplyError) -> bool {
     )
 }
 
-fn focus_window(
-    conn: &RustConnection,
-    root: xproto::Window,
-    window: &WindowInfo,
-) -> Result<(), Box<dyn Error>> {
+fn focus_window(conn: &RustConnection, root: xproto::Window, window: &WindowInfo) -> Result<(), Box<dyn Error>> {
     move_pointer_to_window_center(conn, root, window)?;
     thread::sleep(Duration::from_millis(POINTER_SETTLE_MS));
     inject_button_click(conn, root, BUTTON_LEFT)
@@ -1543,10 +1416,7 @@ fn click_find_query_field(
     inject_button_click(conn, root, BUTTON_LEFT)
 }
 
-fn focus_window_for_keyboard(
-    conn: &RustConnection,
-    window: &WindowInfo,
-) -> Result<(), Box<dyn Error>> {
+fn focus_window_for_keyboard(conn: &RustConnection, window: &WindowInfo) -> Result<(), Box<dyn Error>> {
     conn.set_input_focus(xproto::InputFocus::PARENT, window.id, x11rb::CURRENT_TIME)?;
     conn.flush()?;
     thread::sleep(Duration::from_millis(POINTER_SETTLE_MS));
@@ -1581,11 +1451,7 @@ fn move_pointer_to_window_point(
     Ok(())
 }
 
-fn inject_button_click(
-    conn: &RustConnection,
-    root: xproto::Window,
-    button: u8,
-) -> Result<(), Box<dyn Error>> {
+fn inject_button_click(conn: &RustConnection, root: xproto::Window, button: u8) -> Result<(), Box<dyn Error>> {
     conn.xtest_fake_input(xproto::BUTTON_PRESS_EVENT, button, 0, root, 0, 0, 0)?;
     conn.xtest_fake_input(xproto::BUTTON_RELEASE_EVENT, button, 0, root, 0, 0, 0)?;
     conn.flush()?;
@@ -1725,9 +1591,7 @@ struct FileTextWait<'a> {
     timeout: Duration,
 }
 
-fn wait_for_file_text_with_save_retry(
-    input: FileTextWait<'_>,
-) -> Result<(u64, u64, FileStats), Box<dyn Error>> {
+fn wait_for_file_text_with_save_retry(input: FileTextWait<'_>) -> Result<(u64, u64, FileStats), Box<dyn Error>> {
     let FileTextWait {
         conn,
         damage_id,
@@ -1917,9 +1781,10 @@ fn editor_path() -> Result<PathBuf, Box<dyn Error>> {
         return Ok(sibling);
     }
 
-    Err(io::Error::other(
-        "could not find sibling editor binary 'lst'; build with `cargo build --release -p lst-gpui --bin lst --example bench_editor_x11`",
-    )
+    Err(io::Error::other(concat!(
+        "could not find sibling editor binary 'lst'; build with ",
+        "`cargo build --release -p lst-gpui --bin lst --example bench_editor_x11`"
+    ))
     .into())
 }
 
@@ -1963,13 +1828,9 @@ fn resolve_session_env() -> Result<SessionEnv, Box<dyn Error>> {
             xauthority: vars.get("XAUTHORITY").cloned(),
             dbus_session_bus_address: vars.get("DBUS_SESSION_BUS_ADDRESS").cloned(),
         };
-        let score = usize::from(candidate.xauthority.is_some())
-            + usize::from(candidate.dbus_session_bus_address.is_some());
-        if best
-            .as_ref()
-            .map(|(best_score, _)| score > *best_score)
-            .unwrap_or(true)
-        {
+        let score =
+            usize::from(candidate.xauthority.is_some()) + usize::from(candidate.dbus_session_bus_address.is_some());
+        if best.as_ref().map(|(best_score, _)| score > *best_score).unwrap_or(true) {
             best = Some((score, candidate));
         }
     }
@@ -2061,10 +1922,7 @@ fn cleanup_paths_if(paths: impl IntoIterator<Item = PathBuf>, should_cleanup: bo
         match fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => eprintln!(
-                "failed to remove temporary benchmark file {}: {error}",
-                path.display()
-            ),
+            Err(error) => eprintln!("failed to remove temporary benchmark file {}: {error}", path.display()),
         }
     }
 }
@@ -2135,9 +1993,7 @@ impl Keycodes {
     fn resolve(conn: &RustConnection) -> Result<Self, Box<dyn Error>> {
         let setup = conn.setup();
         let count = setup.max_keycode - setup.min_keycode + 1;
-        let reply = conn
-            .get_keyboard_mapping(setup.min_keycode, count)?
-            .reply()?;
+        let reply = conn.get_keyboard_mapping(setup.min_keycode, count)?.reply()?;
         let active_group = active_keyboard_group(conn)?;
         let mut lower = HashMap::new();
         for byte in b'a'..=b'z' {
@@ -2222,15 +2078,8 @@ mod tests {
 
     #[test]
     fn parses_targeted_scenario_and_counts() {
-        let args = parse_args_from([
-            "--scenario",
-            "typing-large",
-            "--repetitions",
-            "3",
-            "--priming",
-            "0",
-        ])
-        .expect("args should parse");
+        let args = parse_args_from(["--scenario", "typing-large", "--repetitions", "3", "--priming", "0"])
+            .expect("args should parse");
 
         assert_eq!(args.scenario, Scenario::TypingLarge);
         assert_eq!(args.repetitions, 3);
@@ -2297,9 +2146,7 @@ mod tests {
 
     #[test]
     fn trace_parser_keeps_last_and_aggregates_repeated_values() {
-        let trace = EditorTrace::parse(
-            "text_input_apply_ms=1.5\ntext_input_apply_ms=2.5\nfind_query_len=3\n",
-        );
+        let trace = EditorTrace::parse("text_input_apply_ms=1.5\ntext_input_apply_ms=2.5\nfind_query_len=3\n");
 
         assert_eq!(trace.last("text_input_apply_ms"), Some(2.5));
         assert_eq!(trace.sum("text_input_apply_ms"), Some(4.0));

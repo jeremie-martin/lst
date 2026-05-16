@@ -36,8 +36,7 @@ fn recent_panel_path_query_opens_matching_file() -> TestResult {
 
         editor.keys("<enter>")?;
         editor.wait_state("recent target opened", secs(5), |record| {
-            !record.recent_panel_open
-                && record.active_tab_path.as_deref() == Some(target_text.as_str())
+            !record.recent_panel_open && record.active_tab_path.as_deref() == Some(target_text.as_str())
         })?;
         editor.keys("X")?;
         editor.save_then_expect_file(&target, "Xtarget\n")?;
@@ -51,9 +50,7 @@ fn recent_panel_path_query_searches_beyond_initial_batch() -> TestResult {
     support::run_x11_test("recent-path-query-beyond-batch", |session| {
         let mut paths = Vec::new();
         for index in 0..65 {
-            paths.push(
-                session.seed_file(&format!("file-{index:02}.txt"), &format!("body {index}\n"))?,
-            );
+            paths.push(session.seed_file(&format!("file-{index:02}.txt"), &format!("body {index}\n"))?);
         }
         let target = paths[64].clone();
         let target_text = path_text(&target);
@@ -61,25 +58,16 @@ fn recent_panel_path_query_searches_beyond_initial_batch() -> TestResult {
 
         let (mut editor, _scratchpad) = session.open("recent-path-query-beyond-batch")?;
         editor.keys("<C-r>file-64")?;
-        editor.wait_state(
-            "recent search selected target beyond first batch",
-            secs(5),
-            |record| {
-                record.recent_panel_open
-                    && record.recent_panel_query.as_deref() == Some("file-64")
-                    && record.recent_panel_selected_path.as_deref() == Some(target_text.as_str())
-            },
-        )?;
+        editor.wait_state("recent search selected target beyond first batch", secs(5), |record| {
+            record.recent_panel_open
+                && record.recent_panel_query.as_deref() == Some("file-64")
+                && record.recent_panel_selected_path.as_deref() == Some(target_text.as_str())
+        })?;
 
         editor.keys("<enter>")?;
-        editor.wait_state(
-            "recent target beyond first batch opened",
-            secs(5),
-            |record| {
-                !record.recent_panel_open
-                    && record.active_tab_path.as_deref() == Some(target_text.as_str())
-            },
-        )?;
+        editor.wait_state("recent target beyond first batch opened", secs(5), |record| {
+            !record.recent_panel_open && record.active_tab_path.as_deref() == Some(target_text.as_str())
+        })?;
         editor.keys("X")?;
         editor.save_then_expect_file(&target, "Xbody 64\n")?;
         Ok(())
@@ -107,14 +95,12 @@ fn recent_panel_keyboard_selection_opens_selected_file() -> TestResult {
 
         editor.keys("<tab>")?;
         editor.wait_state("recent second selection", secs(5), |record| {
-            record.recent_panel_open
-                && record.recent_panel_selected_path.as_deref() == Some(two_text.as_str())
+            record.recent_panel_open && record.recent_panel_selected_path.as_deref() == Some(two_text.as_str())
         })?;
 
         editor.keys("<enter>")?;
         editor.wait_state("recent second file opened", secs(5), |record| {
-            !record.recent_panel_open
-                && record.active_tab_path.as_deref() == Some(two_text.as_str())
+            !record.recent_panel_open && record.active_tab_path.as_deref() == Some(two_text.as_str())
         })?;
         editor.keys("X")?;
         editor.save_then_expect_file(&two, "Xtwo\n")?;
@@ -168,21 +154,16 @@ fn recent_panel_content_query_opens_file_matching_body() -> TestResult {
                 && record.recent_panel_query.as_deref() == Some("needle")
                 && record.recent_panel_content_search_pending
         })?;
-        editor.wait_state(
-            "recent content filter selected target",
-            secs(10),
-            |record| {
-                record.recent_panel_open
-                    && record.recent_panel_query.as_deref() == Some("needle")
-                    && !record.recent_panel_content_search_pending
-                    && record.recent_panel_selected_path.as_deref() == Some(target_text.as_str())
-            },
-        )?;
+        editor.wait_state("recent content filter selected target", secs(10), |record| {
+            record.recent_panel_open
+                && record.recent_panel_query.as_deref() == Some("needle")
+                && !record.recent_panel_content_search_pending
+                && record.recent_panel_selected_path.as_deref() == Some(target_text.as_str())
+        })?;
 
         editor.keys("<enter>")?;
         editor.wait_state("recent content match opened", secs(5), |record| {
-            !record.recent_panel_open
-                && record.active_tab_path.as_deref() == Some(target_text.as_str())
+            !record.recent_panel_open && record.active_tab_path.as_deref() == Some(target_text.as_str())
         })?;
         Ok(())
     })
@@ -195,8 +176,7 @@ fn recent_panel_empty_states_are_visible() -> TestResult {
         let (mut editor, _scratchpad) = session.open("recent-empty-history")?;
         editor.keys("<C-r>")?;
         editor.wait_state("recent empty history", secs(5), |record| {
-            record.recent_panel_open
-                && record.recent_panel_empty_message.as_deref() == Some("No recent files")
+            record.recent_panel_open && record.recent_panel_empty_message.as_deref() == Some("No recent files")
         })?;
         editor.keys("<escape>")?;
         editor.wait_state("recent closed", secs(5), |record| !record.recent_panel_open)?;
@@ -210,8 +190,7 @@ fn recent_panel_empty_states_are_visible() -> TestResult {
         editor.wait_state("recent query miss", secs(5), |record| {
             record.recent_panel_open
                 && record.recent_panel_query.as_deref() == Some("missing")
-                && record.recent_panel_empty_message.as_deref()
-                    == Some("No matches for \"missing\"")
+                && record.recent_panel_empty_message.as_deref() == Some("No matches for \"missing\"")
         })?;
         Ok(())
     })
@@ -228,8 +207,7 @@ fn opening_missing_recent_file_prunes_it_from_the_panel() -> TestResult {
         let (mut editor, _scratchpad) = session.open("recent-missing-prune")?;
         editor.keys("<C-r>")?;
         editor.wait_state("missing recent selected", secs(5), |record| {
-            record.recent_panel_open
-                && record.recent_panel_selected_path.as_deref() == Some(missing_text.as_str())
+            record.recent_panel_open && record.recent_panel_selected_path.as_deref() == Some(missing_text.as_str())
         })?;
 
         editor.keys("<enter>")?;

@@ -10,9 +10,7 @@ use lst_x11_harness::{clipboard::write_clipboard_text, ChordMods, Selection};
 
 use support::{EditorTestExt, TestResult};
 
-fn anchor_head_positions(
-    record: &lst_x11_harness::StateTraceRecord,
-) -> Vec<((usize, usize), (usize, usize))> {
+fn anchor_head_positions(record: &lst_x11_harness::StateTraceRecord) -> Vec<((usize, usize), (usize, usize))> {
     record
         .cursors
         .iter()
@@ -492,8 +490,7 @@ fn paste_distribute_is_one_undo_step() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn shift_tab_outdents_each_touched_multi_cursor_line() -> TestResult {
     support::run_x11_test("multi-cursor-tdd-shift-tab-each-line", |session| {
-        let path =
-            session.seed_file("shift-tab-each-line.txt", "    alpha\n    beta\n    gamma")?;
+        let path = session.seed_file("shift-tab-each-line.txt", "    alpha\n    beta\n    gamma")?;
         let mut editor = session.open_file("shift-tab-each-line", &path)?;
 
         editor.place_cursor_at_document_start()?;

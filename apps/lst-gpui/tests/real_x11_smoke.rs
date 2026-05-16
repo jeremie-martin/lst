@@ -70,9 +70,7 @@ fn primary_selection_round_trips_via_middle_click() -> TestResult {
         let (mut editor, path) = session.open("scratch")?;
 
         if !editor.is_viewable()? {
-            eprintln!(
-                "skipping middle-click PRIMARY paste check because the X11 window is not viewable"
-            );
+            eprintln!("skipping middle-click PRIMARY paste check because the X11 window is not viewable");
             return Ok(());
         }
 
@@ -87,11 +85,7 @@ fn primary_selection_round_trips_via_middle_click() -> TestResult {
     })
 }
 
-fn with_seed_file(
-    session: &ScratchpadSession,
-    name: &str,
-    contents: &str,
-) -> SupportResult<std::path::PathBuf> {
+fn with_seed_file(session: &ScratchpadSession, name: &str, contents: &str) -> SupportResult<std::path::PathBuf> {
     let path = session.root().join(name);
     fs::write(&path, contents)?;
     Ok(path)

@@ -24,10 +24,7 @@ mod support;
 use support::{EditorTestExt, TestResult};
 
 fn ten_line_fixture() -> String {
-    (0..10)
-        .map(|i| format!("line{i}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+    (0..10).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n")
 }
 
 #[test]

@@ -38,14 +38,10 @@ fn insert_key_toggles_overtype_visible_in_status_bar() -> TestResult {
         );
 
         editor.keys("<insert>")?;
-        editor.wait_state("overtype on", secs(2), |record| {
-            record.status_bar.contains("OVR")
-        })?;
+        editor.wait_state("overtype on", secs(2), |record| record.status_bar.contains("OVR"))?;
 
         editor.keys("<insert>")?;
-        editor.wait_state("overtype off", secs(2), |record| {
-            !record.status_bar.contains("OVR")
-        })?;
+        editor.wait_state("overtype off", secs(2), |record| !record.status_bar.contains("OVR"))?;
         Ok(())
     })
 }
@@ -99,9 +95,7 @@ fn overtype_persists_across_motion_until_toggled_off() -> TestResult {
 
         editor.place_cursor_at_document_start()?;
         editor.keys("<insert>")?;
-        editor.wait_state("overtype on", secs(2), |record| {
-            record.status_bar.contains("OVR")
-        })?;
+        editor.wait_state("overtype on", secs(2), |record| record.status_bar.contains("OVR"))?;
 
         // Trace:
         //   start "abcdef", caret (0,0)
@@ -114,9 +108,7 @@ fn overtype_persists_across_motion_until_toggled_off() -> TestResult {
 
         // Toggle off; subsequent typing inserts again.
         editor.keys("<insert>")?;
-        editor.wait_state("overtype off", secs(2), |record| {
-            !record.status_bar.contains("OVR")
-        })?;
+        editor.wait_state("overtype off", secs(2), |record| !record.status_bar.contains("OVR"))?;
         editor.keys("Z")?;
         editor.save_then_expect_file(&path, "XbcYZef")?;
         Ok(())

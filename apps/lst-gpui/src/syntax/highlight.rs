@@ -1,8 +1,8 @@
 use super::{catalog, SyntaxLanguage, SyntaxSpan};
 use crate::ui::theme::SyntaxRole;
 use tree_sitter_highlight::{
-    Highlight as TreeSitterHighlight, HighlightConfiguration,
-    HighlightEvent as TreeSitterHighlightEvent, Highlighter as TreeSitterHighlighter,
+    Highlight as TreeSitterHighlight, HighlightConfiguration, HighlightEvent as TreeSitterHighlightEvent,
+    Highlighter as TreeSitterHighlighter,
 };
 
 pub(super) fn highlight_source(language: SyntaxLanguage, source: &str) -> Vec<Vec<SyntaxSpan>> {
@@ -28,10 +28,7 @@ pub(super) fn highlight_source(language: SyntaxLanguage, source: &str) -> Vec<Ve
                 let _ = stack.pop();
             }
             Ok(TreeSitterHighlightEvent::Source { start, end }) if start < end => {
-                let Some(role) = stack
-                    .last()
-                    .and_then(|highlight| role_for_capture(highlight.0))
-                else {
+                let Some(role) = stack.last().and_then(|highlight| role_for_capture(highlight.0)) else {
                     continue;
                 };
                 push_highlight_span(&mut lines, &line_starts, &display_ends, start, end, role);
@@ -54,10 +51,7 @@ fn role_for_capture(index: usize) -> Option<SyntaxRole> {
         Some(SyntaxRole::Comment)
     } else if capture.starts_with("string") {
         Some(SyntaxRole::String)
-    } else if matches!(
-        capture,
-        "boolean" | "number" | "constant" | "constant.builtin"
-    ) {
+    } else if matches!(capture, "boolean" | "number" | "constant" | "constant.builtin") {
         Some(SyntaxRole::Constant)
     } else if capture.starts_with("function")
         || capture.starts_with("definition.function")
@@ -137,9 +131,7 @@ fn push_highlight_span(
     role: SyntaxRole,
 ) {
     while start < end {
-        let line_ix = line_starts
-            .partition_point(|offset| *offset <= start)
-            .saturating_sub(1);
+        let line_ix = line_starts.partition_point(|offset| *offset <= start).saturating_sub(1);
         let line_start = line_starts[line_ix];
         let display_end = display_ends[line_ix];
         let next_line_start = line_starts.get(line_ix + 1).copied().unwrap_or(end);

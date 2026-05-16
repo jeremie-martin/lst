@@ -22,7 +22,12 @@ pub struct VimHarness {
 impl VimHarness {
     pub fn new(text: &str) -> Self {
         let tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("vim-spec.md"), text, None);
-        let mut harness = Self { model: EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string()), focus: FocusTarget::Editor, effects: Vec::new(), deferred_find_query: None };
+        let mut harness = Self {
+            model: EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string()),
+            focus: FocusTarget::Editor,
+            effects: Vec::new(),
+            deferred_find_query: None,
+        };
         harness.sync_effects();
         harness
     }
@@ -39,7 +44,12 @@ impl VimHarness {
     pub fn with_two_tabs(first: &str, second: &str) -> Self {
         let first = EditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("first.md"), first, None);
         let second = EditorTab::from_path_with_stamp(TabId::from_raw(2), PathBuf::from("second.md"), second, None);
-        let mut harness = Self { model: EditorModel::from_tabs(first, vec![second], "Ready.".to_string()), focus: FocusTarget::Editor, effects: Vec::new(), deferred_find_query: None };
+        let mut harness = Self {
+            model: EditorModel::from_tabs(first, vec![second], "Ready.".to_string()),
+            focus: FocusTarget::Editor,
+            effects: Vec::new(),
+            deferred_find_query: None,
+        };
         harness.sync_effects();
         harness
     }
@@ -107,15 +117,23 @@ impl VimHarness {
                 self.model.close_find_panel();
             }
             Key::Character(text) => {
-                self.deferred_find_query.get_or_insert_with(|| self.model.find().query.clone()).push_str(&text);
+                self.deferred_find_query
+                    .get_or_insert_with(|| self.model.find().query.clone())
+                    .push_str(&text);
             }
             Key::Named(NamedKey::Backspace) => {
-                let mut query = self.deferred_find_query.take().unwrap_or_else(|| self.model.find().query.clone());
+                let mut query = self
+                    .deferred_find_query
+                    .take()
+                    .unwrap_or_else(|| self.model.find().query.clone());
                 query.pop();
                 self.deferred_find_query = Some(query);
             }
             Key::Named(NamedKey::Enter) => {
-                let query = self.deferred_find_query.take().unwrap_or_else(|| self.model.find().query.clone());
+                let query = self
+                    .deferred_find_query
+                    .take()
+                    .unwrap_or_else(|| self.model.find().query.clone());
                 let was_visual = matches!(self.model.vim_mode(), vim::Mode::Visual | vim::Mode::VisualLine);
                 self.model.update_find_query_and_activate(query);
                 if was_visual {
@@ -200,8 +218,20 @@ impl VimHarness {
     #[track_caller]
     pub fn expect_visual_state(&self, anchor: (usize, usize), head: (usize, usize)) {
         let state = self.model.vim_visual_state().expect("visual state");
-        assert_eq!(state.anchor, Position { line: anchor.0, column: anchor.1 });
-        assert_eq!(state.head, Position { line: head.0, column: head.1 });
+        assert_eq!(
+            state.anchor,
+            Position {
+                line: anchor.0,
+                column: anchor.1
+            }
+        );
+        assert_eq!(
+            state.head,
+            Position {
+                line: head.0,
+                column: head.1
+            }
+        );
     }
 
     #[track_caller]
@@ -214,7 +244,15 @@ pub fn run_cursor_cases(cases: &[CursorCase<'_>]) {
     for &(name, text, start, keys, expected) in cases {
         let mut harness = VimHarness::normal_at(text, start.0, start.1);
         harness.keys(keys);
-        assert_eq!(harness.cursor(), Position { line: expected.0, column: expected.1 }, "{}", name);
+        assert_eq!(
+            harness.cursor(),
+            Position {
+                line: expected.0,
+                column: expected.1
+            },
+            "{}",
+            name
+        );
     }
 }
 
@@ -261,7 +299,11 @@ fn parse_token(token: &str) -> (Key, vim::Modifiers) {
         if let Some(stripped) = rest.strip_prefix("c-").or_else(|| rest.strip_prefix("ctrl-")) {
             modifiers.control = true;
             rest = stripped.to_string();
-        } else if let Some(stripped) = rest.strip_prefix("cmd-").or_else(|| rest.strip_prefix("command-")).or_else(|| rest.strip_prefix("super-")) {
+        } else if let Some(stripped) = rest
+            .strip_prefix("cmd-")
+            .or_else(|| rest.strip_prefix("command-"))
+            .or_else(|| rest.strip_prefix("super-"))
+        {
             modifiers.command = true;
             rest = stripped.to_string();
         } else {

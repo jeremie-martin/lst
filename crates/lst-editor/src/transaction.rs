@@ -26,7 +26,10 @@ pub(crate) struct TextChange {
 
 impl TextChange {
     pub(crate) fn replace(range: Range<usize>, replacement: impl Into<String>) -> Self {
-        Self { range, replacement: replacement.into() }
+        Self {
+            range,
+            replacement: replacement.into(),
+        }
     }
 
     pub(crate) fn insert(offset: usize, replacement: impl Into<String>) -> Self {
@@ -38,7 +41,10 @@ impl TextChange {
     }
 
     fn with_ordered_range(self) -> Self {
-        Self { range: ordered_range(self.range.start, self.range.end), replacement: self.replacement }
+        Self {
+            range: ordered_range(self.range.start, self.range.end),
+            replacement: self.replacement,
+        }
     }
 }
 
@@ -50,7 +56,10 @@ pub(crate) struct TextChangeSet {
 
 impl TextChangeSet {
     pub(crate) fn single(change: TextChange) -> Self {
-        Self { changes: vec![change.with_ordered_range()], primary: 0 }
+        Self {
+            changes: vec![change.with_ordered_range()],
+            primary: 0,
+        }
     }
 
     pub(crate) fn new(changes: Vec<TextChange>, primary: usize) -> Self {
@@ -74,8 +83,15 @@ impl TextChangeSet {
     }
 
     pub(crate) fn normalized_for_len(&self, len: usize) -> Self {
-        let changes = self.changes.iter().map(|change| TextChange::replace(clamped_range(change.range.clone(), len), change.replacement.clone())).collect();
-        Self { changes, primary: self.primary }
+        let changes = self
+            .changes
+            .iter()
+            .map(|change| TextChange::replace(clamped_range(change.range.clone(), len), change.replacement.clone()))
+            .collect();
+        Self {
+            changes,
+            primary: self.primary,
+        }
     }
 
     pub(crate) fn primary_inserted_range(&self) -> Range<usize> {
@@ -94,11 +110,21 @@ pub(crate) struct EditRequest {
 
 impl EditRequest {
     pub(crate) fn single(kind: EditKind, boundary: UndoBoundary, range: Range<usize>, replacement: String) -> Self {
-        Self::from_changes(kind, boundary, TextChangeSet::single(TextChange::replace(range, replacement)))
+        Self::from_changes(
+            kind,
+            boundary,
+            TextChangeSet::single(TextChange::replace(range, replacement)),
+        )
     }
 
     pub(crate) fn from_changes(kind: EditKind, boundary: UndoBoundary, changes: TextChangeSet) -> Self {
-        Self { kind, boundary, changes, selection_after: SelectionAfter::CollapseToInsertedEnd, marked_range_after: None }
+        Self {
+            kind,
+            boundary,
+            changes,
+            selection_after: SelectionAfter::CollapseToInsertedEnd,
+            marked_range_after: None,
+        }
     }
 
     pub(crate) fn other_break(changes: TextChangeSet) -> Self {
@@ -139,13 +165,20 @@ pub(crate) enum SelectionAfter {
     /// Final collapsed cursor clamped to the last displayed char on its line.
     CursorPositionBeforeLineEnd(Position),
     /// Final selection range in post-transaction line/column coordinates.
-    PositionRange { start: Position, end: Position, reversed: bool },
+    PositionRange {
+        start: Position,
+        end: Position,
+        reversed: bool,
+    },
     /// Char offsets relative to the start of the primary inserted text.
     InsertedRange { range: Range<usize>, reversed: bool },
 }
 
 fn valid_change_order(changes: &[TextChange]) -> bool {
-    !changes.is_empty() && changes.windows(2).all(|pair| pair[0].range.start <= pair[1].range.start && pair[0].range.end <= pair[1].range.start)
+    !changes.is_empty()
+        && changes
+            .windows(2)
+            .all(|pair| pair[0].range.start <= pair[1].range.start && pair[0].range.end <= pair[1].range.start)
 }
 
 pub(crate) fn apply_change_to_buffer(buffer: &mut Rope, change: &TextChange) {

@@ -1,28 +1,23 @@
 use gpui::KeyBinding;
 
 use crate::{
-    AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, Backspace, CleanupText, CloseActiveTab,
-    CopySelection, CutSelection, DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward,
-    DuplicateLine, FindNext, FindOpen, FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline,
-    InsertTab, MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineDown, MoveLineEnd,
-    MoveLineStart, MoveLineUp, MovePageDown, MovePageUp, MoveRight, MoveSmartHome, MoveSubwordLeft,
-    MoveSubwordRight, MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab,
-    NextBookmark, NextTab, OpenFile, OutdentSelection, PasteClipboard, PopSelectionCursor, PrevTab,
-    PreviousBookmark, Quit, Redo, ReopenClosedTab, ReplaceAll, SaveFile, SaveFileAs, SelectAll,
-    SelectAllOccurrences, SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectFindMatches,
-    SelectLeft, SelectLine, SelectLineEnd, SelectLineStart, SelectNextOccurrence, SelectPageDown,
-    SelectPageUp, SelectParagraph, SelectRight, SelectSmartHome, SelectSubwordLeft,
-    SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight, SwapRedoBranch,
-    ToggleBlockComment, ToggleBookmark, ToggleComment, ToggleFindInSelection, ToggleLineNumberMode,
-    ToggleOvertype, ToggleRecentFiles, ToggleWrap, TransposeChars, Undo, ZoomIn, ZoomOut,
-    ZoomReset,
+    AddCursorAbove, AddCursorBelow, AddCursorsToLineEnds, Backspace, CleanupText, CloseActiveTab, CopySelection,
+    CutSelection, DeleteForward, DeleteLine, DeleteWordBackward, DeleteWordForward, DuplicateLine, FindNext, FindOpen,
+    FindOpenReplace, FindPrev, GotoLineOpen, InsertNewline, InsertTab, MoveDocumentEnd, MoveDocumentStart, MoveDown,
+    MoveLeft, MoveLineDown, MoveLineEnd, MoveLineStart, MoveLineUp, MovePageDown, MovePageUp, MoveRight, MoveSmartHome,
+    MoveSubwordLeft, MoveSubwordRight, MoveTabLeft, MoveTabRight, MoveUp, MoveWordLeft, MoveWordRight, NewTab,
+    NextBookmark, NextTab, OpenFile, OutdentSelection, PasteClipboard, PopSelectionCursor, PrevTab, PreviousBookmark,
+    Quit, Redo, ReopenClosedTab, ReplaceAll, SaveFile, SaveFileAs, SelectAll, SelectAllOccurrences, SelectDocumentEnd,
+    SelectDocumentStart, SelectDown, SelectFindMatches, SelectLeft, SelectLine, SelectLineEnd, SelectLineStart,
+    SelectNextOccurrence, SelectPageDown, SelectPageUp, SelectParagraph, SelectRight, SelectSmartHome,
+    SelectSubwordLeft, SelectSubwordRight, SelectUp, SelectWordLeft, SelectWordRight, SwapRedoBranch,
+    ToggleBlockComment, ToggleBookmark, ToggleComment, ToggleFindInSelection, ToggleLineNumberMode, ToggleOvertype,
+    ToggleRecentFiles, ToggleWrap, TransposeChars, Undo, ZoomIn, ZoomOut, ZoomReset,
 };
 
 const EDITOR: &str = "Editor && !InlineInput";
 const WS_NO_INPUT: &str = "Workspace && !InlineInput";
 const WS: &str = "Workspace";
-
-#[rustfmt::skip]
 pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("ctrl-n", NewTab, Some(WS_NO_INPUT)),

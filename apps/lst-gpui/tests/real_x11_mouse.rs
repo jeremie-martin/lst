@@ -43,11 +43,7 @@ fn double_click_selects_word_at_text_position() -> TestResult {
         let cursor = record.cursors[0];
         let lo = cursor.anchor_char.min(cursor.head_char);
         let hi = cursor.anchor_char.max(cursor.head_char);
-        assert_eq!(
-            (lo, hi),
-            (6, 11),
-            "double-click should select \"bravo\": {cursor:?}"
-        );
+        assert_eq!((lo, hi), (6, 11), "double-click should select \"bravo\": {cursor:?}");
         Ok(())
     })
 }
@@ -66,10 +62,7 @@ fn triple_click_selects_line_at_text_position() -> TestResult {
         let hi = cursor.anchor_char.max(cursor.head_char);
         // Line 1 is "bravo charlie", char range [6, 19]. Some editors
         // include the trailing newline, others don't — accept either.
-        assert!(
-            lo == 6,
-            "triple-click should anchor at line start: got {lo}"
-        );
+        assert!(lo == 6, "triple-click should anchor at line start: got {lo}");
         assert!(
             hi == 19 || hi == 20,
             "triple-click should select to line end (with or without \\n): got {hi}"
@@ -82,10 +75,7 @@ fn triple_click_selects_line_at_text_position() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn quad_click_selects_paragraph_at_text_position() -> TestResult {
     support::run_x11_test("mouse-quad-click-paragraph", |session| {
-        let path = session.seed_file(
-            "quad.txt",
-            "para one a\npara one b\n\npara two a\npara two b",
-        )?;
+        let path = session.seed_file("quad.txt", "para one a\npara one b\n\npara two a\npara two b")?;
         let mut editor = session.open_file("quad", &path)?;
 
         // Click inside the first paragraph (lines 0–1).
@@ -132,11 +122,7 @@ fn alt_click_adds_secondary_cursor_at_click_point() -> TestResult {
         editor.alt_click_at_text(2, 4)?;
         let record = editor.read_state()?;
         assert_eq!(record.cursors.len(), 2, "{record:?}");
-        let heads: Vec<(usize, usize)> = record
-            .cursors
-            .iter()
-            .map(|c| (c.head_line, c.head_col))
-            .collect();
+        let heads: Vec<(usize, usize)> = record.cursors.iter().map(|c| (c.head_line, c.head_col)).collect();
         assert!(
             heads.contains(&(0, 3)) && heads.contains(&(2, 4)),
             "expected cursors at (0,3) and (2,4); got {heads:?}"

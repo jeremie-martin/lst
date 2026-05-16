@@ -29,7 +29,12 @@ pub struct Viewport {
 
 impl Default for Viewport {
     fn default() -> Self {
-        Self { rows: DEFAULT_VIEWPORT_ROWS, top_visual_row: 0, scrolloff: DEFAULT_SCROLLOFF, sidescrolloff: DEFAULT_SIDESCROLLOFF }
+        Self {
+            rows: DEFAULT_VIEWPORT_ROWS,
+            top_visual_row: 0,
+            scrolloff: DEFAULT_SCROLLOFF,
+            sidescrolloff: DEFAULT_SIDESCROLLOFF,
+        }
     }
 }
 

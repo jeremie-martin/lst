@@ -137,9 +137,7 @@ impl TraceViewport {
     /// when the line is not in the painted-rows window — callers must
     /// scroll-into-view first.
     pub fn first_row_for_line(&self, logical_line: usize) -> Option<&TraceRow> {
-        self.rows
-            .iter()
-            .find(|row| row.logical_line == logical_line)
+        self.rows.iter().find(|row| row.logical_line == logical_line)
     }
 
     /// Convert a (line, col) text position into window-local pixels suitable
@@ -179,9 +177,7 @@ impl TraceViewport {
         }
         let row = covering.or(first)?;
         let col_in_row = target_char.saturating_sub(row.line_start_char);
-        let x = self.code_origin_x_px
-            + (col_in_row as f32) * self.char_width_px
-            + self.char_width_px * 0.5;
+        let x = self.code_origin_x_px + (col_in_row as f32) * self.char_width_px + self.char_width_px * 0.5;
         let y = row.top_px + self.line_height_px * 0.5;
         let scale = if self.scale_factor > 0.0 {
             self.scale_factor
@@ -235,8 +231,7 @@ impl StateTraceReader {
     /// partially-written trailing line — bytes after the last `\n` are
     /// stashed and re-tried on the next call.
     pub fn read_new_records(&mut self) -> Result<Vec<StateTraceRecord>> {
-        let (records, offset, buffered_partial) =
-            self.read_records_since(self.offset, &self.buffered_partial)?;
+        let (records, offset, buffered_partial) = self.read_records_since(self.offset, &self.buffered_partial)?;
         self.offset = offset;
         self.buffered_partial = buffered_partial;
         if let Some(record) = records.last() {
@@ -334,7 +329,10 @@ impl StateTraceReader {
             .or_else(|| self.last_record.clone())
             .ok_or_else(|| {
                 format!(
-                    "no state-trace records available at {}; either the editor has not emitted yet or LST_X11_STATE_TRACE_FILE was not wired into spawn",
+                    concat!(
+                        "no state-trace records available at {}; either the editor has not emitted yet or ",
+                        "LST_X11_STATE_TRACE_FILE was not wired into spawn"
+                    ),
                     self.path.display()
                 )
                 .into()
@@ -342,9 +340,7 @@ impl StateTraceReader {
     }
 }
 
-fn parse_record_line(
-    line: &[u8],
-) -> std::result::Result<Option<StateTraceRecord>, serde_json::Error> {
+fn parse_record_line(line: &[u8]) -> std::result::Result<Option<StateTraceRecord>, serde_json::Error> {
     match serde_json::from_slice(line) {
         Ok(record) => Ok(Some(record)),
         Err(err) => {
@@ -380,9 +376,19 @@ mod tests {
     }
 
     fn sample_record_line(seq: u64) -> String {
-        format!(
-            r#"{{"schema_version":2,"seq":{seq},"revision":{seq},"active_tab_index":0,"active_tab_id":1,"active_tab_path":null,"active_tab_modified":false,"line_count":1,"cursors":[{{"anchor_char":0,"head_char":0,"anchor_line":0,"anchor_col":0,"head_line":0,"head_col":0}}],"primary_cursor_index":0,"marked_range":null,"vim_mode":"INSERT","vim_pending":"","find":{{"visible":false,"show_replace":false,"query":"","case_sensitive":false,"whole_word":false,"use_regex":false,"scope":"document","match_count":0,"active_index":null}},"goto_line_input":null,"recent_panel_open":false,"recent_panel_query":null,"status_message":"Ready.","status_bar":"INSERT","theme_name":"Dark","viewport":{{"bounds_origin_px":null,"bounds_size_px":null,"char_width_px":0.0,"line_height_px":0.0,"scroll_top_px":0.0,"scroll_left_px":0.0,"rows":[]}}}}"#
-        )
+        format!(concat!(
+            r#"{{"schema_version":2,"seq":{seq},"revision":{seq},"active_tab_index":0,"#,
+            r#""active_tab_id":1,"active_tab_path":null,"active_tab_modified":false,"line_count":1,"#,
+            r#""cursors":[{{"anchor_char":0,"head_char":0,"anchor_line":0,"anchor_col":0,"#,
+            r#""head_line":0,"head_col":0}}],"primary_cursor_index":0,"marked_range":null,"#,
+            r#""vim_mode":"INSERT","vim_pending":"","find":{{"visible":false,"show_replace":false,"#,
+            r#""query":"","case_sensitive":false,"whole_word":false,"use_regex":false,"#,
+            r#""scope":"document","match_count":0,"active_index":null}},"goto_line_input":null,"#,
+            r#""recent_panel_open":false,"recent_panel_query":null,"status_message":"Ready.","#,
+            r#""status_bar":"INSERT","theme_name":"Dark","viewport":{{"bounds_origin_px":null,"#,
+            r#""bounds_size_px":null,"char_width_px":0.0,"line_height_px":0.0,"#,
+            r#""scroll_top_px":0.0,"scroll_left_px":0.0,"rows":[]}}}}"#
+        ))
     }
 
     #[test]

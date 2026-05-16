@@ -8,10 +8,22 @@ use support::{run_cursor_cases, run_text_cases, run_text_cases_expect_normal, Vi
 fn x11_vim_smoke_specs_run_through_the_editor_model() {
     let cases = [
         ("top line delete", "A<enter>B<enter>C<enter><esc>ggdd", "B\nC\n"),
-        ("visual line indent", "alpha<enter>beta<enter>gamma<esc>gg0Vjj><esc>", "  alpha\n  beta\n  gamma"),
+        (
+            "visual line indent",
+            "alpha<enter>beta<enter>gamma<esc>gg0Vjj><esc>",
+            "  alpha\n  beta\n  gamma",
+        ),
         ("change inner word", "hello world<esc>0ciwHEY<esc>", "HEY world"),
-        ("normal open join replace", "foo<enter>bar<esc>ggOtop<esc>jJ0rx", "top\nxoo bar"),
-        ("linewise paste", "one<enter>two<enter>three<esc>ggyyGp", "one\ntwo\nthree\none"),
+        (
+            "normal open join replace",
+            "foo<enter>bar<esc>ggOtop<esc>jJ0rx",
+            "top\nxoo bar",
+        ),
+        (
+            "linewise paste",
+            "one<enter>two<enter>three<esc>ggyyGp",
+            "one\ntwo\nthree\none",
+        ),
         ("visual text object case", "hello world<esc>0viwU", "HELLO world"),
     ];
 
@@ -145,11 +157,41 @@ fn word_and_big_word_motions_cover_counts_punctuation_empty_lines_and_unicode() 
         ("counted word backward", "aa bb cc", (0, 6), "2b", (0, 0)),
         ("word crosses empty line", "aa\n\nbb", (0, 0), "w", (1, 0)),
         ("word end crosses empty line", "aa\n\nbb", (0, 0), "2e", (2, 1)),
-        ("big word forward treats punctuation as word", "aa+bb cc", (0, 0), "W", (0, 6)),
-        ("small word forward stops after punctuation", "aa+bb cc", (0, 0), "w", (0, 2)),
-        ("big word backward treats punctuation as word", "aa+bb cc", (0, 6), "B", (0, 0)),
-        ("small word backward stops at identifier run", "aa+bb cc", (0, 6), "b", (0, 3)),
-        ("unicode word motion is grapheme aligned", "éclair cafe", (0, 0), "e", (0, 5)),
+        (
+            "big word forward treats punctuation as word",
+            "aa+bb cc",
+            (0, 0),
+            "W",
+            (0, 6),
+        ),
+        (
+            "small word forward stops after punctuation",
+            "aa+bb cc",
+            (0, 0),
+            "w",
+            (0, 2),
+        ),
+        (
+            "big word backward treats punctuation as word",
+            "aa+bb cc",
+            (0, 6),
+            "B",
+            (0, 0),
+        ),
+        (
+            "small word backward stops at identifier run",
+            "aa+bb cc",
+            (0, 6),
+            "b",
+            (0, 3),
+        ),
+        (
+            "unicode word motion is grapheme aligned",
+            "éclair cafe",
+            (0, 0),
+            "e",
+            (0, 5),
+        ),
         ("combining grapheme horizontal right", "a\u{301}bc", (0, 0), "l", (0, 2)),
         ("combining grapheme horizontal left", "a\u{301}bc", (0, 2), "h", (0, 0)),
     ];
@@ -160,14 +202,50 @@ fn word_and_big_word_motions_cover_counts_punctuation_empty_lines_and_unicode() 
 #[test]
 fn unicode_grapheme_vim_edits_cover_operators_registers_paste_and_case() {
     let cases = [
-        ("delete combining grapheme under cursor", "a\u{301}bc", (0, 0), "x", "bc"),
-        ("replace combining grapheme under cursor", "a\u{301}bc", (0, 0), "rX", "Xbc"),
-        ("substitute combining grapheme under cursor", "a\u{301}bc", (0, 0), "sX<esc>", "Xbc"),
-        ("paste deleted combining grapheme", "a\u{301}bc", (0, 0), "x$p", "bca\u{301}"),
+        (
+            "delete combining grapheme under cursor",
+            "a\u{301}bc",
+            (0, 0),
+            "x",
+            "bc",
+        ),
+        (
+            "replace combining grapheme under cursor",
+            "a\u{301}bc",
+            (0, 0),
+            "rX",
+            "Xbc",
+        ),
+        (
+            "substitute combining grapheme under cursor",
+            "a\u{301}bc",
+            (0, 0),
+            "sX<esc>",
+            "Xbc",
+        ),
+        (
+            "paste deleted combining grapheme",
+            "a\u{301}bc",
+            (0, 0),
+            "x$p",
+            "bca\u{301}",
+        ),
         ("delete emoji grapheme under cursor", "😀abc", (0, 0), "x", "abc"),
         ("unicode inner word delete", "éclair cafe", (0, 0), "diw", " cafe"),
-        ("unicode inner word paste", "éclair cafe", (0, 0), "yiw$p", "éclair cafeéclair"),
-        ("unicode visual uppercase word", "éclair cafe", (0, 0), "viwU", "ÉCLAIR cafe"),
+        (
+            "unicode inner word paste",
+            "éclair cafe",
+            (0, 0),
+            "yiw$p",
+            "éclair cafeéclair",
+        ),
+        (
+            "unicode visual uppercase word",
+            "éclair cafe",
+            (0, 0),
+            "viwU",
+            "ÉCLAIR cafe",
+        ),
     ];
 
     run_text_cases(&cases);
@@ -188,15 +266,57 @@ fn operators_cover_motion_ranges_text_objects_counts_and_lines() {
         ("delete to word end", "alpha beta", (0, 0), "de", " beta"),
         ("delete backward word", "alpha beta", (0, 6), "db", "beta"),
         ("delete to end", "abc def\nnext", (0, 4), "D", "abc \nnext"),
-        ("delete through multiplied counts", "one two three four five", (0, 0), "2d2w", "five"),
+        (
+            "delete through multiplied counts",
+            "one two three four five",
+            (0, 0),
+            "2d2w",
+            "five",
+        ),
         ("delete lines to end", "a\nb\nc\nd", (1, 0), "dG", "a"),
         ("line change", "alpha\nbeta", (0, 0), "ccX<esc>", "X\nbeta"),
-        ("change word uses word-end semantics", "alpha beta", (0, 0), "cwX<esc>", "X beta"),
-        ("change big word uses big-word-end semantics", "alpha+beta gamma", (0, 0), "cWX<esc>", "X gamma"),
-        ("change quote inner object", "prefix \"alpha beta\" tail", (0, 9), "ci\"X<esc>", "prefix \"X\" tail"),
-        ("change quote a-object", "prefix \"alpha beta\" tail", (0, 9), "ca\"X<esc>", "prefix Xtail"),
-        ("change paren inner object", "call(alpha, beta)", (0, 7), "ci(X<esc>", "call(X)"),
-        ("change bracket a-object", "items[one, two] tail", (0, 8), "ca[X<esc>", "itemsX tail"),
+        (
+            "change word uses word-end semantics",
+            "alpha beta",
+            (0, 0),
+            "cwX<esc>",
+            "X beta",
+        ),
+        (
+            "change big word uses big-word-end semantics",
+            "alpha+beta gamma",
+            (0, 0),
+            "cWX<esc>",
+            "X gamma",
+        ),
+        (
+            "change quote inner object",
+            "prefix \"alpha beta\" tail",
+            (0, 9),
+            "ci\"X<esc>",
+            "prefix \"X\" tail",
+        ),
+        (
+            "change quote a-object",
+            "prefix \"alpha beta\" tail",
+            (0, 9),
+            "ca\"X<esc>",
+            "prefix Xtail",
+        ),
+        (
+            "change paren inner object",
+            "call(alpha, beta)",
+            (0, 7),
+            "ci(X<esc>",
+            "call(X)",
+        ),
+        (
+            "change bracket a-object",
+            "items[one, two] tail",
+            (0, 8),
+            "ca[X<esc>",
+            "itemsX tail",
+        ),
     ];
 
     run_text_cases_expect_normal(&cases);
@@ -208,14 +328,50 @@ fn operators_cover_linewise_inclusive_exclusive_and_register_edges() {
         ("delete down is linewise", "a\nb\nc", (0, 0), "dj", "c"),
         ("delete up is linewise", "a\nb\nc", (2, 0), "dk", "a"),
         ("delete counted line end is linewise", "a\nb\nc", (0, 0), "d2$", "c"),
-        ("delete percentage count is linewise", "a\nb\nc\nd", (0, 0), "d50%", "c\nd"),
-        ("change backward excludes cursor char", "alpha beta", (0, 6), "cbX<esc>", "Xbeta"),
+        (
+            "delete percentage count is linewise",
+            "a\nb\nc\nd",
+            (0, 0),
+            "d50%",
+            "c\nd",
+        ),
+        (
+            "change backward excludes cursor char",
+            "alpha beta",
+            (0, 6),
+            "cbX<esc>",
+            "Xbeta",
+        ),
         ("delete char find is inclusive", "abc def", (0, 0), "dfc", " def"),
-        ("delete till find is inclusive to previous char", "abc def", (0, 0), "td", "abc def"),
+        (
+            "delete till find is inclusive to previous char",
+            "abc def",
+            (0, 0),
+            "td",
+            "abc def",
+        ),
         ("delete failed find is noop", "abc def", (0, 0), "dz", "abc def"),
-        ("yank char range pastes charwise", "alpha beta", (0, 0), "yw$p", "alpha betaalpha "),
-        ("yank line count pastes linewise", "one\ntwo\nthree", (0, 0), "2yyGp", "one\ntwo\nthree\none\ntwo"),
-        ("empty line delete records line register", "one\n\ntwo", (1, 0), "ddP", "one\n\ntwo"),
+        (
+            "yank char range pastes charwise",
+            "alpha beta",
+            (0, 0),
+            "yw$p",
+            "alpha betaalpha ",
+        ),
+        (
+            "yank line count pastes linewise",
+            "one\ntwo\nthree",
+            (0, 0),
+            "2yyGp",
+            "one\ntwo\nthree\none\ntwo",
+        ),
+        (
+            "empty line delete records line register",
+            "one\n\ntwo",
+            (1, 0),
+            "ddP",
+            "one\n\ntwo",
+        ),
     ];
 
     run_text_cases(&cases);
@@ -235,15 +391,33 @@ fn normal_edits_cover_insert_positions_substitute_join_replace_paste_and_indent(
         ("substitute one char", "abc", (0, 0), "sZ<esc>", "Zbc"),
         ("substitute counted chars", "abcd", (0, 0), "2sZ<esc>", "Zcd"),
         ("change to end", "abc def", (0, 4), "CXYZ<esc>", "abc XYZ"),
-        ("change line preserves indentation", "  abc\nnext", (0, 2), "Snew<esc>", "  new\nnext"),
+        (
+            "change line preserves indentation",
+            "  abc\nnext",
+            (0, 2),
+            "Snew<esc>",
+            "  new\nnext",
+        ),
         ("join one following line", "alpha\n beta", (0, 0), "J", "alpha beta"),
         ("join counted lines", "a\n b\n c\nd", (0, 0), "3J", "a b c\nd"),
         ("replace char", "abc", (0, 0), "rx", "xbc"),
         ("replace counted chars", "abcd", (0, 0), "3rx", "xxxd"),
         ("indent current line", "alpha", (0, 0), ">>", "  alpha"),
         ("outdent current line", "  alpha", (0, 0), "<<", "alpha"),
-        ("line yank paste after target", "one\ntwo\nthree", (0, 0), "yyGp", "one\ntwo\nthree\none"),
-        ("line yank paste before target", "one\ntwo\nthree", (2, 0), "yyggP", "three\none\ntwo\nthree"),
+        (
+            "line yank paste after target",
+            "one\ntwo\nthree",
+            (0, 0),
+            "yyGp",
+            "one\ntwo\nthree\none",
+        ),
+        (
+            "line yank paste before target",
+            "one\ntwo\nthree",
+            (2, 0),
+            "yyggP",
+            "three\none\ntwo\nthree",
+        ),
     ];
 
     run_text_cases_expect_normal(&cases);
@@ -259,13 +433,31 @@ fn normal_edits_cover_counts_boundaries_empty_lines_and_noops() {
     let cases = [
         ("append at empty line", "", (0, 0), "aX<esc>", "X"),
         ("insert on empty line", "", (0, 0), "iX<esc>", "X"),
-        ("open below inherits indentation", "  alpha", (0, 2), "oX<esc>", "  alpha\n  X"),
-        ("open above inherits indentation", "  alpha", (0, 2), "OX<esc>", "  X\n  alpha"),
+        (
+            "open below inherits indentation",
+            "  alpha",
+            (0, 2),
+            "oX<esc>",
+            "  alpha\n  X",
+        ),
+        (
+            "open above inherits indentation",
+            "  alpha",
+            (0, 2),
+            "OX<esc>",
+            "  X\n  alpha",
+        ),
         ("delete beyond eol clamps", "abc", (0, 1), "9x", "a"),
         ("delete before bol is noop", "abc", (0, 0), "X", "abc"),
         ("substitute on empty line inserts", "", (0, 0), "sX<esc>", "X"),
         ("delete to end at eol deletes current char", "abc", (0, 2), "D", "ab"),
-        ("change to end at eol changes current char", "abc", (0, 2), "CX<esc>", "abX"),
+        (
+            "change to end at eol changes current char",
+            "abc",
+            (0, 2),
+            "CX<esc>",
+            "abX",
+        ),
         ("join at last line is noop", "abc", (0, 0), "J", "abc"),
         ("replace on empty line is noop", "", (0, 0), "rx", ""),
         ("counted indent lines", "a\nb\nc", (0, 0), "2>>", "  a\n  b\nc"),
@@ -283,10 +475,34 @@ fn visual_mode_covers_charwise_linewise_text_objects_case_and_indentation() {
         ("lowercase selection", "ALPHA beta", (0, 0), "viwu", "alpha beta"),
         ("uppercase selection", "alpha beta", (0, 0), "viwU", "ALPHA beta"),
         ("visual line delete", "alpha\nbeta\ngamma", (0, 0), "Vjd", "gamma"),
-        ("visual line change", "alpha\nbeta\ngamma", (0, 0), "VjcX<esc>", "X\ngamma"),
-        ("visual line indent", "alpha\nbeta\ngamma", (0, 0), "Vj>", "  alpha\n  beta\ngamma"),
-        ("visual line outdent", "  alpha\n  beta\ngamma", (0, 0), "Vj<", "alpha\nbeta\ngamma"),
-        ("visual text object selects quotes", "a \"two words\" z", (0, 4), "vi\"U", "a \"TWO WORDS\" z"),
+        (
+            "visual line change",
+            "alpha\nbeta\ngamma",
+            (0, 0),
+            "VjcX<esc>",
+            "X\ngamma",
+        ),
+        (
+            "visual line indent",
+            "alpha\nbeta\ngamma",
+            (0, 0),
+            "Vj>",
+            "  alpha\n  beta\ngamma",
+        ),
+        (
+            "visual line outdent",
+            "  alpha\n  beta\ngamma",
+            (0, 0),
+            "Vj<",
+            "alpha\nbeta\ngamma",
+        ),
+        (
+            "visual text object selects quotes",
+            "a \"two words\" z",
+            (0, 4),
+            "vi\"U",
+            "a \"TWO WORDS\" z",
+        ),
     ];
 
     run_text_cases_expect_normal(&cases);
@@ -317,7 +533,10 @@ fn visual_mode_covers_counts_reverse_selection_search_repeat_and_viewport() {
     harness.keys("N");
     harness.expect_selection("alpha b");
 
-    let text = (0..12).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n");
+    let text = (0..12)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut harness = VimHarness::normal_at(&text, 0, 0);
     harness.model.set_viewport_rows(7);
     harness.model.set_viewport_top(4);
@@ -427,21 +646,81 @@ fn search_commands_cover_wrap_empty_words_and_find_query_editing() {
 #[test]
 fn text_objects_cover_words_paragraphs_pairs_quotes_counts_and_escapes() {
     let cases = [
-        ("change a word consumes following space", "alpha beta", (0, 0), "cawX<esc>", "Xbeta"),
-        ("change inner big word", "alpha+beta gamma", (0, 3), "ciWX<esc>", "X gamma"),
+        (
+            "change a word consumes following space",
+            "alpha beta",
+            (0, 0),
+            "cawX<esc>",
+            "Xbeta",
+        ),
+        (
+            "change inner big word",
+            "alpha+beta gamma",
+            (0, 3),
+            "ciWX<esc>",
+            "X gamma",
+        ),
         ("change a big word", "alpha+beta gamma", (0, 3), "caWX<esc>", "Xgamma"),
-        ("word object count extends through following words", "one two three four", (0, 0), "d2aw", "three four"),
-        ("inner paragraph is linewise", "one\ntwo\n\nthree", (0, 0), "dip", "\nthree"),
-        ("a paragraph includes following blank line", "one\ntwo\n\nthree", (0, 0), "dap", "three"),
-        ("paren inner via close delimiter", "call(alpha)", (0, 10), "ci)X<esc>", "call(X)"),
+        (
+            "word object count extends through following words",
+            "one two three four",
+            (0, 0),
+            "d2aw",
+            "three four",
+        ),
+        (
+            "inner paragraph is linewise",
+            "one\ntwo\n\nthree",
+            (0, 0),
+            "dip",
+            "\nthree",
+        ),
+        (
+            "a paragraph includes following blank line",
+            "one\ntwo\n\nthree",
+            (0, 0),
+            "dap",
+            "three",
+        ),
+        (
+            "paren inner via close delimiter",
+            "call(alpha)",
+            (0, 10),
+            "ci)X<esc>",
+            "call(X)",
+        ),
         ("paren a-object alias b", "call(alpha)", (0, 6), "dab", "call"),
         ("brace inner via B alias", "fn { alpha }", (0, 5), "ciBX<esc>", "fn {X}"),
         ("brace a-object", "fn { alpha } tail", (0, 5), "da}", "fn  tail"),
-        ("bracket inner via close delimiter", "items[alpha]", (0, 8), "ci]X<esc>", "items[X]"),
-        ("angle inner via close delimiter", "tag<alpha>", (0, 5), "ci>X<esc>", "tag<X>"),
-        ("single quote object", "let 'alpha' tail", (0, 6), "ci'X<esc>", "let 'X' tail"),
+        (
+            "bracket inner via close delimiter",
+            "items[alpha]",
+            (0, 8),
+            "ci]X<esc>",
+            "items[X]",
+        ),
+        (
+            "angle inner via close delimiter",
+            "tag<alpha>",
+            (0, 5),
+            "ci>X<esc>",
+            "tag<X>",
+        ),
+        (
+            "single quote object",
+            "let 'alpha' tail",
+            (0, 6),
+            "ci'X<esc>",
+            "let 'X' tail",
+        ),
         ("backtick object", "let `alpha` tail", (0, 6), "ca`X<esc>", "let Xtail"),
-        ("escaped quote stays inside quote object", "let \"a\\\"b\" tail", (0, 7), "ci\"X<esc>", "let \"X\" tail"),
+        (
+            "escaped quote stays inside quote object",
+            "let \"a\\\"b\" tail",
+            (0, 7),
+            "ci\"X<esc>",
+            "let \"X\" tail",
+        ),
     ];
 
     run_text_cases(&cases);
@@ -467,10 +746,28 @@ fn paste_placement_covers_charwise_linewise_before_after_and_empty_registers() {
     let cases = [
         ("empty paste after is noop", "alpha", (0, 0), "p", "alpha"),
         ("empty paste before is noop", "alpha", (0, 0), "P", "alpha"),
-        ("char delete paste after cursor", "alpha beta", (0, 0), "dw$p", "betaalpha "),
-        ("char delete paste before cursor", "alpha beta", (0, 0), "dwP", "alpha beta"),
+        (
+            "char delete paste after cursor",
+            "alpha beta",
+            (0, 0),
+            "dw$p",
+            "betaalpha ",
+        ),
+        (
+            "char delete paste before cursor",
+            "alpha beta",
+            (0, 0),
+            "dwP",
+            "alpha beta",
+        ),
         ("line delete paste after last", "one\ntwo", (0, 0), "ddGp", "two\none"),
-        ("line delete paste before first", "one\ntwo", (1, 0), "ddggP", "two\none"),
+        (
+            "line delete paste before first",
+            "one\ntwo",
+            (1, 0),
+            "ddggP",
+            "two\none",
+        ),
     ];
 
     run_text_cases(&cases);
@@ -496,7 +793,13 @@ fn undo_redo_groups_vim_edit_families_as_single_steps() {
         ("change line", "alpha\nbeta", (0, 0), "ccX<esc>", "X\nbeta"),
         ("substitute char", "alpha beta", (0, 0), "sX<esc>", "Xlpha beta"),
         ("visual delete", "alpha beta gamma", (0, 0), "vwd", "eta gamma"),
-        ("visual change", "alpha beta gamma", (0, 0), "viwcX<esc>", "X beta gamma"),
+        (
+            "visual change",
+            "alpha beta gamma",
+            (0, 0),
+            "viwcX<esc>",
+            "X beta gamma",
+        ),
         ("visual paste", "one two three", (0, 0), "yiwwviwp", "one one three"),
         ("paste", "alpha beta", (0, 0), "yiw$p", "alpha betaalpha"),
         ("join", "alpha\n beta", (0, 0), "J", "alpha beta"),
@@ -528,7 +831,10 @@ fn unsupported_vim_commands_are_intentional_noops() {
 
 #[test]
 fn viewport_commands_emit_reveal_effects_and_move_to_visible_rows() {
-    let text = (0..24).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n");
+    let text = (0..24)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut harness = VimHarness::normal_at(&text, 0, 0);
     harness.model.set_viewport_rows(11);
     harness.model.set_viewport_top(10);
@@ -551,7 +857,10 @@ fn viewport_commands_emit_reveal_effects_and_move_to_visible_rows() {
 
 #[test]
 fn viewport_page_motions_preserve_visual_state() {
-    let text = (0..16).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n");
+    let text = (0..16)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut harness = VimHarness::normal_at(&text, 3, 0);
     harness.model.set_viewport_rows(6);
     harness.keys("v<C-d>");

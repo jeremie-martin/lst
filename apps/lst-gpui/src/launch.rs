@@ -62,15 +62,12 @@ where
             }
             "--title" => {
                 let Some(title) = iter.next() else {
-                    return Err(LaunchArgError::Message(
-                        "missing value for --title".to_string(),
-                    ));
+                    return Err(LaunchArgError::Message("missing value for --title".to_string()));
                 };
                 args.window_title = Some(title);
             }
             _ if arg.starts_with("--scratchpad-dir=") => {
-                args.scratchpad_dir =
-                    Some(PathBuf::from(arg["--scratchpad-dir=".len()..].to_string()));
+                args.scratchpad_dir = Some(PathBuf::from(arg["--scratchpad-dir=".len()..].to_string()));
             }
             "--scratchpad-dir" => {
                 let Some(dir) = iter.next() else {
