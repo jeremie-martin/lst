@@ -14,14 +14,15 @@ pub(crate) enum VimEditAction {
 }
 
 pub(crate) type DeletedEdit = (String, EditRequest);
+pub(crate) type TargetEdit = (Position, bool, Option<DeletedEdit>);
 
-pub(crate) fn extract_range(tab: &EditorTab, from: Position, to: Position) -> String {
+fn extract_range(tab: &EditorTab, from: Position, to: Position) -> String {
     position_range(tab.buffer(), from, to)
         .map(|range| tab.buffer().slice(range).to_string())
         .unwrap_or_default()
 }
 
-pub(crate) fn extract_lines(tab: &EditorTab, first: usize, last: usize) -> String {
+fn extract_lines(tab: &EditorTab, first: usize, last: usize) -> String {
     let (first, last) = clamped_line_span(tab, first, last);
     (first..=last)
         .map(|line| line_display_text(tab.buffer(), line))
@@ -29,12 +30,18 @@ pub(crate) fn extract_lines(tab: &EditorTab, first: usize, last: usize) -> Strin
         .join("\n")
 }
 
-pub(crate) fn delete_range(tab: &EditorTab, from: Position, to: Position) -> Option<DeletedEdit> {
-    capture_range(tab, from, to, false)
-}
-
-pub(crate) fn change_range(tab: &EditorTab, from: Position, to: Position) -> Option<DeletedEdit> {
-    capture_range(tab, from, to, true)
+pub(crate) fn extract_target(
+    tab: &EditorTab,
+    target: vim::RangeTarget,
+    move_after: bool,
+) -> (vim::Register, Option<Position>) {
+    match target {
+        vim::RangeTarget::Range { from, to } => (vim::Register::Char(extract_range(tab, from, to)), Some(from)),
+        vim::RangeTarget::Lines { first, last } => (
+            vim::Register::Line(extract_lines(tab, first, last)),
+            move_after.then_some(Position::new(first, 0)),
+        ),
+    }
 }
 
 fn capture_range(tab: &EditorTab, from: Position, to: Position, insert: bool) -> Option<DeletedEdit> {
@@ -51,12 +58,13 @@ fn capture_range(tab: &EditorTab, from: Position, to: Position, insert: bool) ->
     Some((deleted, request))
 }
 
-pub(crate) fn delete_lines(tab: &EditorTab, first: usize, last: usize) -> Option<DeletedEdit> {
-    capture_lines(tab, first, last, false)
-}
-
-pub(crate) fn change_lines(tab: &EditorTab, first: usize, last: usize) -> Option<DeletedEdit> {
-    capture_lines(tab, first, last, true)
+pub(crate) fn capture_target(tab: &EditorTab, target: vim::RangeTarget, change: bool) -> TargetEdit {
+    match target {
+        vim::RangeTarget::Range { from, to } => (from, false, capture_range(tab, from, to, change)),
+        vim::RangeTarget::Lines { first, last } => {
+            (Position::new(first, 0), true, capture_lines(tab, first, last, change))
+        }
+    }
 }
 
 fn capture_lines(tab: &EditorTab, first: usize, last: usize, insert: bool) -> Option<DeletedEdit> {
@@ -85,12 +93,7 @@ pub(crate) fn paste(tab: &EditorTab, cursor: Position, register: &vim::Register,
     }
 }
 
-pub(crate) fn paste_over_range(
-    tab: &EditorTab,
-    from: Position,
-    to: Position,
-    register: &vim::Register,
-) -> Option<DeletedEdit> {
+fn paste_over_range(tab: &EditorTab, from: Position, to: Position, register: &vim::Register) -> Option<DeletedEdit> {
     let paste_text = match register {
         vim::Register::Empty => return None,
         vim::Register::Char(text) | vim::Register::Line(text) => text,
@@ -102,12 +105,7 @@ pub(crate) fn paste_over_range(
     Some((deleted, EditRequest::single_other_at_position(change, cursor)))
 }
 
-pub(crate) fn paste_over_lines(
-    tab: &EditorTab,
-    first: usize,
-    last: usize,
-    register: &vim::Register,
-) -> Option<DeletedEdit> {
+fn paste_over_lines(tab: &EditorTab, first: usize, last: usize, register: &vim::Register) -> Option<DeletedEdit> {
     let paste_text = match register {
         vim::Register::Empty => return None,
         vim::Register::Char(text) | vim::Register::Line(text) => text,
@@ -123,6 +121,17 @@ pub(crate) fn paste_over_lines(
         deleted,
         EditRequest::single_other_at_position(change, Position::new(first, indent)),
     ))
+}
+
+pub(crate) fn paste_over_target(tab: &EditorTab, target: vim::RangeTarget, register: &vim::Register) -> TargetEdit {
+    match target {
+        vim::RangeTarget::Range { from, to } => (from, false, paste_over_range(tab, from, to, register)),
+        vim::RangeTarget::Lines { first, last } => (
+            Position::new(first, 0),
+            true,
+            paste_over_lines(tab, first, last, register),
+        ),
+    }
 }
 
 pub(crate) fn open_line(tab: &EditorTab, pos: Position, above: bool) -> Option<EditRequest> {
@@ -192,12 +201,7 @@ pub(crate) fn replace_char(tab: &EditorTab, pos: Position, ch: char, count: usiz
     ))
 }
 
-pub(crate) fn transform_case_range(
-    tab: &EditorTab,
-    from: Position,
-    to: Position,
-    uppercase: bool,
-) -> Option<VimEditAction> {
+fn transform_case_range(tab: &EditorTab, from: Position, to: Position, uppercase: bool) -> Option<VimEditAction> {
     let range = position_range(tab.buffer(), from, to)?;
     let text = tab.buffer().slice(range.clone()).to_string();
     let replacement = transform_case_text(&text, uppercase);
@@ -210,7 +214,7 @@ pub(crate) fn transform_case_range(
     )))
 }
 
-pub(crate) fn transform_case_lines(tab: &EditorTab, first: usize, last: usize, uppercase: bool) -> VimEditAction {
+fn transform_case_lines(tab: &EditorTab, first: usize, last: usize, uppercase: bool) -> VimEditAction {
     let (first, last) = clamped_line_span(tab, first, last);
     let mut changes = Vec::new();
     for line in first..=last {
@@ -227,6 +231,17 @@ pub(crate) fn transform_case_lines(tab: &EditorTab, first: usize, last: usize, u
         return VimEditAction::MoveCursor(Position::new(first, 0));
     }
     VimEditAction::Edit(EditRequest::other_at_position(changes, Position::new(first, 0)))
+}
+
+pub(crate) fn transform_case_target(
+    tab: &EditorTab,
+    target: vim::RangeTarget,
+    uppercase: bool,
+) -> Option<VimEditAction> {
+    match target {
+        vim::RangeTarget::Range { from, to } => transform_case_range(tab, from, to, uppercase),
+        vim::RangeTarget::Lines { first, last } => Some(transform_case_lines(tab, first, last, uppercase)),
+    }
 }
 
 fn paste_chars(tab: &EditorTab, cursor: Position, paste_text: &str, before: bool) -> Option<EditRequest> {

@@ -739,20 +739,13 @@ impl EditorModel {
                 self.queue_reveal(intent);
                 return false;
             }
-            C::MoveTo(p) => {
-                self.active_tab_mut().set_cursor_position(p, None);
-            }
+            C::MoveTo(p) => self.active_tab_mut().set_cursor_position(p, None),
             C::Select(selection) => self.apply_vim_select(selection.anchor, selection.head),
-            C::Delete(span) => self.apply_vim_delete(span),
-            C::Change(span) => self.apply_vim_change(span),
-            C::Yank(span, move_after) => self.apply_vim_yank(span, move_after),
+            C::Range(span, command) => self.apply_vim_range(span, command),
             C::SetRegister(register) => {
                 self.vim.register = register;
                 return false;
             }
-            C::Shift(span, indent, move_after) => self.apply_vim_shift(span, indent, move_after),
-            C::PasteSelection(span, preserve_register) => self.apply_vim_selection_paste(span, preserve_register),
-            C::TransformCase(span, uppercase) => self.apply_vim_transform_case(span, uppercase),
             C::EnterInsert => self.vim.mode = vim::Mode::Insert,
             C::Paste(before) => self.vim_paste(before),
             C::OpenLine(above) => {
@@ -804,66 +797,15 @@ impl EditorModel {
         }
         true
     }
-    fn apply_vim_delete(&mut self, span: vim::RangeTarget) {
-        match span {
-            vim::RangeTarget::Range { from, to } => self.vim_delete_range(from, to),
-            vim::RangeTarget::Lines { first, last } => self.vim_delete_lines(first, last),
-        }
-    }
-    fn apply_vim_change(&mut self, span: vim::RangeTarget) {
-        match span {
-            vim::RangeTarget::Range { from, to } => {
-                self.vim_change_range(from, to);
-                self.vim.mode = vim::Mode::Insert;
-            }
-            vim::RangeTarget::Lines { first, last } => {
-                self.vim_change_lines(first, last);
-                self.vim.mode = vim::Mode::Insert;
-            }
-        }
-    }
-    fn apply_vim_yank(&mut self, span: vim::RangeTarget, move_after: bool) {
-        match span {
-            vim::RangeTarget::Range { from, to } => {
-                self.vim.register = vim::Register::Char(vim_edit::extract_range(self.active_tab(), from, to));
-                self.active_tab_mut().set_cursor_position(from, None);
-            }
-            vim::RangeTarget::Lines { first, last } => {
-                self.vim.register = vim::Register::Line(vim_edit::extract_lines(self.active_tab(), first, last));
-                if move_after {
-                    self.active_tab_mut().set_cursor_position(Position::new(first, 0), None);
-                }
-            }
-        }
-    }
-    fn apply_vim_shift(&mut self, span: vim::RangeTarget, indent: bool, move_after: bool) {
-        let (first, last) = match span {
-            vim::RangeTarget::Range { from, to } => ordered_lines_for_vim(from.line, to.line),
-            vim::RangeTarget::Lines { first, last } => (first, last),
-        };
-        if indent {
-            self.indent_selected_lines(first, last);
-        } else {
-            self.outdent_selected_lines(first, last);
-        }
-        if move_after {
-            self.active_tab_mut().set_cursor_position(Position::new(first, 0), None);
-        }
-    }
-    fn apply_vim_selection_paste(&mut self, span: vim::RangeTarget, preserve_register: bool) {
-        match span {
-            vim::RangeTarget::Range { from, to } => {
-                self.vim_paste_selection_range(from, to, preserve_register);
-            }
-            vim::RangeTarget::Lines { first, last } => {
-                self.vim_paste_selection_lines(first, last, preserve_register);
-            }
-        }
-    }
-    fn apply_vim_transform_case(&mut self, span: vim::RangeTarget, uppercase: bool) {
-        match span {
-            vim::RangeTarget::Range { from, to } => self.vim_transform_case_range(from, to, uppercase),
-            vim::RangeTarget::Lines { first, last } => self.vim_transform_case_lines(first, last, uppercase),
+    fn apply_vim_range(&mut self, span: vim::RangeTarget, command: vim::RangeCommand) {
+        use vim::RangeCommand as R;
+        match command {
+            R::Delete => self.vim_capture_range(span, false),
+            R::Change => self.vim_capture_range(span, true),
+            R::Yank { move_after } => self.vim_yank_range(span, move_after),
+            R::Shift { indent, move_after } => self.vim_shift_range(span, indent, move_after),
+            R::Paste { preserve_register } => self.vim_paste_over_range(span, preserve_register),
+            R::TransformCase { uppercase } => self.vim_transform_case(span, uppercase),
         }
     }
     fn vim_paged(&mut self, delta: isize, wrap_columns: usize) {
@@ -926,39 +868,45 @@ impl EditorModel {
         }
     }
     fn apply_vim_capture(&mut self, result: Option<vim_edit::DeletedEdit>, line: bool) {
-        let make = |s: String| {
-            if line {
-                vim::Register::Line(s)
-            } else {
-                vim::Register::Char(s)
-            }
-        };
         let Some((deleted, request)) = result else {
-            self.vim.register = make(String::new());
+            self.vim.register = vim_register(String::new(), line);
             return;
         };
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-        self.vim.register = make(deleted);
+        self.vim.register = vim_register(deleted, line);
     }
     fn collapse_vim_edit_snapshot_to(&mut self, position: Position) {
         let cursor = position_to_char(self.active_tab().buffer(), position);
         self.active_tab_mut().set_selection(Selection::collapsed(cursor));
     }
-    fn vim_delete_range(&mut self, from: Position, to: Position) {
-        self.collapse_vim_edit_snapshot_to(from);
-        self.apply_vim_capture(vim_edit::delete_range(self.active_tab(), from, to), false);
+    fn vim_capture_range(&mut self, span: vim::RangeTarget, change: bool) {
+        let (start, linewise, edit) = vim_edit::capture_target(self.active_tab(), span, change);
+        self.collapse_vim_edit_snapshot_to(start);
+        self.apply_vim_capture(edit, linewise);
+        if change {
+            self.vim.mode = vim::Mode::Insert;
+        }
     }
-    fn vim_change_range(&mut self, from: Position, to: Position) {
-        self.collapse_vim_edit_snapshot_to(from);
-        self.apply_vim_capture(vim_edit::change_range(self.active_tab(), from, to), false);
+    fn vim_yank_range(&mut self, span: vim::RangeTarget, move_after: bool) {
+        let (register, cursor) = vim_edit::extract_target(self.active_tab(), span, move_after);
+        self.vim.register = register;
+        if let Some(cursor) = cursor {
+            self.active_tab_mut().set_cursor_position(cursor, None);
+        }
     }
-    fn vim_delete_lines(&mut self, first: usize, last: usize) {
-        self.collapse_vim_edit_snapshot_to(Position::new(first, 0));
-        self.apply_vim_capture(vim_edit::delete_lines(self.active_tab(), first, last), true);
-    }
-    fn vim_change_lines(&mut self, first: usize, last: usize) {
-        self.collapse_vim_edit_snapshot_to(Position::new(first, 0));
-        self.apply_vim_capture(vim_edit::change_lines(self.active_tab(), first, last), true);
+    fn vim_shift_range(&mut self, span: vim::RangeTarget, indent: bool, move_after: bool) {
+        let (first, last) = match span {
+            vim::RangeTarget::Range { from, to } => ordered_lines_for_vim(from.line, to.line),
+            vim::RangeTarget::Lines { first, last } => (first, last),
+        };
+        if indent {
+            self.indent_selected_lines(first, last);
+        } else {
+            self.outdent_selected_lines(first, last);
+        }
+        if move_after {
+            self.active_tab_mut().set_cursor_position(Position::new(first, 0), None);
+        }
     }
     fn apply_vim_optional(&mut self, request: Option<EditRequest>) {
         self.apply_optional_edit_request(request, Some(RevealIntent::NearestEdge));
@@ -978,26 +926,16 @@ impl EditorModel {
         let cursor = self.active_cursor_position();
         self.apply_vim_optional(vim_edit::paste(self.active_tab(), cursor, &self.vim.register, before));
     }
-    fn vim_paste_selection_range(&mut self, from: Position, to: Position, preserve_register: bool) {
+    fn vim_paste_over_range(&mut self, span: vim::RangeTarget, preserve_register: bool) {
         let register = self.vim.register.clone();
-        self.collapse_vim_edit_snapshot_to(from);
-        let Some((deleted, request)) = vim_edit::paste_over_range(self.active_tab(), from, to, &register) else {
+        let (start, linewise, edit) = vim_edit::paste_over_target(self.active_tab(), span, &register);
+        self.collapse_vim_edit_snapshot_to(start);
+        let Some((deleted, request)) = edit else {
             return;
         };
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
         if !preserve_register {
-            self.vim.register = vim::Register::Char(deleted);
-        }
-    }
-    fn vim_paste_selection_lines(&mut self, first: usize, last: usize, preserve_register: bool) {
-        let register = self.vim.register.clone();
-        self.collapse_vim_edit_snapshot_to(Position::new(first, 0));
-        let Some((deleted, request)) = vim_edit::paste_over_lines(self.active_tab(), first, last, &register) else {
-            return;
-        };
-        self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-        if !preserve_register {
-            self.vim.register = vim::Register::Line(deleted);
+            self.vim.register = vim_register(deleted, linewise);
         }
     }
     fn vim_open_line(&mut self, above: bool) {
@@ -1012,14 +950,10 @@ impl EditorModel {
         let pos = self.active_cursor_position();
         self.apply_vim_optional(vim_edit::replace_char(self.active_tab(), pos, ch, count));
     }
-    fn vim_transform_case_range(&mut self, from: Position, to: Position, uppercase: bool) {
-        if let Some(action) = vim_edit::transform_case_range(self.active_tab(), from, to, uppercase) {
+    fn vim_transform_case(&mut self, span: vim::RangeTarget, uppercase: bool) {
+        if let Some(action) = vim_edit::transform_case_target(self.active_tab(), span, uppercase) {
             self.apply_vim_edit_action(action);
         }
-    }
-    fn vim_transform_case_lines(&mut self, first: usize, last: usize, uppercase: bool) {
-        let action = vim_edit::transform_case_lines(self.active_tab(), first, last, uppercase);
-        self.apply_vim_edit_action(action);
     }
     pub fn replace_text_from_input(&mut self, range: Option<Range<usize>>, text: String) {
         let boundary = if text.chars().any(char::is_whitespace) {
@@ -1541,6 +1475,15 @@ fn selection_line_span(tab: &EditorTab) -> Option<(usize, usize, bool)> {
 fn ordered_lines_for_vim(a: usize, b: usize) -> (usize, usize) {
     (a.min(b), a.max(b))
 }
+
+fn vim_register(text: String, line: bool) -> vim::Register {
+    if line {
+        vim::Register::Line(text)
+    } else {
+        vim::Register::Char(text)
+    }
+}
+
 fn smart_expanded_selection(buffer: &ropey::Rope, selection: Selection) -> Selection {
     let range = selection.range();
     let reversed = selection.is_reversed();

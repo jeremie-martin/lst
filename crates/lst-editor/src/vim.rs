@@ -95,13 +95,8 @@ pub struct VimState {
 pub enum VimCommand {
     MoveTo(Position),
     Select(VisualState),
-    Delete(RangeTarget),
-    Change(RangeTarget),
-    Yank(RangeTarget, bool),
+    Range(RangeTarget, RangeCommand),
     SetRegister(Register),
-    Shift(RangeTarget, bool, bool),
-    PasteSelection(RangeTarget, bool),
-    TransformCase(RangeTarget, bool),
     EnterInsert,
     Paste(bool),
     OpenLine(bool),
@@ -161,6 +156,16 @@ pub enum ScreenRow {
 pub enum RangeTarget {
     Range { from: Position, to: Position },
     Lines { first: usize, last: usize },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RangeCommand {
+    Delete,
+    Change,
+    Yank { move_after: bool },
+    Shift { indent: bool, move_after: bool },
+    Paste { preserve_register: bool },
+    TransformCase { uppercase: bool },
 }
 
 impl RangeTarget {
@@ -285,19 +290,29 @@ impl RangeTarget {
     }
 
     fn operator(self, op: Operator, move_after_yank: bool) -> Vec<VimCommand> {
-        operator_commands(op, self.ordered(), move_after_yank)
+        self.command(match op {
+            Operator::Delete => RangeCommand::Delete,
+            Operator::Change => RangeCommand::Change,
+            Operator::Yank => RangeCommand::Yank {
+                move_after: move_after_yank,
+            },
+        })
     }
 
     fn paste(self, preserve_register: bool) -> Vec<VimCommand> {
-        vec![VimCommand::PasteSelection(self.ordered(), preserve_register)]
+        self.command(RangeCommand::Paste { preserve_register })
     }
 
     fn shift(self, indent: bool, move_after: bool) -> Vec<VimCommand> {
-        vec![VimCommand::Shift(self.ordered(), indent, move_after)]
+        self.command(RangeCommand::Shift { indent, move_after })
     }
 
     fn transform_case(self, uppercase: bool) -> Vec<VimCommand> {
-        vec![VimCommand::TransformCase(self.ordered(), uppercase)]
+        self.command(RangeCommand::TransformCase { uppercase })
+    }
+
+    fn command(self, command: RangeCommand) -> Vec<VimCommand> {
+        vec![VimCommand::Range(self.ordered(), command)]
     }
 }
 
@@ -1079,14 +1094,6 @@ impl VimState {
         RangeTarget::operator_motion(op, &motion, text, count)
             .map_or_else(Vec::new, |target| target.operator(op, false))
     }
-}
-
-fn operator_commands(op: Operator, target: RangeTarget, move_after_yank: bool) -> Vec<VimCommand> {
-    vec![match op {
-        Operator::Delete => VimCommand::Delete(target),
-        Operator::Change => VimCommand::Change(target),
-        Operator::Yank => VimCommand::Yank(target, move_after_yank),
-    }]
 }
 
 fn insert_at(target: Position) -> Vec<VimCommand> {
