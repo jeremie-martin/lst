@@ -158,12 +158,6 @@ pub enum ScreenRow {
 // -- Supporting types --------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Target {
-    Cursor(Position),
-    Range(RangeTarget),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RangeTarget {
     Range { from: Position, to: Position },
     Lines { first: usize, last: usize },
@@ -224,7 +218,7 @@ impl RangeTarget {
             return None;
         }
 
-        let backward = pos_lt(&target, &text.cursor);
+        let backward = target < text.cursor;
 
         let mut eol_clamped = false;
         let target = if matches!(motion, Motion::Word(WordMotion::Forward, _)) {
@@ -259,7 +253,7 @@ impl RangeTarget {
                 to.line -= 1;
                 to.column = line_len(text, to.line).saturating_sub(1);
             }
-            if pos_lt(&to, &from) {
+            if to < from {
                 return None;
             }
         }
@@ -334,19 +328,13 @@ impl Pending {
             Pending::Empty => {}
             Pending::Count(count) => s.push_str(&count.to_string()),
             Pending::Prefix { count, prefix } => {
-                if let Some(count) = count {
-                    s.push_str(&count.to_string());
-                }
+                push_count(&mut s, count);
                 s.push(prefix.as_char());
             }
             Pending::Operator(pending) => {
-                if let Some(op_count) = pending.op_count {
-                    s.push_str(&op_count.to_string());
-                }
+                push_count(&mut s, pending.op_count);
                 s.push(pending.op.as_char());
-                if let Some(count) = pending.count {
-                    s.push_str(&count.to_string());
-                }
+                push_count(&mut s, pending.count);
                 if let Some(prefix) = pending.prefix {
                     s.push(prefix.as_char());
                 }
@@ -374,18 +362,12 @@ impl Pending {
     }
 
     fn start_normal_prefix(&mut self, prefix: Prefix) {
-        let count = match *self {
-            Pending::Count(count) => Some(count),
-            _ => None,
-        };
+        let count = self.take_count();
         *self = Pending::Prefix { count, prefix };
     }
 
     fn start_operator(&mut self, op: Operator) {
-        let op_count = match *self {
-            Pending::Count(count) => Some(count),
-            _ => None,
-        };
+        let op_count = self.take_count();
         *self = Pending::Operator(OperatorPending {
             op,
             op_count,
@@ -451,13 +433,14 @@ impl Pending {
     }
 }
 
-fn combine_counts(operator_count: Option<usize>, motion_count: Option<usize>) -> Option<usize> {
-    match (operator_count, motion_count) {
-        (None, None) => None,
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (Some(a), Some(b)) => Some(a * b),
+fn push_count(s: &mut String, count: Option<usize>) {
+    if let Some(count) = count {
+        s.push_str(&count.to_string());
     }
+}
+
+fn combine_counts(operator_count: Option<usize>, motion_count: Option<usize>) -> Option<usize> {
+    operator_count.map_or(motion_count, |count| Some(count * motion_count.unwrap_or(1)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -819,18 +802,12 @@ impl VimState {
             'M' => vec![VimCommand::MoveToScreen(ScreenRow::Middle)],
             'L' => vec![VimCommand::MoveToScreen(ScreenRow::Bottom)],
             'i' => vec![VimCommand::EnterInsert],
-            'a' => {
-                let col = (text.cursor.column + 1).min(line_len(text, text.cursor.line));
-                vec![VimCommand::MoveTo(pos(text.cursor.line, col)), VimCommand::EnterInsert]
-            }
-            'I' => {
-                let col = first_non_blank(text, text.cursor.line);
-                vec![VimCommand::MoveTo(pos(text.cursor.line, col)), VimCommand::EnterInsert]
-            }
-            'A' => {
-                let col = line_len(text, text.cursor.line);
-                vec![VimCommand::MoveTo(pos(text.cursor.line, col)), VimCommand::EnterInsert]
-            }
+            'a' => insert_at(pos(
+                text.cursor.line,
+                (text.cursor.column + 1).min(line_len(text, text.cursor.line)),
+            )),
+            'I' => insert_at(pos(text.cursor.line, first_non_blank(text, text.cursor.line))),
+            'A' => insert_at(pos(text.cursor.line, line_len(text, text.cursor.line))),
             'o' => vec![VimCommand::OpenLine(false)],
             'O' => vec![VimCommand::OpenLine(true)],
             'x' => operator_or(RangeTarget::forward_chars(text, count), Operator::Delete, None),
@@ -910,21 +887,16 @@ impl VimState {
         let head = self.visual_head.unwrap_or(text.cursor);
         let target = RangeTarget::visual(anchor, head, self.mode == Mode::VisualLine);
 
-        // Operators on selection
         match c {
             'd' | 'x' => return self.exit_visual_with(target.operator(Operator::Delete, true)),
             'c' | 's' => return self.exit_visual_with(target.operator(Operator::Change, true)),
             'y' => return self.exit_visual_with(target.operator(Operator::Yank, true)),
-            'p' | 'P' => {
-                return self.exit_visual_with(target.paste(c == 'P'));
-            }
+            'p' | 'P' => return self.exit_visual_with(target.paste(c == 'P')),
             '>' => return self.exit_visual_with(target.shift(true, true)),
             '<' => return self.exit_visual_with(target.shift(false, true)),
             'v' => return self.toggle_visual(Mode::Visual, text),
             'V' => return self.toggle_visual(Mode::VisualLine, text),
-            'u' | 'U' => {
-                return self.exit_visual_with(target.transform_case(c == 'U'));
-            }
+            'u' | 'U' => return self.exit_visual_with(target.transform_case(c == 'U')),
             _ => {}
         }
 
@@ -956,14 +928,16 @@ impl VimState {
     }
 
     pub fn selection_command(&mut self, head: Position, text: &VimText<'_>) -> VimCommand {
-        self.visual_command(Target::Cursor(head), text)
+        let anchor = self.visual_anchor.unwrap_or(text.cursor);
+        self.visual_head = Some(head);
+        VimCommand::Select(RangeTarget::visual(anchor, head, self.mode == Mode::VisualLine).selection(text))
     }
 
     fn enter_visual(&mut self, mode: Mode, text: &VimText<'_>) -> Vec<VimCommand> {
         self.mode = mode;
         self.visual_anchor = Some(text.cursor);
         self.visual_head = Some(text.cursor);
-        self.visual_select(Target::Cursor(text.cursor), text)
+        vec![self.selection_command(text.cursor, text)]
     }
 
     fn toggle_visual(&mut self, mode: Mode, text: &VimText<'_>) -> Vec<VimCommand> {
@@ -972,36 +946,8 @@ impl VimState {
         } else {
             self.mode = mode;
             self.clear_preferred_column();
-            self.visual_select(Target::Cursor(text.cursor), text)
+            vec![self.selection_command(text.cursor, text)]
         }
-    }
-
-    fn visual_select(&mut self, target: Target, text: &VimText<'_>) -> Vec<VimCommand> {
-        vec![self.visual_command(target, text)]
-    }
-
-    fn visual_command(&mut self, target: Target, text: &VimText<'_>) -> VimCommand {
-        let range = match target {
-            Target::Cursor(head) => {
-                let anchor = self.visual_anchor.unwrap_or(text.cursor);
-                self.visual_head = Some(head);
-                RangeTarget::visual(anchor, head, self.mode == Mode::VisualLine)
-            }
-            Target::Range(range) => {
-                match range {
-                    RangeTarget::Range { from, to } => {
-                        self.visual_anchor = Some(from);
-                        self.visual_head = Some(to);
-                    }
-                    RangeTarget::Lines { first, last } => {
-                        self.visual_anchor = Some(pos(first, 0));
-                        self.visual_head = Some(pos(last, 0));
-                    }
-                }
-                range
-            }
-        };
-        VimCommand::Select(range.selection(text))
     }
 
     // -- Partial resolution ----------------------------------------------
@@ -1047,7 +993,10 @@ impl VimState {
                     let count = self.pending.take_count();
                     if let Some((from, to)) = text_object(text, c, inner, count) {
                         self.clear_preferred_column();
-                        return self.visual_select(Target::Range(RangeTarget::charwise(from, to)), text);
+                        let range = RangeTarget::charwise(from, to);
+                        self.visual_anchor = Some(from);
+                        self.visual_head = Some(to);
+                        return vec![VimCommand::Select(range.selection(text))];
                     }
                     self.clear_command_state();
                     return vec![];
@@ -1104,7 +1053,7 @@ impl VimState {
             self.clear_pending();
             let target = self.cursor_motion_target(&motion, text, count);
             if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
-                self.visual_select(Target::Cursor(target), text)
+                vec![self.selection_command(target, text)]
             } else {
                 vec![VimCommand::MoveTo(target)]
             }
@@ -1138,6 +1087,10 @@ fn operator_commands(op: Operator, target: RangeTarget, move_after_yank: bool) -
         Operator::Change => VimCommand::Change(target),
         Operator::Yank => VimCommand::Yank(target, move_after_yank),
     }]
+}
+
+fn insert_at(target: Position) -> Vec<VimCommand> {
+    vec![VimCommand::MoveTo(target), VimCommand::EnterInsert]
 }
 
 fn operator_or(target: Option<RangeTarget>, op: Operator, fallback: Option<VimCommand>) -> Vec<VimCommand> {
@@ -1240,16 +1193,7 @@ fn compute_motion(
                 .min(line_len(text, line).saturating_sub(1));
             pos(line, col)
         }
-        Motion::Word(kind, big) => repeat_word(
-            text,
-            n,
-            *big,
-            match kind {
-                WordMotion::Forward => word_forward,
-                WordMotion::Backward => word_backward,
-                WordMotion::End => word_end,
-            },
-        ),
+        Motion::Word(kind, big) => word_motion(text, *kind, *big, n),
         Motion::LineStart => pos(text.cursor.line, 0),
         Motion::LineEnd => {
             let line = (text.cursor.line + n.saturating_sub(1)).min(text.line_count().saturating_sub(1));
@@ -1310,21 +1254,6 @@ fn find_char(text: &VimText<'_>, ch: char, n: usize, forward: bool, till: bool) 
     text.cursor
 }
 
-fn repeat_word(
-    text: &VimText<'_>,
-    n: usize,
-    big: bool,
-    step: fn(&VimText<'_>, usize, usize, bool) -> (usize, usize),
-) -> Position {
-    let (mut l, mut c) = (text.cursor.line, text.cursor.column);
-    for _ in 0..n {
-        let (nl, nc) = step(text, l, c, big);
-        l = nl;
-        c = nc;
-    }
-    pos(l, c)
-}
-
 fn key_char(key: &Key) -> Option<char> {
     match key {
         Key::Character(s) => s.as_str().chars().next(),
@@ -1336,29 +1265,17 @@ fn named_key_action(key: &Key) -> Option<KeyAction> {
     let Key::Named(named) = key else {
         return None;
     };
-    named_page_command(named)
-        .map(KeyAction::Command)
-        .or_else(|| named_key_to_motion(named).map(KeyAction::Motion))
-}
-
-fn named_key_to_motion(named: &NamedKey) -> Option<Motion> {
-    match named {
-        NamedKey::ArrowLeft => Some(Motion::Left),
-        NamedKey::ArrowRight => Some(Motion::Right),
-        NamedKey::ArrowUp => Some(Motion::Up),
-        NamedKey::ArrowDown => Some(Motion::Down),
-        NamedKey::Home => Some(Motion::LineStart),
-        NamedKey::End => Some(Motion::LineEnd),
-        _ => None,
-    }
-}
-
-fn named_page_command(named: &NamedKey) -> Option<VimCommand> {
-    match named {
-        NamedKey::PageDown => Some(VimCommand::Page(false, true)),
-        NamedKey::PageUp => Some(VimCommand::Page(false, false)),
-        _ => None,
-    }
+    Some(match named {
+        NamedKey::ArrowLeft => KeyAction::Motion(Motion::Left),
+        NamedKey::ArrowRight => KeyAction::Motion(Motion::Right),
+        NamedKey::ArrowUp => KeyAction::Motion(Motion::Up),
+        NamedKey::ArrowDown => KeyAction::Motion(Motion::Down),
+        NamedKey::Home => KeyAction::Motion(Motion::LineStart),
+        NamedKey::End => KeyAction::Motion(Motion::LineEnd),
+        NamedKey::PageDown => KeyAction::Command(VimCommand::Page(false, true)),
+        NamedKey::PageUp => KeyAction::Command(VimCommand::Page(false, false)),
+        _ => return None,
+    })
 }
 
 fn ctrl_page_command(key: &Key, mods: Modifiers) -> Option<VimCommand> {
@@ -1418,41 +1335,85 @@ fn reverse_find(motion: Motion) -> Motion {
 
 // -- Word motions ------------------------------------------------------------
 
+#[derive(Clone, Copy)]
+struct TokenRun {
+    start: usize,
+    end: usize,
+    class: TokenClass,
+}
+
+struct TokenLine(usize, Vec<GraphemeCell>, bool);
+
+impl TokenLine {
+    fn run(&self, ix: usize) -> TokenRun {
+        let class = vim_token_class(self.1[ix].repr, self.2);
+        let token_class = |i: usize| vim_token_class(self.1[i].repr, self.2);
+        let start = (0..ix).rev().find(|&i| token_class(i) != class).map_or(0, |i| i + 1);
+        let end = (ix + 1..self.1.len())
+            .find(|&i| token_class(i) != class)
+            .map_or(self.1.len() - 1, |i| i - 1);
+        TokenRun { start, end, class }
+    }
+
+    fn non_ws_run(&self, start: usize, forward: bool) -> Option<TokenRun> {
+        let class = |i: usize| vim_token_class(self.1[i].repr, self.2);
+        let ix = if forward {
+            (start..self.1.len()).find(|&i| class(i) != TokenClass::Whitespace)?
+        } else {
+            (0..start).rev().find(|&i| class(i) != TokenClass::Whitespace)?
+        };
+        Some(self.run(ix))
+    }
+
+    fn positions(&self, start: usize, end: usize) -> (Position, Position) {
+        (
+            pos(self.0, self.1[start].char_start),
+            pos(self.0, self.1[end].char_start),
+        )
+    }
+}
+
+fn word_motion(text: &VimText<'_>, kind: WordMotion, big: bool, n: usize) -> Position {
+    let (mut line, mut col) = (text.cursor.line, text.cursor.column);
+    let step = match kind {
+        WordMotion::Forward => word_forward,
+        WordMotion::Backward => word_backward,
+        WordMotion::End => word_end,
+    };
+    for _ in 0..n {
+        (line, col) = step(text, line, col, big);
+    }
+    pos(line, col)
+}
+
 fn word_forward(text: &VimText<'_>, mut line: usize, col: usize, big: bool) -> (usize, usize) {
-    let mut cells = line_cells(text, line);
-    if cells.is_empty() {
+    let mut tokens = TokenLine(line, line_cells(text, line), big);
+    if tokens.1.is_empty() {
         if line + 1 < text.line_count() {
             return (line + 1, 0);
         }
         return (line, 0);
     }
 
-    let containing = cell_containing_char(&cells, col);
-    // If the cursor is past EOL we start advancing from one-past-end so the
-    // class-skip loop falls through to the next line; otherwise advance from
-    // the containing cluster.
-    let mut cell_ix = if col >= line_len(text, line) {
-        cells.len()
+    let mut ix = if col >= line_len(text, line) {
+        tokens.1.len()
     } else {
-        containing
+        cell_containing_char(&tokens.1, col)
     };
 
-    if cell_ix < cells.len() && cell_class(&cells, cell_ix, big) != TokenClass::Whitespace {
-        cell_ix = cell_run(&cells, cell_ix, big).1 + 1;
+    if ix < tokens.1.len() && vim_token_class(tokens.1[ix].repr, big) != TokenClass::Whitespace {
+        ix = tokens.run(ix).end + 1;
     }
 
     loop {
-        while cell_ix < cells.len() && cell_class(&cells, cell_ix, big) == TokenClass::Whitespace {
-            cell_ix += 1;
-        }
-        if cell_ix < cells.len() {
-            return (line, cells[cell_ix].char_start);
+        if let Some(run) = tokens.non_ws_run(ix, true) {
+            return (tokens.0, tokens.1[run.start].char_start);
         }
         if line + 1 < text.line_count() {
             line += 1;
-            cells = line_cells(text, line);
-            cell_ix = 0;
-            if cells.is_empty() {
+            tokens = TokenLine(line, line_cells(text, line), big);
+            ix = 0;
+            if tokens.1.is_empty() {
                 return (line, 0);
             }
         } else {
@@ -1462,74 +1423,59 @@ fn word_forward(text: &VimText<'_>, mut line: usize, col: usize, big: bool) -> (
 }
 
 fn word_backward(text: &VimText<'_>, mut line: usize, col: usize, big: bool) -> (usize, usize) {
-    let mut cells = line_cells(text, line);
-
-    // Step left by one cluster, possibly crossing to the previous line. A
-    // mid-cluster column rounds back to the cluster start (defensive: cursors
-    // are normally grapheme-aligned).
-    let mut cell_ix = if cells.is_empty() {
+    let mut tokens = TokenLine(line, line_cells(text, line), big);
+    let mut ix = if tokens.1.is_empty() {
         None
     } else {
-        cell_partition_by_char(&cells, col).checked_sub(1)
+        cell_partition_by_char(&tokens.1, col).checked_sub(1)
     };
 
-    if cell_ix.is_none() {
+    if ix.is_none() {
         if line == 0 {
             return (0, 0);
         }
         line -= 1;
-        cells = line_cells(text, line);
-        if cells.is_empty() {
+        tokens = TokenLine(line, line_cells(text, line), big);
+        if tokens.1.is_empty() {
             return (line, 0);
         }
-        cell_ix = Some(cells.len() - 1);
+        ix = Some(tokens.1.len() - 1);
     }
-    let mut cell_ix = cell_ix.unwrap();
+    let mut ix = ix.unwrap();
 
     loop {
-        if !cells.is_empty() {
-            while cell_ix > 0 && cell_class(&cells, cell_ix, big) == TokenClass::Whitespace {
-                cell_ix -= 1;
-            }
-            if cell_class(&cells, cell_ix, big) != TokenClass::Whitespace {
-                break;
-            }
+        if let Some(run) = tokens.non_ws_run(ix + 1, false) {
+            return (tokens.0, tokens.1[run.start].char_start);
         }
         if line == 0 {
             return (0, 0);
         }
         line -= 1;
-        cells = line_cells(text, line);
-        if cells.is_empty() {
+        tokens = TokenLine(line, line_cells(text, line), big);
+        if tokens.1.is_empty() {
             return (line, 0);
         }
-        cell_ix = cells.len() - 1;
+        ix = tokens.1.len() - 1;
     }
-
-    cell_ix = cell_run(&cells, cell_ix, big).0;
-    (line, cells[cell_ix].char_start)
 }
 
 fn word_end(text: &VimText<'_>, mut line: usize, col: usize, big: bool) -> (usize, usize) {
-    let mut cells = line_cells(text, line);
-
-    // Step right by one cluster, possibly crossing to the next line. The next
-    // cell is the one just past the cluster currently containing the cursor.
-    let mut cell_ix = if cells.is_empty() {
+    let mut tokens = TokenLine(line, line_cells(text, line), big);
+    let mut ix = if tokens.1.is_empty() {
         if line + 1 < text.line_count() {
             line += 1;
-            cells = line_cells(text, line);
+            tokens = TokenLine(line, line_cells(text, line), big);
             0
         } else {
             return (line, 0);
         }
     } else {
-        let containing = cell_containing_char(&cells, col);
-        if containing + 1 < cells.len() {
+        let containing = cell_containing_char(&tokens.1, col);
+        if containing + 1 < tokens.1.len() {
             containing + 1
         } else if line + 1 < text.line_count() {
             line += 1;
-            cells = line_cells(text, line);
+            tokens = TokenLine(line, line_cells(text, line), big);
             0
         } else {
             return (line, last_cluster_col(text, line));
@@ -1537,61 +1483,51 @@ fn word_end(text: &VimText<'_>, mut line: usize, col: usize, big: bool) -> (usiz
     };
 
     loop {
-        if !cells.is_empty() {
-            while cell_ix < cells.len() && cell_class(&cells, cell_ix, big) == TokenClass::Whitespace {
-                cell_ix += 1;
-            }
-            if cell_ix < cells.len() {
-                break;
-            }
+        if let Some(run) = tokens.non_ws_run(ix, true) {
+            return (tokens.0, tokens.1[run.end].char_start);
         }
         if line + 1 < text.line_count() {
             line += 1;
-            cells = line_cells(text, line);
-            cell_ix = 0;
+            tokens = TokenLine(line, line_cells(text, line), big);
+            ix = 0;
         } else {
             return (line, last_cluster_col(text, line));
         }
     }
-
-    cell_ix = cell_run(&cells, cell_ix, big).1;
-    // The cursor sits on the cluster, so the "end of word" target is the
-    // cluster's start column — never an interior char column.
-    (line, cells[cell_ix].char_start)
 }
 
 // -- Text objects ------------------------------------------------------------
 
 fn text_object(text: &VimText<'_>, obj: char, inner: bool, count: Option<usize>) -> Option<(Position, Position)> {
-    match obj {
+    delimited(text, obj, inner, true).or_else(|| match obj {
         'w' => word_object(text, inner, false, count.unwrap_or(1)),
         'W' => word_object(text, inner, true, count.unwrap_or(1)),
         'p' => paragraph_object(text, inner),
+        _ => None,
+    })
+}
+
+fn delimited(text: &VimText<'_>, obj: char, inner: bool, around: bool) -> Option<(Position, Position)> {
+    match obj {
         '(' | ')' | 'b' => pair_object(text, '(', ')', inner),
         '{' | '}' | 'B' => pair_object(text, '{', '}', inner),
         '[' | ']' => pair_object(text, '[', ']', inner),
         '<' | '>' => pair_object(text, '<', '>', inner),
-        '"' => quote_text_object(text, '"', inner),
-        '\'' => quote_text_object(text, '\'', inner),
-        '`' => quote_text_object(text, '`', inner),
+        '"' if around => quote_text_object(text, '"', inner),
+        '\'' if around => quote_text_object(text, '\'', inner),
+        '`' if around => quote_text_object(text, '`', inner),
+        '"' => quote_object(text, '"', inner),
+        '\'' => quote_object(text, '\'', inner),
+        '`' => quote_object(text, '`', inner),
         _ => None,
     }
 }
 
 fn empty_inner_text_object_position(text: &VimText<'_>, obj: char) -> Option<Position> {
-    let outer = match obj {
-        '(' | ')' | 'b' => pair_object(text, '(', ')', false),
-        '{' | '}' | 'B' => pair_object(text, '{', '}', false),
-        '[' | ']' => pair_object(text, '[', ']', false),
-        '<' | '>' => pair_object(text, '<', '>', false),
-        '"' => quote_object(text, '"', false),
-        '\'' => quote_object(text, '\'', false),
-        '`' => quote_object(text, '`', false),
-        _ => None,
-    }?;
+    let outer = delimited(text, obj, false, false)?;
     let from = advance_pos(text, outer.0)?;
     let to = retreat_pos(text, outer.1)?;
-    (pos_lt(&to, &from)).then_some(from)
+    (to < from).then_some(from)
 }
 
 fn word_object(text: &VimText<'_>, inner: bool, big: bool, count: usize) -> Option<(Position, Position)> {
@@ -1609,37 +1545,34 @@ fn word_object(text: &VimText<'_>, inner: bool, big: bool, count: usize) -> Opti
 }
 
 fn word_object_at(text: &VimText<'_>, cursor: Position, inner: bool, big: bool) -> Option<(Position, Position)> {
-    let line = cursor.line;
-    let cells = line_cells(text, line);
-    if cells.is_empty() {
+    let tokens = TokenLine(cursor.line, line_cells(text, cursor.line), big);
+    if tokens.1.is_empty() {
         return None;
     }
-    let col = cursor.column.min(line_len(text, line).saturating_sub(1));
-    let cell_ix = cell_containing_char(&cells, col);
-    let cur_class = cell_class(&cells, cell_ix, big);
-    let (mut start, mut end) = cell_run(&cells, cell_ix, big);
+    let col = cursor.column.min(line_len(text, cursor.line).saturating_sub(1));
+    let run = tokens.run(cell_containing_char(&tokens.1, col));
 
-    if inner {
-        return Some(cell_positions(line, &cells, start, end));
-    }
-
-    if cur_class == TokenClass::Whitespace {
-        if let Some((_, next_end)) = adjacent_word_run(&cells, end + 1, big, true) {
-            return Some(cell_positions(line, &cells, start, next_end));
+    let (start, end) = if inner {
+        (run.start, run.end)
+    } else if run.class == TokenClass::Whitespace {
+        if let Some(next) = tokens.non_ws_run(run.end + 1, true) {
+            (run.start, next.end)
+        } else if let Some(prev) = tokens.non_ws_run(run.start, false) {
+            (prev.start, run.end)
+        } else {
+            (run.start, run.end)
         }
-        if let Some((prev_start, _)) = adjacent_word_run(&cells, start, big, false) {
-            return Some(cell_positions(line, &cells, prev_start, end));
+    } else {
+        let (mut start, mut end) = (run.start, run.end);
+        if end + 1 < tokens.1.len() && vim_token_class(tokens.1[end + 1].repr, big) == TokenClass::Whitespace {
+            end = tokens.run(end + 1).end;
+        } else if start > 0 && vim_token_class(tokens.1[start - 1].repr, big) == TokenClass::Whitespace {
+            start = tokens.run(start - 1).start;
         }
-        return Some(cell_positions(line, &cells, start, end));
-    }
+        (start, end)
+    };
 
-    if end + 1 < cells.len() && cell_class(&cells, end + 1, big) == TokenClass::Whitespace {
-        end = cell_run(&cells, end + 1, big).1;
-    } else if start > 0 && cell_class(&cells, start - 1, big) == TokenClass::Whitespace {
-        start = cell_run(&cells, start - 1, big).0;
-    }
-
-    Some(cell_positions(line, &cells, start, end))
+    Some(tokens.positions(start, end))
 }
 
 fn paragraph_object(text: &VimText<'_>, inner: bool) -> Option<(Position, Position)> {
@@ -1686,7 +1619,7 @@ fn pair_object(text: &VimText<'_>, open: char, close: char, inner: bool) -> Opti
     if inner {
         let from = advance_pos(text, open_pos)?;
         let to = retreat_pos(text, close_pos)?;
-        pos_le(&from, &to).then_some((from, to))
+        (from <= to).then_some((from, to))
     } else {
         Some((open_pos, close_pos))
     }
@@ -1697,25 +1630,23 @@ fn quote_object(text: &VimText<'_>, quote: char, inner: bool) -> Option<(Positio
     let chars = line_chars(text, line);
     let col = text.cursor.column;
 
-    let quotes: Vec<usize> = chars
-        .iter()
-        .enumerate()
-        .filter(|(i, &c)| c == quote && !is_escaped_quote(&chars, *i))
-        .map(|(i, _)| i)
-        .collect();
-
-    let (start, end) = quotes
-        .windows(2)
-        .filter_map(|pair| {
-            let start = pair[0];
-            let end = pair[1];
-            if start <= col && col <= end && quote_can_open(&chars, start) && quote_can_close(&chars, end) {
-                Some((start, end))
-            } else {
-                None
+    let mut previous_quote = None;
+    let mut best = None;
+    for (end, &ch) in chars.iter().enumerate() {
+        if ch != quote || is_escaped_quote(&chars, end) {
+            continue;
+        }
+        if let Some(start) = previous_quote {
+            let contains_cursor = start <= col && col <= end;
+            let shortest = best.is_none_or(|(best_start, best_end)| end - start < best_end - best_start);
+            if contains_cursor && quote_can_open(&chars, start) && quote_can_close(&chars, end) && shortest {
+                best = Some((start, end));
             }
-        })
-        .min_by_key(|(start, end)| end - start)?;
+        }
+        previous_quote = Some(end);
+    }
+
+    let (start, end) = best?;
 
     if inner {
         if start + 1 < end {
@@ -1737,73 +1668,26 @@ fn quote_text_object(text: &VimText<'_>, quote: char, inner: bool) -> Option<(Po
     let chars = line_chars(text, from.line);
     let mut start = from.column;
     let mut end = to.column;
-    if end + 1 < chars.len() && chars[end + 1].is_whitespace() {
-        while end + 1 < chars.len() && chars[end + 1].is_whitespace() {
-            end += 1;
-        }
-    } else if start > 0 && chars[start - 1].is_whitespace() {
-        while start > 0 && chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
+    let extend_right = end + 1 < chars.len() && chars[end + 1].is_whitespace();
+    while extend_right && end + 1 < chars.len() && chars[end + 1].is_whitespace() {
+        end += 1;
+    }
+    while !extend_right && start > 0 && chars[start - 1].is_whitespace() {
+        start -= 1;
     }
     Some((pos(from.line, start), pos(to.line, end)))
 }
 
-fn cell_class(cells: &[GraphemeCell], ix: usize, big: bool) -> TokenClass {
-    vim_token_class(cells[ix].repr, big)
-}
-
-fn cell_run(cells: &[GraphemeCell], ix: usize, big: bool) -> (usize, usize) {
-    let class = cell_class(cells, ix, big);
-    let start = (0..ix)
-        .rev()
-        .find(|&i| cell_class(cells, i, big) != class)
-        .map_or(0, |i| i + 1);
-    let end = (ix + 1..cells.len())
-        .find(|&i| cell_class(cells, i, big) != class)
-        .map_or(cells.len() - 1, |i| i - 1);
-    (start, end)
-}
-
-fn adjacent_word_run(cells: &[GraphemeCell], start: usize, big: bool, forward: bool) -> Option<(usize, usize)> {
-    let ix = if forward {
-        (start..cells.len()).find(|&i| cell_class(cells, i, big) != TokenClass::Whitespace)?
-    } else {
-        (0..start)
-            .rev()
-            .find(|&i| cell_class(cells, i, big) != TokenClass::Whitespace)?
-    };
-    Some(cell_run(cells, ix, big))
-}
-
-fn cell_positions(line: usize, cells: &[GraphemeCell], start: usize, end: usize) -> (Position, Position) {
-    (pos(line, cells[start].char_start), pos(line, cells[end].char_start))
-}
-
 fn is_escaped_quote(chars: &[char], idx: usize) -> bool {
-    let mut backslashes = 0;
-    let mut i = idx;
-    while i > 0 {
-        i -= 1;
-        if chars[i] == '\\' {
-            backslashes += 1;
-        } else {
-            break;
-        }
-    }
-    backslashes % 2 == 1
+    chars[..idx].iter().rev().take_while(|&&ch| ch == '\\').count() % 2 == 1
 }
 
 fn quote_can_open(chars: &[char], idx: usize) -> bool {
-    idx == 0 || !quote_neighbor_is_wordish(chars[idx - 1])
+    idx == 0 || !is_identifier_char(chars[idx - 1])
 }
 
 fn quote_can_close(chars: &[char], idx: usize) -> bool {
-    idx + 1 >= chars.len() || !quote_neighbor_is_wordish(chars[idx + 1])
-}
-
-fn quote_neighbor_is_wordish(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_'
+    idx + 1 >= chars.len() || !is_identifier_char(chars[idx + 1])
 }
 
 // -- Bracket matching --------------------------------------------------------
@@ -1932,21 +1816,14 @@ fn word_under_cursor(text: &VimText<'_>) -> Option<String> {
         if cells.is_empty() {
             return None;
         }
+        let tokens = TokenLine(text.cursor.line, cells, false);
         let col = text.cursor.column.min(line.chars().count().saturating_sub(1));
-        let cell_ix = cell_containing_char(&cells, col);
-        if !is_identifier_char(cells[cell_ix].repr) {
+        let run = tokens.run(cell_containing_char(&tokens.1, col));
+        if run.class != TokenClass::Word {
             return None;
         }
-        let mut start = cell_ix;
-        while start > 0 && is_identifier_char(cells[start - 1].repr) {
-            start -= 1;
-        }
-        let mut end = cell_ix;
-        while end + 1 < cells.len() && is_identifier_char(cells[end + 1].repr) {
-            end += 1;
-        }
-        let start_byte = cells[start].byte_start;
-        let end_byte = cells.get(end + 1).map_or(line.len(), |c| c.byte_start);
+        let start_byte = tokens.1[run.start].byte_start;
+        let end_byte = tokens.1.get(run.end + 1).map_or(line.len(), |c| c.byte_start);
         Some(line[start_byte..end_byte].to_string())
     })
 }
@@ -1955,18 +1832,8 @@ fn first_non_blank(text: &VimText<'_>, line: usize) -> usize {
     let chars = line_chars(text, line);
     chars.iter().position(|c| !c.is_whitespace()).unwrap_or(0)
 }
-fn pos_le(a: &Position, b: &Position) -> bool {
-    a.line < b.line || (a.line == b.line && a.column <= b.column)
-}
-fn pos_lt(a: &Position, b: &Position) -> bool {
-    a.line < b.line || (a.line == b.line && a.column < b.column)
-}
 fn ordered(a: Position, b: Position) -> (Position, Position) {
-    if pos_le(&a, &b) {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    (a.min(b), a.max(b))
 }
 fn ordered_lines(a: usize, b: usize) -> (usize, usize) {
     (a.min(b), a.max(b))

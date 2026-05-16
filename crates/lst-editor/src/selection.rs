@@ -1,7 +1,7 @@
 use ropey::Rope;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Position {
     pub line: usize,
     pub column: usize,
