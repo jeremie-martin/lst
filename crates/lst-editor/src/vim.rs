@@ -157,37 +157,155 @@ pub enum ScreenRow {
 
 // -- Supporting types --------------------------------------------------------
 
+pub type SelectionSpan = RangeTarget;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SelectionSpan {
+enum Target {
+    Cursor(Position),
+    Range(RangeTarget),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RangeTarget {
     Range { from: Position, to: Position },
     Lines { first: usize, last: usize },
 }
 
-impl SelectionSpan {
+impl RangeTarget {
+    fn charwise(anchor: Position, head: Position) -> Self {
+        Self::Range { from: anchor, to: head }
+    }
+
+    fn linewise(first: usize, last: usize) -> Self {
+        let (first, last) = ordered_lines(first, last);
+        Self::Lines { first, last }
+    }
+
     fn visual(anchor: Position, head: Position, linewise: bool) -> Self {
         if linewise {
-            let (first, last) = ordered_lines(anchor.line, head.line);
-            Self::Lines { first, last }
+            Self::linewise(anchor.line, head.line)
         } else {
-            let (from, to) = ordered(anchor, head);
-            Self::Range { from, to }
+            Self::charwise(anchor, head)
         }
     }
 
-    fn operator(self, op: Operator) -> Vec<VimCommand> {
-        operator_commands(op, self, true)
+    fn forward_chars(text: &VimText<'_>, count: usize) -> Option<Self> {
+        let ll = line_len(text, text.cursor.line);
+        (ll > 0).then(|| {
+            let end = (text.cursor.column + count - 1).min(ll.saturating_sub(1));
+            Self::charwise(text.cursor, pos(text.cursor.line, end))
+        })
+    }
+
+    fn backward_chars(text: &VimText<'_>, count: usize) -> Option<Self> {
+        (text.cursor.column > 0).then(|| {
+            let start = text.cursor.column.saturating_sub(count);
+            Self::charwise(
+                pos(text.cursor.line, start),
+                pos(text.cursor.line, text.cursor.column - 1),
+            )
+        })
+    }
+
+    fn line_tail(text: &VimText<'_>) -> Option<Self> {
+        let ll = line_len(text, text.cursor.line);
+        (ll > 0 && text.cursor.column < ll).then(|| Self::charwise(text.cursor, pos(text.cursor.line, ll - 1)))
+    }
+
+    fn operator_motion(op: Operator, motion: &Motion, text: &VimText<'_>, count: Option<usize>) -> Option<Self> {
+        let semantics = motion_semantics(op, motion, count);
+
+        if semantics.linewise {
+            let target = compute_motion(motion, text, count, None);
+            return Some(Self::linewise(text.cursor.line, target.line));
+        }
+
+        let target = compute_motion(motion, text, count, None);
+
+        if target == text.cursor && semantics.noop_on_same {
+            return None;
+        }
+
+        let backward = pos_lt(&target, &text.cursor);
+
+        let mut eol_clamped = false;
+        let target = if matches!(motion, Motion::Word(WordMotion::Forward, _)) {
+            if op == Operator::Delete && target.line > text.cursor.line {
+                eol_clamped = true;
+                let ll = line_len(text, text.cursor.line);
+                pos(text.cursor.line, ll.saturating_sub(1))
+            } else if target.line == text.line_count().saturating_sub(1)
+                && line_len(text, target.line) > 0
+                && target.column == line_len(text, target.line).saturating_sub(1)
+            {
+                eol_clamped = true;
+                target
+            } else {
+                target
+            }
+        } else {
+            target
+        };
+
+        let (from, to) = if eol_clamped && target == text.cursor {
+            (text.cursor, text.cursor)
+        } else {
+            ordered(text.cursor, target)
+        };
+        let mut to = to;
+
+        if (!semantics.inclusive || backward) && !eol_clamped {
+            if to.column > 0 {
+                to.column -= 1;
+            } else if to.line > from.line {
+                to.line -= 1;
+                to.column = line_len(text, to.line).saturating_sub(1);
+            }
+            if pos_lt(&to, &from) {
+                return None;
+            }
+        }
+
+        Some(Self::charwise(from, to))
+    }
+
+    fn ordered(self) -> Self {
+        match self {
+            Self::Range { from, to } => {
+                let (from, to) = ordered(from, to);
+                Self::Range { from, to }
+            }
+            Self::Lines { first, last } => Self::linewise(first, last),
+        }
+    }
+
+    fn selection(self, text: &VimText<'_>) -> VisualState {
+        match self {
+            Self::Range { from: anchor, to: head } => VisualState { anchor, head },
+            Self::Lines { first, last } => {
+                let last_col = line_len(text, last).saturating_sub(1);
+                VisualState {
+                    anchor: pos(first, 0),
+                    head: pos(last, last_col),
+                }
+            }
+        }
+    }
+
+    fn operator(self, op: Operator, move_after_yank: bool) -> Vec<VimCommand> {
+        operator_commands(op, self.ordered(), move_after_yank)
     }
 
     fn paste(self, preserve_register: bool) -> Vec<VimCommand> {
-        vec![VimCommand::PasteSelection(self, preserve_register)]
+        vec![VimCommand::PasteSelection(self.ordered(), preserve_register)]
     }
 
-    fn shift(self, indent: bool) -> Vec<VimCommand> {
-        vec![VimCommand::Shift(self, indent, true)]
+    fn shift(self, indent: bool, move_after: bool) -> Vec<VimCommand> {
+        vec![VimCommand::Shift(self.ordered(), indent, move_after)]
     }
 
     fn transform_case(self, uppercase: bool) -> Vec<VimCommand> {
-        vec![VimCommand::TransformCase(self, uppercase)]
+        vec![VimCommand::TransformCase(self.ordered(), uppercase)]
     }
 }
 
@@ -662,7 +780,7 @@ impl VimState {
             if Some(op) == Operator::from_char(c) {
                 let count = self.pending.take_operator_count().unwrap_or(1);
                 let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
-                return line_operator(op, text.cursor.line, last, false);
+                return RangeTarget::linewise(text.cursor.line, last).operator(op, false);
             }
 
             if let Some(motion) = self.char_motion(c) {
@@ -682,13 +800,11 @@ impl VimState {
             return self.apply_motion(motion, text);
         }
 
-        // Operators
         if let Some(op) = Operator::from_char(c) {
             self.pending.start_operator(op);
             return vec![];
         }
 
-        // Two-char sequence starters
         if let Some(prefix) = Prefix::start(c, PrefixContext::Normal) {
             self.pending.start_normal_prefix(prefix);
             return vec![];
@@ -719,15 +835,19 @@ impl VimState {
             }
             'o' => vec![VimCommand::OpenLine(false)],
             'O' => vec![VimCommand::OpenLine(true)],
-            'x' => range_operator_or(Operator::Delete, counted_forward_range(text, count), None),
-            'X' => range_operator_or(Operator::Delete, counted_backward_range(text, count), None),
-            's' => range_operator_or(
+            'x' => operator_or(RangeTarget::forward_chars(text, count), Operator::Delete, None),
+            'X' => operator_or(RangeTarget::backward_chars(text, count), Operator::Delete, None),
+            's' => operator_or(
+                RangeTarget::forward_chars(text, count),
                 Operator::Change,
-                counted_forward_range(text, count),
                 Some(VimCommand::EnterInsert),
             ),
-            'D' => range_operator_or(Operator::Delete, line_tail_range(text), None),
-            'C' => range_operator_or(Operator::Change, line_tail_range(text), Some(VimCommand::EnterInsert)),
+            'D' => operator_or(RangeTarget::line_tail(text), Operator::Delete, None),
+            'C' => operator_or(
+                RangeTarget::line_tail(text),
+                Operator::Change,
+                Some(VimCommand::EnterInsert),
+            ),
             'J' => {
                 // vim: J = join 2 lines (1 op), 3J = join 3 lines (2 ops)
                 let joins = if count <= 1 { 1 } else { count - 1 };
@@ -735,26 +855,13 @@ impl VimState {
             }
             'S' => {
                 let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
-                line_operator(Operator::Change, text.cursor.line, last, false)
+                RangeTarget::linewise(text.cursor.line, last).operator(Operator::Change, false)
             }
             'p' => vec![VimCommand::Paste(false)],
             'P' => vec![VimCommand::Paste(true)],
             'u' => vec![VimCommand::Undo],
-            'v' => {
-                self.mode = Mode::Visual;
-                self.visual_anchor = Some(text.cursor);
-                self.visual_head = Some(text.cursor);
-                vec![VimCommand::Select(VisualState {
-                    anchor: text.cursor,
-                    head: text.cursor,
-                })]
-            }
-            'V' => {
-                self.mode = Mode::VisualLine;
-                self.visual_anchor = Some(text.cursor);
-                self.visual_head = Some(text.cursor);
-                self.visual_select(text.cursor, text)
-            }
+            'v' => self.enter_visual(Mode::Visual, text),
+            'V' => self.enter_visual(Mode::VisualLine, text),
             '*' | '#' => {
                 if let Some(word) = word_under_cursor(text) {
                     self.last_search_backward = c == '#';
@@ -795,7 +902,6 @@ impl VimState {
             return self.resolve_partial(prefix, c, text);
         }
 
-        // Digits for count
         if c.is_ascii_digit() && (c != '0' || self.pending.has_count()) {
             let digit = c.to_digit(10).unwrap() as usize;
             self.pending.add_digit(digit);
@@ -804,41 +910,22 @@ impl VimState {
 
         let anchor = self.visual_anchor.unwrap_or(text.cursor);
         let head = self.visual_head.unwrap_or(text.cursor);
-        let span = SelectionSpan::visual(anchor, head, self.mode == Mode::VisualLine);
+        let target = RangeTarget::visual(anchor, head, self.mode == Mode::VisualLine);
 
         // Operators on selection
         match c {
-            'd' | 'x' => return self.exit_visual_with(span.operator(Operator::Delete)),
-            'c' | 's' => return self.exit_visual_with(span.operator(Operator::Change)),
-            'y' => return self.exit_visual_with(span.operator(Operator::Yank)),
+            'd' | 'x' => return self.exit_visual_with(target.operator(Operator::Delete, true)),
+            'c' | 's' => return self.exit_visual_with(target.operator(Operator::Change, true)),
+            'y' => return self.exit_visual_with(target.operator(Operator::Yank, true)),
             'p' | 'P' => {
-                return self.exit_visual_with(span.paste(c == 'P'));
+                return self.exit_visual_with(target.paste(c == 'P'));
             }
-            '>' => return self.exit_visual_with(span.shift(true)),
-            '<' => return self.exit_visual_with(span.shift(false)),
-            'v' => {
-                if self.mode == Mode::Visual {
-                    return self.exit_visual_with(vec![VimCommand::MoveTo(text.cursor)]);
-                } else {
-                    self.mode = Mode::Visual;
-                    self.clear_preferred_column();
-                    return vec![VimCommand::Select(VisualState {
-                        anchor,
-                        head: text.cursor,
-                    })];
-                }
-            }
-            'V' => {
-                if self.mode == Mode::VisualLine {
-                    return self.exit_visual_with(vec![VimCommand::MoveTo(text.cursor)]);
-                } else {
-                    self.mode = Mode::VisualLine;
-                    self.clear_preferred_column();
-                    return self.visual_select(text.cursor, text);
-                }
-            }
+            '>' => return self.exit_visual_with(target.shift(true, true)),
+            '<' => return self.exit_visual_with(target.shift(false, true)),
+            'v' => return self.toggle_visual(Mode::Visual, text),
+            'V' => return self.toggle_visual(Mode::VisualLine, text),
             'u' | 'U' => {
-                return self.exit_visual_with(span.transform_case(c == 'U'));
+                return self.exit_visual_with(target.transform_case(c == 'U'));
             }
             _ => {}
         }
@@ -855,7 +942,6 @@ impl VimState {
             _ => {}
         }
 
-        // Try as motion - extend selection
         if c == '0' && !self.pending.has_count() {
             return self.apply_motion(Motion::LineStart, text);
         }
@@ -872,22 +958,52 @@ impl VimState {
     }
 
     pub fn selection_command(&mut self, head: Position, text: &VimText<'_>) -> VimCommand {
-        let anchor = self.visual_anchor.unwrap_or(text.cursor);
-        self.visual_head = Some(head);
-        if self.mode == Mode::VisualLine {
-            let (first, last) = ordered_lines(anchor.line, head.line);
-            let last_col = line_len(text, last).saturating_sub(1);
-            VimCommand::Select(VisualState {
-                anchor: pos(first, 0),
-                head: pos(last, last_col),
-            })
+        self.visual_command(Target::Cursor(head), text)
+    }
+
+    fn enter_visual(&mut self, mode: Mode, text: &VimText<'_>) -> Vec<VimCommand> {
+        self.mode = mode;
+        self.visual_anchor = Some(text.cursor);
+        self.visual_head = Some(text.cursor);
+        self.visual_select(Target::Cursor(text.cursor), text)
+    }
+
+    fn toggle_visual(&mut self, mode: Mode, text: &VimText<'_>) -> Vec<VimCommand> {
+        if self.mode == mode {
+            self.exit_visual_with(vec![VimCommand::MoveTo(text.cursor)])
         } else {
-            VimCommand::Select(VisualState { anchor, head })
+            self.mode = mode;
+            self.clear_preferred_column();
+            self.visual_select(Target::Cursor(text.cursor), text)
         }
     }
 
-    fn visual_select(&mut self, head: Position, text: &VimText<'_>) -> Vec<VimCommand> {
-        vec![self.selection_command(head, text)]
+    fn visual_select(&mut self, target: Target, text: &VimText<'_>) -> Vec<VimCommand> {
+        vec![self.visual_command(target, text)]
+    }
+
+    fn visual_command(&mut self, target: Target, text: &VimText<'_>) -> VimCommand {
+        let range = match target {
+            Target::Cursor(head) => {
+                let anchor = self.visual_anchor.unwrap_or(text.cursor);
+                self.visual_head = Some(head);
+                RangeTarget::visual(anchor, head, self.mode == Mode::VisualLine)
+            }
+            Target::Range(range) => {
+                match range {
+                    RangeTarget::Range { from, to } => {
+                        self.visual_anchor = Some(from);
+                        self.visual_head = Some(to);
+                    }
+                    RangeTarget::Lines { first, last } => {
+                        self.visual_anchor = Some(pos(first, 0));
+                        self.visual_head = Some(pos(last, 0));
+                    }
+                }
+                range
+            }
+        };
+        VimCommand::Select(range.selection(text))
     }
 
     // -- Partial resolution ----------------------------------------------
@@ -925,17 +1041,15 @@ impl VimState {
                 let count = self.pending.take_count().unwrap_or(1);
                 self.clear_command_state();
                 let last = (text.cursor.line + count - 1).min(text.line_count().saturating_sub(1));
-                shift_lines(text.cursor.line, last, prefix == Prefix::Indent, false)
+                RangeTarget::linewise(text.cursor.line, last).shift(prefix == Prefix::Indent, false)
             }
             Prefix::TextObjectInner | Prefix::TextObjectAround => {
                 let inner = prefix == Prefix::TextObjectInner;
                 if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
                     let count = self.pending.take_count();
                     if let Some((from, to)) = text_object(text, c, inner, count) {
-                        self.visual_anchor = Some(from);
-                        self.visual_head = Some(to);
                         self.clear_preferred_column();
-                        return vec![VimCommand::Select(VisualState { anchor: from, head: to })];
+                        return self.visual_select(Target::Range(RangeTarget::charwise(from, to)), text);
                     }
                     self.clear_command_state();
                     return vec![];
@@ -945,9 +1059,9 @@ impl VimState {
                         self.clear_command_state();
                         // Paragraph text objects are linewise
                         if c == 'p' {
-                            return line_operator(op, range.0.line, range.1.line, false);
+                            return RangeTarget::linewise(range.0.line, range.1.line).operator(op, false);
                         }
-                        return range_operator(op, range.0, range.1);
+                        return RangeTarget::charwise(range.0, range.1).operator(op, false);
                     }
                     if inner && op == Operator::Change {
                         if let Some(at) = empty_inner_text_object_position(text, c) {
@@ -992,7 +1106,7 @@ impl VimState {
             self.clear_pending();
             let target = self.cursor_motion_target(&motion, text, count);
             if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
-                self.visual_select(target, text)
+                self.visual_select(Target::Cursor(target), text)
             } else {
                 vec![VimCommand::MoveTo(target)]
             }
@@ -1006,151 +1120,36 @@ impl VimState {
         text: &VimText<'_>,
         count: Option<usize>,
     ) -> Vec<VimCommand> {
-        // vim: cw/cW behave like ce/cE when cursor is on a non-whitespace char
-        let motion = if op == Operator::Change {
-            let cursor_on_non_space = {
-                let chars = line_chars(text, text.cursor.line);
-                let col = text.cursor.column.min(chars.len().saturating_sub(1));
-                !chars.is_empty() && !chars[col].is_whitespace()
-            };
-            if cursor_on_non_space {
-                match motion {
-                    Motion::Word(WordMotion::Forward, big) => Motion::Word(WordMotion::End, big),
-                    _ => motion,
-                }
-            } else {
-                motion
+        let motion = match motion {
+            Motion::Word(WordMotion::Forward, big) if op == Operator::Change && cursor_on_non_space(text) => {
+                Motion::Word(WordMotion::End, big)
             }
-        } else {
-            motion
+            _ => motion,
         };
 
         self.clear_command_state();
 
-        let semantics = motion_semantics(op, &motion, count);
-
-        if semantics.linewise {
-            let target = compute_motion(&motion, text, count, None);
-            let (first, last) = ordered_lines(text.cursor.line, target.line);
-            return line_operator(op, first, last, false);
-        }
-
-        let target = compute_motion(&motion, text, count, None);
-
-        // Motions that return cursor on failure (no match / no bracket) are true no-ops.
-        // Forward motions that return cursor due to clamping (l at EOL, e at EOF, etc.)
-        // should still operate on the char at cursor.
-        if target == text.cursor && semantics.noop_on_same {
-            return vec![];
-        }
-
-        let backward = pos_lt(&target, &text.cursor);
-
-        // vim: dw at end of line stops at EOL (doesn't eat newline)
-        // vim: w at end of file can't find next word start - treat as inclusive
-        let mut eol_clamped = false;
-        let target = if matches!(motion, Motion::Word(WordMotion::Forward, _)) {
-            if op == Operator::Delete && target.line > text.cursor.line {
-                eol_clamped = true;
-                let ll = line_len(text, text.cursor.line);
-                pos(text.cursor.line, ll.saturating_sub(1))
-            } else if target.line == text.line_count().saturating_sub(1)
-                && line_len(text, target.line) > 0
-                && target.column == line_len(text, target.line).saturating_sub(1)
-            {
-                // w landed at last char of last line - no next word exists
-                eol_clamped = true;
-                target
-            } else {
-                target
-            }
-        } else {
-            target
-        };
-
-        let (from, to) = if eol_clamped && target == text.cursor {
-            (text.cursor, text.cursor)
-        } else {
-            ordered(text.cursor, target)
-        };
-        let mut to = to;
-
-        // Shrink `to` by one character when:
-        // - exclusive motions (standard vim rule), OR
-        // - backward motions (cursor char is never included for backward ops)
-        // Skip when eol_clamped (already adjusted to be inclusive)
-        if (!semantics.inclusive || backward) && !eol_clamped {
-            if to.column > 0 {
-                to.column -= 1;
-            } else if to.line > from.line {
-                to.line -= 1;
-                to.column = line_len(text, to.line).saturating_sub(1);
-            }
-            if pos_lt(&to, &from) {
-                return vec![];
-            }
-        }
-
-        range_operator(op, from, to)
+        RangeTarget::operator_motion(op, &motion, text, count)
+            .map_or_else(Vec::new, |target| target.operator(op, false))
     }
 }
 
-fn line_operator(op: Operator, first: usize, last: usize, move_after_yank: bool) -> Vec<VimCommand> {
-    operator_commands(op, SelectionSpan::Lines { first, last }, move_after_yank)
-}
-
-fn range_operator(op: Operator, from: Position, to: Position) -> Vec<VimCommand> {
-    operator_commands(op, SelectionSpan::Range { from, to }, false)
-}
-
-fn operator_commands(op: Operator, span: SelectionSpan, move_after_yank: bool) -> Vec<VimCommand> {
+fn operator_commands(op: Operator, target: RangeTarget, move_after_yank: bool) -> Vec<VimCommand> {
     vec![match op {
-        Operator::Delete => VimCommand::Delete(span),
-        Operator::Change => VimCommand::Change(span),
-        Operator::Yank => VimCommand::Yank(span, move_after_yank),
+        Operator::Delete => VimCommand::Delete(target),
+        Operator::Change => VimCommand::Change(target),
+        Operator::Yank => VimCommand::Yank(target, move_after_yank),
     }]
 }
 
-fn shift_lines(first: usize, last: usize, indent: bool, move_after: bool) -> Vec<VimCommand> {
-    vec![VimCommand::Shift(
-        SelectionSpan::Lines { first, last },
-        indent,
-        move_after,
-    )]
+fn operator_or(target: Option<RangeTarget>, op: Operator, fallback: Option<VimCommand>) -> Vec<VimCommand> {
+    target.map_or_else(|| fallback.into_iter().collect(), |target| target.operator(op, false))
 }
 
-fn range_operator_or(
-    op: Operator,
-    range: Option<(Position, Position)>,
-    fallback: Option<VimCommand>,
-) -> Vec<VimCommand> {
-    match range {
-        Some((from, to)) => range_operator(op, from, to),
-        None => fallback.into_iter().collect(),
-    }
-}
-
-fn counted_forward_range(text: &VimText<'_>, count: usize) -> Option<(Position, Position)> {
-    let ll = line_len(text, text.cursor.line);
-    (ll > 0).then(|| {
-        let end = (text.cursor.column + count - 1).min(ll.saturating_sub(1));
-        (text.cursor, pos(text.cursor.line, end))
-    })
-}
-
-fn counted_backward_range(text: &VimText<'_>, count: usize) -> Option<(Position, Position)> {
-    (text.cursor.column > 0).then(|| {
-        let start = text.cursor.column.saturating_sub(count);
-        (
-            pos(text.cursor.line, start),
-            pos(text.cursor.line, text.cursor.column - 1),
-        )
-    })
-}
-
-fn line_tail_range(text: &VimText<'_>) -> Option<(Position, Position)> {
-    let ll = line_len(text, text.cursor.line);
-    (ll > 0 && text.cursor.column < ll).then(|| (text.cursor, pos(text.cursor.line, ll - 1)))
+fn cursor_on_non_space(text: &VimText<'_>) -> bool {
+    let chars = line_chars(text, text.cursor.line);
+    let col = text.cursor.column.min(chars.len().saturating_sub(1));
+    !chars.is_empty() && !chars[col].is_whitespace()
 }
 
 #[derive(Clone, Copy)]
