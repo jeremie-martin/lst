@@ -263,19 +263,19 @@ impl EditorModel {
 
     fn vim_motion_command(&mut self, count: usize, cmd: &str, operator: bool) -> Option<Motion> {
         let n = count.max(1);
-        let cur = self.cursor();
         let at = match cmd {
             "h" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.prev_grapheme(off)),
             "l" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.next_normal_grapheme(off)),
-            "0" => self.line_start(cur.line),
-            "^" => self.line_first_nonblank(cur.line),
-            "$" => self.line_last(cur.line),
+            "0" => self.line_start(self.cursor().line),
+            "^" => self.line_first_nonblank(self.cursor().line),
+            "$" => self.line_last(self.cursor().line),
             "w" | "W" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.word_forward(off, cmd == "W")),
             "e" | "E" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.word_end(off, cmd == "E")),
             "b" | "B" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.word_backward(off, cmd == "B")),
             "j" => return Some(self.vertical(n as isize, operator)),
             "k" => return Some(self.vertical(-(n as isize), operator)),
             "G" => {
+                let cur = self.cursor();
                 let at = self.line_col_offset(
                     if count == 1 {
                         self.active_tab().line_count() - 1
@@ -312,7 +312,7 @@ impl EditorModel {
             }
             _ => return None,
         };
-        self.active_tab_mut().clear_preferred_column();
+        self.vim.preferred_column = None;
         Some(Motion {
             at,
             linewise: false,
@@ -391,7 +391,7 @@ impl EditorModel {
         if range.start >= range.end {
             if op == Op::Change {
                 self.vim.mode = vim::Mode::Insert;
-                self.clear_vim_transient_state();
+                self.vim.clear_transient();
             }
             return true;
         }
@@ -465,7 +465,7 @@ impl EditorModel {
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
         if op == Op::Change {
             self.vim.mode = vim::Mode::Insert;
-            self.clear_vim_transient_state();
+            self.vim.clear_transient();
         }
         true
     }
@@ -569,7 +569,7 @@ impl EditorModel {
     fn vim_insert_at(&mut self, at: usize) -> bool {
         self.move_to_char(at, false, None);
         self.vim.mode = vim::Mode::Insert;
-        self.clear_vim_transient_state();
+        self.vim.clear_transient();
         true
     }
 
@@ -597,7 +597,7 @@ impl EditorModel {
             Some(RevealIntent::NearestEdge),
         );
         self.vim.mode = vim::Mode::Insert;
-        self.clear_vim_transient_state();
+        self.vim.clear_transient();
         true
     }
 
@@ -991,9 +991,9 @@ impl EditorModel {
         } else {
             (pos.line + delta as usize).min(last)
         };
-        let goal = self.active_tab().preferred_column().unwrap_or(pos.column);
+        let goal = self.vim.preferred_column.unwrap_or(pos.column);
         let at = self.line_col_offset(line, goal);
-        self.active_tab_mut().set_preferred_column(Some(goal));
+        self.vim.preferred_column = Some(goal);
         Motion {
             at,
             linewise: operator,
@@ -1036,20 +1036,21 @@ impl EditorModel {
     }
 
     fn vim_move_to(&mut self, at: usize) {
-        self.move_to_char(at, false, self.active_tab().preferred_column());
+        let target = at.min(self.active_tab().len_chars());
+        let cursor = self.active_tab().cursor_char();
+        self.active_tab_mut().move_to(target);
+        if target != cursor {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
     }
 
     fn vim_finish_normal(&mut self) {
         self.vim.mode = vim::Mode::Normal;
-        self.clear_vim_transient_state();
+        self.vim.clear_transient();
     }
 
     pub(crate) fn vim_in_visual(&self) -> bool {
         matches!(self.vim.mode, vim::Mode::Visual | vim::Mode::VisualLine)
-    }
-
-    fn clear_vim_transient_state(&mut self) {
-        self.vim.clear_transient();
     }
 
     pub(crate) fn move_to_vim_search_target(&mut self, target: Position) {
@@ -1104,13 +1105,10 @@ impl EditorModel {
         self.line_start(line) + body.chars().take_while(|c| c.is_whitespace()).count()
     }
     fn line_col_offset(&self, line: usize, col: usize) -> usize {
-        let line = line.min(self.active_tab().line_count() - 1);
-        let len = selection::display_line_char_len(self.active_tab().buffer(), line);
-        char_at_line_column(
-            self.active_tab().buffer(),
-            line,
-            if len == 0 { 0 } else { col.min(len - 1) },
-        )
+        let buffer = self.active_tab().buffer();
+        let line = line.min(buffer.len_lines().saturating_sub(1));
+        let len = selection::display_line_char_len(buffer, line);
+        buffer.line_to_char(line) + if len == 0 { 0 } else { col.min(len - 1) }
     }
     fn line_span(&self, first: usize, last: usize) -> Range<usize> {
         let first = first.min(self.active_tab().line_count() - 1);
@@ -1152,17 +1150,17 @@ impl EditorModel {
     fn word_forward(&self, at: usize, big: bool) -> usize {
         let pos = char_to_position(self.active_tab().buffer(), at);
         let (line, col) = self.word_forward_position(pos.line, pos.column, big);
-        char_at_line_column(self.active_tab().buffer(), line, col)
+        self.active_tab().buffer().line_to_char(line) + col
     }
     fn word_end(&self, at: usize, big: bool) -> usize {
         let pos = char_to_position(self.active_tab().buffer(), at);
         let (line, col) = self.word_end_position(pos.line, pos.column, big);
-        char_at_line_column(self.active_tab().buffer(), line, col)
+        self.active_tab().buffer().line_to_char(line) + col
     }
     fn word_backward(&self, at: usize, big: bool) -> usize {
         let pos = char_to_position(self.active_tab().buffer(), at);
         let (line, col) = self.word_backward_position(pos.line, pos.column, big);
-        char_at_line_column(self.active_tab().buffer(), line, col)
+        self.active_tab().buffer().line_to_char(line) + col
     }
 
     fn word_forward_position(&self, mut line: usize, col: usize, big: bool) -> (usize, usize) {

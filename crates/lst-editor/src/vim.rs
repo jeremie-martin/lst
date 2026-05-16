@@ -93,6 +93,7 @@ pub struct VimState {
     pub(crate) pending: String,
     pub(crate) char_find: Option<CharFind>,
     pub(crate) search_backward: bool,
+    pub(crate) preferred_column: Option<usize>,
 }
 
 impl Default for VimState {
@@ -110,6 +111,7 @@ impl VimState {
             pending: String::new(),
             char_find: None,
             search_backward: false,
+            preferred_column: None,
         }
     }
 
@@ -126,14 +128,13 @@ impl VimState {
         self.visual = None;
         self.pending.clear();
         self.char_find = None;
+        self.preferred_column = None;
     }
 
     pub(crate) fn on_tab_switch(&mut self) {
-        self.pending.clear();
-        self.char_find = None;
+        self.clear_transient();
         if matches!(self.mode, Mode::Visual | Mode::VisualLine) {
             self.mode = Mode::Normal;
-            self.visual = None;
         }
     }
 }
