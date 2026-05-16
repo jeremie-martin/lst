@@ -1,6 +1,5 @@
 use crate::selection::{self, line_display_text, Position};
 use ropey::Rope;
-use std::ops::Range;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditKind {
@@ -34,20 +33,6 @@ pub fn position_to_char(buffer: &Rope, position: Position) -> usize {
         .take_while(|ch| *ch != '\n' && *ch != '\r')
         .count();
     line_start + position.column.min(line_len)
-}
-
-pub(crate) fn position_range(buffer: &Rope, from: Position, to: Position) -> Option<Range<usize>> {
-    if from.line >= buffer.len_lines() || to.line >= buffer.len_lines() {
-        return None;
-    }
-    let (from, to) = if (to.line, to.column) < (from.line, from.column) {
-        (to, from)
-    } else {
-        (from, to)
-    };
-    let start = position_start_char(buffer, from);
-    let end = inclusive_position_to_exclusive_char(buffer, to);
-    Some(start..end.max(start))
 }
 
 pub(crate) fn position_start_char(buffer: &Rope, position: Position) -> usize {

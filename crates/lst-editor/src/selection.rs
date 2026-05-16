@@ -275,15 +275,6 @@ impl SelectionState {
             goals: CursorGoals::default(),
         }
     }
-    pub(crate) fn single_with_transform(transform: SelectionTransform) -> Self {
-        Self {
-            set: SelectionSet::single(transform.selection),
-            goals: CursorGoals {
-                movement: transform.movement_goal.map(|g| vec![g]),
-                visible: transform.visible_column.map(|c| vec![c]),
-            },
-        }
-    }
     pub(crate) fn from_set(set: SelectionSet) -> Self {
         Self {
             set,

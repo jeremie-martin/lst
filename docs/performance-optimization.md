@@ -98,7 +98,7 @@ To compare the current implementation with the rewrite workspace:
 2. Apply that patch to clean temporary worktrees for
    `/home/holo/lst-vim-rewrite-codex` commits `2e1daaf` and `a604285`.
 3. Run the same command in each worktree, using distinct baseline names such as
-   `rewrite-baseline` and `rewrite-modalkit`.
+   `rewrite-baseline` and `rewrite-external-engine`.
 4. Record the commit SHA, host/CPU, command, Criterion baseline name, and the
    primary timings for each workload.
 

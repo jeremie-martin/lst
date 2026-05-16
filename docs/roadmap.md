@@ -33,7 +33,7 @@ render observable state.
 - Keep model mutation behind explicit `EditorModel` APIs.
 - Keep text mutation behind `EditRequest` / `TextChangeSet` transactions and
   `EditHistory` snapshot boundaries; focused request builders such as `text_input`,
-  `multi_selection`, `line_edit`, and `vim_edit` should return transactions
+  `multi_selection`, and `line_edit` should return transactions
   instead of mutating `EditorModel` directly. Multi-change batches must choose
   their primary change explicitly through `TextChangeSet::new`.
 - Keep clipboard, filesystem, dialogs, focus, and rendering at the GPUI boundary.

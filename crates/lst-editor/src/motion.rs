@@ -92,46 +92,6 @@ pub(crate) fn display_rows(
         transform_with_goal(tab, selection, target, select, goal)
     })
 }
-pub(crate) fn visual_row(
-    tab: &EditorTab,
-    lines: Option<&[String]>,
-    show_wrap: bool,
-    target_row: usize,
-    select: bool,
-    wrap_columns: usize,
-) -> Option<SelectionState> {
-    if !show_wrap {
-        let current = tab.cursor_position().line;
-        return (target_row != current)
-            .then(|| vertical(tab, target_row as isize - current as isize, select, true))
-            .flatten();
-    }
-    let lines = lines?;
-    let position = tab.cursor_position();
-    let layout = wrap::build_wrap_layout(lines, wrap_columns, true);
-    let current_row =
-        wrap::visual_row_for_position(lines, position.line, position.column, &layout).unwrap_or(position.line);
-    let row_target = (target_row != current_row).then(|| {
-        wrap::display_row_target(
-            lines,
-            position.line,
-            position.column,
-            tab.preferred_column(),
-            target_row as isize - current_row as isize,
-            &layout,
-        )
-    })??;
-    let selection = selection_to(
-        tab.selection(),
-        position_to_char(tab.buffer(), Position::new(row_target.line, row_target.column)),
-        select,
-    );
-    Some(SelectionState::single_with_transform(SelectionTransform::with_columns(
-        selection,
-        CursorGoal::Column(row_target.preferred_column),
-        (!selection.has_selection()).then_some(row_target.preferred_column),
-    )))
-}
 pub(crate) fn line_boundary(tab: &EditorTab, to_end: bool, select: bool) -> Option<SelectionState> {
     map(tab, |_, selection| {
         let line = tab.buffer().char_to_line(selection.cursor().min(tab.len_chars()));

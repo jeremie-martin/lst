@@ -91,10 +91,6 @@ fn replace_lines_in_place_change(
 pub(super) fn insert_lines_change(tab: &EditorTab, insert_at: usize, new_lines: &[String]) -> Option<TextChange> {
     insert_change(tab.buffer(), text_input::preferred_newline(tab), insert_at, new_lines)
 }
-pub(super) fn clamped_line_span(tab: &EditorTab, first: usize, last: usize) -> (usize, usize) {
-    let last_line = tab.line_count().saturating_sub(1);
-    (first.min(last_line), last.min(last_line))
-}
 pub(crate) fn indent_request(tab: &EditorTab, first: usize, last: usize) -> Option<EditRequest> {
     if first > last || last >= tab.line_count() {
         return None;

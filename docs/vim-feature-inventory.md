@@ -9,12 +9,11 @@ This document records the Vim behavior that existed before commit `5e3abbe` rewr
 - Vim has an additional fast model-level black-box parity lane in `crates/lst-editor/tests/vim_behavior.rs`. It drives the public `EditorModel` input surface and asserts observable text, cursor, mode, find, register, and reveal outcomes. This complements, rather than replaces, X11 because exhaustive Vim command coverage would be too slow and fragile through a real display.
 - `crates/lst-editor/tests/vim_oracle.rs` runs a checked-in generated corpus from `crates/lst-editor/tests/fixtures/vim_oracle.json`. Regenerate it with `python3 scripts/generate_vim_oracle_fixtures.py`.
 - Local Neovim 0.9.5 loaded with the user config is the oracle for generated stock Vim behavior. If this inventory disagrees with Neovim for a supported generated case, Neovim takes precedence and this document should be corrected.
-- `modalkit 0.0.25` provides a Vim keybinding machine that emits generic modal editing actions. It is useful as the long-term parser/binding source, but it is not a direct replacement for `EditorModel` execution because lst already owns selections, transactions, find state, wrapping, viewport reveal, registers, and GPUI effects. A safe adapter must translate modalkit actions into lst commands without bypassing those contracts.
 
 ## Restoration Status
 
-- The parity baseline has been restored by bringing the previous lst Vim state machine, edit helpers, and `EditorModel` command executor back into the GPUI editor path.
-- `modalkit` is restored as a workspace dependency and remains the planned parser/keybinding source once an adapter can translate its `editor-types` actions onto lst's document and transaction contracts with full X11 parity.
+- The parity baseline is now handled by a first-party Vim core: public key/state vocabulary in `crates/lst-editor/src/vim.rs` and direct editor execution in `crates/lst-editor/src/vim_engine.rs`.
+- The previous separate Vim edit helper and `EditorModel` command executor layer have been removed. There is no external Vim engine or fallback path in the active implementation.
 - New accepted X11 coverage now exercises representative restored surfaces: text-object change (`ciw`), open-line/join/replace, linewise yank/paste, visual text-object case transforms, and `*`/`n` word search.
 - The tables below record the feature status immediately after compact rewrite commit `5e3abbe`, before the parity restoration.
 
@@ -161,8 +160,8 @@ Unsupported Vim surfaces are intentionally outside the current product contract 
 | `H`, `M`, `L` | Move cursor/visual head to visible top/middle/bottom screen row. | Missing |
 | Page motions | Vim page motions preserve visual state when in Visual mode. | Present |
 
-## Compatibility Notes
+## Implementation Notes
 
 - The old implementation was custom and lived primarily in `crates/lst-editor/src/vim.rs`, `vim_edit.rs`, and the Vim executor section of `lib.rs`.
-- Modalkit should be evaluated as a parser/keybinding source, not as a direct editor engine, unless lst deliberately adopts modalkit's buffer/store model. The direct engine route would duplicate or bypass existing lst transactions, selections, find panel, clipboard effects, and viewport synchronization.
-- The first restoration milestone is parity with this file. The second is replacing custom parser pieces with modalkit-generated actions where that reduces code without weakening lst invariants.
+- The active implementation remains custom, but the state and execution path are intentionally smaller: no separate command translation layer, no external Vim engine dependency, and no duplicated range-conversion helpers.
+- Future changes should replace code only when they preserve this inventory, the generated oracle corpus, and the real-display X11 acceptance lane.
