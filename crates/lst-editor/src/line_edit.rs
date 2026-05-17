@@ -107,12 +107,7 @@ pub(crate) fn indent_request(tab: &EditorTab, first: usize, last: usize) -> Opti
     };
     let new_start = shift(selection.start);
     let new_end = shift(selection.end);
-    let changes: Vec<TextChange> = (first..=last)
-        .map(|line| {
-            let line_start = tab.buffer().line_to_char(line);
-            TextChange::insert(line_start, unit.clone())
-        })
-        .collect();
+    let changes = indent_changes_for_contiguous_lines(tab, first, last, &unit);
     Some(EditRequest::other_with_selection(
         changes,
         SelectionAfter::PositionRange {
@@ -153,6 +148,17 @@ pub(crate) fn indent_selection_set_request(tab: &EditorTab) -> Option<EditReques
         EditRequest::other_break(TextChangeSet::new(changes, 0))
             .with_selection_after(SelectionAfter::Exact(selection_after)),
     )
+}
+
+fn indent_changes_for_contiguous_lines(tab: &EditorTab, first: usize, last: usize, unit: &str) -> Vec<TextChange> {
+    let buffer = tab.buffer();
+    let mut changes = Vec::with_capacity(last - first + 1);
+    let mut line_start = buffer.line_to_char(first);
+    for line in buffer.lines_at(first).take(last - first + 1) {
+        changes.push(TextChange::insert(line_start, unit));
+        line_start += line.len_chars();
+    }
+    changes
 }
 pub(crate) fn outdent_request(tab: &EditorTab, first: usize, last: usize) -> Option<EditRequest> {
     if first > last || last >= tab.line_count() {
