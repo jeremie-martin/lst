@@ -46,14 +46,25 @@ impl EditHistory {
         self.last_edit_kind = None;
     }
 
-    pub(crate) fn record_edit(&mut self, kind: EditKind, boundary: UndoBoundary, snapshot_before: HistorySnapshot) {
+    pub(crate) fn needs_snapshot(&self, kind: EditKind, boundary: UndoBoundary) -> bool {
+        self.should_start_undo_group(kind, boundary) || self.undo_stack.is_empty()
+    }
+
+    pub(crate) fn record_edit(
+        &mut self,
+        kind: EditKind,
+        boundary: UndoBoundary,
+        snapshot_before: Option<HistorySnapshot>,
+    ) {
         if self.should_start_undo_group(kind, boundary) {
+            let snapshot_before = snapshot_before.expect("starting an undo group requires a snapshot");
             self.preserve_redo_branch();
             self.undo_stack.push(snapshot_before);
             if self.undo_stack.len() > MAX_UNDO {
                 self.undo_stack.remove(0);
             }
         } else if self.undo_stack.is_empty() {
+            let snapshot_before = snapshot_before.expect("first merged edit requires a snapshot");
             self.undo_stack.push(snapshot_before);
         }
         self.last_edit_kind = Some(kind);

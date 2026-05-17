@@ -131,9 +131,8 @@ impl FindState {
         };
 
         for (line_idx, line) in text.lines().enumerate() {
-            let cells = cells_of_str(line);
             let line_byte_len = line.len();
-            let line_char_len = cells.last().map(|c| c.char_start + c.char_len as usize).unwrap_or(0);
+            let mut cells = None;
             for m in regex.find_iter(line) {
                 let abs_byte = m.start();
                 let end_byte = m.end();
@@ -142,8 +141,10 @@ impl FindState {
                     // selectable span and cause infinite loops in find/replace.
                     continue;
                 }
-                let start_idx = cell_partition_by_byte(&cells, abs_byte);
-                let end_idx = cell_partition_by_byte(&cells, end_byte);
+                let cells = cells.get_or_insert_with(|| cells_of_str(line));
+                let line_char_len = cells.last().map(|c| c.char_start + c.char_len as usize).unwrap_or(0);
+                let start_idx = cell_partition_by_byte(cells, abs_byte);
+                let end_idx = cell_partition_by_byte(cells, end_byte);
                 let start_aligned = cells
                     .get(start_idx)
                     .map_or(abs_byte == line_byte_len, |c| c.byte_start == abs_byte);

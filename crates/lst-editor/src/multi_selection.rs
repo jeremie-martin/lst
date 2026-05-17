@@ -328,6 +328,10 @@ fn occurrence_ranges(text: &str, query: &str, find: &FindState) -> Vec<Range<usi
     if query.is_empty() {
         return Vec::new();
     }
+    if !find.whole_word && query.is_ascii() && text.is_ascii() {
+        let ignore_case = !find.case_sensitive && !query.chars().any(|c| c.is_uppercase());
+        return ascii_literal_ranges(text.as_bytes(), query.as_bytes(), ignore_case);
+    }
     // Selection-as-query stays literal; only case-related flags apply.
     let regex = match build_query_regex(query, find.case_sensitive, find.whole_word, false) {
         Ok(re) => re,
@@ -335,6 +339,33 @@ fn occurrence_ranges(text: &str, query: &str, find: &FindState) -> Vec<Range<usi
     };
 
     regex_char_ranges(text, &regex).collect()
+}
+
+fn ascii_literal_ranges(text: &[u8], query: &[u8], ignore_case: bool) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    let first = query[0];
+    while start + query.len() <= text.len() {
+        let end = start + query.len();
+        let first_matches = if ignore_case {
+            text[start].eq_ignore_ascii_case(&first)
+        } else {
+            text[start] == first
+        };
+        let matched = first_matches
+            && if ignore_case {
+                text[start..end].eq_ignore_ascii_case(query)
+            } else {
+                &text[start..end] == query
+            };
+        if matched {
+            ranges.push(start..end);
+            start = end;
+        } else {
+            start += 1;
+        }
+    }
+    ranges
 }
 
 fn regex_char_ranges<'a>(text: &'a str, regex: &'a regex::Regex) -> impl Iterator<Item = Range<usize>> + 'a {

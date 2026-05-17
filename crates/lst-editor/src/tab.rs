@@ -473,8 +473,12 @@ impl EditorTab {
         let selection_before = self.selection.clone();
         let marked_range_before = self.marked_range.clone();
         if changes_text {
+            let snapshot_before = self
+                .history
+                .needs_snapshot(request.kind, request.boundary)
+                .then(|| self.history_snapshot());
             self.history
-                .record_edit(request.kind, request.boundary, self.history_snapshot());
+                .record_edit(request.kind, request.boundary, snapshot_before);
         }
         self.apply_normalized_change(
             changes,
