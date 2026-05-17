@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use lst_editor::{
     vim::{self, Key, NamedKey},
-    EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, Position, TabId,
+    EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, Position, Selection, TabId,
 };
 
 const WRAP_COLUMNS: usize = 80;
@@ -17,6 +17,136 @@ pub struct VimHarness {
     pub focus: FocusTarget,
     effects: Vec<EditorEffect>,
     deferred_find_query: Option<String>,
+}
+
+pub struct ModelHarness {
+    pub model: EditorModel,
+    clipboard: Option<String>,
+    primary: Option<String>,
+}
+
+impl ModelHarness {
+    pub fn new(text: &str) -> Self {
+        let tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("model-spec.rs"), text, None);
+        let mut harness = Self {
+            model: EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string()),
+            clipboard: None,
+            primary: None,
+        };
+        harness.sync_effects();
+        harness
+    }
+
+    pub fn with_two_tabs(first: &str, second: &str) -> Self {
+        let first = EditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("first.rs"), first, None);
+        let second = EditorTab::from_path_with_stamp(TabId::from_raw(2), PathBuf::from("second.rs"), second, None);
+        let mut harness = Self {
+            model: EditorModel::from_tabs(first, vec![second], "Ready.".to_string()),
+            clipboard: None,
+            primary: None,
+        };
+        harness.sync_effects();
+        harness
+    }
+
+    pub fn execute(&mut self, command: EditorCommand) {
+        self.model.execute(command);
+        self.sync_effects();
+    }
+
+    pub fn paste_text(&mut self, text: &str) {
+        self.model.paste_text(text.to_string());
+        self.sync_effects();
+    }
+
+    pub fn set_clipboard(&mut self, text: impl Into<String>) {
+        self.clipboard = Some(text.into());
+    }
+
+    pub fn clear_transfer_buffers(&mut self) {
+        self.clipboard = None;
+        self.primary = None;
+    }
+
+    pub fn set_cursor(&mut self, position: Position) {
+        self.model.set_active_cursor_position(position.line, position.column);
+        self.sync_effects();
+    }
+
+    pub fn select_first_lines(&mut self, requested_lines: usize) {
+        let end = {
+            let tab = self.model.active_tab();
+            let selected_lines = requested_lines.min(tab.line_count());
+            if selected_lines >= tab.line_count() {
+                tab.len_chars()
+            } else {
+                tab.buffer().line_to_char(selected_lines)
+            }
+        };
+        self.model.set_selection(Selection::from_range(0..end, false));
+        self.sync_effects();
+    }
+
+    pub fn configure_viewport(&mut self, rows: usize, top: usize) {
+        self.model.set_viewport_rows(rows);
+        self.model.set_viewport_top(top);
+    }
+
+    pub fn sync_effects(&mut self) {
+        loop {
+            let effects = self.model.drain_effects();
+            if effects.is_empty() {
+                break;
+            }
+            for effect in effects {
+                match effect {
+                    EditorEffect::WriteClipboard(text) => self.clipboard = Some(text),
+                    EditorEffect::WritePrimary(text) => self.primary = Some(text),
+                    EditorEffect::ReadClipboard => {
+                        if let Some(text) = self.clipboard.clone() {
+                            self.model.paste_text(text);
+                        } else {
+                            self.model.clipboard_unavailable();
+                        }
+                    }
+                    EditorEffect::Focus(_)
+                    | EditorEffect::Reveal(_)
+                    | EditorEffect::OpenFiles
+                    | EditorEffect::SaveFile { .. }
+                    | EditorEffect::SaveFileAs { .. }
+                    | EditorEffect::AutosaveFile { .. } => {}
+                }
+            }
+        }
+    }
+
+    pub fn text(&self) -> String {
+        self.model.active_tab().buffer_text()
+    }
+
+    pub fn tab_text(&self, index: usize) -> String {
+        self.model.tab(index).expect("tab exists").buffer_text()
+    }
+
+    pub fn cursor(&self) -> Position {
+        self.model.active_tab().cursor_position()
+    }
+
+    pub fn selection_count(&self) -> usize {
+        self.model.selection_set().as_slice().len()
+    }
+
+    pub fn find_match_count(&self) -> usize {
+        self.model.find().matches.len()
+    }
+
+    pub fn clipboard_text(&self) -> Option<&str> {
+        self.clipboard.as_deref()
+    }
+
+    pub fn primary_text(&self) -> Option<&str> {
+        self.primary.as_deref()
+    }
 }
 
 impl VimHarness {
@@ -271,6 +401,21 @@ pub fn run_text_cases_expect_normal(cases: &[TextCase<'_>]) {
         assert_eq!(harness.text(), expected, "{}", name);
         harness.expect_mode(vim::Mode::Normal);
     }
+}
+
+pub fn position_of(text: &str, needle: &str) -> Position {
+    let byte = text.find(needle).expect("needle exists in text");
+    let mut line = 0usize;
+    let mut column = 0usize;
+    for ch in text[..byte].chars() {
+        if ch == '\n' {
+            line += 1;
+            column = 0;
+        } else {
+            column += 1;
+        }
+    }
+    Position { line, column }
 }
 
 pub fn parse_keys(sequence: &str) -> Vec<(Key, vim::Modifiers)> {
