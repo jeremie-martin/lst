@@ -128,6 +128,13 @@ pub struct EditorModel {
     viewport: Viewport,
     effects: Vec<EditorEffect>,
     overtype: bool,
+    wrap_layout_cache: Option<ModelWrapLayoutCache>,
+}
+struct ModelWrapLayoutCache {
+    tab_id: TabId,
+    revision: u64,
+    wrap_columns: usize,
+    layout: wrap::WrapLayout,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FindSubmit {
@@ -150,6 +157,7 @@ impl EditorModel {
             viewport: Viewport::default(),
             effects: Vec::new(),
             overtype: false,
+            wrap_layout_cache: None,
         }
     }
     fn alloc_tab_id(&mut self) -> TabId {
@@ -166,6 +174,21 @@ impl EditorModel {
     }
     pub fn active_tab_lines(&mut self) -> Arc<[String]> {
         self.active_tab_mut().lines()
+    }
+    fn ensure_active_wrap_layout(&mut self, wrap_columns: usize, lines: &[String]) {
+        let tab_id = self.active_tab_id();
+        let revision = self.active_tab().revision();
+        if self.wrap_layout_cache.as_ref().is_some_and(|cache| {
+            cache.tab_id == tab_id && cache.revision == revision && cache.wrap_columns == wrap_columns
+        }) {
+            return;
+        }
+        self.wrap_layout_cache = Some(ModelWrapLayoutCache {
+            tab_id,
+            revision,
+            wrap_columns,
+            layout: wrap::build_wrap_layout(lines, wrap_columns, true),
+        });
     }
     pub fn tabs(&self) -> &[EditorTab] {
         &self.tabs
@@ -572,16 +595,21 @@ impl EditorModel {
         self.apply_selection_state(motion::boundary(self.active_tab(), backward, select, prev_fn, next_fn))
     }
     fn move_display_rows(&mut self, delta: isize, select: bool, wrap_columns: usize, snap: bool) -> bool {
-        let lines = self.show_wrap.then(|| self.active_tab_lines());
-        self.apply_selection_state(motion::display_rows(
-            self.active_tab(),
-            lines.as_deref(),
-            self.show_wrap,
-            delta,
-            select,
-            wrap_columns,
-            snap,
-        ))
+        if !self.show_wrap {
+            return self.apply_selection_state(motion::vertical(self.active_tab(), delta, select, snap));
+        }
+
+        let lines = self.active_tab_lines();
+        self.ensure_active_wrap_layout(wrap_columns, lines.as_ref());
+        let state = {
+            let layout = &self
+                .wrap_layout_cache
+                .as_ref()
+                .expect("wrap layout cache was just populated")
+                .layout;
+            motion::display_rows_with_layout(self.active_tab(), lines.as_ref(), layout, delta, select, snap)
+        };
+        self.apply_selection_state(state)
     }
     fn move_paged(&mut self, delta: isize, select: bool, wrap_columns: usize, snap: bool) {
         if self.move_display_rows(delta, select, wrap_columns, snap) {

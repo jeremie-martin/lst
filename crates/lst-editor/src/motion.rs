@@ -60,26 +60,23 @@ pub(crate) fn vertical(tab: &EditorTab, delta: isize, select: bool, snap: bool) 
         transform_with_goal(tab, selection, target, select, goal)
     })
 }
-pub(crate) fn display_rows(
+pub(crate) fn display_rows_with_layout(
     tab: &EditorTab,
-    lines: Option<&[String]>,
-    show_wrap: bool,
+    lines: &[String],
+    layout: &wrap::WrapLayout,
     delta: isize,
     select: bool,
-    wrap_columns: usize,
     snap: bool,
 ) -> Option<SelectionState> {
-    if !show_wrap {
+    if !layout.show_wrap {
         return vertical(tab, delta, select, snap);
     }
-    let lines = lines?;
-    let layout = wrap::build_wrap_layout(lines, wrap_columns, true);
     map(tab, |index, selection| {
         let position = char_to_position(tab.buffer(), selection.cursor());
         let goal = goal_for(tab, index, selection);
-        let preferred = display_preferred(tab, lines, &layout, position, goal);
+        let preferred = display_preferred(tab, lines, layout, position, goal);
         let row_target =
-            wrap::display_row_target(lines, position.line, position.column, Some(preferred), delta, &layout);
+            wrap::display_row_target(lines, position.line, position.column, Some(preferred), delta, layout);
         let target = row_target
             .map(|target| position_to_char(tab.buffer(), Position::new(target.line, target.column)))
             .or_else(|| snap.then(|| vertical_boundary_target(tab, delta)).flatten())
