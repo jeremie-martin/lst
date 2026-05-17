@@ -9,6 +9,7 @@
 
 mod display;
 mod editor;
+mod screenshot;
 mod x11;
 
 pub mod clipboard;
@@ -17,6 +18,7 @@ pub mod state_trace;
 pub use clipboard::Selection;
 pub use display::Display;
 pub use editor::{ChordMods, Editor, FileStats, FileWaitOpts, FileWaitOutcome, Key, KeyChord, SpawnOpts, WheelDir};
+pub use screenshot::{Screenshot, ScreenshotDiff};
 pub use state_trace::{
     StateTraceReader, StateTraceRecord, TraceCursor, TraceFind, TraceRange, TraceRow, TraceViewport,
     STATE_TRACE_SCHEMA_VERSION,

@@ -231,6 +231,8 @@ On failure:
 - scratch files are preserved
 - editor stdout/stderr are captured under `artifacts/`
 - helper failures try to capture an `.xwd` window image
+- visual snapshot failures write PPM expected/actual/diff artifacts when a
+  `real_x11_visual` assertion fails
 - errors include the tail of captured stderr when available
 
 Normal editor exits are asserted with `quit_default` or
@@ -286,9 +288,10 @@ representation invariant or boundary contract that X11 cannot naturally express.
    find option controls, replace, recent files, and other focus-changing panels
    need more real-display scenarios.
 
-4. **Visual pixel correctness is not covered.** The trace can expose viewport
-   geometry and text-coordinate rows; it is not a general screenshot oracle for
-   colors, antialiasing, or exact painted pixels.
+4. **Visual pixel correctness is intentionally narrow.** `real_x11_visual`
+   covers a few exact-pixel chrome snapshots through the harness. It is a
+   refactor tripwire, not a replacement for behavior assertions. The trace
+   remains the main way to assert user-visible state and geometry.
 
 5. **Non-ASCII input is unsupported in `send_keys`.** Tests that need input such
    as `é`, arrows, or smart quotes need a deliberate harness extension.

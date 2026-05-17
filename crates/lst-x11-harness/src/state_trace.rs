@@ -376,19 +376,22 @@ mod tests {
     }
 
     fn sample_record_line(seq: u64) -> String {
-        format!(concat!(
-            r#"{{"schema_version":2,"seq":{seq},"revision":{seq},"active_tab_index":0,"#,
-            r#""active_tab_id":1,"active_tab_path":null,"active_tab_modified":false,"line_count":1,"#,
-            r#""cursors":[{{"anchor_char":0,"head_char":0,"anchor_line":0,"anchor_col":0,"#,
-            r#""head_line":0,"head_col":0}}],"primary_cursor_index":0,"marked_range":null,"#,
-            r#""vim_mode":"INSERT","vim_pending":"","find":{{"visible":false,"show_replace":false,"#,
-            r#""query":"","case_sensitive":false,"whole_word":false,"use_regex":false,"#,
-            r#""scope":"document","match_count":0,"active_index":null}},"goto_line_input":null,"#,
-            r#""recent_panel_open":false,"recent_panel_query":null,"status_message":"Ready.","#,
-            r#""status_bar":"INSERT","theme_name":"Dark","viewport":{{"bounds_origin_px":null,"#,
-            r#""bounds_size_px":null,"char_width_px":0.0,"line_height_px":0.0,"#,
-            r#""scroll_top_px":0.0,"scroll_left_px":0.0,"rows":[]}}}}"#
-        ))
+        format!(
+            concat!(
+                r#"{{"schema_version":2,"seq":{seq},"revision":{seq},"active_tab_index":0,"#,
+                r#""active_tab_id":1,"active_tab_path":null,"active_tab_modified":false,"line_count":1,"#,
+                r#""cursors":[{{"anchor_char":0,"head_char":0,"anchor_line":0,"anchor_col":0,"#,
+                r#""head_line":0,"head_col":0}}],"primary_cursor_index":0,"marked_range":null,"#,
+                r#""vim_mode":"INSERT","vim_pending":"","find":{{"visible":false,"show_replace":false,"#,
+                r#""query":"","case_sensitive":false,"whole_word":false,"use_regex":false,"#,
+                r#""scope":"document","match_count":0,"active_index":null}},"goto_line_input":null,"#,
+                r#""recent_panel_open":false,"recent_panel_query":null,"status_message":"Ready.","#,
+                r#""status_bar":"INSERT","theme_name":"Dark","viewport":{{"bounds_origin_px":null,"#,
+                r#""bounds_size_px":null,"char_width_px":0.0,"line_height_px":0.0,"#,
+                r#""scroll_top_px":0.0,"scroll_left_px":0.0,"rows":[]}}}}"#
+            ),
+            seq = seq
+        )
     }
 
     #[test]

@@ -24,7 +24,11 @@ fn state_trace_exposes_final_state_after_text_input() -> TestResult {
         let baseline = editor.read_state()?;
 
         editor.keys("abc")?;
-        let after = editor.read_state()?;
+        let after = editor.wait_state(
+            "text input reaches final trace state",
+            Duration::from_secs(2),
+            |record| matches!(record.cursors.as_slice(), [cursor] if cursor.head_char == 3),
+        )?;
         assert!(
             after.seq > baseline.seq,
             "trace should advance after text input: {baseline:?} -> {after:?}"

@@ -14,6 +14,7 @@ use x11rb::rust_connection::RustConnection;
 use x11rb::NONE;
 
 use crate::display::Display;
+use crate::screenshot::{self, Screenshot};
 use crate::state_trace::{StateTraceReader, StateTraceRecord};
 use crate::x11::damage as damage_wait;
 use crate::x11::input::{self, BUTTON_LEFT, BUTTON_MIDDLE, BUTTON_WHEEL_DOWN, BUTTON_WHEEL_UP, POINTER_SETTLE};
@@ -226,6 +227,10 @@ impl<'a> Editor<'a> {
         self.window.id
     }
 
+    pub fn screenshot(&self) -> Result<Screenshot> {
+        screenshot::capture_window(&self.display.conn, self.display.root, self.window.id)
+    }
+
     pub fn is_viewable(&self) -> Result<bool> {
         window::is_viewable(&self.display.conn, self.window.id)
     }
@@ -368,6 +373,7 @@ impl<'a> Editor<'a> {
                 .first_row_for_line(line + 1)
                 .map(|row| row.display_end_char);
             let (x, y) = resolve_text_pixels(&state, line, col, label)?;
+            let expects_state_change = mouse_click_expects_state_change(&state, line, col, mods, button, click_count);
             let conn = &self.display.conn;
             let root = self.display.root;
             let kc = &self.display.keycodes;
@@ -384,20 +390,24 @@ impl<'a> Editor<'a> {
             let damage_id = self.damage.damage();
             let window_id = self.window.id;
             let child = child_mut(&mut self.child)?;
-            damage_wait::wait_for_damage_then_quiet(
-                conn,
-                damage_id,
-                window_id,
-                child,
-                SEND_KEYS_QUIET,
-                SEND_KEYS_TIMEOUT,
-            )?;
+            if expects_state_change {
+                damage_wait::wait_for_damage_then_quiet(
+                    conn,
+                    damage_id,
+                    window_id,
+                    child,
+                    SEND_KEYS_QUIET,
+                    SEND_KEYS_TIMEOUT,
+                )?;
+            } else {
+                damage_wait::wait_quiet(conn, damage_id, window_id, child, SEND_KEYS_QUIET, SEND_KEYS_TIMEOUT)?;
+            }
             if click_count > 1 {
                 self.wait_state(label, TEXT_VIEWPORT_TIMEOUT, |state| {
                     state.seq > before_seq
                         && multi_click_selection_reached(state, clicked_row, quad_min_end, click_count)
                 })?;
-            } else if mouse_click_expects_state_change(&state, line, col, mods, button, click_count) {
+            } else if expects_state_change {
                 self.wait_state(label, TEXT_VIEWPORT_TIMEOUT, |state| {
                     state.seq > before_seq && state_cursor_signature(state) != before_cursors
                 })?;
