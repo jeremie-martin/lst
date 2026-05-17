@@ -307,10 +307,11 @@ impl LstGpuiApp {
         };
 
         if let Some(target) = target {
-            if target > px(0.0) && max_scroll_top(&view.scroll) <= px(0.0) {
+            let max_top = max_scroll_top(&view.scroll);
+            scroll_to_top(&view.scroll, target);
+            if target > max_top && caret_bottom > max_top + viewport_height {
                 return false;
             }
-            scroll_to_top(&view.scroll, target);
         }
 
         if !self.model.show_wrap() {
