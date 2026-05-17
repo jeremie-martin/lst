@@ -72,6 +72,49 @@ The GPUI app writes internal benchmark trace values only when
 `LST_BENCH_TRACE_FILE` is set by the runner. Normal editor runs do not create
 trace files.
 
+## Editor Model Benchmark
+
+`lst-editor` has a non-X11 Criterion benchmark for regular editor model
+behavior. It constructs deterministic in-memory documents and drives
+`EditorModel` directly, including model effects handled through an in-memory
+clipboard. It does not launch GPUI, synthesize desktop input, use the OS
+clipboard, save files, or wait for redraws.
+
+Run the editor model benchmark:
+
+```bash
+cargo bench -p lst-editor --bench editor_model
+```
+
+Run it with a named Criterion baseline:
+
+```bash
+CARGO_TARGET_DIR=/tmp/lst-editor-bench-target cargo bench -p lst-editor --bench editor_model -- --save-baseline current
+```
+
+The most useful workloads for separating core editor cost from UI/display cost
+are:
+
+- `editor_open/construct_model`: model and tab construction from generated text.
+- `editor_typing/type_chars`: repeated text input through the same model entry
+  point used by the app.
+- `editor_clipboard/select_copy_paste_two_tabs`: select all, copy, tab switch,
+  and paste with an in-memory clipboard.
+- `editor_clipboard/paste_three_times_into_empty`,
+  `editor_clipboard/select_copy_paste_three_times_same_tab`, and
+  `editor_clipboard/select_copy_paste_three_times_two_tabs`: repeated whole-file
+  paste workflows that mirror `Ctrl+A`, copy, and repeated paste.
+- `editor_navigation/page_wrapped` and `editor_navigation/page_unwrapped`: page
+  movement with and without soft-wrap cost.
+- `editor_find/submit_query`, `editor_find/find_next`,
+  `editor_find/select_all_find_matches`, and `editor_find/replace_all_matches`:
+  find indexing, stepping, selection creation, and whole-document replacement.
+- `editor_multi_cursor/select_all_occurrences` and
+  `editor_multi_cursor/paste_across_line_end_cursors`: multi-cursor selection
+  and edit application.
+- `editor_line_edit/indent_whole_document`: whole-document line edit request
+  construction and application.
+
 ## Vim Model Benchmark
 
 `lst-editor` also has a non-X11 Criterion benchmark for Vim model behavior. It
