@@ -34,6 +34,12 @@ impl MatchPos {
         );
         start..end
     }
+
+    fn indexed_char_range_in(self, buffer: &Rope) -> Range<usize> {
+        debug_assert!(self.line < buffer.len_lines());
+        let start = buffer.line_to_char(self.line) + self.col;
+        start..start + self.char_len
+    }
 }
 
 // `Selection` freezes a char range captured at toggle-on. Edits before
@@ -121,6 +127,11 @@ impl FindState {
             return;
         }
 
+        if self.compute_ascii_literal_matches(text) {
+            self.set_active_after_reindex(previous_active);
+            return;
+        }
+
         let regex = match self.build_regex() {
             Ok(r) => r,
             Err(e) => {
@@ -163,6 +174,29 @@ impl FindState {
                 });
             }
         }
+        self.set_active_after_reindex(previous_active);
+    }
+
+    fn compute_ascii_literal_matches(&mut self, text: &str) -> bool {
+        if self.use_regex || self.whole_word || !self.query.is_ascii() || !text.is_ascii() {
+            return false;
+        }
+
+        let query = self.query.as_bytes();
+        let ignore_case = !self.case_sensitive && !query.iter().any(|byte| byte.is_ascii_uppercase());
+        for (line_idx, line) in text.lines().enumerate() {
+            for_each_ascii_literal_match_col(line.as_bytes(), query, ignore_case, |col| {
+                self.matches.push(MatchPos {
+                    line: line_idx,
+                    col,
+                    char_len: query.len(),
+                });
+            });
+        }
+        true
+    }
+
+    fn set_active_after_reindex(&mut self, previous_active: Option<usize>) {
         self.active = if self.matches.is_empty() {
             None
         } else {
@@ -241,7 +275,7 @@ impl FindState {
             let len = buffer.len_chars();
             let scope = scope.start.min(len)..scope.end.min(len);
             self.matches
-                .retain(|m| scope_contains(&scope, &m.char_range_in(buffer)));
+                .retain(|m| scope_contains(&scope, &m.indexed_char_range_in(buffer)));
             match (self.matches.is_empty(), self.active) {
                 (true, _) => self.active = None,
                 (false, Some(index)) => self.active = Some(index.min(self.matches.len() - 1)),
@@ -283,7 +317,7 @@ impl FindState {
         let selections: Vec<_> = self
             .matches
             .iter()
-            .map(|m| Selection::from_range(m.char_range_in(buffer), false))
+            .map(|m| Selection::from_range(m.indexed_char_range_in(buffer), false))
             .collect();
         let primary = self.active.unwrap_or(0).min(selections.len() - 1);
         SelectionSet::from_selections(selections, primary).ok()
@@ -425,7 +459,7 @@ pub(crate) fn replace_all_request(tab: &EditorTab, find: &FindState, cursor: Pos
     let buffer = tab.buffer();
     let mut changes = Vec::new();
     for m in find.matches.iter().copied() {
-        let range = m.char_range_in(buffer);
+        let range = m.indexed_char_range_in(buffer);
         let replacement = regex.as_ref().map_or_else(
             || find.replacement.clone(),
             |re| {
@@ -460,4 +494,29 @@ fn expand_match_replacement(regex: &Regex, line: &str, byte_start_in_line: usize
         }
     }
     template.to_string()
+}
+
+fn for_each_ascii_literal_match_col(text: &[u8], query: &[u8], ignore_case: bool, mut on_match: impl FnMut(usize)) {
+    let mut start = 0usize;
+    let first = query[0];
+    while start + query.len() <= text.len() {
+        let end = start + query.len();
+        let first_matches = if ignore_case {
+            text[start].eq_ignore_ascii_case(&first)
+        } else {
+            text[start] == first
+        };
+        let matched = first_matches
+            && if ignore_case {
+                text[start..end].eq_ignore_ascii_case(query)
+            } else {
+                &text[start..end] == query
+            };
+        if matched {
+            on_match(start);
+            start = end;
+        } else {
+            start += 1;
+        }
+    }
 }

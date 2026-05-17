@@ -436,6 +436,18 @@ impl EditorTab {
         self.marked_range = None;
         self.history.break_current_group();
     }
+    pub(crate) fn set_normalized_selection_set(&mut self, selection_set: SelectionSet) {
+        #[cfg(feature = "internal-invariants")]
+        {
+            debug_assert_eq!(
+                normalized_selection_set_for_buffer(&self.buffer, selection_set.clone()),
+                selection_set
+            );
+        }
+        self.selection.replace_set(selection_set);
+        self.marked_range = None;
+        self.history.break_current_group();
+    }
     pub(crate) fn set_selection_state(&mut self, selection_state: SelectionState) {
         self.selection = normalized_selection_state_for_buffer(&self.buffer, selection_state);
         self.marked_range = None;

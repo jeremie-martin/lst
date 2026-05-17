@@ -18,6 +18,11 @@ pub(crate) struct SelectionEdit {
     pub(crate) selection_after: SelectionEditAfter,
 }
 
+pub(crate) struct OccurrenceSelectionSet {
+    pub(crate) set: SelectionSet,
+    pub(crate) already_normalized: bool,
+}
+
 impl SelectionEdit {
     pub(crate) fn insert_with_absolute_cursor(offset: usize, cursor: usize) -> Self {
         Self {
@@ -277,18 +282,27 @@ pub(crate) fn next_occurrence_addition(tab: &EditorTab, find: &FindState) -> Opt
     wrap_candidate.map(|range| Selection::from_range(range, false))
 }
 
-pub(crate) fn all_occurrences_set(tab: &EditorTab, find: &FindState) -> Option<SelectionSet> {
+pub(crate) fn all_occurrences_set(tab: &EditorTab, find: &FindState) -> Option<OccurrenceSelectionSet> {
     let (query, query_range) = occurrence_query(tab)?;
-    let ranges = occurrence_ranges(&tab.buffer_text(), &query, find);
-    if ranges.is_empty() {
+    let occurrences = occurrence_ranges(&tab.buffer_text(), &query, find);
+    if occurrences.ranges.is_empty() {
         return None;
     }
-    let primary = ranges.iter().position(|range| *range == query_range).unwrap_or(0);
-    let selections = ranges
+    let primary = occurrences
+        .ranges
+        .iter()
+        .position(|range| *range == query_range)
+        .unwrap_or(0);
+    let selections = occurrences
+        .ranges
         .into_iter()
         .map(|range| Selection::from_range(range, false))
         .collect();
-    SelectionSet::from_selections(selections, primary).ok()
+    let set = SelectionSet::from_selections(selections, primary).ok()?;
+    Some(OccurrenceSelectionSet {
+        set,
+        already_normalized: occurrences.already_grapheme_aligned,
+    })
 }
 
 fn occurrence_query(tab: &EditorTab) -> Option<(String, Range<usize>)> {
@@ -324,21 +338,40 @@ fn range_is_whitespace(buffer: &ropey::Rope, range: &Range<usize>) -> bool {
     range.start < range.end && buffer.slice(range.clone()).chars().all(char::is_whitespace)
 }
 
-fn occurrence_ranges(text: &str, query: &str, find: &FindState) -> Vec<Range<usize>> {
+struct OccurrenceRanges {
+    ranges: Vec<Range<usize>>,
+    already_grapheme_aligned: bool,
+}
+
+fn occurrence_ranges(text: &str, query: &str, find: &FindState) -> OccurrenceRanges {
     if query.is_empty() {
-        return Vec::new();
+        return OccurrenceRanges {
+            ranges: Vec::new(),
+            already_grapheme_aligned: true,
+        };
     }
     if !find.whole_word && query.is_ascii() && text.is_ascii() {
-        let ignore_case = !find.case_sensitive && !query.chars().any(|c| c.is_uppercase());
-        return ascii_literal_ranges(text.as_bytes(), query.as_bytes(), ignore_case);
+        let ignore_case = !find.case_sensitive && !query.as_bytes().iter().any(|byte| byte.is_ascii_uppercase());
+        return OccurrenceRanges {
+            ranges: ascii_literal_ranges(text.as_bytes(), query.as_bytes(), ignore_case),
+            already_grapheme_aligned: true,
+        };
     }
     // Selection-as-query stays literal; only case-related flags apply.
     let regex = match build_query_regex(query, find.case_sensitive, find.whole_word, false) {
         Ok(re) => re,
-        Err(_) => return Vec::new(),
+        Err(_) => {
+            return OccurrenceRanges {
+                ranges: Vec::new(),
+                already_grapheme_aligned: false,
+            };
+        }
     };
 
-    regex_char_ranges(text, &regex).collect()
+    OccurrenceRanges {
+        ranges: regex_char_ranges(text, &regex).collect(),
+        already_grapheme_aligned: false,
+    }
 }
 
 fn ascii_literal_ranges(text: &[u8], query: &[u8], ignore_case: bool) -> Vec<Range<usize>> {

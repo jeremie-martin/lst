@@ -999,7 +999,11 @@ impl EditorModel {
         let Some(selection_set) = multi_selection::all_occurrences_set(self.active_tab(), &self.find) else {
             return;
         };
-        self.active_tab_mut().set_selection_set(selection_set);
+        if selection_set.already_normalized {
+            self.active_tab_mut().set_normalized_selection_set(selection_set.set);
+        } else {
+            self.active_tab_mut().set_selection_set(selection_set.set);
+        }
         self.queue_reveal(RevealIntent::NearestEdge);
     }
     fn select_all_find_matches(&mut self) {
@@ -1007,7 +1011,7 @@ impl EditorModel {
         let Some(selection_set) = self.find.active_selection_set(self.active_tab()) else {
             return;
         };
-        self.active_tab_mut().set_selection_set(selection_set);
+        self.active_tab_mut().set_normalized_selection_set(selection_set);
         self.queue_focus(FocusTarget::Editor);
         self.queue_reveal(RevealIntent::NearestEdge);
     }
