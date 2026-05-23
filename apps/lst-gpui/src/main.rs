@@ -42,8 +42,7 @@ use std::{
     time::Instant,
 };
 use syntax::{
-    compute_syntax_highlights, syntax_mode_for_language, CachedSyntaxHighlights, SyntaxHighlightJobKey, SyntaxMode,
-    SyntaxSpan,
+    syntax_mode_for_language, CachedSyntaxHighlights, SyntaxMode, TabSyntaxState,
 };
 use viewport::{scroll_to_left, ViewportCache, ViewportGeometry};
 use workspace_action::editor_keybindings;
@@ -66,6 +65,7 @@ pub(crate) struct EditorTabView {
     scroll: ScrollHandle,
     cache: Rc<RefCell<ViewportCache>>,
     geometry: Rc<RefCell<ViewportGeometry>>,
+    syntax_state: Option<crate::syntax::TabSyntaxState>,
 }
 
 impl EditorTabView {
@@ -75,12 +75,17 @@ impl EditorTabView {
             scroll: ScrollHandle::new(),
             cache: Rc::new(RefCell::new(ViewportCache::default())),
             geometry: Rc::new(RefCell::new(ViewportGeometry::default())),
+            syntax_state: None,
         }
     }
 
     fn invalidate_visual_state(&mut self) {
         *self.cache.borrow_mut() = ViewportCache::default();
         *self.geometry.borrow_mut() = ViewportGeometry::default();
+        // syntax_state is intentionally NOT cleared here: it owns the
+        // persistent tree-sitter Tree that makes incremental reparses cheap.
+        // Cleared only on language change or unrecoverable parse failure,
+        // both handled inside sync_active_syntax_state.
     }
 }
 
@@ -383,6 +388,7 @@ impl LstGpuiApp {
         let old_goto_line = self.model.goto_line().map(ToOwned::to_owned);
         update(&mut self.model);
         self.sync_tab_views(old_show_wrap);
+        self.sync_active_syntax_state();
         let effects = self.model.drain_effects();
         self.sync_find_inputs_if_changed(old_find_state.clone(), cx);
         if self.model.goto_line() != old_goto_line.as_deref() {
@@ -395,8 +401,109 @@ impl LstGpuiApp {
         }
     }
 
+    /// Keeps the active tab's syntax highlights in sync with the buffer.
+    /// Runs synchronously on the UI thread: an initial parse takes a few
+    /// ms for a typical file, an incremental reparse takes microseconds
+    /// thanks to the persistent `tree_sitter::Tree`. Called once per
+    /// `update_model` (catches edits + tab switches) and once before each
+    /// paint via `ensure_active_syntax_state` (catches files that were
+    /// opened without an edit cycle).
+    fn sync_active_syntax_state(&mut self) {
+        let active_id = self.model.active_tab_id();
+        let (language, revision, buffer) = {
+            let tab = self.model.active_tab();
+            (tab.language(), tab.revision(), tab.buffer().clone())
+        };
+        let syntax_mode = syntax_mode_for_language(language);
+        let Some(view) = self.tab_views.get_mut(&active_id) else {
+            return;
+        };
+
+        let SyntaxMode::TreeSitter(syntax_lang) = syntax_mode else {
+            view.syntax_state = None;
+            let mut cache = view.cache.borrow_mut();
+            if cache.syntax_highlights.is_some() {
+                cache.syntax_highlights = None;
+                cache.clear_code_lines();
+            }
+            return;
+        };
+
+        // Drop the existing state when the language switched out from under
+        // us so we don't feed the wrong parser an incremental edit.
+        let language_changed = view
+            .syntax_state
+            .as_ref()
+            .is_some_and(|state| state.language != syntax_lang);
+        if language_changed {
+            view.syntax_state = None;
+        }
+
+        let already_current = view
+            .syntax_state
+            .as_ref()
+            .is_some_and(|state| state.language == syntax_lang && state.revision == revision);
+        if already_current {
+            // Drain any unconsumed delta to keep `BufferDelta` accurate for
+            // the next edit. `take_active_buffer_delta` returns Unchanged
+            // when nothing has happened, so this is cheap.
+            let _ = self.model.take_active_buffer_delta();
+            return;
+        }
+
+        let delta = self.model.take_active_buffer_delta();
+        let source = buffer.to_string();
+        match view.syntax_state.as_mut() {
+            None => {
+                // Freshly-opened tab or recovery after a parse failure /
+                // language switch. The delta we drained at line above is
+                // discarded on purpose: parse_initial reads the whole
+                // buffer, so any pending edits are already reflected.
+                let _ = delta;
+                view.syntax_state = TabSyntaxState::parse_initial(syntax_lang, &buffer, &source, revision);
+            }
+            Some(state) => state.update(&buffer, &source, delta, revision),
+        }
+        let Some(state) = view.syntax_state.as_ref() else {
+            // parse_initial failed (grammar / ABI mismatch). Wipe any
+            // stale spans so the renderer doesn't keep painting last
+            // language's colors using the byte-length guard.
+            let mut cache = view.cache.borrow_mut();
+            if cache.syntax_highlights.is_some() {
+                cache.syntax_highlights = None;
+                cache.clear_code_lines();
+            }
+            return;
+        };
+        let (lines, line_byte_lens) = state.compute_spans(&source);
+
+        let mut cache = view.cache.borrow_mut();
+        cache.syntax_highlights = Some(CachedSyntaxHighlights {
+            language: syntax_lang,
+            lines,
+            line_byte_lens,
+        });
+        cache.clear_code_lines();
+    }
+
+    /// Render-path entry point: ensures the active tab has up-to-date
+    /// highlights, even for files that were opened without going through
+    /// an `update_model` cycle (e.g. on first paint). Cheap when nothing
+    /// has changed.
+    pub(crate) fn ensure_active_syntax_state(&mut self) {
+        self.sync_active_syntax_state();
+    }
+
     fn execute_model_command(&mut self, cx: &mut Context<Self>, command: Command) {
+        let trace_label = command_trace_label(command);
+        let trace_started = diagnostics::trace_enabled().then(Instant::now);
         self.update_model(cx, true, |model| model.execute(command));
+        if let Some(label) = trace_label {
+            diagnostics::record_label("command_complete", label);
+            if let Some(started) = trace_started {
+                diagnostics::record_ms(&format!("command_{label}_ms"), started.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
     }
 
     /// On panel open / show_replace flip, select the prefilled query so
@@ -510,77 +617,6 @@ impl LstGpuiApp {
         }
     }
 
-    fn ensure_active_syntax_highlights(&mut self, cx: &mut Context<Self>) {
-        let tab = self.model.active_tab();
-        let SyntaxMode::TreeSitter(language) = syntax_mode_for_language(tab.language()) else {
-            return;
-        };
-
-        let tab_id = tab.id();
-        let revision = tab.revision();
-        let key = SyntaxHighlightJobKey { language, revision };
-        let cache = self.active_view().cache.clone();
-        {
-            let cache_ref = cache.borrow();
-            if cache_ref
-                .syntax_highlights
-                .as_ref()
-                .is_some_and(|highlights| highlights.revision == revision && highlights.language == language)
-            {
-                return;
-            }
-            if cache_ref.syntax_highlight_inflight.is_some() {
-                return;
-            }
-        }
-
-        cache.borrow_mut().syntax_highlight_inflight = Some(key);
-        let source = tab.buffer_text();
-        cx.spawn(async move |this, cx| {
-            let lines = cx
-                .background_executor()
-                .spawn(async move { compute_syntax_highlights(language, &source) })
-                .await;
-            let _ = this.update(cx, |view, cx| {
-                view.finish_syntax_highlights(tab_id, key, cache, lines, cx);
-            });
-        })
-        .detach();
-    }
-
-    fn finish_syntax_highlights(
-        &mut self,
-        tab_id: TabId,
-        key: SyntaxHighlightJobKey,
-        cache: Rc<RefCell<ViewportCache>>,
-        lines: Vec<Vec<SyntaxSpan>>,
-        cx: &mut Context<Self>,
-    ) {
-        let mut cache_ref = cache.borrow_mut();
-        if cache_ref.syntax_highlight_inflight != Some(key) {
-            return;
-        }
-
-        cache_ref.syntax_highlight_inflight = None;
-        if !syntax_highlight_result_is_current(&self.model, &self.tab_views, tab_id, &cache, key) {
-            if self.model.active_tab_id() == tab_id {
-                cx.notify();
-            }
-            return;
-        }
-
-        cache_ref.syntax_highlights = Some(CachedSyntaxHighlights {
-            language: key.language,
-            revision: key.revision,
-            lines,
-        });
-        cache_ref.clear_code_lines();
-        drop(cache_ref);
-
-        if self.model.active_tab_id() == tab_id {
-            cx.notify();
-        }
-    }
 }
 
 fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
@@ -649,22 +685,6 @@ impl Focusable for LstGpuiApp {
     }
 }
 
-fn syntax_highlight_result_is_current(
-    model: &EditorModel,
-    tab_views: &HashMap<TabId, EditorTabView>,
-    tab_id: TabId,
-    cache: &Rc<RefCell<ViewportCache>>,
-    key: SyntaxHighlightJobKey,
-) -> bool {
-    model.tab_by_id(tab_id).is_some_and(|tab| {
-        tab_views.get(&tab_id).is_some_and(|view| {
-            Rc::ptr_eq(&view.cache, cache)
-                && tab.revision() == key.revision
-                && syntax_mode_for_language(tab.language()) == SyntaxMode::TreeSitter(key.language)
-        })
-    })
-}
-
 fn char_to_line_col(buffer: &Rope, char_offset: usize) -> (usize, usize) {
     let char_offset = char_offset.min(buffer.len_chars());
     let line = buffer.char_to_line(char_offset);
@@ -678,6 +698,17 @@ fn focus_trace_label(target: FocusTarget) -> &'static str {
         FocusTarget::FindQuery => "find_query",
         FocusTarget::FindReplace => "find_replace",
         FocusTarget::GotoLine => "goto_line",
+    }
+}
+
+fn command_trace_label(command: Command) -> Option<&'static str> {
+    match command {
+        Command::SelectAll => Some("select_all"),
+        Command::NextTab => Some("next_tab"),
+        Command::PrevTab => Some("previous_tab"),
+        Command::RequestPaste => Some("request_paste"),
+        Command::RequestSave => Some("request_save"),
+        _ => None,
     }
 }
 

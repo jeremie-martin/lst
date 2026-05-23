@@ -41,6 +41,32 @@ fn system_time_to_unix_nanos(time: SystemTime) -> i128 {
         Err(err) => -(err.duration().as_nanos().min(i128::MAX as u128) as i128),
     }
 }
+/// A single replacement applied to a buffer.
+///
+/// `range` is in character offsets relative to the buffer's state *before*
+/// the batch this edit belongs to was applied. Ranges in a batch are sorted
+/// ascending by `start` and non-overlapping, so consumers can apply them in
+/// reverse order without re-mapping offsets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BufferEdit {
+    pub range: Range<usize>,
+    pub replacement: String,
+}
+
+/// How the buffer changed since the last observation.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum BufferDelta {
+    /// Buffer text is identical to the prior observation.
+    #[default]
+    Unchanged,
+    /// Buffer changed via a batch of edits whose offsets are valid against
+    /// the prior buffer state. Consumers should apply them in reverse order.
+    Edits(Vec<BufferEdit>),
+    /// Buffer was replaced wholesale (undo/redo, file reload, save body
+    /// reapply). Consumers should reparse from scratch.
+    FullReplace,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TabId(u64);
 impl TabId {
@@ -161,6 +187,7 @@ pub struct EditorTab {
     /// Bookmarked logical lines, sorted ascending. Stored as raw line
     /// numbers — no anchor tracking, so bookmarks drift on edits.
     bookmarks: Vec<usize>,
+    buffer_delta: BufferDelta,
 }
 impl EditorTab {
     pub fn empty(id: TabId, name_hint: String) -> Self {
@@ -217,6 +244,7 @@ impl EditorTab {
             last_edit_position: None,
             marked_range: None,
             bookmarks: Vec::new(),
+            buffer_delta: BufferDelta::Unchanged,
         }
     }
     pub fn id(&self) -> TabId {
@@ -344,6 +372,34 @@ impl EditorTab {
     pub fn revision(&self) -> u64 {
         self.revision
     }
+    /// Returns the delta since the last call (or since the tab was created)
+    /// and resets the internal record to `Unchanged`. Intended for consumers
+    /// that mirror buffer state (e.g. an incremental tree-sitter parser).
+    pub fn take_buffer_delta(&mut self) -> BufferDelta {
+        std::mem::take(&mut self.buffer_delta)
+    }
+    fn record_full_replace(&mut self) {
+        self.buffer_delta = BufferDelta::FullReplace;
+    }
+    fn record_edits(&mut self, changes: &[TextChange]) {
+        // If a prior delta has not yet been consumed, downgrade to
+        // FullReplace — compositing two edit batches in pre-batch coords
+        // would require re-mapping the second through the first, and that
+        // edge case only fires when the consumer skips a revision tick.
+        if !matches!(self.buffer_delta, BufferDelta::Unchanged) {
+            self.buffer_delta = BufferDelta::FullReplace;
+            return;
+        }
+        self.buffer_delta = BufferDelta::Edits(
+            changes
+                .iter()
+                .map(|change| BufferEdit {
+                    range: change.range.clone(),
+                    replacement: change.replacement.clone(),
+                })
+                .collect(),
+        );
+    }
     fn touch_content(&mut self) {
         self.revision = self.revision.wrapping_add(1);
         self.line_cache = None;
@@ -390,11 +446,8 @@ impl EditorTab {
                 return Arc::clone(&cache.lines);
             }
         }
-        let lines: Arc<[String]> = self
-            .buffer
-            .to_string()
-            .split('\n')
-            .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        let lines: Arc<[String]> = (0..self.buffer.len_lines())
+            .map(|line_ix| display_line_from_rope(&self.buffer, line_ix))
             .collect::<Vec<_>>()
             .into();
         self.line_cache = Some(CachedLines {
@@ -513,9 +566,26 @@ impl EditorTab {
         selection_after: SelectionAfter,
         marked_range_after: Option<Range<usize>>,
     ) {
+        let mut cached_lines = if changes_text {
+            self.line_cache
+                .take()
+                .filter(|cache| cache.revision == self.revision)
+                .map(|cache| cache.lines.iter().cloned().collect::<Vec<_>>())
+        } else {
+            None
+        };
         if changes_text {
+            self.record_edits(&changes);
             remap_bookmarks_after_changes(&self.buffer, &mut self.bookmarks, &changes);
             for change in changes.iter().rev() {
+                if let Some(lines) = cached_lines.as_mut() {
+                    if !apply_change_to_cached_lines(lines, &self.buffer, change) {
+                        // Couldn't update incrementally — drop the cache so
+                        // the next `lines()` call rebuilds from the buffer
+                        // rather than serving stale text under the new revision.
+                        cached_lines = None;
+                    }
+                }
                 apply_change_to_buffer(&mut self.buffer, change);
             }
         }
@@ -525,6 +595,12 @@ impl EditorTab {
         if changes_text {
             self.last_edit_position = Some(self.selection().head().min(self.len_chars()));
             self.touch_text_content();
+            if let Some(lines) = cached_lines {
+                self.line_cache = Some(CachedLines {
+                    revision: self.revision,
+                    lines: lines.into(),
+                });
+            }
         }
     }
     pub fn last_edit_position(&self) -> Option<usize> {
@@ -534,6 +610,7 @@ impl EditorTab {
         self.buffer = Rope::from_str(text);
         self.move_to(0);
         self.touch_text_content();
+        self.record_full_replace();
         self.mark_current_content_saved();
         self.marked_range = None;
         self.history.clear();
@@ -591,20 +668,21 @@ impl EditorTab {
     }
     fn history_snapshot(&self) -> HistorySnapshot {
         HistorySnapshot {
-            text: self.buffer_text(),
+            text: self.buffer.clone(),
             selection: self.selection.clone(),
             content_epoch: self.content_epoch,
             bookmarks: self.bookmarks.clone(),
         }
     }
     fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
-        self.buffer = Rope::from_str(&snapshot.text);
+        self.buffer = snapshot.text;
         self.selection = snapshot.selection;
         self.content_epoch = snapshot.content_epoch;
         self.next_content_epoch = self.next_content_epoch.max(snapshot.content_epoch.saturating_add(1));
         self.bookmarks = snapshot.bookmarks;
         self.marked_range = None;
         self.touch_content();
+        self.record_full_replace();
     }
     pub(crate) fn mark_saved_if_current(
         &mut self,
@@ -639,15 +717,90 @@ impl EditorTab {
         true
     }
     fn apply_saved_body(&mut self, saved_body: &str) {
-        if self.buffer_text() == saved_body {
+        if self.buffer.slice(..) == saved_body {
             return;
         }
         self.buffer = Rope::from_str(saved_body);
         self.selection = normalized_selection_state_for_buffer(&self.buffer, self.selection.clone());
         self.marked_range = marked_range_after_edit(self.marked_range.clone(), 0..0, self.len_chars());
         self.touch_text_content();
+        self.record_full_replace();
     }
 }
+fn display_line_from_rope(buffer: &Rope, line_ix: usize) -> String {
+    let mut line = buffer.line(line_ix).to_string();
+    while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
+        line.pop();
+    }
+    line
+}
+
+/// Returns `false` when the cache cannot be incrementally updated
+/// (out-of-range line indices or empty cache) so the caller can drop the
+/// stale cache rather than stamping it under the new revision.
+fn apply_change_to_cached_lines(lines: &mut Vec<String>, buffer: &Rope, change: &TextChange) -> bool {
+    if lines.is_empty() {
+        return false;
+    }
+
+    let len_chars = buffer.len_chars();
+    let start = change.range.start.min(len_chars);
+    let end = change.range.end.min(len_chars);
+    let start_line = buffer.char_to_line(start);
+    let end_line = buffer.char_to_line(end);
+    if start_line >= lines.len() || end_line >= lines.len() {
+        return false;
+    }
+
+    let start_col = start.saturating_sub(buffer.line_to_char(start_line));
+    let end_col = end.saturating_sub(buffer.line_to_char(end_line));
+    let prefix = line_prefix_chars(&lines[start_line], start_col);
+    let suffix = line_suffix_chars(&lines[end_line], end_col);
+    let replacement_lines = replacement_display_lines(&change.replacement);
+
+    let mut new_lines = Vec::with_capacity(replacement_lines.len().max(1));
+    if replacement_lines.len() == 1 {
+        new_lines.push(format!("{}{}{}", prefix, replacement_lines[0], suffix));
+    } else {
+        new_lines.push(format!("{}{}", prefix, replacement_lines[0]));
+        new_lines.extend(replacement_lines[1..replacement_lines.len() - 1].iter().cloned());
+        let last = replacement_lines.last().map(String::as_str).unwrap_or("");
+        new_lines.push(format!("{last}{suffix}"));
+    }
+
+    lines.splice(start_line..=end_line, new_lines);
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    true
+}
+
+fn replacement_display_lines(text: &str) -> Vec<String> {
+    text.split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        .collect()
+}
+
+fn line_prefix_chars(line: &str, char_count: usize) -> String {
+    let byte = byte_index_for_char(line, char_count);
+    line[..byte].to_string()
+}
+
+fn line_suffix_chars(line: &str, char_count: usize) -> String {
+    let byte = byte_index_for_char(line, char_count);
+    line[byte..].to_string()
+}
+
+fn byte_index_for_char(text: &str, char_ix: usize) -> usize {
+    if char_ix == 0 {
+        return 0;
+    }
+    text.char_indices()
+        .nth(char_ix)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len())
+}
+
 fn first_line_for_detection(buffer: &Rope) -> String {
     buffer.line(0).to_string().trim_end_matches(['\r', '\n']).to_string()
 }
@@ -787,4 +940,100 @@ fn marked_range_after_edit(
     let range = inserted_relative_range(inserted_range, marked_range_after?);
     let range = clamped_range(range, len);
     (range.start < range.end).then_some(range)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        document::{EditKind, UndoBoundary},
+        transaction::{EditRequest, TextChange, TextChangeSet},
+    };
+
+    fn tab_with_text(text: &str) -> EditorTab {
+        EditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("test.rs"), text, None)
+    }
+
+    fn cached_lines(tab: &mut EditorTab) -> Vec<String> {
+        tab.lines().iter().cloned().collect()
+    }
+
+    #[test]
+    fn line_cache_updates_single_line_insert_without_full_rebuild() {
+        let mut tab = tab_with_text("alpha\nbeta\n");
+        assert_eq!(cached_lines(&mut tab), vec!["alpha", "beta", ""]);
+
+        let request = EditRequest::single(EditKind::Insert, UndoBoundary::Merge, 2..2, "Z".to_string());
+        tab.apply_edit_request(request);
+
+        assert_eq!(cached_lines(&mut tab), vec!["alZpha", "beta", ""]);
+    }
+
+    #[test]
+    fn line_cache_updates_multiline_replace() {
+        let mut tab = tab_with_text("alpha\nbeta\ngamma");
+        let _ = tab.lines();
+        let start = tab.buffer().line_to_char(0) + 2;
+        let end = tab.buffer().line_to_char(1) + 2;
+        let request = EditRequest::from_changes(
+            EditKind::Insert,
+            UndoBoundary::Break,
+            TextChangeSet::single(TextChange::replace(start..end, "X\nY".to_string())),
+        );
+
+        tab.apply_edit_request(request);
+
+        assert_eq!(cached_lines(&mut tab), vec!["alX", "Yta", "gamma"]);
+    }
+
+    #[test]
+    fn undo_restores_rope_snapshot() {
+        let mut tab = tab_with_text("alpha\nbeta");
+        let request = EditRequest::single(EditKind::Insert, UndoBoundary::Break, 0..0, "Z".to_string());
+        tab.apply_edit_request(request);
+        assert_eq!(tab.buffer_text(), "Zalpha\nbeta");
+
+        assert!(tab.undo());
+        assert_eq!(tab.buffer_text(), "alpha\nbeta");
+    }
+
+    #[test]
+    fn buffer_delta_reports_edits_then_resets() {
+        let mut tab = tab_with_text("alpha\nbeta");
+        assert!(matches!(tab.take_buffer_delta(), BufferDelta::Unchanged));
+
+        let request = EditRequest::single(EditKind::Insert, UndoBoundary::Merge, 2..2, "Z".to_string());
+        tab.apply_edit_request(request);
+        let delta = tab.take_buffer_delta();
+        let BufferDelta::Edits(edits) = delta else {
+            panic!("expected Edits, got {:?}", delta);
+        };
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].range, 2..2);
+        assert_eq!(edits[0].replacement, "Z");
+        // Taking a second time returns Unchanged.
+        assert!(matches!(tab.take_buffer_delta(), BufferDelta::Unchanged));
+    }
+
+    #[test]
+    fn buffer_delta_collapses_unconsumed_batches_to_full_replace() {
+        let mut tab = tab_with_text("alpha");
+        let r1 = EditRequest::single(EditKind::Insert, UndoBoundary::Merge, 0..0, "A".to_string());
+        let r2 = EditRequest::single(EditKind::Insert, UndoBoundary::Merge, 0..0, "B".to_string());
+        tab.apply_edit_request(r1);
+        tab.apply_edit_request(r2);
+        // Two edit batches without an intervening take_buffer_delta — must
+        // collapse to FullReplace so the consumer reparses from scratch.
+        assert!(matches!(tab.take_buffer_delta(), BufferDelta::FullReplace));
+    }
+
+    #[test]
+    fn buffer_delta_reports_full_replace_after_undo() {
+        let mut tab = tab_with_text("alpha\nbeta");
+        let request = EditRequest::single(EditKind::Insert, UndoBoundary::Break, 0..0, "Z".to_string());
+        tab.apply_edit_request(request);
+        let _ = tab.take_buffer_delta();
+        assert!(tab.undo());
+        assert!(matches!(tab.take_buffer_delta(), BufferDelta::FullReplace));
+    }
 }

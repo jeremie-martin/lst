@@ -1,85 +1,7 @@
 use super::SyntaxLanguage;
+use crate::ui::theme::SyntaxRole;
 use std::sync::LazyLock;
-use tree_sitter_highlight::HighlightConfiguration;
-
-pub(super) const CAPTURE_NAMES: &[&str] = &[
-    "_name",
-    "attribute",
-    "boolean",
-    "character",
-    "charset",
-    "comment",
-    "comment.documentation",
-    "conditional",
-    "constant",
-    "constant.builtin",
-    "constructor",
-    "definition.class",
-    "definition.constant",
-    "definition.function",
-    "definition.interface",
-    "definition.macro",
-    "definition.method",
-    "definition.module",
-    "doc",
-    "embedded",
-    "escape",
-    "function",
-    "function.builtin",
-    "function.call",
-    "function.macro",
-    "function.method",
-    "function.method.call",
-    "glimmer",
-    "import",
-    "injection.content",
-    "injection.language",
-    "keyframes",
-    "keyword",
-    "keyword.directive",
-    "label",
-    "local.definition",
-    "local.reference",
-    "local.scope",
-    "media",
-    "module",
-    "name",
-    "namespace",
-    "none",
-    "number",
-    "operator",
-    "property",
-    "property.builtin",
-    "punctuation",
-    "punctuation.bracket",
-    "punctuation.delimiter",
-    "punctuation.special",
-    "reference.call",
-    "reference.class",
-    "reference.implementation",
-    "reference.type",
-    "string",
-    "string.documentation",
-    "string.escape",
-    "string.regex",
-    "string.special",
-    "string.special.key",
-    "supports",
-    "tag",
-    "tag.error",
-    "text.emphasis",
-    "text.literal",
-    "text.reference",
-    "text.strong",
-    "text.title",
-    "text.uri",
-    "type",
-    "type.builtin",
-    "variable",
-    "variable.builtin",
-    "variable.member",
-    "variable.parameter",
-];
+use tree_sitter::{Language as TsLanguage, Query};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum GrammarId {
@@ -98,29 +20,227 @@ pub(super) enum GrammarId {
     Css,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct RequiredInjection {
-    pub(super) name: &'static str,
-    pub(super) grammar: GrammarId,
+pub(super) fn root_grammar(language: SyntaxLanguage) -> GrammarId {
+    match language {
+        SyntaxLanguage::Rust => GrammarId::Rust,
+        SyntaxLanguage::Python => GrammarId::Python,
+        SyntaxLanguage::JavaScript => GrammarId::JavaScript,
+        SyntaxLanguage::Jsx => GrammarId::Jsx,
+        SyntaxLanguage::TypeScript => GrammarId::TypeScript,
+        SyntaxLanguage::Tsx => GrammarId::Tsx,
+        SyntaxLanguage::Json => GrammarId::Json,
+        SyntaxLanguage::Toml => GrammarId::Toml,
+        SyntaxLanguage::Yaml => GrammarId::Yaml,
+        SyntaxLanguage::Markdown => GrammarId::Markdown,
+        SyntaxLanguage::Html => GrammarId::Html,
+        SyntaxLanguage::Css => GrammarId::Css,
+    }
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct SyntaxSpec {
-    pub(super) root: GrammarId,
-    pub(super) required_injections: &'static [RequiredInjection],
+pub(super) struct GrammarConfig {
+    pub(super) language: TsLanguage,
+    pub(super) highlights: Query,
+    pub(super) injections: Option<Query>,
+    /// Map from highlights-query capture index to the editor's `SyntaxRole`.
+    /// `None` entries are non-highlight captures (e.g. `local.scope`).
+    pub(super) capture_roles: Vec<Option<SyntaxRole>>,
+    /// Capture index for the `injection.language` capture in `injections`,
+    /// when the query defines one. Used to look up the embedded language.
+    pub(super) injection_language_index: Option<u32>,
+    /// Capture index for the `injection.content` capture in `injections`.
+    pub(super) injection_content_index: Option<u32>,
+    /// For roots that always inject a single embedded grammar over their
+    /// whole tree (markdown → markdown_inline via the (inline) node), this
+    /// is the embedded grammar id used as a fallback when the injection
+    /// query carries no `injection.language` capture.
+    pub(super) implicit_injection_grammar: Option<GrammarId>,
 }
 
-const NO_REQUIRED_INJECTIONS: &[RequiredInjection] = &[];
-const MARKDOWN_REQUIRED_INJECTIONS: &[RequiredInjection] = &[RequiredInjection {
-    name: "markdown_inline",
-    grammar: GrammarId::MarkdownInline,
-}];
+impl GrammarConfig {
+    fn new(
+        language: TsLanguage,
+        highlights_source: &str,
+        injections_source: Option<&str>,
+        implicit_injection_grammar: Option<GrammarId>,
+    ) -> Self {
+        let highlights = Query::new(&language, highlights_source).expect("embedded highlights query is valid");
+        let capture_roles = highlights
+            .capture_names()
+            .iter()
+            .map(|name| role_for_capture_name(name))
+            .collect();
+        let (injections, injection_language_index, injection_content_index) = match injections_source {
+            None => (None, None, None),
+            Some(source) => {
+                let query = Query::new(&language, source).expect("embedded injections query is valid");
+                let language_index = query.capture_index_for_name("injection.language");
+                let content_index = query.capture_index_for_name("injection.content");
+                (Some(query), language_index, content_index)
+            }
+        };
+        Self {
+            language,
+            highlights,
+            injections,
+            capture_roles,
+            injection_language_index,
+            injection_content_index,
+            implicit_injection_grammar,
+        }
+    }
+}
 
-#[derive(Clone, Copy)]
+static RUST_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    GrammarConfig::new(
+        tree_sitter_rust::LANGUAGE.into(),
+        tree_sitter_rust::HIGHLIGHTS_QUERY,
+        Some(tree_sitter_rust::INJECTIONS_QUERY),
+        None,
+    )
+});
+
+static PYTHON_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    GrammarConfig::new(
+        tree_sitter_python::LANGUAGE.into(),
+        tree_sitter_python::HIGHLIGHTS_QUERY,
+        None,
+        None,
+    )
+});
+
+static JAVASCRIPT_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    GrammarConfig::new(
+        tree_sitter_javascript::LANGUAGE.into(),
+        tree_sitter_javascript::HIGHLIGHT_QUERY,
+        Some(tree_sitter_javascript::INJECTIONS_QUERY),
+        None,
+    )
+});
+
+static JSX_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    let highlights = format!(
+        "{}\n{}",
+        tree_sitter_javascript::HIGHLIGHT_QUERY,
+        tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
+    );
+    GrammarConfig::new(
+        tree_sitter_javascript::LANGUAGE.into(),
+        &highlights,
+        Some(tree_sitter_javascript::INJECTIONS_QUERY),
+        None,
+    )
+});
+
+static TYPESCRIPT_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    GrammarConfig::new(
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        tree_sitter_typescript::HIGHLIGHTS_QUERY,
+        None,
+        None,
+    )
+});
+
+static TSX_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    let highlights = format!(
+        "{}\n{}",
+        tree_sitter_typescript::HIGHLIGHTS_QUERY,
+        tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
+    );
+    GrammarConfig::new(
+        tree_sitter_typescript::LANGUAGE_TSX.into(),
+        &highlights,
+        None,
+        None,
+    )
+});
+
+static JSON_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    GrammarConfig::new(
+        tree_sitter_json::LANGUAGE.into(),
+        tree_sitter_json::HIGHLIGHTS_QUERY,
+        None,
+        None,
+    )
+});
+
+static TOML_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    GrammarConfig::new(
+        tree_sitter_toml_ng::LANGUAGE.into(),
+        tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+        None,
+        None,
+    )
+});
+
+static YAML_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    GrammarConfig::new(
+        tree_sitter_yaml::LANGUAGE.into(),
+        tree_sitter_yaml::HIGHLIGHTS_QUERY,
+        None,
+        None,
+    )
+});
+
+static MARKDOWN_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    let injections = markdown_block_injections_query();
+    GrammarConfig::new(
+        tree_sitter_md::LANGUAGE.into(),
+        tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
+        Some(&injections),
+        None,
+    )
+});
+
+static MARKDOWN_INLINE_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    GrammarConfig::new(
+        tree_sitter_md::INLINE_LANGUAGE.into(),
+        tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
+        Some(tree_sitter_md::INJECTION_QUERY_INLINE),
+        None,
+    )
+});
+
+static HTML_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    GrammarConfig::new(
+        tree_sitter_html::LANGUAGE.into(),
+        tree_sitter_html::HIGHLIGHTS_QUERY,
+        Some(tree_sitter_html::INJECTIONS_QUERY),
+        None,
+    )
+});
+
+static CSS_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
+    GrammarConfig::new(
+        tree_sitter_css::LANGUAGE.into(),
+        tree_sitter_css::HIGHLIGHTS_QUERY,
+        None,
+        None,
+    )
+});
+
+pub(super) fn grammar(id: GrammarId) -> &'static GrammarConfig {
+    match id {
+        GrammarId::Rust => &RUST_CONFIG,
+        GrammarId::Python => &PYTHON_CONFIG,
+        GrammarId::JavaScript => &JAVASCRIPT_CONFIG,
+        GrammarId::Jsx => &JSX_CONFIG,
+        GrammarId::TypeScript => &TYPESCRIPT_CONFIG,
+        GrammarId::Tsx => &TSX_CONFIG,
+        GrammarId::Json => &JSON_CONFIG,
+        GrammarId::Toml => &TOML_CONFIG,
+        GrammarId::Yaml => &YAML_CONFIG,
+        GrammarId::Markdown => &MARKDOWN_CONFIG,
+        GrammarId::MarkdownInline => &MARKDOWN_INLINE_CONFIG,
+        GrammarId::Html => &HTML_CONFIG,
+        GrammarId::Css => &CSS_CONFIG,
+    }
+}
+
 struct InjectableGrammar {
     names: &'static [&'static str],
     grammar: GrammarId,
 }
+
 const INJECTABLE_GRAMMARS: &[InjectableGrammar] = &[
     InjectableGrammar {
         names: &["rust", "rs"],
@@ -176,225 +296,61 @@ const INJECTABLE_GRAMMARS: &[InjectableGrammar] = &[
     },
 ];
 
-static RUST_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    highlight_config(
-        tree_sitter_rust::LANGUAGE.into(),
-        "rust",
-        tree_sitter_rust::HIGHLIGHTS_QUERY,
-        tree_sitter_rust::INJECTIONS_QUERY,
-        "",
-    )
-});
-
-static PYTHON_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    highlight_config(
-        tree_sitter_python::LANGUAGE.into(),
-        "python",
-        tree_sitter_python::HIGHLIGHTS_QUERY,
-        "",
-        "",
-    )
-});
-
-static JAVASCRIPT_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    highlight_config(
-        tree_sitter_javascript::LANGUAGE.into(),
-        "javascript",
-        tree_sitter_javascript::HIGHLIGHT_QUERY,
-        tree_sitter_javascript::INJECTIONS_QUERY,
-        tree_sitter_javascript::LOCALS_QUERY,
-    )
-});
-
-static JSX_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    let highlights = format!(
-        "{}\n{}",
-        tree_sitter_javascript::HIGHLIGHT_QUERY,
-        tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
-    );
-    highlight_config(
-        tree_sitter_javascript::LANGUAGE.into(),
-        "jsx",
-        &highlights,
-        tree_sitter_javascript::INJECTIONS_QUERY,
-        tree_sitter_javascript::LOCALS_QUERY,
-    )
-});
-
-static TYPESCRIPT_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    highlight_config(
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        "typescript",
-        tree_sitter_typescript::HIGHLIGHTS_QUERY,
-        "",
-        tree_sitter_typescript::LOCALS_QUERY,
-    )
-});
-
-static TSX_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    let highlights = format!(
-        "{}\n{}",
-        tree_sitter_typescript::HIGHLIGHTS_QUERY,
-        tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
-    );
-    highlight_config(
-        tree_sitter_typescript::LANGUAGE_TSX.into(),
-        "tsx",
-        &highlights,
-        "",
-        tree_sitter_typescript::LOCALS_QUERY,
-    )
-});
-
-static JSON_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    highlight_config(
-        tree_sitter_json::LANGUAGE.into(),
-        "json",
-        tree_sitter_json::HIGHLIGHTS_QUERY,
-        "",
-        "",
-    )
-});
-
-static TOML_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    highlight_config(
-        tree_sitter_toml_ng::LANGUAGE.into(),
-        "toml",
-        tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
-        "",
-        "",
-    )
-});
-
-static YAML_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    highlight_config(
-        tree_sitter_yaml::LANGUAGE.into(),
-        "yaml",
-        tree_sitter_yaml::HIGHLIGHTS_QUERY,
-        "",
-        "",
-    )
-});
-
-static MARKDOWN_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    let injections = markdown_block_injections_query();
-    highlight_config(
-        tree_sitter_md::LANGUAGE.into(),
-        "markdown",
-        tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
-        &injections,
-        "",
-    )
-});
-
-static MARKDOWN_INLINE_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    highlight_config(
-        tree_sitter_md::INLINE_LANGUAGE.into(),
-        "markdown_inline",
-        tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
-        tree_sitter_md::INJECTION_QUERY_INLINE,
-        "",
-    )
-});
-
-static HTML_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    highlight_config(
-        tree_sitter_html::LANGUAGE.into(),
-        "html",
-        tree_sitter_html::HIGHLIGHTS_QUERY,
-        tree_sitter_html::INJECTIONS_QUERY,
-        "",
-    )
-});
-
-static CSS_CONFIG: LazyLock<HighlightConfiguration> = LazyLock::new(|| {
-    highlight_config(
-        tree_sitter_css::LANGUAGE.into(),
-        "css",
-        tree_sitter_css::HIGHLIGHTS_QUERY,
-        "",
-        "",
-    )
-});
-
-pub(super) fn syntax_spec(language: SyntaxLanguage) -> SyntaxSpec {
-    SyntaxSpec {
-        root: root_grammar(language),
-        required_injections: required_injections(language),
-    }
-}
-
-fn root_grammar(language: SyntaxLanguage) -> GrammarId {
-    match language {
-        SyntaxLanguage::Rust => GrammarId::Rust,
-        SyntaxLanguage::Python => GrammarId::Python,
-        SyntaxLanguage::JavaScript => GrammarId::JavaScript,
-        SyntaxLanguage::Jsx => GrammarId::Jsx,
-        SyntaxLanguage::TypeScript => GrammarId::TypeScript,
-        SyntaxLanguage::Tsx => GrammarId::Tsx,
-        SyntaxLanguage::Json => GrammarId::Json,
-        SyntaxLanguage::Toml => GrammarId::Toml,
-        SyntaxLanguage::Yaml => GrammarId::Yaml,
-        SyntaxLanguage::Markdown => GrammarId::Markdown,
-        SyntaxLanguage::Html => GrammarId::Html,
-        SyntaxLanguage::Css => GrammarId::Css,
-    }
-}
-
-fn required_injections(language: SyntaxLanguage) -> &'static [RequiredInjection] {
-    match language {
-        SyntaxLanguage::Markdown => MARKDOWN_REQUIRED_INJECTIONS,
-        _ => NO_REQUIRED_INJECTIONS,
-    }
-}
-
-pub(super) fn config(grammar: GrammarId) -> &'static HighlightConfiguration {
-    match grammar {
-        GrammarId::Rust => &RUST_CONFIG,
-        GrammarId::Python => &PYTHON_CONFIG,
-        GrammarId::JavaScript => &JAVASCRIPT_CONFIG,
-        GrammarId::Jsx => &JSX_CONFIG,
-        GrammarId::TypeScript => &TYPESCRIPT_CONFIG,
-        GrammarId::Tsx => &TSX_CONFIG,
-        GrammarId::Json => &JSON_CONFIG,
-        GrammarId::Toml => &TOML_CONFIG,
-        GrammarId::Yaml => &YAML_CONFIG,
-        GrammarId::Markdown => &MARKDOWN_CONFIG,
-        GrammarId::MarkdownInline => &MARKDOWN_INLINE_CONFIG,
-        GrammarId::Html => &HTML_CONFIG,
-        GrammarId::Css => &CSS_CONFIG,
-    }
-}
-
-pub(super) fn injection_config(name: &str) -> Option<&'static HighlightConfiguration> {
+pub(super) fn injectable_grammar(name: &str) -> Option<GrammarId> {
     let normalized = name.to_ascii_lowercase();
     INJECTABLE_GRAMMARS
         .iter()
         .find(|entry| entry.names.contains(&normalized.as_str()))
-        .map(|entry| config(entry.grammar))
+        .map(|entry| entry.grammar)
 }
 
-pub(super) fn required_injections_are_registered(spec: &SyntaxSpec) -> bool {
-    spec.required_injections.iter().all(|injection| {
-        injection_config(injection.name).is_some_and(|resolved| std::ptr::eq(resolved, config(injection.grammar)))
-    })
-}
-
-pub(super) fn capture_name(index: usize) -> Option<&'static str> {
-    CAPTURE_NAMES.get(index).copied()
-}
-
-fn highlight_config(
-    language: tree_sitter::Language,
-    name: &'static str,
-    highlights_query: &str,
-    injections_query: &str,
-    locals_query: &str,
-) -> HighlightConfiguration {
-    let mut config = HighlightConfiguration::new(language, name, highlights_query, injections_query, locals_query)
-        .unwrap_or_else(|error| panic!("embedded tree-sitter {name} highlight query invalid: {error}"));
-    config.configure(CAPTURE_NAMES);
-    config
+fn role_for_capture_name(name: &str) -> Option<SyntaxRole> {
+    if name.starts_with("comment") {
+        Some(SyntaxRole::Comment)
+    } else if name.starts_with("string") {
+        Some(SyntaxRole::String)
+    } else if matches!(name, "boolean" | "number" | "constant" | "constant.builtin") {
+        Some(SyntaxRole::Constant)
+    } else if name.starts_with("function")
+        || name.starts_with("definition.function")
+        || name.starts_with("definition.method")
+        || name == "reference.call"
+    {
+        Some(SyntaxRole::Function)
+    } else if name.starts_with("keyword") {
+        Some(SyntaxRole::Keyword)
+    } else if name == "operator" {
+        Some(SyntaxRole::Operator)
+    } else if name.starts_with("type")
+        || name.starts_with("definition.class")
+        || name.starts_with("definition.interface")
+        || name == "reference.class"
+        || name == "reference.type"
+    {
+        Some(SyntaxRole::Type)
+    } else if name.starts_with("tag") {
+        Some(SyntaxRole::Tag)
+    } else if name == "text.title" {
+        Some(SyntaxRole::Title)
+    } else if name == "text.strong" {
+        Some(SyntaxRole::Strong)
+    } else if name == "text.emphasis" {
+        Some(SyntaxRole::Emphasis)
+    } else if name == "text.literal" {
+        Some(SyntaxRole::Literal)
+    } else if name == "text.reference" || name == "text.uri" {
+        Some(SyntaxRole::Reference)
+    } else if matches!(name, "attribute" | "property" | "property.builtin") {
+        Some(SyntaxRole::Property)
+    } else if name == "escape" || name.starts_with("punctuation.special") {
+        Some(SyntaxRole::Escape)
+    } else if name.starts_with("punctuation") {
+        Some(SyntaxRole::Punctuation)
+    } else if name == "label" || name == "module" || name == "namespace" {
+        Some(SyntaxRole::Label)
+    } else {
+        None
+    }
 }
 
 fn markdown_block_injections_query() -> String {
@@ -418,23 +374,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_configs_and_required_injections_are_valid() {
+    fn catalog_configs_build_for_every_language() {
         for language in SyntaxLanguage::ALL {
-            let spec = syntax_spec(*language);
-            let _ = config(spec.root);
-            for injection in spec.required_injections {
-                assert_eq!(
-                    injection_config(injection.name).map(|_| ()),
-                    Some(()),
-                    "required injection {} is not registered",
-                    injection.name
-                );
-                let _ = config(injection.grammar);
+            let _ = grammar(root_grammar(*language));
+        }
+        let _ = grammar(GrammarId::MarkdownInline);
+        // Force every injectable grammar too. Otherwise a future entry in
+        // INJECTABLE_GRAMMARS that isn't also a SyntaxLanguage root would
+        // skip catalog validation and panic at runtime on first injection
+        // match instead of failing CI.
+        for entry in INJECTABLE_GRAMMARS {
+            let _ = grammar(entry.grammar);
+        }
+    }
+
+    #[test]
+    fn injectable_lookup_round_trip() {
+        for entry in INJECTABLE_GRAMMARS {
+            for name in entry.names {
+                assert_eq!(injectable_grammar(name), Some(entry.grammar));
             }
         }
-
-        for entry in INJECTABLE_GRAMMARS {
-            let _ = config(entry.grammar);
-        }
+        assert_eq!(injectable_grammar("totally-not-a-language"), None);
     }
 }

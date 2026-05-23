@@ -18,7 +18,8 @@ use crate::viewport::{
     WrapLayoutInput,
 };
 use crate::workspace_action::attach_workspace_actions;
-use crate::{FocusTarget, LstGpuiApp, RECENT_CARD_BASIS};
+use crate::{diagnostics, FocusTarget, LstGpuiApp, RECENT_CARD_BASIS};
+use std::time::Instant;
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
@@ -678,7 +679,7 @@ impl LstGpuiApp {
 
 impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.ensure_active_syntax_highlights(cx);
+        self.ensure_active_syntax_state();
 
         let show_gutter = self.model.show_gutter();
         let show_wrap = self.model.show_wrap();
@@ -698,7 +699,10 @@ impl Render for LstGpuiApp {
             .bounds
             .map(|bounds| bounds.size.width)
             .unwrap_or_else(|| metrics::px_for_scale(metrics::WINDOW_WIDTH - 48.0, scale));
-        let char_width = code_char_width(window, scale, theme);
+        let char_width = {
+            let mut cache = active_cache.borrow_mut();
+            code_char_width(&mut cache, window, scale, theme)
+        };
         let show_search_decorations = self.model.find().visible;
         let (revision, syntax_mode, buffer, selection_set, search_matches, active_search_match) = {
             let active_tab = self.model.active_tab();
@@ -848,6 +852,8 @@ impl Render for LstGpuiApp {
                                                             {
                                                                 let viewport_scroll = viewport_scroll.clone();
                                                                 move |bounds, window, cx| {
+                                                                    let prepare_started =
+                                                                        diagnostics::trace_enabled().then(Instant::now);
                                                                     let previous_wrap_columns =
                                                                         viewport_geometry.borrow().painted_wrap_columns;
                                                                     let paint_state = prepare_viewport_paint_state(
@@ -871,6 +877,12 @@ impl Render for LstGpuiApp {
                                                                         },
                                                                         window,
                                                                     );
+                                                                    if let Some(started) = prepare_started {
+                                                                        diagnostics::record_ms(
+                                                                            "viewport_prepare_ms",
+                                                                            started.elapsed().as_secs_f64() * 1000.0,
+                                                                        );
+                                                                    }
                                                                     if previous_wrap_columns
                                                                         != viewport_geometry
                                                                             .borrow()
@@ -890,6 +902,8 @@ impl Render for LstGpuiApp {
                                                                 }
                                                             },
                                                             move |bounds, paint_state, window, cx| {
+                                                                let paint_started =
+                                                                    diagnostics::trace_enabled().then(Instant::now);
                                                                 window.handle_input(
                                                                     &focus_handle,
                                                                     ElementInputHandler::new(bounds, entity.clone()),
@@ -918,6 +932,12 @@ impl Render for LstGpuiApp {
                                                                     window,
                                                                     cx,
                                                                 );
+                                                                if let Some(started) = paint_started {
+                                                                    diagnostics::record_ms(
+                                                                        "viewport_paint_ms",
+                                                                        started.elapsed().as_secs_f64() * 1000.0,
+                                                                    );
+                                                                }
                                                             },
                                                         )
                                                         .size_full(),

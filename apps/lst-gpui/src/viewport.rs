@@ -1,9 +1,12 @@
-use crate::ui::theme::{metrics, typography, Theme};
+use crate::{
+    diagnostics,
+    ui::theme::{metrics, typography, Theme},
+};
 use gpui::{fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString, TextRun, Window};
 use lst_editor::wrap::{
     build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, wrap_segments, WrapLayout, WrappedSegment,
 };
-use lst_editor::{vim, EditorTab, GutterMode, SelectionSet};
+use lst_editor::{vim, EditorTab, GutterMode, Selection, SelectionSet};
 use ropey::Rope;
 use std::{
     cell::RefCell,
@@ -11,6 +14,7 @@ use std::{
     hash::{Hash, Hasher},
     ops::Range,
     rc::Rc,
+    time::Instant,
 };
 
 use crate::syntax::{CachedSyntaxHighlights, SyntaxMode, SyntaxSpan};
@@ -27,9 +31,9 @@ pub(crate) struct ViewportCache {
     code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
     pub(crate) syntax_highlights: Option<CachedSyntaxHighlights>,
-    pub(crate) syntax_highlight_inflight: Option<crate::syntax::SyntaxHighlightJobKey>,
     pub(crate) wrap_layout: Option<CachedWrapLayout>,
     max_unwrapped_line_width: Option<CachedUnwrappedLineWidth>,
+    code_char_width: Option<CachedCodeCharWidth>,
 }
 
 impl ViewportCache {
@@ -48,6 +52,13 @@ struct CachedUnwrappedLineWidth {
     revision: u64,
     char_width: Pixels,
     font_size: Pixels,
+    width: Pixels,
+}
+
+#[derive(Clone, Copy)]
+struct CachedCodeCharWidth {
+    font_size: Pixels,
+    theme_key: u64,
     width: Pixels,
 }
 
@@ -187,10 +198,17 @@ fn char_to_byte_index(text: &str, char_ix: usize) -> usize {
     text.char_indices().nth(char_ix).map(|(b, _)| b).unwrap_or(text.len())
 }
 
+/// Returns cached syntax spans for `line_ix` only when (a) the cache holds
+/// highlights for the active language and (b) the line's display-byte
+/// length is unchanged from the snapshot the cache was built against. The
+/// byte-length guard is what lets the renderer keep showing correct
+/// highlights for unedited lines after an edit invalidates the cache for
+/// the lines the user actually touched, instead of blanking the whole
+/// document until the next parse lands.
 fn line_syntax_spans(
     cache: &mut ViewportCache,
-    revision: u64,
     line_ix: usize,
+    current_line_byte_len: usize,
     syntax_mode: SyntaxMode,
 ) -> Vec<SyntaxSpan> {
     match syntax_mode {
@@ -198,7 +216,14 @@ fn line_syntax_spans(
         SyntaxMode::TreeSitter(language) => cache
             .syntax_highlights
             .as_ref()
-            .filter(|highlights| highlights.revision == revision && highlights.language == language)
+            .filter(|highlights| highlights.language == language)
+            .filter(|highlights| {
+                highlights
+                    .line_byte_lens
+                    .get(line_ix)
+                    .copied()
+                    .is_some_and(|len| len as usize == current_line_byte_len)
+            })
             .and_then(|highlights| highlights.lines.get(line_ix))
             .cloned()
             .unwrap_or_default(),
@@ -282,8 +307,15 @@ pub(crate) fn code_origin_x(element_left: Pixels, show_gutter: bool, scale: f32,
     element_left + code_origin_pad(show_gutter, scale) - horizontal_scroll
 }
 
-pub(crate) fn code_char_width(window: &mut Window, scale: f32, theme: Theme) -> Pixels {
+pub(crate) fn code_char_width(cache: &mut ViewportCache, window: &mut Window, scale: f32, theme: Theme) -> Pixels {
     let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
+    let theme_key = theme.style_key();
+    if let Some(cached) = cache.code_char_width {
+        if cached.font_size == font_size && cached.theme_key == theme_key {
+            return cached.width;
+        }
+    }
+
     let font = typography::primary_font();
     let probe = SharedString::from("00000000");
     let shaped = window.text_system().shape_line(
@@ -300,11 +332,17 @@ pub(crate) fn code_char_width(window: &mut Window, scale: f32, theme: Theme) -> 
         None,
     );
 
-    if shaped.width > px(0.0) {
+    let width = if shaped.width > px(0.0) {
         shaped.width / probe.chars().count() as f32
     } else {
         metrics::px_for_scale(metrics::WRAP_CHAR_WIDTH_FALLBACK, scale)
-    }
+    };
+    cache.code_char_width = Some(CachedCodeCharWidth {
+        font_size,
+        theme_key,
+        width,
+    });
+    width
 }
 
 pub(crate) fn x_for_display_char(
@@ -432,7 +470,11 @@ pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInp
 
     cache.code_lines.clear();
 
+    let started = diagnostics::trace_enabled().then(Instant::now);
     let layout = build_wrap_layout(lines, wrap_columns, show_wrap);
+    if let Some(started) = started {
+        diagnostics::record_ms("wrap_layout_ms", started.elapsed().as_secs_f64() * 1000.0);
+    }
     cache.wrap_layout = Some(CachedWrapLayout {
         revision,
         layout: layout.clone(),
@@ -602,7 +644,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         .skip(first_line)
     {
         let display_source = trim_display_line(line);
-        let highlight_spans = line_syntax_spans(&mut cache, revision, line_ix, syntax_mode);
+        let highlight_spans = line_syntax_spans(&mut cache, line_ix, display_source.len(), syntax_mode);
         let display_len = display_source.chars().count();
         let logical_end_char = if line_ix + 1 < buffer.len_lines() {
             buffer.line_to_char(line_ix + 1)
@@ -737,6 +779,12 @@ fn search_matches_for_row<'a>(search_matches: &'a [Range<usize>], row: &PaintedR
     &search_matches[first..last]
 }
 
+fn selections_for_row<'a>(selections: &'a [Selection], row: &PaintedRow) -> &'a [Selection] {
+    let first = selections.partition_point(|selection| selection.range().end <= row.line_start_char);
+    let last = first + selections[first..].partition_point(|selection| selection.range().start < row.logical_end_char);
+    &selections[first..last]
+}
+
 // One entry per selection. Collapsed cursors take the wide block-cursor in
 // Vim Normal; selections with extent get a thin caret on their head over
 // the existing range fill.
@@ -775,6 +823,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
     let gutter_origin_x = bounds.left() + metrics::px_for_scale(metrics::GUTTER_LEFT_PAD, scale);
     let gutter_width = metrics::px_for_scale(metrics::GUTTER_WIDTH - metrics::GUTTER_LEFT_PAD - 8.0, scale);
     let code_origin_x = code_origin_x(bounds.left(), show_gutter, scale, horizontal_scroll);
+    let selections = selection_set.as_slice();
     let cursors = paint_cursors(&selection_set);
 
     for row in paint_state.rows {
@@ -813,7 +862,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             );
         }
 
-        for selection in selection_set.as_slice() {
+        for selection in selections_for_row(selections, &row) {
             paint_range_background(
                 &row,
                 &selection.range(),
@@ -904,4 +953,75 @@ fn char_to_byte(text: &str, char_offset: usize) -> usize {
 }
 pub(crate) fn byte_index_to_char(text: &str, byte_index: usize) -> usize {
     text[..byte_index.min(text.len())].chars().count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::{CachedSyntaxHighlights, SyntaxLanguage};
+    use crate::ui::theme::SyntaxRole;
+
+    fn cache_with_highlights(line_byte_lens: Vec<u32>, lines: Vec<Vec<SyntaxSpan>>) -> ViewportCache {
+        ViewportCache {
+            syntax_highlights: Some(CachedSyntaxHighlights {
+                language: SyntaxLanguage::Rust,
+                lines,
+                line_byte_lens,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn rust_keyword_span(start: usize, end: usize) -> SyntaxSpan {
+        SyntaxSpan {
+            start,
+            end,
+            role: SyntaxRole::Keyword,
+        }
+    }
+
+    #[test]
+    fn line_syntax_spans_returns_cached_when_byte_length_matches() {
+        // Cached state for two lines: line 0 has 7 bytes with a keyword on
+        // bytes 0..2, line 1 has 11 bytes with no spans.
+        let line_lens = vec![7u32, 11u32];
+        let line_spans = vec![vec![rust_keyword_span(0, 2)], Vec::new()];
+        let mut cache = cache_with_highlights(line_lens, line_spans);
+
+        let spans = line_syntax_spans(&mut cache, 0, 7, SyntaxMode::TreeSitter(SyntaxLanguage::Rust));
+        assert_eq!(spans, vec![rust_keyword_span(0, 2)]);
+    }
+
+    #[test]
+    fn line_syntax_spans_returns_empty_when_byte_length_differs() {
+        // Cached state recorded length 7, but the line has grown to 8 (user
+        // typed a character). Reusing the stale span at byte offset 0..2 is
+        // safe in terms of bytes, but the byte-length-mismatch guard is what
+        // forces a blank-and-reparse for the edited line so a later split
+        // never falls inside a multi-byte UTF-8 character.
+        let mut cache = cache_with_highlights(vec![7u32], vec![vec![rust_keyword_span(0, 2)]]);
+        let spans = line_syntax_spans(&mut cache, 0, 8, SyntaxMode::TreeSitter(SyntaxLanguage::Rust));
+        assert!(spans.is_empty(), "stale-length cache must return empty spans");
+    }
+
+    #[test]
+    fn line_syntax_spans_returns_empty_when_language_differs() {
+        let mut cache = cache_with_highlights(vec![7u32], vec![vec![rust_keyword_span(0, 2)]]);
+        let spans = line_syntax_spans(&mut cache, 0, 7, SyntaxMode::TreeSitter(SyntaxLanguage::Python));
+        assert!(spans.is_empty(), "language switch must invalidate cached spans");
+    }
+
+    #[test]
+    fn line_syntax_spans_returns_empty_when_mode_is_plain() {
+        let mut cache = cache_with_highlights(vec![7u32], vec![vec![rust_keyword_span(0, 2)]]);
+        let spans = line_syntax_spans(&mut cache, 0, 7, SyntaxMode::Plain);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn line_syntax_spans_handles_line_beyond_cache() {
+        let mut cache = cache_with_highlights(vec![7u32], vec![vec![rust_keyword_span(0, 2)]]);
+        let spans = line_syntax_spans(&mut cache, 9, 0, SyntaxMode::TreeSitter(SyntaxLanguage::Rust));
+        assert!(spans.is_empty());
+    }
 }

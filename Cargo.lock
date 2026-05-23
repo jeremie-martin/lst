@@ -3176,7 +3176,6 @@ dependencies = [
  "time",
  "tree-sitter",
  "tree-sitter-css",
- "tree-sitter-highlight",
  "tree-sitter-html",
  "tree-sitter-javascript",
  "tree-sitter-json",
@@ -5946,18 +5945,6 @@ checksum = "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f"
 dependencies = [
  "cc",
  "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-highlight"
-version = "0.26.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccde2b54a34b58313e69c02496a2a9ad38d59af79b196b5e1df063431752a7e0"
-dependencies = [
- "regex",
- "streaming-iterator",
- "thiserror 2.0.18",
- "tree-sitter",
 ]
 
 [[package]]

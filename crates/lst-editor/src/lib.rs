@@ -20,7 +20,7 @@ pub use command::EditorCommand;
 pub use document::{EditKind, UndoBoundary};
 pub use language::{IndentStyle, Language, LanguageConfig};
 pub use selection::{Position, Selection, SelectionSet, SelectionSetError};
-pub use tab::{EditorTab, FileStamp, TabId};
+pub use tab::{BufferDelta, BufferEdit, EditorTab, FileStamp, TabId};
 pub use viewport::Viewport;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FocusTarget {
@@ -92,7 +92,7 @@ impl GutterMode {
         match self {
             Self::Absolute => format!("{:>3}", line_ix + 1),
             Self::Relative => format!("{:>3}", line_ix.abs_diff(cursor_line)),
-            Self::Hybrid if cursor_lines.contains(&line_ix) => format!("{:>3}", line_ix + 1),
+            Self::Hybrid if cursor_lines.binary_search(&line_ix).is_ok() => format!("{:>3}", line_ix + 1),
             Self::Hybrid => format!("{:>3}", line_ix.abs_diff(cursor_line)),
         }
     }
@@ -174,6 +174,12 @@ impl EditorModel {
     }
     pub fn active_tab_lines(&mut self) -> Arc<[String]> {
         self.active_tab_mut().lines()
+    }
+    /// Returns the active tab's buffer delta since the previous call and
+    /// resets the tab's record. Mirrors `EditorTab::take_buffer_delta` for
+    /// callers that only have a handle on the model.
+    pub fn take_active_buffer_delta(&mut self) -> BufferDelta {
+        self.active_tab_mut().take_buffer_delta()
     }
     fn ensure_active_wrap_layout(&mut self, wrap_columns: usize, lines: &[String]) {
         let tab_id = self.active_tab_id();
@@ -1159,12 +1165,13 @@ impl EditorModel {
         self.status = "Clipboard does not currently contain plain text.".to_string();
     }
     pub fn paste_text(&mut self, text: String) {
-        if let Some(request) = multi_selection::paste_request(self.active_tab(), text.clone(), UndoBoundary::Break) {
+        let line_count = text.lines().count();
+        if let Some(request) = multi_selection::paste_request(self.active_tab(), &text, UndoBoundary::Break) {
             self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
         } else {
-            self.replace_text(None, text.clone(), UndoBoundary::Break);
+            self.replace_text(None, text, UndoBoundary::Break);
         }
-        self.status = format!("Pasted {} line(s).", text.lines().count());
+        self.status = format!("Pasted {line_count} line(s).");
     }
     pub fn set_active_cursor_position(&mut self, line: usize, column: usize) {
         self.move_active_cursor(line, column, false);
