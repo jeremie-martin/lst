@@ -5,7 +5,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::panic;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use time::OffsetDateTime;
 
@@ -22,21 +22,25 @@ pub(crate) fn record_usize(label: &str, value: usize) {
 }
 
 pub(crate) fn record_operation(label: &str, bytes: usize, lines: usize, clipboard_read_ms: Option<f64>, apply_ms: f64) {
-    let Some(path) = trace_path() else {
+    let Some(file) = trace_file() else {
         return;
     };
 
-    if let Err(err) = append_operation(path, label, bytes, lines, clipboard_read_ms, apply_ms) {
+    if let Err(err) = append_operation(file, label, bytes, lines, clipboard_read_ms, apply_ms) {
         eprintln!("lst_gpui failed to write benchmark trace: {err}");
     }
 }
 
+pub(crate) fn trace_enabled() -> bool {
+    trace_file().is_some()
+}
+
 fn record_line(label: &str, value: std::fmt::Arguments<'_>) {
-    let Some(path) = trace_path() else {
+    let Some(file) = trace_file() else {
         return;
     };
 
-    if let Err(err) = append_line(path, format_args!("{label}={value}\n")) {
+    if let Err(err) = append_line(file, format_args!("{label}={value}\n")) {
         eprintln!("lst_gpui failed to write benchmark trace: {err}");
     }
 }
@@ -52,20 +56,36 @@ fn trace_path() -> Option<&'static Path> {
         .as_deref()
 }
 
-fn append_line(path: &Path, line: std::fmt::Arguments<'_>) -> io::Result<()> {
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+fn trace_file() -> Option<&'static Mutex<fs::File>> {
+    static CACHED: OnceLock<Option<Mutex<fs::File>>> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            let path = trace_path()?;
+            match OpenOptions::new().create(true).append(true).open(path) {
+                Ok(file) => Some(Mutex::new(file)),
+                Err(err) => {
+                    eprintln!("lst_gpui failed to open benchmark trace {}: {err}", path.display());
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+fn append_line(file: &Mutex<fs::File>, line: std::fmt::Arguments<'_>) -> io::Result<()> {
+    let mut file = file.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     file.write_fmt(line)
 }
 
 fn append_operation(
-    path: &Path,
+    file: &Mutex<fs::File>,
     label: &str,
     bytes: usize,
     lines: usize,
     clipboard_read_ms: Option<f64>,
     apply_ms: f64,
 ) -> io::Result<()> {
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = file.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     writeln!(file, "{label}_apply_ms={apply_ms:.3}")?;
     if let Some(read_ms) = clipboard_read_ms {
         writeln!(file, "{label}_clipboard_read_ms={read_ms:.3}")?;

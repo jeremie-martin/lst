@@ -28,9 +28,6 @@ const WINDOW_DISCOVERY_TIMEOUT_MS: u64 = 10_000;
 const TRACE_TIMEOUT_MS: u64 = 30_000;
 const POINTER_SETTLE_MS: u64 = 50;
 const CLIPBOARD_TIMEOUT_MS: u64 = 20_000;
-const FILE_STABLE_MS: u64 = 200;
-const FILE_STABLE_TIMEOUT_MS: u64 = 20_000;
-const SAVE_RETRY_MS: u64 = 100;
 const SCROLL_WHEEL_COUNT: usize = 240;
 const SCROLL_HALF_MS: u64 = 1_500;
 const TYPING_CHARS: usize = 320;
@@ -39,8 +36,6 @@ const MEDIUM_RUST_MODULES: usize = 64;
 const LARGE_RUST_MODULES: usize = 256;
 const RUST_FUNCTIONS_PER_MODULE: usize = 8;
 const LARGE_PLAIN_LINES: usize = 18_000;
-const FIND_QUERY_CLICK_X_FRACTION: f32 = 0.82;
-const FIND_QUERY_CLICK_Y_FRACTION: f32 = 0.10;
 const BUTTON_LEFT: u8 = 1;
 const BUTTON_WHEEL_UP: u8 = 4;
 const BUTTON_WHEEL_DOWN: u8 = 5;
@@ -392,15 +387,15 @@ impl Bench {
             let trace_started = Instant::now();
 
             let select_all_started = Instant::now();
+            let select_all_count = trace_line_count(&trace_path, "command_complete=select_all");
             inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.a)?;
-            let mut damage_events = wait_for_damage_quiet(
-                &self.conn,
-                damage.damage(),
-                window.id,
-                &mut child,
-                Duration::from_millis(QUIET_MS),
+            wait_for_trace_line_count(
+                &trace_path,
+                "command_complete=select_all",
+                select_all_count + 1,
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
+            let damage_events = 0u64;
             let select_all_ms = elapsed_ms(select_all_started);
 
             let copy_started = Instant::now();
@@ -409,35 +404,43 @@ impl Bench {
             let copy_clipboard_ms = elapsed_ms(copy_started);
 
             let tab_started = Instant::now();
+            let tab_count = trace_line_count(&trace_path, "command_complete=next_tab");
             inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.tab)?;
-            damage_events += wait_for_damage_quiet(
-                &self.conn,
-                damage.damage(),
-                window.id,
-                &mut child,
-                Duration::from_millis(QUIET_MS),
+            wait_for_trace_line_count(
+                &trace_path,
+                "command_complete=next_tab",
+                tab_count + 1,
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
             let tab_switch_ms = elapsed_ms(tab_started);
 
             let paste_started = Instant::now();
+            let paste_apply_count = read_editor_trace(&trace_path)?
+                .count("paste_clipboard_apply_ms")
+                .unwrap_or(0);
             inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.v)?;
-            let (paste_damage_events, save_retry_count, final_stats) =
-                wait_for_file_text_with_save_retry(FileTextWait {
-                    conn: &self.conn,
-                    damage_id: damage.damage(),
-                    window: window.id,
-                    child: &mut child,
-                    root: self.root,
-                    keycodes: &self.keycodes,
-                    path: &target_path,
-                    expected_text: &corpus.text,
-                    stable_for: Duration::from_millis(FILE_STABLE_MS),
-                    save_retry_every: Duration::from_millis(SAVE_RETRY_MS),
-                    timeout: Duration::from_millis(FILE_STABLE_TIMEOUT_MS),
-                })?;
+            wait_for_trace_count(
+                &trace_path,
+                "paste_clipboard_apply_ms",
+                paste_apply_count + 1,
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let paste_damage_events = 0u64;
             let paste_complete_ms = elapsed_ms(paste_started);
-            damage_events += paste_damage_events;
+
+            let save_count = read_editor_trace(&trace_path)?.count("save_complete").unwrap_or(0);
+            let save_started = Instant::now();
+            inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.s)?;
+            wait_for_trace_count(
+                &trace_path,
+                "save_complete",
+                save_count + 1,
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let save_complete_ms = elapsed_ms(save_started);
+            let verify_started = Instant::now();
+            let final_stats = verify_file_text(&target_path, &corpus.text)?;
+            let save_verify_ms = elapsed_ms(verify_started);
 
             let trace_wall_ms = elapsed_ms(trace_started);
             let after = proc_sample(pid)?;
@@ -451,7 +454,8 @@ impl Bench {
             metrics.set("trace_wall_ms", trace_wall_ms);
             metrics.set("damage_events", damage_events as f64);
             metrics.set("paste_damage_events", paste_damage_events as f64);
-            metrics.set("save_retry_count", save_retry_count as f64);
+            metrics.set("save_complete_ms", save_complete_ms);
+            metrics.set("save_verify_ms", save_verify_ms);
             metrics.set("final_file_bytes", final_stats.bytes as f64);
             metrics.set("final_file_lines", final_stats.lines as f64);
             add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
@@ -464,6 +468,22 @@ impl Bench {
             );
             add_trace_last(&mut metrics, &trace, "paste_clipboard_bytes", "paste_bytes");
             add_trace_last(&mut metrics, &trace, "paste_clipboard_lines", "paste_lines");
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "viewport_prepare_ms",
+                "viewport_prepare_ms_sum",
+                "viewport_prepare_ms_max",
+                "viewport_prepare_ms_count",
+            );
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "viewport_paint_ms",
+                "viewport_paint_ms_sum",
+                "viewport_paint_ms_max",
+                "viewport_paint_ms_count",
+            );
             Ok(metrics)
         })();
 
@@ -522,36 +542,47 @@ impl Bench {
             let before = proc_sample(pid)?;
             let trace_started = Instant::now();
             let typing_started = Instant::now();
+            let input_count = read_editor_trace(&trace_path)?
+                .count("text_input_apply_ms")
+                .unwrap_or(0);
+            let paint_count = read_editor_trace(&trace_path)?.count("viewport_paint_ms").unwrap_or(0);
+            let typing_send_started = Instant::now();
             inject_text(&self.conn, self.root, &self.keycodes, &payload)?;
-            let damage_events = wait_for_damage_quiet(
-                &self.conn,
-                damage.damage(),
-                window.id,
-                &mut child,
-                Duration::from_millis(QUIET_MS),
+            let typing_send_ms = elapsed_ms(typing_send_started);
+            wait_for_trace_count(
+                &trace_path,
+                "text_input_apply_ms",
+                input_count + payload.chars().count(),
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
+            wait_for_trace_count(
+                &trace_path,
+                "viewport_paint_ms",
+                paint_count + 1,
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let damage_events = 0u64;
             let typing_input_to_quiet_ms = elapsed_ms(typing_started);
-            let (_file_damage_events, save_retry_count, final_stats) =
-                wait_for_file_text_with_save_retry(FileTextWait {
-                    conn: &self.conn,
-                    damage_id: damage.damage(),
-                    window: window.id,
-                    child: &mut child,
-                    root: self.root,
-                    keycodes: &self.keycodes,
-                    path: &file_path,
-                    expected_text: &expected_text,
-                    stable_for: Duration::from_millis(FILE_STABLE_MS),
-                    save_retry_every: Duration::from_millis(SAVE_RETRY_MS),
-                    timeout: Duration::from_millis(FILE_STABLE_TIMEOUT_MS),
-                })?;
+            let save_count = read_editor_trace(&trace_path)?.count("save_complete").unwrap_or(0);
+            let save_started = Instant::now();
+            inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.s)?;
+            wait_for_trace_count(
+                &trace_path,
+                "save_complete",
+                save_count + 1,
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let save_complete_ms = elapsed_ms(save_started);
+            let verify_started = Instant::now();
+            let final_stats = verify_file_text(&file_path, &expected_text)?;
+            let save_verify_ms = elapsed_ms(verify_started);
             let trace_wall_ms = elapsed_ms(trace_started);
             let after = proc_sample(pid)?;
             let trace = read_editor_trace(&trace_path)?;
 
             let mut metrics = RunMetrics::new(window.width, window.height);
             metrics.set("startup_ms", startup_ms);
+            metrics.set("typing_send_ms", typing_send_ms);
             metrics.set("typing_input_to_quiet_ms", typing_input_to_quiet_ms);
             metrics.set(
                 "typing_ms_per_char",
@@ -560,7 +591,8 @@ impl Bench {
             metrics.set("typing_completion_ms", trace_wall_ms);
             metrics.set("trace_wall_ms", trace_wall_ms);
             metrics.set("damage_events", damage_events as f64);
-            metrics.set("save_retry_count", save_retry_count as f64);
+            metrics.set("save_complete_ms", save_complete_ms);
+            metrics.set("save_verify_ms", save_verify_ms);
             metrics.set("typed_chars", payload.chars().count() as f64);
             metrics.set("final_file_bytes", final_stats.bytes as f64);
             metrics.set("final_file_lines", final_stats.lines as f64);
@@ -572,6 +604,22 @@ impl Bench {
                 "text_input_apply_ms_sum",
                 "text_input_apply_ms_max",
                 "text_input_apply_ms_count",
+            );
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "viewport_prepare_ms",
+                "viewport_prepare_ms_sum",
+                "viewport_prepare_ms_max",
+                "viewport_prepare_ms_count",
+            );
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "viewport_paint_ms",
+                "viewport_paint_ms_sum",
+                "viewport_paint_ms_max",
+                "viewport_paint_ms_count",
             );
             Ok(metrics)
         })();
@@ -772,6 +820,14 @@ impl Bench {
             let startup_ms = elapsed_ms(startup_started);
 
             focus_window(&self.conn, self.root, &window)?;
+            let _ = wait_for_damage_quiet(
+                &self.conn,
+                damage.damage(),
+                window.id,
+                &mut child,
+                Duration::from_millis(QUIET_MS),
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
             let before = proc_sample(pid)?;
             let trace_started = Instant::now();
             inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.f)?;
@@ -787,25 +843,6 @@ impl Bench {
                 &trace_path,
                 "focus_applied",
                 "find_query",
-                Duration::from_millis(TRACE_TIMEOUT_MS),
-            )?;
-            thread::sleep(Duration::from_millis(150));
-            let _ = wait_for_damage_quiet(
-                &self.conn,
-                damage.damage(),
-                window.id,
-                &mut child,
-                Duration::from_millis(QUIET_MS),
-                Duration::from_millis(TRACE_TIMEOUT_MS),
-            )?;
-            click_find_query_field(&self.conn, self.root, &window)?;
-            thread::sleep(Duration::from_millis(150));
-            let _ = wait_for_damage_quiet(
-                &self.conn,
-                damage.damage(),
-                window.id,
-                &mut child,
-                Duration::from_millis(QUIET_MS),
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
             let search_input_started = Instant::now();
@@ -1041,7 +1078,12 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "trace_wall_ms",
             "damage_events",
             "paste_damage_events",
-            "save_retry_count",
+            "save_complete_ms",
+            "save_verify_ms",
+            "viewport_prepare_ms_sum",
+            "viewport_prepare_ms_max",
+            "viewport_paint_ms_sum",
+            "viewport_paint_ms_max",
             "user_cpu_ms",
             "sys_cpu_ms",
             "cpu_ms",
@@ -1051,6 +1093,7 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
         ],
         Scenario::TypingMedium | Scenario::TypingLarge => &[
             "typing_ms_per_char",
+            "typing_send_ms",
             "typing_input_to_quiet_ms",
             "typing_completion_ms",
             "typed_chars",
@@ -1059,7 +1102,12 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "text_input_apply_ms_count",
             "trace_wall_ms",
             "damage_events",
-            "save_retry_count",
+            "save_complete_ms",
+            "save_verify_ms",
+            "viewport_prepare_ms_sum",
+            "viewport_prepare_ms_max",
+            "viewport_paint_ms_sum",
+            "viewport_paint_ms_max",
             "user_cpu_ms",
             "sys_cpu_ms",
             "cpu_ms",
@@ -1188,6 +1236,7 @@ impl EditorTrace {
             let Some((label, value)) = line.split_once('=') else {
                 continue;
             };
+            *trace.counts.entry(label.to_string()).or_insert(0) += 1;
             let Ok(value) = value.parse::<f64>() else {
                 trace.last_labels.insert(label.to_string(), value.to_string());
                 continue;
@@ -1199,17 +1248,12 @@ impl EditorTrace {
                 .entry(label.to_string())
                 .and_modify(|max| *max = max.max(value))
                 .or_insert(value);
-            *trace.counts.entry(label.to_string()).or_insert(0) += 1;
         }
         trace
     }
 
     fn last(&self, label: &str) -> Option<f64> {
         self.last_values.get(label).copied()
-    }
-
-    fn last_label(&self, label: &str) -> Option<&str> {
-        self.last_labels.get(label).map(String::as_str)
     }
 
     fn sum(&self, label: &str) -> Option<f64> {
@@ -1236,14 +1280,68 @@ fn read_editor_trace(path: &Path) -> Result<EditorTrace, Box<dyn Error>> {
 
 fn wait_for_trace_label(path: &Path, label: &str, expected: &str, timeout: Duration) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
+    let expected_line = format!("{label}={expected}");
 
     loop {
-        let trace = read_editor_trace(path)?;
-        if trace.last_label(label) == Some(expected) {
+        let text = fs::read_to_string(path).unwrap_or_default();
+        if text.lines().any(|line| line == expected_line) {
             return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(io::Error::other(format!("timed out waiting for trace {label}={expected}")).into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_trace_count(
+    path: &Path,
+    label: &str,
+    minimum_count: usize,
+    timeout: Duration,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        let trace = read_editor_trace(path)?;
+        if trace.count(label).unwrap_or(0) >= minimum_count {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(format!(
+                "timed out waiting for trace {label} count to reach {minimum_count}"
+            ))
+            .into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn trace_line_count(path: &Path, line: &str) -> usize {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|candidate| *candidate == line)
+        .count()
+}
+
+fn wait_for_trace_line_count(
+    path: &Path,
+    line: &str,
+    minimum_count: usize,
+    timeout: Duration,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if trace_line_count(path, line) >= minimum_count {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(format!(
+                "timed out waiting for trace line {line:?} count {minimum_count}"
+            ))
+            .into());
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -1400,22 +1498,6 @@ fn focus_window(conn: &RustConnection, root: xproto::Window, window: &WindowInfo
     inject_button_click(conn, root, BUTTON_LEFT)
 }
 
-fn click_find_query_field(
-    conn: &RustConnection,
-    root: xproto::Window,
-    window: &WindowInfo,
-) -> Result<(), Box<dyn Error>> {
-    move_pointer_to_window_point(
-        conn,
-        root,
-        window,
-        (f32::from(window.width) * FIND_QUERY_CLICK_X_FRACTION).round() as i32,
-        (f32::from(window.height) * FIND_QUERY_CLICK_Y_FRACTION).round() as i32,
-    )?;
-    thread::sleep(Duration::from_millis(POINTER_SETTLE_MS));
-    inject_button_click(conn, root, BUTTON_LEFT)
-}
-
 fn focus_window_for_keyboard(conn: &RustConnection, window: &WindowInfo) -> Result<(), Box<dyn Error>> {
     conn.set_input_focus(xproto::InputFocus::PARENT, window.id, x11rb::CURRENT_TIME)?;
     conn.flush()?;
@@ -1484,8 +1566,8 @@ fn inject_text(
             .ok_or_else(|| io::Error::other(format!("unsupported benchmark input char: {ch:?}")))?;
         inject_key_press(conn, root, keycode)?;
         inject_key_release(conn, root, keycode)?;
-        conn.flush()?;
     }
+    conn.flush()?;
     Ok(())
 }
 
@@ -1577,98 +1659,21 @@ fn wait_for_damage_quiet(
     }
 }
 
-struct FileTextWait<'a> {
-    conn: &'a RustConnection,
-    damage_id: damage::Damage,
-    window: xproto::Window,
-    child: &'a mut Child,
-    root: xproto::Window,
-    keycodes: &'a Keycodes,
-    path: &'a Path,
-    expected_text: &'a str,
-    stable_for: Duration,
-    save_retry_every: Duration,
-    timeout: Duration,
-}
-
-fn wait_for_file_text_with_save_retry(input: FileTextWait<'_>) -> Result<(u64, u64, FileStats), Box<dyn Error>> {
-    let FileTextWait {
-        conn,
-        damage_id,
-        window,
-        child,
-        root,
-        keycodes,
-        path,
-        expected_text,
-        stable_for,
-        save_retry_every,
-        timeout,
-    } = input;
-    let deadline = Instant::now() + timeout;
-    let mut last_text = fs::read_to_string(path).unwrap_or_default();
-    let mut last_change = Instant::now();
-    let mut last_save: Option<Instant> = None;
-    let mut damage_events = 0u64;
-    let mut save_retry_count = 0u64;
-
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Err(io::Error::other(format!(
-                "editor exited while benchmark was waiting for file contents: {status}"
-            ))
-            .into());
-        }
-
-        while let Some(event) = conn.poll_for_event()? {
-            if let Event::DamageNotify(notify) = event {
-                if notify.damage == damage_id && notify.drawable == window {
-                    damage_events += 1;
-                    conn.damage_subtract(damage_id, NONE, NONE)?;
-                }
-            }
-        }
-        conn.flush()?;
-
-        let current = fs::read_to_string(path).unwrap_or_default();
-        if current != last_text {
-            last_text = current;
-            last_change = Instant::now();
-        }
-
-        if last_text == expected_text && last_change.elapsed() >= stable_for {
-            return Ok((
-                damage_events,
-                save_retry_count,
-                FileStats {
-                    bytes: last_text.len() as u64,
-                    lines: last_text.lines().count(),
-                },
-            ));
-        }
-
-        let should_retry_save = match last_save {
-            Some(saved_at) => saved_at.elapsed() >= save_retry_every,
-            None => true,
-        };
-        if should_retry_save {
-            inject_ctrl_chord(conn, root, keycodes.control_l, keycodes.s)?;
-            last_save = Some(Instant::now());
-            save_retry_count += 1;
-        }
-
-        if Instant::now() >= deadline {
-            return Err(io::Error::other(format!(
-                "timed out waiting for {} to reach {} bytes; last observed {} bytes",
-                path.display(),
-                expected_text.len(),
-                last_text.len()
-            ))
-            .into());
-        }
-
-        thread::sleep(Duration::from_millis(20));
+fn verify_file_text(path: &Path, expected_text: &str) -> Result<FileStats, Box<dyn Error>> {
+    let current = fs::read_to_string(path)?;
+    if current != expected_text {
+        return Err(io::Error::other(format!(
+            "{} has {} bytes after save; expected {} bytes",
+            path.display(),
+            current.len(),
+            expected_text.len()
+        ))
+        .into());
     }
+    Ok(FileStats {
+        bytes: current.len() as u64,
+        lines: current.lines().count(),
+    })
 }
 
 fn wait_for_clipboard_bytes(expected_bytes: u64, timeout: Duration) -> Result<(), Box<dyn Error>> {

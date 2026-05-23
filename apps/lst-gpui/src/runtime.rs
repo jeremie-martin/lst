@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{elapsed_ms, LstGpuiApp, PendingAfterSave};
+use crate::{diagnostics, elapsed_ms, LstGpuiApp, PendingAfterSave};
 use lst_editor::UndoBoundary;
 use std::ops::Range;
 
@@ -318,12 +318,22 @@ impl LstGpuiApp {
             SaveKind::Save { expected_stamp } => *expected_stamp,
             SaveKind::SaveAs { .. } => None,
         };
+        let save_started = Instant::now();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { save_file_result(tab_id, path, body, revision, expected_stamp, ticket) })
                 .await;
+            let save_complete_ms = elapsed_ms(save_started);
             let _ = this.update(cx, |view, cx| {
+                if diagnostics::trace_enabled() {
+                    let kind_label = match kind {
+                        SaveKind::Save { .. } => "regular",
+                        SaveKind::SaveAs { .. } => "save_as",
+                    };
+                    diagnostics::record_label("save_complete", kind_label);
+                    diagnostics::record_ms("save_complete_ms", save_complete_ms);
+                }
                 view.apply_save_outcome(result, kind, cx);
             });
         })

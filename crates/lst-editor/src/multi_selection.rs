@@ -106,17 +106,17 @@ pub(crate) fn replacement_request(tab: &EditorTab, text: String, boundary: UndoB
     replacement_request_by_index(tab, |_| text.clone(), boundary)
 }
 
-pub(crate) fn paste_request(tab: &EditorTab, text: String, boundary: UndoBoundary) -> Option<EditRequest> {
+pub(crate) fn paste_request(tab: &EditorTab, text: &str, boundary: UndoBoundary) -> Option<EditRequest> {
     let selection_count = tab.selection_set().as_slice().len();
     if selection_count <= 1 {
         return None;
     }
 
-    let lines = clipboard_lines_for_distribution(&text);
+    let lines = clipboard_lines_for_distribution(text);
     if lines.len() == selection_count {
         replacement_request_by_index(tab, |index| lines[index].clone(), boundary)
     } else {
-        replacement_request_by_index(tab, |_| text.clone(), boundary)
+        replacement_request_by_index(tab, |_| text.to_string(), boundary)
     }
 }
 

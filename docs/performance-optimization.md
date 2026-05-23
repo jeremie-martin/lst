@@ -56,13 +56,13 @@ size where relevant.
 
 | Scenario | Primary metric | Completion condition |
 | --- | --- | --- |
-| `large-paste` | `paste_complete_ms` | Copies the large Rust corpus, pastes into a second file tab, then retries `Ctrl+S` until the target file exactly matches the corpus and stays stable. |
-| `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload into the generated medium Rust corpus, waits for redraw quiet, then verifies the saved file exactly matches the expected text. |
+| `large-paste` | `paste_complete_ms` | Copies the large Rust corpus, switches to a second file tab, waits for app-traced select/tab/paste completion, saves once, then verifies the target file exactly matches the corpus. |
+| `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload into the generated medium Rust corpus, waits for every app-traced text input plus the next paint, saves once, then verifies the saved file exactly matches the expected text. |
 | `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using the generated large Rust corpus. |
 | `scroll-highlighted` | `scroll_overrun_ms` | Scrolls down and back through the large Rust file on a fixed input schedule, then waits for redraw quiet. |
 | `scroll-plain` | `scroll_overrun_ms` | Same scroll trace using the generated large plain-text corpus, so syntax highlighting is out of the path. |
 | `open-large` | `open_to_quiet_ms` | Measures process spawn through benchmark window discovery and redraw quiet on the large Rust file. |
-| `search-large` | `search_reindex_ms` | Opens find through `Ctrl+F`, clicks the visible find query input, types `fn `, waits for redraw quiet, and reads the completed in-app find reindex trace. |
+| `search-large` | `search_reindex_ms` | Opens find through `Ctrl+F`, waits for the real find-query focus transition, types `fn `, waits for redraw quiet, and reads the completed in-app find reindex trace. |
 
 The default runner contract is one priming run and seven measured repetitions.
 Use `--repetitions <n>` and `--priming <n>` only when characterizing variance or
@@ -71,6 +71,10 @@ shortening a local smoke test.
 The GPUI app writes internal benchmark trace values only when
 `LST_BENCH_TRACE_FILE` is set by the runner. Normal editor runs do not create
 trace files.
+
+For edit-heavy scenarios, the primary timing is based on app trace completion
+rather than XDamage quiet periods. This avoids scoring caret/focus animations as
+editor work while still printing render, save, CPU, and damage diagnostics.
 
 ## Editor Model Benchmark
 

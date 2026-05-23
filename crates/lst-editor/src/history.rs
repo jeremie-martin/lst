@@ -2,13 +2,14 @@ use crate::{
     document::{EditKind, UndoBoundary},
     selection::SelectionState,
 };
+use ropey::Rope;
 
 const MAX_UNDO: usize = 100;
 const MAX_REDO_BRANCHES: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HistorySnapshot {
-    pub(crate) text: String,
+    pub(crate) text: Rope,
     pub(crate) selection: SelectionState,
     pub(crate) content_epoch: u64,
     pub(crate) bookmarks: Vec<usize>,

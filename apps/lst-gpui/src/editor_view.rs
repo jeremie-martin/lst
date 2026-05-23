@@ -179,11 +179,11 @@ impl LstGpuiApp {
             .bounds
             .map(|bounds| bounds.size.width)
             .unwrap_or_else(|| self.ui_px(metrics::WINDOW_WIDTH - 48.0));
-        let char_width = code_char_width(window, self.ui_scale(), self.theme(cx));
         let revision = self.model.active_tab().revision();
         let lines = self.model.active_tab_lines();
         let layout = {
             let mut cache = cache.borrow_mut();
+            let char_width = code_char_width(&mut cache, window, self.ui_scale(), self.theme(cx));
             ensure_wrap_layout(
                 &mut cache,
                 WrapLayoutInput {
