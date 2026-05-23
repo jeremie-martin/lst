@@ -39,6 +39,7 @@ positions, visible modes/panels/status text, or viewport-observable geometry.
 - [x] **Shift-motion extends selection** - shift-modified movement extends from the original anchor.
 - [x] **Selection anchor preservation** - extending in either direction keeps the expected anchor and moves only the head.
 - [x] **Click-drag selection with auto-scroll** - dragging selects text and continues extending while the pointer is beyond the viewport. X11: `real_x11_mouse.rs`.
+- [x] **Click below last line jumps to end-of-document** - clicking in the empty area below the last painted line moves the caret to the end of the document, regardless of x. X11: `real_x11_mouse.rs`.
 - [x] **Double-click word** - double-click selects the word under the pointer. X11: `real_x11_mouse.rs`.
 - [x] **Triple-click line** - triple-click selects the clicked line. X11: `real_x11_mouse.rs`.
 - [x] **Quad-click paragraph** - quad-click selects the paragraph under the pointer. X11: `real_x11_mouse.rs`.
@@ -172,6 +173,7 @@ multi-cursor policy is intentionally separate.
 - [x] **Backspace at start of line joins previous line** - Backspace at column 0 removes the line break.
 - [x] **Delete at end of line joins next line** - Delete at line end removes the following line break.
 - [x] **Smart indent on Enter** - Enter preserves the active line's indentation.
+- [x] **Modified Enter inserts newline in insert mode** - Ctrl-Enter, Alt-Enter, and Shift-Enter all insert a newline when typing (insert mode), so chorded shortcuts from other apps don't silently disappear. X11: `real_x11_modifiers.rs`.
 - [x] **Auto-dedent on close bracket** - typing a closer on a whitespace-only line dedents when the language expects it. X11: `real_x11_language.rs`.
 - [x] **Indent/outdent selection** - Tab and Shift-Tab indent or outdent all touched lines; Vim indent commands follow the same user-visible behavior. X11: `real_x11_language.rs`, `real_x11_vim.rs`.
 - [x] **Move line up/down** - line move commands swap the current line or selected block with neighboring lines.

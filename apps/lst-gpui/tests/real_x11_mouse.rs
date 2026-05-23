@@ -200,3 +200,69 @@ fn middle_click_at_text_pastes_primary_selection_at_click_point() -> TestResult 
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn click_below_last_line_moves_caret_to_document_end() -> TestResult {
+    // Clicking in the empty area below the last painted line should jump
+    // the caret to the end of the document — matching every other editor
+    // and avoiding the "click does nothing" trap.
+    support::run_x11_test("mouse-click-below-last-line", |session| {
+        let path = session.seed_file("below.txt", "alpha\nbravo\ncharlie")?;
+        let mut editor = session.open_file("below", &path)?;
+
+        // Park the caret away from the end so the click has to move it.
+        editor.click_at_text(0, 0)?;
+        let before = editor.read_state()?;
+        let cursor = before.cursors[0];
+        assert_eq!((cursor.head_line, cursor.head_col), (0, 0), "{cursor:?}");
+
+        // Wait for a paint that exposes the geometry we need to aim below
+        // the last row without overshooting the window.
+        let painted = editor.wait_state(
+            "viewport geometry for below-last-line click",
+            std::time::Duration::from_secs(5),
+            |state| {
+                !state.viewport.rows.is_empty()
+                    && state.viewport.bounds_origin_px.is_some()
+                    && state.viewport.bounds_size_px.is_some()
+                    && state.viewport.line_height_px > 0.0
+            },
+        )?;
+        let viewport = &painted.viewport;
+        let last_row = viewport.rows.last().expect("rows non-empty per wait predicate");
+        let (origin_x, _origin_y) = viewport.bounds_origin_px.expect("bounds populated per wait");
+        let (size_w, size_h) = viewport.bounds_size_px.expect("bounds populated per wait");
+        let scale = if viewport.scale_factor > 0.0 {
+            viewport.scale_factor
+        } else {
+            1.0
+        };
+
+        // Anywhere comfortably below the last row, inside the editor bounds.
+        let click_x = origin_x + size_w * 0.5;
+        let click_y_unscaled = (last_row.top_px + viewport.line_height_px * 1.5)
+            .min(viewport.bounds_origin_px.unwrap().1 + size_h - viewport.line_height_px * 0.5);
+        let cx = (click_x * scale).round() as i32;
+        let cy = (click_y_unscaled * scale).round() as i32;
+        editor.click_at(cx, cy)?;
+
+        let after = editor.wait_state(
+            "caret at document end after click-below",
+            std::time::Duration::from_secs(5),
+            |state| {
+                state.cursors.len() == 1
+                    && state.cursors[0].is_collapsed()
+                    && state.cursors[0].head_line == 2
+                    && state.cursors[0].head_col == "charlie".len()
+            },
+        )?;
+        let cursor = after.cursors[0];
+        assert_eq!(
+            (cursor.head_line, cursor.head_col),
+            (2, "charlie".len()),
+            "caret should jump to end-of-document, got {cursor:?}"
+        );
+        Ok(())
+    })
+}

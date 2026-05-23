@@ -128,6 +128,7 @@ impl LstGpuiApp {
         let show_replace = find.show_replace;
 
         div()
+            .key_context("Find")
             .flex_none()
             .flex()
             .items_center()

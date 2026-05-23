@@ -6,6 +6,7 @@ use crate::LstGpuiApp;
 const EDITOR: &str = "Editor && !InlineInput";
 const WS_NO_INPUT: &str = "Workspace && !InlineInput";
 const WS: &str = "Workspace";
+const FIND: &str = "Find";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, gpui::Action)]
 #[action(namespace = lst_gpui, no_json)]
@@ -202,7 +203,7 @@ const BINDINGS: &[WorkspaceBinding] = &[
     fb("ctrl-shift-l", EDITOR, model(Command::SelectAllOccurrences)),
     b("cmd-shift-l", EDITOR, model(Command::SelectAllOccurrences)),
     b("ctrl-f2", EDITOR, model(Command::SelectAllOccurrences)),
-    b("alt-enter", WS, model(Command::SelectAllFindMatches)),
+    b("alt-enter", FIND, model(Command::SelectAllFindMatches)),
     b("shift-alt-i", EDITOR, model(Command::AddCursorsToSelectedLineEnds)),
     b("alt-shift-i", EDITOR, model(Command::AddCursorsToSelectedLineEnds)),
     fb("alt-shift-up", EDITOR, model(Command::AddCursorAbove)),
@@ -228,8 +229,8 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("ctrl-shift-t", WS_NO_INPUT, WorkspaceCommand::ReopenClosedTab),
     b("cmd-shift-t", WS_NO_INPUT, WorkspaceCommand::ReopenClosedTab),
     b("alt-s", WS, model(Command::ToggleFindInSelection)),
-    b("ctrl-alt-enter", WS, model(Command::ReplaceAllMatches)),
-    b("cmd-alt-enter", WS, model(Command::ReplaceAllMatches)),
+    b("ctrl-alt-enter", FIND, model(Command::ReplaceAllMatches)),
+    b("cmd-alt-enter", FIND, model(Command::ReplaceAllMatches)),
 ];
 
 pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {

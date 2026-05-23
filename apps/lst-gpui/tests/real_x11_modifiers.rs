@@ -65,3 +65,60 @@ fn ctrl_y_redoes_after_ctrl_z() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn shift_enter_in_insert_mode_inserts_newline() -> TestResult {
+    // Shift+Enter (and Ctrl+Enter / Alt+Enter) should insert a literal
+    // newline while editing — many keyboards send modified Enter from
+    // chorded shortcuts, and a text editor must never silently drop them.
+    // Default startup mode is INSERT, so we can type straight away.
+    support::run_x11_test("modifier-shift-enter", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("alpha<S-enter>bravo")?;
+        editor.save_then_expect_file(&path, "alpha\nbravo")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_enter_in_insert_mode_inserts_newline() -> TestResult {
+    support::run_x11_test("modifier-ctrl-enter", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("alpha<C-enter>bravo")?;
+        editor.save_then_expect_file(&path, "alpha\nbravo")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn alt_enter_in_insert_mode_inserts_newline() -> TestResult {
+    support::run_x11_test("modifier-alt-enter", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("alpha<A-enter>bravo")?;
+        editor.save_then_expect_file(&path, "alpha\nbravo")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn shift_enter_preserves_indent_like_plain_enter() -> TestResult {
+    // Modified Enter must go through the smart-indent path, not raw '\n' —
+    // otherwise the new line lands at column 0 inside indented code.
+    support::run_x11_test("modifier-shift-enter-indent", |session| {
+        let path = session.seed_file("indent.txt", "    alpha")?;
+        let mut editor = session.open_file("indent", &path)?;
+
+        // Move to end-of-line, then Shift+Enter — the inserted line must
+        // carry the four-space indent, matching plain Enter's behavior.
+        editor.keys("<end><S-enter>bravo")?;
+        editor.save_then_expect_file(&path, "    alpha\n    bravo")?;
+        Ok(())
+    })
+}

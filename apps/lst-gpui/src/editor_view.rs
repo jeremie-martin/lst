@@ -398,15 +398,6 @@ impl LstGpuiApp {
         }
     }
 
-    pub(crate) fn point_below_painted_rows(&self, point: Point<Pixels>) -> bool {
-        let active_view = self.active_view();
-        let geometry = active_view.geometry.borrow();
-        let Some(last_row) = geometry.rows.last() else {
-            return false;
-        };
-        point.y >= last_row.row_top + self.ui_px(metrics::ROW_HEIGHT)
-    }
-
     pub(crate) fn active_char_index_for_point(&self, point: Point<Pixels>) -> usize {
         let active_view = self.active_view();
         let geometry = active_view.geometry.borrow();
@@ -436,7 +427,8 @@ impl LstGpuiApp {
         {
             row
         } else {
-            geometry.rows.last().expect("checked above")
+            let last_row = geometry.rows.last().expect("checked above");
+            return last_row.display_end_char;
         };
 
         let x = if point.x >= code_origin_x {

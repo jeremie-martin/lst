@@ -5,7 +5,7 @@ use gpui::{
 use lst_editor::{
     selection::{drag_selection_range, line_range_at_char, paragraph_range_at_char, word_range_at_char},
     vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
-    RevealIntent, Selection,
+    EditorCommand, RevealIntent, Selection,
 };
 use ropey::Rope;
 use std::{ops::Range, time::Instant};
@@ -50,15 +50,6 @@ impl LstGpuiApp {
     pub(crate) fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);
-        if !event.modifiers.alt
-            && !event.modifiers.shift
-            && event.click_count == 1
-            && self.point_below_painted_rows(event.position)
-        {
-            self.cancel_drag_selection();
-            cx.notify();
-            return;
-        }
         let index = self.active_char_index_for_point(event.position);
         if event.modifiers.alt {
             // Single Alt-click on a point already covered by a multi-cursor
@@ -470,6 +461,19 @@ impl LstGpuiApp {
         }
 
         if self.model.vim_mode() == vim::Mode::Insert {
+            let key_is_enter = matches!(key.as_ref(), Some(VimKey::Named(VimNamedKey::Enter)));
+            let modified_enter = key_is_enter
+                && (effective_modifiers.shift
+                    || effective_modifiers.control
+                    || effective_modifiers.alt
+                    || effective_modifiers.platform);
+            if modified_enter {
+                self.x11_ctrl_k_pending = false;
+                self.execute_model_command(cx, EditorCommand::InsertNewline);
+                self.clear_recent_x11_modifier_chord();
+                cx.stop_propagation();
+                return true;
+            }
             return false;
         }
 
