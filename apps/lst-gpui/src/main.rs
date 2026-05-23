@@ -81,11 +81,18 @@ impl EditorTabView {
 
     fn invalidate_visual_state(&mut self) {
         *self.cache.borrow_mut() = ViewportCache::default();
-        *self.geometry.borrow_mut() = ViewportGeometry::default();
-        // syntax_state is intentionally NOT cleared here: it owns the
-        // persistent tree-sitter Tree that makes incremental reparses cheap.
-        // Cleared only on language change or unrecoverable parse failure,
-        // both handled inside sync_active_syntax_state.
+        // geometry is intentionally NOT reset here: every field gets
+        // overwritten by the next viewport prepare anyway, and resetting
+        // makes the status bar paint one frame of stale "no painted
+        // geometry" state (e.g. wrap-column count dropping to "Wrap"
+        // instead of "Wrap 80 cols") on every edit, since the status bar
+        // runs above the viewport canvas in the render tree.
+        //
+        // syntax_state is intentionally NOT cleared here either: it owns
+        // the persistent tree-sitter Tree that makes incremental
+        // reparses cheap. Cleared only on language change or
+        // unrecoverable parse failure, both handled inside
+        // sync_active_syntax_state.
     }
 }
 
