@@ -59,6 +59,40 @@ fn submitting_find_query_advances_to_next_match() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn workspace_shortcuts_work_while_find_query_is_focused() -> TestResult {
+    support::run_x11_test("find-workspace-shortcuts", |session| {
+        let first = session.seed_file("find-shortcuts-first.txt", "first")?;
+        let second = session.seed_file("find-shortcuts-second.txt", "second")?;
+        let second_path = second.to_string_lossy().into_owned();
+        let mut editor = session.open_files("find-workspace-shortcuts-close", &[first, second])?;
+
+        editor.keys("<C-f>")?;
+        editor.wait_state("find query focus before close", secs(2), |record| {
+            record.find.visible && record.focused_input == "find_query"
+        })?;
+        editor.keys("<C-w>")?;
+        editor.wait_state("close tab from find focus", secs(5), |record| {
+            record.active_tab_path.as_deref() == Some(&second_path)
+                && record.status_message == "Closed tab."
+                && record.focused_input == "editor"
+        })?;
+
+        editor.keys("<C-f><C-f>")?;
+        editor.wait_state("find query focus before new tab", secs(2), |record| {
+            record.find.visible && record.focused_input == "find_query"
+        })?;
+        editor.keys("<C-n>")?;
+        editor.wait_state("new tab from find focus", secs(5), |record| {
+            record.active_tab_path.as_deref() != Some(&second_path)
+                && record.status_message == "Created a new scratchpad."
+                && record.focused_input == "editor"
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn case_sensitive_chip_disables_smart_case() -> TestResult {
     support::run_x11_test("find-chip-case-sensitive", |session| {
         let path = session.seed_file("find-chip-case.txt", "Foo foo FOO")?;
