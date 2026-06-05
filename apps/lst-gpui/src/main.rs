@@ -41,9 +41,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
-use syntax::{
-    syntax_mode_for_language, CachedSyntaxHighlights, SyntaxMode, TabSyntaxState,
-};
+use syntax::{syntax_mode_for_language, CachedSyntaxHighlights, SyntaxLanguage, SyntaxMode, TabSyntaxState};
 use viewport::{scroll_to_left, ViewportCache, ViewportGeometry};
 use workspace_action::editor_keybindings;
 
@@ -455,6 +453,13 @@ impl LstGpuiApp {
             // the next edit. `take_active_buffer_delta` returns Unchanged
             // when nothing has happened, so this is cheap.
             let _ = self.model.take_active_buffer_delta();
+            if !syntax_cache_is_current(&view.cache.borrow(), syntax_lang) {
+                let source = buffer.to_string();
+                if let Some(state) = view.syntax_state.as_ref() {
+                    let mut cache = view.cache.borrow_mut();
+                    rebuild_syntax_cache(&mut cache, state, &source);
+                }
+            }
             return;
         }
 
@@ -482,15 +487,8 @@ impl LstGpuiApp {
             }
             return;
         };
-        let (lines, line_byte_lens) = state.compute_spans(&source);
-
         let mut cache = view.cache.borrow_mut();
-        cache.syntax_highlights = Some(CachedSyntaxHighlights {
-            language: syntax_lang,
-            lines,
-            line_byte_lens,
-        });
-        cache.clear_code_lines();
+        rebuild_syntax_cache(&mut cache, state, &source);
     }
 
     /// Render-path entry point: ensures the active tab has up-to-date
@@ -623,7 +621,6 @@ impl LstGpuiApp {
             InputFieldEvent::Navigate(_) => {}
         }
     }
-
 }
 
 fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
@@ -690,6 +687,23 @@ impl Focusable for LstGpuiApp {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
+}
+
+fn syntax_cache_is_current(cache: &ViewportCache, language: SyntaxLanguage) -> bool {
+    cache
+        .syntax_highlights
+        .as_ref()
+        .is_some_and(|highlights| highlights.language == language)
+}
+
+fn rebuild_syntax_cache(cache: &mut ViewportCache, state: &TabSyntaxState, source: &str) {
+    let (lines, line_byte_lens) = state.compute_spans(source);
+    cache.syntax_highlights = Some(CachedSyntaxHighlights {
+        language: state.language,
+        lines,
+        line_byte_lens,
+    });
+    cache.clear_code_lines();
 }
 
 fn char_to_line_col(buffer: &Rope, char_offset: usize) -> (usize, usize) {
@@ -790,4 +804,34 @@ fn main() {
             })
             .unwrap();
     });
+}
+
+#[cfg(test)]
+mod syntax_cache_tests {
+    use super::*;
+    use crate::ui::theme::SyntaxRole;
+    use std::path::PathBuf;
+
+    #[test]
+    fn rebuild_syntax_cache_repopulates_invalidated_current_state() {
+        let source = "fn main() { let value = \"hi\"; }\n";
+        let tab = ModelEditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("test.rs"), source, None);
+        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, tab.buffer(), source, tab.revision())
+            .expect("rust parser should be available");
+        let mut cache = ViewportCache::default();
+
+        assert!(!syntax_cache_is_current(&cache, SyntaxLanguage::Rust));
+        rebuild_syntax_cache(&mut cache, &state, source);
+
+        let highlights = cache
+            .syntax_highlights
+            .as_ref()
+            .expect("syntax cache should be repopulated");
+        assert!(syntax_cache_is_current(&cache, SyntaxLanguage::Rust));
+        assert!(
+            highlights.lines[0].iter().any(|span| span.role == SyntaxRole::Keyword),
+            "{:?}",
+            highlights.lines[0]
+        );
+    }
 }
