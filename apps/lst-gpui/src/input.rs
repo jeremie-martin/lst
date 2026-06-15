@@ -441,9 +441,9 @@ impl LstGpuiApp {
         let plain_vim_key = !effective_modifiers.control && !effective_modifiers.alt && !effective_modifiers.platform;
         let redo_key = key
             .as_ref()
-            .is_some_and(|key| matches!(key, VimKey::Character(value) if value == "r") && mods.command());
+            .is_some_and(|key| matches!(key, VimKey::Character(value) if value == "r") && mods.command);
         let ctrl_vim_motion = key.as_ref().is_some_and(|key| {
-            mods.control()
+            mods.control
                 && matches!(
                     key,
                     VimKey::Character(value)

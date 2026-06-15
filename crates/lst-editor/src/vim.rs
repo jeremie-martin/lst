@@ -39,12 +39,6 @@ impl Modifiers {
         command: false,
         control: true,
     };
-    pub fn command(self) -> bool {
-        self.command
-    }
-    pub fn control(self) -> bool {
-        self.control
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

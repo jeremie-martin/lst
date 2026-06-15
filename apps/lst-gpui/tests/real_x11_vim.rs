@@ -66,6 +66,34 @@ fn vim_normal_open_join_and_replace_commands_edit_observable_text() -> TestResul
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn vim_word_delete_on_empty_line_edits_observable_text() -> TestResult {
+    support::run_x11_test("vim-dw-empty-line", |session| {
+        let path = session.seed_file("vim-dw-empty-line.txt", "\nabc")?;
+        let mut editor = session.open_file("dw-empty", &path)?;
+
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<esc>dw")?;
+        editor.save_then_expect_file(&path, "abc")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_join_preserves_indent_only_first_line_in_observable_text() -> TestResult {
+    support::run_x11_test("vim-join-indent-only", |session| {
+        let path = session.seed_file("vim-join-indent-only.txt", "  \nbar")?;
+        let mut editor = session.open_file("join-indent-only", &path)?;
+
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<esc>J")?;
+        editor.save_then_expect_file(&path, "   bar")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn vim_linewise_yank_pastes_after_target_line() -> TestResult {
     support::run_x11_test("vim-linewise-paste", |session| {
         let (mut editor, path) = session.open("scratch")?;

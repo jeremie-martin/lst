@@ -4,7 +4,7 @@ use lst_editor::EditorCommand as Command;
 use crate::LstGpuiApp;
 
 const EDITOR: &str = "Editor && !InlineInput";
-const WS_FIND_OK: &str = "(Workspace && !InlineInput) || (Workspace > Find)";
+const WS_FIND_OK: &str = "(Workspace && !InlineInput) || Find";
 const WS: &str = "Workspace";
 const FIND: &str = "Find";
 

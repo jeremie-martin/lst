@@ -30,12 +30,7 @@ impl TabSyntaxState {
     /// `source` must equal `buffer.to_string()`. The caller passes both so
     /// the same string can be reused for `compute_spans` without a second
     /// allocation.
-    pub(crate) fn parse_initial(
-        language: SyntaxLanguage,
-        buffer: &Rope,
-        source: &str,
-        revision: u64,
-    ) -> Option<Self> {
+    pub(crate) fn parse_initial(language: SyntaxLanguage, buffer: &Rope, source: &str, revision: u64) -> Option<Self> {
         let grammar = catalog::grammar(catalog::root_grammar(language));
         let mut parser = Parser::new();
         parser.set_language(&grammar.language).ok()?;
@@ -52,13 +47,7 @@ impl TabSyntaxState {
     /// Update the tree to match `new_buffer` at `new_revision`, using
     /// `delta` to choose between incremental and full reparse. `new_source`
     /// must equal `new_buffer.to_string()`.
-    pub(crate) fn update(
-        &mut self,
-        new_buffer: &Rope,
-        new_source: &str,
-        delta: BufferDelta,
-        new_revision: u64,
-    ) {
+    pub(crate) fn update(&mut self, new_buffer: &Rope, new_source: &str, delta: BufferDelta, new_revision: u64) {
         match delta {
             BufferDelta::Unchanged => {
                 // Buffer claims to be unchanged; refresh the snapshot anyway
@@ -171,10 +160,7 @@ fn collect_captures(
             if start_local >= end_local {
                 continue;
             }
-            if suppression
-                .iter()
-                .any(|r| r.start <= start_local && end_local <= r.end)
-            {
+            if suppression.iter().any(|r| r.start <= start_local && end_local <= r.end) {
                 continue;
             }
             out.push(CapturedSpan {

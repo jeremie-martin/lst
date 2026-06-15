@@ -415,7 +415,7 @@ impl VimDriver {
             self.model.handle_vim_escape();
             return;
         }
-        if self.model.vim_mode() == vim::Mode::Insert && !modifiers.command() && !modifiers.control() {
+        if self.model.vim_mode() == vim::Mode::Insert && !modifiers.command && !modifiers.control {
             if let Key::Character(text) = key {
                 self.model.replace_text_from_input(None, text);
                 return;

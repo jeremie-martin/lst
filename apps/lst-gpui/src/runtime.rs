@@ -20,8 +20,10 @@ use crate::{diagnostics, elapsed_ms, LstGpuiApp, PendingAfterSave};
 use lst_editor::UndoBoundary;
 use std::ops::Range;
 
+mod clipboard;
 mod scratchpad;
 
+use clipboard::persist_clipboards_after_exit;
 pub(crate) use scratchpad::create_scratchpad_note;
 use scratchpad::{remove_previous_scratchpad_after_save_as, remove_scratchpad_file_if_unreferenced};
 
@@ -624,13 +626,20 @@ impl LstGpuiApp {
     }
 
     fn finish_quit(&mut self, cx: &mut Context<Self>) {
+        let text = self.model.active_tab().buffer_text();
+        persist_clipboards_after_exit(&text);
         self.cleanup_empty_scratchpad_files();
         // X11 WM_DELETE_WINDOW already holds GPUI's X11 client RefCell, so defer
-        // exit until the current frame releases it. Production shutdown calls
-        // `process::exit`; tests route through GPUI's `quit` so the harness can
-        // observe shutdown.
+        // exit until the current frame releases it. Real builds rely on the
+        // external clipboard owner spawned above instead of in-process writes
+        // (which would re-enter that same RefCell). Tests route through GPUI's
+        // `quit` so the harness can observe shutdown.
         #[cfg(test)]
-        cx.defer(|app| app.quit());
+        cx.defer(move |app| {
+            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+            app.write_to_primary(ClipboardItem::new_string(text));
+            app.quit();
+        });
         #[cfg(not(test))]
         cx.defer(|_| process::exit(0));
     }

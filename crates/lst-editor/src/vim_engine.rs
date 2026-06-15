@@ -138,14 +138,8 @@ impl EditorModel {
                 self.vim_collapse_restored_selection();
                 true
             }
-            "D" => self.vim_apply_range(
-                Op::Delete,
-                self.cursor_offset()..self.next_grapheme(self.line_last(self.cursor().line)),
-            ),
-            "C" => self.vim_apply_range(
-                Op::Change,
-                self.cursor_offset()..self.next_grapheme(self.line_last(self.cursor().line)),
-            ),
+            "D" => self.vim_apply_range(Op::Delete, self.cursor_offset()..self.line_end(self.cursor().line)),
+            "C" => self.vim_apply_range(Op::Change, self.cursor_offset()..self.line_end(self.cursor().line)),
             "S" => self.vim_apply_lines_span(Op::Change, self.cursor().line, self.cursor().line),
             "x" | "X" => self.vim_delete_counted_chars(count, rest == "x"),
             "s" => self.vim_substitute(count),
@@ -243,6 +237,7 @@ impl EditorModel {
             "y" => self.vim_apply_visual(Op::Yank),
             "u" | "U" => self.vim_case_visual(rest == "U"),
             "p" | "P" => self.vim_visual_paste(rest == "p"),
+            "o" => self.vim_swap_visual_ends(),
             ">" | "<" => self.vim_indent_visual(rest == ">"),
             "/" | "?" => self.vim_open_search(rest == "?"),
             "n" | "N" => self.vim_search_step(rest == "n"),
@@ -379,12 +374,21 @@ impl EditorModel {
             return self.vim_apply_lines_span(op, a, b);
         }
         let cur = self.cursor_offset();
-        let mut range = if motion.at >= cur {
-            cur..motion.at
-        } else {
-            motion.at..cur
-        };
-        if motion.inclusive && motion.at >= cur {
+        let mut at = motion.at;
+        // Vim exclusive-motion rule: an exclusive forward motion that lands in
+        // column 0 is pulled back to the end of the previous line, so e.g. `dw`
+        // on the last word of a line operates on the word, not the line break.
+        if !motion.inclusive && at > cur {
+            let at_pos = char_to_position(self.active_tab().buffer(), at);
+            if at_pos.column == 0 && at_pos.line > 0 {
+                let prev_end = self.line_end(at_pos.line - 1);
+                if prev_end > cur {
+                    at = prev_end;
+                }
+            }
+        }
+        let mut range = if at >= cur { cur..at } else { at..cur };
+        if motion.inclusive && at >= cur {
             range.end = self.next_grapheme(range.end);
         }
         self.vim_apply_range(op, range)
@@ -517,9 +521,12 @@ impl EditorModel {
             vim::Register::Line(text) => {
                 let lines: Vec<String> = text.split('\n').map(str::to_string).collect();
                 let line = self.cursor().line + usize::from(after);
+                let indent = lines
+                    .first()
+                    .map_or(0, |first| first.chars().take_while(|c| c.is_whitespace()).count());
                 if let Some(change) = line_edit::insert_lines_change(self.active_tab(), line, &lines) {
                     self.apply_active_edit_request(
-                        EditRequest::single_other_at_position(change, Position::new(line, 0)),
+                        EditRequest::single_other_at_position(change, Position::new(line, indent)),
                         Some(RevealIntent::NearestEdge),
                     );
                 }
@@ -634,6 +641,15 @@ impl EditorModel {
         }
     }
 
+    fn vim_swap_visual_ends(&mut self) -> bool {
+        if let Some(mut state) = self.vim.visual {
+            std::mem::swap(&mut state.anchor, &mut state.head);
+            self.vim.visual = Some(state);
+            self.vim_sync_visual_selection();
+        }
+        true
+    }
+
     fn vim_set_visual_range(&mut self, range: Range<usize>) {
         self.vim.mode = vim::Mode::Visual;
         let anchor = char_to_position(self.active_tab().buffer(), range.start);
@@ -705,30 +721,39 @@ impl EditorModel {
 
     fn vim_delete_counted_chars(&mut self, count: usize, forward: bool) -> bool {
         let cur = self.cursor_offset();
+        let line = self.cursor().line;
+        let (line_lo, line_hi) = (self.line_start(line), self.line_end(line));
+        // Clamp to the current line so `x`/`X` never reach across the line break
+        // into an adjacent line (which would silently join the two lines).
         let end = repeat_offset(self, cur, count, |s, off| {
             if forward {
                 s.next_grapheme(off)
             } else {
                 s.prev_grapheme(off)
             }
-        });
+        })
+        .clamp(line_lo, line_hi);
         let range = end.min(cur)..end.max(cur);
         self.vim_apply_range(Op::Delete, range)
     }
 
     fn vim_substitute(&mut self, count: usize) -> bool {
         let cur = self.cursor_offset();
-        let end = repeat_offset(self, cur, count, |s, off| s.next_grapheme(off));
+        let line_hi = self.line_end(self.cursor().line);
+        let end = repeat_offset(self, cur, count, |s, off| s.next_grapheme(off)).min(line_hi);
         self.vim_apply_range(Op::Change, cur..end)
     }
 
     fn vim_replace_chars(&mut self, count: usize, ch: char) -> bool {
         let cur = self.cursor_offset();
+        let line_hi = self.line_end(self.cursor().line);
         let mut end = cur;
         let mut replaced = 0usize;
         for _ in 0..count.max(1) {
             let next = self.next_grapheme(end);
-            if next == end {
+            // Stop at the line break: `r{count}` only replaces within the line,
+            // and is a no-op if fewer than `count` chars remain on it.
+            if next == end || next > line_hi {
                 break;
             }
             end = next;
@@ -762,12 +787,33 @@ impl EditorModel {
         {
             last -= 1;
         }
-        let joined = (first..=last)
-            .map(|line| line_display_text(self.active_tab().buffer(), line).trim().to_string())
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim_end()
-            .to_string();
+        // Vim keeps the first line's leading indentation, strips leading
+        // whitespace from each joined line, and inserts a single separating
+        // space (none for empty lines), rather than trimming every line.
+        let mut joined = String::new();
+        let mut first_len = 0usize;
+        for (offset, line) in (first..=last).enumerate() {
+            let text = line_display_text(self.active_tab().buffer(), line);
+            if offset == 0 {
+                let trimmed = text.trim_end();
+                let part = if trimmed.is_empty() && !text.is_empty() {
+                    text.as_str()
+                } else {
+                    trimmed
+                };
+                first_len = part.chars().count();
+                joined.push_str(part);
+                continue;
+            }
+            let part = text.trim();
+            if !part.is_empty() {
+                if !joined.is_empty() {
+                    joined.push(' ');
+                }
+                joined.push_str(part);
+            }
+        }
+        let joined = joined.trim_end().to_string();
         let end = if last + 1 < self.active_tab().line_count()
             && self.line_start(last + 1) == self.active_tab().len_chars()
         {
@@ -775,10 +821,6 @@ impl EditorModel {
         } else {
             self.line_end(last)
         };
-        let first_len = line_display_text(self.active_tab().buffer(), first)
-            .trim_end()
-            .chars()
-            .count();
         let cursor_col = if count <= 1 {
             first_len
         } else {
@@ -1013,7 +1055,8 @@ impl EditorModel {
     }
 
     fn screen_motion(&mut self, row: usize) -> Motion {
-        let at = self.line_col_offset(row.min(self.active_tab().line_count() - 1), self.cursor().column);
+        let row = row.min(self.active_tab().line_count() - 1);
+        let at = self.line_first_nonblank(row);
         self.queue_reveal(RevealIntent::NearestEdge);
         Motion {
             at,

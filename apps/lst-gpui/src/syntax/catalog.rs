@@ -146,12 +146,7 @@ static TSX_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {
         tree_sitter_typescript::HIGHLIGHTS_QUERY,
         tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
     );
-    GrammarConfig::new(
-        tree_sitter_typescript::LANGUAGE_TSX.into(),
-        &highlights,
-        None,
-        None,
-    )
+    GrammarConfig::new(tree_sitter_typescript::LANGUAGE_TSX.into(), &highlights, None, None)
 });
 
 static JSON_CONFIG: LazyLock<GrammarConfig> = LazyLock::new(|| {

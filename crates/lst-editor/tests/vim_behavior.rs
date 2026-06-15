@@ -510,6 +510,66 @@ fn normal_edits_cover_counts_boundaries_empty_lines_and_noops() {
 }
 
 #[test]
+fn char_edits_stay_within_their_line() {
+    run_text_cases(&[
+        ("x clamps at line end", "abc\ndef", (0, 1), "5x", "a\ndef"),
+        ("X clamps at line start", "abc\ndef", (1, 1), "9X", "abc\nef"),
+        ("s clamps at line end", "ab\ncd", (0, 1), "5s<esc>", "a\ncd"),
+        ("r past the line end is a noop", "ab\ncd", (0, 1), "3rx", "ab\ncd"),
+        ("D on an empty line keeps the newline", "\nabc", (0, 0), "D", "\nabc"),
+        (
+            "C on an empty line keeps the newline",
+            "\nabc",
+            (0, 0),
+            "Cx<esc>",
+            "x\nabc",
+        ),
+        (
+            "dw on the last word keeps the newline",
+            "alpha beta\ngamma",
+            (0, 6),
+            "dw",
+            "alpha \ngamma",
+        ),
+        ("dw on an empty line deletes the newline", "\nabc", (0, 0), "dw", "abc"),
+        (
+            "yw on an empty line yanks the newline",
+            "\nabc",
+            (0, 0),
+            "ywP",
+            "\n\nabc",
+        ),
+    ]);
+}
+
+#[test]
+fn join_preserves_first_line_indentation() {
+    run_text_cases(&[
+        (
+            "join keeps the first line indent",
+            "  foo\nbar",
+            (0, 0),
+            "J",
+            "  foo bar",
+        ),
+        (
+            "join keeps indentation-only first line",
+            "  \nbar",
+            (0, 0),
+            "J",
+            "   bar",
+        ),
+        ("join adds no space for blank lines", "a\n\nb", (0, 0), "3J", "a b"),
+    ]);
+}
+
+#[test]
+fn visual_o_swaps_the_selection_ends() {
+    // `o` moves the cursor (head) from the far end back to the anchor end.
+    run_cursor_cases(&[("visual o jumps to the other end", "abcdef", (0, 0), "vlllo", (0, 0))]);
+}
+
+#[test]
 fn visual_mode_covers_charwise_linewise_text_objects_case_and_indentation() {
     let cases = [
         ("delete inner word", "alpha beta", (0, 0), "viwd", " beta"),
