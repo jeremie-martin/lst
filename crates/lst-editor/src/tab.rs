@@ -447,7 +447,7 @@ impl EditorTab {
             }
         }
         let lines: Arc<[String]> = (0..self.buffer.len_lines())
-            .map(|line_ix| display_line_from_rope(&self.buffer, line_ix))
+            .map(|line_ix| crate::selection::line_display_text(&self.buffer, line_ix))
             .collect::<Vec<_>>()
             .into();
         self.line_cache = Some(CachedLines {
@@ -727,14 +727,6 @@ impl EditorTab {
         self.record_full_replace();
     }
 }
-fn display_line_from_rope(buffer: &Rope, line_ix: usize) -> String {
-    let mut line = buffer.line(line_ix).to_string();
-    while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
-        line.pop();
-    }
-    line
-}
-
 /// Returns `false` when the cache cannot be incrementally updated
 /// (out-of-range line indices or empty cache) so the caller can drop the
 /// stale cache rather than stamping it under the new revision.
@@ -754,6 +746,16 @@ fn apply_change_to_cached_lines(lines: &mut Vec<String>, buffer: &Rope, change: 
 
     let start_col = start.saturating_sub(buffer.line_to_char(start_line));
     let end_col = end.saturating_sub(buffer.line_to_char(end_line));
+    // Columns are raw rope offsets (line terminators included), but the cached
+    // lines have trailing CR/LF stripped. When an endpoint lands inside a
+    // multi-char terminator — the `\n` of a `\r\n`, which ropey groups into the
+    // preceding line — the column overshoots the stripped line and the splice
+    // would silently grab the whole line as prefix/suffix, corrupting the cache.
+    // Drop to a full rebuild instead of stamping a garbled line under the new
+    // revision.
+    if start_col > lines[start_line].chars().count() || end_col > lines[end_line].chars().count() {
+        return false;
+    }
     let prefix = line_prefix_chars(&lines[start_line], start_col);
     let suffix = line_suffix_chars(&lines[end_line], end_col);
     let replacement_lines = replacement_display_lines(&change.replacement);
@@ -984,6 +986,24 @@ mod tests {
         tab.apply_edit_request(request);
 
         assert_eq!(cached_lines(&mut tab), vec!["alX", "Yta", "gamma"]);
+    }
+
+    #[test]
+    fn line_cache_matches_full_rebuild_for_crlf_boundary_edit() {
+        // Editing a CRLF buffer at the `\n` of a `\r\n` pair (which ropey groups
+        // into the preceding line) used to corrupt the incremental line cache:
+        // the column was computed in raw rope coordinates but applied to the
+        // CR/LF-stripped display line, overshooting it. The incremental result
+        // must equal a from-scratch rebuild of the resulting text.
+        let mut tab = tab_with_text("alpha\r\nbeta\r\ngamma");
+        let _ = tab.lines(); // prime the incremental cache
+        // char 6 is the `\n` of the first CRLF pair.
+        let request = EditRequest::single(EditKind::Insert, UndoBoundary::Break, 6..6, "X".to_string());
+        tab.apply_edit_request(request);
+
+        let incremental = cached_lines(&mut tab);
+        let rebuilt = cached_lines(&mut tab_with_text(&tab.buffer_text()));
+        assert_eq!(incremental, rebuilt);
     }
 
     #[test]

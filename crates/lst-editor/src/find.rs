@@ -185,7 +185,7 @@ impl FindState {
         let query = self.query.as_bytes();
         let ignore_case = !self.case_sensitive && !query.iter().any(|byte| byte.is_ascii_uppercase());
         for (line_idx, line) in text.lines().enumerate() {
-            for_each_ascii_literal_match_col(line.as_bytes(), query, ignore_case, |col| {
+            for_each_ascii_literal_match(line.as_bytes(), query, ignore_case, |col| {
                 self.matches.push(MatchPos {
                     line: line_idx,
                     col,
@@ -496,7 +496,11 @@ fn expand_match_replacement(regex: &Regex, line: &str, byte_start_in_line: usize
     template.to_string()
 }
 
-fn for_each_ascii_literal_match_col(text: &[u8], query: &[u8], ignore_case: bool, mut on_match: impl FnMut(usize)) {
+/// Scans `text` for every (optionally case-insensitive) occurrence of the
+/// ASCII literal `query`, invoking `on_match` with each match's start byte.
+/// Matches are non-overlapping and advance past each hit; `query` must be
+/// non-empty. Shared with `multi_selection::ascii_literal_ranges`.
+pub(crate) fn for_each_ascii_literal_match(text: &[u8], query: &[u8], ignore_case: bool, mut on_match: impl FnMut(usize)) {
     let mut start = 0usize;
     let first = query[0];
     while start + query.len() <= text.len() {

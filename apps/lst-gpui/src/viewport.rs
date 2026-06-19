@@ -81,6 +81,13 @@ pub(crate) struct ViewportPaintState {
 #[derive(Default)]
 pub(crate) struct ViewportGeometry {
     pub(crate) bounds: Option<Bounds<Pixels>>,
+    /// Buffer revision the `rows` below were painted at. Geometry is carried
+    /// across edits (see `invalidate_visual_state`), so consumers that read
+    /// per-sample char offsets out of `rows` must check this against the
+    /// active tab's current revision and treat a mismatch as "not yet
+    /// painted for this content" — otherwise they compare a fresh cursor
+    /// position against last revision's char ranges.
+    pub(crate) painted_revision: u64,
     pub(crate) rows: Vec<PaintedRow>,
     pub(crate) scroll_top_at_paint: Pixels,
     pub(crate) scroll_left_at_paint: Pixels,
@@ -727,6 +734,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
 
     *viewport_geometry.borrow_mut() = ViewportGeometry {
         bounds: Some(bounds),
+        painted_revision: revision,
         rows: rows.clone(),
         scroll_top_at_paint: scroll_top,
         scroll_left_at_paint: scroll_left,
@@ -772,17 +780,13 @@ fn paint_range_background(
     ));
 }
 
-fn search_matches_for_row<'a>(search_matches: &'a [Range<usize>], row: &PaintedRow) -> &'a [Range<usize>] {
-    // FindState emits document-order, non-overlapping ranges.
-    let first = search_matches.partition_point(|range| range.end <= row.line_start_char);
-    let last = first + search_matches[first..].partition_point(|range| range.start < row.logical_end_char);
-    &search_matches[first..last]
-}
-
-fn selections_for_row<'a>(selections: &'a [Selection], row: &PaintedRow) -> &'a [Selection] {
-    let first = selections.partition_point(|selection| selection.range().end <= row.line_start_char);
-    let last = first + selections[first..].partition_point(|selection| selection.range().start < row.logical_end_char);
-    &selections[first..last]
+/// Slices the (document-order, non-overlapping) `items` down to those whose
+/// char range overlaps `row`'s painted span. Shared by search matches and
+/// selections, both of which uphold that ordering invariant.
+fn items_overlapping_row<'a, T>(items: &'a [T], row: &PaintedRow, range_of: impl Fn(&T) -> Range<usize>) -> &'a [T] {
+    let first = items.partition_point(|item| range_of(item).end <= row.line_start_char);
+    let last = first + items[first..].partition_point(|item| range_of(item).start < row.logical_end_char);
+    &items[first..last]
 }
 
 // One entry per selection. Collapsed cursors take the wide block-cursor in
@@ -838,7 +842,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             },
         ));
 
-        for search_match in search_matches_for_row(search_matches, &row) {
+        for search_match in items_overlapping_row(search_matches, &row, Clone::clone) {
             paint_range_background(
                 &row,
                 search_match,
@@ -862,7 +866,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             );
         }
 
-        for selection in selections_for_row(selections, &row) {
+        for selection in items_overlapping_row(selections, &row, Selection::range) {
             paint_range_background(
                 &row,
                 &selection.range(),

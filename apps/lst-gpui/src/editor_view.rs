@@ -56,6 +56,17 @@ impl LstGpuiApp {
     fn off_screen_cursor_indicator(&self) -> Option<String> {
         let view = self.tab_views.get(&self.model.active_tab_id())?;
         let geometry = view.geometry.borrow();
+        // `rows` carries the char ranges from the last paint. After an edit
+        // the buffer revision advances but geometry is intentionally kept
+        // (see `invalidate_visual_state`), so on the edit frame these ranges
+        // predate the insert. Comparing the freshly-moved cursor against them
+        // would spuriously report it "below" the painted region for one frame
+        // — a layout-shifting flicker in the status bar, most visible in a
+        // new/empty buffer where the cursor always sits at the very end. Wait
+        // until the viewport repaints at the current revision.
+        if geometry.painted_revision != self.active_tab().revision() {
+            return None;
+        }
         let first = geometry.rows.first()?;
         let last = geometry.rows.last()?;
         let painted_start_char = first.line_start_char;
@@ -408,9 +419,15 @@ impl LstGpuiApp {
         let current_scroll_top = scroll_top_for(&active_view.scroll);
         let current_scroll_left = scroll_left_for(&active_view.scroll);
         if self.selection_drag.is_none()
-            && ((current_scroll_top - geometry.scroll_top_at_paint).abs() > px(SCROLL_STALE_THRESHOLD)
+            && (geometry.painted_revision != self.active_tab().revision()
+                || (current_scroll_top - geometry.scroll_top_at_paint).abs() > px(SCROLL_STALE_THRESHOLD)
                 || (current_scroll_left - geometry.scroll_left_at_paint).abs() > px(SCROLL_STALE_THRESHOLD))
         {
+            // Geometry rows carry char offsets from the last paint; after an
+            // edit (revision bumped) they predate the buffer until the next
+            // paint, and a click landing in that pre-repaint frame would map to
+            // a stale offset. Fall back to the known cursor position, matching
+            // the scroll-staleness handling above.
             return self.active_tab().cursor_char();
         }
         let code_origin_x = bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
