@@ -54,11 +54,14 @@ and dedicated-machine behavior-gate entry points:
 DISPLAY=:0 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
 DISPLAY=:0 cargo nextest run --profile x11-stress -p lst-gpui --tests --run-ignored only --stress-count 3
 DISPLAY=:0 cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
+DISPLAY=:0 cargo nextest run --profile x11-regression -p lst-gpui --tests --run-ignored only
 ```
 
 The `x11` profile is the blocking accepted-behavior lane. `x11-stress` runs that
-same set repeatedly for flake detection. `x11-tdd` is a focused lane for
-TDD-named real-display suites; it is not a weaker gate for accepted behavior.
+same set repeatedly for flake detection. `x11-regression` narrows to the
+`real_x11_regressions` suite for fast iteration on a specific past-bug guard.
+`x11-tdd` is a focused lane for TDD-named real-display suites; it is not a
+weaker gate for accepted behavior.
 Broad accepted multi-cursor edge-case specs live in
 `apps/lst-gpui/tests/real_x11_multi_cursor_spec.rs`; the now-green
 `apps/lst-gpui/tests/real_x11_multi_cursor_tdd.rs` suite is also part of the
@@ -249,7 +252,13 @@ The real-display suite currently has broad coverage across:
 - CLIPBOARD and PRIMARY paste/copy behavior
 - keyboard modifiers and undo/redo
 - Vim mode transitions and compound commands
-- find and goto panel state
+- find, replace, and goto panel state
+- recent-files picker and tab ordering/activation workflows
+- viewport scroll, reveal, and geometry behavior
+- language-sensitive editing: comment toggling, auto-pairing, and indent units
+- overtype and transpose editing
+- AI text cleanup via `Ctrl-Shift-R` and the sparkle button (with an in-process
+  fake LLM client)
 - mouse click, double-click, triple-click, quad-click, drag selection, middle-click
   paste, shift-click, and Alt-click cursor toggles
 - cursor movement and subword motion
@@ -277,7 +286,10 @@ representation invariant or boundary contract that X11 cannot naturally express.
 
    The current multi-cursor TDD-named file is accepted and included in `x11`;
    it still intentionally excludes Vim-mode multi-cursor behavior. Decide that
-   product policy before adding Vim Normal mode multi-cursor specs.
+   product policy before adding Vim Normal mode multi-cursor specs. Some
+   already-wired behaviors still live only under `x11-tdd` awaiting promotion —
+   notably line bookmarks (`real_x11_bookmarks_tdd.rs`) and recently-closed-tab
+   reopen (`real_x11_recently_closed_tdd.rs`).
 
 2. **Trace discipline matters.** The trace is powerful enough to become an
    implementation inspection tool by accident. Keep behavior tests focused on

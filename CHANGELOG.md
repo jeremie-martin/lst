@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added tree-sitter syntax highlighting for Rust, Python, JavaScript/JSX, TypeScript/TSX, JSON, TOML, YAML, Markdown, HTML, and CSS, with incremental reparsing and language injection
+- Added AI text cleanup (`Ctrl-Shift-R` / status-bar sparkle button) that rewrites the buffer or selection through DeepSeek to remove transcription artifacts
+- Added per-buffer line bookmarks with toggle and next/previous navigation (`Ctrl-Alt-K` / `Ctrl-Alt-L` / `Ctrl-Alt-J`)
 - Removed stale benchmark corpus snapshots and moved active benchmarks to generated deterministic corpora
 - Removed the `lst-gpui` install compatibility alias
 - Removed backward-compatible editor construction adapters that allowed empty tab sets

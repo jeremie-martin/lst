@@ -18,17 +18,18 @@ Single module, single state struct, single panel.
 - [x] **Regex toggle** — `FindState::use_regex`; replace requests expand capture refs via `caps.expand` in `crates/lst-editor/src/find.rs`.
 - [x] **Find-in-selection scope** — `FindScope::{Document, Selection}` clamps matches; `EditorModel::toggle_find_in_selection` re-derives scope from the active selection.
 
-Bound to `ToggleFindCase` / `ToggleFindWholeWord` / `ToggleFindRegex` /
-`ToggleFindInSelection` actions in `apps/lst-gpui/src/actions.rs` and
-`apps/lst-gpui/src/keymap.rs`.
+Driven by the `Command::ToggleFindCaseSensitive` / `ToggleFindWholeWord` /
+`ToggleFindRegex` / `ToggleFindInSelection` model commands, wired through the
+find panel in `apps/lst-gpui/src/shell.rs` and bound in the keybinding table in
+`apps/lst-gpui/src/workspace_action.rs`.
 
 ## 2. User config-file infrastructure
 
 Both items want the same loader; designing the schema once unlocks several
 other future settings (theme, autosave cadence, per-language save hooks).
 
-- [~] **Configurable keybindings** — `apps/lst-gpui/src/keymap.rs::editor_keybindings` returns a hardcoded `Vec<KeyBinding>`; no config-load infra.
-- [~] **Language picker / per-file override** — model API exists at `crates/lst-editor/src/lib.rs::EditorModel::set_tab_language`, but no UI command palette and no config file for language overrides.
+- [~] **Configurable keybindings** — `apps/lst-gpui/src/workspace_action.rs::editor_keybindings` builds a hardcoded `Vec<KeyBinding>` from the `BINDINGS` table; no config-load infra.
+- [~] **Language picker / per-file override** — language is auto-detected per tab (`crates/lst-editor/src/tab.rs::detect_language`), but there is no override API, command palette, or config file for language overrides.
 
 Tradeoff: you commit to a config schema (likely `~/.config/lst/config.toml`)
 that is painful to break later — design it once, deliberately.
@@ -38,7 +39,7 @@ that is painful to break later — design it once, deliberately.
 - [x] **Block-comment toggle** — `LanguageConfig::block_comment` carries the open/close pair; `EditorModel::toggle_block_comment` delegates delimiter transaction construction to `line_edit` (`crates/lst-editor/src/language.rs::LanguageConfig::block_comment`; `crates/lst-editor/src/lib.rs::toggle_block_comment`; `crates/lst-editor/src/line_edit.rs::toggle_block_comment_request`; bindings `ctrl/cmd-shift-/`).
 - [x] **Soft-tab backspace** — `crates/lst-editor/src/lib.rs::soft_tab_backspace_range` snaps backspace to a full `IndentStyle::indent_unit` when the cursor sits in leading whitespace; falls back to a single grapheme otherwise.
 - [x] **Select line / select paragraph** — `EditorModel::select_current_line` / `::select_current_paragraph` plus `SelectLine` (`ctrl/cmd-l`) and `SelectParagraph` (`ctrl/cmd-shift-p`) actions.
-- [x] **Quad-click paragraph** — `apps/lst-gpui/src/interactions.rs::on_mouse_down` `click_count >= 4` selects the enclosing paragraph via `paragraph_range_at_char`.
+- [x] **Quad-click paragraph** — `apps/lst-gpui/src/input.rs::on_mouse_down` routes `click_count >= 4` to the enclosing paragraph via `paragraph_range_at_char`.
 
 ## 4. Tabs, rendering chrome & history — ✅ shipped
 

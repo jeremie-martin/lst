@@ -5,6 +5,22 @@
 Editor behavior lives in the framework-neutral `lst-editor` crate. The GPUI app
 owns rendering, widgets, desktop integration, and runtime effects.
 
+## Features
+
+- Vim-style modal editing alongside standard editor keybindings, multi-cursor
+  and column selection, find/replace with regex, soft wrap, and auto-pairing.
+- Tree-sitter syntax highlighting for Rust, Python, JavaScript/JSX,
+  TypeScript/TSX, JSON, TOML, YAML, Markdown, HTML, and CSS, with incremental
+  reparsing, language injection (e.g. fenced code blocks in Markdown), and
+  theme-driven colors.
+- Line bookmarks: toggle with `Ctrl-Alt-K`, jump to the next/previous bookmark
+  with `Ctrl-Alt-L` / `Ctrl-Alt-J` (wraps around).
+- AI text cleanup for scratchpad transcripts: `Ctrl-Shift-R` (or the status-bar
+  sparkle button) rewrites the buffer or current selection through DeepSeek to
+  remove filler words and false starts while preserving meaning and structure;
+  a single undo restores the original. Set `DEEPSEEK_API_KEY` (and optionally
+  `DEEPSEEK_MODEL`) to enable it.
+
 ## Active Layout
 
 - `apps/lst-gpui`: active GPUI desktop editor.

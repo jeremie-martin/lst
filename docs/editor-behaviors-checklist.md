@@ -6,7 +6,8 @@ items must not depend on production implementation details.
 
 Status legend: `[ ]` missing · `[~]` partial · `[x]` done
 
-Status last refreshed: 2026-05-14 (behavior-led X11 coverage refresh).
+Status last refreshed: 2026-06-17 (added syntax highlighting, line bookmarks,
+and AI text cleanup).
 
 Real-display tests under `apps/lst-gpui/tests/real_x11_*.rs` are the executable
 reference for this checklist. When an item links tests, those tests should assert
@@ -33,6 +34,7 @@ positions, visible modes/panels/status text, or viewport-observable geometry.
 - [x] **Go to column** - the goto panel accepts `line:column` and clamps out-of-range values. X11: `real_x11_workflows.rs`.
 - [ ] **Jump list / navigation history** - jumps between meaningful prior locations.
 - [x] **Last edit location** - Vim `gi` / `g;` return to the last edit location, with `gi` entering Insert.
+- [~] **Line bookmarks** - `Ctrl-Alt-K` toggles a per-buffer bookmark on the current line; `Ctrl-Alt-L` / `Ctrl-Alt-J` jump to the next/previous bookmark with wraparound and recenter the viewport. Bookmarks survive edits and undo/redo. X11: the under-review `real_x11_bookmarks_tdd.rs` spec (x11-tdd lane), pending promotion to a stable name.
 
 ## Selection
 
@@ -223,6 +225,7 @@ multi-cursor policy is intentionally separate.
 - [x] **Line numbers** - absolute, relative, and hybrid line-number modes are available. X11: `real_x11_chrome.rs`.
 - [x] **Zoom controls** - keyboard zoom in/out/reset updates the visible status bar and returns to the default size. X11: `real_x11_chrome.rs`.
 - [x] **Theme toggle** - the visible theme control cycles the active theme label. X11: `real_x11_chrome.rs`.
+- [x] **Syntax highlighting** - tree-sitter highlighting for Rust, Python, JavaScript/JSX, TypeScript/TSX, JSON, TOML, YAML, Markdown, HTML, and CSS, with incremental reparsing, language injection (e.g. Markdown fenced code), and theme-driven colors. Covered by in-crate parser tests (`apps/lst-gpui/src/syntax`); no real-display color coverage yet.
 - [ ] **Ruler / column guides** - visible column guides can be shown.
 - [x] **Current line highlight** - the cursor line is visibly highlighted.
 - [ ] **Cursor blink** - cursor blink respects OS or editor settings.
@@ -250,6 +253,10 @@ multi-cursor policy is intentionally separate.
 - [~] **Configurable keybindings** - keybindings are not user-configurable yet.
 - [ ] **Respect OS text settings** - double-click word separators and repeat-rate preferences are not fully integrated.
 
+## AI Assistance
+
+- [x] **LLM text cleanup** - `Ctrl-Shift-R` or the status-bar sparkle button rewrites the whole buffer, or the current selection, through DeepSeek to remove transcription filler and false starts while preserving meaning and structure; a single undo restores the original. Requires `DEEPSEEK_API_KEY` (model overridable via `DEEPSEEK_MODEL`). X11: `real_x11_llm_cleanup.rs` (with an in-process fake client).
+
 ---
 
 ## Commonly Missed Fundamentals
@@ -267,16 +274,17 @@ multi-cursor policy is intentionally separate.
 
 ## Summary
 
-- **Done:** 128
-- **Partial:** 12
+- **Done:** 130
+- **Partial:** 13
 - **Missing:** 26
 
 **Strong foundation:** Vim editing workflows, viewport motion and scroll
 margin, soft wrap, undo/redo, autosave, find/replace, mouse selection,
 clipboard and PRIMARY, IME composition, gutter modes, current-line highlight,
 line-ending preservation, grapheme-aware text behavior, scrollbars, horizontal
-scrolling, keyboard-driven buffer workflows, theme/zoom chrome, recently closed
-tabs, save-option hooks, and the real-display X11 suite.
+scrolling, keyboard-driven buffer workflows, theme/zoom chrome, tree-sitter
+syntax highlighting, AI text cleanup, recently closed tabs, save-option hooks,
+and the real-display X11 suite.
 
 **Biggest gaps to close for idiomatic behavior:**
 

@@ -6,10 +6,11 @@ observable behavior over feature volume.
 ## Current Architecture
 
 - `lst-editor`: framework-neutral editor model, document primitives, text
-  transactions, undo/redo snapshot history, observable snapshots, effects, and
-  Vim state
+  transactions, undo/redo snapshot history, observable snapshots, effects,
+  language detection, line bookmarks, and Vim state
 - `lst-gpui`: rendering, widgets, input adaptation, dialogs, clipboard, file
-  I/O, benchmark wiring, and desktop integration
+  I/O, tree-sitter syntax highlighting (`src/syntax`), DeepSeek text cleanup
+  (`src/llm.rs`), benchmark wiring, and desktop integration
 
 Editor-domain behavior should live in `lst-editor`; accepted product behavior
 should be specified through the real GPUI app under the X11 harness whenever it
@@ -18,15 +19,21 @@ render observable state.
 
 ## Near-Term Priorities
 
-- Horizontal scrolling when soft wrap is disabled
-- Find toggles: case sensitivity, smart case, whole word, and regex
-- Grapheme-aware motion in the main editor
+Horizontal scrolling, find toggles, grapheme-aware motion, tab reordering,
+multi-cursor creation gestures, and env-gated save options have landed; the
+remaining near-term work is:
+
 - Cursor blink and other small viewport polish
-- Trim-trailing-whitespace and ensure-final-newline save options
-- Tab reordering and recently closed tab recovery
-- Jump list and GPUI multi-cursor creation gestures
+- Promote the `x11-tdd` specs that are already wired (line bookmarks, recently
+  closed tab reopen) into the blocking `x11` profile, and add real-display
+  coverage for syntax-highlighting colors
+- User settings UI for the existing env-gated save options
+  (trim-trailing-whitespace, ensure-final-newline) and a user-facing language
+  picker (language is currently detection-only, with no override)
+- Jump list and navigation history
 - User-configurable keybindings
-- User-facing language picker for the existing model-level override
+- Multi-cursor policy gaps: Vim-mode multi-cursor, join-line clusters, and
+  find/replace over multiple selections
 
 ## Codebase Shape
 

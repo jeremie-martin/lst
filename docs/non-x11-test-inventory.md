@@ -1,7 +1,7 @@
 # Non-X11 Test Inventory
 
-Status: 2026-05-14. This is the source-side test map after the first
-aggressive pruning pass.
+Status: 2026-06-17. This is the source-side test map after further pruning plus
+the Vim-rewrite and incremental-syntax work.
 
 X11 is the behavior gate. A source-side test does not survive merely because it
 is a pure invariant. It needs a narrower justification: it is test
@@ -17,11 +17,12 @@ with a clear path to either X11 coverage or deletion.
   removed tests asserted private input selection state, word/subword helper
   outputs, and stale-drag internals. Visible panel input replacement is now
   covered by `real_x11_find.rs::find_query_ctrl_a_replaces_existing_query`.
-- `apps/lst-gpui/src/viewport.rs` no longer has source-side tests. The removed
-  tests asserted paint-helper bookkeeping: syntax style keys, wrap-column math,
-  row-local search slicing, and cursor paint entries. User-visible viewport
-  behavior is covered through `real_x11_viewport.rs`, `real_x11_chrome.rs`,
-  `real_x11_find.rs`, and multi-cursor X11 suites.
+- `apps/lst-gpui/src/viewport.rs` once had its paint-helper tests removed, but
+  it now carries a small set of structural paint/line-cache checks again (see
+  the Remaining Map). User-visible viewport behavior is still covered through
+  `real_x11_viewport.rs`, `real_x11_chrome.rs`, `real_x11_find.rs`, and
+  multi-cursor X11 suites; the source-side tests only guard the incremental
+  paint/cache bookkeeping.
 - `apps/lst-gpui/src/ui/scrollbar.rs` no longer has source-side tests. The
   removed tests pinned private thumb geometry and track-click math instead of a
   user workflow. Scrolling behavior is covered through viewport and off-screen
@@ -47,8 +48,14 @@ with a clear path to either X11 coverage or deletion.
 
 ## Remaining Map
 
-There are 89 non-X11 `#[test]` functions left. They are not preferred behavior
-coverage; they are the remaining exceptions and migration targets.
+About 58 inline source-side `#[test]` functions remain, plus the model-level
+suites in `crates/lst-editor/tests` described at the end. The inline tests are
+not preferred behavior coverage; they are the remaining exceptions and
+incremental-bookkeeping guards. Many files that used to appear here
+(`runtime/tests.rs`, `recent.rs`, `wrap.rs`, `transaction.rs`, `launch.rs`,
+`document.rs`, `selection.rs`, `find.rs`, app-side `input.rs`/`llm.rs`/
+`diagnostics.rs`/`state_trace.rs`) have since had their source-side tests pruned
+in favor of X11 coverage.
 
 ### Test Infrastructure
 
@@ -57,6 +64,7 @@ coverage; they are the remaining exceptions and migration targets.
 - `crates/lst-x11-harness/src/state_trace.rs` has 7 JSONL reader tests for
   missing files, partial lines, truncation, offset advancement, and latest-record
   semantics.
+- `crates/lst-x11-harness/src/screenshot.rs` has 1 image-capture self-test.
 - `apps/lst-gpui/examples/bench_editor_x11.rs` has 6 benchmark-runner tests for
   scenario parsing, generated corpora, metric selection, medians, and trace
   aggregation.
@@ -66,41 +74,35 @@ lane usable.
 
 ### Boundary Adapters
 
-- `apps/lst-gpui/src/launch.rs` has 4 CLI parser tests for `--window-title` and
-  `--scratchpad-dir`, including missing-value errors.
-- `apps/lst-gpui/src/input.rs` has 2 IME UTF-16 conversion tests for surrogate
-  pairs and clamping past the buffer end.
-- `apps/lst-gpui/src/llm.rs` has 2 OpenAI response-parser tests for content
-  extraction and trailing-newline preservation.
-- `apps/lst-gpui/src/diagnostics.rs` has 3 log-format/filesystem tests for
-  session headers, panic entries, and append behavior.
-- `apps/lst-gpui/src/state_trace.rs` has 1 serialization round-trip test.
-- `apps/lst-gpui/src/syntax/{mod.rs,catalog.rs}` has 9 tree-sitter adapter
+- `apps/lst-gpui/src/syntax/mod.rs` and `catalog.rs` have 8 tree-sitter adapter
   tests for language mapping, injection registration, highlight-role contracts,
-  and multiline parser context.
+  multiline parser context, and incremental-reparse equivalence, plus extra
+  `catalog.rs` checks gated behind the `internal-invariants` feature.
 
 These should stay small and boundary-shaped. If a test starts asserting editor
 behavior rather than adapter correctness, move the behavior to X11 and delete
 the source-side assertion.
 
-### Migration Targets
+### Incremental Paint / Cache Guards
 
-- `apps/lst-gpui/src/runtime/tests.rs` has 17 filesystem/runtime tests:
-  scratchpad filename collision handling, save-as cleanup rules, open/save
-  result shapes, stale save tickets, external conflicts, deleted backing files,
-  and autosave temp-file completion. Many of these are user-visible enough to
-  move to X11; the remaining job-ticket checks should disappear as the runtime
-  makes stale states unrepresentable.
-- `apps/lst-gpui/src/recent.rs` has 6 recent-file persistence tests: dedupe,
-  state round-trip, corrupt state, prune, cap, and content-search cap. Panel
-  behavior is already X11-covered; persistence across actual app launches and
-  cap behavior are good next ports.
-- `crates/lst-editor/src/wrap.rs` has 6 wrapping algorithm tests: row segments,
-  wide trailing cells, visual-row mapping, vertical target preservation, and
-  grapheme-cluster integrity. These are user-visible rendering/motion behavior
-  and should be ported with seeded wide-character fixtures plus state-trace row
-  assertions where practical.
-- `crates/lst-editor/src/transaction.rs` has 3 structural validation tests for
-  text-change ordering and inserted-range mapping. These are not accepted
-  behavior specs; keep only until the edit request API makes invalid change sets
-  unrepresentable enough that the tests add no signal.
+These guard the incremental syntax-highlighting and paint-cache machinery, where
+the invariant (incremental result equals a fresh computation) is hard to express
+through a black-box display test.
+
+- `apps/lst-gpui/src/viewport.rs` has 5 paint/line-cache structural tests.
+- `apps/lst-gpui/src/main.rs` has 1 syntax-cache rebuild test.
+- `crates/lst-editor/src/tab.rs` has 7 line-cache, buffer-delta, and
+  undo-snapshot tests that back incremental reparsing.
+
+### Model-Level Behavior Lanes
+
+Unlike the inline tests above, these are deliberate non-X11 behavior lanes (see
+`docs/vim-feature-inventory.md`), not migration targets. They drive the public
+`EditorModel`/Vim input surface and assert observable outcomes where exhaustive
+coverage through a real display would be too slow.
+
+- `crates/lst-editor/tests/vim_behavior.rs`: 28 grouped Vim parity tests.
+- `crates/lst-editor/tests/vim_oracle.rs`: replays the generated 715-case
+  Neovim oracle fixture (`tests/fixtures/vim_oracle.json`).
+- `crates/lst-editor/tests/editor_model_workflows.rs`: 5 clipboard, find, and
+  multi-cursor model workflows.
