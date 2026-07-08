@@ -46,6 +46,10 @@ pub struct StateTraceRecord {
     pub status_message: String,
     pub status_bar: String,
     #[serde(default)]
+    pub recent_button_bounds_px: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    pub new_tab_button_bounds_px: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
     pub cleanup_button_bounds_px: Option<(f32, f32, f32, f32)>,
     #[serde(default)]
     pub theme_name: String,

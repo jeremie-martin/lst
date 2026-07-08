@@ -132,6 +132,10 @@ struct LstGpuiApp {
     /// Surfaced through the state trace so real-X11 tests can click the
     /// find chips without relying on fixed shell geometry.
     find_chip_bounds_px: FindChipBounds,
+    /// Surfaced through the state trace so real-X11 tests can click tab-strip
+    /// chrome without relying on fixed shell geometry.
+    recent_button_bounds_px: Option<Bounds<Pixels>>,
+    new_tab_button_bounds_px: Option<Bounds<Pixels>>,
     /// Surfaced through the state trace so real-X11 tests can click the
     /// button without depending on theme-name / status-details widths.
     cleanup_button_bounds_px: Option<Bounds<Pixels>>,
@@ -215,6 +219,8 @@ impl LstGpuiApp {
             cleanup_in_flight: false,
             cleanup_message: None,
             find_chip_bounds_px: FindChipBounds::default(),
+            recent_button_bounds_px: None,
+            new_tab_button_bounds_px: None,
             cleanup_button_bounds_px: None,
             theme_button_bounds_px: None,
             theme_name_rendered: ThemeId::default().theme().name.to_string(),

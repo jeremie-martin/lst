@@ -311,6 +311,12 @@ pub trait EditorTestExt {
 
     /// Click the visible status-bar theme toggle button.
     fn click_theme_button(&mut self) -> SupportResult<()>;
+
+    /// Click the visible tab-strip recent-files button.
+    fn click_recent_files_button(&mut self) -> SupportResult<()>;
+
+    /// Click the visible tab-strip new-tab button.
+    fn click_new_tab_button(&mut self) -> SupportResult<()>;
 }
 
 impl EditorTestExt for Editor<'_> {
@@ -376,16 +382,7 @@ impl EditorTestExt for Editor<'_> {
             state.find.visible && find_chip_bounds(state, chip).is_some()
         })?;
         let (ox, oy, w, h) = find_chip_bounds(&record, chip).ok_or("find chip bounds missing after wait")?;
-        let scale = if record.viewport.scale_factor > 0.0 {
-            record.viewport.scale_factor
-        } else {
-            1.0
-        };
-        let cx = ((ox + w * 0.5) * scale).round() as i32;
-        let cy = ((oy + h * 0.5) * scale).round() as i32;
-        let result = self.click_at(cx, cy);
-        with_window_artifact(self, "find-chip-click", result)?;
-        Ok(())
+        click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "find-chip-click")
     }
 
     fn click_cleanup_button(&mut self) -> SupportResult<()> {
@@ -395,16 +392,7 @@ impl EditorTestExt for Editor<'_> {
         let (ox, oy, w, h) = record
             .cleanup_button_bounds_px
             .ok_or("cleanup button bounds missing after wait")?;
-        let scale = if record.viewport.scale_factor > 0.0 {
-            record.viewport.scale_factor
-        } else {
-            1.0
-        };
-        let cx = ((ox + w * 0.5) * scale).round() as i32;
-        let cy = ((oy + h * 0.5) * scale).round() as i32;
-        let result = self.click_at(cx, cy);
-        with_window_artifact(self, "cleanup-click", result)?;
-        Ok(())
+        click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "cleanup-click")
     }
 
     fn click_theme_button(&mut self) -> SupportResult<()> {
@@ -414,17 +402,45 @@ impl EditorTestExt for Editor<'_> {
         let (ox, oy, w, h) = record
             .theme_button_bounds_px
             .ok_or("theme button bounds missing after wait")?;
-        let scale = if record.viewport.scale_factor > 0.0 {
-            record.viewport.scale_factor
-        } else {
-            1.0
-        };
-        let cx = ((ox + w * 0.5) * scale).round() as i32;
-        let cy = ((oy + h * 0.5) * scale).round() as i32;
-        let result = self.click_at(cx, cy);
-        with_window_artifact(self, "theme-click", result)?;
-        Ok(())
+        click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "theme-click")
     }
+
+    fn click_recent_files_button(&mut self) -> SupportResult<()> {
+        let record = self.wait_state("recent button bounds", FOCUS_TIMEOUT, |state| {
+            state.recent_button_bounds_px.is_some()
+        })?;
+        let (ox, oy, w, h) = record
+            .recent_button_bounds_px
+            .ok_or("recent button bounds missing after wait")?;
+        click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "recent-button-click")
+    }
+
+    fn click_new_tab_button(&mut self) -> SupportResult<()> {
+        let record = self.wait_state("new tab button bounds", FOCUS_TIMEOUT, |state| {
+            state.new_tab_button_bounds_px.is_some()
+        })?;
+        let (ox, oy, w, h) = record
+            .new_tab_button_bounds_px
+            .ok_or("new tab button bounds missing after wait")?;
+        click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "new-tab-button-click")
+    }
+}
+
+fn click_trace_bounds_center(
+    editor: &mut Editor<'_>,
+    ox: f32,
+    oy: f32,
+    w: f32,
+    h: f32,
+    scale_factor: f32,
+    artifact: &str,
+) -> SupportResult<()> {
+    let scale = if scale_factor > 0.0 { scale_factor } else { 1.0 };
+    let cx = ((ox + w * 0.5) * scale).round() as i32;
+    let cy = ((oy + h * 0.5) * scale).round() as i32;
+    let result = editor.click_at(cx, cy);
+    with_window_artifact(editor, artifact, result)?;
+    Ok(())
 }
 
 fn find_chip_bounds(record: &StateTraceRecord, chip: FindChip) -> Option<(f32, f32, f32, f32)> {

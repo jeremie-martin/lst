@@ -131,6 +131,53 @@ fn workspace_shortcuts_work_while_find_inputs_are_focused() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn tab_strip_buttons_work_while_find_query_is_focused() -> TestResult {
+    support::run_x11_test("find-tab-strip-buttons", |session| {
+        let recent = session.seed_file("find-recent-button-target.txt", "recent target\n")?;
+        let recent_path = recent.to_string_lossy().into_owned();
+        session.seed_recent_files(std::slice::from_ref(&recent))?;
+        let (mut editor, _scratchpad) = session.open("find-tab-strip-buttons")?;
+
+        editor.keys("<C-f>")?;
+        editor.wait_state("find query focus before new-tab click", secs(2), |record| {
+            record.find.visible && record.focused_input == "find_query"
+        })?;
+        editor.click_new_tab_button()?;
+        editor.wait_state("new tab button from find focus", secs(5), |record| {
+            record.find.visible
+                && record.status_message == "Created a new scratchpad."
+                && record.focused_input == "editor"
+        })?;
+
+        editor.keys("<C-f><C-f>")?;
+        editor.wait_state("find query focus before recent click", secs(2), |record| {
+            record.find.visible && record.focused_input == "find_query"
+        })?;
+        editor.click_recent_files_button()?;
+        editor.wait_state("recent button from find focus", secs(5), |record| {
+            record.recent_panel_open
+                && record.focused_input == "recent_query"
+                && record.recent_panel_selected_path.as_deref() == Some(recent_path.as_str())
+        })?;
+        editor.keys("<escape>")?;
+        let before_theme = editor.wait_state("recent panel closed before theme click", secs(5), |record| {
+            !record.recent_panel_open && record.focused_input == "editor"
+        })?;
+
+        editor.keys("<C-f>")?;
+        editor.wait_state("find query focus before theme click", secs(2), |record| {
+            record.find.visible && record.focused_input == "find_query"
+        })?;
+        editor.click_theme_button()?;
+        editor.wait_state("theme button from find focus", secs(5), |record| {
+            record.find.visible && record.theme_name != before_theme.theme_name
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn case_sensitive_chip_disables_smart_case() -> TestResult {
     support::run_x11_test("find-chip-case-sensitive", |session| {
         let path = session.seed_file("find-chip-case.txt", "Foo foo FOO")?;

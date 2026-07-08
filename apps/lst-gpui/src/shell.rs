@@ -30,10 +30,13 @@ impl LstGpuiApp {
         let close_button: Option<IconButton> = show_close.then(|| {
             IconButton::new(("tab-close", ix), IconKind::Close, theme)
                 .emphasized(active)
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.request_close_tab_at(ix, cx);
-                    cx.stop_propagation();
-                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _window, cx| {
+                        this.request_close_tab_at(ix, cx);
+                        cx.stop_propagation();
+                    }),
+                )
         });
 
         UiTab::new(("tab", ix), theme)
@@ -46,18 +49,21 @@ impl LstGpuiApp {
                 }
                 cx.notify();
             }))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.close_recent_files_panel(cx);
-                this.force_editor_focus = true;
-                this.set_focus(FocusTarget::Editor);
-                this.update_model(cx, true, |model| {
-                    if let Some(id) = model.tab_id_at(ix) {
-                        model.set_active_tab(id);
-                    }
-                });
-                window.focus(&this.focus_handle);
-                cx.notify();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.close_recent_files_panel(cx);
+                    this.force_editor_focus = true;
+                    this.set_focus(FocusTarget::Editor);
+                    this.update_model(cx, true, |model| {
+                        if let Some(id) = model.tab_id_at(ix) {
+                            model.set_active_tab(id);
+                        }
+                    });
+                    window.focus(&this.focus_handle);
+                    cx.notify();
+                }),
+            )
             .on_mouse_up(
                 MouseButton::Middle,
                 cx.listener(move |this, _: &MouseUpEvent, window, cx| {
@@ -74,12 +80,29 @@ impl LstGpuiApp {
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
         let theme = self.theme(cx);
-        let recent_button = IconButton::new("recent-files-button", IconKind::Recent, theme)
-            .emphasized(self.recent.is_open())
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.toggle_recent_files_panel(window, cx);
-                cx.stop_propagation();
-            }));
+        let entity = cx.entity();
+        let recent_button = {
+            let entity = entity.clone();
+            div()
+                .flex_none()
+                .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                    let captured = bounds.first().copied();
+                    entity.update(cx, |this, _| {
+                        this.recent_button_bounds_px = captured;
+                    });
+                })
+                .child(
+                    IconButton::new("recent-files-button", IconKind::Recent, theme)
+                        .emphasized(self.recent.is_open())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.toggle_recent_files_panel(window, cx);
+                                cx.stop_propagation();
+                            }),
+                        ),
+                )
+        };
         let mut items = (0..self.model.tab_count())
             .map(|ix| self.render_tab(ix, cx).into_any_element())
             .collect::<Vec<_>>();
@@ -92,14 +115,22 @@ impl LstGpuiApp {
                 .items_center()
                 .border_r_1()
                 .border_color(rgb(theme.role.border))
-                .child(
-                    IconButton::new("new-tab-button", IconKind::Plus, theme).on_click(cx.listener(
-                        |this, _, _window, cx| {
-                            this.request_new_tab(cx);
-                            cx.stop_propagation();
-                        },
-                    )),
-                )
+                .on_children_prepainted({
+                    let entity = entity.clone();
+                    move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                        let captured = bounds.first().copied();
+                        entity.update(cx, |this, _| {
+                            this.new_tab_button_bounds_px = captured;
+                        });
+                    }
+                })
+                .child(IconButton::new("new-tab-button", IconKind::Plus, theme).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _window, cx| {
+                        this.request_new_tab(cx);
+                        cx.stop_propagation();
+                    }),
+                ))
                 .into_any_element(),
         );
 
@@ -338,12 +369,15 @@ impl LstGpuiApp {
                                         .child("Searching contents..."),
                                 )
                             })
-                            .child(IconButton::new("recent-files-close", IconKind::Close, theme).on_click(
-                                cx.listener(|this, _, _window, cx| {
-                                    this.close_recent_files_panel(cx);
-                                    cx.stop_propagation();
-                                }),
-                            )),
+                            .child(
+                                IconButton::new("recent-files-close", IconKind::Close, theme).on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.close_recent_files_panel(cx);
+                                        cx.stop_propagation();
+                                    }),
+                                ),
+                            ),
                     )
                     .child(
                         div()
@@ -517,10 +551,13 @@ impl LstGpuiApp {
             .cursor(CursorStyle::PointingHand)
             .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
             .text_color(rgb(theme.role.text))
-            .on_click(cx.listener(|this, _, _window, cx| {
-                this.load_more_recent_files(cx);
-                cx.stop_propagation();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _window, cx| {
+                    this.load_more_recent_files(cx);
+                    cx.stop_propagation();
+                }),
+            )
             .child("Load more")
     }
 
@@ -592,10 +629,13 @@ impl LstGpuiApp {
                             .child(
                                 IconButton::new("cleanup-button", IconKind::Sparkle, theme)
                                     .disabled(self.cleanup_in_flight)
-                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.start_cleanup(cx);
-                                        cx.stop_propagation();
-                                    })),
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.start_cleanup(cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    ),
                             )
                     })
                     .child({
@@ -608,12 +648,15 @@ impl LstGpuiApp {
                                     this.theme_button_bounds_px = captured;
                                 });
                             })
-                            .child(IconButton::new("theme-toggle-button", IconKind::Theme, theme).on_click(
-                                cx.listener(|this, _, _window, cx| {
-                                    this.cycle_theme(cx);
-                                    cx.stop_propagation();
-                                }),
-                            ))
+                            .child(
+                                IconButton::new("theme-toggle-button", IconKind::Theme, theme).on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _window, cx| {
+                                        this.cycle_theme(cx);
+                                        cx.stop_propagation();
+                                    }),
+                                ),
+                            )
                     })
                     .child(
                         div()
