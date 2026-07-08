@@ -276,6 +276,7 @@ impl EditorModel {
         }
         self.active_tab_changed();
         self.status = format!("Switched to {}.", self.active_tab().display_name());
+        self.queue_focus(FocusTarget::Editor);
         true
     }
     fn active_tab_changed(&mut self) {
@@ -781,7 +782,6 @@ impl EditorModel {
         let index = self.tabs.push(tab);
         self.activate_tab(index);
         self.status = "Created a new tab.".to_string();
-        self.queue_focus(FocusTarget::Editor);
     }
     pub fn new_scratchpad_tab(&mut self, path: PathBuf, file_stamp: FileStamp) {
         let id = self.alloc_tab_id();
@@ -789,7 +789,6 @@ impl EditorModel {
         let index = self.tabs.push(tab);
         self.activate_tab(index);
         self.status = "Created a new scratchpad.".to_string();
-        self.queue_focus(FocusTarget::Editor);
     }
     pub fn close_request_for_tab(&self, tab_id: TabId) -> Option<TabCloseRequest> {
         let tab = self.tab_by_id(tab_id)?;
@@ -841,8 +840,12 @@ impl EditorModel {
         }
     }
     pub fn move_tab(&mut self, from: usize, to: usize) {
+        let active_moved = from == self.active_index();
         if self.tabs.reorder(from, to) {
             self.status = format!("Reordered tab to position {}.", to + 1);
+            if active_moved {
+                self.queue_focus(FocusTarget::Editor);
+            }
         }
     }
     pub fn viewport(&self) -> Viewport {

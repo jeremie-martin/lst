@@ -109,6 +109,7 @@ pub struct InputField {
     focus_handle: FocusHandle,
     text: InputText,
     placeholder: SharedString,
+    extra_key_context: Option<SharedString>,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     selection_drag: Option<InputDragSelectionMode>,
@@ -353,11 +354,17 @@ impl InputField {
             focus_handle: cx.focus_handle(),
             text: InputText::new(),
             placeholder: placeholder.into(),
+            extra_key_context: None,
             last_layout: None,
             last_bounds: None,
             selection_drag: None,
             vertical_navigation: false,
         }
+    }
+
+    pub fn with_key_context(mut self, key_context: impl Into<SharedString>) -> Self {
+        self.extra_key_context = Some(key_context.into());
+        self
     }
 
     pub fn with_vertical_navigation(mut self) -> Self {
@@ -861,10 +868,15 @@ impl Render for InputField {
         } else {
             rgb(theme.role.border)
         };
+        let key_context = self
+            .extra_key_context
+            .as_ref()
+            .map(|extra| format!("InlineInput {}", extra.as_ref()))
+            .unwrap_or_else(|| "InlineInput".to_string());
 
         div()
             .track_focus(&self.focus_handle)
-            .key_context("InlineInput")
+            .key_context(key_context.as_str())
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
             .on_action(cx.listener(Self::subword_left))

@@ -59,7 +59,7 @@ fn submitting_find_query_advances_to_next_match() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn workspace_shortcuts_work_while_find_query_is_focused() -> TestResult {
+fn workspace_shortcuts_work_while_find_inputs_are_focused() -> TestResult {
     support::run_x11_test("find-workspace-shortcuts", |session| {
         let first = session.seed_file("find-shortcuts-first.txt", "first")?;
         let second = session.seed_file("find-shortcuts-second.txt", "second")?;
@@ -84,7 +84,45 @@ fn workspace_shortcuts_work_while_find_query_is_focused() -> TestResult {
         editor.keys("<C-n>")?;
         editor.wait_state("new tab from find focus", secs(5), |record| {
             record.active_tab_path.as_deref() != Some(&second_path)
+                && record.active_tab_index == 1
                 && record.status_message == "Created a new scratchpad."
+                && record.focused_input == "editor"
+        })?;
+
+        editor.keys("<C-f><C-f>")?;
+        editor.wait_state("find query focus before next tab", secs(2), |record| {
+            record.find.visible && record.focused_input == "find_query"
+        })?;
+        editor.keys("<C-tab>")?;
+        editor.wait_state("next tab from find focus", secs(5), |record| {
+            record.active_tab_path.as_deref() == Some(&second_path)
+                && record.active_tab_index == 0
+                && record.find.visible
+                && record.focused_input == "editor"
+        })?;
+
+        editor.keys("<C-f><C-f>")?;
+        editor.wait_state("find query focus before previous tab", secs(2), |record| {
+            record.find.visible && record.focused_input == "find_query"
+        })?;
+        editor.keys("<C-S-tab>")?;
+        editor.wait_state("previous tab from find focus", secs(5), |record| {
+            record.active_tab_path.as_deref() != Some(&second_path)
+                && record.active_tab_index == 1
+                && record.find.visible
+                && record.focused_input == "editor"
+        })?;
+
+        editor.keys("<C-h><tab>")?;
+        editor.wait_state("replace focus before tab switch", secs(2), |record| {
+            record.find.visible && record.find.show_replace && record.focused_input == "find_replace"
+        })?;
+        editor.keys("<C-tab>")?;
+        editor.wait_state("next tab from replace focus", secs(5), |record| {
+            record.active_tab_path.as_deref() == Some(&second_path)
+                && record.active_tab_index == 0
+                && record.find.visible
+                && record.find.show_replace
                 && record.focused_input == "editor"
         })?;
         Ok(())

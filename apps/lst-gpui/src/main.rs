@@ -163,8 +163,8 @@ pub(crate) struct FindChipBounds {
 
 impl LstGpuiApp {
     fn new(cx: &mut Context<Self>, launch: LaunchArgs) -> Self {
-        let find_query_input = cx.new(|cx| InputField::new(cx, "Find"));
-        let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace"));
+        let find_query_input = cx.new(|cx| InputField::new(cx, "Find").with_key_context("Find"));
+        let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace").with_key_context("Find"));
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line[:Column]"));
         let recent_query_input = cx.new(|cx| InputField::new(cx, "Search recent files").with_vertical_navigation());
         let recent_files_path = default_recent_files_path();
