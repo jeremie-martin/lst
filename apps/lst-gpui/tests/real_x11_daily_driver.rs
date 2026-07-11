@@ -33,6 +33,33 @@ fn standard_mode_is_default_and_workspace_surfaces_are_keyboard_reachable() -> T
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn app_menu_does_not_dim_the_editor() -> TestResult {
+    support::run_x11_test("daily-driver-menu-backdrop", |session| {
+        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\n")?;
+        let (mut editor, _path) = session.open("scratch")?;
+        editor.wait_quiet(secs(1), secs(5))?;
+        let before = editor.screenshot()?;
+
+        editor.click_app_menu_button()?;
+        let open = editor.wait_state("app menu opens", secs(2), |record| {
+            record.workspace_surface == "app_menu"
+        })?;
+        editor.wait_quiet(secs(1), secs(5))?;
+        let after = editor.screenshot()?;
+        let diff = after.diff(&before)?;
+        let (_, _, max_x, max_y) = diff.changed_bounds.ok_or("opening the app menu changed no pixels")?;
+        let scale = open.viewport.scale_factor.max(1.0);
+
+        assert!(
+            f32::from(max_x) < 340.0 * scale && f32::from(max_y) < 430.0 * scale,
+            "app menu changed pixels outside its bounds, indicating a tinted backdrop: {diff:?}"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn standard_alt_shift_up_duplicates_line_above() -> TestResult {
     support::run_x11_test("daily-driver-duplicate-up", |session| {
         let path = session.seed_file("duplicate.txt", "alpha\nbeta")?;

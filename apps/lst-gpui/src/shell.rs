@@ -192,15 +192,28 @@ impl LstGpuiApp {
             .gap_1()
             .px_1()
             .child(
-                IconButton::new("app-menu-button", IconKind::Menu, theme)
-                    .emphasized(self.workspace_surface == crate::WorkspaceSurface::AppMenu)
-                    .tooltip("Application menu")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.toggle_app_menu(cx);
-                            cx.stop_propagation();
-                        }),
+                div()
+                    .flex_none()
+                    .on_children_prepainted({
+                        let entity = entity.clone();
+                        move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                            let captured = bounds.first().copied();
+                            entity.update(cx, |this, _| {
+                                this.app_menu_button_bounds_px = captured;
+                            });
+                        }
+                    })
+                    .child(
+                        IconButton::new("app-menu-button", IconKind::Menu, theme)
+                            .emphasized(self.workspace_surface == crate::WorkspaceSurface::AppMenu)
+                            .tooltip("Application menu")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.toggle_app_menu(cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
                     ),
             )
             .child(recent_button);
@@ -432,12 +445,12 @@ impl LstGpuiApp {
         let content_search_pending = self.recent.content_search_pending();
         let entity = cx.entity();
         let recent_scroll = self.recent_scroll.clone();
-        let rows = page
+        let cards = page
             .visible
             .into_iter()
             .enumerate()
             .map(|(ix, path)| {
-                self.render_recent_file_row(ix, path, selected_index == Some(ix), cx)
+                self.render_recent_file_card(ix, path, selected_index == Some(ix), cx)
                     .into_any_element()
             })
             .collect::<Vec<_>>();
@@ -538,8 +551,9 @@ impl LstGpuiApp {
                                     })
                                     .id("recent-files-grid")
                                     .flex()
-                                    .flex_col()
-                                    .children(rows)
+                                    .flex_wrap()
+                                    .gap(metrics::px_for_scale(metrics::SHELL_GAP, scale))
+                                    .children(cards)
                                     .when_some(empty_message, |grid, message| {
                                         grid.child(
                                             div()
@@ -555,7 +569,7 @@ impl LstGpuiApp {
             )
     }
 
-    fn render_recent_file_row(
+    fn render_recent_file_card(
         &mut self,
         ix: usize,
         path: std::path::PathBuf,
@@ -593,17 +607,21 @@ impl LstGpuiApp {
         let border = if selected { theme.role.accent } else { theme.role.border };
 
         div()
-            .id(("recent-file-row", ix))
+            .id(("recent-file-card", ix))
             .relative()
             .flex()
-            .items_center()
-            .w_full()
-            .h(metrics::px_for_scale(62.0, scale))
-            .gap_3()
+            .flex_col()
+            .flex_grow()
+            .flex_basis(px(crate::RECENT_CARD_BASIS))
+            .min_w(px(220.0))
+            .max_w(px(420.0))
+            .h(px(156.0))
+            .gap_2()
             .px_3()
-            .py_2()
+            .py_3()
+            .rounded_sm()
             .bg(rgb(background))
-            .border_b_1()
+            .border_1()
             .border_color(rgb(border))
             .cursor(CursorStyle::PointingHand)
             .hover(move |style| style.bg(rgb(hover_background)))
@@ -616,36 +634,29 @@ impl LstGpuiApp {
             )
             .child(
                 div()
-                    .flex()
-                    .flex_col()
                     .flex_none()
-                    .w(metrics::px_for_scale(280.0, scale))
-                    .min_w_0()
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(metrics::px_for_scale(metrics::TAB_TEXT_SIZE, scale))
-                            .line_height(metrics::px_for_scale(metrics::TAB_TEXT_LINE_HEIGHT, scale))
-                            .text_color(rgb(theme.role.text))
-                            .child(file_name),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(metrics::px_for_scale(11.0, scale))
-                            .line_height(metrics::px_for_scale(15.0, scale))
-                            .text_color(rgb(theme.role.text_muted))
-                            .child(parent),
-                    ),
+                    .truncate()
+                    .text_size(metrics::px_for_scale(metrics::TAB_TEXT_SIZE, scale))
+                    .line_height(metrics::px_for_scale(metrics::TAB_TEXT_LINE_HEIGHT, scale))
+                    .text_color(rgb(theme.role.text))
+                    .child(file_name),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .truncate()
+                    .text_size(metrics::px_for_scale(11.0, scale))
+                    .line_height(metrics::px_for_scale(15.0, scale))
+                    .text_color(rgb(theme.role.text_muted))
+                    .child(parent),
             )
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
                     .min_h(px(0.0))
                     .overflow_hidden()
                     .whitespace_normal()
-                    .line_clamp(2)
+                    .line_clamp(6)
                     .text_size(metrics::px_for_scale(11.0, scale))
                     .line_height(metrics::px_for_scale(15.0, scale))
                     .text_color(rgb(preview_color))
@@ -659,6 +670,7 @@ impl LstGpuiApp {
                         .top_0()
                         .bottom_0()
                         .w(px(3.0))
+                        .rounded_sm()
                         .bg(rgb(theme.role.accent))
                         .into_any_element(),
                 ),

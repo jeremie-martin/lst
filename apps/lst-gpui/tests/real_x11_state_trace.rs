@@ -205,7 +205,7 @@ fn ctrl_s_on_unmodified_buffer_leaves_visible_state_unchanged() -> TestResult {
         let path = session.seed_file("clean.txt", "untouched\n")?;
         let mut editor = session.open_file("clean", &path)?;
 
-        let baseline = editor.read_state()?;
+        let baseline = editor.place_cursor_at_document_start()?;
 
         editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char('s')))?;
         editor.wait_quiet(Duration::from_millis(75), Duration::from_secs(2))?;

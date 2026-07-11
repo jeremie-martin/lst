@@ -357,6 +357,9 @@ pub trait EditorTestExt {
     /// Click the visible status-bar theme toggle button.
     fn click_theme_button(&mut self) -> SupportResult<()>;
 
+    /// Click the visible tab-strip application-menu button.
+    fn click_app_menu_button(&mut self) -> SupportResult<()>;
+
     /// Click the visible tab-strip recent-files button.
     fn click_recent_files_button(&mut self) -> SupportResult<()>;
 
@@ -448,6 +451,16 @@ impl EditorTestExt for Editor<'_> {
             .theme_button_bounds_px
             .ok_or("theme button bounds missing after wait")?;
         click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "theme-click")
+    }
+
+    fn click_app_menu_button(&mut self) -> SupportResult<()> {
+        let record = self.wait_state("app menu button bounds", FOCUS_TIMEOUT, |state| {
+            state.app_menu_button_bounds_px.is_some()
+        })?;
+        let (ox, oy, w, h) = record
+            .app_menu_button_bounds_px
+            .ok_or("app menu button bounds missing after wait")?;
+        click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "app-menu-click")
     }
 
     fn click_recent_files_button(&mut self) -> SupportResult<()> {

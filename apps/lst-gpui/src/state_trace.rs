@@ -124,6 +124,7 @@ pub(crate) struct StateTraceRecord {
     pub close_prompt_file: Option<String>,
     pub status_message: String,
     pub status_bar: String,
+    pub app_menu_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub recent_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub new_tab_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub cleanup_button_bounds_px: Option<(f32, f32, f32, f32)>,
@@ -252,6 +253,7 @@ impl LstGpuiApp {
                 f32::from(bounds.size.height),
             )
         });
+        let app_menu_button_bounds_px = trace_bounds(self.app_menu_button_bounds_px);
         let recent_button_bounds_px = trace_bounds(self.recent_button_bounds_px);
         let new_tab_button_bounds_px = trace_bounds(self.new_tab_button_bounds_px);
         let theme_button_bounds_px = trace_bounds(self.theme_button_bounds_px);
@@ -315,6 +317,7 @@ impl LstGpuiApp {
                 .map(|tab| tab.display_name().to_string()),
             status_message,
             status_bar,
+            app_menu_button_bounds_px,
             recent_button_bounds_px,
             new_tab_button_bounds_px,
             cleanup_button_bounds_px,

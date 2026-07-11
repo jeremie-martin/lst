@@ -19,9 +19,9 @@ pub(crate) enum InputModeSetting {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ThemePreference {
-    #[default]
     System,
     Dark,
+    #[default]
     Light,
 }
 
@@ -321,11 +321,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_standard_and_scratchpad_safe() {
+    fn defaults_are_standard_scratchpad_safe_and_light() {
         let settings = AppSettings::default();
         assert_eq!(settings.editor.input_mode, InputModeSetting::Standard);
         assert_eq!(settings.files.autosave, AutosaveMode::Scratchpads);
-        assert_eq!(settings.appearance.theme, ThemePreference::System);
+        assert_eq!(settings.appearance.theme, ThemePreference::Light);
     }
 
     #[test]

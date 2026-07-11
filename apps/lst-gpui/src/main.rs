@@ -51,6 +51,8 @@ use viewport::{scroll_to_left, ViewportCache, ViewportGeometry};
 use workspace_action::editor_keybindings;
 use workspace_action::WorkspaceCommand;
 
+pub(crate) const RECENT_CARD_BASIS: f32 = 260.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingAfterSave {
     CloseTab(TabId),
@@ -163,6 +165,7 @@ struct LstGpuiApp {
     find_chip_bounds_px: FindChipBounds,
     /// Surfaced through the state trace so real-X11 tests can click tab-strip
     /// chrome without relying on fixed shell geometry.
+    app_menu_button_bounds_px: Option<Bounds<Pixels>>,
     recent_button_bounds_px: Option<Bounds<Pixels>>,
     new_tab_button_bounds_px: Option<Bounds<Pixels>>,
     /// Surfaced through the state trace so real-X11 tests can click the
@@ -281,6 +284,7 @@ impl LstGpuiApp {
             cleanup_message: None,
             cursor_visible: true,
             find_chip_bounds_px: FindChipBounds::default(),
+            app_menu_button_bounds_px: None,
             recent_button_bounds_px: None,
             new_tab_button_bounds_px: None,
             cleanup_button_bounds_px: None,

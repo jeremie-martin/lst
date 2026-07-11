@@ -212,10 +212,7 @@ fn click_below_last_line_moves_caret_to_document_end() -> TestResult {
         let mut editor = session.open_file("below", &path)?;
 
         // Park the caret away from the end so the click has to move it.
-        editor.click_at_text(0, 0)?;
-        let before = editor.read_state()?;
-        let cursor = before.cursors[0];
-        assert_eq!((cursor.head_line, cursor.head_col), (0, 0), "{cursor:?}");
+        editor.place_cursor_at_document_start()?;
 
         // Wait for a paint that exposes the geometry we need to aim below
         // the last row without overshooting the window.

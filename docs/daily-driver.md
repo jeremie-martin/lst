@@ -10,7 +10,7 @@ explicit mode, but new general editing behavior must work without it.
 - Standard input mode is active unless `--vim` or the Vim setting is selected.
 - Scratchpads autosave. Ordinary files require an explicit save.
 - Closing a modified ordinary file asks whether to save, discard, or cancel.
-- Word wrap, absolute line numbers, cursor blink, and system theme are enabled
+- Word wrap, absolute line numbers, cursor blink, and the light theme are enabled
   by default.
 
 ## Primary Surfaces
@@ -43,7 +43,7 @@ font_family = "TX-02"
 font_size = 13
 
 [appearance]
-theme = "system"
+theme = "light"
 zoom_level = 0
 
 [files]

@@ -302,7 +302,6 @@ impl LstGpuiApp {
             .id("app-menu-scrim")
             .absolute()
             .inset_0()
-            .bg(gpui::rgba(0x00000022))
             .occlude()
             .on_mouse_down(
                 MouseButton::Left,
@@ -402,7 +401,6 @@ impl LstGpuiApp {
             .id("language-menu-scrim")
             .absolute()
             .inset_0()
-            .bg(gpui::rgba(0x00000022))
             .occlude()
             .on_mouse_down(
                 MouseButton::Left,

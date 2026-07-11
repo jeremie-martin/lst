@@ -2,8 +2,8 @@ use gpui::{font, px, App, Font, FontFallbacks, Global, Pixels};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum ThemeId {
-    #[default]
     Dark,
+    #[default]
     Light,
 }
 
