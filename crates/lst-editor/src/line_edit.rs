@@ -329,17 +329,17 @@ pub(crate) fn move_lines_request(tab: &EditorTab, pos: Position, up: bool) -> Op
     }
     line_swap_request(tab, pos, up)
 }
-pub(crate) fn duplicate_line_request(tab: &EditorTab, pos: Position) -> Option<EditRequest> {
+pub(crate) fn duplicate_line_request(tab: &EditorTab, pos: Position, below: bool) -> Option<EditRequest> {
     let line = pos.line.min(tab.line_count().saturating_sub(1));
     let text = line_display_text(tab.buffer(), line);
-    let insert_at = line + 1;
+    let insert_at = line + usize::from(below);
     let change = insert_lines_change(tab, insert_at, std::slice::from_ref(&text))?;
     Some(EditRequest::single_other_at_position(
         change,
         Position::new(insert_at, pos.column),
     ))
 }
-pub(crate) fn duplicate_touched_lines_request(tab: &EditorTab) -> Option<EditRequest> {
+pub(crate) fn duplicate_touched_lines_request(tab: &EditorTab, below: bool) -> Option<EditRequest> {
     let lines = selection_set_touched_lines(tab);
     if lines.is_empty() {
         return None;
@@ -347,10 +347,10 @@ pub(crate) fn duplicate_touched_lines_request(tab: &EditorTab) -> Option<EditReq
     let mut changes = Vec::new();
     for line in &lines {
         let text = line_display_text(tab.buffer(), *line);
-        let change = insert_lines_change(tab, line + 1, std::slice::from_ref(&text))?;
+        let change = insert_lines_change(tab, line + usize::from(below), std::slice::from_ref(&text))?;
         changes.push(change);
     }
-    request_with_duplicate_line_selection(tab, changes, &lines)
+    request_with_duplicate_line_selection(tab, changes, &lines, below)
 }
 pub(crate) fn duplicate_selection_request(tab: &EditorTab) -> Option<EditRequest> {
     let text = tab.selected_text()?;
@@ -370,13 +370,13 @@ pub(crate) fn duplicate_selection_request(tab: &EditorTab) -> Option<EditRequest
         }),
     )
 }
-pub(crate) fn duplicate_lines_request(tab: &EditorTab, pos: Position) -> Option<EditRequest> {
+pub(crate) fn duplicate_lines_request(tab: &EditorTab, pos: Position, below: bool) -> Option<EditRequest> {
     if tab.selection_set().has_multiple() {
-        if let Some(request) = duplicate_touched_lines_request(tab) {
+        if let Some(request) = duplicate_touched_lines_request(tab, below) {
             return Some(request);
         }
     }
-    duplicate_selection_request(tab).or_else(|| duplicate_line_request(tab, pos))
+    duplicate_selection_request(tab).or_else(|| duplicate_line_request(tab, pos, below))
 }
 pub(crate) fn toggle_comment_action(tab: &EditorTab, prefix: &str) -> Option<LineEditAction> {
     let selected = tab.selected_range();
@@ -496,9 +496,10 @@ fn request_with_duplicate_line_selection(
     tab: &EditorTab,
     changes: Vec<TextChange>,
     lines: &[usize],
+    below: bool,
 ) -> Option<EditRequest> {
     request_with_selection_map(tab, changes, |_changes, after_buffer, offset| {
-        map_duplicate_line_endpoint(tab, after_buffer, offset, lines)
+        map_duplicate_line_endpoint(tab, after_buffer, offset, lines, below)
     })
 }
 fn request_with_selection_map<F>(tab: &EditorTab, changes: Vec<TextChange>, mut map_endpoint: F) -> Option<EditRequest>
@@ -584,12 +585,18 @@ fn map_line_move_selection_endpoint(
     }
     map_line_move_endpoint(tab, after_buffer, offset, clusters, up)
 }
-fn map_duplicate_line_endpoint(tab: &EditorTab, after_buffer: &ropey::Rope, offset: usize, lines: &[usize]) -> usize {
+fn map_duplicate_line_endpoint(
+    tab: &EditorTab,
+    after_buffer: &ropey::Rope,
+    offset: usize,
+    lines: &[usize],
+    below: bool,
+) -> usize {
     let mut position = char_to_position(tab.buffer(), offset.min(tab.len_chars()));
     let mut inserted_before = 0;
     for line in lines {
         if *line == position.line {
-            position.line += inserted_before + 1;
+            position.line += inserted_before + usize::from(below);
             return position_to_char(after_buffer, position);
         }
         if *line < position.line {

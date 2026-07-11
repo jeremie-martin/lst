@@ -3168,12 +3168,14 @@ dependencies = [
  "libc",
  "lst-editor",
  "lst-x11-harness",
+ "lucide-icons",
  "rfd",
  "ropey",
  "serde",
  "serde_json",
  "smallvec",
  "time",
+ "toml_edit 0.25.11+spec-1.1.0",
  "tree-sitter",
  "tree-sitter-css",
  "tree-sitter-html",
@@ -3199,6 +3201,12 @@ dependencies = [
  "serde_json",
  "x11rb",
 ]
+
+[[package]]
+name = "lucide-icons"
+version = "1.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6622735ce403d5ecacee585200bfbb5afd22878131a4a66ade8bcd9443d68fc7"
 
 [[package]]
 name = "lyon"
@@ -5839,8 +5847,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b59c4d22ed448339746c59b905d24568fcbb3ab65a500494f7b8c3e97739f2b"
 dependencies = [
  "indexmap",
+ "serde_core",
+ "serde_spanned 1.1.1",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.1",
 ]
 

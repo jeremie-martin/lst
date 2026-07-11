@@ -1330,6 +1330,9 @@ fn state_key_context_changed_after(before: &StateTraceRecord, after: &StateTrace
         && (after.revision != before.revision
             || state_cursor_signature(after) != state_cursor_signature(before)
             || after.focused_input != before.focused_input
+            || after.input_mode != before.input_mode
+            || after.workspace_surface != before.workspace_surface
+            || after.close_prompt_file != before.close_prompt_file
             || after.vim_mode != before.vim_mode
             || after.vim_pending != before.vim_pending
             || after.find.visible != before.find.visible

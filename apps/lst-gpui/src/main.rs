@@ -1,8 +1,9 @@
 use gpui::{
-    prelude::*, px, size, App, Application, Bounds, Context, Entity, FocusHandle, Focusable, Modifiers, Pixels,
-    ScrollHandle, Subscription, Window, WindowBounds, WindowOptions,
+    prelude::*, px, size, App, Application, Bounds, Context, Entity, FocusHandle, Focusable, Modifiers, Pixels, Point,
+    ScrollHandle, Subscription, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 
+mod command_ui;
 mod diagnostics;
 mod editor_view;
 mod input;
@@ -10,6 +11,8 @@ mod launch;
 mod llm;
 mod recent;
 mod runtime;
+mod settings;
+mod settings_ui;
 mod shell;
 mod state_trace;
 mod syntax;
@@ -19,20 +22,22 @@ mod workspace_action;
 
 use crate::ui::{
     input_keybindings,
-    theme::{current_theme, current_theme_id, metrics, Theme, ThemeId},
+    theme::{current_theme, current_theme_id, metrics, typography, Theme, ThemeId},
     InputField, InputFieldEvent,
 };
 use input::ActiveDragSelection;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
-    EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FocusTarget, Position, RevealIntent, TabId,
-    UNTITLED_PREFIX,
+    EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FocusTarget, InputMode, Position, RevealIntent,
+    TabId, UNTITLED_PREFIX,
 };
 use recent::default_recent_files_path;
 use recent::RecentView;
 use ropey::Rope;
+use settings::{InputModeSetting, SettingsStore, ThemePreference};
 use state_trace::StateTraceEmitter;
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -44,13 +49,29 @@ use std::{
 use syntax::{syntax_mode_for_language, CachedSyntaxHighlights, SyntaxLanguage, SyntaxMode, TabSyntaxState};
 use viewport::{scroll_to_left, ViewportCache, ViewportGeometry};
 use workspace_action::editor_keybindings;
-
-pub(crate) const RECENT_CARD_BASIS: f32 = 260.0;
+use workspace_action::WorkspaceCommand;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingAfterSave {
     CloseTab(TabId),
     Quit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ClosePrompt {
+    tab_id: TabId,
+    pending: PendingAfterSave,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum WorkspaceSurface {
+    #[default]
+    None,
+    CommandPalette,
+    Settings,
+    AppMenu,
+    LanguageMenu,
+    ContextMenu,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -110,9 +131,16 @@ struct LstGpuiApp {
     find_replace_input: Entity<InputField>,
     goto_line_input: Entity<InputField>,
     recent_query_input: Entity<InputField>,
+    command_palette_input: Entity<InputField>,
+    settings_scroll: ScrollHandle,
+    workspace_surface: WorkspaceSurface,
+    command_palette_selected: usize,
+    pending_workspace_command: Option<WorkspaceCommand>,
+    context_menu_position: Option<Point<Pixels>>,
     focus_target: FocusTarget,
     focus_last_applied: FocusTarget,
     pending_after_save: Option<PendingAfterSave>,
+    close_prompt: Option<ClosePrompt>,
     pending_reveal: Option<RevealIntent>,
     reveal_scheduled: bool,
     autosave_inflight: HashSet<PathBuf>,
@@ -129,6 +157,7 @@ struct LstGpuiApp {
     state_trace: StateTraceEmitter,
     cleanup_in_flight: bool,
     cleanup_message: Option<String>,
+    cursor_visible: bool,
     /// Surfaced through the state trace so real-X11 tests can click the
     /// find chips without relying on fixed shell geometry.
     find_chip_bounds_px: FindChipBounds,
@@ -148,6 +177,8 @@ struct LstGpuiApp {
     /// pops the top entry and reopens it with the cursor restored. Bounded
     /// so a long-lived editor session does not grow this unboundedly.
     closed_tabs_history: Vec<ClosedTabRecord>,
+    settings: SettingsStore,
+    input_mode_cli_override: bool,
     _shell_subscriptions: Vec<Subscription>,
 }
 
@@ -166,14 +197,37 @@ pub(crate) struct FindChipBounds {
 }
 
 impl LstGpuiApp {
-    fn new(cx: &mut Context<Self>, launch: LaunchArgs) -> Self {
+    fn new(cx: &mut Context<Self>, launch: LaunchArgs, settings: SettingsStore) -> Self {
+        typography::set_primary_font_family(&settings.settings.editor.font_family);
+        metrics::set_code_font_size(f32::from(settings.settings.editor.font_size));
+        let initial_theme = theme_for_preference(settings.settings.appearance.theme, cx.window_appearance());
+        cx.set_global(initial_theme);
         let find_query_input = cx.new(|cx| InputField::new(cx, "Find").with_key_context("Find"));
         let find_replace_input = cx.new(|cx| InputField::new(cx, "Replace").with_key_context("Find"));
         let goto_line_input = cx.new(|cx| InputField::new(cx, "Line[:Column]"));
         let recent_query_input = cx.new(|cx| InputField::new(cx, "Search recent files").with_vertical_navigation());
+        let command_palette_input = cx.new(|cx| {
+            InputField::new(cx, "Type a command")
+                .with_key_context("CommandPalette")
+                .with_vertical_navigation()
+        });
         let recent_files_path = default_recent_files_path();
-        let scratchpad_dir = launch.scratchpad_dir.clone();
-        let model = initial_model_from_launch(launch);
+        let scratchpad_dir = launch
+            .scratchpad_dir
+            .clone()
+            .or_else(|| settings.settings.files.scratchpad_directory.clone());
+        let mut model = initial_model_from_launch(launch.clone(), scratchpad_dir.as_deref());
+        let configured_mode = match settings.settings.editor.input_mode {
+            InputModeSetting::Standard => InputMode::Standard,
+            InputModeSetting::Vim => InputMode::Vim,
+        };
+        model.set_input_mode(launch.input_mode.unwrap_or(configured_mode));
+        model.set_show_wrap(settings.settings.editor.word_wrap);
+        model.set_gutter_mode(match settings.settings.editor.line_numbers {
+            settings::LineNumbersSetting::Absolute => lst_editor::GutterMode::Absolute,
+            settings::LineNumbersSetting::Relative => lst_editor::GutterMode::Relative,
+            settings::LineNumbersSetting::Hybrid => lst_editor::GutterMode::Hybrid,
+        });
         let mut recent = RecentView::load(recent_files_path);
         for tab in model.tabs() {
             if !tab.is_scratchpad() {
@@ -199,9 +253,16 @@ impl LstGpuiApp {
             find_replace_input: find_replace_input.clone(),
             goto_line_input: goto_line_input.clone(),
             recent_query_input: recent_query_input.clone(),
+            command_palette_input: command_palette_input.clone(),
+            settings_scroll: ScrollHandle::new(),
+            workspace_surface: WorkspaceSurface::None,
+            command_palette_selected: 0,
+            pending_workspace_command: None,
+            context_menu_position: None,
             focus_target: FocusTarget::Editor,
             focus_last_applied: FocusTarget::Editor,
             pending_after_save: None,
+            close_prompt: None,
             pending_reveal: None,
             reveal_scheduled: false,
             autosave_inflight: HashSet::new(),
@@ -214,21 +275,23 @@ impl LstGpuiApp {
             modifier_chord_accumulated: Modifiers::default(),
             recent_modifier_chord: None,
             x11_ctrl_k_pending: false,
-            zoom_level: 0,
+            zoom_level: settings.settings.appearance.zoom_level,
             state_trace: StateTraceEmitter::from_env(),
             cleanup_in_flight: false,
             cleanup_message: None,
+            cursor_visible: true,
             find_chip_bounds_px: FindChipBounds::default(),
             recent_button_bounds_px: None,
             new_tab_button_bounds_px: None,
             cleanup_button_bounds_px: None,
             theme_button_bounds_px: None,
-            theme_name_rendered: ThemeId::default().theme().name.to_string(),
+            theme_name_rendered: initial_theme.theme().name.to_string(),
             status_details_rendered: String::new(),
             closed_tabs_history: Vec::new(),
+            input_mode_cli_override: launch.input_mode.is_some(),
+            settings,
             _shell_subscriptions: Vec::new(),
         };
-        cx.set_global(ThemeId::default());
         let show_wrap = app.model.show_wrap();
         app.sync_tab_views(show_wrap);
 
@@ -248,6 +311,11 @@ impl LstGpuiApp {
         app._shell_subscriptions.push(
             cx.subscribe(&recent_query_input, |this, _, event: &InputFieldEvent, cx| {
                 this.handle_recent_query_input_event(event, cx)
+            }),
+        );
+        app._shell_subscriptions.push(
+            cx.subscribe(&command_palette_input, |this, _, event: &InputFieldEvent, cx| {
+                this.handle_command_palette_input_event(event, cx)
             }),
         );
 
@@ -279,7 +347,13 @@ impl LstGpuiApp {
     }
 
     fn cycle_theme(&mut self, cx: &mut Context<Self>) {
-        self.set_theme(current_theme_id(cx).next(), cx);
+        let theme = current_theme_id(cx).next();
+        self.settings.settings.appearance.theme = match theme {
+            ThemeId::Dark => ThemePreference::Dark,
+            ThemeId::Light => ThemePreference::Light,
+        };
+        self.set_theme(theme, cx);
+        self.persist_settings(cx);
     }
 
     fn set_zoom_level(&mut self, level: i32, window: &mut Window, cx: &mut Context<Self>) {
@@ -289,11 +363,12 @@ impl LstGpuiApp {
         }
 
         self.zoom_level = level;
+        self.settings.settings.appearance.zoom_level = level;
         window.set_rem_size(self.ui_px(metrics::BASE_REM_SIZE));
         for view in self.tab_views.values_mut() {
             view.invalidate_visual_state();
         }
-        cx.notify();
+        self.persist_settings(cx);
     }
 
     fn zoom_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -316,6 +391,13 @@ impl LstGpuiApp {
     }
 
     fn apply_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_surface == WorkspaceSurface::CommandPalette {
+            let handle = self.command_palette_input.read(cx).focus_handle();
+            if !handle.is_focused(window) {
+                window.focus(&handle);
+            }
+            return;
+        }
         if self.recent.is_open() {
             let handle = self.recent_query_input.read(cx).focus_handle();
             if !handle.is_focused(window) {
@@ -390,6 +472,7 @@ impl LstGpuiApp {
         notify_after_update: bool,
         update: impl FnOnce(&mut EditorModel),
     ) {
+        self.cursor_visible = true;
         if !self.cleanup_in_flight {
             self.cleanup_message = None;
         }
@@ -629,7 +712,18 @@ impl LstGpuiApp {
     }
 }
 
-fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
+fn theme_for_preference(preference: ThemePreference, appearance: WindowAppearance) -> ThemeId {
+    match preference {
+        ThemePreference::Dark => ThemeId::Dark,
+        ThemePreference::Light => ThemeId::Light,
+        ThemePreference::System => match appearance {
+            WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeId::Dark,
+            WindowAppearance::Light | WindowAppearance::VibrantLight => ThemeId::Light,
+        },
+    }
+}
+
+fn initial_model_from_launch(launch: LaunchArgs, scratchpad_dir: Option<&std::path::Path>) -> EditorModel {
     let mut tabs = Vec::new();
     let mut next_tab_id = 1u64;
     let mut status = "Ready.".to_string();
@@ -637,7 +731,7 @@ fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
     if launch.files.is_empty() {
         tabs.push(scratchpad_or_empty_tab(
             TabId::from_raw(next_tab_id),
-            launch.scratchpad_dir.as_deref(),
+            scratchpad_dir,
             &mut status,
         ));
     } else {
@@ -661,7 +755,7 @@ fn initial_model_from_launch(launch: LaunchArgs) -> EditorModel {
         if tabs.is_empty() {
             tabs.push(scratchpad_or_empty_tab(
                 TabId::from_raw(next_tab_id),
-                launch.scratchpad_dir.as_deref(),
+                scratchpad_dir,
                 &mut status,
             ));
         }
@@ -755,7 +849,14 @@ fn main() {
     }
 
     Application::new().run(move |cx: &mut App| {
-        cx.bind_keys(editor_keybindings());
+        if let Err(error) = cx
+            .text_system()
+            .add_fonts(vec![Cow::Borrowed(lucide_icons::LUCIDE_FONT_BYTES)])
+        {
+            eprintln!("failed to load bundled Lucide icons: {error}");
+        }
+        let settings = SettingsStore::load();
+        cx.bind_keys(editor_keybindings(&settings.settings.keybindings));
         cx.bind_keys(input_keybindings());
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
@@ -779,7 +880,7 @@ fn main() {
             },
             move |_, cx| {
                 let launch = launch.clone();
-                cx.new(move |cx| LstGpuiApp::new(cx, launch))
+                cx.new(move |cx| LstGpuiApp::new(cx, launch, settings))
             },
         ) {
             Ok(window) => window,
@@ -795,6 +896,7 @@ fn main() {
         window
             .update(cx, |view, window, cx| {
                 window.set_window_title(&window_title);
+                window.set_rem_size(view.ui_px(metrics::BASE_REM_SIZE));
                 let entity = cx.entity();
                 window.on_window_should_close(cx, move |_window, cx| {
                     let entity = entity.clone();

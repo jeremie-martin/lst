@@ -100,13 +100,13 @@ fn alt_enter_selects_all_current_find_matches() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn shift_alt_down_adds_adjacent_line_cursors_for_literal_input() -> TestResult {
-    support::run_x11_test("multi-cursor-shift-alt-down", |session| {
+fn ctrl_alt_down_adds_adjacent_line_cursors_for_literal_input() -> TestResult {
+    support::run_x11_test("multi-cursor-ctrl-alt-down", |session| {
         let path = session.seed_file("columns.txt", "alpha\nbeta\ngamma")?;
         let mut editor = session.open_file("columns", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
 
         editor.keys("X")?;
@@ -123,7 +123,7 @@ fn backspace_deletes_before_every_cursor_added_by_adjacent_line_commands() -> Te
         let mut editor = session.open_file("backspace", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<end><S-A-down><S-A-down>")?;
+        editor.keys("<end><C-A-down><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 5), (1, 5), (2, 5)])?;
 
         editor.keys("<bs>")?;
@@ -140,7 +140,7 @@ fn delete_forward_deletes_after_every_cursor_added_by_adjacent_line_commands() -
         let mut editor = session.open_file("delete-forward", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
 
         editor.keys("<delete>")?;
@@ -158,7 +158,7 @@ fn paste_distributes_clipboard_lines_to_matching_cursor_count() -> TestResult {
 
         write_clipboard_text(Selection::Clipboard, "red\ngreen\nblue")?;
         editor.place_cursor_at_document_start()?;
-        editor.keys("<S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
 
         editor.keys("<C-v>")?;
@@ -190,7 +190,7 @@ fn smart_enter_inherits_each_cursor_line_indent() -> TestResult {
         let mut editor = session.open_file("smart-enter", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<end><S-A-down>")?;
+        editor.keys("<end><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 10), (1, 10)])?;
 
         editor.keys("<enter>")?;
@@ -225,7 +225,7 @@ fn right_motion_moves_every_cursor_before_literal_input() -> TestResult {
         let mut editor = session.open_file("right-motion", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
 
         editor.keys("<right><right>X")?;
@@ -242,7 +242,7 @@ fn duplicate_line_applies_to_every_cursor_line() -> TestResult {
         let mut editor = session.open_file("duplicate-line", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<S-A-down>")?;
+        editor.keys("<C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0)])?;
 
         editor.keys("<C-S-A-down>")?;
@@ -309,13 +309,13 @@ fn shift_alt_i_adds_cursor_at_end_of_each_selected_line() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn shift_alt_down_adds_three_cursors_aligned_on_column_zero() -> TestResult {
-    support::run_x11_test("multi-cursor-shift-alt-down-state", |session| {
+fn ctrl_alt_down_adds_three_cursors_aligned_on_column_zero() -> TestResult {
+    support::run_x11_test("multi-cursor-ctrl-alt-down-state", |session| {
         let path = session.seed_file("columns-state.txt", "alpha\nbeta\ngamma")?;
         let mut editor = session.open_file("columns-state", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down>")?;
         let record = editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
         assert!(
             record.cursors.iter().all(|c| c.is_collapsed()),
@@ -334,7 +334,7 @@ fn right_motion_advances_every_cursor_independently() -> TestResult {
         let mut editor = session.open_file("right-motion-state", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
 
         editor.keys("<right><right>")?;
@@ -429,7 +429,7 @@ fn paste_distribute_preserves_cursor_count_after_insertion() -> TestResult {
 
         write_clipboard_text(Selection::Clipboard, "red\ngreen\nblue")?;
         editor.place_cursor_at_document_start()?;
-        editor.keys("<S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
 
         editor.keys("<C-v>")?;
@@ -450,7 +450,7 @@ fn smart_enter_per_cursor_indent_lands_each_cursor_at_inherited_column() -> Test
         let mut editor = session.open_file("smart-enter-state", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<end><S-A-down>")?;
+        editor.keys("<end><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 10), (1, 10)])?;
 
         editor.keys("<enter>")?;

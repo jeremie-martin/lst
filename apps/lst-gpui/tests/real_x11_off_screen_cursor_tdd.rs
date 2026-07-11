@@ -1,12 +1,12 @@
 //! Under-review executable specs for off-screen cursor indicators and
-//! viewport reveal across `Shift+Alt+Down` cursor extension.
+//! viewport reveal across `Ctrl+Alt+Down` cursor extension.
 //!
 //! Pinned contract:
 //!
 //! - When N active cursors lie above the painted viewport, the status bar
 //!   contains the substring `"▲<N>"`. When N lie below, it contains
 //!   `"▼<N>"`. With no off-screen cursors, neither substring appears.
-//! - When `Shift+Alt+Down` extends the cursor cluster past the painted
+//! - When `Ctrl+Alt+Down` extends the cursor cluster past the painted
 //!   viewport's bottom edge, the viewport scrolls so the bottom-most
 //!   cursor is visible. The harness can only observe document-ordered
 //!   cursors via the trace, so the assertion is on the bottom-most
@@ -70,13 +70,13 @@ fn status_bar_shows_count_when_secondary_cursors_are_below_viewport() -> TestRes
         let path = session.seed_file("off-screen-below.txt", &hundred_line_fixture())?;
         let mut editor = session.open_file("off-screen-below", &path)?;
 
-        // Caret at line 99; <S-A-up> adds cursors above (at 98, 97, ...).
+        // Caret at line 99; <C-A-up> adds cursors above (at 98, 97, ...).
         // Reveal targets the newly-added cursor near the top of the cluster,
         // so the cursors near line 99 fall below the viewport.
         editor.keys("<C-end>")?;
         let visible_rows = editor.read_state()?.viewport.rows.len().max(1);
         for _ in 0..(visible_rows + 5).min(90) {
-            editor.keys("<S-A-up>")?;
+            editor.keys("<C-A-up>")?;
         }
 
         let record = editor.read_state()?;
@@ -105,13 +105,13 @@ fn status_bar_shows_count_when_secondary_cursors_are_above_viewport() -> TestRes
         let path = session.seed_file("off-screen-above.txt", &hundred_line_fixture())?;
         let mut editor = session.open_file("off-screen-above", &path)?;
 
-        // Caret at line 0; <S-A-down> adds cursors below. Reveal targets
+        // Caret at line 0; <C-A-down> adds cursors below. Reveal targets
         // the newly-added cursor near the bottom of the cluster, so the
         // cursors near line 0 fall above the viewport.
         editor.place_cursor_at_document_start()?;
         let visible_rows = editor.read_state()?.viewport.rows.len().max(1);
         for _ in 0..(visible_rows + 5).min(90) {
-            editor.keys("<S-A-down>")?;
+            editor.keys("<C-A-down>")?;
         }
 
         let record = editor.read_state()?;
@@ -135,7 +135,7 @@ fn status_bar_shows_count_when_secondary_cursors_are_above_viewport() -> TestRes
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn shift_alt_down_keeps_bottom_most_cursor_visible_after_extending_past_viewport() -> TestResult {
+fn ctrl_alt_down_keeps_bottom_most_cursor_visible_after_extending_past_viewport() -> TestResult {
     support::run_x11_test("off-screen-reveal-bottom-most", |session| {
         let path = session.seed_file("reveal-bottom-most.txt", &hundred_line_fixture())?;
         let mut editor = session.open_file("off-screen-reveal-bottom-most", &path)?;
@@ -147,7 +147,7 @@ fn shift_alt_down_keeps_bottom_most_cursor_visible_after_extending_past_viewport
         // cluster they're building.
         let visible_rows = editor.read_state()?.viewport.rows.len().max(1);
         for _ in 0..(visible_rows + 5).min(90) {
-            editor.keys("<S-A-down>")?;
+            editor.keys("<C-A-down>")?;
         }
 
         let record = editor.read_state()?;

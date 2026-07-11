@@ -5,7 +5,7 @@ use gpui::{
 use lst_editor::{
     selection::{drag_selection_range, line_range_at_char, paragraph_range_at_char, word_range_at_char},
     vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
-    EditorCommand, RevealIntent, Selection,
+    EditorCommand, InputMode, RevealIntent, Selection,
 };
 use ropey::Rope;
 use std::{ops::Range, time::Instant};
@@ -320,14 +320,14 @@ pub(crate) fn drag_autoscroll_delta(position: Point<Pixels>, bounds: Bounds<Pixe
         let distance = ((top_edge - position.y) / px(1.0)).min(EDGE_PX * scale * 2.0);
         let rows = 0.5 + distance / (EDGE_PX * scale);
         Some(-metrics::px_for_scale(
-            (metrics::ROW_HEIGHT * rows).min(metrics::ROW_HEIGHT * 3.0),
+            (metrics::row_height() * rows).min(metrics::row_height() * 3.0),
             scale,
         ))
     } else if position.y > bottom_edge {
         let distance = ((position.y - bottom_edge) / px(1.0)).min(EDGE_PX * scale * 2.0);
         let rows = 0.5 + distance / (EDGE_PX * scale);
         Some(metrics::px_for_scale(
-            (metrics::ROW_HEIGHT * rows).min(metrics::ROW_HEIGHT * 3.0),
+            (metrics::row_height() * rows).min(metrics::row_height() * 3.0),
             scale,
         ))
     } else {
@@ -369,7 +369,8 @@ impl LstGpuiApp {
             return false;
         }
 
-        let insert_mode = self.model.vim_mode() == vim::Mode::Insert;
+        let vim_enabled = self.model.input_mode() == InputMode::Vim;
+        let insert_mode = !vim_enabled || self.model.vim_mode() == vim::Mode::Insert;
         let modifiers = if insert_mode {
             self.effective_current_modifiers(event.keystroke.modifiers)
         } else {
@@ -383,6 +384,13 @@ impl LstGpuiApp {
         }
 
         let key = event.keystroke.key.to_ascii_lowercase();
+        if insert_mode && key == "enter" {
+            self.x11_ctrl_k_pending = false;
+            self.execute_model_command(cx, EditorCommand::InsertNewline);
+            self.clear_recent_x11_modifier_chord();
+            cx.stop_propagation();
+            return true;
+        }
         if !insert_mode && vim_owns_modifier_chord(key.as_str(), modifiers) {
             self.x11_ctrl_k_pending = false;
             return false;
@@ -431,7 +439,7 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.editor_input_is_focused() {
+        if !self.editor_input_is_focused() || self.model.input_mode() != InputMode::Vim {
             return false;
         }
 
@@ -619,7 +627,7 @@ impl EntityInputHandler for LstGpuiApp {
             point(start_x, row.row_top),
             point(
                 end_x.max(start_x + metrics::px_for_scale(metrics::CURSOR_WIDTH, self.ui_scale())),
-                row.row_top + metrics::px_for_scale(metrics::ROW_HEIGHT, self.ui_scale()),
+                row.row_top + metrics::px_for_scale(metrics::row_height(), self.ui_scale()),
             ),
         ))
     }

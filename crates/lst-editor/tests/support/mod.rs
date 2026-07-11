@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use lst_editor::{
     vim::{self, Key, NamedKey},
-    EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, Position, Selection, TabId,
+    EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, InputMode, Position, Selection, TabId,
 };
 
 const WRAP_COLUMNS: usize = 80;
@@ -152,8 +152,10 @@ impl ModelHarness {
 impl VimHarness {
     pub fn new(text: &str) -> Self {
         let tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("vim-spec.md"), text, None);
+        let mut model = EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string());
+        model.set_input_mode(InputMode::Vim);
         let mut harness = Self {
-            model: EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string()),
+            model,
             focus: FocusTarget::Editor,
             effects: Vec::new(),
             deferred_find_query: None,
@@ -174,8 +176,10 @@ impl VimHarness {
     pub fn with_two_tabs(first: &str, second: &str) -> Self {
         let first = EditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("first.md"), first, None);
         let second = EditorTab::from_path_with_stamp(TabId::from_raw(2), PathBuf::from("second.md"), second, None);
+        let mut model = EditorModel::from_tabs(first, vec![second], "Ready.".to_string());
+        model.set_input_mode(InputMode::Vim);
         let mut harness = Self {
-            model: EditorModel::from_tabs(first, vec![second], "Ready.".to_string()),
+            model,
             focus: FocusTarget::Editor,
             effects: Vec::new(),
             deferred_find_query: None,

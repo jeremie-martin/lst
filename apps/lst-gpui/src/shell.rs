@@ -5,10 +5,10 @@ use crate::ui::{
 };
 use gpui::{
     canvas, div, prelude::*, px, rgb, AnyElement, App, Bounds, Context, CursorStyle, ElementInputHandler,
-    InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseUpEvent, ParentElement, Pixels, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement,
+    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Window,
 };
-use lst_editor::EditorCommand as Command;
+use lst_editor::{EditorCommand as Command, TabId};
 
 use crate::recent::RecentPreviewState;
 use crate::syntax::syntax_mode_for_language;
@@ -18,18 +18,42 @@ use crate::viewport::{
     WrapLayoutInput,
 };
 use crate::workspace_action::attach_workspace_actions;
-use crate::{diagnostics, FocusTarget, LstGpuiApp, RECENT_CARD_BASIS};
+use crate::{diagnostics, FocusTarget, LstGpuiApp};
 use std::time::Instant;
+
+#[derive(Clone)]
+struct TabDrag {
+    tab_id: TabId,
+    name: String,
+    theme: crate::ui::theme::Theme,
+}
+
+impl Render for TabDrag {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_2()
+            .rounded_sm()
+            .border_1()
+            .border_color(rgb(self.theme.role.border))
+            .bg(rgb(self.theme.role.panel_bg))
+            .text_color(rgb(self.theme.role.text))
+            .child(self.name.clone())
+    }
+}
 
 impl LstGpuiApp {
     fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme(cx);
         let tab = self.model.tab(ix).expect("rendered tab index must exist");
+        let tab_id = tab.id();
+        let tab_name = tab.display_name();
         let active = !self.recent.is_open() && ix == self.model.active_index();
         let show_close = active || self.hovered_tab == Some(ix);
         let close_button: Option<IconButton> = show_close.then(|| {
             IconButton::new(("tab-close", ix), IconKind::Close, theme)
                 .emphasized(active)
+                .tooltip("Close tab (Ctrl+W)")
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _, _window, cx| {
@@ -73,8 +97,31 @@ impl LstGpuiApp {
                     cx.stop_propagation();
                 }),
             )
+            .on_drag(
+                TabDrag {
+                    tab_id,
+                    name: tab_name.clone(),
+                    theme,
+                },
+                |drag: &TabDrag, _, _, cx| cx.new(|_| drag.clone()),
+            )
+            .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
+                let source =
+                    (0..this.model.tab_count()).find(|index| this.model.tab_id_at(*index) == Some(drag.tab_id));
+                let Some(source) = source else {
+                    return;
+                };
+                let delta = ix as isize - source as isize;
+                if delta == 0 {
+                    return;
+                }
+                this.update_model(cx, true, |model| {
+                    model.set_active_tab(drag.tab_id);
+                    model.execute(Command::MoveActiveTab(delta));
+                });
+            }))
             .end_slot(close_button.map(IntoElement::into_any_element))
-            .child(tab.display_name())
+            .child(tab_name)
     }
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -94,6 +141,7 @@ impl LstGpuiApp {
                 .child(
                     IconButton::new("recent-files-button", IconKind::Recent, theme)
                         .emphasized(self.recent.is_open())
+                        .tooltip("Open recent (Ctrl+R)")
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _, window, cx| {
@@ -124,18 +172,41 @@ impl LstGpuiApp {
                         });
                     }
                 })
-                .child(IconButton::new("new-tab-button", IconKind::Plus, theme).on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _window, cx| {
-                        this.request_new_tab(cx);
-                        cx.stop_propagation();
-                    }),
-                ))
+                .child(
+                    IconButton::new("new-tab-button", IconKind::Plus, theme)
+                        .tooltip("New scratchpad (Ctrl+N)")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _window, cx| {
+                                this.request_new_tab(cx);
+                                cx.stop_propagation();
+                            }),
+                        ),
+                )
                 .into_any_element(),
         );
 
+        let start_controls = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .child(
+                IconButton::new("app-menu-button", IconKind::Menu, theme)
+                    .emphasized(self.workspace_surface == crate::WorkspaceSurface::AppMenu)
+                    .tooltip("Application menu")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.toggle_app_menu(cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .child(recent_button);
+
         TabBar::new("editor-tabs", theme)
-            .start_child(recent_button)
+            .start_child(start_controls)
             .track_scroll(&self.tab_bar_scroll)
             .children(items)
     }
@@ -197,6 +268,52 @@ impl LstGpuiApp {
                     .text_color(rgb(theme.role.text_muted))
                     .child(match_label),
             )
+            .child(
+                IconButton::new("find-previous", IconKind::ChevronUp, theme)
+                    .tooltip("Previous match (Shift+F3)")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.execute_model_command(cx, Command::FindPrev);
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .child(
+                IconButton::new("find-next", IconKind::ChevronDown, theme)
+                    .tooltip("Next match (F3)")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.execute_model_command(cx, Command::FindNext);
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .when(show_replace, |row| {
+                row.child(
+                    IconButton::new("find-replace-one", IconKind::Replace, theme)
+                        .tooltip("Replace current match (Enter in Replace)")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                this.execute_model_command(cx, Command::ReplaceCurrentMatch);
+                                cx.stop_propagation();
+                            }),
+                        ),
+                )
+                .child(
+                    IconButton::new("find-replace-all", IconKind::ReplaceAll, theme)
+                        .tooltip("Replace all matches (Ctrl+Alt+Enter)")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                this.execute_model_command(cx, Command::ReplaceAllMatches);
+                                cx.stop_propagation();
+                            }),
+                        ),
+                )
+            })
             .when_some(error, |row, err| {
                 row.child(
                     div()
@@ -266,6 +383,17 @@ impl LstGpuiApp {
                 cx,
                 |this, cx| this.execute_model_command(cx, Command::ToggleFindInSelection),
             ))
+            .child(
+                IconButton::new("find-close", IconKind::Close, theme)
+                    .tooltip("Close find (Esc)")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.update_model(cx, true, |model| model.close_find_panel());
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
     }
 
     fn render_goto_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -304,12 +432,12 @@ impl LstGpuiApp {
         let content_search_pending = self.recent.content_search_pending();
         let entity = cx.entity();
         let recent_scroll = self.recent_scroll.clone();
-        let cards = page
+        let rows = page
             .visible
             .into_iter()
             .enumerate()
             .map(|(ix, path)| {
-                self.render_recent_file_card(ix, path, selected_index == Some(ix), cx)
+                self.render_recent_file_row(ix, path, selected_index == Some(ix), cx)
                     .into_any_element()
             })
             .collect::<Vec<_>>();
@@ -370,13 +498,15 @@ impl LstGpuiApp {
                                 )
                             })
                             .child(
-                                IconButton::new("recent-files-close", IconKind::Close, theme).on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _window, cx| {
-                                        this.close_recent_files_panel(cx);
-                                        cx.stop_propagation();
-                                    }),
-                                ),
+                                IconButton::new("recent-files-close", IconKind::Close, theme)
+                                    .tooltip("Close recent files (Esc)")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.close_recent_files_panel(cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    ),
                             ),
                     )
                     .child(
@@ -408,9 +538,8 @@ impl LstGpuiApp {
                                     })
                                     .id("recent-files-grid")
                                     .flex()
-                                    .flex_wrap()
-                                    .gap(metrics::px_for_scale(metrics::SHELL_GAP, scale))
-                                    .children(cards)
+                                    .flex_col()
+                                    .children(rows)
                                     .when_some(empty_message, |grid, message| {
                                         grid.child(
                                             div()
@@ -426,7 +555,7 @@ impl LstGpuiApp {
             )
     }
 
-    fn render_recent_file_card(
+    fn render_recent_file_row(
         &mut self,
         ix: usize,
         path: std::path::PathBuf,
@@ -464,21 +593,17 @@ impl LstGpuiApp {
         let border = if selected { theme.role.accent } else { theme.role.border };
 
         div()
-            .id(("recent-file-card", ix))
+            .id(("recent-file-row", ix))
             .relative()
             .flex()
-            .flex_col()
-            .flex_grow()
-            .flex_basis(px(RECENT_CARD_BASIS))
-            .min_w(px(220.0))
-            .max_w(px(420.0))
-            .h(px(156.0))
-            .gap_2()
+            .items_center()
+            .w_full()
+            .h(metrics::px_for_scale(62.0, scale))
+            .gap_3()
             .px_3()
-            .py_3()
-            .rounded_sm()
+            .py_2()
             .bg(rgb(background))
-            .border_1()
+            .border_b_1()
             .border_color(rgb(border))
             .cursor(CursorStyle::PointingHand)
             .hover(move |style| style.bg(rgb(hover_background)))
@@ -491,29 +616,36 @@ impl LstGpuiApp {
             )
             .child(
                 div()
+                    .flex()
+                    .flex_col()
                     .flex_none()
-                    .truncate()
-                    .text_size(metrics::px_for_scale(metrics::TAB_TEXT_SIZE, scale))
-                    .line_height(metrics::px_for_scale(metrics::TAB_TEXT_LINE_HEIGHT, scale))
-                    .text_color(rgb(theme.role.text))
-                    .child(file_name),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .truncate()
-                    .text_size(metrics::px_for_scale(11.0, scale))
-                    .line_height(metrics::px_for_scale(15.0, scale))
-                    .text_color(rgb(theme.role.text_muted))
-                    .child(parent),
+                    .w(metrics::px_for_scale(280.0, scale))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(metrics::px_for_scale(metrics::TAB_TEXT_SIZE, scale))
+                            .line_height(metrics::px_for_scale(metrics::TAB_TEXT_LINE_HEIGHT, scale))
+                            .text_color(rgb(theme.role.text))
+                            .child(file_name),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(metrics::px_for_scale(11.0, scale))
+                            .line_height(metrics::px_for_scale(15.0, scale))
+                            .text_color(rgb(theme.role.text_muted))
+                            .child(parent),
+                    ),
             )
             .child(
                 div()
                     .flex_1()
+                    .min_w_0()
                     .min_h(px(0.0))
                     .overflow_hidden()
                     .whitespace_normal()
-                    .line_clamp(6)
+                    .line_clamp(2)
                     .text_size(metrics::px_for_scale(11.0, scale))
                     .line_height(metrics::px_for_scale(15.0, scale))
                     .text_color(rgb(preview_color))
@@ -527,7 +659,6 @@ impl LstGpuiApp {
                         .top_0()
                         .bottom_0()
                         .w(px(3.0))
-                        .rounded_sm()
                         .bg(rgb(theme.role.accent))
                         .into_any_element(),
                 ),
@@ -629,6 +760,7 @@ impl LstGpuiApp {
                             .child(
                                 IconButton::new("cleanup-button", IconKind::Sparkle, theme)
                                     .disabled(self.cleanup_in_flight)
+                                    .tooltip("Clean up text with AI (Ctrl+Shift+R)")
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, _window, cx| {
@@ -638,6 +770,45 @@ impl LstGpuiApp {
                                     ),
                             )
                     })
+                    .child(
+                        IconButton::new("settings-button", IconKind::Settings, theme)
+                            .emphasized(self.workspace_surface == crate::WorkspaceSurface::Settings)
+                            .tooltip("Settings (Ctrl+,)")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.toggle_settings(window, cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("language-mode-button")
+                            .flex()
+                            .items_center()
+                            .h(metrics::px_for_scale(22.0, scale))
+                            .px_2()
+                            .rounded_sm()
+                            .text_size(metrics::px_for_scale(11.0, scale))
+                            .text_color(rgb(theme.role.text_muted))
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.toggle_language_menu(cx);
+                                    cx.stop_propagation();
+                                }),
+                            )
+                            .child(
+                                self.model
+                                    .active_tab()
+                                    .language()
+                                    .map(|language| format!("{language:?}"))
+                                    .unwrap_or_else(|| "Plain Text".to_string()),
+                            ),
+                    )
                     .child({
                         let entity = cx.entity();
                         div()
@@ -649,13 +820,15 @@ impl LstGpuiApp {
                                 });
                             })
                             .child(
-                                IconButton::new("theme-toggle-button", IconKind::Theme, theme).on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _window, cx| {
-                                        this.cycle_theme(cx);
-                                        cx.stop_propagation();
-                                    }),
-                                ),
+                                IconButton::new("theme-toggle-button", IconKind::Theme, theme)
+                                    .tooltip("Change theme")
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _window, cx| {
+                                            this.cycle_theme(cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    ),
                             )
                     })
                     .child(
@@ -676,9 +849,116 @@ impl LstGpuiApp {
             )
     }
 
+    fn render_close_prompt(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let scale = self.ui_scale();
+        let theme = self.theme(cx);
+        let name = self
+            .close_prompt
+            .and_then(|prompt| self.model.tab_by_id(prompt.tab_id))
+            .map(|tab| tab.display_name().to_string())
+            .unwrap_or_else(|| "this file".to_string());
+        let button = |label: &'static str, emphasized: bool| {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(metrics::px_for_scale(30.0, scale))
+                .px_3()
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(if emphasized {
+                    theme.role.accent
+                } else {
+                    theme.role.border
+                }))
+                .bg(rgb(if emphasized {
+                    theme.role.accent
+                } else {
+                    theme.role.control_bg
+                }))
+                .text_color(rgb(if emphasized {
+                    theme.role.accent_text
+                } else {
+                    theme.role.text
+                }))
+                .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
+                .child(label)
+        };
+
+        div()
+            .id("close-prompt-scrim")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::rgba(0x00000088))
+            .occlude()
+            .child(
+                div()
+                    .id("close-prompt")
+                    .flex()
+                    .flex_col()
+                    .w(metrics::px_for_scale(420.0, scale))
+                    .max_w_full()
+                    .gap_3()
+                    .p_4()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(theme.role.border))
+                    .bg(rgb(theme.role.panel_bg))
+                    .child(
+                        div()
+                            .text_size(metrics::px_for_scale(15.0, scale))
+                            .text_color(rgb(theme.role.text))
+                            .child(format!("Save changes to {name}?")),
+                    )
+                    .child(
+                        div()
+                            .text_size(metrics::px_for_scale(12.0, scale))
+                            .text_color(rgb(theme.role.text_subtle))
+                            .child("Your changes will be lost if you don't save them."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(button("Cancel", false).on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _window, cx| this.cancel_close_prompt(cx)),
+                            ))
+                            .child(button("Don't Save", false).on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _window, cx| this.confirm_close_prompt_discard(cx)),
+                            ))
+                            .child(button("Save", true).on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _window, cx| this.confirm_close_prompt_save(cx)),
+                            )),
+                    ),
+            )
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_prompt.is_some() {
+            match event.keystroke.key.as_str() {
+                "escape" => self.cancel_close_prompt(cx),
+                "enter" => self.confirm_close_prompt_save(cx),
+                _ => {}
+            }
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key == "escape" {
             self.x11_ctrl_k_pending = false;
+            if self.workspace_surface != crate::WorkspaceSurface::None {
+                self.close_workspace_surface(cx);
+                cx.stop_propagation();
+                return;
+            }
             if self.recent.is_open() {
                 self.close_recent_files_panel(cx);
                 cx.stop_propagation();
@@ -691,6 +971,14 @@ impl LstGpuiApp {
             }
             if self.model.find().visible {
                 self.update_model(cx, true, |model| model.close_find_panel());
+                cx.stop_propagation();
+                return;
+            }
+
+            if self.model.input_mode() == lst_editor::InputMode::Standard {
+                self.update_model(cx, true, |model| {
+                    model.cancel_standard_selection();
+                });
                 cx.stop_propagation();
                 return;
             }
@@ -723,6 +1011,9 @@ impl LstGpuiApp {
 
 impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(command) = self.pending_workspace_command.take() {
+            self.dispatch_workspace_command(command, window, cx);
+        }
         self.ensure_active_syntax_state();
 
         let show_gutter = self.model.show_gutter();
@@ -818,6 +1109,7 @@ impl Render for LstGpuiApp {
         let entity = cx.entity();
         let prepare_entity = entity.clone();
         let vim_mode = self.model.vim_mode();
+        let cursor_visible = self.cursor_visible;
         let ui_scale = self.ui_scale();
 
         let root = attach_workspace_actions(div().flex().flex_col().key_context("Workspace"), cx)
@@ -852,8 +1144,8 @@ impl Render for LstGpuiApp {
                                     .border_color(rgb(theme.role.border))
                                     .bg(rgb(theme.role.editor_bg))
                                     .font(typography::primary_font())
-                                    .text_size(metrics::px_for_scale(metrics::CODE_FONT_SIZE, self.ui_scale()))
-                                    .line_height(metrics::px_for_scale(metrics::ROW_HEIGHT, self.ui_scale()))
+                                    .text_size(metrics::px_for_scale(metrics::code_font_size(), self.ui_scale()))
+                                    .line_height(metrics::px_for_scale(metrics::row_height(), self.ui_scale()))
                                     .when(self.recent.is_open(), |viewport| {
                                         viewport.child(self.render_recent_files_view(cx))
                                     })
@@ -884,6 +1176,13 @@ impl Render for LstGpuiApp {
                                                     .cursor(CursorStyle::IBeam)
                                                     .block_mouse_except_scroll()
                                                     .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+                                                    .on_mouse_down(
+                                                        MouseButton::Right,
+                                                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                                            this.open_context_menu(event.position, cx);
+                                                            cx.stop_propagation();
+                                                        }),
+                                                    )
                                                     .on_mouse_down(
                                                         MouseButton::Middle,
                                                         cx.listener(Self::on_middle_mouse_down),
@@ -968,6 +1267,7 @@ impl Render for LstGpuiApp {
                                                                             .as_ref(),
                                                                         vim_mode,
                                                                         focused: focus_handle.is_focused(window),
+                                                                        cursor_visible,
                                                                         paint_state,
                                                                         scale: ui_scale,
                                                                         horizontal_scroll,
@@ -1008,6 +1308,27 @@ impl Render for LstGpuiApp {
                     )
                     .child(self.render_status_bar(cx)),
             );
+        let root = root
+            .when(
+                self.workspace_surface == crate::WorkspaceSurface::CommandPalette,
+                |root| root.child(self.render_command_palette(cx)),
+            )
+            .when(self.workspace_surface == crate::WorkspaceSurface::Settings, |root| {
+                root.child(self.render_settings(cx))
+            })
+            .when(self.workspace_surface == crate::WorkspaceSurface::AppMenu, |root| {
+                root.child(self.render_app_menu(cx))
+            })
+            .when(
+                self.workspace_surface == crate::WorkspaceSurface::LanguageMenu,
+                |root| root.child(self.render_language_menu(cx)),
+            )
+            .when(self.workspace_surface == crate::WorkspaceSurface::ContextMenu, |root| {
+                root.child(self.render_context_menu(cx))
+            })
+            .when(self.close_prompt.is_some(), |root| {
+                root.child(self.render_close_prompt(cx))
+            });
         self.schedule_pending_reveal(window, cx);
         self.apply_focus(window, cx);
         if self.recent.is_open() {

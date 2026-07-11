@@ -500,7 +500,12 @@ fn expand_match_replacement(regex: &Regex, line: &str, byte_start_in_line: usize
 /// ASCII literal `query`, invoking `on_match` with each match's start byte.
 /// Matches are non-overlapping and advance past each hit; `query` must be
 /// non-empty. Shared with `multi_selection::ascii_literal_ranges`.
-pub(crate) fn for_each_ascii_literal_match(text: &[u8], query: &[u8], ignore_case: bool, mut on_match: impl FnMut(usize)) {
+pub(crate) fn for_each_ascii_literal_match(
+    text: &[u8],
+    query: &[u8],
+    ignore_case: bool,
+    mut on_match: impl FnMut(usize),
+) {
     let mut start = 0usize;
     let first = query[0];
     while start + query.len() <= text.len() {

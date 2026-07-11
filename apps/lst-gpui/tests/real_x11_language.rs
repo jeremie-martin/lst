@@ -44,6 +44,7 @@ fn block_comment_toggles_current_rust_line() -> TestResult {
         let path = session.seed_file("main.rs", "let x = 1;\n")?;
         let mut editor = session.open_file("language-block-comment-rust", &path)?;
 
+        editor.place_cursor_at_document_start()?;
         editor.keys("<C-S-/>")?;
         editor.save_then_expect_file(&path, "/*let x = 1;*/\n")?;
 

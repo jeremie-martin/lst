@@ -70,15 +70,19 @@ fn theme_button_cycles_visible_theme_label() -> TestResult {
     support::run_x11_test("chrome-theme-cycle", |session| {
         let (mut editor, _path) = session.open("scratch")?;
 
-        editor.wait_state("initial theme", secs(2), |record| {
-            record.theme_name == "Dark" && record.theme_button_bounds_px.is_some()
+        let initial = editor.wait_state("initial theme", secs(2), |record| {
+            matches!(record.theme_name.as_str(), "Dark" | "Light") && record.theme_button_bounds_px.is_some()
         })?;
+        let initial_name = initial.theme_name;
+        let next_name = if initial_name == "Dark" { "Light" } else { "Dark" };
 
         editor.click_theme_button()?;
-        editor.wait_state("light theme", secs(2), |record| record.theme_name == "Light")?;
+        editor.wait_state("cycled theme", secs(2), |record| record.theme_name == next_name)?;
 
         editor.click_theme_button()?;
-        editor.wait_state("dark theme restored", secs(2), |record| record.theme_name == "Dark")?;
+        editor.wait_state("initial theme restored", secs(2), |record| {
+            record.theme_name == initial_name
+        })?;
         Ok(())
     })
 }

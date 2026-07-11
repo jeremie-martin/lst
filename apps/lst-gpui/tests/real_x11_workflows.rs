@@ -7,7 +7,7 @@
 
 mod support;
 
-use lst_x11_harness::{clipboard::write_clipboard_text, Selection};
+use lst_x11_harness::{clipboard::write_clipboard_text, Key, KeyChord, Selection};
 use std::fs;
 
 use support::{EditorTestExt, TestResult};
@@ -94,7 +94,7 @@ fn ctrl_w_dirty_file_tab_saves_before_close() -> TestResult {
             record.active_tab_path.as_deref() == Some(&path_string)
         })?;
 
-        editor.keys("<C-w>")?;
+        editor.keys("<C-w><enter>")?;
         editor.wait_state("dirty file tab closed", support::secs(5), |record| {
             record.active_tab_path.as_deref() != Some(&path_string)
         })?;
@@ -111,7 +111,12 @@ fn ctrl_q_dirty_file_saves_before_exit() -> TestResult {
         let mut editor = session.open_file("dirty-file-quit", &path)?;
 
         editor.keys("<C-a>saved before quit")?;
-        editor.quit_default()?;
+        editor.keys("<C-q>")?;
+        editor.wait_state("dirty file quit prompt", support::secs(2), |record| {
+            record.close_prompt_file.as_deref() == Some("dirty-quit.txt")
+        })?;
+        editor.press(KeyChord::Key(Key::Enter))?;
+        editor.wait_for_successful_exit(support::secs(10))?;
 
         assert_eq!(fs::read_to_string(&path)?, "saved before quit");
         Ok(())

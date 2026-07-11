@@ -108,11 +108,12 @@ impl EditorModel {
         self.status = format!("Failed to save {}: {message}", path.display());
     }
 
-    pub fn autosave_tick(&mut self) {
+    pub fn autosave_tick(&mut self, include_ordinary_files: bool) {
         let jobs = self
             .tabs
             .iter()
             .filter(|tab| tab.modified())
+            .filter(|tab| include_ordinary_files || tab.is_scratchpad())
             .filter_map(|tab| {
                 let path = tab.path().cloned()?;
                 let open_tabs_for_path = self

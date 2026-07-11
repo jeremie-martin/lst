@@ -388,6 +388,10 @@ impl InputField {
         self.focus_handle.clone()
     }
 
+    pub fn text(&self) -> &str {
+        self.text.content.as_ref()
+    }
+
     fn emit_changed(&self, cx: &mut Context<Self>) {
         cx.emit(InputFieldEvent::Changed(self.text.content.to_string()));
     }

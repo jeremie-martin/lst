@@ -149,13 +149,14 @@ pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) active_search_match: Option<&'a Range<usize>>,
     pub(crate) vim_mode: vim::Mode,
     pub(crate) focused: bool,
+    pub(crate) cursor_visible: bool,
     pub(crate) paint_state: ViewportPaintState,
     pub(crate) scale: f32,
     pub(crate) horizontal_scroll: Pixels,
     pub(crate) theme: Theme,
 }
 pub(crate) fn buffer_content_height(visual_rows: usize, scale: f32) -> Pixels {
-    metrics::px_for_scale((visual_rows.max(1) as f32) * metrics::ROW_HEIGHT, scale)
+    metrics::px_for_scale((visual_rows.max(1) as f32) * metrics::row_height(), scale)
 }
 
 /// GPUI's `ScrollHandle::offset()` is negative when scrolled away from the
@@ -315,7 +316,7 @@ pub(crate) fn code_origin_x(element_left: Pixels, show_gutter: bool, scale: f32,
 }
 
 pub(crate) fn code_char_width(cache: &mut ViewportCache, window: &mut Window, scale: f32, theme: Theme) -> Pixels {
-    let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
+    let font_size = metrics::px_for_scale(metrics::code_font_size(), scale);
     let theme_key = theme.style_key();
     if let Some(cached) = cache.code_char_width {
         if cached.font_size == font_size && cached.theme_key == theme_key {
@@ -382,7 +383,7 @@ pub(crate) fn max_unwrapped_line_width(
     theme: Theme,
     window: &mut Window,
 ) -> Pixels {
-    let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
+    let font_size = metrics::px_for_scale(metrics::code_font_size(), scale);
     if let Some(cached) = cache.max_unwrapped_line_width {
         if cached.revision == revision && cached.char_width == char_width && cached.font_size == font_size {
             return cached.width;
@@ -418,7 +419,7 @@ fn shape_display_line(text: &str, scale: f32, theme: Theme, window: &mut Window)
         return None;
     }
 
-    let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
+    let font_size = metrics::px_for_scale(metrics::code_font_size(), scale);
     let text = SharedString::from(text.to_string());
     let font = typography::primary_font();
     Some(window.text_system().shape_line(
@@ -593,7 +594,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         scale,
         theme,
     } = input;
-    let row_height = metrics::px_for_scale(metrics::ROW_HEIGHT, scale);
+    let row_height = metrics::px_for_scale(metrics::row_height(), scale);
     let viewport_height = if bounds.size.height > px(0.0) {
         bounds.size.height
     } else {
@@ -601,7 +602,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     };
     let scroll_top = scroll_top_for(viewport_scroll);
     let scroll_left = scroll_left_for(viewport_scroll);
-    let font_size = metrics::px_for_scale(metrics::CODE_FONT_SIZE, scale);
+    let font_size = metrics::px_for_scale(metrics::code_font_size(), scale);
     let font = typography::primary_font();
     let code_run = TextRun {
         len: 0,
@@ -817,13 +818,14 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         active_search_match,
         vim_mode,
         focused,
+        cursor_visible,
         paint_state,
         scale,
         horizontal_scroll,
         theme,
     } = input;
     let line_height = window.line_height();
-    let row_height = metrics::px_for_scale(metrics::ROW_HEIGHT, scale);
+    let row_height = metrics::px_for_scale(metrics::row_height(), scale);
     let gutter_origin_x = bounds.left() + metrics::px_for_scale(metrics::GUTTER_LEFT_PAD, scale);
     let gutter_width = metrics::px_for_scale(metrics::GUTTER_WIDTH - metrics::GUTTER_LEFT_PAD - 8.0, scale);
     let code_origin_x = code_origin_x(bounds.left(), show_gutter, scale, horizontal_scroll);
@@ -882,7 +884,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             let _ = code_line.paint(point(code_origin_x, row.row_top), line_height, window, cx);
         }
 
-        if focused {
+        if focused && cursor_visible {
             for cursor in cursors.iter().filter(|cursor| row_contains_cursor(&row, cursor.char)) {
                 let cursor_char = cursor.char;
                 let block_cursor = vim_mode == vim::Mode::Normal && cursor.collapsed;
@@ -891,7 +893,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 let cursor_width = if block_cursor {
                     let next_x = code_origin_x
                         + x_for_global_char(&row, (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)))
-                            .unwrap_or_else(|| cursor_x + metrics::px_for_scale(metrics::CODE_FONT_SIZE * 0.55, scale));
+                            .unwrap_or_else(|| {
+                                cursor_x + metrics::px_for_scale(metrics::code_font_size() * 0.55, scale)
+                            });
                     (next_x - cursor_x).max(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale))
                 } else {
                     metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)

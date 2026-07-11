@@ -51,6 +51,7 @@ pub struct ScratchpadSession {
     root: PathBuf,
     artifacts: PathBuf,
     home: PathBuf,
+    config_home: PathBuf,
     state_home: PathBuf,
     drop_handled: bool,
 }
@@ -62,9 +63,11 @@ impl ScratchpadSession {
         let root = temp_dir(&format!("lst-real-x11-{label}"))?;
         let artifacts = root.join("artifacts");
         let home = root.join("home");
+        let config_home = root.join("config");
         let state_home = root.join("state");
         fs::create_dir_all(&artifacts)?;
         fs::create_dir_all(&home)?;
+        fs::create_dir_all(&config_home)?;
         fs::create_dir_all(&state_home)?;
         env::set_var("LST_X11_ARTIFACT_DIR", &artifacts);
         Ok(Self {
@@ -73,6 +76,7 @@ impl ScratchpadSession {
             root,
             artifacts,
             home,
+            config_home,
             state_home,
             drop_handled: false,
         })
@@ -83,7 +87,11 @@ impl ScratchpadSession {
     /// will write to plus the focused [`Editor`] handle. The autosave path
     /// already exists at return time.
     pub fn open(&mut self, name: &str) -> SupportResult<(Editor<'_>, PathBuf)> {
-        self.open_with_env(name, &[])
+        self.open_scratchpad(name, &[], false)
+    }
+
+    pub fn open_vim(&mut self, name: &str) -> SupportResult<(Editor<'_>, PathBuf)> {
+        self.open_scratchpad(name, &[], true)
     }
 
     /// Same as [`open`], but exports `extra_env` to the spawned editor.
@@ -95,14 +103,28 @@ impl ScratchpadSession {
         name: &str,
         extra_env: &[(&OsStr, &OsStr)],
     ) -> SupportResult<(Editor<'_>, PathBuf)> {
+        self.open_scratchpad(name, extra_env, false)
+    }
+
+    fn open_scratchpad(
+        &mut self,
+        name: &str,
+        extra_env: &[(&OsStr, &OsStr)],
+        vim: bool,
+    ) -> SupportResult<(Editor<'_>, PathBuf)> {
         let dir = self.root.join(name);
         fs::create_dir_all(&dir)?;
         let title = unique_title(name);
-        let args: [&OsStr; 2] = [OsStr::new("--scratchpad-dir"), dir.as_os_str()];
+        let mut args = Vec::with_capacity(3);
+        if vim {
+            args.push(OsStr::new("--vim"));
+        }
+        args.push(OsStr::new("--scratchpad-dir"));
+        args.push(dir.as_os_str());
         let stderr_log_path = self.stderr_log_path(name);
         let state_trace_path = self.state_trace_path(name);
         let (stdout, stderr) = self.log_stdio(name)?;
-        let env = spawn_env(&self.home, &self.state_home, extra_env);
+        let env = spawn_env(&self.home, &self.config_home, &self.state_home, extra_env);
         let mut editor = self.display.spawn_editor(SpawnOpts {
             binary: &self.binary,
             args: &args,
@@ -123,18 +145,30 @@ impl ScratchpadSession {
     /// Spawn the editor with the given file path as a positional arg and
     /// return the focused [`Editor`] handle.
     pub fn open_file(&mut self, name: &str, file: &Path) -> SupportResult<Editor<'_>> {
-        self.open_files(name, &[file.to_path_buf()])
+        self.open_files_with_mode(name, &[file.to_path_buf()], false)
+    }
+
+    pub fn open_vim_file(&mut self, name: &str, file: &Path) -> SupportResult<Editor<'_>> {
+        self.open_files_with_mode(name, &[file.to_path_buf()], true)
     }
 
     /// Spawn the editor with the given file paths as positional args and
     /// return the focused [`Editor`] handle.
     pub fn open_files(&mut self, name: &str, files: &[PathBuf]) -> SupportResult<Editor<'_>> {
+        self.open_files_with_mode(name, files, false)
+    }
+
+    fn open_files_with_mode(&mut self, name: &str, files: &[PathBuf], vim: bool) -> SupportResult<Editor<'_>> {
         let title = unique_title(name);
-        let args = files.iter().map(|file| file.as_os_str()).collect::<Vec<_>>();
+        let mut args = Vec::with_capacity(files.len() + usize::from(vim));
+        if vim {
+            args.push(OsStr::new("--vim"));
+        }
+        args.extend(files.iter().map(|file| file.as_os_str()));
         let stderr_log_path = self.stderr_log_path(name);
         let state_trace_path = self.state_trace_path(name);
         let (stdout, stderr) = self.log_stdio(name)?;
-        let env = spawn_env(&self.home, &self.state_home, &[]);
+        let env = spawn_env(&self.home, &self.config_home, &self.state_home, &[]);
         let mut editor = self.display.spawn_editor(SpawnOpts {
             binary: &self.binary,
             args: &args,
@@ -183,6 +217,15 @@ impl ScratchpadSession {
         Ok(state_path)
     }
 
+    pub fn seed_settings(&self, contents: &str) -> SupportResult<PathBuf> {
+        let path = self.config_home.join("lst").join("config.toml");
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, contents)?;
+        Ok(path)
+    }
+
     fn cleanup(&mut self) -> SupportResult<()> {
         if env::var_os("LST_X11_KEEP_TEMP").is_some() {
             self.preserve("LST_X11_KEEP_TEMP");
@@ -223,11 +266,13 @@ impl ScratchpadSession {
 
 fn spawn_env<'a>(
     home: &'a Path,
+    config_home: &'a Path,
     state_home: &'a Path,
     extra_env: &'a [(&'a OsStr, &'a OsStr)],
 ) -> Vec<(&'a OsStr, &'a OsStr)> {
     let mut env = vec![
         (OsStr::new("HOME"), home.as_os_str()),
+        (OsStr::new("XDG_CONFIG_HOME"), config_home.as_os_str()),
         (OsStr::new("XDG_STATE_HOME"), state_home.as_os_str()),
     ];
     env.extend_from_slice(extra_env);

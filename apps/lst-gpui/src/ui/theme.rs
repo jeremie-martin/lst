@@ -237,29 +237,40 @@ const LIGHT: Theme = Theme {
 
 pub mod typography {
     use super::{font, Font, FontFallbacks};
-    use std::sync::OnceLock;
+    use std::sync::{OnceLock, RwLock};
 
     pub const PRIMARY_FONT_FAMILY: &str = "TX-02";
 
-    pub fn primary_font() -> Font {
-        static FONT: OnceLock<Font> = OnceLock::new();
+    fn configured_family() -> &'static RwLock<String> {
+        static FAMILY: OnceLock<RwLock<String>> = OnceLock::new();
+        FAMILY.get_or_init(|| RwLock::new(PRIMARY_FONT_FAMILY.to_string()))
+    }
 
-        FONT.get_or_init(|| {
-            let mut font = font(PRIMARY_FONT_FAMILY);
-            font.fallbacks = Some(FontFallbacks::from_fonts(vec![
-                "JetBrains Mono".to_string(),
-                ".ZedMono".to_string(),
-                "Lilex".to_string(),
-                "IBM Plex Mono".to_string(),
-            ]));
-            font
-        })
-        .clone()
+    pub fn set_primary_font_family(family: &str) {
+        *configured_family()
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = family.to_string();
+    }
+
+    pub fn primary_font() -> Font {
+        let family = configured_family()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let mut font = font(family);
+        font.fallbacks = Some(FontFallbacks::from_fonts(vec![
+            "JetBrains Mono".to_string(),
+            ".ZedMono".to_string(),
+            "Lilex".to_string(),
+            "IBM Plex Mono".to_string(),
+        ]));
+        font
     }
 }
 
 pub mod metrics {
     use super::{px, Pixels};
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     pub const BASE_REM_SIZE: f32 = 16.0;
     pub const MIN_ZOOM_LEVEL: i32 = -4;
@@ -286,9 +297,8 @@ pub mod metrics {
     pub const INPUT_TEXT_SIZE: f32 = 12.0;
     pub const INPUT_TEXT_LINE_HEIGHT: f32 = 18.0;
 
-    pub const ROW_HEIGHT: f32 = 22.0;
+    pub const DEFAULT_CODE_FONT_SIZE: f32 = 13.0;
     pub const GUTTER_WIDTH: f32 = 58.0;
-    pub const CODE_FONT_SIZE: f32 = 13.0;
     pub const CURSOR_WIDTH: f32 = 2.0;
     pub const VIEWPORT_OVERSCAN_LINES: usize = 6;
     pub const EDITOR_LEFT_PAD: f32 = 18.0;
@@ -298,6 +308,20 @@ pub mod metrics {
     pub const SCROLLBAR_THUMB_WIDTH: f32 = 4.0;
     pub const SCROLLBAR_EDGE_PAD: f32 = 3.0;
     pub const SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 24.0;
+
+    static CODE_FONT_SIZE_BITS: AtomicU32 = AtomicU32::new(DEFAULT_CODE_FONT_SIZE.to_bits());
+
+    pub fn set_code_font_size(size: f32) {
+        CODE_FONT_SIZE_BITS.store(size.clamp(8.0, 40.0).to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn code_font_size() -> f32 {
+        f32::from_bits(CODE_FONT_SIZE_BITS.load(Ordering::Relaxed))
+    }
+
+    pub fn row_height() -> f32 {
+        code_font_size() + 9.0
+    }
 
     pub fn zoom_scale(level: i32) -> f32 {
         ZOOM_STEP.powi(level.clamp(MIN_ZOOM_LEVEL, MAX_ZOOM_LEVEL))

@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{diagnostics, elapsed_ms, LstGpuiApp, PendingAfterSave};
+use crate::{diagnostics, elapsed_ms, ClosePrompt, LstGpuiApp, PendingAfterSave};
 use lst_editor::UndoBoundary;
 use std::ops::Range;
 
@@ -130,6 +130,12 @@ enum ConflictWrite {
     Autosave { revision: u64 },
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SaveTextOptions {
+    trim_trailing_whitespace: bool,
+    ensure_final_newline: bool,
+}
+
 #[derive(Debug)]
 enum SaveKind {
     Save { expected_stamp: Option<FileStamp> },
@@ -222,10 +228,23 @@ impl LstGpuiApp {
                 cx.background_executor().timer(Duration::from_millis(500)).await;
                 if view
                     .update(cx, |view, cx| {
+                        let cursor_was_visible = view.cursor_visible;
+                        let next_cursor_visible = if view.settings.settings.editor.cursor_blink {
+                            !view.cursor_visible
+                        } else {
+                            true
+                        };
+                        view.reload_settings_if_changed(cx);
                         view.check_external_file_changes(cx);
+                        let include_ordinary =
+                            view.settings.settings.files.autosave == crate::settings::AutosaveMode::All;
                         view.update_model(cx, false, |model| {
-                            model.autosave_tick();
+                            model.autosave_tick(include_ordinary);
                         });
+                        view.cursor_visible = next_cursor_visible;
+                        if cursor_was_visible != next_cursor_visible {
+                            cx.notify();
+                        }
                     })
                     .is_err()
                 {
@@ -314,6 +333,7 @@ impl LstGpuiApp {
         kind: SaveKind,
         cx: &mut Context<Self>,
     ) {
+        let save_options = self.save_text_options();
         let ticket = self.issue_save_ticket(&path);
         self.begin_save_inflight(&path);
         let expected_stamp = match &kind {
@@ -324,7 +344,9 @@ impl LstGpuiApp {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { save_file_result(tab_id, path, body, revision, expected_stamp, ticket) })
+                .spawn(
+                    async move { save_file_result(tab_id, path, body, revision, expected_stamp, ticket, save_options) },
+                )
                 .await;
             let save_complete_ms = elapsed_ms(save_started);
             let _ = this.update(cx, |view, cx| {
@@ -431,7 +453,7 @@ impl LstGpuiApp {
             return;
         }
         let body = tab.buffer_text();
-        let saved_body = saved_body_for_conflict(write, &body);
+        let saved_body = saved_body_for_conflict(write, &body, self.save_text_options());
         if fs::read_to_string(&path).is_ok_and(|text| text == saved_body.as_str()) {
             self.finish_matching_disk_conflict(tab_id, path, disk_stamp, saved_body, write, cx);
             return;
@@ -501,6 +523,15 @@ impl LstGpuiApp {
                     cx,
                 );
             }
+        }
+    }
+
+    fn save_text_options(&self) -> SaveTextOptions {
+        SaveTextOptions {
+            trim_trailing_whitespace: self.settings.settings.files.trim_trailing_whitespace
+                || env_flag("LST_SAVE_TRIM_TRAILING_WS"),
+            ensure_final_newline: self.settings.settings.files.ensure_final_newline
+                || env_flag("LST_SAVE_ENSURE_FINAL_NEWLINE"),
         }
     }
 
@@ -585,7 +616,15 @@ impl LstGpuiApp {
                 });
             }
             Some(TabCloseRequest::SaveAndClose { tab_id }) => {
-                self.start_save_for_pending(tab_id, PendingAfterSave::CloseTab(tab_id), cx);
+                if self.model.tab_by_id(tab_id).is_some_and(ModelEditorTab::is_scratchpad) {
+                    self.start_save_for_pending(tab_id, PendingAfterSave::CloseTab(tab_id), cx);
+                } else {
+                    self.close_prompt = Some(ClosePrompt {
+                        tab_id,
+                        pending: PendingAfterSave::CloseTab(tab_id),
+                    });
+                    cx.notify();
+                }
             }
             None => {}
         }
@@ -608,7 +647,43 @@ impl LstGpuiApp {
             self.finish_quit(cx);
             return;
         };
-        self.start_save_for_pending(tab_id, PendingAfterSave::Quit, cx);
+        if self.model.tab_by_id(tab_id).is_some_and(ModelEditorTab::is_scratchpad) {
+            self.start_save_for_pending(tab_id, PendingAfterSave::Quit, cx);
+        } else {
+            self.close_prompt = Some(ClosePrompt {
+                tab_id,
+                pending: PendingAfterSave::Quit,
+            });
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn confirm_close_prompt_save(&mut self, cx: &mut Context<Self>) {
+        let Some(prompt) = self.close_prompt.take() else {
+            return;
+        };
+        self.start_save_for_pending(prompt.tab_id, prompt.pending, cx);
+    }
+
+    pub(crate) fn confirm_close_prompt_discard(&mut self, cx: &mut Context<Self>) {
+        let Some(prompt) = self.close_prompt.take() else {
+            return;
+        };
+        self.record_closed_tab(prompt.tab_id);
+        self.update_model(cx, true, |model| {
+            model.discard_close_tab(prompt.tab_id);
+        });
+        if prompt.pending == PendingAfterSave::Quit {
+            self.continue_quit_sequence(cx);
+        }
+    }
+
+    pub(crate) fn cancel_close_prompt(&mut self, cx: &mut Context<Self>) {
+        if self.close_prompt.take().is_some() {
+            self.pending_after_save = None;
+            self.force_editor_focus = true;
+            cx.notify();
+        }
     }
 
     fn start_save_for_pending(&mut self, tab_id: TabId, pending: PendingAfterSave, cx: &mut Context<Self>) {
@@ -1051,9 +1126,9 @@ fn stale_save_result(tab_id: TabId, path: PathBuf, revision: u64) -> FileWriteOu
     FileWriteOutcome::Stale { tab_id, path, revision }
 }
 
-fn saved_body_for_conflict(write: ConflictWrite, body: &str) -> String {
+fn saved_body_for_conflict(write: ConflictWrite, body: &str, options: SaveTextOptions) -> String {
     match write {
-        ConflictWrite::Save { .. } => apply_save_options(body.to_string()),
+        ConflictWrite::Save { .. } => apply_save_options(body.to_string(), options),
         ConflictWrite::Autosave { .. } => body.to_string(),
     }
 }
@@ -1077,6 +1152,7 @@ fn save_file_result(
     revision: u64,
     expected_stamp: Option<FileStamp>,
     ticket: SaveTicket,
+    options: SaveTextOptions,
 ) -> FileWriteOutcome {
     if !ticket.is_current() {
         return stale_save_result(tab_id, path, revision);
@@ -1103,7 +1179,7 @@ fn save_file_result(
     if !ticket.is_current() {
         return stale_save_result(tab_id, path, revision);
     }
-    write_file_result(tab_id, path, body, revision, expected_stamp, ticket)
+    write_file_result(tab_id, path, body, revision, expected_stamp, ticket, options)
 }
 
 fn write_file_result(
@@ -1113,8 +1189,9 @@ fn write_file_result(
     revision: u64,
     expected_stamp: Option<FileStamp>,
     ticket: SaveTicket,
+    options: SaveTextOptions,
 ) -> FileWriteOutcome {
-    let body = apply_save_options(body);
+    let body = apply_save_options(body, options);
     match write_file_with_guards(&path, body.as_bytes(), expected_stamp, Some(&ticket)) {
         Ok(AtomicWriteOutcome::Written) => match file_stamp(&path) {
             Ok(stamp) => FileWriteOutcome::Written {
@@ -1210,18 +1287,16 @@ fn write_autosave_temp_file(job: &AutosaveJob) -> std::io::Result<PathBuf> {
     fs::write(&temp_path, job.body.as_bytes()).map(|_| temp_path)
 }
 
-/// Opt-in save-time text policies driven by env flags
-/// (`LST_SAVE_TRIM_TRAILING_WS`, `LST_SAVE_ENSURE_FINAL_NEWLINE`). They live
-/// as env vars in the spirit of `LST_LLM_FAKE_RESPONSE` until a real
-/// settings surface lands.
-fn apply_save_options(body: String) -> String {
-    let trim = env_flag("LST_SAVE_TRIM_TRAILING_WS");
-    let ensure_newline = env_flag("LST_SAVE_ENSURE_FINAL_NEWLINE");
-    if !trim && !ensure_newline {
+fn apply_save_options(body: String, options: SaveTextOptions) -> String {
+    if !options.trim_trailing_whitespace && !options.ensure_final_newline {
         return body;
     }
-    let mut body = if trim { trim_trailing_ws(&body) } else { body };
-    if ensure_newline && !body.is_empty() && !body.ends_with('\n') {
+    let mut body = if options.trim_trailing_whitespace {
+        trim_trailing_ws(&body)
+    } else {
+        body
+    };
+    if options.ensure_final_newline && !body.is_empty() && !body.ends_with('\n') {
         body.push('\n');
     }
     body

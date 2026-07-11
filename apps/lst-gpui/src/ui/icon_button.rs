@@ -1,7 +1,8 @@
 use gpui::{
-    div, prelude::FluentBuilder, rgb, App, CursorStyle, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    Stateful, StatefulInteractiveElement, Styled,
+    div, font, prelude::FluentBuilder, rgb, App, AppContext, Context, CursorStyle, InteractiveElement, IntoElement,
+    ParentElement, Render, RenderOnce, Stateful, StatefulInteractiveElement, Styled, Window,
 };
+use lucide_icons::Icon;
 
 use crate::ui::theme::{metrics, Theme};
 
@@ -9,19 +10,33 @@ use crate::ui::theme::{metrics, Theme};
 pub enum IconKind {
     Close,
     Plus,
+    Minus,
     Recent,
     Sparkle,
     Theme,
+    Menu,
+    Settings,
+    ChevronUp,
+    ChevronDown,
+    Replace,
+    ReplaceAll,
 }
 
 impl IconKind {
-    fn label(self) -> &'static str {
+    fn icon(self) -> Icon {
         match self {
-            Self::Close => "×",
-            Self::Plus => "+",
-            Self::Recent => "↺",
-            Self::Sparkle => "✦",
-            Self::Theme => "◐",
+            Self::Close => Icon::X,
+            Self::Plus => Icon::Plus,
+            Self::Minus => Icon::Minus,
+            Self::Recent => Icon::History,
+            Self::Sparkle => Icon::Sparkles,
+            Self::Theme => Icon::SunMoon,
+            Self::Menu => Icon::Menu,
+            Self::Settings => Icon::Settings,
+            Self::ChevronUp => Icon::ChevronUp,
+            Self::ChevronDown => Icon::ChevronDown,
+            Self::Replace => Icon::Replace,
+            Self::ReplaceAll => Icon::ReplaceAll,
         }
     }
 }
@@ -33,6 +48,7 @@ pub struct IconButton {
     theme: Theme,
     emphasized: bool,
     disabled: bool,
+    tooltip: Option<String>,
 }
 
 impl IconButton {
@@ -43,6 +59,7 @@ impl IconButton {
             theme,
             emphasized: false,
             disabled: false,
+            tooltip: None,
         }
     }
 
@@ -53,6 +70,11 @@ impl IconButton {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    pub fn tooltip(mut self, label: impl Into<String>) -> Self {
+        self.tooltip = Some(label.into());
         self
     }
 }
@@ -86,6 +108,8 @@ impl RenderOnce for IconButton {
         };
         let interactive = !self.disabled;
 
+        let icon = char::from(self.icon.icon()).to_string();
+        let tooltip_theme = self.theme;
         self.div
             .flex()
             .w(metrics::px_for_rem(metrics::ICON_BUTTON_SIZE, rem_size))
@@ -99,8 +123,38 @@ impl RenderOnce for IconButton {
             })
             .items_center()
             .justify_center()
+            .font(font("lucide"))
             .text_size(metrics::px_for_rem(metrics::TAB_TEXT_SIZE, rem_size))
             .text_color(foreground)
-            .child(self.icon.label())
+            .when_some(self.tooltip, |button, tooltip| {
+                button.tooltip(move |_window, cx| {
+                    cx.new(|_| Tooltip {
+                        text: tooltip.clone(),
+                        theme: tooltip_theme,
+                    })
+                    .into()
+                })
+            })
+            .child(icon)
+    }
+}
+
+struct Tooltip {
+    text: String,
+    theme: Theme,
+}
+
+impl Render for Tooltip {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .border_1()
+            .border_color(rgb(self.theme.role.border))
+            .bg(rgb(self.theme.role.control_bg))
+            .text_size(metrics::px_for_rem(11.0, window.rem_size()))
+            .text_color(rgb(self.theme.role.text))
+            .child(self.text.clone())
     }
 }

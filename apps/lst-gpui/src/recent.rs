@@ -723,6 +723,13 @@ impl LstGpuiApp {
             return;
         }
 
+        if self.model.find().visible {
+            self.update_model(cx, false, |model| model.close_find_panel());
+        }
+        if self.model.goto_line().is_some() {
+            self.update_model(cx, false, |model| model.close_goto_line_panel());
+        }
+
         let pending_search = self.recent.open();
         let seeded_query = self.recent.query().to_string();
         reset_scroll(&self.recent_scroll);

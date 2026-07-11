@@ -26,7 +26,7 @@ fn vim_ctrl_d_in_normal_mode_keeps_vim_half_page_motion() -> TestResult {
             .collect::<Vec<_>>()
             .join("\n");
         let path = session.seed_file("vim-ctrl-d.txt", &text)?;
-        let mut editor = session.open_file("vim-ctrl-d", &path)?;
+        let mut editor = session.open_vim_file("vim-ctrl-d", &path)?;
 
         editor.click_at_text(0, 0)?;
         editor.send_keys_settle("<esc>")?;
@@ -113,7 +113,7 @@ fn released_ctrl_then_plain_d_in_insert_mode_inserts_d() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn ignored_insert_mode_recent_ctrl_does_not_poison_next_vim_key() -> TestResult {
     support::run_x11_test("regression-ignored-insert-ctrl-clears", |session| {
-        let (mut editor, _path) = session.open("scratch")?;
+        let (mut editor, _path) = session.open_vim("scratch")?;
 
         editor.keys("abc")?;
         editor.key_after_released_modifiers(ChordMods::CTRL, Key::Char('d'))?;
@@ -169,6 +169,7 @@ fn crlf_line_ending_is_not_split_by_right_motion_and_insert() -> TestResult {
         let path = session.seed_file("crlf.txt", "a\r\nb")?;
         let mut editor = session.open_file("regression-crlf-motion-insert", &path)?;
 
+        editor.place_cursor_at_document_start()?;
         editor.keys("<end><right>X")?;
         editor.save_then_expect_file(&path, "a\r\nXb")?;
         Ok(())
@@ -184,6 +185,7 @@ fn save_preserves_existing_executable_mode() -> TestResult {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
         let mut editor = session.open_file("regression-save-preserves-mode", &path)?;
 
+        editor.place_cursor_at_document_start()?;
         editor.keys("#")?;
         editor.save_then_expect_file(&path, "##!/bin/sh\necho hi\n")?;
         let mode = std::fs::metadata(&path)?.permissions().mode() & 0o777;
@@ -202,6 +204,7 @@ fn save_through_symlink_updates_target_without_replacing_link() -> TestResult {
         symlink(&target, &link)?;
         let mut editor = session.open_file("regression-save-symlink", &link)?;
 
+        editor.place_cursor_at_document_start()?;
         editor.keys("linked ")?;
         editor.save_then_expect_file(&target, "linked target\n")?;
         assert!(std::fs::symlink_metadata(&link)?.file_type().is_symlink());

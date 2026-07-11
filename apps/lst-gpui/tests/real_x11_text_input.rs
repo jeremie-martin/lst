@@ -15,6 +15,7 @@ fn backspace_deletes_seeded_combining_cluster_as_one_character() -> TestResult {
         let path = session.seed_file("grapheme.txt", "e\u{301}x")?;
         let mut editor = session.open_file("text-input-grapheme-backspace", &path)?;
 
+        editor.place_cursor_at_document_start()?;
         editor.keys("<right><bs>")?;
         editor.save_then_expect_file(&path, "x")?;
         Ok(())

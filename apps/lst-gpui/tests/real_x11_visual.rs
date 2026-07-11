@@ -55,16 +55,22 @@ const SCENARIOS: &[VisualScenario] = &[
 #[ignore = "requires a real X11 display plus xclip"]
 fn visual_scenarios_are_exactly_repeatable() -> TestResult {
     support::run_x11_test("visual-repeatability", |session| {
+        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\n[appearance]\ntheme = 'dark'\n")?;
+        let update_baselines = std::env::var_os("LST_UPDATE_VISUAL_BASELINES").is_some();
         for scenario in SCENARIOS {
             let expected = (scenario.capture)(session, 0)?;
             expected.write_ppm(session.artifacts().join(format!("{}-expected.ppm", scenario.name)))?;
-            let baseline = Screenshot::read_ppm(baseline_path(scenario.name))?;
-            assert_screenshot_exact(
-                session.artifacts(),
-                &format!("{}-baseline", scenario.name),
-                &expected,
-                &baseline,
-            )?;
+            if update_baselines {
+                expected.write_ppm(baseline_path(scenario.name))?;
+            } else {
+                let baseline = Screenshot::read_ppm(baseline_path(scenario.name))?;
+                assert_screenshot_exact(
+                    session.artifacts(),
+                    &format!("{}-baseline", scenario.name),
+                    &expected,
+                    &baseline,
+                )?;
+            }
 
             for run in 1..FRESH_LAUNCHES {
                 let actual = (scenario.capture)(session, run)?;

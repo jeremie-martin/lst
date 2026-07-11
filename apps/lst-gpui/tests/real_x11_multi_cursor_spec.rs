@@ -35,15 +35,15 @@ fn selection_widths(record: &lst_x11_harness::StateTraceRecord) -> Vec<usize> {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn shift_alt_up_adds_adjacent_line_cursors_above() -> TestResult {
-    support::run_x11_test("multi-cursor-spec-shift-alt-up", |session| {
-        let path = session.seed_file("shift-alt-up.txt", "alpha\nbeta\ngamma")?;
-        let mut editor = session.open_file("shift-alt-up", &path)?;
+fn ctrl_alt_up_adds_adjacent_line_cursors_above() -> TestResult {
+    support::run_x11_test("multi-cursor-spec-ctrl-alt-up", |session| {
+        let path = session.seed_file("ctrl-alt-up.txt", "alpha\nbeta\ngamma")?;
+        let mut editor = session.open_file("ctrl-alt-up", &path)?;
 
         editor.keys("<C-home><down><down>")?;
         editor.expect_cursor_heads(&[(2, 0)])?;
 
-        editor.keys("<S-A-up><S-A-up>")?;
+        editor.keys("<C-A-up><C-A-up>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
         Ok(())
     })
@@ -51,7 +51,7 @@ fn shift_alt_up_adds_adjacent_line_cursors_above() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn shift_alt_down_clamps_added_cursors_to_short_line_ends() -> TestResult {
+fn ctrl_alt_down_clamps_added_cursors_to_short_line_ends() -> TestResult {
     support::run_x11_test("multi-cursor-spec-short-line-clamp", |session| {
         let path = session.seed_file("short-line-clamp.txt", "abcdef\nx\nabcdef")?;
         let mut editor = session.open_file("short-line-clamp", &path)?;
@@ -60,7 +60,7 @@ fn shift_alt_down_clamps_added_cursors_to_short_line_ends() -> TestResult {
         editor.keys("<right><right><right><right>")?;
         editor.expect_cursor_heads(&[(0, 4)])?;
 
-        editor.keys("<S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 4), (1, 1), (2, 4)])?;
         Ok(())
     })
@@ -68,13 +68,13 @@ fn shift_alt_down_clamps_added_cursors_to_short_line_ends() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn shift_alt_down_stops_at_document_end_without_duplicate_cursors() -> TestResult {
+fn ctrl_alt_down_stops_at_document_end_without_duplicate_cursors() -> TestResult {
     support::run_x11_test("multi-cursor-spec-boundary", |session| {
         let path = session.seed_file("boundary.txt", "alpha\nbeta")?;
         let mut editor = session.open_file("boundary", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<S-A-down><S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0)])?;
         Ok(())
     })
@@ -120,7 +120,7 @@ fn shift_right_extends_every_cursor_independently() -> TestResult {
         let mut editor = session.open_file("shift-right", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
 
         editor.keys("<S-right>")?;
@@ -154,6 +154,7 @@ fn shift_alt_right_expands_and_shift_alt_left_shrinks_each_selection() -> TestRe
         let path = session.seed_file("smart-select.txt", "(foo)\n(foo)")?;
         let mut editor = session.open_file("smart-select", &path)?;
 
+        editor.place_cursor_at_document_start()?;
         editor.keys("<right><C-S-l>")?;
         let baseline = editor.read_state()?;
         assert_eq!(selection_widths(&baseline), vec![3, 3], "{baseline:?}");

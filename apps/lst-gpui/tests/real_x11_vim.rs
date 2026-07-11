@@ -17,7 +17,7 @@ fn vim_top_line_delete_round_trips_to_autosaved_file() -> TestResult {
     // Type three lines in Insert, leave Insert, jump to top, delete first
     // line. Standard vim semantics: result is "B\nC\n".
     support::run_x11_test("vim-top-line-delete", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let (mut editor, path) = session.open_vim("scratch")?;
 
         editor.keys("A<enter>B<enter>C<enter><esc>ggdd")?;
         editor.save_then_expect_file(&path, "B\nC\n")?;
@@ -32,7 +32,7 @@ fn vim_visual_line_indent_indents_block_by_one_unit() -> TestResult {
     // Visual-line over all three lines, indent. Scratchpads are saved as
     // `.md`, so the active indent unit is two spaces.
     support::run_x11_test("vim-visual-indent", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let (mut editor, path) = session.open_vim("scratch")?;
 
         editor.keys("alpha<enter>beta<enter>gamma<esc>gg0Vjj><esc>")?;
         editor.save_then_expect_file(&path, "  alpha\n  beta\n  gamma")?;
@@ -44,7 +44,7 @@ fn vim_visual_line_indent_indents_block_by_one_unit() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn vim_change_inner_word_replaces_text_object_and_enters_insert() -> TestResult {
     support::run_x11_test("vim-change-inner-word", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let (mut editor, path) = session.open_vim("scratch")?;
 
         editor.keys("hello world<esc>0ciwHEY<esc>")?;
         editor.save_then_expect_file(&path, "HEY world")?;
@@ -56,7 +56,7 @@ fn vim_change_inner_word_replaces_text_object_and_enters_insert() -> TestResult 
 #[ignore = "requires a real X11 display plus xclip"]
 fn vim_normal_open_join_and_replace_commands_edit_observable_text() -> TestResult {
     support::run_x11_test("vim-open-join-replace", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let (mut editor, path) = session.open_vim("scratch")?;
 
         editor.keys("foo<enter>bar<esc>ggOtop<esc>jJ0rx")?;
         editor.save_then_expect_file(&path, "top\nxoo bar")?;
@@ -69,7 +69,7 @@ fn vim_normal_open_join_and_replace_commands_edit_observable_text() -> TestResul
 fn vim_word_delete_on_empty_line_edits_observable_text() -> TestResult {
     support::run_x11_test("vim-dw-empty-line", |session| {
         let path = session.seed_file("vim-dw-empty-line.txt", "\nabc")?;
-        let mut editor = session.open_file("dw-empty", &path)?;
+        let mut editor = session.open_vim_file("dw-empty", &path)?;
 
         editor.place_cursor_at_document_start()?;
         editor.keys("<esc>dw")?;
@@ -83,7 +83,7 @@ fn vim_word_delete_on_empty_line_edits_observable_text() -> TestResult {
 fn vim_join_preserves_indent_only_first_line_in_observable_text() -> TestResult {
     support::run_x11_test("vim-join-indent-only", |session| {
         let path = session.seed_file("vim-join-indent-only.txt", "  \nbar")?;
-        let mut editor = session.open_file("join-indent-only", &path)?;
+        let mut editor = session.open_vim_file("join-indent-only", &path)?;
 
         editor.place_cursor_at_document_start()?;
         editor.keys("<esc>J")?;
@@ -96,7 +96,7 @@ fn vim_join_preserves_indent_only_first_line_in_observable_text() -> TestResult 
 #[ignore = "requires a real X11 display plus xclip"]
 fn vim_linewise_yank_pastes_after_target_line() -> TestResult {
     support::run_x11_test("vim-linewise-paste", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let (mut editor, path) = session.open_vim("scratch")?;
 
         editor.keys("one<enter>two<enter>three<esc>ggyyGp")?;
         editor.save_then_expect_file(&path, "one\ntwo\nthree\none")?;
@@ -108,7 +108,7 @@ fn vim_linewise_yank_pastes_after_target_line() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn vim_visual_text_object_uppercases_inner_word() -> TestResult {
     support::run_x11_test("vim-visual-text-object-case", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let (mut editor, path) = session.open_vim("scratch")?;
 
         editor.keys("hello world<esc>0viwU")?;
         editor.save_then_expect_file(&path, "HELLO world")?;
@@ -121,7 +121,7 @@ fn vim_visual_text_object_uppercases_inner_word() -> TestResult {
 fn vim_star_and_navigate_find_word_under_cursor() -> TestResult {
     support::run_x11_test("vim-star-search", |session| {
         let path = session.seed_file("vim-star-search.txt", "foo bar foo baz foo")?;
-        let mut editor = session.open_file("vim-star-search", &path)?;
+        let mut editor = session.open_vim_file("vim-star-search", &path)?;
 
         editor.keys("<esc>0*")?;
         editor.expect_cursor_heads(&[(0, 8)])?;
@@ -136,7 +136,7 @@ fn vim_star_and_navigate_find_word_under_cursor() -> TestResult {
 fn vim_question_search_repeats_backward() -> TestResult {
     support::run_x11_test("vim-question-search", |session| {
         let path = session.seed_file("vim-question-search.txt", "foo bar foo baz foo")?;
-        let mut editor = session.open_file("vim-question-search", &path)?;
+        let mut editor = session.open_vim_file("vim-question-search", &path)?;
 
         editor.keys("<esc>gg$")?;
         editor.expect_cursor_heads(&[(0, 18)])?;
@@ -162,7 +162,7 @@ fn vim_question_search_repeats_backward() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn vim_change_undo_is_single_step() -> TestResult {
     support::run_x11_test("vim-change-undo", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let (mut editor, path) = session.open_vim("scratch")?;
 
         editor.keys("alpha beta<esc>0cwX<esc>u")?;
         editor.save_then_expect_file(&path, "alpha beta")?;
@@ -193,7 +193,7 @@ fn vim_compound_commands_survive_long_pauses_between_keystrokes() -> TestResult 
     // have. Investigate the regression — do not "fix" the test by
     // shortening the pauses.
     support::run_x11_test("vim-slow-paced", |session| {
-        let (mut editor, path) = session.open("scratch")?;
+        let (mut editor, path) = session.open_vim("scratch")?;
 
         editor.keys("first<enter>second<enter>third<esc>")?;
         thread::sleep(secs(1));

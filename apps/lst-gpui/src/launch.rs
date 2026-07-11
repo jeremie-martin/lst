@@ -1,3 +1,4 @@
+use lst_editor::InputMode;
 use std::{fmt, path::PathBuf, process};
 
 #[derive(Clone, Debug, Default)]
@@ -5,6 +6,7 @@ pub(crate) struct LaunchArgs {
     pub(crate) files: Vec<PathBuf>,
     pub(crate) window_title: Option<String>,
     pub(crate) scratchpad_dir: Option<PathBuf>,
+    pub(crate) input_mode: Option<InputMode>,
 }
 
 #[derive(Clone, Debug)]
@@ -27,7 +29,8 @@ fn usage() -> &'static str {
   cargo run
   cargo run -- file1.rs file2.md
   cargo run -- --title \"lst GPUI\"
-  cargo run -- --scratchpad-dir /path/to/notes"
+  cargo run -- --scratchpad-dir /path/to/notes
+  cargo run -- --vim | --no-vim"
 }
 
 pub(crate) fn parse_launch_args() -> LaunchArgs {
@@ -57,6 +60,8 @@ where
             "--help" | "-h" => {
                 return Err(LaunchArgError::Help);
             }
+            "--vim" => args.input_mode = Some(InputMode::Vim),
+            "--no-vim" => args.input_mode = Some(InputMode::Standard),
             _ if arg.starts_with("--title=") => {
                 args.window_title = Some(arg["--title=".len()..].to_string());
             }

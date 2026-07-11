@@ -376,7 +376,9 @@ fn occurrence_ranges(text: &str, query: &str, find: &FindState) -> OccurrenceRan
 
 fn ascii_literal_ranges(text: &[u8], query: &[u8], ignore_case: bool) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
-    crate::find::for_each_ascii_literal_match(text, query, ignore_case, |start| ranges.push(start..start + query.len()));
+    crate::find::for_each_ascii_literal_match(text, query, ignore_case, |start| {
+        ranges.push(start..start + query.len())
+    });
     ranges
 }
 

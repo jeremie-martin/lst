@@ -7,7 +7,8 @@ observable behavior over feature volume.
 
 - `lst-editor`: framework-neutral editor model, document primitives, text
   transactions, undo/redo snapshot history, observable snapshots, effects,
-  language detection, line bookmarks, and Vim state
+  language detection and overrides, line bookmarks, standard input mode, and
+  the optional Vim state machine
 - `lst-gpui`: rendering, widgets, input adaptation, dialogs, clipboard, file
   I/O, tree-sitter syntax highlighting (`src/syntax`), DeepSeek text cleanup
   (`src/llm.rs`), benchmark wiring, and desktop integration
@@ -19,19 +20,18 @@ render observable state.
 
 ## Near-Term Priorities
 
-Horizontal scrolling, find toggles, grapheme-aware motion, tab reordering,
-multi-cursor creation gestures, and env-gated save options have landed; the
-remaining near-term work is:
+The daily-driver foundation has landed: standard mode is the default, ordinary
+files are manually saved, settings and keybindings are persistent, command and
+application menus make behavior discoverable, and find/replace and language
+controls are visible. Remaining near-term work is:
 
-- Cursor blink and other small viewport polish
 - Promote the `x11-tdd` specs that are already wired (line bookmarks, recently
   closed tab reopen) into the blocking `x11` profile, and add real-display
   coverage for syntax-highlighting colors
-- User settings UI for the existing env-gated save options
-  (trim-trailing-whitespace, ensure-final-newline) and a user-facing language
-  picker (language is currently detection-only, with no override)
 - Jump list and navigation history
-- User-configurable keybindings
+- Direct keybinding editing in the settings surface; TOML overrides and live
+  reload are already supported
+- Extend tab dragging and context-menu coverage in the real-display harness
 - Multi-cursor policy gaps: Vim-mode multi-cursor, join-line clusters, and
   find/replace over multiple selections
 

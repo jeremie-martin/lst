@@ -2,6 +2,7 @@ use gpui::{Context, Div, InteractiveElement, KeyBinding, Modifiers, Window};
 use lst_editor::EditorCommand as Command;
 
 use crate::LstGpuiApp;
+use std::collections::{BTreeMap, HashSet};
 
 const EDITOR: &str = "Editor && !InlineInput";
 const WS_FIND_OK: &str = "(Workspace && !InlineInput) || Find";
@@ -17,10 +18,13 @@ pub(crate) struct WorkspaceAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceCommand {
     Model(Command),
+    OpenCommandPalette,
+    ToggleSettings,
     NewTab,
     ToggleRecentFiles,
     CleanupText,
     MoveVertical(isize, bool),
+    ScrollLines(isize),
     Page(bool, bool),
     CloseActiveTab,
     ReopenClosedTab,
@@ -63,6 +67,10 @@ const fn model(command: Command) -> WorkspaceCommand {
 }
 
 const BINDINGS: &[WorkspaceBinding] = &[
+    b("ctrl-shift-p", WS, WorkspaceCommand::OpenCommandPalette),
+    b("cmd-shift-p", WS, WorkspaceCommand::OpenCommandPalette),
+    b("ctrl-,", WS, WorkspaceCommand::ToggleSettings),
+    b("cmd-,", WS, WorkspaceCommand::ToggleSettings),
     b("ctrl-n", WS_FIND_OK, WorkspaceCommand::NewTab),
     b("cmd-n", WS_FIND_OK, WorkspaceCommand::NewTab),
     b("ctrl-o", WS_FIND_OK, model(Command::RequestOpenFiles)),
@@ -73,7 +81,7 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("cmd-s", WS_FIND_OK, model(Command::RequestSave)),
     b("ctrl-shift-s", WS_FIND_OK, model(Command::RequestSaveAs)),
     b("cmd-shift-s", WS_FIND_OK, model(Command::RequestSaveAs)),
-    b("ctrl-w", WS_FIND_OK, WorkspaceCommand::CloseActiveTab),
+    fb("ctrl-w", WS_FIND_OK, WorkspaceCommand::CloseActiveTab),
     b("cmd-w", WS_FIND_OK, WorkspaceCommand::CloseActiveTab),
     b("ctrl-tab", WS_FIND_OK, model(Command::NextTab)),
     b("cmd-shift-]", WS_FIND_OK, model(Command::NextTab)),
@@ -123,9 +131,9 @@ const BINDINGS: &[WorkspaceBinding] = &[
     fb("ctrl-alt-shift-down", EDITOR, model(Command::DuplicateLine)),
     b("ctrl-/", EDITOR, model(Command::ToggleComment)),
     b("cmd-/", EDITOR, model(Command::ToggleComment)),
-    b("ctrl-shift-/", EDITOR, model(Command::ToggleBlockComment)),
+    fb("ctrl-shift-/", EDITOR, model(Command::ToggleBlockComment)),
     b("cmd-shift-/", EDITOR, model(Command::ToggleBlockComment)),
-    b("ctrl-?", EDITOR, model(Command::ToggleBlockComment)),
+    fb("ctrl-?", EDITOR, model(Command::ToggleBlockComment)),
     b("cmd-?", EDITOR, model(Command::ToggleBlockComment)),
     b("left", EDITOR, model(Command::MoveHorizontalCollapsed(true))),
     b("right", EDITOR, model(Command::MoveHorizontalCollapsed(false))),
@@ -149,8 +157,8 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("alt-shift-right", EDITOR, model(Command::SmartExpandSelection)),
     b("shift-up", EDITOR, WorkspaceCommand::MoveVertical(-1, true)),
     b("shift-down", EDITOR, WorkspaceCommand::MoveVertical(1, true)),
-    b("ctrl-up", EDITOR, WorkspaceCommand::MoveVertical(-1, true)),
-    b("ctrl-down", EDITOR, WorkspaceCommand::MoveVertical(1, true)),
+    b("ctrl-up", EDITOR, WorkspaceCommand::ScrollLines(-1)),
+    b("ctrl-down", EDITOR, WorkspaceCommand::ScrollLines(1)),
     b("shift-pageup", EDITOR, WorkspaceCommand::Page(false, true)),
     b("shift-pagedown", EDITOR, WorkspaceCommand::Page(true, true)),
     b(
@@ -206,17 +214,15 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("alt-enter", FIND, model(Command::SelectAllFindMatches)),
     b("shift-alt-i", EDITOR, model(Command::AddCursorsToSelectedLineEnds)),
     b("alt-shift-i", EDITOR, model(Command::AddCursorsToSelectedLineEnds)),
-    fb("alt-shift-up", EDITOR, model(Command::AddCursorAbove)),
-    fb("alt-shift-down", EDITOR, model(Command::AddCursorBelow)),
+    fb("alt-shift-up", EDITOR, model(Command::DuplicateLineAbove)),
+    fb("alt-shift-down", EDITOR, model(Command::DuplicateLine)),
     b("ctrl-alt-up", EDITOR, model(Command::AddCursorAbove)),
     b("cmd-alt-up", EDITOR, model(Command::AddCursorAbove)),
     b("ctrl-alt-down", EDITOR, model(Command::AddCursorBelow)),
     b("cmd-alt-down", EDITOR, model(Command::AddCursorBelow)),
     b("ctrl-l", EDITOR, model(Command::SelectCurrentLine)),
     b("cmd-l", EDITOR, model(Command::SelectCurrentLine)),
-    b("ctrl-shift-p", EDITOR, model(Command::SelectCurrentParagraph)),
-    b("cmd-shift-p", EDITOR, model(Command::SelectCurrentParagraph)),
-    b("ctrl-q", WS_FIND_OK, WorkspaceCommand::Quit),
+    fb("ctrl-q", WS_FIND_OK, WorkspaceCommand::Quit),
     b("cmd-q", WS_FIND_OK, WorkspaceCommand::Quit),
     b("ctrl-shift-r", EDITOR, WorkspaceCommand::CleanupText),
     b("cmd-shift-r", EDITOR, WorkspaceCommand::CleanupText),
@@ -233,9 +239,11 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("cmd-alt-enter", FIND, model(Command::ReplaceAllMatches)),
 ];
 
-pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
-    BINDINGS
+pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> Vec<KeyBinding> {
+    let overridden: HashSet<&str> = overrides.keys().map(String::as_str).collect();
+    let mut bindings = BINDINGS
         .iter()
+        .filter(|binding| !overridden.contains(command_id(binding.command)))
         .map(|binding| {
             KeyBinding::new(
                 binding.keystroke,
@@ -245,7 +253,237 @@ pub(crate) fn editor_keybindings() -> Vec<KeyBinding> {
                 Some(binding.context),
             )
         })
-        .collect()
+        .collect::<Vec<_>>();
+    for (id, keystrokes) in overrides {
+        let Some(default) = BINDINGS.iter().find(|binding| command_id(binding.command) == id) else {
+            continue;
+        };
+        for keystroke in keystrokes {
+            bindings.push(KeyBinding::new(
+                keystroke,
+                WorkspaceAction {
+                    command: default.command,
+                },
+                Some(default.context),
+            ));
+        }
+    }
+    bindings
+}
+
+pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
+    use lst_editor::EditorCommand::*;
+    match command {
+        WorkspaceCommand::OpenCommandPalette => "workbench.command_palette",
+        WorkspaceCommand::ToggleSettings => "workbench.settings",
+        WorkspaceCommand::NewTab => "file.new_scratchpad",
+        WorkspaceCommand::ToggleRecentFiles => "file.open_recent",
+        WorkspaceCommand::CleanupText => "tools.cleanup_text",
+        WorkspaceCommand::MoveVertical(-1, false) => "cursor.up",
+        WorkspaceCommand::MoveVertical(1, false) => "cursor.down",
+        WorkspaceCommand::MoveVertical(-1, true) => "cursor.up_select",
+        WorkspaceCommand::MoveVertical(1, true) => "cursor.down_select",
+        WorkspaceCommand::MoveVertical(_, _) => "cursor.move_vertical",
+        WorkspaceCommand::ScrollLines(-1) => "view.scroll_line_up",
+        WorkspaceCommand::ScrollLines(1) => "view.scroll_line_down",
+        WorkspaceCommand::ScrollLines(_) => "view.scroll_lines",
+        WorkspaceCommand::Page(false, false) => "cursor.page_up",
+        WorkspaceCommand::Page(true, false) => "cursor.page_down",
+        WorkspaceCommand::Page(false, true) => "cursor.page_up_select",
+        WorkspaceCommand::Page(true, true) => "cursor.page_down_select",
+        WorkspaceCommand::CloseActiveTab => "file.close_tab",
+        WorkspaceCommand::ReopenClosedTab => "file.reopen_closed_tab",
+        WorkspaceCommand::ZoomIn => "view.zoom_in",
+        WorkspaceCommand::ZoomOut => "view.zoom_out",
+        WorkspaceCommand::ZoomReset => "view.zoom_reset",
+        WorkspaceCommand::Quit => "file.quit",
+        WorkspaceCommand::SetSelectNextSkipPrefix => "selection.skip_next_prefix",
+        WorkspaceCommand::SelectNextOccurrenceOrSkip => "selection.add_next_occurrence",
+        WorkspaceCommand::Model(command) => match command {
+            RequestOpenFiles => "file.open",
+            RequestSave => "file.save",
+            RequestSaveAs => "file.save_as",
+            NextTab => "tabs.next",
+            PrevTab => "tabs.previous",
+            MoveActiveTab(-1) => "tabs.move_left",
+            MoveActiveTab(1) => "tabs.move_right",
+            MoveActiveTab(_) => "tabs.move",
+            ToggleWrap => "view.toggle_word_wrap",
+            CycleGutterMode => "view.cycle_line_numbers",
+            CopySelection => "edit.copy",
+            CutSelection => "edit.cut",
+            RequestPaste => "edit.paste",
+            MoveHorizontalCollapsed(true) => "cursor.left",
+            MoveHorizontalCollapsed(false) => "cursor.right",
+            MoveHorizontal(-1, true) => "cursor.left_select",
+            MoveHorizontal(1, true) => "cursor.right_select",
+            MoveHorizontal(_, _) => "cursor.horizontal",
+            MoveWord(true, false) => "cursor.word_left",
+            MoveWord(false, false) => "cursor.word_right",
+            MoveWord(true, true) => "cursor.word_left_select",
+            MoveWord(false, true) => "cursor.word_right_select",
+            MoveSubword(true, false) => "cursor.subword_left",
+            MoveSubword(false, false) => "cursor.subword_right",
+            MoveSubword(_, _) => "cursor.subword",
+            MoveDocumentBoundary(false, false) => "cursor.document_start",
+            MoveDocumentBoundary(true, false) => "cursor.document_end",
+            MoveDocumentBoundary(false, true) => "cursor.document_start_select",
+            MoveDocumentBoundary(true, true) => "cursor.document_end_select",
+            SmartHome(false) => "cursor.smart_home",
+            SmartHome(true) => "cursor.smart_home_select",
+            MoveLineBoundary(false, false) => "cursor.line_start",
+            MoveLineBoundary(true, false) => "cursor.line_end",
+            MoveLineBoundary(false, true) => "cursor.line_start_select",
+            MoveLineBoundary(true, true) => "cursor.line_end_select",
+            MoveDisplayRows(_, _, _) | Page(_, _, _) => "cursor.viewport_motion",
+            Backspace => "edit.backspace",
+            DeleteForward => "edit.delete_forward",
+            DeleteWord(true) => "edit.delete_word_left",
+            DeleteWord(false) => "edit.delete_word_right",
+            InsertNewline => "edit.insert_newline",
+            InsertTab => "edit.indent",
+            Outdent => "edit.outdent",
+            SelectAll => "selection.select_all",
+            SmartExpandSelection => "selection.expand",
+            SmartShrinkSelection => "selection.shrink",
+            SelectNextOccurrence => "selection.add_next_occurrence",
+            SelectAllOccurrences => "selection.select_all_occurrences",
+            SelectAllFindMatches => "selection.select_all_find_matches",
+            SkipNextOccurrence => "selection.skip_next_occurrence",
+            PopPrimarySelectionCursor => "selection.undo_cursor",
+            AddCursorAbove => "selection.add_cursor_above",
+            AddCursorBelow => "selection.add_cursor_below",
+            AddCursorsToSelectedLineEnds => "selection.add_cursors_line_ends",
+            SelectCurrentLine => "selection.select_line",
+            SelectCurrentParagraph => "selection.select_paragraph",
+            Undo => "edit.undo",
+            Redo => "edit.redo",
+            SwapRedoBranch => "edit.swap_redo_branch",
+            ToggleFindPanel(false) => "find.open",
+            ToggleFindPanel(true) => "find.replace",
+            FindNext => "find.next",
+            FindPrev => "find.previous",
+            ReplaceCurrentMatch => "find.replace_one",
+            ReplaceAllMatches => "find.replace_all",
+            ToggleFindCaseSensitive => "find.toggle_case_sensitive",
+            ToggleFindWholeWord => "find.toggle_whole_word",
+            ToggleFindRegex => "find.toggle_regex",
+            ToggleFindInSelection => "find.toggle_in_selection",
+            ToggleGotoLinePanel => "navigation.goto_line",
+            SubmitGotoLine => "navigation.submit_goto_line",
+            DeleteLine => "edit.delete_line",
+            MoveLineUp => "edit.move_line_up",
+            MoveLineDown => "edit.move_line_down",
+            DuplicateLineAbove => "edit.duplicate_line_above",
+            DuplicateLine => "edit.duplicate_line",
+            ToggleComment => "edit.toggle_line_comment",
+            ToggleBlockComment => "edit.toggle_block_comment",
+            TransposeChars => "edit.transpose_characters",
+            ToggleOvertype => "edit.toggle_overtype",
+            ToggleBookmark => "navigation.toggle_bookmark",
+            JumpNextBookmark => "navigation.next_bookmark",
+            JumpPreviousBookmark => "navigation.previous_bookmark",
+        },
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CommandSpec {
+    pub(crate) id: &'static str,
+    pub(crate) title: String,
+    pub(crate) category: &'static str,
+    pub(crate) command: WorkspaceCommand,
+    pub(crate) shortcuts: Vec<String>,
+}
+
+pub(crate) fn command_specs(overrides: &BTreeMap<String, Vec<String>>) -> Vec<CommandSpec> {
+    let mut specs: Vec<CommandSpec> = Vec::new();
+    let mut indices = std::collections::HashMap::<&'static str, usize>::new();
+    for binding in BINDINGS {
+        let id = command_id(binding.command);
+        if let Some(index) = indices.get(id).copied() {
+            if !overrides.contains_key(id) {
+                let shortcut = binding.keystroke.to_string();
+                if !specs[index].shortcuts.contains(&shortcut) {
+                    specs[index].shortcuts.push(shortcut);
+                }
+            }
+            continue;
+        }
+        let shortcuts = overrides
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| vec![binding.keystroke.to_string()]);
+        indices.insert(id, specs.len());
+        specs.push(CommandSpec {
+            id,
+            title: command_title(id),
+            category: command_category(id),
+            command: binding.command,
+            shortcuts,
+        });
+    }
+    specs.sort_by(|left, right| {
+        left.category
+            .cmp(right.category)
+            .then_with(|| left.title.cmp(&right.title))
+    });
+    specs
+}
+
+fn command_category(id: &str) -> &'static str {
+    match id.split('.').next().unwrap_or_default() {
+        "file" | "tabs" => "File",
+        "edit" => "Edit",
+        "selection" | "cursor" => "Selection",
+        "find" | "navigation" => "Navigate",
+        "view" => "View",
+        "tools" => "Tools",
+        "workbench" => "Preferences",
+        _ => "Other",
+    }
+}
+
+fn command_title(id: &str) -> String {
+    let explicit = match id {
+        "workbench.command_palette" => Some("Show Command Palette"),
+        "workbench.settings" => Some("Open Settings"),
+        "file.new_scratchpad" => Some("New Scratchpad"),
+        "file.open_recent" => Some("Open Recent"),
+        "file.save_as" => Some("Save As"),
+        "file.close_tab" => Some("Close Tab"),
+        "file.reopen_closed_tab" => Some("Reopen Closed Tab"),
+        "find.open" => Some("Find"),
+        "find.replace" => Some("Replace"),
+        "find.replace_one" => Some("Replace Current Match"),
+        "find.replace_all" => Some("Replace All Matches"),
+        "navigation.goto_line" => Some("Go to Line or Column"),
+        "view.toggle_word_wrap" => Some("Toggle Word Wrap"),
+        "view.cycle_line_numbers" => Some("Cycle Line Number Mode"),
+        "tools.cleanup_text" => Some("Clean Up Text with AI"),
+        "selection.add_next_occurrence" => Some("Add Selection to Next Match"),
+        "selection.select_all_occurrences" => Some("Select All Occurrences"),
+        "selection.add_cursors_line_ends" => Some("Add Cursors to Line Ends"),
+        "edit.toggle_line_comment" => Some("Toggle Line Comment"),
+        "edit.toggle_block_comment" => Some("Toggle Block Comment"),
+        _ => None,
+    };
+    if let Some(title) = explicit {
+        return title.to_string();
+    }
+    id.rsplit('.')
+        .next()
+        .unwrap_or(id)
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub(crate) fn workspace_fallback_command(key: &str, modifiers: Modifiers) -> Option<WorkspaceCommand> {
@@ -270,6 +508,12 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_prompt.is_some() {
+            if command == WorkspaceCommand::Model(Command::InsertNewline) {
+                self.confirm_close_prompt_save(cx);
+            }
+            return;
+        }
         let command = match command {
             WorkspaceCommand::SetSelectNextSkipPrefix => {
                 self.clear_x11_modifier_chord_state();
@@ -293,6 +537,12 @@ impl LstGpuiApp {
         };
 
         match command {
+            WorkspaceCommand::OpenCommandPalette => {
+                self.open_command_palette(window, cx);
+            }
+            WorkspaceCommand::ToggleSettings => {
+                self.toggle_settings(window, cx);
+            }
             WorkspaceCommand::Model(command) => {
                 self.execute_model_command(cx, command);
             }
@@ -307,6 +557,9 @@ impl LstGpuiApp {
             }
             WorkspaceCommand::MoveVertical(delta, select) => {
                 self.move_vertical(delta, select, window, cx);
+            }
+            WorkspaceCommand::ScrollLines(delta) => {
+                self.scroll_editor_lines(delta, cx);
             }
             WorkspaceCommand::Page(down, select) => {
                 self.move_page(down, select, window, cx);

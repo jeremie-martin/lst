@@ -16,6 +16,15 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LanguageMode {
+    #[default]
+    Auto,
+    PlainText,
+    Language(Language),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileStamp {
     len: u64,
@@ -174,6 +183,7 @@ pub struct EditorTab {
     name_hint: String,
     origin: TabOrigin,
     language: Option<Language>,
+    language_mode: LanguageMode,
     buffer: Rope,
     content_epoch: u64,
     saved_content_epoch: u64,
@@ -233,6 +243,7 @@ impl EditorTab {
             name_hint,
             origin,
             language,
+            language_mode: LanguageMode::Auto,
             buffer: Rope::from_str(text),
             content_epoch: 0,
             saved_content_epoch: 0,
@@ -258,6 +269,13 @@ impl EditorTab {
     }
     pub fn language(&self) -> Option<Language> {
         self.language
+    }
+    pub fn language_mode(&self) -> LanguageMode {
+        self.language_mode
+    }
+    pub(crate) fn set_language_mode(&mut self, mode: LanguageMode) {
+        self.language_mode = mode;
+        self.refresh_language();
     }
     pub fn language_config(&self) -> &'static crate::language::LanguageConfig {
         language::config_for(self.language)
@@ -637,7 +655,11 @@ impl EditorTab {
         self.origin.suppress_file_conflict(stamp);
     }
     fn refresh_language(&mut self) -> bool {
-        let language = self.detect_language();
+        let language = match self.language_mode {
+            LanguageMode::Auto => self.detect_language(),
+            LanguageMode::PlainText => None,
+            LanguageMode::Language(language) => Some(language),
+        };
         let changed = self.language != language;
         self.language = language;
         changed
@@ -997,7 +1019,7 @@ mod tests {
         // must equal a from-scratch rebuild of the resulting text.
         let mut tab = tab_with_text("alpha\r\nbeta\r\ngamma");
         let _ = tab.lines(); // prime the incremental cache
-        // char 6 is the `\n` of the first CRLF pair.
+                             // char 6 is the `\n` of the first CRLF pair.
         let request = EditRequest::single(EditKind::Insert, UndoBoundary::Break, 6..6, "X".to_string());
         tab.apply_edit_request(request);
 

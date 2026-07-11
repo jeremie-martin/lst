@@ -71,6 +71,7 @@ pub enum EditorCommand {
     DeleteLine,
     MoveLineUp,
     MoveLineDown,
+    DuplicateLineAbove,
     DuplicateLine,
     ToggleComment,
     ToggleBlockComment,
@@ -244,7 +245,8 @@ impl EditorModel {
             DeleteLine => self.delete_line(),
             MoveLineUp => self.move_line(true),
             MoveLineDown => self.move_line(false),
-            DuplicateLine => self.duplicate_line(),
+            DuplicateLineAbove => self.duplicate_line(false),
+            DuplicateLine => self.duplicate_line(true),
             ToggleComment => self.toggle_comment(),
             ToggleBlockComment => self.toggle_block_comment(),
             TransposeChars => {

@@ -19,9 +19,9 @@ use gpui::{Bounds, Pixels, Window};
 use lst_editor::find::FindScope;
 use serde::Serialize;
 
-use crate::{char_to_line_col, focus_trace_label, LstGpuiApp};
+use crate::{char_to_line_col, focus_trace_label, LstGpuiApp, WorkspaceSurface};
 
-pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 2;
+pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 3;
 
 /// Holds the state-trace path and emitter state. Constructed once at app
 /// init from the env var; subsequent calls to `try_emit` are no-ops when
@@ -109,6 +109,7 @@ pub(crate) struct StateTraceRecord {
     pub cursors: Vec<TraceCursor>,
     pub primary_cursor_index: usize,
     pub marked_range: Option<TraceRange>,
+    pub input_mode: &'static str,
     pub vim_mode: String,
     pub vim_pending: String,
     pub find: TraceFind,
@@ -119,6 +120,8 @@ pub(crate) struct StateTraceRecord {
     pub recent_panel_empty_message: Option<String>,
     pub recent_panel_content_search_pending: bool,
     pub focused_input: &'static str,
+    pub workspace_surface: &'static str,
+    pub close_prompt_file: Option<String>,
     pub status_message: String,
     pub status_bar: String,
     pub recent_button_bounds_px: Option<(f32, f32, f32, f32)>,
@@ -264,6 +267,10 @@ impl LstGpuiApp {
             cursors,
             primary_cursor_index: selection_set.primary_index(),
             marked_range,
+            input_mode: match self.model.input_mode() {
+                lst_editor::InputMode::Standard => "standard",
+                lst_editor::InputMode::Vim => "vim",
+            },
             vim_mode: self.model.vim_mode().label().to_string(),
             vim_pending: self.model.vim_pending_display(),
             find: TraceFind {
@@ -294,6 +301,18 @@ impl LstGpuiApp {
             recent_panel_empty_message,
             recent_panel_content_search_pending: self.recent.content_search_pending(),
             focused_input: self.state_trace_focus_label(),
+            workspace_surface: match self.workspace_surface {
+                WorkspaceSurface::None => "none",
+                WorkspaceSurface::CommandPalette => "command_palette",
+                WorkspaceSurface::Settings => "settings",
+                WorkspaceSurface::AppMenu => "app_menu",
+                WorkspaceSurface::LanguageMenu => "language_menu",
+                WorkspaceSurface::ContextMenu => "context_menu",
+            },
+            close_prompt_file: self
+                .close_prompt
+                .and_then(|prompt| self.model.tab_by_id(prompt.tab_id))
+                .map(|tab| tab.display_name().to_string()),
             status_message,
             status_bar,
             recent_button_bounds_px,
@@ -306,7 +325,17 @@ impl LstGpuiApp {
     }
 
     fn state_trace_focus_label(&self) -> &'static str {
-        if self.recent.is_open() {
+        if self.workspace_surface == WorkspaceSurface::CommandPalette {
+            "command_palette"
+        } else if self.workspace_surface == WorkspaceSurface::Settings {
+            "settings"
+        } else if self.workspace_surface == WorkspaceSurface::AppMenu {
+            "app_menu"
+        } else if self.workspace_surface == WorkspaceSurface::LanguageMenu {
+            "language_menu"
+        } else if self.workspace_surface == WorkspaceSurface::ContextMenu {
+            "context_menu"
+        } else if self.recent.is_open() {
             "recent_query"
         } else {
             focus_trace_label(self.focus_last_applied)

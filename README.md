@@ -7,8 +7,12 @@ owns rendering, widgets, desktop integration, and runtime effects.
 
 ## Features
 
-- Vim-style modal editing alongside standard editor keybindings, multi-cursor
-  and column selection, find/replace with regex, soft wrap, and auto-pairing.
+- Standard desktop editing by default, with multi-cursor and column selection,
+  complete find/replace, soft wrap, auto-pairing, and optional Vim mode.
+- Searchable command palette, application menu, visible settings, versioned
+  TOML configuration with live reload, and configurable keybindings.
+- Scratchpad-only autosave by default and explicit save/discard/cancel handling
+  for modified ordinary files.
 - Tree-sitter syntax highlighting for Rust, Python, JavaScript/JSX,
   TypeScript/TSX, JSON, TOML, YAML, Markdown, HTML, and CSS, with incremental
   reparsing, language injection (e.g. fenced code blocks in Markdown), and
@@ -34,11 +38,17 @@ cargo build --release -p lst-gpui
 ./target/release/lst README.md
 ./target/release/lst --title lst-scratchpad
 ./target/release/lst --scratchpad-dir /path/to/notes
+./target/release/lst --vim README.md
 ```
 
 Running without files creates a timestamped scratchpad note in
 `~/.local/share/lst/` by default. Use `--scratchpad-dir` to choose another
 scratchpad directory.
+
+Open the command palette with `Ctrl-Shift-P` and settings with `Ctrl-,`.
+Configuration is stored in `$XDG_CONFIG_HOME/lst/config.toml` or
+`~/.config/lst/config.toml`. See `docs/daily-driver.md` for the default behavior,
+setting schema, and standard key policy.
 
 ## Install
 

@@ -46,7 +46,7 @@ fn state_trace_exposes_final_state_after_text_input() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn vim_mode_transitions_visible_in_trace() -> TestResult {
     support::run_x11_test("state-trace-vim-mode", |session| {
-        let (mut editor, _path) = session.open("scratch")?;
+        let (mut editor, _path) = session.open_vim("scratch")?;
 
         // Scratchpads start in Insert. Type something so we have a buffer
         // to enter Visual on, then walk through modes.
@@ -79,7 +79,7 @@ fn vim_pending_is_visible_mid_compound_command() -> TestResult {
     // settled state for each keystroke, so we can observe `g` halfway
     // through `gg` without typing the second `g`.
     support::run_x11_test("state-trace-vim-pending", |session| {
-        let (mut editor, _path) = session.open("scratch")?;
+        let (mut editor, _path) = session.open_vim("scratch")?;
 
         editor.keys("first<enter>second<esc>")?;
         editor.expect_vim_mode("NORMAL")?;
@@ -141,7 +141,7 @@ fn status_bar_reports_multi_cursor_summary() -> TestResult {
         let mut editor = session.open_file("status", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<C-S-l><esc>")?;
+        editor.keys("<C-S-l>")?;
         let record = editor.read_state()?;
         assert!(
             record.status_bar.contains("3 cursors"),
@@ -227,7 +227,7 @@ fn ctrl_s_on_unmodified_buffer_leaves_visible_state_unchanged() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn vim_pending_clears_when_escape_drops_the_compound_prefix() -> TestResult {
     support::run_x11_test("state-trace-pending-escape", |session| {
-        let (mut editor, _path) = session.open("scratch")?;
+        let (mut editor, _path) = session.open_vim("scratch")?;
 
         editor.keys("first<esc>")?;
         editor.expect_vim_mode("NORMAL")?;

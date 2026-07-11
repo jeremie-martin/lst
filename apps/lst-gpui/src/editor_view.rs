@@ -132,7 +132,6 @@ impl LstGpuiApp {
         let tab = self.active_tab();
         let (line, column) = self.active_cursor_line_col();
         let mut parts = vec![
-            self.model.vim_mode().label().to_string(),
             format!("Ln {}", line + 1),
             format!("Col {}", column + 1),
             if self.model.show_wrap() {
@@ -144,9 +143,12 @@ impl LstGpuiApp {
             },
             format!("{} lines", tab.line_count()),
         ];
-        let pending = self.model.vim_pending_display();
-        if !pending.is_empty() {
-            parts.push(pending);
+        if self.model.input_mode() == lst_editor::InputMode::Vim {
+            parts.insert(0, self.model.vim_mode().label().to_string());
+            let pending = self.model.vim_pending_display();
+            if !pending.is_empty() {
+                parts.push(pending);
+            }
         }
         if self.model.overtype() {
             parts.push("OVR".to_string());
@@ -216,12 +218,21 @@ impl LstGpuiApp {
         self.execute_model_command(cx, Command::Page(down, select, wrap_columns));
     }
 
+    pub(crate) fn scroll_editor_lines(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let view = self.active_view();
+        let current = scroll_top_for(&view.scroll);
+        let target = current + self.ui_px(metrics::row_height()) * delta as f32;
+        scroll_to_top(&view.scroll, target);
+        self.sync_viewport_state();
+        cx.notify();
+    }
+
     pub(crate) fn sync_viewport_state(&mut self) {
         let bounds = self.active_view().geometry.borrow().bounds;
         let Some(bounds) = bounds else {
             return;
         };
-        let row_height = self.ui_px(metrics::ROW_HEIGHT);
+        let row_height = self.ui_px(metrics::row_height());
         if row_height <= px(0.0) || bounds.size.height <= px(0.0) {
             return;
         }
@@ -295,7 +306,7 @@ impl LstGpuiApp {
             return false;
         };
 
-        let row_height = self.ui_px(metrics::ROW_HEIGHT);
+        let row_height = self.ui_px(metrics::row_height());
         let caret_top = row_height * visual_row as f32;
         let caret_bottom = caret_top + row_height;
         let scroll_top = scroll_top_for(&view.scroll);
@@ -432,7 +443,7 @@ impl LstGpuiApp {
         }
         let code_origin_x = bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
 
-        let row_height = self.ui_px(metrics::ROW_HEIGHT);
+        let row_height = self.ui_px(metrics::row_height());
         let row = if geometry.rows.is_empty() {
             return 0;
         } else if point.y <= geometry.rows[0].row_top {

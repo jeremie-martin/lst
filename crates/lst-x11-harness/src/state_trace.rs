@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-pub const STATE_TRACE_SCHEMA_VERSION: u32 = 2;
+pub const STATE_TRACE_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StateTraceRecord {
@@ -28,6 +28,8 @@ pub struct StateTraceRecord {
     pub cursors: Vec<TraceCursor>,
     pub primary_cursor_index: usize,
     pub marked_range: Option<TraceRange>,
+    #[serde(default)]
+    pub input_mode: String,
     pub vim_mode: String,
     pub vim_pending: String,
     pub find: TraceFind,
@@ -42,6 +44,10 @@ pub struct StateTraceRecord {
     pub recent_panel_content_search_pending: bool,
     #[serde(default)]
     pub focused_input: String,
+    #[serde(default)]
+    pub workspace_surface: String,
+    #[serde(default)]
+    pub close_prompt_file: Option<String>,
     #[serde(default)]
     pub status_message: String,
     pub status_bar: String,

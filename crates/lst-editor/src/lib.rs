@@ -20,8 +20,14 @@ pub use command::EditorCommand;
 pub use document::{EditKind, UndoBoundary};
 pub use language::{IndentStyle, Language, LanguageConfig};
 pub use selection::{Position, Selection, SelectionSet, SelectionSetError};
-pub use tab::{BufferDelta, BufferEdit, EditorTab, FileStamp, TabId};
+pub use tab::{BufferDelta, BufferEdit, EditorTab, FileStamp, LanguageMode, TabId};
 pub use viewport::Viewport;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputMode {
+    #[default]
+    Standard,
+    Vim,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FocusTarget {
     Editor,
@@ -124,6 +130,7 @@ pub struct EditorModel {
     find_submit: FindSubmit,
     goto_line: Option<String>,
     status: String,
+    input_mode: InputMode,
     vim: vim::VimState,
     viewport: Viewport,
     effects: Vec<EditorEffect>,
@@ -153,6 +160,7 @@ impl EditorModel {
             find_submit: FindSubmit::Panel,
             goto_line: None,
             status,
+            input_mode: InputMode::Standard,
             vim: vim::VimState::new(),
             viewport: Viewport::default(),
             effects: Vec::new(),
@@ -223,8 +231,23 @@ impl EditorModel {
     pub fn show_wrap(&self) -> bool {
         self.show_wrap
     }
+    pub fn set_show_wrap(&mut self, show_wrap: bool) {
+        self.show_wrap = show_wrap;
+        self.wrap_layout_cache = None;
+    }
     pub fn gutter_mode(&self) -> GutterMode {
         self.gutter_mode
+    }
+    pub fn set_gutter_mode(&mut self, gutter_mode: GutterMode) {
+        self.gutter_mode = gutter_mode;
+    }
+    pub fn set_active_language_mode(&mut self, mode: LanguageMode) {
+        self.active_tab_mut().set_language_mode(mode);
+        self.status = match mode {
+            LanguageMode::Auto => "Language mode set to auto-detect.".to_string(),
+            LanguageMode::PlainText => "Language mode set to Plain Text.".to_string(),
+            LanguageMode::Language(language) => format!("Language mode set to {language:?}."),
+        };
     }
     pub fn find(&self) -> &FindState {
         &self.find
@@ -248,6 +271,21 @@ impl EditorModel {
     }
     pub fn status(&self) -> &str {
         &self.status
+    }
+    pub fn input_mode(&self) -> InputMode {
+        self.input_mode
+    }
+    pub fn set_input_mode(&mut self, input_mode: InputMode) {
+        if self.input_mode == input_mode {
+            return;
+        }
+        self.input_mode = input_mode;
+        self.vim = vim::VimState::new();
+        self.status = match input_mode {
+            InputMode::Standard => "Standard editing enabled.",
+            InputMode::Vim => "Vim editing enabled.",
+        }
+        .to_string();
     }
     pub fn vim_mode(&self) -> vim::Mode {
         self.vim.mode
@@ -716,10 +754,10 @@ impl EditorModel {
         self.queue_effect(EditorEffect::WritePrimary(text));
     }
     pub fn handle_vim_key(&mut self, key: vim::Key, mods: vim::Modifiers, wrap_columns: usize) -> bool {
-        self.vim_handle_key(key, mods, wrap_columns)
+        self.input_mode == InputMode::Vim && self.vim_handle_key(key, mods, wrap_columns)
     }
     pub fn handle_vim_escape(&mut self) -> bool {
-        self.vim_escape()
+        self.input_mode == InputMode::Vim && self.vim_escape()
     }
     pub fn replace_text_from_input(&mut self, range: Option<Range<usize>>, text: String) {
         let boundary = if text.chars().any(char::is_whitespace) {
@@ -892,6 +930,9 @@ impl EditorModel {
             return true;
         }
         false
+    }
+    pub fn cancel_standard_selection(&mut self) -> bool {
+        self.collapse_to_primary()
     }
     pub fn add_cursor_at_char(&mut self, offset: usize) {
         let offset = selection::floor_grapheme_boundary(self.active_tab().buffer(), offset);
@@ -1132,9 +1173,9 @@ impl EditorModel {
             Some(RevealIntent::NearestEdge),
         );
     }
-    fn duplicate_line(&mut self) {
+    fn duplicate_line(&mut self, below: bool) {
         self.apply_optional_edit_request(
-            line_edit::duplicate_lines_request(self.active_tab(), self.active_cursor_position()),
+            line_edit::duplicate_lines_request(self.active_tab(), self.active_cursor_position(), below),
             Some(RevealIntent::NearestEdge),
         );
     }

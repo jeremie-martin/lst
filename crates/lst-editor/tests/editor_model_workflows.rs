@@ -1,10 +1,42 @@
 mod support;
 
-use lst_editor::{EditorCommand, Position};
+use lst_editor::{EditorCommand, FileStamp, InputMode, Language, LanguageMode, Position};
+use std::path::PathBuf;
 use support::{position_of, ModelHarness};
 
 const SAMPLE: &str = "alpha\nbeta\ngamma\n";
 const FIND_TEXT: &str = "fn alpha() {}\nlet other = 1;\nfn beta() {}\nfn gamma() {}\n";
+
+#[test]
+fn standard_input_and_explicit_language_are_stable_defaults() {
+    let mut harness = ModelHarness::new("print('hello')\n");
+    assert_eq!(harness.model.input_mode(), InputMode::Standard);
+    assert_eq!(harness.model.active_tab().language(), Some(Language::Rust));
+
+    harness
+        .model
+        .set_active_language_mode(LanguageMode::Language(Language::Markdown));
+    let tab_id = harness.model.active_tab_id();
+    let revision = harness.model.active_tab().revision();
+    let body = harness.model.active_tab().buffer_text();
+    assert!(harness.model.save_as_finished_for_tab(
+        tab_id,
+        PathBuf::from("renamed.py"),
+        revision,
+        FileStamp::from_raw(body.len() as u64, Some(1)),
+        body,
+    ));
+    assert_eq!(harness.model.active_tab().language(), Some(Language::Markdown));
+    assert_eq!(
+        harness.model.active_tab().language_mode(),
+        LanguageMode::Language(Language::Markdown)
+    );
+
+    harness.model.set_active_language_mode(LanguageMode::Auto);
+    assert_eq!(harness.model.active_tab().language(), Some(Language::Python));
+    harness.model.set_active_language_mode(LanguageMode::PlainText);
+    assert_eq!(harness.model.active_tab().language(), None);
+}
 
 #[test]
 fn clipboard_workflows_preserve_current_model_results() {

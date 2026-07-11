@@ -261,7 +261,7 @@ fn parse_sub_source(grammar: GrammarId, source: &[u8]) -> Option<Tree> {
 /// non-overlapping, innermost-wins per-line spans suitable for the renderer.
 fn emit_non_overlapping_spans(
     captures: &[CapturedSpan],
-    lines: &mut Vec<Vec<SyntaxSpan>>,
+    lines: &mut [Vec<SyntaxSpan>],
     line_starts: &[usize],
     display_ends: &[usize],
 ) {

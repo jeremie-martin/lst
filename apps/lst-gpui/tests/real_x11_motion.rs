@@ -177,7 +177,7 @@ fn vertical_motion_per_cursor_preferred_column() -> TestResult {
         for _ in 0..8 {
             editor.keys("<right>")?;
         }
-        editor.keys("<S-A-down><S-A-down>")?;
+        editor.keys("<C-A-down><C-A-down>")?;
         // Move down once: the middle line is short, so both cursors clamp
         // to its end (col 5). Move up twice: each cursor should restore
         // to col 8 thanks to its own preferred-column memory.

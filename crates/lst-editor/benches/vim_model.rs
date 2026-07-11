@@ -3,7 +3,7 @@ use std::{hint::black_box, path::PathBuf, time::Duration};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use lst_editor::{
     vim::{self, Key, NamedKey},
-    EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, Position, TabId,
+    EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, InputMode, Position, TabId,
 };
 use serde::Deserialize;
 
@@ -354,8 +354,10 @@ struct VimDriver {
 impl VimDriver {
     fn new(text: &str) -> Self {
         let tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("vim-bench.md"), text, None);
+        let mut model = EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string());
+        model.set_input_mode(InputMode::Vim);
         let mut driver = Self {
-            model: EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string()),
+            model,
             focus: FocusTarget::Editor,
             deferred_find_query: None,
         };

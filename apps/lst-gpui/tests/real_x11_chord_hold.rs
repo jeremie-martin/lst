@@ -40,7 +40,7 @@ fn ctrl_k_ctrl_d_skip_via_held_modifier_grows_selection_set() -> TestResult {
     support::run_x11_test("chord-hold-ctrl-k-ctrl-d", |session| {
         let (mut editor, path) = session.open("scratch")?;
 
-        editor.keys("foo foo foo<esc>0i<C-d><C-d>")?;
+        editor.keys("foo foo foo<C-home><C-d><C-d>")?;
         // Two cursors at this point. Ctrl+K Ctrl+D should skip the
         // current match (the second "foo") and add the third occurrence's
         // selection. Replacing all selections with "bar" then yields
