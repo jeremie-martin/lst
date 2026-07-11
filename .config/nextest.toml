@@ -33,6 +33,21 @@ report-name = "lst-x11-stress"
 store-success-output = false
 store-failure-output = true
 
+[profile.x11-nested]
+inherits = "x11"
+default-filter = '''
+package(lst-gpui)
+& kind(test)
+& binary(~real_x11_)
+& not binary(=real_x11_visual)
+'''
+
+[profile.x11-nested.junit]
+path = "junit.xml"
+report-name = "lst-x11-nested"
+store-success-output = false
+store-failure-output = true
+
 [profile.x11-tdd]
 inherits = "x11"
 default-filter = '''

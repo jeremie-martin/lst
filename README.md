@@ -75,6 +75,17 @@ Use the workspace suite as the active refactor gate:
 cargo test
 ```
 
+Run accepted desktop behavior through a real, off-screen X11 server:
+
+```bash
+./scripts/run_x11_nested.py
+```
+
+This requires a host X11 session plus `Xephyr`, `lwm`, `wmctrl`, `xclip`, and
+Python Xlib. It sends real XTEST keyboard and mouse input to the production app
+without taking over the visible desktop. See `docs/x11-harness.md` for focused,
+stress, physical-display, and real-vs-nested qualification commands.
+
 For deeper Vim state-machine coverage in the editor crate:
 
 ```bash
@@ -96,8 +107,8 @@ Run the full smoke suite from a real X11 session:
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario all --repetitions 1 --priming 0
 ```
 
-There is also an opt-in real-display behavior suite for scratchpad cleanup,
-clipboard, vim, multi-cursor, modifier, and whole-editor workflow coverage:
+The physical-display form remains available for visual baselines and explicit
+diagnostics:
 
 ```bash
 DISPLAY=:1 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only

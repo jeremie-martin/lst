@@ -1,0 +1,11 @@
+diff --git a/apps/lst-gpui/src/command_ui.rs b/apps/lst-gpui/src/command_ui.rs
+--- a/apps/lst-gpui/src/command_ui.rs
++++ b/apps/lst-gpui/src/command_ui.rs
+@@ -305,6 +305,7 @@ impl WorkspaceView {
+             .id("app-menu-scrim")
+             .absolute()
+             .inset_0()
++            .bg(gpui::rgba(0x00000066))
+             .occlude()
+             .on_mouse_down(
+                 MouseButton::Left,

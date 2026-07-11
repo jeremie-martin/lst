@@ -47,8 +47,32 @@ product behavior tests should go through behavior-named helpers such as
 
 ## Running Tests
 
-Use the nextest profiles for real-display work. They are the canonical local
-and dedicated-machine behavior-gate entry points:
+The normal behavior gate runs on an off-screen Xephyr X server:
+
+```sh
+./scripts/run_x11_nested.py
+```
+
+This is not a mocked or renderer-only lane. Xephyr supplies a real X11 server,
+the production GPUI binary connects to it, nested `lwm` manages the app window,
+and the harness sends the same XTEST keyboard and mouse events used on a
+physical display. The Xephyr root is embedded in a mapped override-redirect
+host window created at `x=-20000`; this preserves DAMAGE/rendering behavior
+without showing a nested desktop or leaving a host window for the user's window
+manager to place. The runner restores host focus before tests begin and verifies
+the parent is mapped, entirely off-screen, and backed by DAMAGE, XTEST, and XKB.
+
+Requirements are a host X11 session, `Xephyr`, `lwm`, `wmctrl`, `xclip`,
+`xprop`, `xwininfo`, `xdpyinfo`, and the Python Xlib package. Useful forms:
+
+```sh
+./scripts/run_x11_nested.py --probe
+./scripts/run_x11_nested.py -- cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored only
+./scripts/run_x11_nested.py -- cargo nextest run --profile x11-nested -p lst-gpui --tests --run-ignored only --stress-count 3
+```
+
+The direct physical-display profiles remain available for visual baselines,
+diagnostics, and explicit comparison:
 
 ```sh
 DISPLAY=:0 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
@@ -57,21 +81,24 @@ DISPLAY=:0 cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored
 DISPLAY=:0 cargo nextest run --profile x11-regression -p lst-gpui --tests --run-ignored only
 ```
 
-The `x11` profile is the blocking accepted-behavior lane. `x11-stress` runs that
-same set repeatedly for flake detection. `x11-regression` narrows to the
+The `x11-nested` profile is the blocking accepted-behavior filter. It includes
+every `real_x11_*` suite except `real_x11_visual`. `x11-stress` runs the physical
+set repeatedly for flake detection; use `--stress-count` with `x11-nested`, as
+shown above, for off-screen flake detection. `x11-regression` narrows to the
 `real_x11_regressions` suite for fast iteration on a specific past-bug guard.
 `x11-tdd` is a focused lane for TDD-named real-display suites; it is not a
 weaker gate for accepted behavior.
 Broad accepted multi-cursor edge-case specs live in
 `apps/lst-gpui/tests/real_x11_multi_cursor_spec.rs`; the now-green
-`apps/lst-gpui/tests/real_x11_multi_cursor_tdd.rs` suite is also part of the
-blocking `x11` profile and remains named as a historical marker until it is
-renamed. Vim-mode multi-cursor policy is deliberately outside that pass.
+`apps/lst-gpui/tests/real_x11_multi_cursor_tdd.rs` suite is part of both full
+behavior profiles and remains named as a historical marker until it is renamed.
+Vim-mode multi-cursor policy is deliberately outside that pass.
 
-The profiles run serially. Every test grabs keyboard focus and moves the global
-pointer through XTEST. The harness also takes a cross-process display lock, so
-accidental parallel runs serialize, but serial execution is clearer and avoids
-wasted workers.
+The profiles run serially. Every test grabs keyboard focus and moves the display's
+global pointer through XTEST. In the nested lane those operations are confined
+to Xephyr. The harness also takes a cross-process display lock, so accidental
+parallel runs serialize, but serial execution is clearer and avoids wasted
+workers.
 
 Useful environment variables:
 
@@ -80,10 +107,36 @@ Useful environment variables:
 - `LST_X11_KEEP_TEMP=1` preserves scratchpad temp directories even on success.
 - `LST_GPUI_BIN=/path/to/lst` runs a specific editor binary.
 
-All three profiles disable retries, continue after failures, and write JUnit
+The profiles disable retries, continue after failures, and write JUnit
 output under `target/nextest/<profile>/junit.xml`. Prefer `--stress-count` over
 retries for flake discovery: repeated successes and failures are the signal we
 want, while retrying only failures can hide nondeterminism.
+
+### What "Equivalent" Means
+
+The qualified guarantee is behavioral, not pixel-identical. The same production
+binary, harness binaries, fixtures, XTEST event sequences, state trace, file and
+clipboard effects, and assertions run in both environments. The physical server
+and Xephyr still differ in DPI, GPU/compositor path, font rasterization, monitor
+layout, and outer-window presentation. For that reason `real_x11_visual` is
+excluded from `x11-nested` and must run directly on the physical display.
+
+Requalify the lane after changing the runner, harness synchronization, display
+assumptions, or suite partitioning:
+
+```sh
+./scripts/qualify_x11_nested.py
+```
+
+Qualification builds the baseline once and uses that exact binary on both
+displays. It then applies six source patches in disposable detached worktrees,
+builds one binary for each fault, and runs the same targeted tests and passing
+controls on both displays. The faults cover a missing keybinding, Backspace,
+mouse hit testing below the document, menu backdrop rendering, Replace All, and
+ordinary-file autosave. Qualification succeeds only when the baseline result
+sets match and every mutant produces its declared failures and passes on both
+displays. Machine-readable and Markdown reports, binaries, JUnit, and logs are
+written under `target/x11-qualification/`.
 
 ---
 

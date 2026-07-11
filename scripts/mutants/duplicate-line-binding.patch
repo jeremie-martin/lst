@@ -1,0 +1,12 @@
+diff --git a/apps/lst-gpui/src/workspace_action.rs b/apps/lst-gpui/src/workspace_action.rs
+--- a/apps/lst-gpui/src/workspace_action.rs
++++ b/apps/lst-gpui/src/workspace_action.rs
+@@ -214,7 +214,6 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
+     b("ctrl-f2", EDITOR, model(Command::SelectAllOccurrences)),
+     b("alt-enter", FIND, model(Command::SelectAllFindMatches)),
+     b("shift-alt-i", EDITOR, model(Command::AddCursorsToSelectedLineEnds)),
+     b("alt-shift-i", EDITOR, model(Command::AddCursorsToSelectedLineEnds)),
+-    fb("alt-shift-up", EDITOR, model(Command::DuplicateLineAbove)),
+     fb("alt-shift-down", EDITOR, model(Command::DuplicateLine)),
+     b("ctrl-alt-up", EDITOR, model(Command::AddCursorAbove)),
+     b("cmd-alt-up", EDITOR, model(Command::AddCursorAbove)),

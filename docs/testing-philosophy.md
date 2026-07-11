@@ -105,16 +105,22 @@ The line is: test everything we own, trust everything we don't. If we find ourse
 
 ## Behavior gate
 
-The canonical behavior gate is the real-display X11 suite:
+The canonical behavior gate is the X11 suite running in the repository's
+off-screen Xephyr environment:
 
 ```sh
-DISPLAY=:0 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
+./scripts/run_x11_nested.py
 ```
 
 This is the closest thing the repository has to a true black-box refactor gate:
 it launches the production GPUI app, sends real keyboard and mouse input, and
-asserts on observable user-facing state. When a behavior can be driven through
-that path, X11 is the preferred specification.
+asserts on observable user-facing state. The nested display is a real X11 server,
+not a mocked renderer. Qualification runs the same baseline binary and six
+deliberately broken binaries on both the physical and nested displays and
+requires identical behavioral outcomes. Exact pixel assertions remain on the
+physical display because host DPI, GPU, font rasterization, and outer-window
+presentation are not equivalent. When a behavior can be driven through that
+path, X11 is the preferred specification.
 
 `cargo test` is still useful, but it is no longer the primary behavior contract.
 Treat it as fast compile/domain feedback. It should stay lean enough to run

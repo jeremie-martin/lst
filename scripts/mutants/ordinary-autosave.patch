@@ -1,0 +1,13 @@
+diff --git a/apps/lst-gpui/src/runtime.rs b/apps/lst-gpui/src/runtime.rs
+--- a/apps/lst-gpui/src/runtime.rs
++++ b/apps/lst-gpui/src/runtime.rs
+@@ -236,8 +236,7 @@ impl WorkspaceView {
+                         };
+                         view.reload_settings_if_changed(cx);
+                         view.check_external_file_changes(cx);
+-                        let include_ordinary =
+-                            view.settings.settings.files.autosave == crate::settings::AutosaveMode::All;
++                        let include_ordinary = true;
+                         view.update_model(cx, false, |model| {
+                             model.autosave_tick(include_ordinary);
+                         });

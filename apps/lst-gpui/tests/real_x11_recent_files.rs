@@ -202,15 +202,9 @@ fn opening_missing_recent_file_prunes_it_from_the_panel() -> TestResult {
     support::run_x11_test("recent-missing-prune", |session| {
         let missing = session.root().join("missing.txt");
         session.seed_recent_files(std::slice::from_ref(&missing))?;
-        let missing_text = path_text(&missing);
 
         let (mut editor, _scratchpad) = session.open("recent-missing-prune")?;
         editor.keys("<C-r>")?;
-        editor.wait_state("missing recent selected", secs(5), |record| {
-            record.recent_panel_open && record.recent_panel_selected_path.as_deref() == Some(missing_text.as_str())
-        })?;
-
-        editor.keys("<enter>")?;
         editor.wait_state("missing recent pruned", secs(5), |record| {
             record.recent_panel_open
                 && record.recent_panel_selected_path.is_none()

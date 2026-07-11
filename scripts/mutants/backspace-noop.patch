@@ -1,0 +1,15 @@
+diff --git a/crates/lst-editor/src/command.rs b/crates/lst-editor/src/command.rs
+--- a/crates/lst-editor/src/command.rs
++++ b/crates/lst-editor/src/command.rs
+@@ -143,9 +143,7 @@ impl EditorModel {
+             Page(down, select, wrap_columns) => {
+                 let delta = self.viewport.page() as isize;
+                 self.move_paged(if down { delta } else { -delta }, select, wrap_columns, true);
+             }
+-            Backspace => {
+-                self.delete_selected_or_previous();
+-            }
++            Backspace => {}
+             DeleteForward => {
+                 self.delete_selected_or_next();
+             }

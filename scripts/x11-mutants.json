@@ -1,0 +1,57 @@
+[
+  {
+    "name": "duplicate_line_binding",
+    "patch": "scripts/mutants/duplicate-line-binding.patch",
+    "tests": [
+      ["real_x11_daily_driver", "standard_alt_shift_up_duplicates_line_above", "fail"],
+      ["real_x11_daily_driver", "app_menu_does_not_dim_the_editor", "pass"],
+      ["real_x11_text_input", "backspace_deletes_seeded_combining_cluster_as_one_character", "pass"]
+    ]
+  },
+  {
+    "name": "backspace_noop",
+    "patch": "scripts/mutants/backspace-noop.patch",
+    "tests": [
+      ["real_x11_text_input", "backspace_deletes_seeded_combining_cluster_as_one_character", "fail"],
+      ["real_x11_daily_driver", "standard_alt_shift_up_duplicates_line_above", "pass"],
+      ["real_x11_daily_driver", "app_menu_does_not_dim_the_editor", "pass"]
+    ]
+  },
+  {
+    "name": "mouse_below_document",
+    "patch": "scripts/mutants/mouse-below-document.patch",
+    "tests": [
+      ["real_x11_mouse", "click_below_last_line_moves_caret_to_document_end", "fail"],
+      ["real_x11_daily_driver", "standard_alt_shift_up_duplicates_line_above", "pass"],
+      ["real_x11_daily_driver", "app_menu_does_not_dim_the_editor", "pass"]
+    ]
+  },
+  {
+    "name": "app_menu_backdrop",
+    "patch": "scripts/mutants/app-menu-backdrop.patch",
+    "tests": [
+      ["real_x11_daily_driver", "app_menu_does_not_dim_the_editor", "fail"],
+      ["real_x11_daily_driver", "standard_alt_shift_up_duplicates_line_above", "pass"],
+      ["real_x11_mouse", "click_below_last_line_moves_caret_to_document_end", "pass"]
+    ]
+  },
+  {
+    "name": "replace_all_noop",
+    "patch": "scripts/mutants/replace-all-noop.patch",
+    "tests": [
+      ["real_x11_replace_scope_tdd", "replace_all_in_selection_only_mutates_inside_selection", "fail"],
+      ["real_x11_replace_scope_tdd", "replace_all_with_document_scope_mutates_every_match", "fail"],
+      ["real_x11_replace_scope_tdd", "replace_all_in_selection_preserves_outside_text_byte_for_byte", "fail"],
+      ["real_x11_daily_driver", "app_menu_does_not_dim_the_editor", "pass"]
+    ]
+  },
+  {
+    "name": "ordinary_autosave",
+    "patch": "scripts/mutants/ordinary-autosave.patch",
+    "tests": [
+      ["real_x11_daily_driver", "ordinary_files_do_not_autosave_by_default", "fail"],
+      ["real_x11_daily_driver", "standard_alt_shift_up_duplicates_line_above", "pass"],
+      ["real_x11_daily_driver", "app_menu_does_not_dim_the_editor", "pass"]
+    ]
+  }
+]

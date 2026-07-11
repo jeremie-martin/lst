@@ -1,0 +1,8 @@
+# Deliberately minimal and isolated from the user's desktop configuration.
+[appearance]
+padding = 10
+border_width = 2
+
+[workspaces]
+count = 1
+names = ["test"]

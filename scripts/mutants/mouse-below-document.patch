@@ -1,0 +1,11 @@
+diff --git a/apps/lst-gpui/src/editor_view.rs b/apps/lst-gpui/src/editor_view.rs
+--- a/apps/lst-gpui/src/editor_view.rs
++++ b/apps/lst-gpui/src/editor_view.rs
+@@ -455,6 +455,5 @@ impl WorkspaceView {
+         {
+             row
+         } else {
+-            let last_row = geometry.rows.last().expect("checked above");
+-            return last_row.display_end_char;
++            return geometry.rows[0].line_start_char;
+         };
