@@ -332,6 +332,27 @@ fn standard_pair_backspace_and_smart_enter_are_single_conventional_edits() {
 }
 
 #[test]
+fn enter_carries_only_the_indent_behind_the_cursor() {
+    let mut at_start = ModelHarness::new("    foo");
+    at_start.set_cursor(Position::new(0, 0));
+    at_start.execute(EditorCommand::InsertNewline);
+    assert_eq!(at_start.text(), "\n    foo");
+    assert_eq!(at_start.cursor(), Position::new(1, 0));
+
+    let mut inside_indent = ModelHarness::new("    foo");
+    inside_indent.set_cursor(Position::new(0, 2));
+    inside_indent.execute(EditorCommand::InsertNewline);
+    assert_eq!(inside_indent.text(), "  \n    foo");
+    assert_eq!(inside_indent.cursor(), Position::new(1, 2));
+
+    let mut at_end = ModelHarness::new("    foo");
+    at_end.set_cursor(Position::new(0, 7));
+    at_end.execute(EditorCommand::InsertNewline);
+    assert_eq!(at_end.text(), "    foo\n    ");
+    assert_eq!(at_end.cursor(), Position::new(1, 4));
+}
+
+#[test]
 fn new_standard_pair_edits_do_not_change_vim_insert_semantics() {
     let mut vim = ModelHarness::new("{}");
     vim.model.set_input_mode(InputMode::Vim);
@@ -421,6 +442,32 @@ fn no_selection_copy_and_cut_keep_linewise_semantics_inside_lst() {
     external.set_cursor(Position::new(0, 2));
     external.execute(EditorCommand::RequestPaste);
     assert_eq!(external.text(), "alexternalpha\n");
+}
+
+#[test]
+fn pasting_a_linewise_copy_over_a_selection_replaces_the_selection() {
+    let mut model = ModelHarness::new("alpha\nbeta\n");
+    model.execute(EditorCommand::CopySelection);
+    assert_eq!(model.clipboard_text(), Some("alpha\n"));
+
+    model.model.set_selection(Selection::from_range(6..10, false));
+    model.execute(EditorCommand::RequestPaste);
+    assert_eq!(model.text(), "alpha\nalpha\n\n");
+}
+
+#[test]
+fn end_and_home_on_wrapped_rows_neither_walk_the_line_nor_stall_at_boundaries() {
+    let mut wrapped = ModelHarness::new("aaaaabbbbbccccc");
+    wrapped.model.set_show_wrap(true);
+    wrapped.set_cursor(Position::new(0, 2));
+
+    wrapped.model.move_visual_line_boundary(true, false, 5);
+    assert_eq!(wrapped.cursor(), Position::new(0, 5));
+    wrapped.model.move_visual_line_boundary(true, false, 5);
+    assert_eq!(wrapped.cursor(), Position::new(0, 5));
+
+    wrapped.model.move_visual_line_boundary(false, false, 5);
+    assert_eq!(wrapped.cursor(), Position::new(0, 0));
 }
 
 #[test]

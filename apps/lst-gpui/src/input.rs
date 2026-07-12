@@ -14,8 +14,8 @@ use crate::{
     elapsed_ms,
     ui::theme::metrics,
     viewport::{
-        code_origin_x, row_contains_cursor, scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for,
-        x_for_global_char,
+        code_origin_pad, code_origin_x, row_contains_cursor, scroll_left_for, scroll_to_left, scroll_to_top,
+        scroll_top_for, x_for_global_char,
     },
     workspace_action::workspace_fallback_command,
     FocusTarget, LstGpuiApp,
@@ -66,13 +66,17 @@ impl LstGpuiApp {
         self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);
         let index = self.active_char_index_for_point(event.position);
+        // The gutter is painted as a fixed column at the element's left edge;
+        // code_origin_x_at_paint is horizontal-scroll-adjusted and drifts left
+        // of it once the view is scrolled right.
+        let gutter_edge = code_origin_pad(true, self.ui_scale());
         let gutter_click = self.model.show_gutter()
             && self
                 .active_view()
                 .geometry
                 .borrow()
                 .bounds
-                .is_some_and(|_| event.position.x < self.active_view().geometry.borrow().code_origin_x_at_paint);
+                .is_some_and(|bounds| event.position.x < bounds.left() + gutter_edge);
 
         if gutter_click && !event.modifiers.alt {
             let clicked = line_range_at_char(self.active_tab().buffer(), index);
@@ -197,7 +201,7 @@ impl LstGpuiApp {
             Some(text) => {
                 self.update_model(cx, true, |model| {
                     model.move_to_char(index, false, None);
-                    model.paste_text(text);
+                    model.paste_text_characterwise(text);
                 });
             }
             None => {

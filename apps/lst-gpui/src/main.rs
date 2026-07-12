@@ -733,6 +733,14 @@ impl LstGpuiApp {
         })
     }
 
+    /// Cheap identity of what PRIMARY would hold: the active tab, its edit
+    /// revision, and its primary selection. Changes exactly when the selected
+    /// text could have changed, without materializing it.
+    fn primary_selection_state(&self) -> (lst_editor::TabId, u64, lst_editor::Selection) {
+        let tab = self.model.active_tab();
+        (tab.id(), tab.revision(), tab.selection())
+    }
+
     fn update_model(
         &mut self,
         cx: &mut Context<Self>,
@@ -748,7 +756,7 @@ impl LstGpuiApp {
         let old_active_index = self.model.active_index();
         let old_find_state = self.find_input_state();
         let old_goto_line = self.model.goto_line().map(ToOwned::to_owned);
-        let old_primary_selection = self.model.active_tab().selected_text();
+        let old_primary_state = self.primary_selection_state();
         update(&mut self.model);
         if self
             .clipboard_quit_bypass
@@ -760,9 +768,14 @@ impl LstGpuiApp {
         if self.model.active_index() != old_active_index {
             self.tab_bar_scroll.scroll_to_item(self.model.active_index());
         }
-        let new_primary_selection = self.model.active_tab().selected_text();
-        if new_primary_selection != old_primary_selection {
-            if let Some(text) = new_primary_selection.filter(|text| !text.is_empty()) {
+        let new_primary_state = self.primary_selection_state();
+        // Own the X11 PRIMARY selection only when the selection changed within
+        // the same tab: switching tabs must not clobber another application's
+        // selection with this tab's stale one. Comparing (tab, revision,
+        // selection) also avoids materializing the selected text on every
+        // input event just to detect a change.
+        if new_primary_state != old_primary_state && new_primary_state.0 == old_primary_state.0 {
+            if let Some(text) = self.model.active_tab().selected_text().filter(|text| !text.is_empty()) {
                 cx.write_to_primary(gpui::ClipboardItem::new_string(text));
             }
         }

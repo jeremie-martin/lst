@@ -228,6 +228,10 @@ impl LstGpuiApp {
     pub(crate) fn apply_reloaded_settings(&mut self, settings: SettingsStore, cx: &mut Context<Self>) {
         if let Some(error) = settings.error() {
             self.cleanup_message = Some(format!("Settings reload failed: {error}"));
+            // Remember the broken content so the 500 ms poll reports it once
+            // instead of rediscovering it (and re-notifying) every tick.
+            self.settings.mark_source_seen(settings);
+            cx.notify();
             return;
         }
         let values = settings.settings.clone();

@@ -812,11 +812,21 @@ impl LstGpuiApp {
             self.reload_clean_external_file(tab_id, path, exit_save, cx);
             return;
         }
+        let explicit_save = matches!(write, ConflictWrite::Save { .. });
         let (revision, exit_save) = match write {
             ConflictWrite::Save { revision, exit_save } => (revision, exit_save),
             ConflictWrite::Autosave { revision } => (revision, None),
         };
         if tab.revision() != revision {
+            // An explicit save that hit both a disk change and a concurrent
+            // edit must not fail silently: without feedback the status bar
+            // keeps the last "Saved" text while nothing was written. A save
+            // queued behind this one will re-raise the conflict itself.
+            if explicit_save && exit_save.is_none() && !self.queued_saves.contains_key(&path) {
+                self.update_model(cx, false, |model| {
+                    model.save_failed(path.clone(), "document changed while saving; save again".to_string());
+                });
+            }
             self.finish_exit_save_failure(exit_save, "Document changed while saving".to_string(), cx);
             cx.notify();
             return;

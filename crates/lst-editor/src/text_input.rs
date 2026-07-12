@@ -156,8 +156,10 @@ pub(crate) fn newline_request(tab: &EditorTab) -> EditRequest {
         .as_slice()
         .iter()
         .map(|selection| {
-            let line = buffer.char_to_line(selection.range().start.min(len_chars));
-            format!("{newline}{}", line_indent_prefix(buffer, line))
+            format!(
+                "{newline}{}",
+                carried_indent(buffer, selection.range().start.min(len_chars))
+            )
         })
         .collect();
     multi_selection::replacement_request_by_index(tab, |index| replacements[index].clone(), UndoBoundary::Break)
@@ -416,11 +418,20 @@ fn empty_auto_pair_range_at(tab: &EditorTab, cursor: usize) -> Option<Range<usiz
         .then_some((cursor - 1)..(cursor + 1))
 }
 
+/// The indentation a newline inserted at `at` carries to the next line: the
+/// line's leading whitespace, truncated at the cursor so pressing Enter
+/// inside the indent does not duplicate the part behind the cursor.
+fn carried_indent(buffer: &ropey::Rope, at: usize) -> String {
+    let at = at.min(buffer.len_chars());
+    let line = buffer.char_to_line(at);
+    let column = at - buffer.line_to_char(line);
+    line_indent_prefix(buffer, line).chars().take(column).collect()
+}
+
 fn newline_replacement(tab: &EditorTab, range: &Range<usize>, smart_pair: bool) -> (String, usize) {
     let newline = preferred_newline(tab);
     let buffer = tab.buffer();
-    let line = buffer.char_to_line(range.start.min(tab.len_chars()));
-    let outer_indent = line_indent_prefix(buffer, line);
+    let outer_indent = carried_indent(buffer, range.start);
     if smart_pair && range.start == range.end && non_quote_auto_pair_at(tab, range.start).is_some() {
         let inner_indent = format!("{outer_indent}{}", tab.language_config().indent.indent_unit());
         let replacement = format!("{newline}{inner_indent}{newline}{outer_indent}");

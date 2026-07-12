@@ -109,7 +109,17 @@ pub(crate) fn visual_line_boundary(
         let text = lines.get(position.line).map(AsRef::as_ref).unwrap_or_default();
         let (segment_start, segment_end) = if show_wrap {
             let segments = wrap::wrap_segments(text, wrap_columns);
-            let row = wrap::cursor_visual_row_in_line(text, position.column, wrap_columns);
+            let mut row = wrap::cursor_visual_row_in_line(text, position.column, wrap_columns);
+            // A cursor exactly on a wrap boundary counts as the end of the
+            // previous row here, or End would walk down one row per press
+            // and Home on that boundary would be a permanent no-op.
+            if row > 0
+                && segments
+                    .get(row)
+                    .is_some_and(|segment| position.column == segment.start_col)
+            {
+                row -= 1;
+            }
             let segment = segments
                 .get(row)
                 .or_else(|| segments.last())

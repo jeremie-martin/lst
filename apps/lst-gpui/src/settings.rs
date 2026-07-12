@@ -120,6 +120,11 @@ pub(crate) struct SettingsStore {
     path: Option<PathBuf>,
     document: DocumentMut,
     parse_error: Option<String>,
+    /// The config file content as last read from or written to disk. Reload
+    /// detection compares against this — not `document.to_string()`, which
+    /// never matches for content that does not round-trip (parse errors,
+    /// whitespace-only files) and would retrigger a reload every poll.
+    source: String,
     pub(crate) settings: AppSettings,
 }
 
@@ -133,6 +138,7 @@ impl SettingsStore {
                 parse_error: Some(
                     "HOME and XDG_CONFIG_HOME are unavailable; settings cannot be persisted.".to_string(),
                 ),
+                source: String::new(),
                 settings: AppSettings::default(),
             };
         };
@@ -144,6 +150,7 @@ impl SettingsStore {
                     path,
                     document: DocumentMut::new(),
                     parse_error: Some(format!("Failed to read {}: {error}", path_ref.display())),
+                    source: String::new(),
                     settings: AppSettings::default(),
                 };
             }
@@ -153,6 +160,7 @@ impl SettingsStore {
                 path,
                 document: DocumentMut::new(),
                 parse_error: None,
+                source,
                 settings: AppSettings::default(),
             };
         }
@@ -164,6 +172,7 @@ impl SettingsStore {
                 path,
                 document,
                 parse_error: None,
+                source,
                 settings: settings.normalized(),
             },
             (Ok(document), Ok(settings)) => Self {
@@ -173,18 +182,21 @@ impl SettingsStore {
                     "Unsupported settings version {}; expected {}.",
                     settings.version, CONFIG_VERSION
                 )),
+                source,
                 settings: AppSettings::default(),
             },
             (Ok(document), Err(error)) => Self {
                 path,
                 document,
                 parse_error: Some(format!("Invalid settings in {}: {error}", path_ref.display())),
+                source,
                 settings: AppSettings::default(),
             },
             (Err(error), _) => Self {
                 path,
                 document: DocumentMut::new(),
                 parse_error: Some(format!("Invalid settings in {}: {error}", path_ref.display())),
+                source,
                 settings: AppSettings::default(),
             },
         }
@@ -211,7 +223,10 @@ impl SettingsStore {
             .path
             .as_deref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "settings path unavailable"))?;
-        atomic_write(path, self.document.to_string().as_bytes())
+        let serialized = self.document.to_string();
+        atomic_write(path, serialized.as_bytes())?;
+        self.source = serialized;
+        Ok(())
     }
 
     pub(crate) fn reset(&mut self) -> io::Result<()> {
@@ -228,7 +243,14 @@ impl SettingsStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
             Err(_) => return None,
         };
-        (source != self.document.to_string()).then(Self::load)
+        (source != self.source).then(Self::load)
+    }
+
+    /// Records a reloaded store's on-disk content as seen without adopting
+    /// its values. Used when a reload fails to parse: the old settings stay
+    /// in effect, but the poll must not rediscover the same content forever.
+    pub(crate) fn mark_source_seen(&mut self, reloaded: Self) {
+        self.source = reloaded.source;
     }
 }
 

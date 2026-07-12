@@ -1338,15 +1338,33 @@ impl EditorModel {
         self.status = "Clipboard does not currently contain plain text.".to_string();
     }
     pub fn paste_text(&mut self, text: String) {
-        let line_count = text.lines().count();
+        // Linewise semantics only apply when nothing is selected; pasting
+        // over a selection replaces it, like the characterwise path.
         let linewise = self
             .owned_clipboard
             .as_ref()
-            .is_some_and(|owned| owned.kind == ClipboardKind::Linewise && owned.text == text);
+            .is_some_and(|owned| owned.kind == ClipboardKind::Linewise && owned.text == text)
+            && !self
+                .active_tab()
+                .selection_set()
+                .as_slice()
+                .iter()
+                .any(Selection::has_selection);
         if linewise {
+            let line_count = text.lines().count();
             let request = text_input::linewise_paste_request(self.active_tab(), text);
             self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-        } else if let Some(request) = multi_selection::paste_request(self.active_tab(), &text, UndoBoundary::Break) {
+            self.status = format!("Pasted {line_count} line(s).");
+        } else {
+            self.paste_text_characterwise(text);
+        }
+    }
+    /// Pastes at the cursor without linewise treatment, regardless of how the
+    /// text was copied. Middle-click primary-selection paste uses this: X11
+    /// convention is to insert exactly at the clicked position.
+    pub fn paste_text_characterwise(&mut self, text: String) {
+        let line_count = text.lines().count();
+        if let Some(request) = multi_selection::paste_request(self.active_tab(), &text, UndoBoundary::Break) {
             self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
         } else {
             self.replace_text(None, text, UndoBoundary::Break);

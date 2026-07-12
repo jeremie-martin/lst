@@ -1,4 +1,4 @@
-use gpui::{Context, Div, InteractiveElement, KeyBinding, Modifiers, Window};
+use gpui::{Context, Div, InteractiveElement, KeyBinding, Keystroke, Modifiers, Window};
 use lst_editor::EditorCommand as Command;
 
 use crate::LstGpuiApp;
@@ -132,7 +132,7 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("cmd-shift-k", EDITOR, model(Command::DeleteLine)),
     b("ctrl-shift-d", EDITOR, model(Command::DuplicateLine)),
     b("cmd-shift-d", EDITOR, model(Command::DuplicateLine)),
-    fb("ctrl-alt-shift-up", EDITOR, model(Command::DuplicateLine)),
+    fb("ctrl-alt-shift-up", EDITOR, model(Command::DuplicateLineAbove)),
     fb("ctrl-alt-shift-down", EDITOR, model(Command::DuplicateLine)),
     b("ctrl-/", EDITOR, model(Command::ToggleComment)),
     b("cmd-/", EDITOR, model(Command::ToggleComment)),
@@ -290,6 +290,11 @@ pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> V
             continue;
         };
         for keystroke in keystrokes {
+            // KeyBinding::new panics on malformed keystrokes; overrides come
+            // from user-edited config, so invalid ones are dropped instead.
+            if !valid_keystroke_sequence(keystroke) {
+                continue;
+            }
             bindings.push(KeyBinding::new(
                 keystroke,
                 WorkspaceAction {
@@ -300,6 +305,17 @@ pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> V
         }
     }
     bindings
+}
+
+fn valid_keystroke_sequence(sequence: &str) -> bool {
+    let mut any = false;
+    for keystroke in sequence.split_whitespace() {
+        if Keystroke::parse(keystroke).is_err() {
+            return false;
+        }
+        any = true;
+    }
+    any
 }
 
 pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
