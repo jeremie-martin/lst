@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-pub const STATE_TRACE_SCHEMA_VERSION: u32 = 3;
+pub const STATE_TRACE_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StateTraceRecord {
@@ -24,6 +24,8 @@ pub struct StateTraceRecord {
     pub active_tab_id: u64,
     pub active_tab_path: Option<String>,
     pub active_tab_modified: bool,
+    #[serde(default)]
+    pub active_tab_backing_file_missing: bool,
     pub line_count: usize,
     pub cursors: Vec<TraceCursor>,
     pub primary_cursor_index: usize,
@@ -47,12 +49,38 @@ pub struct StateTraceRecord {
     #[serde(default)]
     pub workspace_surface: String,
     #[serde(default)]
+    pub workspace_surface_selected_index: Option<usize>,
+    #[serde(default)]
+    pub settings_selected_item: Option<String>,
+    #[serde(default)]
+    pub word_wrap_enabled: bool,
+    #[serde(default)]
     pub close_prompt_file: Option<String>,
+    #[serde(default)]
+    pub close_prompt_status: Option<String>,
+    #[serde(default)]
+    pub close_prompt_error: Option<String>,
+    #[serde(default)]
+    pub quit_review_open: bool,
+    #[serde(default)]
+    pub quit_review_items: Vec<TraceQuitReviewItem>,
+    #[serde(default)]
+    pub quit_review_selected_index: Option<usize>,
+    #[serde(default)]
+    pub quit_review_message: Option<String>,
+    #[serde(default)]
+    pub file_conflict_path: Option<String>,
+    #[serde(default)]
+    pub file_conflict_button_bounds_px: TraceFileConflictButtonBounds,
+    #[serde(default)]
+    pub cleanup_confirmation_open: bool,
     #[serde(default)]
     pub status_message: String,
     pub status_bar: String,
     #[serde(default)]
     pub app_menu_button_bounds_px: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    pub all_tabs_button_bounds_px: Option<(f32, f32, f32, f32)>,
     #[serde(default)]
     pub recent_button_bounds_px: Option<(f32, f32, f32, f32)>,
     #[serde(default)]
@@ -64,6 +92,26 @@ pub struct StateTraceRecord {
     #[serde(default)]
     pub theme_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub viewport: TraceViewport,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TraceQuitReviewItem {
+    pub identity: String,
+    pub decision: String,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TraceFileConflictButtonBounds {
+    #[serde(default)]
+    pub reload: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    pub keep_mine: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    pub save_as: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    pub dismiss: Option<(f32, f32, f32, f32)>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]

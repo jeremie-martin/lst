@@ -21,11 +21,13 @@ pub(crate) enum WorkspaceCommand {
     OpenCommandPalette,
     ToggleSettings,
     NewTab,
+    OpenQuickRecent,
     ToggleRecentFiles,
     CleanupText,
     MoveVertical(isize, bool),
     ScrollLines(isize),
     Page(bool, bool),
+    VisualLineBoundary { end: bool, select: bool },
     CloseActiveTab,
     ReopenClosedTab,
     ZoomIn,
@@ -75,6 +77,8 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("cmd-n", WS_FIND_OK, WorkspaceCommand::NewTab),
     b("ctrl-o", WS_FIND_OK, model(Command::RequestOpenFiles)),
     b("cmd-o", WS_FIND_OK, model(Command::RequestOpenFiles)),
+    b("ctrl-p", WS_FIND_OK, WorkspaceCommand::OpenQuickRecent),
+    b("cmd-p", WS_FIND_OK, WorkspaceCommand::OpenQuickRecent),
     b("ctrl-r", WS_FIND_OK, WorkspaceCommand::ToggleRecentFiles),
     b("cmd-r", WS_FIND_OK, WorkspaceCommand::ToggleRecentFiles),
     b("ctrl-s", WS_FIND_OK, model(Command::RequestSave)),
@@ -110,6 +114,7 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("ctrl-z", EDITOR, model(Command::Undo)),
     b("cmd-z", EDITOR, model(Command::Undo)),
     b("ctrl-y", EDITOR, model(Command::Redo)),
+    b("ctrl-shift-z", EDITOR, model(Command::Redo)),
     b("cmd-shift-z", EDITOR, model(Command::Redo)),
     b("ctrl-alt-y", EDITOR, model(Command::SwapRedoBranch)),
     b("cmd-alt-shift-z", EDITOR, model(Command::SwapRedoBranch)),
@@ -181,12 +186,40 @@ const BINDINGS: &[WorkspaceBinding] = &[
         EDITOR,
         model(Command::MoveDocumentBoundary(true, true)),
     ),
-    b("home", EDITOR, model(Command::SmartHome(false))),
-    b("end", EDITOR, model(Command::MoveLineBoundary(true, false))),
+    b(
+        "home",
+        EDITOR,
+        WorkspaceCommand::VisualLineBoundary {
+            end: false,
+            select: false,
+        },
+    ),
     b("cmd-left", EDITOR, model(Command::MoveLineBoundary(false, false))),
     b("cmd-right", EDITOR, model(Command::MoveLineBoundary(true, false))),
-    b("shift-home", EDITOR, model(Command::SmartHome(true))),
-    b("shift-end", EDITOR, model(Command::MoveLineBoundary(true, true))),
+    b(
+        "shift-home",
+        EDITOR,
+        WorkspaceCommand::VisualLineBoundary {
+            end: false,
+            select: true,
+        },
+    ),
+    b(
+        "end",
+        EDITOR,
+        WorkspaceCommand::VisualLineBoundary {
+            end: true,
+            select: false,
+        },
+    ),
+    b(
+        "shift-end",
+        EDITOR,
+        WorkspaceCommand::VisualLineBoundary {
+            end: true,
+            select: true,
+        },
+    ),
     fb("cmd-shift-left", EDITOR, model(Command::MoveLineBoundary(false, true))),
     fb("cmd-shift-home", EDITOR, model(Command::MoveLineBoundary(false, true))),
     fb("cmd-shift-right", EDITOR, model(Command::MoveLineBoundary(true, true))),
@@ -199,7 +232,7 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("alt-delete", EDITOR, model(Command::DeleteWord(false))),
     b("enter", EDITOR, model(Command::InsertNewline)),
     b("tab", EDITOR, model(Command::InsertTab)),
-    b("ctrl-]", EDITOR, model(Command::InsertTab)),
+    b("ctrl-]", EDITOR, model(Command::IndentLines)),
     fb("shift-tab", EDITOR, model(Command::Outdent)),
     b("ctrl-[", EDITOR, model(Command::Outdent)),
     fb("ctrl-a", EDITOR, model(Command::SelectAll)),
@@ -224,8 +257,6 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("cmd-l", EDITOR, model(Command::SelectCurrentLine)),
     fb("ctrl-q", WS_FIND_OK, WorkspaceCommand::Quit),
     b("cmd-q", WS_FIND_OK, WorkspaceCommand::Quit),
-    b("ctrl-shift-r", EDITOR, WorkspaceCommand::CleanupText),
-    b("cmd-shift-r", EDITOR, WorkspaceCommand::CleanupText),
     b("ctrl-t", EDITOR, model(Command::TransposeChars)),
     b("cmd-t", EDITOR, model(Command::TransposeChars)),
     b("insert", EDITOR, model(Command::ToggleOvertype)),
@@ -277,6 +308,7 @@ pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
         WorkspaceCommand::OpenCommandPalette => "workbench.command_palette",
         WorkspaceCommand::ToggleSettings => "workbench.settings",
         WorkspaceCommand::NewTab => "file.new_scratchpad",
+        WorkspaceCommand::OpenQuickRecent => "file.quick_open",
         WorkspaceCommand::ToggleRecentFiles => "file.open_recent",
         WorkspaceCommand::CleanupText => "tools.cleanup_text",
         WorkspaceCommand::MoveVertical(-1, false) => "cursor.up",
@@ -291,6 +323,22 @@ pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
         WorkspaceCommand::Page(true, false) => "cursor.page_down",
         WorkspaceCommand::Page(false, true) => "cursor.page_up_select",
         WorkspaceCommand::Page(true, true) => "cursor.page_down_select",
+        WorkspaceCommand::VisualLineBoundary {
+            end: false,
+            select: false,
+        } => "cursor.visual_home",
+        WorkspaceCommand::VisualLineBoundary {
+            end: true,
+            select: false,
+        } => "cursor.visual_end",
+        WorkspaceCommand::VisualLineBoundary {
+            end: false,
+            select: true,
+        } => "cursor.visual_home_select",
+        WorkspaceCommand::VisualLineBoundary {
+            end: true,
+            select: true,
+        } => "cursor.visual_end_select",
         WorkspaceCommand::CloseActiveTab => "file.close_tab",
         WorkspaceCommand::ReopenClosedTab => "file.reopen_closed_tab",
         WorkspaceCommand::ZoomIn => "view.zoom_in",
@@ -342,6 +390,7 @@ pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
             DeleteWord(false) => "edit.delete_word_right",
             InsertNewline => "edit.insert_newline",
             InsertTab => "edit.indent",
+            IndentLines => "edit.indent_lines",
             Outdent => "edit.outdent",
             SelectAll => "selection.select_all",
             SmartExpandSelection => "selection.expand",
@@ -423,6 +472,18 @@ pub(crate) fn command_specs(overrides: &BTreeMap<String, Vec<String>>) -> Vec<Co
             shortcuts,
         });
     }
+    // Commands intentionally discoverable only through the palette live here
+    // rather than carrying a hidden or misleading default shortcut.
+    let cleanup_id = command_id(WorkspaceCommand::CleanupText);
+    if !indices.contains_key(cleanup_id) {
+        specs.push(CommandSpec {
+            id: cleanup_id,
+            title: command_title(cleanup_id),
+            category: command_category(cleanup_id),
+            command: WorkspaceCommand::CleanupText,
+            shortcuts: overrides.get(cleanup_id).cloned().unwrap_or_default(),
+        });
+    }
     specs.sort_by(|left, right| {
         left.category
             .cmp(right.category)
@@ -449,6 +510,7 @@ fn command_title(id: &str) -> String {
         "workbench.command_palette" => Some("Show Command Palette"),
         "workbench.settings" => Some("Open Settings"),
         "file.new_scratchpad" => Some("New Scratchpad"),
+        "file.quick_open" => Some("Quick Open"),
         "file.open_recent" => Some("Open Recent"),
         "file.save_as" => Some("Save As"),
         "file.close_tab" => Some("Close Tab"),
@@ -466,6 +528,7 @@ fn command_title(id: &str) -> String {
         "selection.add_cursors_line_ends" => Some("Add Cursors to Line Ends"),
         "edit.toggle_line_comment" => Some("Toggle Line Comment"),
         "edit.toggle_block_comment" => Some("Toggle Block Comment"),
+        "edit.indent_lines" => Some("Indent Lines"),
         _ => None,
     };
     if let Some(title) = explicit {
@@ -508,9 +571,30 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.quit_review.is_some() || self.cleanup_confirmation.is_some() {
+            return;
+        }
         if self.close_prompt.is_some() {
             if command == WorkspaceCommand::Model(Command::InsertNewline) {
                 self.confirm_close_prompt_save(cx);
+            }
+            return;
+        }
+        if self.recent.is_open() {
+            if command == WorkspaceCommand::ToggleRecentFiles {
+                self.toggle_recent_files_panel(window, cx);
+            }
+            return;
+        }
+        if self.workspace_surface != crate::WorkspaceSurface::None {
+            match (self.workspace_surface, command) {
+                (crate::WorkspaceSurface::Settings, WorkspaceCommand::ToggleSettings) => {
+                    self.toggle_settings(window, cx);
+                }
+                (crate::WorkspaceSurface::CommandPalette, WorkspaceCommand::OpenCommandPalette) => {
+                    self.close_workspace_surface(cx);
+                }
+                _ => {}
             }
             return;
         }
@@ -549,6 +633,9 @@ impl LstGpuiApp {
             WorkspaceCommand::NewTab => {
                 self.request_new_tab(cx);
             }
+            WorkspaceCommand::OpenQuickRecent => {
+                self.open_recent_quick_picker(window, cx);
+            }
             WorkspaceCommand::ToggleRecentFiles => {
                 self.toggle_recent_files_panel(window, cx);
             }
@@ -563,6 +650,9 @@ impl LstGpuiApp {
             }
             WorkspaceCommand::Page(down, select) => {
                 self.move_page(down, select, window, cx);
+            }
+            WorkspaceCommand::VisualLineBoundary { end, select } => {
+                self.move_visual_line_boundary(end, select, cx);
             }
             WorkspaceCommand::CloseActiveTab => {
                 self.request_close_active_tab(cx);
@@ -608,4 +698,32 @@ fn fallback_keystroke(key: &str, modifiers: Modifiers) -> Option<String> {
     }
     keystroke.push_str(&key);
     Some(keystroke)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_insertion_and_line_indent_have_independent_configurable_commands() {
+        let mut overrides = BTreeMap::new();
+        overrides.insert("edit.indent".to_string(), vec!["alt-t".to_string()]);
+        overrides.insert("edit.indent_lines".to_string(), vec!["alt-i".to_string()]);
+
+        let specs = command_specs(&overrides);
+        let tab = specs
+            .iter()
+            .find(|spec| spec.id == "edit.indent")
+            .expect("Tab insertion command should remain discoverable");
+        let lines = specs
+            .iter()
+            .find(|spec| spec.id == "edit.indent_lines")
+            .expect("Explicit line-indent command should remain discoverable");
+
+        assert_eq!(tab.command, WorkspaceCommand::Model(Command::InsertTab));
+        assert_eq!(tab.shortcuts, ["alt-t"]);
+        assert_eq!(lines.command, WorkspaceCommand::Model(Command::IndentLines));
+        assert_eq!(lines.title, "Indent Lines");
+        assert_eq!(lines.shortcuts, ["alt-i"]);
+    }
 }

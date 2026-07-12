@@ -145,12 +145,21 @@ fn bookmarks_track_inserted_lines_and_restore_on_undo() -> TestResult {
         let mut editor = session.open_file("bookmarks-track-edits", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.keys("<down><C-A-k><C-home><enter>")?;
+        editor.keys("<down>")?;
+        editor.expect_cursor_heads(&[(1, 0)])?;
+        editor.keys("<C-A-k>")?;
+        editor.keys("<C-home>")?;
+        editor.expect_cursor_heads(&[(0, 0)])?;
+        editor.keys("<enter>")?;
+        editor.expect_cursor_heads(&[(1, 0)])?;
 
-        editor.keys("<C-home><C-A-l>")?;
+        editor.keys("<C-home>")?;
+        editor.keys("<C-A-l>")?;
         editor.expect_cursor_heads(&[(2, 0)])?;
 
-        editor.keys("<C-z><C-home><C-A-l>")?;
+        editor.keys("<C-z>")?;
+        editor.keys("<C-home>")?;
+        editor.keys("<C-A-l>")?;
         editor.expect_cursor_heads(&[(1, 0)])?;
         editor.save_then_expect_file(&path, "a\nb\nc")?;
         Ok(())

@@ -218,6 +218,18 @@ impl LstGpuiApp {
         self.execute_model_command(cx, Command::Page(down, select, wrap_columns));
     }
 
+    pub(crate) fn move_visual_line_boundary(&mut self, end: bool, select: bool, cx: &mut Context<Self>) {
+        let wrap_columns = self
+            .active_view()
+            .geometry
+            .borrow()
+            .painted_wrap_columns
+            .unwrap_or(usize::MAX);
+        self.update_model(cx, true, |model| {
+            model.move_visual_line_boundary(end, select, wrap_columns);
+        });
+    }
+
     pub(crate) fn scroll_editor_lines(&mut self, delta: isize, cx: &mut Context<Self>) {
         let view = self.active_view();
         let current = scroll_top_for(&view.scroll);

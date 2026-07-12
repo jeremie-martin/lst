@@ -6,8 +6,8 @@ items must not depend on production implementation details.
 
 Status legend: `[ ]` missing · `[~]` partial · `[x]` done
 
-Status last refreshed: 2026-06-17 (added syntax highlighting, line bookmarks,
-and AI text cleanup).
+Status last refreshed: 2026-07-12 (daily-driver interaction, file safety,
+search/replace, settings, and responsiveness pass).
 
 Real-display tests under `apps/lst-gpui/tests/real_x11_*.rs` are the executable
 reference for this checklist. When an item links tests, those tests should assert
@@ -228,7 +228,7 @@ multi-cursor policy is intentionally separate.
 - [x] **Syntax highlighting** - tree-sitter highlighting for Rust, Python, JavaScript/JSX, TypeScript/TSX, JSON, TOML, YAML, Markdown, HTML, and CSS, with incremental reparsing, language injection (e.g. Markdown fenced code), and theme-driven colors. Covered by in-crate parser tests (`apps/lst-gpui/src/syntax`); no real-display color coverage yet.
 - [ ] **Ruler / column guides** - visible column guides can be shown.
 - [x] **Current line highlight** - the cursor line is visibly highlighted.
-- [ ] **Cursor blink** - cursor blink respects OS or editor settings.
+- [x] **Cursor blink** - all visible carets share the configured editor blink state.
 - [x] **Scroll margin** - vertical and horizontal cursor reveal keep margin around the cursor.
 - [x] **Visible scrollbar when content overflows** - scrollbars appear and can be used when content overflows.
 - [x] **Horizontal scroll on long lines** - with soft wrap off, horizontal scrolling keeps the cursor visible.
@@ -239,23 +239,23 @@ multi-cursor policy is intentionally separate.
 
 - [x] **Dirty indicator** - modified buffers show a visible dirty state. X11: `real_x11_state_trace.rs`.
 - [x] **Clean save is state-preserving** - `Ctrl-S` on an unmodified buffer leaves dirty state, cursor position, and visible selection state unchanged. X11: `real_x11_state_trace.rs`.
-- [x] **Reload on external change prompt** - external changes reload clean buffers or prompt on conflicts.
+- [x] **External-change resolution** - clean buffers reload in place; dirty buffers show a non-modal per-tab Reload / Keep Mine / Save As / Dismiss banner. X11: `real_x11_workflows.rs`.
 - [x] **Auto-save** - scratchpad and autosave workflows persist edits. X11: `real_x11_smoke.rs`, `real_x11_workflows.rs`.
 - [ ] **Recover from crash via swap/journal** - unsaved work can be recovered after a crash.
-- [x] **Multiple tabs/buffers** - users can open, close, activate, and reorder buffers.
+- [x] **Multiple tabs/buffers** - users can open, close, activate, reorder, and reach overflowed buffers through the all-tabs list.
 - [x] **Recently closed reopen** - recently closed buffers can be reopened with caret position restored. X11: `real_x11_recently_closed_tdd.rs`.
-- [~] **Filetype / language detection** - common languages are detected for syntax and editor behavior, but there is no user-facing language picker or config override UI. X11: `real_x11_language.rs`.
+- [x] **Filetype / language detection and override** - common languages are detected for syntax and editor behavior, with a keyboard-operable language override menu. X11: `real_x11_language.rs`.
 
 ## Accessibility & Input
 
 - [ ] **Screen reader support** - accessibility integration is not available.
 - [x] **Keyboard-only operation** - editor actions are reachable from the keyboard and Vim state machine.
-- [~] **Configurable keybindings** - keybindings are not user-configurable yet.
+- [~] **Configurable keybindings** - versioned TOML overrides reload live and Settings exposes searchable bindings/conflicts; direct binding capture/editing remains future work.
 - [ ] **Respect OS text settings** - double-click word separators and repeat-rate preferences are not fully integrated.
 
 ## AI Assistance
 
-- [x] **LLM text cleanup** - `Ctrl-Shift-R` or the status-bar sparkle button rewrites the whole buffer, or the current selection, through DeepSeek to remove transcription filler and false starts while preserving meaning and structure; a single undo restores the original. Requires `DEEPSEEK_API_KEY` (model overridable via `DEEPSEEK_MODEL`). X11: `real_x11_llm_cleanup.rs` (with an in-process fake client).
+- [x] **LLM text cleanup** - the command-palette action rewrites the current selection through DeepSeek; an unselected whole document requires an explicit in-app data-sharing confirmation. A single undo restores the original. Requires `DEEPSEEK_API_KEY` (model overridable via `DEEPSEEK_MODEL`). X11: `real_x11_llm_cleanup.rs` (with an in-process fake client).
 
 ---
 

@@ -310,8 +310,8 @@ The real-display suite currently has broad coverage across:
 - viewport scroll, reveal, and geometry behavior
 - language-sensitive editing: comment toggling, auto-pairing, and indent units
 - overtype and transpose editing
-- AI text cleanup via `Ctrl-Shift-R` and the sparkle button (with an in-process
-  fake LLM client)
+- command-palette AI text cleanup, including selection-only operation and the
+  whole-document confirmation/cancel flow (with an in-process fake LLM client)
 - mouse click, double-click, triple-click, quad-click, drag selection, middle-click
   paste, shift-click, and Alt-click cursor toggles
 - cursor movement and subword motion

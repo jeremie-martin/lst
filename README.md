@@ -19,11 +19,11 @@ owns rendering, widgets, desktop integration, and runtime effects.
   theme-driven colors.
 - Line bookmarks: toggle with `Ctrl-Alt-K`, jump to the next/previous bookmark
   with `Ctrl-Alt-L` / `Ctrl-Alt-J` (wraps around).
-- AI text cleanup for scratchpad transcripts: `Ctrl-Shift-R` (or the status-bar
-  sparkle button) rewrites the buffer or current selection through DeepSeek to
-  remove filler words and false starts while preserving meaning and structure;
-  a single undo restores the original. Set `DEEPSEEK_API_KEY` (and optionally
-  `DEEPSEEK_MODEL`) to enable it.
+- AI text cleanup for scratchpad transcripts is available from the command
+  palette. A selection is cleaned directly; cleaning an entire document first
+  requires an explicit in-app confirmation. A single undo restores the
+  original. Set `DEEPSEEK_API_KEY` (and optionally `DEEPSEEK_MODEL`) to enable
+  it.
 
 ## Active Layout
 
@@ -39,6 +39,7 @@ cargo build --release -p lst-gpui
 ./target/release/lst --title lst-scratchpad
 ./target/release/lst --scratchpad-dir /path/to/notes
 ./target/release/lst --vim README.md
+./target/release/lst --version
 ```
 
 Running without files creates a timestamped scratchpad note in
@@ -52,16 +53,18 @@ setting schema, and standard key policy.
 
 ## Install
 
-`install.sh` installs the active GPUI editor to `~/.local/bin/lst` by default.
+`install.sh` builds and installs the active GPUI editor in release mode to
+`~/.local/bin/lst` by default. It then compares the installed package version,
+Git revision, and dirty marker with the source build and fails on any mismatch.
 
 ```bash
 ./install.sh
-~/.local/bin/lst
+~/.local/bin/lst --version
 ```
 
 Set `LST_PREFIX=/some/prefix` to change the install root.
-The installer verifies that the `TX-02` font is available because the editor
-uses it as the primary UI and code font.
+The installer verifies that the `TX-02` font is available because it is the
+default editor font. Application chrome uses the platform UI font.
 
 For scratchpad window-manager rules, spawn `~/.local/bin/lst --title lst-scratchpad`.
 The GPUI window sets that title on X11/Wayland and uses `lst` as its app id /

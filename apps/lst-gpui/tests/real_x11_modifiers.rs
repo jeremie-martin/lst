@@ -68,6 +68,18 @@ fn ctrl_y_redoes_after_ctrl_z() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_shift_z_redoes_after_ctrl_z() -> TestResult {
+    support::run_x11_test("modifier-ctrl-shift-z", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("hello<C-z><C-S-z>")?;
+        editor.save_then_expect_file(&path, "hello")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn shift_enter_in_insert_mode_inserts_newline() -> TestResult {
     // Shift+Enter (and Ctrl+Enter / Alt+Enter) should insert a literal
     // newline while editing — many keyboards send modified Enter from

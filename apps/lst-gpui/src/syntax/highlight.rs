@@ -5,7 +5,43 @@ use super::{
 use crate::ui::theme::SyntaxRole;
 use lst_editor::{BufferDelta, BufferEdit};
 use ropey::Rope;
+use std::ops::Range;
 use tree_sitter::{InputEdit, Parser, Point, QueryCursor, StreamingIterator, Tree};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SyntaxInvalidation {
+    Full,
+    Lines(Range<usize>),
+}
+
+impl SyntaxInvalidation {
+    pub(crate) fn line_range(&self, line_count: usize) -> Range<usize> {
+        match self {
+            Self::Full => 0..line_count,
+            Self::Lines(lines) => lines.start.min(line_count)..lines.end.min(line_count),
+        }
+    }
+
+    pub(crate) fn is_full(&self) -> bool {
+        matches!(self, Self::Full)
+    }
+
+    pub(crate) fn from_buffer_delta(
+        new_buffer: &Rope,
+        delta: &BufferDelta,
+        previous_line_count: Option<usize>,
+    ) -> Self {
+        match delta {
+            BufferDelta::Unchanged => Self::Lines(0..0),
+            BufferDelta::FullReplace => Self::Full,
+            BufferDelta::Edits(edits) if previous_line_count == Some(new_buffer.len_lines()) => {
+                let changed = edited_line_range(new_buffer, edits).unwrap_or(0..new_buffer.len_lines());
+                Self::Lines(changed.start.saturating_sub(1)..changed.end.saturating_add(1).min(new_buffer.len_lines()))
+            }
+            BufferDelta::Edits(_) => Self::Full,
+        }
+    }
+}
 
 /// Per-tab parse state. Owns its own `Parser` and the most recent `Tree`
 /// for the buffer, plus a snapshot of the buffer the tree was parsed
@@ -27,14 +63,11 @@ pub(crate) struct TabSyntaxState {
 }
 
 impl TabSyntaxState {
-    /// `source` must equal `buffer.to_string()`. The caller passes both so
-    /// the same string can be reused for `compute_spans` without a second
-    /// allocation.
-    pub(crate) fn parse_initial(language: SyntaxLanguage, buffer: &Rope, source: &str, revision: u64) -> Option<Self> {
+    pub(crate) fn parse_initial(language: SyntaxLanguage, buffer: &Rope, revision: u64) -> Option<Self> {
         let grammar = catalog::grammar(catalog::root_grammar(language));
         let mut parser = Parser::new();
         parser.set_language(&grammar.language).ok()?;
-        let tree = parser.parse(source, None)?;
+        let tree = parse_rope(&mut parser, buffer, None)?;
         Some(Self {
             language,
             revision,
@@ -44,21 +77,29 @@ impl TabSyntaxState {
         })
     }
 
-    /// Update the tree to match `new_buffer` at `new_revision`, using
-    /// `delta` to choose between incremental and full reparse. `new_source`
-    /// must equal `new_buffer.to_string()`.
-    pub(crate) fn update(&mut self, new_buffer: &Rope, new_source: &str, delta: BufferDelta, new_revision: u64) {
-        match delta {
+    /// Update the tree to match `new_buffer` and return the smallest safe
+    /// line window whose cached highlight spans need replacing. Changes that
+    /// alter line topology intentionally fall back to `Full`; ordinary typing
+    /// keeps all unaffected per-line spans.
+    pub(crate) fn update(&mut self, new_buffer: &Rope, delta: BufferDelta, new_revision: u64) -> SyntaxInvalidation {
+        let invalidation = match delta {
             BufferDelta::Unchanged => {
-                // Buffer claims to be unchanged; refresh the snapshot anyway
-                // in case a caller reached us with a stale revision.
-            }
-            BufferDelta::FullReplace => {
-                if let Some(tree) = self.parser.parse(new_source, None) {
+                // A changed revision without a delta means a consumer missed
+                // an edit batch. Reparse and rebuild rather than guessing.
+                if let Some(tree) = parse_rope(&mut self.parser, new_buffer, None) {
                     self.tree = tree;
                 }
+                SyntaxInvalidation::Full
+            }
+            BufferDelta::FullReplace => {
+                if let Some(tree) = parse_rope(&mut self.parser, new_buffer, None) {
+                    self.tree = tree;
+                }
+                SyntaxInvalidation::Full
             }
             BufferDelta::Edits(edits) => {
+                let line_topology_changed = self.parsed_buffer.len_lines() != new_buffer.len_lines();
+                let mut changed_lines = edited_line_range(new_buffer, &edits);
                 // Apply edits in reverse order so each edit's pre-batch
                 // coordinates (in `self.parsed_buffer`) stay valid — later
                 // edits don't shift earlier positions.
@@ -66,35 +107,73 @@ impl TabSyntaxState {
                     let input_edit = input_edit_for(&self.parsed_buffer, edit);
                     self.tree.edit(&input_edit);
                 }
-                if let Some(tree) = self.parser.parse(new_source, Some(&self.tree)) {
+                if let Some(tree) = parse_rope(&mut self.parser, new_buffer, Some(&self.tree)) {
+                    for range in self.tree.changed_ranges(&tree) {
+                        include_line_range(
+                            &mut changed_lines,
+                            range.start_point.row..range.end_point.row.saturating_add(1),
+                        );
+                    }
                     self.tree = tree;
                 }
+                if line_topology_changed {
+                    SyntaxInvalidation::Full
+                } else {
+                    let line_count = new_buffer.len_lines();
+                    let changed_lines = changed_lines.unwrap_or(0..line_count);
+                    SyntaxInvalidation::Lines(
+                        changed_lines.start.saturating_sub(1)..changed_lines.end.saturating_add(1).min(line_count),
+                    )
+                }
             }
-        }
+        };
         self.parsed_buffer = new_buffer.clone();
         self.revision = new_revision;
+        invalidation
     }
 
-    pub(crate) fn compute_spans(&self, source: &str) -> (Vec<Vec<SyntaxSpan>>, Vec<u32>) {
+    #[cfg(test)]
+    pub(crate) fn compute_spans(&self) -> (Vec<Vec<SyntaxSpan>>, Vec<u32>) {
+        self.compute_spans_for_lines(0..self.parsed_buffer.len_lines())
+    }
+
+    pub(crate) fn compute_spans_for_lines(&self, lines: Range<usize>) -> (Vec<Vec<SyntaxSpan>>, Vec<u32>) {
+        let line_count = self.parsed_buffer.len_lines();
+        let lines = lines.start.min(line_count)..lines.end.min(line_count);
+        if lines.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
         // Line topology must match `EditorTab::lines()` (which iterates
         // `Rope::lines()` and trims trailing \n/\r), otherwise the byte-
         // length guard in viewport disables the cache for the wrong line
         // indices on files containing lone CR or other Unicode separators
         // that ropey treats as line breaks.
-        let (line_starts, display_ends) = line_bounds_from_rope(&self.parsed_buffer);
+        let (line_starts, display_ends) = line_bounds_from_rope(&self.parsed_buffer, lines.clone());
         let line_byte_lens: Vec<u32> = line_starts
             .iter()
             .zip(display_ends.iter())
             .map(|(start, end)| (end.saturating_sub(*start)) as u32)
             .collect();
-        let mut lines = vec![Vec::new(); line_starts.len()];
+        let mut spans = vec![Vec::new(); line_starts.len()];
+        let byte_range = self.parsed_buffer.line_to_byte(lines.start)..if lines.end < line_count {
+            self.parsed_buffer.line_to_byte(lines.end)
+        } else {
+            self.parsed_buffer.len_bytes()
+        };
 
         let root_grammar = catalog::root_grammar(self.language);
         let mut captures = Vec::new();
-        collect_captures(root_grammar, &self.tree, source.as_bytes(), 0, 0, &mut captures);
+        collect_rope_captures(
+            root_grammar,
+            &self.tree,
+            &self.parsed_buffer,
+            byte_range.clone(),
+            0,
+            &mut captures,
+        );
 
-        emit_non_overlapping_spans(&captures, &mut lines, &line_starts, &display_ends);
-        (lines, line_byte_lens)
+        emit_non_overlapping_spans(&captures, &mut spans, &line_starts, &display_ends, byte_range);
+        (spans, line_byte_lens)
     }
 }
 
@@ -124,6 +203,188 @@ struct InjectionMatch {
     include_children: bool,
 }
 
+fn parse_rope(parser: &mut Parser, buffer: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
+    let len_bytes = buffer.len_bytes();
+    parser.parse_with_options(
+        &mut |byte_offset, _| {
+            if byte_offset >= len_bytes {
+                return &[] as &[u8];
+            }
+            let (chunk, chunk_start, _, _) = buffer.chunk_at_byte(byte_offset);
+            &chunk.as_bytes()[byte_offset - chunk_start..]
+        },
+        old_tree,
+        None,
+    )
+}
+
+fn edited_line_range(new_buffer: &Rope, edits: &[BufferEdit]) -> Option<Range<usize>> {
+    let mut changed = None;
+    let mut shift = 0isize;
+    for edit in edits {
+        let new_start = edit
+            .range
+            .start
+            .saturating_add_signed(shift)
+            .min(new_buffer.len_chars());
+        let replacement_chars = edit.replacement.chars().count();
+        let new_end = new_start.saturating_add(replacement_chars).min(new_buffer.len_chars());
+        let start_line = new_buffer.char_to_line(new_start);
+        let end_line = new_buffer.char_to_line(new_end).saturating_add(1);
+        include_line_range(&mut changed, start_line..end_line);
+        shift = shift.saturating_add(
+            isize::try_from(replacement_chars).unwrap_or(isize::MAX)
+                - isize::try_from(edit.range.end.saturating_sub(edit.range.start)).unwrap_or(isize::MAX),
+        );
+    }
+    changed
+}
+
+fn include_line_range(target: &mut Option<Range<usize>>, addition: Range<usize>) {
+    match target {
+        Some(current) => {
+            current.start = current.start.min(addition.start);
+            current.end = current.end.max(addition.end);
+        }
+        None => *target = Some(addition),
+    }
+}
+
+fn collect_rope_captures(
+    grammar: GrammarId,
+    tree: &Tree,
+    source: &Rope,
+    byte_range: Range<usize>,
+    depth: u16,
+    out: &mut Vec<CapturedSpan>,
+) {
+    let config = catalog::grammar(grammar);
+    let injections = collect_rope_injection_matches(tree, source, config, byte_range.clone());
+    let suppression: Vec<Range<usize>> = injections
+        .iter()
+        .filter(|injection| !injection.include_children)
+        .map(|injection| injection.content_start..injection.content_end)
+        .collect();
+
+    let mut cursor = QueryCursor::new();
+    cursor.set_byte_range(byte_range.clone());
+    let mut matches = cursor.matches(&config.highlights, tree.root_node(), |node: tree_sitter::Node<'_>| {
+        source.byte_slice(node.byte_range()).chunks().map(str::as_bytes)
+    });
+    while let Some(query_match) = matches.next() {
+        let pattern_index = query_match.pattern_index as u16;
+        for capture in query_match.captures {
+            let Some(role) = config.capture_roles.get(capture.index as usize).copied().flatten() else {
+                continue;
+            };
+            let node = capture.node;
+            let start = node.start_byte();
+            let end = node.end_byte();
+            if start >= end || suppression.iter().any(|range| range.start <= start && end <= range.end) {
+                continue;
+            }
+            out.push(CapturedSpan {
+                start,
+                end,
+                role,
+                depth,
+                pattern_index,
+            });
+        }
+    }
+
+    for injection in injections {
+        if injection.content_end <= injection.content_start {
+            continue;
+        }
+        let content_range = injection.content_start..injection.content_end;
+        let local_range = byte_range
+            .start
+            .max(content_range.start)
+            .saturating_sub(content_range.start)
+            ..byte_range
+                .end
+                .min(content_range.end)
+                .saturating_sub(content_range.start);
+        if local_range.is_empty() {
+            continue;
+        }
+        let sub_source = source.byte_slice(content_range.clone()).to_string();
+        let Some(sub_tree) = parse_sub_source(injection.embedded, sub_source.as_bytes()) else {
+            continue;
+        };
+        collect_captures(
+            injection.embedded,
+            &sub_tree,
+            sub_source.as_bytes(),
+            injection.content_start,
+            depth + 1,
+            local_range,
+            out,
+        );
+    }
+}
+
+fn collect_rope_injection_matches(
+    tree: &Tree,
+    source: &Rope,
+    config: &catalog::GrammarConfig,
+    byte_range: Range<usize>,
+) -> Vec<InjectionMatch> {
+    let Some(injections_query) = config.injections.as_ref() else {
+        return Vec::new();
+    };
+    let content_index = config.injection_content_index;
+    let language_index = config.injection_language_index;
+    let mut out = Vec::new();
+    let mut cursor = QueryCursor::new();
+    cursor.set_byte_range(byte_range);
+    let mut matches = cursor.matches(injections_query, tree.root_node(), |node: tree_sitter::Node<'_>| {
+        source.byte_slice(node.byte_range()).chunks().map(str::as_bytes)
+    });
+    while let Some(query_match) = matches.next() {
+        let mut content_node = None;
+        let mut language_text = None;
+        for capture in query_match.captures {
+            if Some(capture.index) == content_index {
+                content_node = Some(capture.node);
+            } else if Some(capture.index) == language_index {
+                language_text = Some(source.byte_slice(capture.node.byte_range()).to_string());
+            }
+        }
+        let Some(node) = content_node else {
+            continue;
+        };
+        let settings = injections_query.property_settings(query_match.pattern_index);
+        let language_property = settings
+            .iter()
+            .find(|property| property.key.as_ref() == "injection.language")
+            .and_then(|property| property.value.as_deref());
+        let embedded = language_text
+            .as_deref()
+            .and_then(catalog::injectable_grammar)
+            .or_else(|| language_property.and_then(catalog::injectable_grammar))
+            .or(config.implicit_injection_grammar);
+        let Some(embedded) = embedded else {
+            continue;
+        };
+        let include_children = settings.iter().any(|property| {
+            property.key.as_ref() == "injection.include-children"
+                && match property.value.as_deref() {
+                    None => true,
+                    Some(value) => value.eq_ignore_ascii_case("true"),
+                }
+        });
+        out.push(InjectionMatch {
+            content_start: node.start_byte(),
+            content_end: node.end_byte(),
+            embedded,
+            include_children,
+        });
+    }
+    out
+}
+
 /// Walks the highlights query of `grammar` over `tree`, then recurses into
 /// each injection region. Byte offsets are shifted by `byte_offset` so
 /// injected sub-trees land in outer-buffer coordinates. Host captures
@@ -135,11 +396,12 @@ fn collect_captures(
     source: &[u8],
     byte_offset: usize,
     depth: u16,
+    byte_range: Range<usize>,
     out: &mut Vec<CapturedSpan>,
 ) {
     let config = catalog::grammar(grammar);
 
-    let injections = collect_injection_matches(tree, source, config);
+    let injections = collect_injection_matches(tree, source, config, byte_range.clone());
     let suppression: Vec<std::ops::Range<usize>> = injections
         .iter()
         .filter(|inj| !inj.include_children)
@@ -147,6 +409,7 @@ fn collect_captures(
         .collect();
 
     let mut cursor = QueryCursor::new();
+    cursor.set_byte_range(byte_range.clone());
     let mut matches = cursor.matches(&config.highlights, tree.root_node(), source);
     while let Some(m) = matches.next() {
         let pattern_index = m.pattern_index as u16;
@@ -187,12 +450,22 @@ fn collect_captures(
             sub_source,
             byte_offset + inj.content_start,
             depth + 1,
+            byte_range
+                .start
+                .max(inj.content_start)
+                .saturating_sub(inj.content_start)
+                ..byte_range.end.min(inj.content_end).saturating_sub(inj.content_start),
             out,
         );
     }
 }
 
-fn collect_injection_matches(tree: &Tree, source: &[u8], config: &catalog::GrammarConfig) -> Vec<InjectionMatch> {
+fn collect_injection_matches(
+    tree: &Tree,
+    source: &[u8],
+    config: &catalog::GrammarConfig,
+    byte_range: Range<usize>,
+) -> Vec<InjectionMatch> {
     let Some(injections_query) = config.injections.as_ref() else {
         return Vec::new();
     };
@@ -201,6 +474,7 @@ fn collect_injection_matches(tree: &Tree, source: &[u8], config: &catalog::Gramm
 
     let mut out = Vec::new();
     let mut cursor = QueryCursor::new();
+    cursor.set_byte_range(byte_range);
     let mut matches = cursor.matches(injections_query, tree.root_node(), source);
     while let Some(m) = matches.next() {
         let mut content_node = None;
@@ -264,6 +538,7 @@ fn emit_non_overlapping_spans(
     lines: &mut [Vec<SyntaxSpan>],
     line_starts: &[usize],
     display_ends: &[usize],
+    byte_range: Range<usize>,
 ) {
     if captures.is_empty() {
         return;
@@ -277,16 +552,24 @@ fn emit_non_overlapping_spans(
     }
     let mut events: Vec<Event> = Vec::with_capacity(captures.len() * 2);
     for (ix, cap) in captures.iter().enumerate() {
+        let start = cap.start.max(byte_range.start);
+        let end = cap.end.min(byte_range.end);
+        if start >= end {
+            continue;
+        }
         events.push(Event {
-            byte: cap.start,
+            byte: start,
             is_end: false,
             capture_ix: ix,
         });
         events.push(Event {
-            byte: cap.end,
+            byte: end,
             is_end: true,
             capture_ix: ix,
         });
+    }
+    if events.is_empty() {
+        return;
     }
     // At the same byte, closes come before opens so a capture ending here
     // doesn't briefly co-exist with a sibling starting here.
@@ -339,25 +622,24 @@ fn innermost_role(active: &[usize], captures: &[CapturedSpan]) -> Option<SyntaxR
 /// string disagrees with `EditorTab::lines()` on files containing lone
 /// CR (or other Unicode line terminators). Using `Rope::lines()` keeps
 /// the line indices and per-line lengths consistent with the renderer.
-fn line_bounds_from_rope(buffer: &Rope) -> (Vec<usize>, Vec<usize>) {
-    let len_lines = buffer.len_lines();
-    let mut line_starts = Vec::with_capacity(len_lines);
-    let mut display_ends = Vec::with_capacity(len_lines);
-    let mut cursor = 0usize;
-    for line in buffer.lines() {
-        line_starts.push(cursor);
-        let line_str = line.to_string();
-        let bytes = line_str.as_bytes();
-        let mut end = bytes.len();
-        while end > 0 && matches!(bytes[end - 1], b'\n' | b'\r') {
-            end -= 1;
+fn line_bounds_from_rope(buffer: &Rope, lines: Range<usize>) -> (Vec<usize>, Vec<usize>) {
+    let mut line_starts = Vec::with_capacity(lines.len());
+    let mut display_ends = Vec::with_capacity(lines.len());
+    for line_ix in lines {
+        let line_start = buffer.line_to_byte(line_ix);
+        let line = buffer.line(line_ix);
+        let mut trailing_break_bytes = 0;
+        let mut char_ix = line.len_chars();
+        while char_ix > 0 {
+            let character = line.char(char_ix - 1);
+            if !matches!(character, '\n' | '\r') {
+                break;
+            }
+            trailing_break_bytes += character.len_utf8();
+            char_ix -= 1;
         }
-        display_ends.push(cursor + end);
-        cursor += bytes.len();
-    }
-    if line_starts.is_empty() {
-        line_starts.push(0);
-        display_ends.push(0);
+        line_starts.push(line_start);
+        display_ends.push(line_start + line.len_bytes().saturating_sub(trailing_break_bytes));
     }
     (line_starts, display_ends)
 }

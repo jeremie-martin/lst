@@ -1,3 +1,4 @@
+use crate::build_info::BUILD_IDENTITY;
 use lst_editor::InputMode;
 use std::{fmt, path::PathBuf, process};
 
@@ -12,6 +13,7 @@ pub(crate) struct LaunchArgs {
 #[derive(Clone, Debug)]
 pub(crate) enum LaunchArgError {
     Help,
+    Version,
     Message(String),
 }
 
@@ -19,6 +21,7 @@ impl fmt::Display for LaunchArgError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Help => f.write_str(usage()),
+            Self::Version => f.write_str(BUILD_IDENTITY),
             Self::Message(message) => f.write_str(message),
         }
     }
@@ -26,11 +29,15 @@ impl fmt::Display for LaunchArgError {
 
 fn usage() -> &'static str {
     "Usage:
-  cargo run
-  cargo run -- file1.rs file2.md
-  cargo run -- --title \"lst GPUI\"
-  cargo run -- --scratchpad-dir /path/to/notes
-  cargo run -- --vim | --no-vim"
+  lst [OPTIONS] [FILES...]
+
+Options:
+  --title TITLE             Set the window title
+  --scratchpad-dir PATH     Store newly created scratchpads in PATH
+  --vim                     Start in Vim input mode
+  --no-vim                  Start in standard input mode
+  -h, --help                Print help
+  -V, --version             Print build identity"
 }
 
 pub(crate) fn parse_launch_args() -> LaunchArgs {
@@ -38,6 +45,10 @@ pub(crate) fn parse_launch_args() -> LaunchArgs {
         Ok(args) => args,
         Err(LaunchArgError::Help) => {
             println!("{}", usage());
+            process::exit(0);
+        }
+        Err(LaunchArgError::Version) => {
+            println!("{BUILD_IDENTITY}");
             process::exit(0);
         }
         Err(LaunchArgError::Message(message)) => {
@@ -59,6 +70,9 @@ where
         match arg.as_str() {
             "--help" | "-h" => {
                 return Err(LaunchArgError::Help);
+            }
+            "--version" | "-V" => {
+                return Err(LaunchArgError::Version);
             }
             "--vim" => args.input_mode = Some(InputMode::Vim),
             "--no-vim" => args.input_mode = Some(InputMode::Standard),
@@ -90,4 +104,45 @@ where
     }
 
     Ok(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_flags_request_the_reproducible_build_identity() {
+        for flag in ["--version", "-V"] {
+            let error = parse_launch_args_from([flag]).expect_err("version should stop normal launch");
+            assert!(matches!(error, LaunchArgError::Version));
+            assert_eq!(error.to_string(), BUILD_IDENTITY);
+        }
+    }
+
+    #[test]
+    fn version_takes_precedence_over_graphical_launch_arguments() {
+        let error = parse_launch_args_from(["README.md", "--version", "--title", "ignored"])
+            .expect_err("version should stop normal launch");
+        assert!(matches!(error, LaunchArgError::Version));
+    }
+
+    #[test]
+    fn existing_window_and_input_arguments_remain_supported() {
+        let args = parse_launch_args_from([
+            "--title",
+            "lst-scratchpad",
+            "--scratchpad-dir=/tmp/lst-notes",
+            "--no-vim",
+            "README.md",
+        ])
+        .expect("existing arguments should parse");
+
+        assert_eq!(args.window_title.as_deref(), Some("lst-scratchpad"));
+        assert_eq!(
+            args.scratchpad_dir.as_deref(),
+            Some(std::path::Path::new("/tmp/lst-notes"))
+        );
+        assert_eq!(args.input_mode, Some(InputMode::Standard));
+        assert_eq!(args.files, vec![PathBuf::from("README.md")]);
+    }
 }

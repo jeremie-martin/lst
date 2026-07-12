@@ -19,9 +19,12 @@ use gpui::{Bounds, Pixels, Window};
 use lst_editor::find::FindScope;
 use serde::Serialize;
 
-use crate::{char_to_line_col, focus_trace_label, LstGpuiApp, WorkspaceSurface};
+use crate::{
+    char_to_line_col, runtime::tab_identity, ClosePromptStatus, LstGpuiApp, QuitReviewDecision, QuitReviewItemStatus,
+    WorkspaceSurface,
+};
 
-pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 3;
+pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 7;
 
 /// Holds the state-trace path and emitter state. Constructed once at app
 /// init from the env var; subsequent calls to `try_emit` are no-ops when
@@ -105,6 +108,7 @@ pub(crate) struct StateTraceRecord {
     pub active_tab_id: u64,
     pub active_tab_path: Option<String>,
     pub active_tab_modified: bool,
+    pub active_tab_backing_file_missing: bool,
     pub line_count: usize,
     pub cursors: Vec<TraceCursor>,
     pub primary_cursor_index: usize,
@@ -121,16 +125,45 @@ pub(crate) struct StateTraceRecord {
     pub recent_panel_content_search_pending: bool,
     pub focused_input: &'static str,
     pub workspace_surface: &'static str,
+    pub workspace_surface_selected_index: Option<usize>,
+    pub settings_selected_item: Option<&'static str>,
+    pub word_wrap_enabled: bool,
     pub close_prompt_file: Option<String>,
+    pub close_prompt_status: Option<&'static str>,
+    pub close_prompt_error: Option<String>,
+    pub quit_review_open: bool,
+    pub quit_review_items: Vec<TraceQuitReviewItem>,
+    pub quit_review_selected_index: Option<usize>,
+    pub quit_review_message: Option<String>,
+    pub file_conflict_path: Option<String>,
+    pub file_conflict_button_bounds_px: TraceFileConflictButtonBounds,
+    pub cleanup_confirmation_open: bool,
     pub status_message: String,
     pub status_bar: String,
     pub app_menu_button_bounds_px: Option<(f32, f32, f32, f32)>,
+    pub all_tabs_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub recent_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub new_tab_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub cleanup_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub theme_name: String,
     pub theme_button_bounds_px: Option<(f32, f32, f32, f32)>,
     pub viewport: TraceViewport,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct TraceQuitReviewItem {
+    pub identity: String,
+    pub decision: &'static str,
+    pub status: &'static str,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub(crate) struct TraceFileConflictButtonBounds {
+    pub reload: Option<(f32, f32, f32, f32)>,
+    pub keep_mine: Option<(f32, f32, f32, f32)>,
+    pub save_as: Option<(f32, f32, f32, f32)>,
+    pub dismiss: Option<(f32, f32, f32, f32)>,
 }
 
 #[derive(Serialize)]
@@ -254,6 +287,7 @@ impl LstGpuiApp {
             )
         });
         let app_menu_button_bounds_px = trace_bounds(self.app_menu_button_bounds_px);
+        let all_tabs_button_bounds_px = trace_bounds(self.all_tabs_button_bounds_px);
         let recent_button_bounds_px = trace_bounds(self.recent_button_bounds_px);
         let new_tab_button_bounds_px = trace_bounds(self.new_tab_button_bounds_px);
         let theme_button_bounds_px = trace_bounds(self.theme_button_bounds_px);
@@ -265,6 +299,7 @@ impl LstGpuiApp {
             active_tab_id: tab.id().get(),
             active_tab_path: tab.path().map(|p| p.to_string_lossy().into_owned()),
             active_tab_modified: tab.modified(),
+            active_tab_backing_file_missing: tab.backing_file_missing(),
             line_count: tab.line_count(),
             cursors,
             primary_cursor_index: selection_set.primary_index(),
@@ -302,22 +337,90 @@ impl LstGpuiApp {
             recent_panel_selected_path,
             recent_panel_empty_message,
             recent_panel_content_search_pending: self.recent.content_search_pending(),
-            focused_input: self.state_trace_focus_label(),
+            focused_input: self.state_trace_focus_label(window),
             workspace_surface: match self.workspace_surface {
                 WorkspaceSurface::None => "none",
                 WorkspaceSurface::CommandPalette => "command_palette",
                 WorkspaceSurface::Settings => "settings",
+                WorkspaceSurface::TabList => "tab_list",
                 WorkspaceSurface::AppMenu => "app_menu",
                 WorkspaceSurface::LanguageMenu => "language_menu",
                 WorkspaceSurface::ContextMenu => "context_menu",
             },
+            workspace_surface_selected_index: matches!(
+                self.workspace_surface,
+                WorkspaceSurface::TabList
+                    | WorkspaceSurface::AppMenu
+                    | WorkspaceSurface::LanguageMenu
+                    | WorkspaceSurface::ContextMenu
+            )
+            .then(|| {
+                let count = self.workspace_surface_item_count();
+                (count > 0).then_some(self.workspace_surface_selected.min(count - 1))
+            })
+            .flatten(),
+            settings_selected_item: (self.workspace_surface == WorkspaceSurface::Settings)
+                .then(|| self.settings_selection.selected_id())
+                .flatten(),
+            word_wrap_enabled: self.model.show_wrap(),
             close_prompt_file: self
                 .close_prompt
+                .as_ref()
                 .and_then(|prompt| self.model.tab_by_id(prompt.tab_id))
-                .map(|tab| tab.display_name().to_string()),
+                .map(tab_identity),
+            close_prompt_status: self.close_prompt.as_ref().map(|prompt| match &prompt.status {
+                ClosePromptStatus::Reviewing => "reviewing",
+                ClosePromptStatus::Saving => "saving",
+                ClosePromptStatus::Failed(_) => "failed",
+            }),
+            close_prompt_error: self.close_prompt.as_ref().and_then(|prompt| match &prompt.status {
+                ClosePromptStatus::Failed(message) => Some(message.clone()),
+                _ => None,
+            }),
+            quit_review_open: self.quit_review.is_some(),
+            quit_review_items: self
+                .quit_review
+                .as_ref()
+                .map(|review| {
+                    review
+                        .items
+                        .iter()
+                        .map(|item| {
+                            let (status, error) = match &item.status {
+                                QuitReviewItemStatus::Pending => ("pending", None),
+                                QuitReviewItemStatus::Saving => ("saving", None),
+                                QuitReviewItemStatus::Saved => ("saved", None),
+                                QuitReviewItemStatus::Failed(message) => ("failed", Some(message.clone())),
+                            };
+                            TraceQuitReviewItem {
+                                identity: item.identity.clone(),
+                                decision: match item.decision {
+                                    QuitReviewDecision::Save => "save",
+                                    QuitReviewDecision::Discard => "discard",
+                                },
+                                status,
+                                error,
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            quit_review_selected_index: self.quit_review.as_ref().map(|review| review.selected_index),
+            quit_review_message: self.quit_review.as_ref().and_then(|review| review.message.clone()),
+            file_conflict_path: self
+                .active_file_conflict()
+                .map(|notice| notice.path.to_string_lossy().into_owned()),
+            file_conflict_button_bounds_px: TraceFileConflictButtonBounds {
+                reload: trace_bounds(self.file_conflict_button_bounds_px.reload),
+                keep_mine: trace_bounds(self.file_conflict_button_bounds_px.keep_mine),
+                save_as: trace_bounds(self.file_conflict_button_bounds_px.save_as),
+                dismiss: trace_bounds(self.file_conflict_button_bounds_px.dismiss),
+            },
+            cleanup_confirmation_open: self.cleanup_confirmation.is_some(),
             status_message,
             status_bar,
             app_menu_button_bounds_px,
+            all_tabs_button_bounds_px,
             recent_button_bounds_px,
             new_tab_button_bounds_px,
             cleanup_button_bounds_px,
@@ -327,21 +430,45 @@ impl LstGpuiApp {
         }
     }
 
-    fn state_trace_focus_label(&self) -> &'static str {
-        if self.workspace_surface == WorkspaceSurface::CommandPalette {
+    fn state_trace_focus_label(&self, window: &Window) -> &'static str {
+        if self.workspace_surface == WorkspaceSurface::CommandPalette
+            && self.command_palette_focus_handle.is_focused(window)
+        {
             "command_palette"
-        } else if self.workspace_surface == WorkspaceSurface::Settings {
+        } else if self.workspace_surface == WorkspaceSurface::Settings
+            && (self.settings_search_focus_handle.is_focused(window) || self.surface_focus_handle.is_focused(window))
+        {
             "settings"
-        } else if self.workspace_surface == WorkspaceSurface::AppMenu {
+        } else if self.workspace_surface == WorkspaceSurface::TabList && self.surface_focus_handle.is_focused(window) {
+            "tab_list"
+        } else if self.workspace_surface == WorkspaceSurface::AppMenu && self.surface_focus_handle.is_focused(window) {
             "app_menu"
-        } else if self.workspace_surface == WorkspaceSurface::LanguageMenu {
+        } else if self.workspace_surface == WorkspaceSurface::LanguageMenu
+            && self.surface_focus_handle.is_focused(window)
+        {
             "language_menu"
-        } else if self.workspace_surface == WorkspaceSurface::ContextMenu {
+        } else if self.workspace_surface == WorkspaceSurface::ContextMenu
+            && self.surface_focus_handle.is_focused(window)
+        {
             "context_menu"
-        } else if self.recent.is_open() {
+        } else if self.recent.is_open() && self.recent_focus_handle.is_focused(window) {
             "recent_query"
+        } else if self.find_query_focus_handle.is_focused(window) {
+            "find_query"
+        } else if self.find_replace_focus_handle.is_focused(window) {
+            "find_replace"
+        } else if self.goto_line_focus_handle.is_focused(window) {
+            "goto_line"
+        } else if self.quit_review.is_some() && self.surface_focus_handle.is_focused(window) {
+            "quit_review"
+        } else if self.close_prompt.is_some() && self.surface_focus_handle.is_focused(window) {
+            "close_prompt"
+        } else if self.cleanup_confirmation.is_some() && self.surface_focus_handle.is_focused(window) {
+            "cleanup_confirmation"
+        } else if self.focus_handle.is_focused(window) {
+            "editor"
         } else {
-            focus_trace_label(self.focus_last_applied)
+            "none"
         }
     }
 

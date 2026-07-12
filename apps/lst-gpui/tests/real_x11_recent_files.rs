@@ -110,12 +110,12 @@ fn recent_panel_keyboard_selection_opens_selected_file() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn recent_panel_preserves_query_across_close_and_reopen() -> TestResult {
-    support::run_x11_test("recent-query-preserved", |session| {
+fn recent_panel_clears_query_across_close_and_reopen() -> TestResult {
+    support::run_x11_test("recent-query-cleared", |session| {
         let file = session.seed_file("needle.txt", "needle body\n")?;
         session.seed_recent_files(&[file])?;
 
-        let (mut editor, _scratchpad) = session.open("recent-query-preserved")?;
+        let (mut editor, _scratchpad) = session.open("recent-query-cleared")?;
         editor.keys("<C-r>needle")?;
         editor.wait_state("recent query entered", secs(5), |record| {
             record.recent_panel_open && record.recent_panel_query.as_deref() == Some("needle")
@@ -127,8 +127,8 @@ fn recent_panel_preserves_query_across_close_and_reopen() -> TestResult {
         })?;
 
         editor.keys("<C-r>")?;
-        editor.wait_state("recent query restored", secs(5), |record| {
-            record.recent_panel_open && record.recent_panel_query.as_deref() == Some("needle")
+        editor.wait_state("recent query reset", secs(5), |record| {
+            record.recent_panel_open && record.recent_panel_query.as_deref() == Some("")
         })?;
         Ok(())
     })
@@ -176,7 +176,8 @@ fn recent_panel_empty_states_are_visible() -> TestResult {
         let (mut editor, _scratchpad) = session.open("recent-empty-history")?;
         editor.keys("<C-r>")?;
         editor.wait_state("recent empty history", secs(5), |record| {
-            record.recent_panel_open && record.recent_panel_empty_message.as_deref() == Some("No recent files")
+            record.recent_panel_open
+                && record.recent_panel_empty_message.as_deref() == Some("No recent files or scratchpads")
         })?;
         editor.keys("<escape>")?;
         editor.wait_state("recent closed", secs(5), |record| !record.recent_panel_open)?;
@@ -208,8 +209,48 @@ fn opening_missing_recent_file_prunes_it_from_the_panel() -> TestResult {
         editor.wait_state("missing recent pruned", secs(5), |record| {
             record.recent_panel_open
                 && record.recent_panel_selected_path.is_none()
-                && record.recent_panel_empty_message.as_deref() == Some("No recent files")
+                && record.recent_panel_empty_message.as_deref() == Some("No recent files or scratchpads")
         })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_p_reopens_archived_scratchpad_with_scratchpad_autosave() -> TestResult {
+    support::run_x11_test("recent-quick-scratchpad", |session| {
+        let (mut editor, scratchpad) = session.open("quick-scratchpad")?;
+        let scratchpad_text = path_text(&scratchpad);
+
+        editor.keys("archived scratch")?;
+        editor.expect_file(&scratchpad, "archived scratch")?;
+        editor.keys("<C-n>")?;
+        editor.wait_state("sibling scratchpad active", secs(2), |record| {
+            record.active_tab_path.as_deref() != Some(scratchpad_text.as_str())
+        })?;
+        editor.keys("<C-S-tab>")?;
+        editor.wait_state("original scratchpad active", secs(2), |record| {
+            record.active_tab_path.as_deref() == Some(scratchpad_text.as_str())
+        })?;
+        editor.keys("<C-w>")?;
+        editor.wait_state("original scratchpad archived", secs(5), |record| {
+            record.active_tab_path.as_deref() != Some(scratchpad_text.as_str())
+        })?;
+
+        editor.keys("<C-p>")?;
+        editor.wait_state("quick picker selects archived scratchpad", secs(5), |record| {
+            record.recent_panel_open
+                && record.focused_input == "recent_query"
+                && record.recent_panel_query.as_deref() == Some("")
+                && record.recent_panel_selected_path.as_deref() == Some(scratchpad_text.as_str())
+        })?;
+        editor.keys("<enter>")?;
+        editor.wait_state("archived scratchpad reopened", secs(5), |record| {
+            !record.recent_panel_open && record.active_tab_path.as_deref() == Some(scratchpad_text.as_str())
+        })?;
+
+        editor.keys("X")?;
+        editor.expect_file(&scratchpad, "Xarchived scratch")?;
         Ok(())
     })
 }

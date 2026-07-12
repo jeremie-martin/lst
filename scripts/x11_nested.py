@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import os
 from pathlib import Path
 import re
@@ -35,10 +36,22 @@ REQUIRED_COMMANDS = (
     "xclip",
 )
 REQUIRED_EXTENSIONS = ("DAMAGE", "XTEST", "XKEYBOARD")
+DISPLAY_ALLOCATION_LOCK = Path(tempfile.gettempdir()) / "lst-x11-nested-display.lock"
 
 
 class NestedDisplayError(RuntimeError):
     pass
+
+
+@contextlib.contextmanager
+def display_allocation_lock():
+    """Serialize Xephyr's non-atomic `-displayfd` probe-and-bind window."""
+    with DISPLAY_ALLOCATION_LOCK.open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def command_path(name: str) -> str:
@@ -168,10 +181,16 @@ class NestedDisplay:
         try:
             if not self.visible:
                 self._create_offscreen_container()
-            self._start_xephyr()
+            # Xephyr's `-displayfd` allocation can race another Xephyr: both
+            # processes may report the same free display before either binds
+            # its socket. Keep allocation locked until the chosen server is
+            # accepting connections, after which another run will choose a
+            # different display.
+            with display_allocation_lock():
+                self._start_xephyr()
+                self._wait_for_display()
             if not self.visible:
                 self._restore_host_focus()
-            self._wait_for_display()
             if not self.visible:
                 self._verify_offscreen_container()
             self._start_window_manager()

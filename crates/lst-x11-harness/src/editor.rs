@@ -1332,7 +1332,15 @@ fn state_key_context_changed_after(before: &StateTraceRecord, after: &StateTrace
             || after.focused_input != before.focused_input
             || after.input_mode != before.input_mode
             || after.workspace_surface != before.workspace_surface
+            || after.settings_selected_item != before.settings_selected_item
+            || after.word_wrap_enabled != before.word_wrap_enabled
             || after.close_prompt_file != before.close_prompt_file
+            || after.close_prompt_status != before.close_prompt_status
+            || after.close_prompt_error != before.close_prompt_error
+            || after.quit_review_open != before.quit_review_open
+            || after.quit_review_items != before.quit_review_items
+            || after.quit_review_selected_index != before.quit_review_selected_index
+            || after.quit_review_message != before.quit_review_message
             || after.vim_mode != before.vim_mode
             || after.vim_pending != before.vim_pending
             || after.find.visible != before.find.visible

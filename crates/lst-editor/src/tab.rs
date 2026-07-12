@@ -44,6 +44,18 @@ impl FileStamp {
         }
     }
 }
+
+/// What must be true about a save target before it may be replaced.
+///
+/// Ordinary saves preserve the last observed disk state, including an
+/// observed deletion. Save As is the only unguarded write path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveExpectation {
+    Matching(FileStamp),
+    Absent,
+    Unguarded,
+}
+
 fn system_time_to_unix_nanos(time: SystemTime) -> i128 {
     match time.duration_since(UNIX_EPOCH) {
         Ok(duration) => duration.as_nanos().min(i128::MAX as u128) as i128,
@@ -89,8 +101,11 @@ impl TabId {
 #[derive(Clone)]
 struct CachedLines {
     revision: u64,
-    lines: Arc<[String]>,
+    lines: Arc<[DisplayLine]>,
 }
+
+/// Immutable, cheaply cloned display text for one logical line.
+pub type DisplayLine = Arc<str>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveKind {
     Regular,
@@ -103,6 +118,7 @@ pub enum TabOrigin {
         path: PathBuf,
         file_stamp: Option<FileStamp>,
         kind: SaveKind,
+        backing_file_missing: bool,
         suppressed_conflict_stamp: Option<FileStamp>,
     },
 }
@@ -112,6 +128,7 @@ impl TabOrigin {
             path,
             file_stamp,
             kind,
+            backing_file_missing: false,
             suppressed_conflict_stamp: None,
         }
     }
@@ -136,6 +153,28 @@ impl TabOrigin {
             }
         )
     }
+    pub fn backing_file_missing(&self) -> bool {
+        matches!(
+            self,
+            Self::Saved {
+                backing_file_missing: true,
+                ..
+            }
+        )
+    }
+    fn mark_backing_file_missing(&mut self) {
+        if let Self::Saved {
+            file_stamp,
+            backing_file_missing,
+            suppressed_conflict_stamp,
+            ..
+        } = self
+        {
+            *file_stamp = None;
+            *backing_file_missing = true;
+            *suppressed_conflict_stamp = None;
+        }
+    }
     pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
         match self {
             Self::Untitled => false,
@@ -144,6 +183,15 @@ impl TabOrigin {
                 ..
             } => *suppressed_conflict_stamp == Some(stamp),
         }
+    }
+    pub fn has_suppressed_conflict(&self) -> bool {
+        matches!(
+            self,
+            Self::Saved {
+                suppressed_conflict_stamp: Some(_),
+                ..
+            }
+        )
     }
     fn mark_saved(&mut self, path: PathBuf, file_stamp: FileStamp) {
         let kind = if self.is_scratchpad() {
@@ -159,11 +207,13 @@ impl TabOrigin {
     fn update_file_stamp(&mut self, file_stamp: FileStamp) {
         if let Self::Saved {
             file_stamp: stamp,
+            backing_file_missing,
             suppressed_conflict_stamp,
             ..
         } = self
         {
             *stamp = Some(file_stamp);
+            *backing_file_missing = false;
             *suppressed_conflict_stamp = None;
         }
     }
@@ -283,14 +333,26 @@ impl EditorTab {
     pub fn file_stamp(&self) -> Option<FileStamp> {
         self.origin.file_stamp()
     }
+    pub fn save_expectation(&self) -> SaveExpectation {
+        match self.file_stamp() {
+            Some(stamp) => SaveExpectation::Matching(stamp),
+            None => SaveExpectation::Absent,
+        }
+    }
     pub fn is_scratchpad(&self) -> bool {
         self.origin.is_scratchpad()
+    }
+    pub fn backing_file_missing(&self) -> bool {
+        self.origin.backing_file_missing()
     }
     pub fn scratchpad_path(&self) -> Option<&PathBuf> {
         self.is_scratchpad().then(|| self.path()).flatten()
     }
     pub fn conflict_suppressed_for(&self, stamp: FileStamp) -> bool {
         self.origin.conflict_suppressed_for(stamp)
+    }
+    pub fn has_suppressed_conflict(&self) -> bool {
+        self.origin.has_suppressed_conflict()
     }
     pub fn buffer(&self) -> &Rope {
         &self.buffer
@@ -458,14 +520,14 @@ impl EditorTab {
         self.has_selection()
             .then(|| self.buffer.slice(self.selection().range()).to_string())
     }
-    pub fn lines(&mut self) -> Arc<[String]> {
+    pub fn lines(&mut self) -> Arc<[DisplayLine]> {
         if let Some(cache) = &self.line_cache {
             if cache.revision == self.revision {
                 return Arc::clone(&cache.lines);
             }
         }
-        let lines: Arc<[String]> = (0..self.buffer.len_lines())
-            .map(|line_ix| crate::selection::line_display_text(&self.buffer, line_ix))
+        let lines: Arc<[DisplayLine]> = (0..self.buffer.len_lines())
+            .map(|line_ix| DisplayLine::from(crate::selection::line_display_text(&self.buffer, line_ix)))
             .collect::<Vec<_>>()
             .into();
         self.line_cache = Some(CachedLines {
@@ -588,6 +650,9 @@ impl EditorTab {
             self.line_cache
                 .take()
                 .filter(|cache| cache.revision == self.revision)
+                // The rendered canvas can retain the previous outer slice,
+                // so clone only Arc pointers here. Unchanged line text remains
+                // shared instead of copying every String in the document.
                 .map(|cache| cache.lines.iter().cloned().collect::<Vec<_>>())
         } else {
             None
@@ -651,8 +716,32 @@ impl EditorTab {
         self.origin.update_file_stamp(file_stamp);
         true
     }
+    pub(crate) fn observe_committed_body_if_path(
+        &mut self,
+        path: &Path,
+        file_stamp: FileStamp,
+        saved_body: &str,
+    ) -> bool {
+        if self.path().map(PathBuf::as_path) != Some(path) {
+            return false;
+        }
+        self.origin.update_file_stamp(file_stamp);
+        if self.buffer.slice(..) == saved_body {
+            self.mark_current_content_saved();
+        } else {
+            // The write committed after the editor moved to another history
+            // state. Reserve, but never assign, an epoch for the disk body so
+            // no existing undo snapshot can incorrectly appear clean.
+            self.saved_content_epoch = self.next_content_epoch;
+            self.next_content_epoch = self.next_content_epoch.saturating_add(1);
+        }
+        true
+    }
     pub(crate) fn suppress_file_conflict(&mut self, stamp: FileStamp) {
         self.origin.suppress_file_conflict(stamp);
+    }
+    pub(crate) fn mark_backing_file_missing(&mut self) {
+        self.origin.mark_backing_file_missing();
     }
     fn refresh_language(&mut self) -> bool {
         let language = match self.language_mode {
@@ -752,7 +841,7 @@ impl EditorTab {
 /// Returns `false` when the cache cannot be incrementally updated
 /// (out-of-range line indices or empty cache) so the caller can drop the
 /// stale cache rather than stamping it under the new revision.
-fn apply_change_to_cached_lines(lines: &mut Vec<String>, buffer: &Rope, change: &TextChange) -> bool {
+fn apply_change_to_cached_lines(lines: &mut Vec<DisplayLine>, buffer: &Rope, change: &TextChange) -> bool {
     if lines.is_empty() {
         return false;
     }
@@ -778,23 +867,30 @@ fn apply_change_to_cached_lines(lines: &mut Vec<String>, buffer: &Rope, change: 
     if start_col > lines[start_line].chars().count() || end_col > lines[end_line].chars().count() {
         return false;
     }
-    let prefix = line_prefix_chars(&lines[start_line], start_col);
-    let suffix = line_suffix_chars(&lines[end_line], end_col);
+    let prefix = line_prefix_chars(lines[start_line].as_ref(), start_col);
+    let suffix = line_suffix_chars(lines[end_line].as_ref(), end_col);
     let replacement_lines = replacement_display_lines(&change.replacement);
 
     let mut new_lines = Vec::with_capacity(replacement_lines.len().max(1));
     if replacement_lines.len() == 1 {
-        new_lines.push(format!("{}{}{}", prefix, replacement_lines[0], suffix));
+        new_lines.push(DisplayLine::from(format!(
+            "{}{}{}",
+            prefix, replacement_lines[0], suffix
+        )));
     } else {
-        new_lines.push(format!("{}{}", prefix, replacement_lines[0]));
-        new_lines.extend(replacement_lines[1..replacement_lines.len() - 1].iter().cloned());
+        new_lines.push(DisplayLine::from(format!("{}{}", prefix, replacement_lines[0])));
+        new_lines.extend(
+            replacement_lines[1..replacement_lines.len() - 1]
+                .iter()
+                .map(|line| DisplayLine::from(line.as_str())),
+        );
         let last = replacement_lines.last().map(String::as_str).unwrap_or("");
-        new_lines.push(format!("{last}{suffix}"));
+        new_lines.push(DisplayLine::from(format!("{last}{suffix}")));
     }
 
     lines.splice(start_line..=end_line, new_lines);
     if lines.is_empty() {
-        lines.push(String::new());
+        lines.push(DisplayLine::from(""));
     }
     true
 }
@@ -979,7 +1075,7 @@ mod tests {
     }
 
     fn cached_lines(tab: &mut EditorTab) -> Vec<String> {
-        tab.lines().iter().cloned().collect()
+        tab.lines().iter().map(ToString::to_string).collect()
     }
 
     #[test]

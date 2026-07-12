@@ -42,7 +42,7 @@ impl EditorModel {
                 path,
                 body,
                 revision,
-                expected_stamp: tab.file_stamp(),
+                expectation: tab.save_expectation(),
             });
         } else {
             self.queue_effect(EditorEffect::SaveFileAs {
@@ -56,7 +56,10 @@ impl EditorModel {
     }
 
     pub(crate) fn request_save_as(&mut self) {
-        let tab_id = self.active_tab_id();
+        self.request_save_as_tab(self.active_tab_id());
+    }
+
+    pub fn request_save_as_tab(&mut self, tab_id: TabId) {
         let Some(tab) = self.tab_by_id(tab_id) else {
             return;
         };
@@ -81,6 +84,7 @@ impl EditorModel {
             return false;
         };
         if !tab.mark_saved_if_current(path.clone(), revision, file_stamp, &saved_body) {
+            tab.observe_committed_body_if_path(&path, file_stamp, &saved_body);
             return false;
         }
         self.status = format!("Saved {}.", path.display());
@@ -108,10 +112,11 @@ impl EditorModel {
         self.status = format!("Failed to save {}: {message}", path.display());
     }
 
-    pub fn autosave_tick(&mut self, include_ordinary_files: bool) {
+    pub fn autosave_tick(&mut self, include_ordinary_files: bool, eligible_tabs: &[TabId]) {
         let jobs = self
             .tabs
             .iter()
+            .filter(|tab| eligible_tabs.contains(&tab.id()))
             .filter(|tab| tab.modified())
             .filter(|tab| include_ordinary_files || tab.is_scratchpad())
             .filter_map(|tab| {
@@ -125,16 +130,22 @@ impl EditorModel {
                 if open_tabs_for_path != 1 {
                     return None;
                 }
-                Some((tab.id(), path, tab.buffer_text(), tab.revision(), tab.file_stamp()))
+                Some((
+                    tab.id(),
+                    path,
+                    tab.buffer_text(),
+                    tab.revision(),
+                    tab.save_expectation(),
+                ))
             })
             .collect::<Vec<_>>();
-        for (tab_id, path, body, revision, expected_stamp) in jobs {
+        for (tab_id, path, body, revision, expectation) in jobs {
             self.queue_effect(EditorEffect::AutosaveFile {
                 tab_id,
                 path,
                 body,
                 revision,
-                expected_stamp,
+                expectation,
             });
         }
     }
@@ -151,7 +162,11 @@ impl EditorModel {
         let Some(tab) = self.tab_mut_by_id(tab_id) else {
             return false;
         };
-        if tab.path() != Some(&path) || tab.revision() != revision {
+        if tab.path() != Some(&path) {
+            return false;
+        }
+        if tab.revision() != revision {
+            tab.observe_committed_body_if_path(&path, file_stamp, &saved_body);
             return false;
         }
         tab.mark_autosaved(file_stamp, &saved_body);
@@ -172,12 +187,20 @@ impl EditorModel {
     }
 
     pub fn reload_tab_from_disk(&mut self, tab_id: TabId, path: PathBuf, text: String, file_stamp: FileStamp) -> bool {
-        let Some(tab) = self.tab_mut_by_id(tab_id) else {
-            return false;
-        };
-        tab.reset_from_disk_at_path(path.clone(), &text, file_stamp);
+        let active = self.active_tab_id() == tab_id;
+        {
+            let Some(tab) = self.tab_mut_by_id(tab_id) else {
+                return false;
+            };
+            let previous_position = tab.cursor_position();
+            tab.reset_from_disk_at_path(path.clone(), &text, file_stamp);
+            tab.set_cursor_position(previous_position, None);
+        }
         self.sync_find_with_active_document();
         self.status = format!("Reloaded {}.", path.display());
+        if active {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
         true
     }
     pub fn reload_failed(&mut self, path: PathBuf, message: String) {

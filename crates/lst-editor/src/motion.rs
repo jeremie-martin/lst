@@ -4,7 +4,7 @@ use crate::{
         next_grapheme_boundary, previous_grapheme_boundary, CursorGoal, Position, Selection, SelectionState,
         SelectionTransform,
     },
-    tab::EditorTab,
+    tab::{DisplayLine, EditorTab},
     wrap,
 };
 pub(crate) fn horizontal(tab: &EditorTab, delta: isize, select: bool) -> Option<SelectionState> {
@@ -62,7 +62,7 @@ pub(crate) fn vertical(tab: &EditorTab, delta: isize, select: bool, snap: bool) 
 }
 pub(crate) fn display_rows_with_layout(
     tab: &EditorTab,
-    lines: &[String],
+    lines: &[DisplayLine],
     layout: &wrap::WrapLayout,
     delta: isize,
     select: bool,
@@ -93,6 +93,44 @@ pub(crate) fn line_boundary(tab: &EditorTab, to_end: bool, select: bool) -> Opti
     map(tab, |_, selection| {
         let line = tab.buffer().char_to_line(selection.cursor().min(tab.len_chars()));
         let target = tab.buffer().line_to_char(line) + if to_end { display_line_char_len(tab, line) } else { 0 };
+        SelectionTransform::new(selection_to(selection, target, select))
+    })
+}
+pub(crate) fn visual_line_boundary(
+    tab: &EditorTab,
+    lines: &[DisplayLine],
+    wrap_columns: usize,
+    show_wrap: bool,
+    to_end: bool,
+    select: bool,
+) -> Option<SelectionState> {
+    map(tab, |_, selection| {
+        let position = char_to_position(tab.buffer(), selection.cursor());
+        let text = lines.get(position.line).map(AsRef::as_ref).unwrap_or_default();
+        let (segment_start, segment_end) = if show_wrap {
+            let segments = wrap::wrap_segments(text, wrap_columns);
+            let row = wrap::cursor_visual_row_in_line(text, position.column, wrap_columns);
+            let segment = segments
+                .get(row)
+                .or_else(|| segments.last())
+                .expect("wrap_segments always returns at least one segment");
+            (segment.start_col, segment.end_col)
+        } else {
+            (0, text.chars().count())
+        };
+        let target_column = if to_end {
+            segment_end
+        } else if segment_start > 0 {
+            segment_start
+        } else {
+            let first_non_blank = text.chars().position(|ch| !ch.is_whitespace()).unwrap_or(0);
+            if position.column == first_non_blank {
+                0
+            } else {
+                first_non_blank
+            }
+        };
+        let target = position_to_char(tab.buffer(), Position::new(position.line, target_column));
         SelectionTransform::new(selection_to(selection, target, select))
     })
 }
@@ -195,7 +233,7 @@ fn transform_with_goal(
 }
 fn display_preferred(
     tab: &EditorTab,
-    lines: &[String],
+    lines: &[DisplayLine],
     layout: &wrap::WrapLayout,
     position: Position,
     goal: CursorGoal,
@@ -208,11 +246,11 @@ fn display_preferred(
         CursorGoal::LineEnd => display_line_char_len(tab, position.line),
     }
 }
-fn current_visual_column(lines: &[String], layout: &wrap::WrapLayout, position: Position) -> usize {
+fn current_visual_column(lines: &[DisplayLine], layout: &wrap::WrapLayout, position: Position) -> usize {
     let current_visual_row = wrap::visual_row_for_position(lines, position.line, position.column, layout)
         .unwrap_or(layout.line_row_starts[position.line]);
     let row_in_line = current_visual_row.saturating_sub(layout.line_row_starts[position.line]);
-    let current_line = lines.get(position.line).map(String::as_str).unwrap_or_default();
+    let current_line = lines.get(position.line).map(AsRef::as_ref).unwrap_or_default();
     let segments = wrap::wrap_segments(current_line, layout.wrap_columns);
     let current_segment = segments
         .get(row_in_line)

@@ -1,6 +1,6 @@
 use gpui::{ClipboardItem, Context, Window};
-use lst_editor::{EditorEffect, EditorTab as ModelEditorTab, FileStamp, TabCloseRequest, TabId};
-use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+use lst_editor::{EditorEffect, EditorTab as ModelEditorTab, FileStamp, SaveExpectation, TabCloseRequest, TabId};
+use rfd::FileDialog;
 use std::{
     collections::HashSet,
     env,
@@ -16,7 +16,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{diagnostics, elapsed_ms, ClosePrompt, LstGpuiApp, PendingAfterSave};
+use crate::{
+    diagnostics, elapsed_ms,
+    recent::{normalize_recent_path, RecentOrigin},
+    ClosePrompt, ClosePromptIntent, ClosePromptStatus, ExitSaveContinuation, FileConflictNotice, LstGpuiApp,
+    PendingExitSave, QuitReview, QuitReviewDecision, QuitReviewItemStatus,
+};
 use lst_editor::UndoBoundary;
 use std::ops::Range;
 
@@ -27,16 +32,17 @@ use clipboard::persist_clipboards_after_exit;
 pub(crate) use scratchpad::create_scratchpad_note;
 use scratchpad::{remove_previous_scratchpad_after_save_as, remove_scratchpad_file_if_unreferenced};
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct AutosaveJob {
     tab_id: TabId,
     path: PathBuf,
     body: String,
     revision: u64,
-    expected_stamp: Option<FileStamp>,
+    expectation: SaveExpectation,
+    ticket: SaveTicket,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct SaveTicket {
     generation: u64,
     current_generation: Arc<Mutex<u64>>,
@@ -75,10 +81,97 @@ fn lock_generation(generation: &Mutex<u64>) -> MutexGuard<'_, u64> {
 
 type OpenFileResults = (Vec<(PathBuf, String, Option<FileStamp>)>, Vec<(PathBuf, String)>);
 
+#[derive(Clone, Debug)]
+struct ExternalFileRequest {
+    tab_id: TabId,
+    path: PathBuf,
+    expected_stamp: Option<FileStamp>,
+}
+
+#[derive(Clone, Debug)]
+struct ConflictReloadRequest {
+    notice: FileConflictNotice,
+    revision: u64,
+}
+
+impl ConflictReloadRequest {
+    fn is_current(&self, tab: Option<&ModelEditorTab>, notice: Option<&FileConflictNotice>) -> bool {
+        notice == Some(&self.notice)
+            && tab.is_some_and(|tab| {
+                tab.id() == self.notice.tab_id
+                    && tab.path() == Some(&self.notice.path)
+                    && tab.revision() == self.revision
+            })
+    }
+}
+
+#[cfg(test)]
+mod conflict_reload_request_tests {
+    use super::*;
+
+    #[test]
+    fn editor_edit_invalidates_an_inflight_conflict_reload() {
+        let tab_id = TabId::from_raw(1);
+        let path = PathBuf::from("/tmp/conflicted.txt");
+        let notice = FileConflictNotice {
+            tab_id,
+            path: path.clone(),
+            disk_stamp: FileStamp::from_raw(12, Some(34)),
+        };
+        let tab = ModelEditorTab::from_path_with_stamp(tab_id, path, "local text", None);
+        let request = ConflictReloadRequest {
+            notice: notice.clone(),
+            revision: tab.revision(),
+        };
+        let mut model = lst_editor::EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string());
+
+        assert!(request.is_current(model.tab_by_id(tab_id), Some(&notice)));
+        model.replace_text(None, "newer local text".to_string(), UndoBoundary::Break);
+        assert!(!request.is_current(model.tab_by_id(tab_id), Some(&notice)));
+    }
+
+    #[test]
+    fn changed_notice_invalidates_an_inflight_conflict_reload() {
+        let tab_id = TabId::from_raw(1);
+        let path = PathBuf::from("/tmp/conflicted.txt");
+        let notice = FileConflictNotice {
+            tab_id,
+            path: path.clone(),
+            disk_stamp: FileStamp::from_raw(12, Some(34)),
+        };
+        let tab = ModelEditorTab::from_path_with_stamp(tab_id, path, "local text", None);
+        let request = ConflictReloadRequest {
+            notice: notice.clone(),
+            revision: tab.revision(),
+        };
+        let newer_notice = FileConflictNotice {
+            disk_stamp: FileStamp::from_raw(13, Some(35)),
+            ..notice
+        };
+
+        assert!(!request.is_current(Some(&tab), Some(&newer_notice)));
+    }
+}
+
+#[derive(Debug)]
+enum ExternalFileObservation {
+    Unchanged(ExternalFileRequest),
+    Changed {
+        request: ExternalFileRequest,
+        text: String,
+        disk_stamp: FileStamp,
+    },
+    Missing(ExternalFileRequest),
+    Failed {
+        request: ExternalFileRequest,
+        message: String,
+    },
+}
+
 /// Outcome of a single file-write attempt (save, save-as, or autosave).
 ///
-/// `Stale` is only produced by save tickets — autosave is not ticket-gated,
-/// so its job pipeline never observes it.
+/// `Stale` is produced when a newer explicit save or autosave supersedes a
+/// ticket before its atomic replacement.
 #[derive(Debug, PartialEq, Eq)]
 enum FileWriteOutcome {
     Written {
@@ -118,16 +211,14 @@ impl FileWriteOutcome {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FileConflictDecision {
-    Reload,
-    Overwrite,
-    Cancel,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConflictWrite {
-    Save { revision: u64 },
-    Autosave { revision: u64 },
+    Save {
+        revision: u64,
+        exit_save: Option<PendingExitSave>,
+    },
+    Autosave {
+        revision: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -138,8 +229,48 @@ struct SaveTextOptions {
 
 #[derive(Debug)]
 enum SaveKind {
-    Save { expected_stamp: Option<FileStamp> },
-    SaveAs { previous_scratchpad: Option<PathBuf> },
+    Save {
+        guard: SaveGuard,
+        exit_save: Option<PendingExitSave>,
+    },
+    SaveAs {
+        previous_scratchpad: Option<PathBuf>,
+        exit_save: Option<PendingExitSave>,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SaveGuard {
+    /// A normal save snapshots the model's observed disk version. If the save
+    /// has to wait for an earlier app-owned write, refresh that snapshot after
+    /// the earlier completion has updated the tab's file stamp.
+    RefreshAfterDeferred(SaveExpectation),
+    /// Conflict actions are intentionally tied to the exact disk version the
+    /// user reviewed and must never silently retarget a later version.
+    Exact(SaveExpectation),
+}
+
+#[derive(Debug)]
+pub(crate) struct QueuedSaveJob {
+    tab_id: TabId,
+    path: PathBuf,
+    body: String,
+    revision: u64,
+    kind: SaveKind,
+}
+
+impl SaveKind {
+    fn exit_save(&self) -> Option<PendingExitSave> {
+        match self {
+            Self::Save { exit_save, .. } | Self::SaveAs { exit_save, .. } => *exit_save,
+        }
+    }
+
+    fn set_exit_save(&mut self, pending: PendingExitSave) {
+        match self {
+            Self::Save { exit_save, .. } | Self::SaveAs { exit_save, .. } => *exit_save = Some(pending),
+        }
+    }
 }
 
 impl LstGpuiApp {
@@ -175,8 +306,21 @@ impl LstGpuiApp {
                     path,
                     body,
                     revision,
-                    expected_stamp,
-                } => self.spawn_save_job(tab_id, path, body, revision, SaveKind::Save { expected_stamp }, cx),
+                    expectation,
+                } => {
+                    let exit_save = self.pending_exit_save.filter(|pending| pending.tab_id == tab_id);
+                    self.spawn_save_job(
+                        tab_id,
+                        path,
+                        body,
+                        revision,
+                        SaveKind::Save {
+                            guard: SaveGuard::RefreshAfterDeferred(expectation),
+                            exit_save,
+                        },
+                        cx,
+                    )
+                }
                 EditorEffect::SaveFileAs {
                     tab_id,
                     suggested_name,
@@ -184,10 +328,26 @@ impl LstGpuiApp {
                     revision,
                     previous_scratchpad_path,
                 } => {
+                    let exit_save = self.pending_exit_save.filter(|pending| pending.tab_id == tab_id);
                     let Some(path) = FileDialog::new().set_file_name(&suggested_name).save_file() else {
-                        self.finish_pending_after_save(tab_id, false, cx);
+                        self.finish_exit_save_failure(exit_save, "Save cancelled".to_string(), cx);
                         continue;
                     };
+                    let normalized = normalize_recent_path(&path);
+                    let existing = self.model.tabs().iter().find_map(|tab| {
+                        (tab.id() != tab_id
+                            && tab
+                                .path()
+                                .is_some_and(|open_path| normalize_recent_path(open_path) == normalized))
+                        .then_some(tab.id())
+                    });
+                    if let Some(existing_tab) = existing {
+                        self.update_model(cx, true, |model| model.set_active_tab(existing_tab));
+                        let message = format!("{} is already open in another tab.", path.display());
+                        self.cleanup_message = Some(message.clone());
+                        self.finish_exit_save_failure(exit_save, message, cx);
+                        continue;
+                    }
                     self.spawn_save_job(
                         tab_id,
                         path,
@@ -195,6 +355,7 @@ impl LstGpuiApp {
                         revision,
                         SaveKind::SaveAs {
                             previous_scratchpad: previous_scratchpad_path,
+                            exit_save,
                         },
                         cx,
                     );
@@ -204,8 +365,8 @@ impl LstGpuiApp {
                     path,
                     body,
                     revision,
-                    expected_stamp,
-                } => self.start_autosave_job(tab_id, path, body, revision, expected_stamp, cx),
+                    expectation,
+                } => self.start_autosave_job(tab_id, path, body, revision, expectation, cx),
             }
         }
     }
@@ -214,7 +375,14 @@ impl LstGpuiApp {
         let Some(paths) = FileDialog::new().pick_files() else {
             return;
         };
-        self.apply_open_file_results(open_file_results(paths), cx);
+        cx.spawn(async move |this, cx| {
+            let results = cx
+                .background_executor()
+                .spawn(async move { open_file_results(paths) })
+                .await;
+            let _ = this.update(cx, |view, cx| view.apply_open_file_results(results, cx));
+        })
+        .detach();
     }
 
     pub(crate) fn start_background_tasks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -234,13 +402,6 @@ impl LstGpuiApp {
                         } else {
                             true
                         };
-                        view.reload_settings_if_changed(cx);
-                        view.check_external_file_changes(cx);
-                        let include_ordinary =
-                            view.settings.settings.files.autosave == crate::settings::AutosaveMode::All;
-                        view.update_model(cx, false, |model| {
-                            model.autosave_tick(include_ordinary);
-                        });
                         view.cursor_visible = next_cursor_visible;
                         if cursor_was_visible != next_cursor_visible {
                             cx.notify();
@@ -252,6 +413,94 @@ impl LstGpuiApp {
                 }
             })
             .detach();
+
+        let view = cx.entity();
+        window
+            .spawn(cx, async move |cx| loop {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+                if view
+                    .update(cx, |view, cx| {
+                        view.check_settings_reload(cx);
+                        view.check_external_file_changes(cx);
+                        let eligible_tabs = view.autosave_ready_tabs();
+                        if eligible_tabs.is_empty() {
+                            return;
+                        }
+                        let include_ordinary =
+                            view.settings.settings.files.autosave == crate::settings::AutosaveMode::All;
+                        view.update_model(cx, false, |model| {
+                            model.autosave_tick(include_ordinary, &eligible_tabs);
+                        });
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            })
+            .detach();
+    }
+
+    fn autosave_ready_tabs(&mut self) -> Vec<TabId> {
+        const IDLE_BEFORE_AUTOSAVE: Duration = Duration::from_millis(750);
+
+        let now = Instant::now();
+        let revisions = self
+            .model
+            .tabs()
+            .iter()
+            .map(|tab| (tab.id(), tab.revision(), tab.modified(), tab.has_suppressed_conflict()))
+            .collect::<Vec<_>>();
+        self.autosave_observed_revisions
+            .retain(|tab_id, _| revisions.iter().any(|(current, _, _, _)| current == tab_id));
+
+        let mut ready = Vec::new();
+        for (tab_id, revision, modified, conflict_suppressed) in revisions {
+            if !modified || conflict_suppressed {
+                self.autosave_observed_revisions.remove(&tab_id);
+                continue;
+            }
+            let observed = self
+                .autosave_observed_revisions
+                .entry(tab_id)
+                .or_insert((revision, now));
+            if observed.0 != revision {
+                *observed = (revision, now);
+                continue;
+            }
+            if now.duration_since(observed.1) >= IDLE_BEFORE_AUTOSAVE {
+                ready.push(tab_id);
+                observed.1 = now;
+            }
+        }
+        ready
+    }
+
+    fn check_settings_reload(&mut self, cx: &mut Context<Self>) {
+        if self.settings_reload_inflight {
+            return;
+        }
+        self.settings_reload_inflight = true;
+        let settings = self.settings.clone();
+        let generation = self.settings_generation;
+        cx.spawn(async move |this, cx| {
+            let reloaded = cx
+                .background_executor()
+                .spawn(async move { settings.reloaded_if_changed() })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.settings_reload_inflight = false;
+                if view.settings_generation == generation {
+                    if let Some(settings) = reloaded {
+                        view.apply_reloaded_settings(settings, cx);
+                    }
+                } else if reloaded.is_some() {
+                    // The in-app change won the race. A later probe will
+                    // compare the now-current document with disk again.
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn start_autosave_job(
@@ -260,68 +509,54 @@ impl LstGpuiApp {
         path: PathBuf,
         body: String,
         revision: u64,
-        expected_stamp: Option<FileStamp>,
+        expectation: SaveExpectation,
         cx: &mut Context<Self>,
     ) {
         if !can_start_autosave_job(self.model.tabs(), &self.autosave_inflight, tab_id, &path, revision) {
             return;
         }
-        match file_conflict_stamp(&path, expected_stamp) {
-            Ok(Some(disk_stamp))
-                if self
-                    .model
-                    .tab_by_id(tab_id)
-                    .is_some_and(|tab| tab.conflict_suppressed_for(disk_stamp)) =>
-            {
-                return;
-            }
-            Ok(Some(disk_stamp)) => {
-                self.handle_file_conflict(tab_id, path, disk_stamp, ConflictWrite::Autosave { revision }, cx);
-                return;
-            }
-            Ok(None) => {}
-            Err(err) => {
-                self.apply_autosave_completion(
-                    FileWriteOutcome::Failed {
-                        tab_id,
-                        path,
-                        message: err.to_string(),
-                    },
-                    cx,
-                );
-                return;
-            }
+        if self.save_inflight.contains_key(&path) || self.queued_saves.contains_key(&path) {
+            return;
         }
-
+        let ticket = self.issue_save_ticket(&path);
         let job = AutosaveJob {
             tab_id,
             path,
             body,
             revision,
-            expected_stamp,
+            expectation,
+            ticket,
         };
         self.autosave_inflight.insert(job.path.clone());
-        cx.spawn({
-            let job = job.clone();
-            async move |this, cx| {
-                let write_job = job.clone();
-                let result = cx
-                    .background_executor()
-                    .spawn(async move { write_autosave_temp_file(&write_job) })
-                    .await;
-                let _ = this.update(cx, |view, cx| view.finish_autosave(job, result, cx));
-            }
+        let inflight_path = job.path.clone();
+        let completion_ticket = job.ticket.clone();
+        cx.spawn(async move |this, cx| {
+            let completion = cx
+                .background_executor()
+                .spawn(async move {
+                    write_autosave_body_result(
+                        job.tab_id,
+                        job.path,
+                        job.body,
+                        job.revision,
+                        job.expectation,
+                        job.ticket,
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.autosave_inflight.remove(&inflight_path);
+                // A newer save can be issued after this job commits but
+                // before its background result reaches the UI thread. Do not
+                // let that older completion regress the model's saved body or
+                // file stamp.
+                if completion_ticket.is_current() {
+                    view.apply_autosave_completion(completion, cx);
+                }
+                view.start_queued_save_for_path(&inflight_path, cx);
+            });
         })
         .detach();
-    }
-
-    fn finish_autosave(&mut self, job: AutosaveJob, result: std::io::Result<PathBuf>, cx: &mut Context<Self>) {
-        self.autosave_inflight.remove(&job.path);
-        if let Some(completion) = autosave_completion(self.model.tabs(), job, result) {
-            self.apply_autosave_completion(completion, cx);
-        } else {
-            cx.notify();
-        }
     }
 
     fn spawn_save_job(
@@ -333,20 +568,63 @@ impl LstGpuiApp {
         kind: SaveKind,
         cx: &mut Context<Self>,
     ) {
+        let job = QueuedSaveJob {
+            tab_id,
+            path,
+            body,
+            revision,
+            kind,
+        };
+        if self.path_write_inflight(&job.path) {
+            self.queue_save_job(job);
+            cx.notify();
+            return;
+        }
+        self.start_save_job(job, false, cx);
+    }
+
+    fn start_save_job(&mut self, job: QueuedSaveJob, deferred: bool, cx: &mut Context<Self>) {
+        if self.path_write_inflight(&job.path) {
+            self.queue_save_job(job);
+            return;
+        }
+        let QueuedSaveJob {
+            tab_id,
+            path,
+            body,
+            revision,
+            kind,
+        } = job;
+        let expectation = match &kind {
+            SaveKind::Save {
+                guard: SaveGuard::RefreshAfterDeferred(_),
+                ..
+            } if deferred => {
+                let Some(tab) = self.model.tab_by_id(tab_id).filter(|tab| tab.path() == Some(&path)) else {
+                    self.finish_exit_save_failure(
+                        kind.exit_save(),
+                        "Document changed identity while waiting to save".to_string(),
+                        cx,
+                    );
+                    return;
+                };
+                tab.save_expectation()
+            }
+            SaveKind::Save {
+                guard: SaveGuard::RefreshAfterDeferred(requested) | SaveGuard::Exact(requested),
+                ..
+            } => *requested,
+            SaveKind::SaveAs { .. } => SaveExpectation::Unguarded,
+        };
         let save_options = self.save_text_options();
         let ticket = self.issue_save_ticket(&path);
         self.begin_save_inflight(&path);
-        let expected_stamp = match &kind {
-            SaveKind::Save { expected_stamp } => *expected_stamp,
-            SaveKind::SaveAs { .. } => None,
-        };
         let save_started = Instant::now();
+        let completion_ticket = ticket.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(
-                    async move { save_file_result(tab_id, path, body, revision, expected_stamp, ticket, save_options) },
-                )
+                .spawn(async move { save_file_result(tab_id, path, body, revision, expectation, ticket, save_options) })
                 .await;
             let save_complete_ms = elapsed_ms(save_started);
             let _ = this.update(cx, |view, cx| {
@@ -358,10 +636,37 @@ impl LstGpuiApp {
                     diagnostics::record_label("save_complete", kind_label);
                     diagnostics::record_ms("save_complete_ms", save_complete_ms);
                 }
-                view.apply_save_outcome(result, kind, cx);
+                view.apply_save_outcome(result, kind, completion_ticket, cx);
             });
         })
         .detach();
+    }
+
+    fn path_write_inflight(&self, path: &Path) -> bool {
+        self.save_inflight.contains_key(path) || self.autosave_inflight.contains(path)
+    }
+
+    fn queue_save_job(&mut self, mut job: QueuedSaveJob) {
+        if let Some(previous) = self.queued_saves.remove(&job.path) {
+            if let Some(exit_save) = previous.kind.exit_save() {
+                if previous.tab_id == job.tab_id && job.kind.exit_save().is_none() {
+                    job.kind.set_exit_save(exit_save);
+                } else if previous.tab_id != job.tab_id && job.kind.exit_save().is_none() {
+                    self.queued_saves.insert(previous.path.clone(), previous);
+                    return;
+                }
+            }
+        }
+        self.queued_saves.insert(job.path.clone(), job);
+    }
+
+    fn start_queued_save_for_path(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if self.path_write_inflight(path) {
+            return;
+        }
+        if let Some(job) = self.queued_saves.remove(path) {
+            self.start_save_job(job, true, cx);
+        }
     }
 
     fn issue_save_ticket(&mut self, path: &Path) -> SaveTicket {
@@ -371,6 +676,14 @@ impl LstGpuiApp {
             .or_insert_with(|| Arc::new(Mutex::new(0)));
         SaveTicket::issue(current_generation)
     }
+
+    fn save_generation_for_path(&self, path: &Path) -> u64 {
+        self.save_ticket_generations
+            .get(path)
+            .map(|generation| *lock_generation(generation))
+            .unwrap_or(0)
+    }
+
     fn begin_save_inflight(&mut self, path: &Path) {
         *self.save_inflight.entry(path.to_path_buf()).or_insert(0) += 1;
     }
@@ -386,46 +699,97 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn check_external_file_changes(&mut self, cx: &mut Context<Self>) {
+        if self.maintenance_inflight {
+            return;
+        }
         let requests = self
             .model
             .tabs()
             .iter()
-            .filter_map(|tab| Some((tab.id(), tab.path()?.clone(), tab.file_stamp()?, tab.modified())))
-            .collect::<Vec<_>>();
-
-        for (tab_id, path, expected_stamp, modified) in requests {
-            if self.save_inflight.contains_key(&path) {
-                continue;
-            }
-            let Ok(disk_stamp) = file_stamp(&path) else {
-                continue;
-            };
-            if disk_stamp == expected_stamp {
-                continue;
-            }
-            if modified {
-                if self
-                    .model
-                    .tab_by_id(tab_id)
-                    .is_some_and(|tab| tab.conflict_suppressed_for(disk_stamp))
-                {
-                    continue;
-                }
-                let Some(tab) = self.model.tab_by_id(tab_id) else {
-                    continue;
-                };
-                self.handle_file_conflict(
-                    tab_id,
-                    path,
-                    disk_stamp,
-                    ConflictWrite::Autosave {
-                        revision: tab.revision(),
+            .filter_map(|tab| {
+                let path = tab.path()?.clone();
+                (!self.path_write_inflight(&path) && !self.queued_saves.contains_key(&path)).then_some(
+                    ExternalFileRequest {
+                        tab_id: tab.id(),
+                        path,
+                        expected_stamp: tab.file_stamp(),
                     },
-                    cx,
-                );
-                break;
+                )
+            })
+            .collect::<Vec<_>>();
+        if requests.is_empty() {
+            return;
+        }
+        self.maintenance_inflight = true;
+        cx.spawn(async move |this, cx| {
+            let observations = cx
+                .background_executor()
+                .spawn(async move { observe_external_files(requests) })
+                .await;
+            let _ = this.update(cx, |view, cx| view.apply_external_file_observations(observations, cx));
+        })
+        .detach();
+    }
+
+    fn apply_external_file_observations(&mut self, observations: Vec<ExternalFileObservation>, cx: &mut Context<Self>) {
+        self.maintenance_inflight = false;
+        for observation in observations {
+            let request = match &observation {
+                ExternalFileObservation::Unchanged(request)
+                | ExternalFileObservation::Changed { request, .. }
+                | ExternalFileObservation::Missing(request)
+                | ExternalFileObservation::Failed { request, .. } => request,
+            };
+            let current = self.model.tab_by_id(request.tab_id);
+            if current.is_none_or(|tab| tab.path() != Some(&request.path) || tab.file_stamp() != request.expected_stamp)
+                || self.path_write_inflight(&request.path)
+                || self.queued_saves.contains_key(&request.path)
+            {
+                continue;
             }
-            self.refresh_or_reload_clean_tab_from_path(tab_id, path, disk_stamp, cx);
+
+            match observation {
+                ExternalFileObservation::Unchanged(_) => {}
+                ExternalFileObservation::Missing(request) => {
+                    self.file_conflicts.remove(&request.tab_id);
+                    let missing_path = request.path.clone();
+                    self.update_model(cx, true, |model| {
+                        model.mark_tab_backing_file_missing(request.tab_id);
+                    });
+                    self.cleanup_message = Some(format!(
+                        "{} was deleted. Save to recreate it, use Save As, or discard explicitly.",
+                        missing_path.display()
+                    ));
+                    cx.notify();
+                }
+                ExternalFileObservation::Failed { request, message } => {
+                    self.cleanup_message = Some(format!("Could not check {}: {message}", request.path.display()));
+                    cx.notify();
+                }
+                ExternalFileObservation::Changed {
+                    request,
+                    text,
+                    disk_stamp,
+                } => {
+                    let Some(tab) = self.model.tab_by_id(request.tab_id) else {
+                        continue;
+                    };
+                    let save_required = tab.modified() || tab.backing_file_missing();
+                    if !save_required || tab.buffer_text() == text {
+                        self.apply_clean_external_file(request.tab_id, request.path, text, disk_stamp, cx);
+                    } else if !tab.conflict_suppressed_for(disk_stamp) {
+                        self.handle_file_conflict(
+                            request.tab_id,
+                            request.path,
+                            disk_stamp,
+                            ConflictWrite::Autosave {
+                                revision: tab.revision(),
+                            },
+                            cx,
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -440,90 +804,161 @@ impl LstGpuiApp {
         let Some(tab) = self.model.tab_by_id(tab_id) else {
             return;
         };
-        if !tab.modified() {
-            self.refresh_or_reload_clean_tab_from_path(tab_id, path, disk_stamp, cx);
-            self.finish_pending_after_save(tab_id, true, cx);
+        if !tab.modified() && !tab.backing_file_missing() {
+            let exit_save = match write {
+                ConflictWrite::Save { exit_save, .. } => exit_save,
+                ConflictWrite::Autosave { .. } => None,
+            };
+            self.reload_clean_external_file(tab_id, path, exit_save, cx);
             return;
         }
-        let revision = match write {
-            ConflictWrite::Save { revision } | ConflictWrite::Autosave { revision } => revision,
+        let (revision, exit_save) = match write {
+            ConflictWrite::Save { revision, exit_save } => (revision, exit_save),
+            ConflictWrite::Autosave { revision } => (revision, None),
         };
         if tab.revision() != revision {
+            self.finish_exit_save_failure(exit_save, "Document changed while saving".to_string(), cx);
             cx.notify();
             return;
         }
-        let body = tab.buffer_text();
-        let saved_body = saved_body_for_conflict(write, &body, self.save_text_options());
-        if fs::read_to_string(&path).is_ok_and(|text| text == saved_body.as_str()) {
-            self.finish_matching_disk_conflict(tab_id, path, disk_stamp, saved_body, write, cx);
-            return;
-        }
-
-        match prompt_file_conflict_decision(&tab.display_name()) {
-            FileConflictDecision::Reload => {
-                self.reload_tab_from_path(tab_id, path, cx);
-                self.finish_pending_after_save(tab_id, true, cx);
-            }
-            FileConflictDecision::Overwrite => match write {
-                ConflictWrite::Save { revision } => {
+        // Dismiss acknowledges exactly one disk version. Autosave must not
+        // overwrite it in the background, while the next explicit Save is
+        // an intentional request and may replace that acknowledged version.
+        if tab.conflict_suppressed_for(disk_stamp) {
+            match write {
+                ConflictWrite::Save { revision, exit_save } => {
+                    let body = tab.buffer_text();
                     self.spawn_save_job(
                         tab_id,
                         path,
                         body,
                         revision,
-                        SaveKind::Save { expected_stamp: None },
+                        SaveKind::Save {
+                            guard: SaveGuard::Exact(SaveExpectation::Matching(disk_stamp)),
+                            exit_save,
+                        },
                         cx,
                     );
                 }
-                ConflictWrite::Autosave { revision } => {
-                    self.apply_autosave_completion(write_autosave_body_result(tab_id, path, body, revision, None), cx);
+                ConflictWrite::Autosave { .. } => {
+                    self.finish_exit_save_failure(exit_save, "File changed on disk".to_string(), cx);
                 }
-            },
-            FileConflictDecision::Cancel => {
-                self.update_model(cx, true, |model| {
-                    model.suppress_file_conflict(tab_id, path, disk_stamp);
-                });
-                self.finish_pending_after_save(tab_id, false, cx);
             }
+            return;
         }
+
+        let notice = FileConflictNotice {
+            tab_id,
+            path: path.clone(),
+            disk_stamp,
+        };
+        if self.file_conflicts.get(&tab_id) != Some(&notice) {
+            self.file_conflicts.insert(tab_id, notice);
+        }
+        self.finish_exit_save_failure(
+            exit_save,
+            format!(
+                "{} changed on disk; choose an action in the editor banner",
+                path.display()
+            ),
+            cx,
+        );
+        cx.notify();
     }
 
-    fn finish_matching_disk_conflict(
-        &mut self,
-        tab_id: TabId,
-        path: PathBuf,
-        disk_stamp: FileStamp,
-        saved_body: String,
-        write: ConflictWrite,
-        cx: &mut Context<Self>,
-    ) {
-        match write {
-            ConflictWrite::Save { revision } => {
-                let recent_path = path.clone();
-                let mut saved = false;
-                let mut record_recent = false;
-                self.update_model(cx, true, |model| {
-                    saved = model.save_finished_for_tab(tab_id, path, revision, disk_stamp, saved_body);
-                    record_recent = saved && model.tab_by_id(tab_id).is_some_and(|tab| !tab.is_scratchpad());
-                });
-                if record_recent {
-                    self.recent.record(&recent_path);
+    pub(crate) fn active_file_conflict(&self) -> Option<&FileConflictNotice> {
+        self.file_conflicts.get(&self.model.active_tab_id())
+    }
+
+    pub(crate) fn reload_file_conflict(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        let Some(notice) = self.file_conflicts.get(&tab_id).cloned() else {
+            return;
+        };
+        let Some(revision) = self
+            .model
+            .tab_by_id(tab_id)
+            .filter(|tab| tab.path() == Some(&notice.path))
+            .map(ModelEditorTab::revision)
+        else {
+            return;
+        };
+        let request = ConflictReloadRequest { notice, revision };
+        let path = request.notice.path.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { read_file_with_stamp(&path) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if !request.is_current(view.model.tab_by_id(tab_id), view.file_conflicts.get(&tab_id)) {
+                    if view.file_conflicts.get(&tab_id) == Some(&request.notice) {
+                        view.cleanup_message = Some(format!(
+                            "Reload cancelled because {} changed in the editor while its disk copy was being read.",
+                            request.notice.path.display()
+                        ));
+                        cx.notify();
+                    }
+                    return;
                 }
-                self.finish_pending_after_save(tab_id, saved, cx);
-            }
-            ConflictWrite::Autosave { revision } => {
-                self.apply_autosave_completion(
-                    FileWriteOutcome::Written {
-                        tab_id,
-                        path,
-                        revision,
-                        stamp: disk_stamp,
-                        body: saved_body,
-                    },
-                    cx,
-                );
-            }
+                match result {
+                    Ok((text, stamp)) => {
+                        view.file_conflicts.remove(&tab_id);
+                        let reload_path = request.notice.path;
+                        view.update_model(cx, true, |model| {
+                            model.reload_tab_from_disk(tab_id, reload_path, text, stamp);
+                        });
+                    }
+                    Err(error) => {
+                        view.cleanup_message =
+                            Some(format!("Could not reload {}: {error}", request.notice.path.display()));
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn keep_file_conflict_local(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        let Some(notice) = self.file_conflicts.remove(&tab_id) else {
+            return;
+        };
+        let Some(tab) = self.model.tab_by_id(tab_id) else {
+            return;
+        };
+        if tab.path() != Some(&notice.path) {
+            return;
         }
+        self.spawn_save_job(
+            tab_id,
+            notice.path,
+            tab.buffer_text(),
+            tab.revision(),
+            SaveKind::Save {
+                guard: SaveGuard::Exact(SaveExpectation::Matching(notice.disk_stamp)),
+                exit_save: None,
+            },
+            cx,
+        );
+    }
+
+    pub(crate) fn save_file_conflict_as(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        if !self.file_conflicts.contains_key(&tab_id) {
+            return;
+        }
+        self.update_model(cx, true, |model| {
+            model.set_active_tab(tab_id);
+            model.request_save_as_tab(tab_id);
+        });
+    }
+
+    pub(crate) fn dismiss_file_conflict(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        let Some(notice) = self.file_conflicts.remove(&tab_id) else {
+            return;
+        };
+        self.update_model(cx, true, |model| {
+            model.suppress_file_conflict(tab_id, notice.path, notice.disk_stamp);
+        });
     }
 
     fn save_text_options(&self) -> SaveTextOptions {
@@ -535,50 +970,92 @@ impl LstGpuiApp {
         }
     }
 
-    fn reload_tab_from_path(&mut self, tab_id: TabId, path: PathBuf, cx: &mut Context<Self>) {
-        match read_file_with_stamp(&path) {
-            Ok((text, stamp)) => {
-                self.update_model(cx, true, |model| {
-                    model.reload_tab_from_disk(tab_id, path, text, stamp);
-                });
-            }
-            Err(err) => {
-                self.update_model(cx, true, |model| {
-                    model.reload_failed(path, err.to_string());
-                });
-            }
-        }
-    }
-
-    fn refresh_or_reload_clean_tab_from_path(
+    fn apply_clean_external_file(
         &mut self,
         tab_id: TabId,
         path: PathBuf,
+        text: String,
         disk_stamp: FileStamp,
         cx: &mut Context<Self>,
     ) {
-        match fs::read_to_string(&path) {
-            Ok(text)
-                if self
-                    .model
-                    .tab_by_id(tab_id)
-                    .is_some_and(|tab| tab.buffer_text() == text) =>
-            {
-                self.update_model(cx, true, |model| {
-                    model.refresh_file_stamp_for_tab(tab_id, path, disk_stamp);
-                });
+        let Some(tab) = self.model.tab_by_id(tab_id) else {
+            return;
+        };
+        let same_text = tab.buffer_text() == text;
+        let modified = tab.modified();
+        let revision = tab.revision();
+        self.file_conflicts.remove(&tab_id);
+        self.update_model(cx, true, |model| {
+            if same_text && modified {
+                model.autosave_finished_for_tab(tab_id, path, revision, disk_stamp, text);
+            } else if same_text {
+                model.refresh_file_stamp_for_tab(tab_id, path, disk_stamp);
+            } else {
+                model.reload_tab_from_disk(tab_id, path, text, disk_stamp);
             }
-            Ok(text) => {
-                self.update_model(cx, true, |model| {
-                    model.reload_tab_from_disk(tab_id, path, text, disk_stamp);
-                });
-            }
-            Err(err) => {
-                self.update_model(cx, true, |model| {
-                    model.reload_failed(path, err.to_string());
-                });
-            }
-        }
+        });
+    }
+
+    fn reload_clean_external_file(
+        &mut self,
+        tab_id: TabId,
+        path: PathBuf,
+        exit_save: Option<PendingExitSave>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((expected_revision, expected_stamp)) = self
+            .model
+            .tab_by_id(tab_id)
+            .filter(|tab| !tab.modified() && tab.path() == Some(&path))
+            .map(|tab| (tab.revision(), tab.file_stamp()))
+        else {
+            self.finish_exit_save_failure(
+                exit_save,
+                "Document changed while resolving an external edit".to_string(),
+                cx,
+            );
+            return;
+        };
+        let expected_save_generation = self.save_generation_for_path(&path);
+        cx.spawn(async move |this, cx| {
+            let read_path = path.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { read_file_with_stamp(&read_path) })
+                .await;
+            let _ = this.update(cx, |view, cx| match result {
+                Ok((text, observed_stamp)) => {
+                    let still_clean = view.model.tab_by_id(tab_id).is_some_and(|tab| {
+                        !tab.modified()
+                            && tab.path() == Some(&path)
+                            && tab.revision() == expected_revision
+                            && tab.file_stamp() == expected_stamp
+                    }) && view.save_generation_for_path(&path) == expected_save_generation
+                        && !view.path_write_inflight(&path)
+                        && !view.queued_saves.contains_key(&path);
+                    if still_clean {
+                        view.apply_clean_external_file(tab_id, path, text, observed_stamp, cx);
+                        view.finish_exit_save_success(exit_save, cx);
+                    } else {
+                        view.finish_exit_save_failure(
+                            exit_save,
+                            "Document changed while resolving an external edit".to_string(),
+                            cx,
+                        );
+                    }
+                }
+                Err(error) => {
+                    view.finish_exit_save_failure(
+                        exit_save,
+                        format!("Could not reload {}: {error}", path.display()),
+                        cx,
+                    );
+                    view.cleanup_message = Some(format!("Could not reload {}: {error}", path.display()));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn request_close_active_tab(&mut self, cx: &mut Context<Self>) {
@@ -587,6 +1064,9 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn request_close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.close_prompt.is_some() || self.quit_review.is_some() || self.pending_exit_save.is_some() {
+            return;
+        }
         self.hovered_tab = None;
         if self.tab_is_empty_scratchpad(index) {
             self.cleanup_scratchpad_tab_file(index);
@@ -610,6 +1090,7 @@ impl LstGpuiApp {
         };
         match self.model.close_request_for_tab(tab_id) {
             Some(TabCloseRequest::Close { tab_id }) => {
+                self.copy_scratchpad_for_tab_close(tab_id, cx);
                 self.record_closed_tab(tab_id);
                 self.update_model(cx, true, |model| {
                     model.close_clean_tab(tab_id);
@@ -617,11 +1098,12 @@ impl LstGpuiApp {
             }
             Some(TabCloseRequest::SaveAndClose { tab_id }) => {
                 if self.model.tab_by_id(tab_id).is_some_and(ModelEditorTab::is_scratchpad) {
-                    self.start_save_for_pending(tab_id, PendingAfterSave::CloseTab(tab_id), cx);
+                    self.start_exit_save(tab_id, ExitSaveContinuation::CloseTab, cx);
                 } else {
                     self.close_prompt = Some(ClosePrompt {
                         tab_id,
-                        pending: PendingAfterSave::CloseTab(tab_id),
+                        intent: ClosePromptIntent::CloseTab,
+                        status: ClosePromptStatus::Reviewing,
                     });
                     cx.notify();
                 }
@@ -631,78 +1113,306 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
+        if self.close_prompt.is_some() || self.quit_review.is_some() || self.pending_exit_save.is_some() {
+            return;
+        }
+        if self.cleanup_in_flight {
+            self.cleanup_message = Some("Wait for text cleanup to finish before quitting.".to_string());
+            self.force_editor_focus = true;
+            cx.notify();
+            return;
+        }
+        let retrying_same_clipboard_payload = self
+            .clipboard_quit_bypass
+            .as_ref()
+            .is_some_and(|bypass| Some(bypass) == self.active_scratchpad_clipboard_payload().as_ref());
+        if !retrying_same_clipboard_payload {
+            self.exit_discarded_revisions.clear();
+            self.clipboard_quit_bypass = None;
+        }
         self.continue_quit_sequence(cx);
     }
 
     fn continue_quit_sequence(&mut self, cx: &mut Context<Self>) {
-        let Some(index) = self.first_dirty_tab_index_for_quit() else {
-            self.finish_quit(cx);
-            return;
-        };
-        let Some(tab_id) = self.model.tab_id_at(index) else {
-            self.finish_quit(cx);
-            return;
-        };
-        let Some(TabCloseRequest::SaveAndClose { tab_id }) = self.model.close_request_for_tab(tab_id) else {
-            self.finish_quit(cx);
-            return;
-        };
-        if self.model.tab_by_id(tab_id).is_some_and(ModelEditorTab::is_scratchpad) {
-            self.start_save_for_pending(tab_id, PendingAfterSave::Quit, cx);
-        } else {
+        let dirty_regular = self
+            .model
+            .tabs()
+            .iter()
+            .filter(|tab| !tab.is_scratchpad() && (tab.modified() || tab.backing_file_missing()))
+            .filter(|tab| self.exit_discarded_revisions.get(&tab.id()) != Some(&tab.revision()))
+            .map(ModelEditorTab::id)
+            .collect::<Vec<_>>();
+        if dirty_regular.len() >= 2 {
+            self.quit_review =
+                Some(QuitReview::new(dirty_regular.into_iter().filter_map(|tab_id| {
+                    self.model.tab_by_id(tab_id).map(|tab| (tab_id, tab_identity(tab)))
+                })));
+            self.quit_review_scroll.scroll_to_item(0);
+            cx.notify();
+        } else if let Some(tab_id) = dirty_regular.first().copied() {
             self.close_prompt = Some(ClosePrompt {
                 tab_id,
-                pending: PendingAfterSave::Quit,
+                intent: ClosePromptIntent::Quit,
+                status: ClosePromptStatus::Reviewing,
             });
             cx.notify();
+        } else {
+            self.continue_quit_scratchpads(cx);
         }
     }
 
     pub(crate) fn confirm_close_prompt_save(&mut self, cx: &mut Context<Self>) {
-        let Some(prompt) = self.close_prompt.take() else {
+        let Some(prompt) = self.close_prompt.as_mut() else {
             return;
         };
-        self.start_save_for_pending(prompt.tab_id, prompt.pending, cx);
+        if matches!(prompt.status, ClosePromptStatus::Saving) {
+            return;
+        }
+        let tab_id = prompt.tab_id;
+        let continuation = match prompt.intent {
+            ClosePromptIntent::CloseTab => ExitSaveContinuation::CloseTab,
+            ClosePromptIntent::Quit => ExitSaveContinuation::QuitSingle,
+        };
+        prompt.status = ClosePromptStatus::Saving;
+        self.start_exit_save(tab_id, continuation, cx);
     }
 
     pub(crate) fn confirm_close_prompt_discard(&mut self, cx: &mut Context<Self>) {
+        if self
+            .close_prompt
+            .as_ref()
+            .is_some_and(|prompt| matches!(prompt.status, ClosePromptStatus::Saving))
+        {
+            return;
+        }
         let Some(prompt) = self.close_prompt.take() else {
             return;
         };
-        self.record_closed_tab(prompt.tab_id);
-        self.update_model(cx, true, |model| {
-            model.discard_close_tab(prompt.tab_id);
-        });
-        if prompt.pending == PendingAfterSave::Quit {
-            self.continue_quit_sequence(cx);
+        match prompt.intent {
+            ClosePromptIntent::CloseTab => {
+                self.record_closed_tab(prompt.tab_id);
+                self.update_model(cx, true, |model| {
+                    model.discard_close_tab(prompt.tab_id);
+                });
+            }
+            ClosePromptIntent::Quit => {
+                self.remember_exit_discard(prompt.tab_id);
+                self.continue_quit_scratchpads(cx);
+            }
         }
     }
 
     pub(crate) fn cancel_close_prompt(&mut self, cx: &mut Context<Self>) {
+        if self
+            .close_prompt
+            .as_ref()
+            .is_some_and(|prompt| matches!(prompt.status, ClosePromptStatus::Saving))
+        {
+            return;
+        }
         if self.close_prompt.take().is_some() {
-            self.pending_after_save = None;
+            // Cancelling aborts the whole quit attempt. In particular, do not
+            // carry a prior clipboard-failure bypass or already-discarded
+            // revisions into some later, unrelated quit request.
+            self.exit_discarded_revisions.clear();
+            self.clipboard_quit_bypass = None;
             self.force_editor_focus = true;
             cx.notify();
         }
     }
 
-    fn start_save_for_pending(&mut self, tab_id: TabId, pending: PendingAfterSave, cx: &mut Context<Self>) {
-        self.pending_after_save = Some(pending);
+    pub(crate) fn move_quit_review_selection(&mut self, down: bool, cx: &mut Context<Self>) {
+        let Some(review) = self.quit_review.as_mut().filter(|review| !review.is_running()) else {
+            return;
+        };
+        if review.items.is_empty() {
+            return;
+        }
+        review.selected_index = if down {
+            (review.selected_index + 1).min(review.items.len() - 1)
+        } else {
+            review.selected_index.saturating_sub(1)
+        };
+        self.quit_review_scroll.scroll_to_item(review.selected_index);
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_quit_review_item(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(review) = self.quit_review.as_mut().filter(|review| !review.is_running()) else {
+            return;
+        };
+        let Some(item) = review.items.get_mut(index) else {
+            return;
+        };
+        if matches!(item.status, QuitReviewItemStatus::Saved) {
+            return;
+        }
+        review.selected_index = index;
+        item.decision = match item.decision {
+            QuitReviewDecision::Save => QuitReviewDecision::Discard,
+            QuitReviewDecision::Discard => QuitReviewDecision::Save,
+        };
+        if matches!(item.status, QuitReviewItemStatus::Failed(_)) {
+            item.status = QuitReviewItemStatus::Pending;
+        }
+        review.message = None;
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_selected_quit_review_item(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.quit_review.as_ref().map(|review| review.selected_index) else {
+            return;
+        };
+        self.toggle_quit_review_item(index, cx);
+    }
+
+    pub(crate) fn confirm_quit_review_save_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(review) = self.quit_review.as_mut().filter(|review| !review.is_running()) else {
+            return;
+        };
+        review.message = None;
+        for item in &mut review.items {
+            if item.decision == QuitReviewDecision::Save && matches!(item.status, QuitReviewItemStatus::Failed(_)) {
+                item.status = QuitReviewItemStatus::Pending;
+            }
+        }
+        self.continue_quit_review(cx);
+    }
+
+    pub(crate) fn confirm_quit_review_discard_all(&mut self, cx: &mut Context<Self>) {
+        let Some(review) = self.quit_review.as_mut().filter(|review| !review.is_running()) else {
+            return;
+        };
+        review.message = None;
+        for item in &mut review.items {
+            if !matches!(item.status, QuitReviewItemStatus::Saved) {
+                item.decision = QuitReviewDecision::Discard;
+                item.status = QuitReviewItemStatus::Pending;
+            }
+        }
+        let discarded = review
+            .items
+            .iter()
+            .filter(|item| item.decision == QuitReviewDecision::Discard)
+            .map(|item| item.tab_id)
+            .collect::<Vec<_>>();
+        let failed_scratchpad = review.failed_scratchpad.take();
+        for tab_id in discarded.into_iter().chain(failed_scratchpad) {
+            self.remember_exit_discard(tab_id);
+        }
+        self.continue_quit_scratchpads(cx);
+    }
+
+    pub(crate) fn cancel_quit_review(&mut self, cx: &mut Context<Self>) {
+        if self.quit_review.as_ref().is_some_and(QuitReview::is_running) {
+            return;
+        }
+        if self.quit_review.take().is_some() {
+            self.exit_discarded_revisions.clear();
+            self.clipboard_quit_bypass = None;
+            self.force_editor_focus = true;
+            cx.notify();
+        }
+    }
+
+    fn continue_quit_review(&mut self, cx: &mut Context<Self>) {
+        loop {
+            let next_index = self.quit_review.as_ref().and_then(|review| {
+                review.items.iter().position(|item| {
+                    item.decision == QuitReviewDecision::Save && !matches!(item.status, QuitReviewItemStatus::Saved)
+                })
+            });
+            let Some(index) = next_index else {
+                let discarded = self
+                    .quit_review
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|review| &review.items)
+                    .filter(|item| item.decision == QuitReviewDecision::Discard)
+                    .map(|item| item.tab_id)
+                    .collect::<Vec<_>>();
+                for tab_id in discarded {
+                    self.remember_exit_discard(tab_id);
+                }
+                self.continue_quit_scratchpads(cx);
+                return;
+            };
+            let tab_id = self.quit_review.as_ref().expect("review exists").items[index].tab_id;
+            let Some(tab) = self.model.tab_by_id(tab_id) else {
+                self.finish_exit_save_failure_for_review(index, "Document is no longer open".to_string(), cx);
+                return;
+            };
+            if !tab.modified() && !tab.backing_file_missing() {
+                self.quit_review.as_mut().expect("review exists").items[index].status = QuitReviewItemStatus::Saved;
+                continue;
+            }
+            self.quit_review.as_mut().expect("review exists").items[index].status = QuitReviewItemStatus::Saving;
+            self.start_exit_save(tab_id, ExitSaveContinuation::QuitReview, cx);
+            return;
+        }
+    }
+
+    fn continue_quit_scratchpads(&mut self, cx: &mut Context<Self>) {
+        if self.pending_exit_save.is_some() {
+            return;
+        }
+        let next = self
+            .model
+            .tabs()
+            .iter()
+            .find(|tab| tab.is_scratchpad() && (tab.modified() || tab.backing_file_missing()) && !tab.is_blank())
+            .filter(|tab| self.exit_discarded_revisions.get(&tab.id()) != Some(&tab.revision()))
+            .map(ModelEditorTab::id);
+        let Some(tab_id) = next else {
+            self.finish_quit(cx);
+            return;
+        };
+        if let Some(review) = self.quit_review.as_mut() {
+            review.saving_scratchpad = true;
+            review.failed_scratchpad = None;
+            review.message = Some("Saving scratchpads…".to_string());
+        }
+        self.start_exit_save(tab_id, ExitSaveContinuation::QuitScratchpad, cx);
+    }
+
+    fn remember_exit_discard(&mut self, tab_id: TabId) {
+        if let Some(revision) = self.model.tab_by_id(tab_id).map(ModelEditorTab::revision) {
+            self.exit_discarded_revisions.insert(tab_id, revision);
+        }
+    }
+
+    fn start_exit_save(&mut self, tab_id: TabId, continuation: ExitSaveContinuation, cx: &mut Context<Self>) {
+        if self.pending_exit_save.is_some() {
+            return;
+        }
+        self.pending_exit_save = Some(PendingExitSave { tab_id, continuation });
         self.update_model(cx, true, |model| {
             model.request_save_tab(tab_id);
         });
     }
 
-    fn first_dirty_tab_index_for_quit(&self) -> Option<usize> {
-        self.model
-            .tabs()
-            .iter()
-            .position(|tab| tab.modified() && !(tab.is_scratchpad() && tab.is_blank()))
-    }
-
     fn finish_quit(&mut self, cx: &mut Context<Self>) {
-        let text = self.model.active_tab().buffer_text();
-        persist_clipboards_after_exit(&text);
+        // Copy-on-close is a scratchpad workflow, never an ordinary-file
+        // shutdown side effect. When an application-level quit closes several
+        // tabs, the active scratchpad is the only unambiguous clipboard source;
+        // every other scratchpad is still archived on disk.
+        let scratchpad_payload = self.active_scratchpad_clipboard_payload();
+        let bypass_matches = self.clipboard_quit_bypass.as_ref() == scratchpad_payload.as_ref();
+        if let Some(payload) = scratchpad_payload.as_ref().filter(|_| !bypass_matches) {
+            if let Err(error) = persist_clipboards_after_exit(&payload.text) {
+                self.clipboard_quit_bypass = Some(payload.clone());
+                self.close_prompt = None;
+                self.quit_review = None;
+                self.cleanup_message = Some(format!(
+                    "Could not keep the scratchpad in the system clipboard: {error}. Press Ctrl+Q again to quit anyway; the scratchpad remains archived on disk."
+                ));
+                self.force_editor_focus = true;
+                cx.notify();
+                return;
+            }
+        }
+        self.clipboard_quit_bypass = None;
+        self.archive_open_scratchpads();
         self.cleanup_empty_scratchpad_files();
         // X11 WM_DELETE_WINDOW already holds GPUI's X11 client RefCell, so defer
         // exit until the current frame releases it. Real builds rely on the
@@ -711,55 +1421,205 @@ impl LstGpuiApp {
         // `quit` so the harness can observe shutdown.
         #[cfg(test)]
         cx.defer(move |app| {
-            app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-            app.write_to_primary(ClipboardItem::new_string(text));
+            if let Some(text) = scratchpad_payload.map(|payload| payload.text) {
+                app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                app.write_to_primary(ClipboardItem::new_string(text));
+            }
             app.quit();
         });
         #[cfg(not(test))]
         cx.defer(|_| process::exit(0));
     }
 
-    fn finish_pending_after_save(&mut self, tab_id: TabId, success: bool, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending_after_save else {
+    fn finish_exit_save_success(&mut self, exit_save: Option<PendingExitSave>, cx: &mut Context<Self>) {
+        let Some(exit_save) = exit_save.filter(|exit_save| self.pending_exit_save == Some(*exit_save)) else {
             return;
         };
-        match pending {
-            PendingAfterSave::CloseTab(pending_tab_id) if pending_tab_id == tab_id => {
-                self.pending_after_save = None;
-                if success {
-                    self.record_closed_tab(tab_id);
-                    self.update_model(cx, true, |model| {
-                        model.close_clean_tab(tab_id);
+        self.pending_exit_save = None;
+        match exit_save.continuation {
+            ExitSaveContinuation::CloseTab => {
+                if self
+                    .close_prompt
+                    .as_ref()
+                    .is_some_and(|prompt| prompt.tab_id == exit_save.tab_id)
+                {
+                    self.close_prompt = None;
+                }
+                self.copy_scratchpad_for_tab_close(exit_save.tab_id, cx);
+                self.record_closed_tab(exit_save.tab_id);
+                self.update_model(cx, true, |model| {
+                    model.close_clean_tab(exit_save.tab_id);
+                });
+            }
+            ExitSaveContinuation::QuitSingle => {
+                self.close_prompt = None;
+                self.continue_quit_scratchpads(cx);
+            }
+            ExitSaveContinuation::QuitReview => {
+                if let Some(item) = self
+                    .quit_review
+                    .as_mut()
+                    .and_then(|review| review.items.iter_mut().find(|item| item.tab_id == exit_save.tab_id))
+                {
+                    item.status = QuitReviewItemStatus::Saved;
+                }
+                self.continue_quit_review(cx);
+            }
+            ExitSaveContinuation::QuitScratchpad => {
+                if let Some(review) = self.quit_review.as_mut() {
+                    review.saving_scratchpad = false;
+                    review.failed_scratchpad = None;
+                    review.message = None;
+                }
+                self.continue_quit_scratchpads(cx);
+            }
+        }
+    }
+
+    fn finish_exit_save_failure(
+        &mut self,
+        exit_save: Option<PendingExitSave>,
+        message: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(exit_save) = exit_save.filter(|exit_save| self.pending_exit_save == Some(*exit_save)) else {
+            return;
+        };
+        self.pending_exit_save = None;
+        match exit_save.continuation {
+            ExitSaveContinuation::CloseTab | ExitSaveContinuation::QuitSingle => {
+                let intent = if exit_save.continuation == ExitSaveContinuation::CloseTab {
+                    ClosePromptIntent::CloseTab
+                } else {
+                    ClosePromptIntent::Quit
+                };
+                if let Some(prompt) = self
+                    .close_prompt
+                    .as_mut()
+                    .filter(|prompt| prompt.tab_id == exit_save.tab_id)
+                {
+                    prompt.status = ClosePromptStatus::Failed(message);
+                } else {
+                    self.close_prompt = Some(ClosePrompt {
+                        tab_id: exit_save.tab_id,
+                        intent,
+                        status: ClosePromptStatus::Failed(message),
                     });
                 }
             }
-            PendingAfterSave::Quit => {
-                self.pending_after_save = None;
-                if success {
-                    self.continue_quit_sequence(cx);
+            ExitSaveContinuation::QuitReview => {
+                let index = self
+                    .quit_review
+                    .as_ref()
+                    .and_then(|review| review.items.iter().position(|item| item.tab_id == exit_save.tab_id));
+                if let Some(index) = index {
+                    self.finish_exit_save_failure_for_review(index, message, cx);
+                    return;
                 }
             }
-            _ => {}
+            ExitSaveContinuation::QuitScratchpad => {
+                if let Some(review) = self.quit_review.as_mut() {
+                    review.saving_scratchpad = false;
+                    review.failed_scratchpad = Some(exit_save.tab_id);
+                    review.message = Some(format!("Could not save scratchpad: {message}"));
+                } else {
+                    self.close_prompt = Some(ClosePrompt {
+                        tab_id: exit_save.tab_id,
+                        intent: ClosePromptIntent::Quit,
+                        status: ClosePromptStatus::Failed(message),
+                    });
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn finish_exit_save_failure_for_review(&mut self, index: usize, message: String, cx: &mut Context<Self>) {
+        if let Some(review) = self.quit_review.as_mut() {
+            if let Some(item) = review.items.get_mut(index) {
+                item.status = QuitReviewItemStatus::Failed(message);
+            }
+            review.message = Some("Some selected files could not be saved.".to_string());
+        }
+        cx.notify();
+    }
+
+    fn copy_scratchpad_for_tab_close(&self, tab_id: TabId, cx: &mut Context<Self>) {
+        let Some(tab) = self.model.tab_by_id(tab_id).filter(|tab| tab.is_scratchpad()) else {
+            return;
+        };
+        let text = tab.buffer_text();
+        if text.trim().is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+        cx.write_to_primary(ClipboardItem::new_string(text));
+    }
+
+    fn archive_open_scratchpads(&mut self) {
+        let active_id = self.model.active_tab_id();
+        let mut paths = self
+            .model
+            .tabs()
+            .iter()
+            .filter(|tab| tab.is_scratchpad() && !tab.is_blank())
+            .filter_map(|tab| Some((tab.id(), tab.path()?.clone())))
+            .collect::<Vec<_>>();
+        paths.sort_by_key(|(tab_id, _)| *tab_id == active_id);
+        for (_, path) in paths {
+            self.recent.record_with_origin(&path, RecentOrigin::Scratchpad);
         }
     }
 
     fn apply_open_file_results(&mut self, (opened, failed): OpenFileResults, cx: &mut Context<Self>) {
-        for (path, message) in failed {
-            self.update_model(cx, true, |model| model.open_file_failed(path, message));
-        }
-        if !opened.is_empty() {
-            let opened_paths: Vec<_> = opened.iter().map(|(p, _, _)| p.clone()).collect();
-            self.update_model(cx, true, |model| model.open_files_with_stamps(opened));
-            for path in opened_paths {
-                self.recent.record(&path);
+        let failures = failed
+            .into_iter()
+            .map(|(path, message)| format!("{}: {message}", path.display()))
+            .collect::<Vec<_>>();
+
+        for (path, text, stamp) in opened {
+            let normalized = normalize_recent_path(&path);
+            let existing = self.model.tabs().iter().find_map(|tab| {
+                let tab_path = tab.path()?;
+                (normalize_recent_path(tab_path) == normalized).then_some(tab.id())
+            });
+            if let Some(tab_id) = existing {
+                self.update_model(cx, true, |model| model.set_active_tab(tab_id));
+            } else {
+                let opened_path = path.clone();
+                self.update_model(cx, true, |model| {
+                    model.open_files_with_stamps(vec![(opened_path, text, stamp)]);
+                });
             }
+            self.recent.record_with_origin(&path, RecentOrigin::Regular);
+        }
+
+        if !failures.is_empty() {
+            self.cleanup_message = Some(format!("Some files could not be opened: {}", failures.join("; ")));
+            cx.notify();
         }
     }
 
-    fn apply_save_outcome(&mut self, result: FileWriteOutcome, kind: SaveKind, cx: &mut Context<Self>) {
+    fn apply_save_outcome(
+        &mut self,
+        result: FileWriteOutcome,
+        kind: SaveKind,
+        ticket: SaveTicket,
+        cx: &mut Context<Self>,
+    ) {
         let inflight_path = result.path().to_path_buf();
         self.finish_save_inflight(&inflight_path);
+        if !ticket.is_current() {
+            self.finish_exit_save_failure(
+                kind.exit_save(),
+                "A newer save superseded this save attempt".to_string(),
+                cx,
+            );
+            self.start_queued_save_for_path(&inflight_path, cx);
+            return;
+        }
         let is_save_as = matches!(kind, SaveKind::SaveAs { .. });
+        let exit_save = kind.exit_save();
         match result {
             FileWriteOutcome::Written {
                 tab_id,
@@ -781,20 +1641,37 @@ impl LstGpuiApp {
                         saved && (is_save_as || model.tab_by_id(tab_id).is_some_and(|tab| !tab.is_scratchpad()));
                 });
                 if record_recent {
-                    self.recent.record(&saved_path);
+                    self.recent.record_with_origin(&saved_path, RecentOrigin::Regular);
                 }
-                if let SaveKind::SaveAs { previous_scratchpad } = kind {
+                if saved {
+                    self.file_conflicts.remove(&tab_id);
+                }
+                if let SaveKind::SaveAs {
+                    previous_scratchpad, ..
+                } = kind
+                {
                     if saved {
+                        if let Some(previous) = previous_scratchpad.as_deref() {
+                            if normalize_recent_path(previous) != normalize_recent_path(&saved_path) {
+                                self.recent.prune_path(previous);
+                            }
+                        }
                         remove_previous_scratchpad_after_save_as(previous_scratchpad, &saved_path, self.model.tabs());
                     }
                 }
-                self.finish_pending_after_save(tab_id, saved, cx);
+                if saved {
+                    self.finish_exit_save_success(exit_save, cx);
+                } else {
+                    self.finish_exit_save_failure(exit_save, "Document changed while saving".to_string(), cx);
+                }
             }
             FileWriteOutcome::Failed { tab_id, path, message } => {
+                let failure = message.clone();
                 self.update_model(cx, true, |model| {
                     model.save_failed(path, message);
                 });
-                self.finish_pending_after_save(tab_id, false, cx);
+                let _ = tab_id;
+                self.finish_exit_save_failure(exit_save, failure, cx);
             }
             FileWriteOutcome::Conflict {
                 tab_id,
@@ -802,12 +1679,20 @@ impl LstGpuiApp {
                 revision,
                 disk_stamp,
             } => {
-                self.handle_file_conflict(tab_id, path, disk_stamp, ConflictWrite::Save { revision }, cx);
+                self.handle_file_conflict(
+                    tab_id,
+                    path,
+                    disk_stamp,
+                    ConflictWrite::Save { revision, exit_save },
+                    cx,
+                );
             }
             FileWriteOutcome::Stale { .. } => {
+                self.finish_exit_save_failure(exit_save, "A newer save superseded this save attempt".to_string(), cx);
                 cx.notify();
             }
         }
+        self.start_queued_save_for_path(&inflight_path, cx);
     }
 
     fn apply_autosave_completion(&mut self, completion: FileWriteOutcome, cx: &mut Context<Self>) {
@@ -820,13 +1705,17 @@ impl LstGpuiApp {
                 body,
             } => {
                 let recent_path = path.clone();
+                let mut saved = false;
                 let mut record_recent = false;
                 self.update_model(cx, true, |model| {
-                    record_recent = model.autosave_finished_for_tab(tab_id, path, revision, stamp, body)
-                        && model.tab_by_id(tab_id).is_some_and(|tab| !tab.is_scratchpad());
+                    saved = model.autosave_finished_for_tab(tab_id, path, revision, stamp, body);
+                    record_recent = saved && model.tab_by_id(tab_id).is_some_and(|tab| !tab.is_scratchpad());
                 });
+                if saved {
+                    self.file_conflicts.remove(&tab_id);
+                }
                 if record_recent {
-                    self.recent.record(&recent_path);
+                    self.recent.record_with_origin(&recent_path, RecentOrigin::Regular);
                 }
             }
             FileWriteOutcome::Failed {
@@ -844,25 +1733,33 @@ impl LstGpuiApp {
                 revision,
                 disk_stamp,
             } => self.handle_file_conflict(tab_id, path, disk_stamp, ConflictWrite::Autosave { revision }, cx),
-            // Autosave is not ticket-gated, so it never emits `Stale`.
+            // A newer explicit save may invalidate an older autosave ticket.
             FileWriteOutcome::Stale { .. } => {}
         }
     }
 
     pub(crate) fn request_new_tab(&mut self, cx: &mut Context<Self>) {
-        match create_scratchpad_note(self.scratchpad_dir_override()) {
-            Ok((path, file_stamp)) => {
-                self.update_model(cx, true, |model| {
-                    model.new_scratchpad_tab(path, file_stamp);
-                });
-            }
-            Err(err) => {
-                self.update_model(cx, true, |model| {
-                    model.new_tab();
-                    model.save_failed(PathBuf::from("scratchpad"), err.to_string());
-                });
-            }
-        }
+        let directory = self.scratchpad_dir_override().map(Path::to_path_buf);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { create_scratchpad_note(directory.as_deref()) })
+                .await;
+            let _ = this.update(cx, |view, cx| match result {
+                Ok((path, file_stamp)) => {
+                    view.update_model(cx, true, |model| {
+                        model.new_scratchpad_tab(path, file_stamp);
+                    });
+                }
+                Err(err) => {
+                    view.update_model(cx, true, |model| {
+                        model.new_tab();
+                        model.save_failed(PathBuf::from("scratchpad"), err.to_string());
+                    });
+                }
+            });
+        })
+        .detach();
     }
 
     fn scratchpad_dir_override(&self) -> Option<&Path> {
@@ -903,23 +1800,32 @@ impl LstGpuiApp {
         }
     }
 
-    /// Snapshot a closing tab so `Ctrl+Shift+T` can reopen it. Scratchpads
-    /// and untitled tabs are excluded — there is no path to reopen.
+    /// Snapshot a closing path-backed tab so `Ctrl+Shift+T` can reopen it.
+    /// Non-empty scratchpads are also archived into unified recent history.
     fn record_closed_tab(&mut self, tab_id: TabId) {
         const MAX_CLOSED_HISTORY: usize = 32;
-        let Some(tab) = self.model.tab_by_id(tab_id) else {
+        let Some((path, position, origin, blank)) = self.model.tab_by_id(tab_id).and_then(|tab| {
+            Some((
+                tab.path()?.clone(),
+                tab.cursor_position(),
+                if tab.is_scratchpad() {
+                    RecentOrigin::Scratchpad
+                } else {
+                    RecentOrigin::Regular
+                },
+                tab.is_blank(),
+            ))
+        }) else {
             return;
         };
-        if tab.is_scratchpad() {
+        if origin == RecentOrigin::Scratchpad && blank {
             return;
         }
-        let Some(path) = tab.path().cloned() else {
-            return;
-        };
-        self.closed_tabs_history.push(crate::ClosedTabRecord {
-            path,
-            position: tab.cursor_position(),
-        });
+        if origin == RecentOrigin::Scratchpad {
+            self.recent.record_with_origin(&path, RecentOrigin::Scratchpad);
+        }
+        self.closed_tabs_history
+            .push(crate::ClosedTabRecord { path, position, origin });
         if self.closed_tabs_history.len() > MAX_CLOSED_HISTORY {
             let overflow = self.closed_tabs_history.len() - MAX_CLOSED_HISTORY;
             self.closed_tabs_history.drain(..overflow);
@@ -939,38 +1845,85 @@ impl LstGpuiApp {
             .tabs()
             .iter()
             .find(|tab| tab.path() == Some(&record.path))
-            .map(ModelEditorTab::id);
-        if let Some(tab_id) = existing {
+            .map(|tab| {
+                let origin = if tab.is_scratchpad() {
+                    RecentOrigin::Scratchpad
+                } else {
+                    RecentOrigin::Regular
+                };
+                (tab.id(), origin)
+            });
+        if let Some((tab_id, origin)) = existing {
             self.update_model(cx, true, |model| {
                 model.set_active_tab(tab_id);
                 model.set_active_cursor_position(line, column);
             });
+            self.recent.record_with_origin(&record.path, origin);
             return;
         }
-        match read_file_with_stamp(&record.path) {
-            Ok((text, stamp)) => {
-                let opened_path = record.path.clone();
-                self.update_model(cx, true, |model| {
-                    model.open_files_with_stamps(vec![(opened_path, text, Some(stamp))]);
-                    model.set_active_cursor_position(line, column);
-                });
-                self.recent.record(&record.path);
-            }
-            Err(err) => {
-                self.update_model(cx, true, |model| {
-                    model.open_file_failed(record.path, err.to_string());
-                });
-            }
-        }
+        cx.spawn(async move |this, cx| {
+            let read_path = record.path.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { read_file_with_stamp(&read_path) })
+                .await;
+            let _ = this.update(cx, |view, cx| match result {
+                Ok((text, stamp)) => {
+                    if let Some((tab_id, origin)) = view
+                        .model
+                        .tabs()
+                        .iter()
+                        .find(|tab| tab.path() == Some(&record.path))
+                        .map(|tab| {
+                            (
+                                tab.id(),
+                                if tab.is_scratchpad() {
+                                    RecentOrigin::Scratchpad
+                                } else {
+                                    RecentOrigin::Regular
+                                },
+                            )
+                        })
+                    {
+                        view.update_model(cx, true, |model| {
+                            model.set_active_tab(tab_id);
+                            model.set_active_cursor_position(line, column);
+                        });
+                        view.recent.record_with_origin(&record.path, origin);
+                        return;
+                    }
+                    let opened_path = record.path.clone();
+                    view.update_model(cx, true, |model| {
+                        match record.origin {
+                            RecentOrigin::Regular => {
+                                model.open_files_with_stamps(vec![(opened_path, text, Some(stamp))]);
+                            }
+                            RecentOrigin::Scratchpad => {
+                                model.new_scratchpad_tab(opened_path.clone(), stamp);
+                                let tab_id = model.active_tab_id();
+                                model.reload_tab_from_disk(tab_id, opened_path, text, stamp);
+                            }
+                        }
+                        model.set_active_cursor_position(line, column);
+                    });
+                    view.recent.record_with_origin(&record.path, record.origin);
+                }
+                Err(err) => {
+                    let failed_path = record.path;
+                    view.update_model(cx, true, |model| {
+                        model.open_file_failed(failed_path, err.to_string());
+                    });
+                }
+            });
+        })
+        .detach();
     }
 }
 
-fn autosave_temp_path(path: &Path, revision: u64) -> PathBuf {
-    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("buffer");
-    path.with_file_name(format!(
-        ".{file_name}.lst-gpui-autosave-{}-{revision}.tmp",
-        process::id()
-    ))
+pub(crate) fn tab_identity(tab: &ModelEditorTab) -> String {
+    tab.path()
+        .map(|path| normalize_recent_path(path).to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{} (unsaved)", tab.display_name()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -983,40 +1936,57 @@ enum AtomicWriteOutcome {
 fn write_file_with_guards(
     path: &Path,
     bytes: &[u8],
-    expected_stamp: Option<FileStamp>,
+    expectation: SaveExpectation,
     ticket: Option<&SaveTicket>,
 ) -> io::Result<AtomicWriteOutcome> {
     if ticket.is_some_and(|ticket| !ticket.is_current()) {
         return Ok(AtomicWriteOutcome::Stale);
     }
-    ensure_existing_target_is_writable(path)?;
 
-    if let Some(disk_stamp) = file_conflict_stamp(path, expected_stamp)? {
+    if let Some(disk_stamp) = save_conflict_stamp(path, expectation)? {
         return Ok(AtomicWriteOutcome::Conflict(disk_stamp));
     }
+    ensure_existing_target_is_writable(path)?;
 
     let write_target = write_target_for_path(path)?;
     let permissions = fs::metadata(path).ok().map(|metadata| metadata.permissions());
     let temp_path = write_temp_replacement(&write_target, bytes, permissions)?;
 
+    commit_temp_replacement(path, &write_target, &temp_path, expectation, ticket)
+}
+
+fn commit_temp_replacement(
+    path: &Path,
+    write_target: &Path,
+    temp_path: &Path,
+    expectation: SaveExpectation,
+    ticket: Option<&SaveTicket>,
+) -> io::Result<AtomicWriteOutcome> {
     let _current = match ticket {
         Some(ticket) => match ticket.current_guard() {
             Some(guard) => Some(guard),
             None => {
-                remove_temp_file(&temp_path);
+                remove_temp_file(temp_path);
                 return Ok(AtomicWriteOutcome::Stale);
             }
         },
         None => None,
     };
 
-    if let Some(disk_stamp) = file_conflict_stamp(path, expected_stamp)? {
-        remove_temp_file(&temp_path);
-        return Ok(AtomicWriteOutcome::Conflict(disk_stamp));
+    match save_conflict_stamp(path, expectation) {
+        Ok(Some(disk_stamp)) => {
+            remove_temp_file(temp_path);
+            return Ok(AtomicWriteOutcome::Conflict(disk_stamp));
+        }
+        Ok(None) => {}
+        Err(error) => {
+            remove_temp_file(temp_path);
+            return Err(error);
+        }
     }
 
-    if let Err(err) = fs::rename(&temp_path, &write_target) {
-        remove_temp_file(&temp_path);
+    if let Err(err) = fs::rename(temp_path, write_target) {
+        remove_temp_file(temp_path);
         return Err(err);
     }
     Ok(AtomicWriteOutcome::Written)
@@ -1126,13 +2096,6 @@ fn stale_save_result(tab_id: TabId, path: PathBuf, revision: u64) -> FileWriteOu
     FileWriteOutcome::Stale { tab_id, path, revision }
 }
 
-fn saved_body_for_conflict(write: ConflictWrite, body: &str, options: SaveTextOptions) -> String {
-    match write {
-        ConflictWrite::Save { .. } => apply_save_options(body.to_string(), options),
-        ConflictWrite::Autosave { .. } => body.to_string(),
-    }
-}
-
 fn open_file_results(paths: impl IntoIterator<Item = PathBuf>) -> OpenFileResults {
     let mut opened = Vec::new();
     let mut failed = Vec::new();
@@ -1145,21 +2108,60 @@ fn open_file_results(paths: impl IntoIterator<Item = PathBuf>) -> OpenFileResult
     (opened, failed)
 }
 
+fn observe_external_files(requests: Vec<ExternalFileRequest>) -> Vec<ExternalFileObservation> {
+    requests
+        .into_iter()
+        .map(|request| match file_stamp(&request.path) {
+            Ok(stamp) if Some(stamp) == request.expected_stamp => ExternalFileObservation::Unchanged(request),
+            Ok(_) => match read_file_with_stamp(&request.path) {
+                Ok((text, disk_stamp)) => ExternalFileObservation::Changed {
+                    request,
+                    text,
+                    disk_stamp,
+                },
+                Err(error) if error.kind() == io::ErrorKind::NotFound => ExternalFileObservation::Missing(request),
+                Err(error) => ExternalFileObservation::Failed {
+                    request,
+                    message: error.to_string(),
+                },
+            },
+            Err(error) if error.kind() == io::ErrorKind::NotFound && request.expected_stamp.is_none() => {
+                ExternalFileObservation::Unchanged(request)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => ExternalFileObservation::Missing(request),
+            Err(error) => ExternalFileObservation::Failed {
+                request,
+                message: error.to_string(),
+            },
+        })
+        .collect()
+}
+
 fn save_file_result(
     tab_id: TabId,
     path: PathBuf,
     body: String,
     revision: u64,
-    expected_stamp: Option<FileStamp>,
+    expectation: SaveExpectation,
     ticket: SaveTicket,
     options: SaveTextOptions,
 ) -> FileWriteOutcome {
     if !ticket.is_current() {
         return stale_save_result(tab_id, path, revision);
     }
+    let body = apply_save_options(body, options);
 
-    match file_conflict_stamp(&path, expected_stamp) {
+    match save_conflict_stamp(&path, expectation) {
         Ok(Some(disk_stamp)) => {
+            if fs::read_to_string(&path).is_ok_and(|disk_body| disk_body == body) {
+                return FileWriteOutcome::Written {
+                    tab_id,
+                    path,
+                    revision,
+                    stamp: disk_stamp,
+                    body,
+                };
+            }
             return FileWriteOutcome::Conflict {
                 tab_id,
                 path,
@@ -1179,7 +2181,7 @@ fn save_file_result(
     if !ticket.is_current() {
         return stale_save_result(tab_id, path, revision);
     }
-    write_file_result(tab_id, path, body, revision, expected_stamp, ticket, options)
+    write_file_result(tab_id, path, body, revision, expectation, ticket)
 }
 
 fn write_file_result(
@@ -1187,12 +2189,10 @@ fn write_file_result(
     path: PathBuf,
     body: String,
     revision: u64,
-    expected_stamp: Option<FileStamp>,
+    expectation: SaveExpectation,
     ticket: SaveTicket,
-    options: SaveTextOptions,
 ) -> FileWriteOutcome {
-    let body = apply_save_options(body, options);
-    match write_file_with_guards(&path, body.as_bytes(), expected_stamp, Some(&ticket)) {
+    match write_file_with_guards(&path, body.as_bytes(), expectation, Some(&ticket)) {
         Ok(AtomicWriteOutcome::Written) => match file_stamp(&path) {
             Ok(stamp) => FileWriteOutcome::Written {
                 tab_id,
@@ -1227,9 +2227,43 @@ fn write_autosave_body_result(
     path: PathBuf,
     body: String,
     revision: u64,
-    expected_stamp: Option<FileStamp>,
+    expectation: SaveExpectation,
+    ticket: SaveTicket,
 ) -> FileWriteOutcome {
-    match write_file_with_guards(&path, body.as_bytes(), expected_stamp, None) {
+    if !ticket.is_current() {
+        return stale_save_result(tab_id, path, revision);
+    }
+    match save_conflict_stamp(&path, expectation) {
+        Ok(Some(disk_stamp)) if fs::read_to_string(&path).is_ok_and(|disk_body| disk_body == body) => {
+            return FileWriteOutcome::Written {
+                tab_id,
+                path,
+                revision,
+                stamp: disk_stamp,
+                body,
+            };
+        }
+        Ok(Some(disk_stamp)) => {
+            return FileWriteOutcome::Conflict {
+                tab_id,
+                path,
+                revision,
+                disk_stamp,
+            };
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return FileWriteOutcome::Failed {
+                tab_id,
+                path,
+                message: error.to_string(),
+            };
+        }
+    }
+    if !ticket.is_current() {
+        return stale_save_result(tab_id, path, revision);
+    }
+    match write_file_with_guards(&path, body.as_bytes(), expectation, Some(&ticket)) {
         Ok(AtomicWriteOutcome::Written) => match file_stamp(&path) {
             Ok(stamp) => FileWriteOutcome::Written {
                 tab_id,
@@ -1244,7 +2278,7 @@ fn write_autosave_body_result(
                 message: err.to_string(),
             },
         },
-        Ok(AtomicWriteOutcome::Stale) => unreachable!("autosave writes are never ticket-gated"),
+        Ok(AtomicWriteOutcome::Stale) => stale_save_result(tab_id, path, revision),
         Ok(AtomicWriteOutcome::Conflict(disk_stamp)) => FileWriteOutcome::Conflict {
             tab_id,
             path,
@@ -1260,16 +2294,18 @@ fn write_autosave_body_result(
 }
 
 pub(crate) fn read_file_with_stamp(path: &Path) -> std::io::Result<(String, FileStamp)> {
-    let before = file_stamp(path)?;
-    let text = fs::read_to_string(path)?;
-    let after = file_stamp(path)?;
-    if before == after {
-        return Ok((text, after));
+    for _ in 0..3 {
+        let before = file_stamp(path)?;
+        let text = fs::read_to_string(path)?;
+        let after = file_stamp(path)?;
+        if before == after {
+            return Ok((text, after));
+        }
     }
-
-    let text = fs::read_to_string(path)?;
-    let stamp = file_stamp(path)?;
-    Ok((text, stamp))
+    Err(io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "file kept changing while it was being read",
+    ))
 }
 
 fn can_start_autosave_job(
@@ -1280,11 +2316,6 @@ fn can_start_autosave_job(
     revision: u64,
 ) -> bool {
     !inflight.contains(path) && autosave_revision_is_current(tabs, tab_id, path, revision)
-}
-
-fn write_autosave_temp_file(job: &AutosaveJob) -> std::io::Result<PathBuf> {
-    let temp_path = autosave_temp_path(&job.path, job.revision);
-    fs::write(&temp_path, job.body.as_bytes()).map(|_| temp_path)
 }
 
 fn apply_save_options(body: String, options: SaveTextOptions) -> String {
@@ -1319,37 +2350,6 @@ fn trim_trailing_ws(body: &str) -> String {
     out
 }
 
-fn autosave_completion(
-    tabs: &[ModelEditorTab],
-    job: AutosaveJob,
-    result: std::io::Result<PathBuf>,
-) -> Option<FileWriteOutcome> {
-    let temp_path = match result {
-        Ok(temp_path) => temp_path,
-        Err(err) => {
-            return Some(FileWriteOutcome::Failed {
-                tab_id: job.tab_id,
-                path: job.path,
-                message: err.to_string(),
-            });
-        }
-    };
-
-    if !autosave_revision_is_current(tabs, job.tab_id, &job.path, job.revision) {
-        let _ = fs::remove_file(&temp_path);
-        return None;
-    }
-
-    let _ = fs::remove_file(&temp_path);
-    Some(write_autosave_body_result(
-        job.tab_id,
-        job.path,
-        job.body,
-        job.revision,
-        job.expected_stamp,
-    ))
-}
-
 pub(crate) fn autosave_revision_is_current(tabs: &[ModelEditorTab], tab_id: TabId, path: &Path, revision: u64) -> bool {
     let open_tabs_for_path = tabs
         .iter()
@@ -1371,50 +2371,89 @@ fn file_stamp(path: &Path) -> std::io::Result<FileStamp> {
     fs::metadata(path).map(|metadata| FileStamp::from_metadata(&metadata))
 }
 
-fn file_conflict_stamp(path: &Path, expected_stamp: Option<FileStamp>) -> std::io::Result<Option<FileStamp>> {
-    let Some(expected_stamp) = expected_stamp else {
-        return Ok(None);
-    };
-    let disk_stamp = match file_stamp(path) {
-        Ok(stamp) => stamp,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            // Deleted backing files have no current stamp; reuse the last known
-            // stamp as a stable conflict key so Save can offer to recreate them.
-            return Ok(Some(expected_stamp));
+fn save_conflict_stamp(path: &Path, expectation: SaveExpectation) -> std::io::Result<Option<FileStamp>> {
+    match expectation {
+        SaveExpectation::Unguarded => Ok(None),
+        SaveExpectation::Absent => match file_stamp(path) {
+            Ok(stamp) => Ok(Some(stamp)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        },
+        SaveExpectation::Matching(expected_stamp) => {
+            let disk_stamp = match file_stamp(path) {
+                Ok(stamp) => stamp,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    // A deleted file has no current stamp. Reuse the last known
+                    // stamp as a stable key for the conflict UI.
+                    return Ok(Some(expected_stamp));
+                }
+                Err(error) => return Err(error),
+            };
+            Ok((disk_stamp != expected_stamp).then_some(disk_stamp))
         }
-        Err(err) => return Err(err),
-    };
-    Ok((disk_stamp != expected_stamp).then_some(disk_stamp))
-}
-
-fn prompt_file_conflict_decision(title: &str) -> FileConflictDecision {
-    match MessageDialog::new()
-        .set_level(MessageLevel::Warning)
-        .set_title("File changed on disk")
-        .set_description(format!(
-            "{title} changed outside lst. Reload from disk, overwrite it, or keep editing?"
-        ))
-        .set_buttons(MessageButtons::YesNoCancelCustom(
-            "Reload".to_string(),
-            "Overwrite".to_string(),
-            "Cancel".to_string(),
-        ))
-        .show()
-    {
-        MessageDialogResult::Custom(label) if label == "Reload" => FileConflictDecision::Reload,
-        MessageDialogResult::Custom(label) if label == "Overwrite" => FileConflictDecision::Overwrite,
-        MessageDialogResult::Yes => FileConflictDecision::Reload,
-        MessageDialogResult::No => FileConflictDecision::Overwrite,
-        _ => FileConflictDecision::Cancel,
     }
 }
 
 impl LstGpuiApp {
     pub(crate) fn start_cleanup(&mut self, cx: &mut Context<Self>) {
-        if self.cleanup_in_flight {
+        if self.cleanup_in_flight || self.cleanup_confirmation.is_some() {
             return;
         }
+        let tab = self.active_tab();
+        let tab_id = tab.id();
+        let revision = tab.revision();
+        if tab.has_selection() {
+            let range = tab.selected_range();
+            match tab.selected_text() {
+                Some(text) if !text.is_empty() => self.begin_cleanup(tab_id, revision, range, text, cx),
+                _ => {
+                    self.cleanup_message = Some("Nothing to clean up.".to_string());
+                    cx.notify();
+                }
+            }
+            return;
+        }
+        if tab.buffer().len_chars() == 0 {
+            self.cleanup_message = Some("Nothing to clean up.".to_string());
+            cx.notify();
+            return;
+        }
+        self.cleanup_confirmation = Some(crate::CleanupConfirmation { tab_id, revision });
+        cx.notify();
+    }
 
+    pub(crate) fn confirm_cleanup_whole_document(&mut self, cx: &mut Context<Self>) {
+        let Some(confirmation) = self.cleanup_confirmation.take() else {
+            return;
+        };
+        let Some(tab) = self.model.tab_by_id(confirmation.tab_id) else {
+            cx.notify();
+            return;
+        };
+        if self.model.active_tab_id() != confirmation.tab_id || tab.revision() != confirmation.revision {
+            self.cleanup_message = Some("Document changed; cleanup was cancelled.".to_string());
+            cx.notify();
+            return;
+        }
+        let range = 0..tab.buffer().len_chars();
+        let source_text = tab.buffer_text();
+        self.begin_cleanup(confirmation.tab_id, confirmation.revision, range, source_text, cx);
+    }
+
+    pub(crate) fn cancel_cleanup_confirmation(&mut self, cx: &mut Context<Self>) {
+        if self.cleanup_confirmation.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn begin_cleanup(
+        &mut self,
+        tab_id: TabId,
+        revision: u64,
+        range: Range<usize>,
+        source_text: String,
+        cx: &mut Context<Self>,
+    ) {
         let client = match build_llm_client() {
             Ok(client) => client,
             Err(message) => {
@@ -1422,29 +2461,6 @@ impl LstGpuiApp {
                 cx.notify();
                 return;
             }
-        };
-
-        let tab = self.active_tab();
-        let tab_id = tab.id();
-        let revision = tab.revision();
-        let (range, source_text) = if tab.has_selection() {
-            let range = tab.selected_range();
-            match tab.selected_text() {
-                Some(text) if !text.is_empty() => (range, text),
-                _ => {
-                    self.cleanup_message = Some("Nothing to clean up.".to_string());
-                    cx.notify();
-                    return;
-                }
-            }
-        } else {
-            let text = tab.buffer_text();
-            if text.is_empty() {
-                self.cleanup_message = Some("Nothing to clean up.".to_string());
-                cx.notify();
-                return;
-            }
-            (0..tab.buffer().len_chars(), text)
         };
 
         self.cleanup_in_flight = true;
@@ -1517,4 +2533,123 @@ fn build_llm_client() -> Result<Box<dyn crate::llm::LlmClient>, String> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| crate::llm::DEFAULT_DEEPSEEK_MODEL.to_string());
     Ok(Box::new(crate::llm::DeepSeekClient::new(api_key, model_name)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deferred_latest_save_uses_the_stamp_from_an_older_committed_save() {
+        static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let directory = env::temp_dir().join(format!(
+            "lst-serialized-save-{}-{}",
+            process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let path = directory.join("document.txt");
+        fs::write(&path, "initial\n").expect("seed target");
+        let initial_stamp = file_stamp(&path).expect("stamp initial target");
+        let tab_id = TabId::from_raw(1);
+        let tab = ModelEditorTab::from_path_with_stamp(tab_id, path.clone(), "initial\n", Some(initial_stamp));
+        let mut model = lst_editor::EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string());
+
+        model.execute(lst_editor::EditorCommand::SelectAll);
+        model.replace_text(None, "older requested body\n".to_string(), UndoBoundary::Break);
+        let older_revision = model.active_tab().revision();
+        let older_body = model.active_tab().buffer_text();
+
+        model.execute(lst_editor::EditorCommand::SelectAll);
+        model.replace_text(None, "latest requested body\n".to_string(), UndoBoundary::Break);
+        let latest_revision = model.active_tab().revision();
+        let latest_body = model.active_tab().buffer_text();
+
+        let generation = Arc::new(Mutex::new(0));
+        let older = save_file_result(
+            tab_id,
+            path.clone(),
+            older_body,
+            older_revision,
+            SaveExpectation::Matching(initial_stamp),
+            SaveTicket::issue(&generation),
+            SaveTextOptions {
+                trim_trailing_whitespace: false,
+                ensure_final_newline: false,
+            },
+        );
+        let FileWriteOutcome::Written {
+            path: written_path,
+            revision,
+            stamp: older_stamp,
+            body,
+            ..
+        } = older
+        else {
+            panic!("older save should commit");
+        };
+        assert!(!model.save_finished_for_tab(tab_id, written_path, revision, older_stamp, body));
+        assert!(model.active_tab().modified());
+
+        let latest = save_file_result(
+            tab_id,
+            path.clone(),
+            latest_body,
+            latest_revision,
+            model.active_tab().save_expectation(),
+            SaveTicket::issue(&generation),
+            SaveTextOptions {
+                trim_trailing_whitespace: false,
+                ensure_final_newline: false,
+            },
+        );
+        let FileWriteOutcome::Written {
+            path: written_path,
+            revision,
+            stamp,
+            body,
+            ..
+        } = latest
+        else {
+            panic!("latest save should not conflict with the app's older write");
+        };
+        assert!(model.save_finished_for_tab(tab_id, written_path, revision, stamp, body));
+        assert_eq!(
+            fs::read_to_string(&path).expect("read final target"),
+            "latest requested body\n"
+        );
+        assert!(!model.active_tab().modified());
+
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn final_atomic_guard_preserves_a_target_recreated_after_expected_absence() {
+        static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let directory = env::temp_dir().join(format!(
+            "lst-expected-absence-{}-{}",
+            process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let target = directory.join("document.txt");
+        let temp_path = write_temp_replacement(&target, b"editor copy\n", None).expect("stage replacement");
+
+        fs::write(&target, "recreated elsewhere\n").expect("recreate target");
+        let recreated_stamp = file_stamp(&target).expect("stamp recreated target");
+        let generation = Arc::new(Mutex::new(0));
+        let ticket = SaveTicket::issue(&generation);
+        let outcome = commit_temp_replacement(&target, &target, &temp_path, SaveExpectation::Absent, Some(&ticket))
+            .expect("run final guard");
+
+        assert_eq!(outcome, AtomicWriteOutcome::Conflict(recreated_stamp));
+        assert_eq!(
+            fs::read_to_string(&target).expect("read preserved target"),
+            "recreated elsewhere\n"
+        );
+        assert!(!temp_path.exists(), "rejected replacement should be removed");
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
 }

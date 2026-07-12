@@ -8,7 +8,7 @@
 
 mod support;
 
-use support::{EditorTestExt, TestResult};
+use support::{secs, EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
@@ -48,6 +48,46 @@ fn smart_home_toggles_between_first_non_blank_and_column_zero() -> TestResult {
             after_third.cursors[0].head_col, 4,
             "third Home should toggle back to first non-blank: {after_third:?}"
         );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn home_and_end_target_the_current_wrapped_visual_row() -> TestResult {
+    support::run_x11_test("motion-wrapped-visual-boundaries", |session| {
+        let text = "alpha beta gamma delta ".repeat(30);
+        let path = session.seed_file("wrapped-boundaries.txt", &text)?;
+        let mut editor = session.open_file("wrapped-visual-boundaries", &path)?;
+
+        let wrapped = editor.wait_state("multiple wrapped rows", secs(5), |record| {
+            record.viewport.rows.iter().filter(|row| row.logical_line == 0).count() >= 2
+        })?;
+        let segments = wrapped
+            .viewport
+            .rows
+            .iter()
+            .filter(|row| row.logical_line == 0)
+            .map(|row| (row.line_start_char, row.display_end_char))
+            .collect::<Vec<_>>();
+        let logical_start = segments[0].0;
+        let second_start = segments[1].0 - logical_start;
+        let second_end = segments[1].1 - logical_start;
+        assert!(
+            second_end >= second_start + 2,
+            "unexpected wrapped segments: {segments:?}"
+        );
+        let inside_second = second_start + 2;
+
+        editor.click_at_text(0, inside_second)?;
+        editor.keys("<home>")?;
+        let at_visual_start = editor.read_state()?;
+        assert_eq!(at_visual_start.cursors[0].head_col, second_start, "{at_visual_start:?}");
+
+        editor.click_at_text(0, inside_second)?;
+        editor.keys("<end>")?;
+        let at_visual_end = editor.read_state()?;
+        assert_eq!(at_visual_end.cursors[0].head_col, second_end, "{at_visual_end:?}");
         Ok(())
     })
 }

@@ -12,12 +12,10 @@ pub enum IconKind {
     Plus,
     Minus,
     Recent,
-    Sparkle,
-    Theme,
     Menu,
-    Settings,
     ChevronUp,
     ChevronDown,
+    ChevronRight,
     Replace,
     ReplaceAll,
 }
@@ -29,12 +27,10 @@ impl IconKind {
             Self::Plus => Icon::Plus,
             Self::Minus => Icon::Minus,
             Self::Recent => Icon::History,
-            Self::Sparkle => Icon::Sparkles,
-            Self::Theme => Icon::SunMoon,
             Self::Menu => Icon::Menu,
-            Self::Settings => Icon::Settings,
             Self::ChevronUp => Icon::ChevronUp,
             Self::ChevronDown => Icon::ChevronDown,
+            Self::ChevronRight => Icon::ChevronRight,
             Self::Replace => Icon::Replace,
             Self::ReplaceAll => Icon::ReplaceAll,
         }
@@ -100,7 +96,7 @@ impl RenderOnce for IconButton {
         } else {
             rgb(self.theme.role.control_bg)
         };
-        let active_bg = self.theme.role.control_bg_hover;
+        let active_bg = self.theme.role.selection_bg;
         let foreground = if self.disabled {
             rgb(self.theme.role.text_muted)
         } else {
@@ -116,9 +112,10 @@ impl RenderOnce for IconButton {
             .h(metrics::px_for_rem(metrics::ICON_BUTTON_SIZE, rem_size))
             .rounded_sm()
             .bg(background)
+            .when(self.disabled, |button| button.opacity(0.55))
             .when(interactive, |s| {
                 s.hover(move |style| style.bg(hover))
-                    .active(move |style| style.bg(rgb(active_bg)))
+                    .active(move |style| style.bg(rgb(active_bg)).opacity(0.82))
                     .cursor(CursorStyle::PointingHand)
             })
             .items_center()

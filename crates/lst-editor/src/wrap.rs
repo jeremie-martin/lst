@@ -66,14 +66,14 @@ pub struct DisplayRowTarget {
     pub preferred_column: usize,
 }
 
-pub fn build_wrap_layout(lines: &[String], wrap_columns: usize, show_wrap: bool) -> WrapLayout {
+pub fn build_wrap_layout<T: AsRef<str>>(lines: &[T], wrap_columns: usize, show_wrap: bool) -> WrapLayout {
     let wrap_columns = wrap_columns.max(1);
     let mut line_row_starts = Vec::with_capacity(lines.len() + 1);
     let mut total_rows = 0usize;
     line_row_starts.push(0);
 
     for line in lines {
-        let display = trim_display_line(line);
+        let display = trim_display_line(line.as_ref());
         total_rows += if show_wrap {
             visual_line_count(display, wrap_columns)
         } else {
@@ -98,9 +98,14 @@ pub fn line_for_visual_row(layout: &WrapLayout, visual_row: usize) -> usize {
         .min(layout.line_row_starts.len().saturating_sub(2))
 }
 
-pub fn visual_row_for_position(lines: &[String], line: usize, column: usize, layout: &WrapLayout) -> Option<usize> {
+pub fn visual_row_for_position<T: AsRef<str>>(
+    lines: &[T],
+    line: usize,
+    column: usize,
+    layout: &WrapLayout,
+) -> Option<usize> {
     let line_start_row = layout.line_row_starts.get(line).copied()?;
-    let display_text = trim_display_line(lines.get(line)?);
+    let display_text = trim_display_line(lines.get(line)?.as_ref());
     let display_column = column.min(display_text.chars().count());
     let row_in_line = if layout.show_wrap {
         cursor_visual_row_in_line(display_text, display_column, layout.wrap_columns)
@@ -110,8 +115,8 @@ pub fn visual_row_for_position(lines: &[String], line: usize, column: usize, lay
     Some(line_start_row + row_in_line)
 }
 
-pub fn display_row_target(
-    lines: &[String],
+pub fn display_row_target<T: AsRef<str>>(
+    lines: &[T],
     line: usize,
     column: usize,
     preferred_column: Option<usize>,
@@ -122,7 +127,7 @@ pub fn display_row_target(
         return None;
     }
 
-    let display_text = trim_display_line(lines.get(line)?);
+    let display_text = trim_display_line(lines.get(line)?.as_ref());
     let column = column.min(display_text.chars().count());
     let segment_row = cursor_visual_row_in_line(display_text, column, layout.wrap_columns);
     let visual_row = layout.line_row_starts.get(line).copied()? + segment_row;
@@ -143,7 +148,7 @@ pub fn display_row_target(
         .expect("wrap_segments always returns at least one segment");
     let preferred_column = preferred_column.unwrap_or_else(|| column.saturating_sub(current_segment.start_col));
     let target_line = line_for_visual_row(layout, target_visual_row);
-    let target_text = trim_display_line(lines.get(target_line)?);
+    let target_text = trim_display_line(lines.get(target_line)?.as_ref());
     let target_segments = wrap_segments(target_text, layout.wrap_columns);
     let target_row_in_line = target_visual_row - layout.line_row_starts[target_line];
     let target_segment = target_segments

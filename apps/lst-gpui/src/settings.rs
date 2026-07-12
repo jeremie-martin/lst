@@ -115,6 +115,7 @@ impl Default for AppSettings {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SettingsStore {
     path: Option<PathBuf>,
     document: DocumentMut,

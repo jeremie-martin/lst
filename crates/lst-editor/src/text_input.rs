@@ -4,10 +4,11 @@ use crate::{
     multi_selection::{self, request_for_each, SelectionEdit},
     selection::{
         ceil_grapheme_boundary, display_line_char_len, floor_grapheme_boundary, is_identifier_char,
-        next_grapheme_boundary, next_word_boundary, previous_grapheme_boundary, previous_word_boundary,
+        next_grapheme_boundary, next_word_boundary, previous_grapheme_boundary, previous_word_boundary, Selection,
+        SelectionSet,
     },
     tab::EditorTab,
-    transaction::{EditRequest, SelectionAfter},
+    transaction::{EditRequest, SelectionAfter, TextChange, TextChangeSet},
 };
 use std::ops::Range;
 
@@ -101,6 +102,26 @@ pub(crate) fn delete_selected_or_previous_request(tab: &EditorTab) -> Option<Edi
     })
 }
 
+pub(crate) fn delete_selected_or_previous_pair_aware_request(tab: &EditorTab) -> Option<EditRequest> {
+    let has_empty_pair = tab
+        .selection_set()
+        .as_slice()
+        .iter()
+        .any(|selection| !selection.has_selection() && empty_auto_pair_range_at(tab, selection.cursor()).is_some());
+    if !has_empty_pair {
+        return delete_selected_or_previous_request(tab);
+    }
+
+    delete_request(tab, UndoBoundary::Break, |tab, cursor| {
+        empty_auto_pair_range_at(tab, cursor).or_else(|| {
+            (cursor > 0).then(|| {
+                soft_tab_backspace_range_at(tab, cursor)
+                    .unwrap_or_else(|| previous_grapheme_boundary(tab.buffer(), cursor)..cursor)
+            })
+        })
+    })
+}
+
 pub(crate) fn delete_selected_or_next_request(tab: &EditorTab) -> Option<EditRequest> {
     delete_request(tab, UndoBoundary::Merge, |tab, cursor| {
         (cursor < tab.len_chars()).then(|| cursor..next_grapheme_boundary(tab.buffer(), cursor))
@@ -148,6 +169,85 @@ pub(crate) fn newline_request(tab: &EditorTab) -> EditRequest {
                 replacements[tab.selection_set().primary_index()].clone(),
             )
         })
+}
+
+pub(crate) fn smart_newline_request(tab: &EditorTab) -> EditRequest {
+    if let Some(request) = request_for_each(tab, EditKind::Insert, UndoBoundary::Break, |_index, selection| {
+        let (replacement, caret) = newline_replacement(tab, &selection.range(), true);
+        Some(SelectionEdit::replace_with_inserted_range(
+            selection.range(),
+            replacement,
+            caret..caret,
+            false,
+        ))
+    }) {
+        return request;
+    }
+
+    let range = resolve_range(tab, None);
+    let (replacement, caret) = newline_replacement(tab, &range, true);
+    EditRequest::single(EditKind::Insert, UndoBoundary::Break, range, replacement).with_selection_after(
+        SelectionAfter::InsertedRange {
+            range: caret..caret,
+            reversed: false,
+        },
+    )
+}
+
+pub(crate) fn tab_request(tab: &EditorTab) -> EditRequest {
+    let replacements = tab
+        .selection_set()
+        .as_slice()
+        .iter()
+        .map(|selection| tab_text_at(tab, selection.cursor()))
+        .collect::<Vec<_>>();
+    multi_selection::replacement_request_by_index(tab, |index| replacements[index].clone(), UndoBoundary::Break)
+        .unwrap_or_else(|| {
+            EditRequest::single(
+                EditKind::Insert,
+                UndoBoundary::Break,
+                resolve_range(tab, None),
+                replacements[tab.selection_set().primary_index()].clone(),
+            )
+        })
+}
+
+pub(crate) fn linewise_paste_request(tab: &EditorTab, mut text: String) -> EditRequest {
+    if !text.ends_with(['\n', '\r']) {
+        text.push_str(preferred_newline(tab));
+    }
+    let line_starts = tab
+        .selection_set()
+        .as_slice()
+        .iter()
+        .map(|selection| {
+            let line = tab.buffer().char_to_line(selection.cursor().min(tab.len_chars()));
+            tab.buffer().line_to_char(line)
+        })
+        .collect::<Vec<_>>();
+    let mut unique_starts = line_starts.clone();
+    unique_starts.sort_unstable();
+    unique_starts.dedup();
+    let primary_start = line_starts[tab.selection_set().primary_index()];
+    let primary_change = unique_starts
+        .binary_search(&primary_start)
+        .expect("primary cursor line is included in linewise paste changes");
+    let changes = TextChangeSet::new(
+        unique_starts
+            .into_iter()
+            .map(|start| TextChange::insert(start, text.clone()))
+            .collect(),
+        primary_change,
+    );
+    let selections = line_starts
+        .into_iter()
+        .map(|start| Selection::collapsed(changes.map_offset_to_inserted_end(start)))
+        .collect();
+    let selection_after =
+        SelectionSet::from_selections_coalescing_cursors(selections, tab.selection_set().primary_index())
+            .expect("linewise paste preserves a valid selection set");
+    EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, changes)
+        .with_selection_after(SelectionAfter::Exact(selection_after))
 }
 pub(crate) fn transpose_request(tab: &EditorTab) -> Option<EditRequest> {
     let buffer = tab.buffer();
@@ -302,6 +402,66 @@ fn soft_tab_backspace_range_at(tab: &EditorTab, cursor: usize) -> Option<Range<u
     }
     let prefix_len = buffer.line(line).chars().take_while(|ch| *ch == ' ').take(col).count();
     (col <= prefix_len).then_some((cursor - unit)..cursor)
+}
+
+fn empty_auto_pair_range_at(tab: &EditorTab, cursor: usize) -> Option<Range<usize>> {
+    if cursor == 0 || cursor >= tab.len_chars() {
+        return None;
+    }
+    let opener = tab.buffer().char(cursor - 1);
+    let closer = tab.buffer().char(cursor);
+    tab.language_config()
+        .auto_pairs
+        .contains(&(opener, closer))
+        .then_some((cursor - 1)..(cursor + 1))
+}
+
+fn newline_replacement(tab: &EditorTab, range: &Range<usize>, smart_pair: bool) -> (String, usize) {
+    let newline = preferred_newline(tab);
+    let buffer = tab.buffer();
+    let line = buffer.char_to_line(range.start.min(tab.len_chars()));
+    let outer_indent = line_indent_prefix(buffer, line);
+    if smart_pair && range.start == range.end && non_quote_auto_pair_at(tab, range.start).is_some() {
+        let inner_indent = format!("{outer_indent}{}", tab.language_config().indent.indent_unit());
+        let replacement = format!("{newline}{inner_indent}{newline}{outer_indent}");
+        let caret = newline.chars().count() + inner_indent.chars().count();
+        return (replacement, caret);
+    }
+
+    let replacement = format!("{newline}{outer_indent}");
+    let caret = replacement.chars().count();
+    (replacement, caret)
+}
+
+fn non_quote_auto_pair_at(tab: &EditorTab, cursor: usize) -> Option<(char, char)> {
+    if cursor == 0 || cursor >= tab.len_chars() {
+        return None;
+    }
+    let pair = (tab.buffer().char(cursor - 1), tab.buffer().char(cursor));
+    (pair.0 != pair.1 && tab.language_config().auto_pairs.contains(&pair)).then_some(pair)
+}
+
+fn tab_text_at(tab: &EditorTab, cursor: usize) -> String {
+    let indent = tab.language_config().indent;
+    if indent.uses_tabs() {
+        return "\t".to_string();
+    }
+    let width = indent.width();
+    if width == 0 {
+        return String::new();
+    }
+
+    let cursor = cursor.min(tab.len_chars());
+    let line = tab.buffer().char_to_line(cursor);
+    let line_start = tab.buffer().line_to_char(line);
+    let visual_column = tab.buffer().slice(line_start..cursor).chars().fold(0, |column, ch| {
+        if ch == '\t' {
+            column + width - (column % width)
+        } else {
+            column + 1
+        }
+    });
+    " ".repeat(width - (visual_column % width))
 }
 fn delete_word_range_at(tab: &EditorTab, cursor: usize, backward: bool) -> Option<Range<usize>> {
     if backward {

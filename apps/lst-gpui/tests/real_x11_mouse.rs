@@ -189,6 +189,55 @@ fn drag_text_followed_by_typing_replaces_selection() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn dragging_selected_text_moves_it_as_one_undoable_edit() -> TestResult {
+    support::run_x11_test("mouse-drag-move-selection", |session| {
+        let path = session.seed_file("drag-move.txt", "abcdef")?;
+        let mut editor = session.open_file("drag-move", &path)?;
+
+        editor.drag_text((0, 1), (0, 3), ChordMods::default())?;
+        editor.drag_text((0, 2), (0, 6), ChordMods::default())?;
+        editor.save_then_expect_file(&path, "adefbc")?;
+
+        editor.keys("<C-z>")?;
+        editor.save_then_expect_file(&path, "abcdef")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_dragging_selected_text_copies_it() -> TestResult {
+    support::run_x11_test("mouse-drag-copy-selection", |session| {
+        let path = session.seed_file("drag-copy.txt", "abcdef")?;
+        let mut editor = session.open_file("drag-copy", &path)?;
+
+        editor.drag_text((0, 1), (0, 3), ChordMods::default())?;
+        editor.drag_text((0, 2), (0, 6), ChordMods::CTRL)?;
+        editor.save_then_expect_file(&path, "abcdefbc")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn clicking_inside_selection_without_drag_collapses_the_caret() -> TestResult {
+    support::run_x11_test("mouse-selection-click-collapse", |session| {
+        let path = session.seed_file("selection-click.txt", "abcdef")?;
+        let mut editor = session.open_file("selection-click", &path)?;
+
+        editor.drag_text((0, 1), (0, 3), ChordMods::default())?;
+        editor.click_at_text(0, 2)?;
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 1, "{record:?}");
+        assert!(record.cursors[0].is_collapsed(), "{record:?}");
+        assert_eq!(record.cursors[0].head_char, 2, "{record:?}");
+        editor.save_then_expect_file(&path, "abcdef")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn middle_click_at_text_pastes_primary_selection_at_click_point() -> TestResult {
     support::run_x11_test("mouse-middle-click-paste", |session| {
         let path = session.seed_file("middle.txt", "alpha bravo")?;

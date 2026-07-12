@@ -40,6 +40,7 @@ pub enum EditorCommand {
     DeleteWord(bool),
     InsertNewline,
     InsertTab,
+    IndentLines,
     Outdent,
     SelectAll,
     SmartExpandSelection,
@@ -154,6 +155,7 @@ impl EditorModel {
             }
             InsertNewline => self.insert_newline(),
             InsertTab => self.insert_tab_at_cursor(),
+            IndentLines => self.indent_lines_at_cursor(),
             Outdent => self.outdent_at_cursor(),
             SelectAll => {
                 self.active_tab_mut().select_all();
@@ -207,8 +209,15 @@ impl EditorModel {
             }
             SwapRedoBranch => self.swap_redo_branch(),
             ToggleFindPanel(show_replace) => {
-                if self.find.visible && self.find.show_replace == show_replace {
-                    self.close_find_panel();
+                if self.find.visible {
+                    if show_replace {
+                        self.find.show_replace = true;
+                        self.queue_focus(crate::FocusTarget::FindReplace);
+                    } else {
+                        // Ctrl+F is idempotent: repeated invocations focus the
+                        // existing query and never toggle the panel closed.
+                        self.queue_focus(crate::FocusTarget::FindQuery);
+                    }
                 } else {
                     self.open_find_panel(show_replace);
                 }

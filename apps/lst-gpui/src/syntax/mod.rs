@@ -1,7 +1,7 @@
 mod catalog;
 mod highlight;
 
-pub(crate) use highlight::TabSyntaxState;
+pub(crate) use highlight::{SyntaxInvalidation, TabSyntaxState};
 
 use crate::ui::theme::SyntaxRole;
 use lst_editor::Language;
@@ -74,6 +74,7 @@ pub(crate) struct SyntaxSpan {
 #[derive(Clone)]
 pub(crate) struct CachedSyntaxHighlights {
     pub(crate) language: SyntaxLanguage,
+    pub(crate) revision: u64,
     pub(crate) lines: Vec<Vec<SyntaxSpan>>,
     /// Byte length of each line's *display* text (no trailing `\n` / `\r`) in
     /// the source that produced `lines`. The renderer guards span reuse with
@@ -128,8 +129,8 @@ mod tests {
 
     fn full_parse(language: SyntaxLanguage, source: &str) -> (Vec<Vec<SyntaxSpan>>, Vec<u32>) {
         let buffer = ropey::Rope::from_str(source);
-        let state = TabSyntaxState::parse_initial(language, &buffer, source, 0).expect("language is supported");
-        state.compute_spans(source)
+        let state = TabSyntaxState::parse_initial(language, &buffer, 0).expect("language is supported");
+        state.compute_spans()
     }
 
     #[test]
@@ -172,8 +173,8 @@ mod tests {
         // to lock the trim semantics in step.
         let source = "a\nb\r\nc\rd\r\r\ne";
         let buffer = ropey::Rope::from_str(source);
-        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, source, 0).unwrap();
-        let (_lines, byte_lens) = state.compute_spans(source);
+        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, 0).unwrap();
+        let (_lines, byte_lens) = state.compute_spans();
         let display_lens: Vec<u32> = (0..buffer.len_lines())
             .map(|i| {
                 let mut line = buffer.line(i).to_string();
@@ -194,19 +195,76 @@ mod tests {
         let buffer_before = ropey::Rope::from_str(before);
         let buffer_after = ropey::Rope::from_str(after);
 
-        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer_before, before, 0).unwrap();
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer_before, 0).unwrap();
         // Inserted one 'x' immediately after the 'x' in `let x`.
         let insert_at = before.find("let x").unwrap() + "let x".len();
         let edit = BufferEdit {
             range: insert_at..insert_at,
             replacement: "x".to_string(),
         };
-        state.update(&buffer_after, after, BufferDelta::Edits(vec![edit]), 1);
-        let (incremental_lines, incremental_lens) = state.compute_spans(after);
+        state.update(&buffer_after, BufferDelta::Edits(vec![edit]), 1);
+        let (incremental_lines, incremental_lens) = state.compute_spans();
 
         let (fresh_lines, fresh_lens) = full_parse(SyntaxLanguage::Rust, after);
         assert_eq!(incremental_lens, fresh_lens);
         assert_eq!(incremental_lines, fresh_lines);
+    }
+
+    #[test]
+    fn ordinary_edit_recomputes_only_a_small_line_window() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let before = (0..200)
+            .map(|line| format!("fn item_{line}() {{ let value_{line} = {line}; }}\n"))
+            .collect::<String>();
+        let edit_start = before.find("value_100").unwrap() + "value_".len();
+        let mut after = before.clone();
+        after.insert(edit_start, 'x');
+        let before_buffer = ropey::Rope::from_str(&before);
+        let after_buffer = ropey::Rope::from_str(&after);
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &before_buffer, 0).unwrap();
+
+        let invalidation = state.update(
+            &after_buffer,
+            BufferDelta::Edits(vec![BufferEdit {
+                range: edit_start..edit_start,
+                replacement: "x".to_string(),
+            }]),
+            1,
+        );
+        let SyntaxInvalidation::Lines(changed_lines) = invalidation else {
+            panic!("single-line typing should preserve line topology");
+        };
+        assert!(changed_lines.len() <= 4, "unexpected invalidation: {changed_lines:?}");
+
+        let (partial_lines, partial_lens) = state.compute_spans_for_lines(changed_lines.clone());
+        let (fresh_lines, fresh_lens) = full_parse(SyntaxLanguage::Rust, &after);
+        assert_eq!(partial_lines, fresh_lines[changed_lines.clone()]);
+        assert_eq!(partial_lens, fresh_lens[changed_lines]);
+    }
+
+    #[test]
+    fn line_topology_change_requests_a_full_highlight_rebuild() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let before = "fn first() {}\nfn second() {}\n";
+        let insert_at = before.find("fn second").unwrap();
+        let after = format!("{}// inserted\n{}", &before[..insert_at], &before[insert_at..]);
+        let before_buffer = ropey::Rope::from_str(before);
+        let after_buffer = ropey::Rope::from_str(&after);
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &before_buffer, 0).unwrap();
+
+        let invalidation = state.update(
+            &after_buffer,
+            BufferDelta::Edits(vec![BufferEdit {
+                range: insert_at..insert_at,
+                replacement: "// inserted\n".to_string(),
+            }]),
+            1,
+        );
+
+        assert_eq!(invalidation, SyntaxInvalidation::Full);
+        assert_eq!(state.compute_spans(), full_parse(SyntaxLanguage::Rust, &after));
     }
 
     #[test]

@@ -34,6 +34,14 @@ pub enum FindChip {
     Scope,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum FileConflictAction {
+    Reload,
+    KeepMine,
+    SaveAs,
+    Dismiss,
+}
+
 const FOCUS_QUIET: Duration = Duration::from_millis(75);
 const FOCUS_TIMEOUT: Duration = Duration::from_secs(5);
 const FILE_STABLE: Duration = Duration::from_millis(200);
@@ -148,6 +156,15 @@ impl ScratchpadSession {
         self.open_files_with_mode(name, &[file.to_path_buf()], false)
     }
 
+    pub fn open_file_with_env(
+        &mut self,
+        name: &str,
+        file: &Path,
+        extra_env: &[(&OsStr, &OsStr)],
+    ) -> SupportResult<Editor<'_>> {
+        self.open_files_with_mode_and_env(name, &[file.to_path_buf()], false, extra_env)
+    }
+
     pub fn open_vim_file(&mut self, name: &str, file: &Path) -> SupportResult<Editor<'_>> {
         self.open_files_with_mode(name, &[file.to_path_buf()], true)
     }
@@ -159,6 +176,16 @@ impl ScratchpadSession {
     }
 
     fn open_files_with_mode(&mut self, name: &str, files: &[PathBuf], vim: bool) -> SupportResult<Editor<'_>> {
+        self.open_files_with_mode_and_env(name, files, vim, &[])
+    }
+
+    fn open_files_with_mode_and_env(
+        &mut self,
+        name: &str,
+        files: &[PathBuf],
+        vim: bool,
+        extra_env: &[(&OsStr, &OsStr)],
+    ) -> SupportResult<Editor<'_>> {
         let title = unique_title(name);
         let mut args = Vec::with_capacity(files.len() + usize::from(vim));
         if vim {
@@ -168,7 +195,7 @@ impl ScratchpadSession {
         let stderr_log_path = self.stderr_log_path(name);
         let state_trace_path = self.state_trace_path(name);
         let (stdout, stderr) = self.log_stdio(name)?;
-        let env = spawn_env(&self.home, &self.config_home, &self.state_home, &[]);
+        let env = spawn_env(&self.home, &self.config_home, &self.state_home, extra_env);
         let mut editor = self.display.spawn_editor(SpawnOpts {
             binary: &self.binary,
             args: &args,
@@ -360,11 +387,17 @@ pub trait EditorTestExt {
     /// Click the visible tab-strip application-menu button.
     fn click_app_menu_button(&mut self) -> SupportResult<()>;
 
+    /// Click the pinned tab-strip control that lists every open tab.
+    fn click_all_tabs_button(&mut self) -> SupportResult<()>;
+
     /// Click the visible tab-strip recent-files button.
     fn click_recent_files_button(&mut self) -> SupportResult<()>;
 
     /// Click the visible tab-strip new-tab button.
     fn click_new_tab_button(&mut self) -> SupportResult<()>;
+
+    /// Click one of the active document's external-change banner actions.
+    fn click_file_conflict_action(&mut self, action: FileConflictAction) -> SupportResult<()>;
 }
 
 impl EditorTestExt for Editor<'_> {
@@ -463,6 +496,16 @@ impl EditorTestExt for Editor<'_> {
         click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "app-menu-click")
     }
 
+    fn click_all_tabs_button(&mut self) -> SupportResult<()> {
+        let record = self.wait_state("all tabs button bounds", FOCUS_TIMEOUT, |state| {
+            state.all_tabs_button_bounds_px.is_some()
+        })?;
+        let (ox, oy, w, h) = record
+            .all_tabs_button_bounds_px
+            .ok_or("all tabs button bounds missing after wait")?;
+        click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "all-tabs-click")
+    }
+
     fn click_recent_files_button(&mut self) -> SupportResult<()> {
         let record = self.wait_state("recent button bounds", FOCUS_TIMEOUT, |state| {
             state.recent_button_bounds_px.is_some()
@@ -481,6 +524,23 @@ impl EditorTestExt for Editor<'_> {
             .new_tab_button_bounds_px
             .ok_or("new tab button bounds missing after wait")?;
         click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "new-tab-button-click")
+    }
+
+    fn click_file_conflict_action(&mut self, action: FileConflictAction) -> SupportResult<()> {
+        let record = self.wait_state("file conflict action bounds", FOCUS_TIMEOUT, |state| {
+            state.file_conflict_path.is_some() && file_conflict_action_bounds(state, action).is_some()
+        })?;
+        let (ox, oy, w, h) =
+            file_conflict_action_bounds(&record, action).ok_or("file conflict action bounds missing after wait")?;
+        click_trace_bounds_center(
+            self,
+            ox,
+            oy,
+            w,
+            h,
+            record.viewport.scale_factor,
+            "file-conflict-action-click",
+        )
     }
 }
 
@@ -507,6 +567,15 @@ fn find_chip_bounds(record: &StateTraceRecord, chip: FindChip) -> Option<(f32, f
         FindChip::WholeWord => record.find.chip_bounds_px.whole_word,
         FindChip::Regex => record.find.chip_bounds_px.regex,
         FindChip::Scope => record.find.chip_bounds_px.scope,
+    }
+}
+
+fn file_conflict_action_bounds(record: &StateTraceRecord, action: FileConflictAction) -> Option<(f32, f32, f32, f32)> {
+    match action {
+        FileConflictAction::Reload => record.file_conflict_button_bounds_px.reload,
+        FileConflictAction::KeepMine => record.file_conflict_button_bounds_px.keep_mine,
+        FileConflictAction::SaveAs => record.file_conflict_button_bounds_px.save_as,
+        FileConflictAction::Dismiss => record.file_conflict_button_bounds_px.dismiss,
     }
 }
 

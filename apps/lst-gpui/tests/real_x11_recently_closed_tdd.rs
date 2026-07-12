@@ -95,3 +95,37 @@ fn ctrl_shift_t_with_empty_history_is_a_visible_noop() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_shift_t_reopens_scratchpad_with_cursor_and_autosave_origin() -> TestResult {
+    support::run_x11_test("recently-closed-scratchpad", |session| {
+        let (mut editor, scratchpad) = session.open("scratch")?;
+        let scratchpad_text = scratchpad.to_string_lossy().into_owned();
+
+        editor.keys("scratch body")?;
+        editor.expect_file(&scratchpad, "scratch body")?;
+        editor.expect_cursor_heads(&[(0, 12)])?;
+        editor.keys("<C-n>")?;
+        editor.wait_state("sibling scratchpad active", secs(2), |record| {
+            record.active_tab_path.as_deref() != Some(scratchpad_text.as_str())
+        })?;
+        editor.keys("<C-S-tab>")?;
+        editor.wait_state("original scratchpad active", secs(2), |record| {
+            record.active_tab_path.as_deref() == Some(scratchpad_text.as_str())
+        })?;
+        editor.keys("<C-w>")?;
+        editor.wait_state("scratchpad closed", secs(2), |record| {
+            record.active_tab_path.as_deref() != Some(scratchpad_text.as_str())
+        })?;
+
+        editor.keys("<C-S-t>")?;
+        editor.wait_state("scratchpad reopened", secs(2), |record| {
+            record.active_tab_path.as_deref() == Some(scratchpad_text.as_str())
+        })?;
+        editor.expect_cursor_heads(&[(0, 12)])?;
+        editor.keys("X")?;
+        editor.expect_file(&scratchpad, "scratch bodyX")?;
+        Ok(())
+    })
+}

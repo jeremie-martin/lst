@@ -28,6 +28,8 @@ fn closing_an_empty_scratchpad_removes_its_file() -> TestResult {
     support::run_x11_test("smoke-empty", |session| {
         let scratchpad_dir = session.root().join("scratch");
         let (mut editor, path) = session.open("scratch")?;
+        write_clipboard_text(Selection::Clipboard, "empty clipboard sentinel")?;
+        write_clipboard_text(Selection::Primary, "empty primary sentinel")?;
 
         editor.press(KeyChord::Ctrl(Key::Char('w')))?;
         editor.wait_for_successful_exit(secs(10))?;
@@ -38,21 +40,54 @@ fn closing_an_empty_scratchpad_removes_its_file() -> TestResult {
             path.display()
         );
         assert_eq!(support::count_files(&scratchpad_dir)?, 0);
+        wait_clipboard_text(Selection::Clipboard, "empty clipboard sentinel", secs(10))?;
+        wait_clipboard_text(Selection::Primary, "empty primary sentinel", secs(10))?;
         Ok(())
     })
 }
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn quit_persists_buffer_into_clipboard_and_primary() -> TestResult {
-    support::run_x11_test("smoke-quit-clipboard", |session| {
+fn quitting_a_regular_file_preserves_clipboard_and_primary() -> TestResult {
+    support::run_x11_test("smoke-quit-regular-clipboard", |session| {
         let text_path = with_seed_file(session, "quit-source.txt", TEXT)?;
         let editor = session.open_file("text", &text_path)?;
+        write_clipboard_text(Selection::Clipboard, "clipboard sentinel")?;
+        write_clipboard_text(Selection::Primary, "primary sentinel")?;
 
-        // Ctrl+Q is an editor accelerator; the spawn already focused the window
-        // for us, so the synthesized chord lands in the editor.
         editor.quit_default()?;
 
+        wait_clipboard_text(Selection::Clipboard, "clipboard sentinel", secs(10))?;
+        wait_clipboard_text(Selection::Primary, "primary sentinel", secs(10))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn quitting_a_nonempty_scratchpad_copies_it_to_both_selections() -> TestResult {
+    support::run_x11_test("smoke-quit-scratchpad-clipboard", |session| {
+        let (mut editor, _path) = session.open("scratch")?;
+        editor.keys(TEXT)?;
+        editor.quit_default()?;
+
+        wait_clipboard_text(Selection::Clipboard, TEXT, secs(10))?;
+        wait_clipboard_text(Selection::Primary, TEXT, secs(10))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn closing_a_scratchpad_tab_copies_it_while_other_tabs_remain_open() -> TestResult {
+    support::run_x11_test("smoke-close-scratchpad-tab-clipboard", |session| {
+        let (mut editor, _path) = session.open("scratch")?;
+        editor.keys(TEXT)?;
+        editor.keys("<C-n><C-S-tab><C-w>")?;
+
+        editor.wait_state("scratchpad tab closed", secs(5), |record| {
+            record.status_message == "Closed tab." && record.line_count == 1
+        })?;
         wait_clipboard_text(Selection::Clipboard, TEXT, secs(10))?;
         wait_clipboard_text(Selection::Primary, TEXT, secs(10))?;
         Ok(())
@@ -77,6 +112,35 @@ fn primary_selection_round_trips_via_middle_click() -> TestResult {
         write_clipboard_text(Selection::Primary, PRIMARY_TEXT)?;
         editor.middle_click_at_text(0, 0)?;
         editor.save_then_expect_file(&path, PRIMARY_TEXT)?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn copying_without_a_selection_pastes_a_complete_line_before_the_cursor_line() -> TestResult {
+    support::run_x11_test("smoke-linewise-copy-paste", |session| {
+        let path = session.seed_file("linewise-copy.txt", "alpha\nbeta\n")?;
+        let mut editor = session.open_file("linewise-copy", &path)?;
+
+        editor.keys("<C-home><C-c>")?;
+        wait_clipboard_text(Selection::Clipboard, "alpha\n", secs(10))?;
+        editor.keys("<down><C-v>")?;
+        editor.save_then_expect_file(&path, "alpha\nalpha\nbeta\n")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn keyboard_selection_updates_x11_primary() -> TestResult {
+    support::run_x11_test("smoke-keyboard-selection-primary", |session| {
+        let path = session.seed_file("keyboard-primary.txt", "alpha beta")?;
+        let mut editor = session.open_file("keyboard-primary", &path)?;
+        write_clipboard_text(Selection::Primary, "primary sentinel")?;
+
+        editor.keys("<C-home><S-right>")?;
+        wait_clipboard_text(Selection::Primary, "a", secs(10))?;
         Ok(())
     })
 }

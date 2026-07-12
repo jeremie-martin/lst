@@ -11,6 +11,7 @@ adaptation, desktop integration, and runtime effects.
 ```sh
 cd apps/lst-gpui
 cargo run
+cargo run -- --version
 DISPLAY=:1 cargo run -- path/to/file.rs
 DISPLAY=:1 cargo run -- --title lst-scratchpad
 DISPLAY=:1 cargo run -- --scratchpad-dir /path/to/notes

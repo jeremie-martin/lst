@@ -25,7 +25,8 @@ pub(crate) const RECENT_FILE_LIMIT: usize = 10_000;
 pub(crate) const RECENT_BATCH_SIZE: usize = 60;
 const CONTENT_SEARCH_FILE_LIMIT: usize = 500;
 
-const RECENT_FILE_HEADER: &str = "lst-recent-files-v1";
+const RECENT_FILE_HEADER_V1: &str = "lst-recent-files-v1";
+const RECENT_FILE_HEADER_V2: &str = "lst-recent-files-v2";
 const PREVIEW_BYTES: u64 = 4096;
 const PREVIEW_LINES: usize = 6;
 const SEARCH_BYTES: u64 = 64 * 1024;
@@ -58,6 +59,100 @@ pub(crate) enum ApplyPreviewOutcome {
     Pruned,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum RecentOrigin {
+    Regular,
+    Scratchpad,
+}
+
+impl RecentOrigin {
+    fn storage_tag(self) -> &'static str {
+        match self {
+            Self::Regular => "regular",
+            Self::Scratchpad => "scratchpad",
+        }
+    }
+
+    fn from_storage_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "regular" => Some(Self::Regular),
+            "scratchpad" => Some(Self::Scratchpad),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RecentFilter {
+    #[default]
+    All,
+    Files,
+    Scratchpads,
+}
+
+impl RecentFilter {
+    fn includes(self, origin: RecentOrigin) -> bool {
+        match self {
+            Self::All => true,
+            Self::Files => origin == RecentOrigin::Regular,
+            Self::Scratchpads => origin == RecentOrigin::Scratchpad,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Files => "Files",
+            Self::Scratchpads => "Scratchpads",
+        }
+    }
+
+    fn empty_message(self) -> &'static str {
+        match self {
+            Self::All => "No recent files or scratchpads",
+            Self::Files => "No recent files",
+            Self::Scratchpads => "No recent scratchpads",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RecentPresentation {
+    #[default]
+    Cards,
+    Quick,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RecentEntry {
+    path: PathBuf,
+    origin: RecentOrigin,
+}
+
+impl RecentEntry {
+    fn normalized(path: &Path, origin: RecentOrigin) -> Self {
+        Self {
+            path: normalize_recent_path(path),
+            origin,
+        }
+    }
+
+    fn normalized_without_io(path: &Path, origin: RecentOrigin) -> Self {
+        Self {
+            path: normalize_recent_path_without_io(path),
+            origin,
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn origin(&self) -> RecentOrigin {
+        self.origin
+    }
+}
+
 /// Snapshot of what the recent panel should render this frame: the visible
 /// slice (already filtered and paginated), totals for the count label, the
 /// selected index within `visible`, and an empty-state message when nothing
@@ -73,24 +168,41 @@ pub(crate) struct RecentPage {
 #[derive(Clone, Debug)]
 pub(crate) struct RecentFiles {
     state_path: Option<PathBuf>,
-    entries: Vec<PathBuf>,
+    entries: Vec<RecentEntry>,
 }
 
 impl RecentFiles {
     pub(crate) fn load(state_path: Option<PathBuf>) -> Self {
-        let entries = state_path
+        let loaded = state_path
             .as_deref()
             .and_then(|path| read_entries(path).ok())
             .unwrap_or_default();
-        Self { state_path, entries }
+        let files = Self {
+            state_path,
+            entries: loaded.entries,
+        };
+        if loaded.migrate_to_v2 {
+            let _ = files.save();
+        }
+        files
     }
-    pub(crate) fn entries(&self) -> &[PathBuf] {
+
+    pub(crate) fn typed_entries(&self) -> &[RecentEntry] {
         &self.entries
     }
 
-    pub(crate) fn record(&mut self, path: &Path) {
-        let path = normalize_recent_path(path);
-        if move_to_front(&mut self.entries, path) {
+    /// Compatibility view for callers that have not adopted typed recents yet.
+    pub(crate) fn entries(&self) -> Vec<PathBuf> {
+        self.paths().map(Path::to_path_buf).collect()
+    }
+
+    fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.entries.iter().map(RecentEntry::path)
+    }
+
+    pub(crate) fn record_with_origin(&mut self, path: &Path, origin: RecentOrigin) {
+        let entry = RecentEntry::normalized(path, origin);
+        if move_to_front(&mut self.entries, entry) {
             self.entries.truncate(RECENT_FILE_LIMIT);
             let _ = self.save();
         }
@@ -99,7 +211,7 @@ impl RecentFiles {
     pub(crate) fn prune(&mut self, path: &Path) {
         let path = normalize_recent_path(path);
         let original_len = self.entries.len();
-        self.entries.retain(|entry| entry != &path);
+        self.entries.retain(|entry| entry.path != path);
         if self.entries.len() != original_len {
             let _ = self.save();
         }
@@ -125,12 +237,13 @@ impl RecentFiles {
 pub(crate) struct RecentView {
     files: RecentFiles,
     panel: Option<RecentPanel>,
-    last_query: String,
 }
 
 #[derive(Clone, Debug)]
 struct RecentPanel {
     query: String,
+    filter: RecentFilter,
+    presentation: RecentPresentation,
     visible_count: usize,
     selection: Option<PathBuf>,
     card_bounds: Vec<Bounds<Pixels>>,
@@ -143,9 +256,11 @@ struct RecentPanel {
 }
 
 impl RecentPanel {
-    fn fresh(query: String) -> Self {
+    fn fresh(presentation: RecentPresentation) -> Self {
         Self {
-            query,
+            query: String::new(),
+            filter: RecentFilter::All,
+            presentation,
             visible_count: RECENT_BATCH_SIZE,
             selection: None,
             card_bounds: Vec::new(),
@@ -164,43 +279,76 @@ impl RecentView {
         Self {
             files: RecentFiles::load(state_path),
             panel: None,
-            last_query: String::new(),
         }
     }
-    pub(crate) fn record(&mut self, path: &Path) {
-        self.files.record(path);
+    pub(crate) fn record_with_origin(&mut self, path: &Path, origin: RecentOrigin) {
+        self.files.record_with_origin(path, origin);
     }
-    pub(crate) fn entries(&self) -> &[PathBuf] {
+
+    pub(crate) fn typed_entries(&self) -> &[RecentEntry] {
+        self.files.typed_entries()
+    }
+
+    /// Compatibility view for callers that have not adopted typed recents yet.
+    pub(crate) fn entries(&self) -> Vec<PathBuf> {
         self.files.entries()
     }
     pub(crate) fn is_open(&self) -> bool {
         self.panel.is_some()
     }
 
-    /// Opens the panel, preserving any prior query so reopening keeps the
-    /// filter. Returns `Some(generation)` if the preserved query is non-empty
-    /// and the caller should schedule a debounced content search.
+    /// Opens the full recent-files view with a fresh query and the unified
+    /// origin filter reset to `All`.
     pub(crate) fn open(&mut self) -> Option<u64> {
-        let prior_query = self.last_query.clone();
-        let mut panel = RecentPanel::fresh(prior_query);
+        self.open_with_presentation(RecentPresentation::Cards)
+    }
+
+    /// Opens the compact keyboard-first picker with the same data and filter
+    /// semantics as the full recent-files view.
+    pub(crate) fn open_quick(&mut self) -> Option<u64> {
+        self.open_with_presentation(RecentPresentation::Quick)
+    }
+
+    fn open_with_presentation(&mut self, presentation: RecentPresentation) -> Option<u64> {
+        let mut panel = RecentPanel::fresh(presentation);
         Self::reset_selection_in(&mut panel, &self.files);
-        let pending_search = if panel.query.trim().is_empty() {
-            None
-        } else {
-            panel.content_search_generation = 1;
-            panel.content_search_pending = true;
-            Some(panel.content_search_generation)
-        };
         self.panel = Some(panel);
-        pending_search
+        None
     }
 
     pub(crate) fn close(&mut self) {
-        if let Some(panel) = &self.panel {
-            self.last_query = panel.query.clone();
-        }
         self.panel = None;
     }
+
+    pub(crate) fn presentation(&self) -> RecentPresentation {
+        self.panel.as_ref().map(|panel| panel.presentation).unwrap_or_default()
+    }
+
+    pub(crate) fn filter(&self) -> RecentFilter {
+        self.panel.as_ref().map(|panel| panel.filter).unwrap_or_default()
+    }
+
+    pub(crate) fn set_filter(&mut self, filter: RecentFilter) -> bool {
+        let Some(panel) = self.panel.as_mut() else {
+            return false;
+        };
+        if panel.filter == filter {
+            return false;
+        }
+        panel.filter = filter;
+        panel.visible_count = RECENT_BATCH_SIZE;
+        Self::reset_selection_in(panel, &self.files);
+        true
+    }
+
+    pub(crate) fn origin_for_path(&self, path: &Path) -> Option<RecentOrigin> {
+        self.files
+            .typed_entries()
+            .iter()
+            .find(|entry| entry.path() == path)
+            .map(RecentEntry::origin)
+    }
+
     pub(crate) fn query(&self) -> &str {
         self.panel.as_ref().map(|p| p.query.as_str()).unwrap_or("")
     }
@@ -211,7 +359,6 @@ impl RecentView {
     pub(crate) fn set_query(&mut self, text: String) -> Option<u64> {
         let panel = self.panel.as_mut()?;
         panel.query = text;
-        self.last_query = panel.query.clone();
         panel.visible_count = RECENT_BATCH_SIZE;
         panel.content_matches.clear();
         Self::reset_selection_in(panel, &self.files);
@@ -339,8 +486,12 @@ impl RecentView {
 
         let empty_message = if total == 0 {
             let query = panel.query.trim();
-            if query.is_empty() || self.files.entries().is_empty() {
-                Some("No recent files".to_string())
+            let filter_is_empty = !self
+                .typed_entries()
+                .iter()
+                .any(|entry| panel.filter.includes(entry.origin()));
+            if query.is_empty() || filter_is_empty {
+                Some(panel.filter.empty_message().to_string())
             } else {
                 Some(format!("No matches for \"{query}\""))
             }
@@ -366,6 +517,9 @@ impl RecentView {
         let Some(panel) = self.panel.as_mut() else {
             return Vec::new();
         };
+        if panel.presentation == RecentPresentation::Quick {
+            return Vec::new();
+        }
         let visible = Self::visible_paths_for(panel, &self.files);
         let mut to_load = Vec::new();
         for path in visible {
@@ -439,14 +593,12 @@ impl RecentView {
 
     fn filtered_paths_for(panel: &RecentPanel, files: &RecentFiles) -> Vec<PathBuf> {
         let query = panel.query.trim().to_lowercase();
-        if query.is_empty() {
-            return files.entries().to_vec();
-        }
         files
-            .entries()
+            .typed_entries()
             .iter()
-            .filter(|path| Self::matches_in(panel, path, &query))
-            .cloned()
+            .filter(|entry| panel.filter.includes(entry.origin()))
+            .filter(|entry| query.is_empty() || Self::matches_in(panel, entry.path(), &query))
+            .map(|entry| entry.path().to_path_buf())
             .collect()
     }
 
@@ -605,48 +757,95 @@ fn clean_path(path: &Path) -> PathBuf {
     cleaned
 }
 
-fn read_entries(path: &Path) -> io::Result<Vec<PathBuf>> {
+#[derive(Default)]
+struct LoadedRecentEntries {
+    entries: Vec<RecentEntry>,
+    migrate_to_v2: bool,
+}
+
+#[derive(Clone, Copy)]
+enum RecentFileFormat {
+    V1,
+    V2,
+}
+
+fn read_entries(path: &Path) -> io::Result<LoadedRecentEntries> {
     let body = fs::read_to_string(path)?;
+    Ok(parse_entries(&body))
+}
+
+fn parse_entries(body: &str) -> LoadedRecentEntries {
     let mut lines = body.lines();
-    if lines.next() != Some(RECENT_FILE_HEADER) {
-        return Ok(Vec::new());
-    }
+    let format = match lines.next() {
+        Some(RECENT_FILE_HEADER_V1) => RecentFileFormat::V1,
+        Some(RECENT_FILE_HEADER_V2) => RecentFileFormat::V2,
+        _ => return LoadedRecentEntries::default(),
+    };
 
     let mut entries = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     for line in lines {
-        let Some(path) = decode_path(line) else {
-            return Ok(Vec::new());
+        let decoded = match format {
+            RecentFileFormat::V1 => decode_v1_entry(line),
+            RecentFileFormat::V2 => decode_v2_entry(line),
         };
-        let path = normalize_recent_path_without_io(&path);
-        if seen.insert(path.clone()) {
-            entries.push(path);
+        let Some((path, origin)) = decoded else {
+            continue;
+        };
+        let entry = RecentEntry::normalized_without_io(&path, origin);
+        if seen.insert(entry.path.clone()) {
+            entries.push(entry);
             if entries.len() >= RECENT_FILE_LIMIT {
                 break;
             }
         }
     }
-    Ok(entries)
+
+    LoadedRecentEntries {
+        entries,
+        migrate_to_v2: matches!(format, RecentFileFormat::V1),
+    }
 }
 
-fn serialize_entries(entries: &[PathBuf]) -> String {
-    let mut body = String::from(RECENT_FILE_HEADER);
+fn decode_v1_entry(line: &str) -> Option<(PathBuf, RecentOrigin)> {
+    (!line.is_empty())
+        .then(|| decode_path(line))
+        .flatten()
+        .map(|path| (path, RecentOrigin::Regular))
+}
+
+fn decode_v2_entry(line: &str) -> Option<(PathBuf, RecentOrigin)> {
+    let (origin, encoded_path) = line.split_once('\t')?;
+    if encoded_path.is_empty() || encoded_path.contains('\t') {
+        return None;
+    }
+    Some((decode_path(encoded_path)?, RecentOrigin::from_storage_tag(origin)?))
+}
+
+fn serialize_entries(entries: &[RecentEntry]) -> String {
+    let mut body = String::from(RECENT_FILE_HEADER_V2);
     body.push('\n');
-    for path in entries {
-        body.push_str(&encode_path(path));
+    for entry in entries {
+        body.push_str(entry.origin().storage_tag());
+        body.push('\t');
+        body.push_str(&encode_path(entry.path()));
         body.push('\n');
     }
     body
 }
 
-fn move_to_front(entries: &mut Vec<PathBuf>, path: PathBuf) -> bool {
-    if entries.first() == Some(&path) {
-        return false;
+fn move_to_front(entries: &mut Vec<RecentEntry>, entry: RecentEntry) -> bool {
+    if let Some(first) = entries.first_mut().filter(|first| first.path == entry.path) {
+        if first.origin == entry.origin {
+            return false;
+        }
+        first.origin = entry.origin;
+        return true;
     }
-    if let Some(index) = entries.iter().position(|entry| entry == &path) {
+    if let Some(index) = entries.iter().position(|candidate| candidate.path == entry.path) {
         entries.remove(index);
     }
-    entries.insert(0, path);
+    entries.insert(0, entry);
     true
 }
 
@@ -723,6 +922,14 @@ impl LstGpuiApp {
             return;
         }
 
+        self.open_recent_surface(window, RecentPresentation::Cards, cx);
+    }
+
+    pub(crate) fn open_recent_quick_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_recent_surface(window, RecentPresentation::Quick, cx);
+    }
+
+    fn open_recent_surface(&mut self, window: &mut Window, presentation: RecentPresentation, cx: &mut Context<Self>) {
         if self.model.find().visible {
             self.update_model(cx, false, |model| model.close_find_panel());
         }
@@ -730,11 +937,12 @@ impl LstGpuiApp {
             self.update_model(cx, false, |model| model.close_goto_line_panel());
         }
 
-        let pending_search = self.recent.open();
-        let seeded_query = self.recent.query().to_string();
+        let pending_search = match presentation {
+            RecentPresentation::Cards => self.recent.open(),
+            RecentPresentation::Quick => self.recent.open_quick(),
+        };
         reset_scroll(&self.recent_scroll);
-        self.recent_query_input
-            .update(cx, |input, cx| input.set_text(&seeded_query, cx));
+        self.recent_query_input.update(cx, |input, cx| input.set_text("", cx));
         let focus_handle = self.recent_query_input.read(cx).focus_handle();
         window.focus(&focus_handle);
         if let Some(generation) = pending_search {
@@ -742,6 +950,14 @@ impl LstGpuiApp {
         }
         self.spawn_recent_previews(cx);
         cx.notify();
+    }
+
+    pub(crate) fn set_recent_filter(&mut self, filter: RecentFilter, cx: &mut Context<Self>) {
+        if self.recent.set_filter(filter) {
+            reset_scroll(&self.recent_scroll);
+            self.spawn_recent_previews(cx);
+            cx.notify();
+        }
     }
 
     pub(crate) fn close_recent_files_panel(&mut self, cx: &mut Context<Self>) {
@@ -859,7 +1075,7 @@ impl LstGpuiApp {
             return;
         }
 
-        let paths = self.recent.entries().to_vec();
+        let paths = self.recent.entries();
         cx.spawn(async move |this, cx| {
             let search_query = query.clone();
             let matches = cx
@@ -889,45 +1105,70 @@ impl LstGpuiApp {
 
     pub(crate) fn open_recent_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let path = normalize_recent_path(&path);
-        if self.activate_existing_tab_for_path(&path, cx) {
-            self.recent.record(&path);
+        let recorded_origin = self.recent.origin_for_path(&path).unwrap_or(RecentOrigin::Regular);
+        if let Some(open_origin) = self.activate_existing_tab_for_path(&path, cx) {
+            self.recent.record_with_origin(&path, open_origin);
             self.close_recent_files_panel(cx);
             return;
         }
 
-        match crate::runtime::read_file_with_stamp(&path) {
-            Ok((text, stamp)) => {
-                let opened_path = path.clone();
-                self.update_model(cx, true, |model| {
-                    model.open_files_with_stamps(vec![(opened_path, text, Some(stamp))]);
-                });
-                self.recent.record(&path);
-                self.close_recent_files_panel(cx);
-            }
-            Err(err) => {
-                if err.kind() == std::io::ErrorKind::NotFound {
-                    self.recent.prune_path(&path);
-                    self.spawn_recent_previews(cx);
+        self.close_recent_files_panel(cx);
+        cx.spawn(async move |this, cx| {
+            let read_path = path.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { crate::runtime::read_file_with_stamp(&read_path) })
+                .await;
+            let _ = this.update(cx, |view, cx| match result {
+                Ok((text, stamp)) => {
+                    if let Some(open_origin) = view.activate_existing_tab_for_path(&path, cx) {
+                        view.recent.record_with_origin(&path, open_origin);
+                        return;
+                    }
+                    let opened_path = path.clone();
+                    view.update_model(cx, true, |model| match recorded_origin {
+                        RecentOrigin::Regular => {
+                            model.open_files_with_stamps(vec![(opened_path, text, Some(stamp))]);
+                        }
+                        RecentOrigin::Scratchpad => {
+                            model.new_scratchpad_tab(opened_path.clone(), stamp);
+                            let tab_id = model.active_tab_id();
+                            model.reload_tab_from_disk(tab_id, opened_path, text, stamp);
+                        }
+                    });
+                    view.recent.record_with_origin(&path, recorded_origin);
                 }
-                self.update_model(cx, true, |model| {
-                    model.open_file_failed(path, err.to_string());
-                });
-            }
-        }
+                Err(err) => {
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        view.recent.prune_path(&path);
+                        view.spawn_recent_previews(cx);
+                    }
+                    view.update_model(cx, true, |model| {
+                        model.open_file_failed(path, err.to_string());
+                    });
+                }
+            });
+        })
+        .detach();
     }
 
-    fn activate_existing_tab_for_path(&mut self, path: &Path, cx: &mut Context<Self>) -> bool {
-        let Some(tab_id) = self.model.tabs().iter().find_map(|tab| {
+    fn activate_existing_tab_for_path(&mut self, path: &Path, cx: &mut Context<Self>) -> Option<RecentOrigin> {
+        let (tab_id, origin) = self.model.tabs().iter().find_map(|tab| {
             let tab_path = tab.path()?;
-            (normalize_recent_path(tab_path) == path).then_some(tab.id())
-        }) else {
-            return false;
-        };
+            (normalize_recent_path(tab_path) == path).then_some((
+                tab.id(),
+                if tab.is_scratchpad() {
+                    RecentOrigin::Scratchpad
+                } else {
+                    RecentOrigin::Regular
+                },
+            ))
+        })?;
 
         self.update_model(cx, true, |model| {
             model.set_active_tab(tab_id);
         });
-        true
+        Some(origin)
     }
 }
 
@@ -939,5 +1180,220 @@ fn recent_content_search_debounce() -> Duration {
     #[cfg(not(test))]
     {
         Duration::from_millis(RECENT_CONTENT_SEARCH_DEBOUNCE_MS)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TestStateDir {
+        root: PathBuf,
+    }
+
+    impl TestStateDir {
+        fn new(label: &str) -> Self {
+            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "lst-recent-{label}-{}-{}",
+                process::id(),
+                NEXT_ID.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(&root).expect("test state directory should be created");
+            Self { root }
+        }
+
+        fn state_path(&self) -> PathBuf {
+            self.root.join("recent-files")
+        }
+    }
+
+    impl Drop for TestStateDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_regular_and_scratchpad_origins() {
+        let state = TestStateDir::new("v2-round-trip");
+        let entries = vec![
+            RecentEntry::normalized_without_io(&state.root.join("regular.txt"), RecentOrigin::Regular),
+            RecentEntry::normalized_without_io(&state.root.join("scratch.md"), RecentOrigin::Scratchpad),
+        ];
+
+        let serialized = serialize_entries(&entries);
+        let loaded = parse_entries(&serialized);
+
+        assert!(serialized.starts_with("lst-recent-files-v2\nregular\t"));
+        assert_eq!(loaded.entries, entries);
+        assert!(!loaded.migrate_to_v2);
+    }
+
+    #[test]
+    fn loading_v1_migrates_valid_paths_to_v2_as_regular() {
+        let state = TestStateDir::new("v1-migration");
+        let state_path = state.state_path();
+        let first = state.root.join("first.txt");
+        let second = state.root.join("second.txt");
+        fs::write(
+            &state_path,
+            format!(
+                "{RECENT_FILE_HEADER_V1}\n{}\nnot-hex\n{}\n",
+                encode_path(&first),
+                encode_path(&second)
+            ),
+        )
+        .expect("v1 fixture should be written");
+
+        let files = RecentFiles::load(Some(state_path.clone()));
+
+        assert_eq!(
+            files
+                .typed_entries()
+                .iter()
+                .map(|entry| (entry.path().to_path_buf(), entry.origin()))
+                .collect::<Vec<_>>(),
+            vec![
+                (normalize_recent_path_without_io(&first), RecentOrigin::Regular),
+                (normalize_recent_path_without_io(&second), RecentOrigin::Regular),
+            ]
+        );
+        let migrated = fs::read_to_string(&state_path).expect("migration should persist v2 state");
+        assert!(migrated.starts_with(RECENT_FILE_HEADER_V2));
+        assert!(!atomic_temp_path(&state_path).exists());
+    }
+
+    #[test]
+    fn malformed_v2_records_do_not_discard_neighboring_history() {
+        let state = TestStateDir::new("malformed-records");
+        let regular = state.root.join("regular.txt");
+        let scratchpad = state.root.join("scratch.md");
+        let body = format!(
+            "{RECENT_FILE_HEADER_V2}\nregular\t{}\ninvalid record\nscratchpad\txyz\nunknown\t{}\nscratchpad\t{}\nregular\t{}\textra\n",
+            encode_path(&regular),
+            encode_path(&regular),
+            encode_path(&scratchpad),
+            encode_path(&scratchpad),
+        );
+
+        let loaded = parse_entries(&body);
+
+        assert_eq!(
+            loaded
+                .entries
+                .iter()
+                .map(|entry| (entry.path().to_path_buf(), entry.origin()))
+                .collect::<Vec<_>>(),
+            vec![
+                (normalize_recent_path_without_io(&regular), RecentOrigin::Regular),
+                (normalize_recent_path_without_io(&scratchpad), RecentOrigin::Scratchpad,),
+            ]
+        );
+    }
+
+    #[test]
+    fn recording_an_existing_path_updates_its_origin_and_origin_filters() {
+        let state = TestStateDir::new("origin-update");
+        let state_path = state.state_path();
+        let first = state.root.join("first.md");
+        let second = state.root.join("second.txt");
+        let mut files = RecentFiles::load(Some(state_path.clone()));
+
+        files.record_with_origin(&first, RecentOrigin::Scratchpad);
+        files.record_with_origin(&second, RecentOrigin::Regular);
+        files.record_with_origin(&first, RecentOrigin::Regular);
+        files.record_with_origin(&second, RecentOrigin::Scratchpad);
+
+        let scratchpads = files
+            .typed_entries()
+            .iter()
+            .filter(|entry| entry.origin() == RecentOrigin::Scratchpad)
+            .map(|entry| entry.path().to_path_buf())
+            .collect::<Vec<_>>();
+        let regular = files
+            .typed_entries()
+            .iter()
+            .filter(|entry| entry.origin() == RecentOrigin::Regular)
+            .map(|entry| entry.path().to_path_buf())
+            .collect::<Vec<_>>();
+        assert_eq!(scratchpads, vec![normalize_recent_path(&second)]);
+        assert_eq!(regular, vec![normalize_recent_path(&first)]);
+        assert_eq!(files.typed_entries().len(), 2);
+
+        let reloaded = RecentFiles::load(Some(state_path));
+        assert_eq!(reloaded.typed_entries(), files.typed_entries());
+    }
+
+    #[test]
+    fn path_compatibility_view_preserves_unified_order() {
+        let state = TestStateDir::new("compatibility");
+        let regular = state.root.join("regular.txt");
+        let scratchpad = state.root.join("scratch.md");
+        let mut view = RecentView::load(None);
+
+        view.record_with_origin(&regular, RecentOrigin::Regular);
+        view.record_with_origin(&scratchpad, RecentOrigin::Scratchpad);
+
+        assert_eq!(
+            view.entries(),
+            vec![normalize_recent_path(&scratchpad), normalize_recent_path(&regular)]
+        );
+        assert_eq!(view.typed_entries()[1].origin(), RecentOrigin::Regular);
+    }
+
+    #[test]
+    fn opening_recent_surfaces_resets_query_and_filter_to_all() {
+        let state = TestStateDir::new("open-reset");
+        let regular = state.root.join("regular.txt");
+        let scratchpad = state.root.join("scratch.md");
+        let mut view = RecentView::load(None);
+        view.record_with_origin(&regular, RecentOrigin::Regular);
+        view.record_with_origin(&scratchpad, RecentOrigin::Scratchpad);
+
+        let _ = view.open();
+        let _ = view.set_query("regular".to_string());
+        assert!(view.set_filter(RecentFilter::Files));
+        view.close();
+        let _ = view.open_quick();
+
+        assert_eq!(view.presentation(), RecentPresentation::Quick);
+        assert_eq!(view.filter(), RecentFilter::All);
+        assert_eq!(view.query(), "");
+        assert_eq!(view.page().total, 2);
+    }
+
+    #[test]
+    fn origin_filter_limits_visible_entries_without_losing_unified_order() {
+        let state = TestStateDir::new("filter");
+        let newest_scratchpad = state.root.join("newest.md");
+        let regular = state.root.join("regular.txt");
+        let oldest_scratchpad = state.root.join("oldest.md");
+        let mut view = RecentView::load(None);
+        view.record_with_origin(&oldest_scratchpad, RecentOrigin::Scratchpad);
+        view.record_with_origin(&regular, RecentOrigin::Regular);
+        view.record_with_origin(&newest_scratchpad, RecentOrigin::Scratchpad);
+        let _ = view.open();
+
+        assert!(view.set_filter(RecentFilter::Scratchpads));
+        assert_eq!(
+            view.page().visible,
+            vec![
+                normalize_recent_path(&newest_scratchpad),
+                normalize_recent_path(&oldest_scratchpad)
+            ]
+        );
+        assert!(view.set_filter(RecentFilter::Files));
+        assert_eq!(view.page().visible, vec![normalize_recent_path(&regular)]);
+        assert!(view.set_filter(RecentFilter::All));
+        assert_eq!(
+            view.page().visible,
+            vec![
+                normalize_recent_path(&newest_scratchpad),
+                normalize_recent_path(&regular),
+                normalize_recent_path(&oldest_scratchpad),
+            ]
+        );
     }
 }

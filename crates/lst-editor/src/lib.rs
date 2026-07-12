@@ -20,7 +20,7 @@ pub use command::EditorCommand;
 pub use document::{EditKind, UndoBoundary};
 pub use language::{IndentStyle, Language, LanguageConfig};
 pub use selection::{Position, Selection, SelectionSet, SelectionSetError};
-pub use tab::{BufferDelta, BufferEdit, EditorTab, FileStamp, LanguageMode, TabId};
+pub use tab::{BufferDelta, BufferEdit, DisplayLine, EditorTab, FileStamp, LanguageMode, SaveExpectation, TabId};
 pub use viewport::Viewport;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum InputMode {
@@ -55,7 +55,7 @@ pub enum EditorEffect {
         path: PathBuf,
         body: String,
         revision: u64,
-        expected_stamp: Option<FileStamp>,
+        expectation: SaveExpectation,
     },
     SaveFileAs {
         tab_id: TabId,
@@ -69,7 +69,7 @@ pub enum EditorEffect {
         path: PathBuf,
         body: String,
         revision: u64,
-        expected_stamp: Option<FileStamp>,
+        expectation: SaveExpectation,
     },
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -111,7 +111,7 @@ use crate::{
         word_range_at_char, CursorGoal, SelectionTransform,
     },
     tab_set::TabSet,
-    transaction::{EditOutcome, EditRequest},
+    transaction::{EditOutcome, EditRequest, SelectionAfter, TextChange, TextChangeSet},
 };
 use std::{ops::Range, path::PathBuf, sync::Arc};
 pub const UNTITLED_PREFIX: &str = "untitled";
@@ -134,8 +134,18 @@ pub struct EditorModel {
     vim: vim::VimState,
     viewport: Viewport,
     effects: Vec<EditorEffect>,
+    owned_clipboard: Option<OwnedClipboard>,
     overtype: bool,
     wrap_layout_cache: Option<ModelWrapLayoutCache>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClipboardKind {
+    Characterwise,
+    Linewise,
+}
+struct OwnedClipboard {
+    text: String,
+    kind: ClipboardKind,
 }
 struct ModelWrapLayoutCache {
     tab_id: TabId,
@@ -164,6 +174,7 @@ impl EditorModel {
             vim: vim::VimState::new(),
             viewport: Viewport::default(),
             effects: Vec::new(),
+            owned_clipboard: None,
             overtype: false,
             wrap_layout_cache: None,
         }
@@ -180,7 +191,7 @@ impl EditorModel {
     pub fn active_tab_id(&self) -> TabId {
         self.active_tab().id()
     }
-    pub fn active_tab_lines(&mut self) -> Arc<[String]> {
+    pub fn active_tab_lines(&mut self) -> Arc<[DisplayLine]> {
         self.active_tab_mut().lines()
     }
     /// Returns the active tab's buffer delta since the previous call and
@@ -189,7 +200,7 @@ impl EditorModel {
     pub fn take_active_buffer_delta(&mut self) -> BufferDelta {
         self.active_tab_mut().take_buffer_delta()
     }
-    fn ensure_active_wrap_layout(&mut self, wrap_columns: usize, lines: &[String]) {
+    fn ensure_active_wrap_layout(&mut self, wrap_columns: usize, lines: &[DisplayLine]) {
         let tab_id = self.active_tab_id();
         let revision = self.active_tab().revision();
         if self.wrap_layout_cache.as_ref().is_some_and(|cache| {
@@ -365,6 +376,11 @@ impl EditorModel {
             }
         }
         self.queue_focus(FocusTarget::FindQuery);
+    }
+    pub fn set_find_replace_visible(&mut self, show_replace: bool) {
+        if self.find.visible {
+            self.find.show_replace = show_replace;
+        }
     }
     pub fn close_find_panel(&mut self) {
         self.find.visible = false;
@@ -582,7 +598,11 @@ impl EditorModel {
         )
     }
     fn insert_newline(&mut self) {
-        let request = text_input::newline_request(self.active_tab());
+        let request = if self.input_mode == InputMode::Standard {
+            text_input::smart_newline_request(self.active_tab())
+        } else {
+            text_input::newline_request(self.active_tab())
+        };
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
     }
     fn apply_selection_motion<F>(&mut self, preferred_column: Option<usize>, mut motion: F) -> bool
@@ -656,6 +676,19 @@ impl EditorModel {
         };
         self.apply_selection_state(state)
     }
+    pub fn move_visual_line_boundary(&mut self, to_end: bool, select: bool, wrap_columns: usize) {
+        let show_wrap = self.show_wrap;
+        let lines = self.active_tab_lines();
+        let state = motion::visual_line_boundary(
+            self.active_tab(),
+            lines.as_ref(),
+            wrap_columns,
+            show_wrap,
+            to_end,
+            select,
+        );
+        self.move_with_reveal(state);
+    }
     fn move_paged(&mut self, delta: isize, select: bool, wrap_columns: usize, snap: bool) {
         if self.move_display_rows(delta, select, wrap_columns, snap) {
             self.queue_reveal(RevealIntent::NearestEdge);
@@ -679,10 +712,12 @@ impl EditorModel {
         self.active_tab_mut().set_cursor_position(position, anchor);
     }
     fn delete_selected_or_previous(&mut self) -> bool {
-        self.apply_optional_edit_request(
-            text_input::delete_selected_or_previous_request(self.active_tab()),
-            Some(RevealIntent::NearestEdge),
-        )
+        let request = if self.input_mode == InputMode::Standard {
+            text_input::delete_selected_or_previous_pair_aware_request(self.active_tab())
+        } else {
+            text_input::delete_selected_or_previous_request(self.active_tab())
+        };
+        self.apply_optional_edit_request(request, Some(RevealIntent::NearestEdge))
     }
     fn delete_selected_or_next(&mut self) -> bool {
         self.apply_optional_edit_request(
@@ -690,7 +725,7 @@ impl EditorModel {
             Some(RevealIntent::NearestEdge),
         )
     }
-    fn selection_or_current_line(&self) -> (Range<usize>, String, bool) {
+    fn selection_or_current_line(&self) -> (Range<usize>, String, ClipboardKind) {
         let tab = self.active_tab();
         let use_current_line = !tab.has_selection();
         let range = if use_current_line {
@@ -698,24 +733,31 @@ impl EditorModel {
         } else {
             tab.selected_range()
         };
-        let text = tab.buffer().slice(range.clone()).to_string();
-        (range, text, use_current_line)
+        let (text, kind) = if use_current_line {
+            (linewise_clipboard_text(tab, tab.cursor_char()), ClipboardKind::Linewise)
+        } else {
+            (
+                tab.buffer().slice(range.clone()).to_string(),
+                ClipboardKind::Characterwise,
+            )
+        };
+        (range, text, kind)
     }
     fn copy_selection(&mut self) {
         if let Some(text) = multi_selection::selected_text_joined(self.active_tab()) {
             if text.is_empty() {
                 return;
             }
-            self.queue_clipboard_copy(text);
+            self.queue_clipboard_copy(text, ClipboardKind::Characterwise);
             self.status = "Copied selections.".to_string();
             return;
         }
-        let (_range, text, whole_line) = self.selection_or_current_line();
+        let (_range, text, kind) = self.selection_or_current_line();
         if text.is_empty() {
             return;
         }
-        self.queue_clipboard_copy(text);
-        self.status = if whole_line {
+        self.queue_clipboard_copy(text, kind);
+        self.status = if kind == ClipboardKind::Linewise {
             "Copied line.".to_string()
         } else {
             "Copied selection.".to_string()
@@ -726,7 +768,7 @@ impl EditorModel {
             if text.is_empty() {
                 return;
             }
-            self.queue_clipboard_copy(text);
+            self.queue_clipboard_copy(text, ClipboardKind::Characterwise);
             let deleted = self.apply_optional_edit_request(
                 multi_selection::delete_request(self.active_tab(), UndoBoundary::Break, |_tab, _| None),
                 Some(RevealIntent::NearestEdge),
@@ -736,20 +778,24 @@ impl EditorModel {
             }
             return;
         }
-        let (range, text, whole_line) = self.selection_or_current_line();
+        let (range, text, kind) = self.selection_or_current_line();
         if text.is_empty() {
             return;
         }
-        self.queue_clipboard_copy(text);
+        self.queue_clipboard_copy(text, kind);
         let request = text_input::replace_request(self.active_tab(), Some(range), String::new(), UndoBoundary::Break);
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
-        self.status = if whole_line {
+        self.status = if kind == ClipboardKind::Linewise {
             "Cut line.".to_string()
         } else {
             "Cut selection.".to_string()
         };
     }
-    fn queue_clipboard_copy(&mut self, text: String) {
+    fn queue_clipboard_copy(&mut self, text: String, kind: ClipboardKind) {
+        self.owned_clipboard = Some(OwnedClipboard {
+            text: text.clone(),
+            kind,
+        });
         self.queue_effect(EditorEffect::WriteClipboard(text.clone()));
         self.queue_effect(EditorEffect::WritePrimary(text));
     }
@@ -831,7 +877,7 @@ impl EditorModel {
     pub fn close_request_for_tab(&self, tab_id: TabId) -> Option<TabCloseRequest> {
         let tab = self.tab_by_id(tab_id)?;
         let tab_id = tab.id();
-        Some(if tab.modified() {
+        Some(if tab.modified() || tab.backing_file_missing() {
             TabCloseRequest::SaveAndClose { tab_id }
         } else {
             TabCloseRequest::Close { tab_id }
@@ -844,7 +890,7 @@ impl EditorModel {
         let Some(index) = self.tab_index_by_id(tab_id) else {
             return false;
         };
-        if self.tabs[index].modified() {
+        if self.tabs[index].modified() || self.tabs[index].backing_file_missing() {
             return false;
         }
         self.close_tab_at_unchecked(index)
@@ -862,6 +908,14 @@ impl EditorModel {
         if self.activate_tab(index) {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
+    }
+    pub fn mark_tab_backing_file_missing(&mut self, tab_id: TabId) -> bool {
+        let Some(tab) = self.tab_mut_by_id(tab_id) else {
+            return false;
+        };
+        tab.mark_backing_file_missing();
+        self.status = format!("{} was deleted or became inaccessible.", tab.display_name());
+        true
     }
     fn next_tab(&mut self) {
         if self.tabs.len() > 1 {
@@ -900,6 +954,51 @@ impl EditorModel {
     }
     pub fn set_selection_set(&mut self, selection_set: SelectionSet) {
         self.active_tab_mut().set_selection_set(selection_set);
+    }
+    /// Moves or copies `source` to `drop` as one undoable edit. Coordinates
+    /// are from the pre-edit buffer; dropping on either source boundary or
+    /// anywhere inside the source is intentionally a no-op.
+    pub fn drag_selection_to(&mut self, source: Range<usize>, drop: usize, copy: bool) -> bool {
+        let buffer = self.active_tab().buffer();
+        let source = selection::floor_grapheme_boundary(buffer, source.start)
+            ..selection::ceil_grapheme_boundary(buffer, source.end);
+        let drop = selection::floor_grapheme_boundary(buffer, drop.min(buffer.len_chars()));
+        if source.start >= source.end || (source.start..=source.end).contains(&drop) {
+            return false;
+        }
+
+        let text = buffer.slice(source.clone()).to_string();
+        let selected_len = text.chars().count();
+        let selection_after = SelectionAfter::InsertedRange {
+            range: 0..selected_len,
+            reversed: false,
+        };
+        let request = if copy {
+            EditRequest::single(EditKind::Other, UndoBoundary::Break, drop..drop, text)
+                .with_selection_after(selection_after)
+        } else {
+            let (changes, insertion_index) = if drop < source.start {
+                (vec![TextChange::insert(drop, text), TextChange::delete(source)], 0)
+            } else {
+                (vec![TextChange::delete(source), TextChange::insert(drop, text)], 1)
+            };
+            EditRequest::from_changes(
+                EditKind::Other,
+                UndoBoundary::Break,
+                TextChangeSet::new(changes, insertion_index),
+            )
+            .with_selection_after(selection_after)
+        };
+        let outcome = self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        if outcome.text_changed {
+            self.status = if copy {
+                "Copied selection by dragging."
+            } else {
+                "Moved selection by dragging."
+            }
+            .to_string();
+        }
+        outcome.text_changed
     }
     pub fn selection(&self) -> Selection {
         self.active_tab().selection()
@@ -1116,7 +1215,14 @@ impl EditorModel {
         self.queue_reveal(RevealIntent::NearestEdge);
     }
     fn insert_tab_at_cursor(&mut self) {
-        if self.active_tab().selection_set().has_multiple()
+        let any_selection = self
+            .active_tab()
+            .selection_set()
+            .as_slice()
+            .iter()
+            .any(Selection::has_selection);
+        if any_selection
+            && self.active_tab().selection_set().has_multiple()
             && self.apply_optional_edit_request(
                 line_edit::indent_selection_set_request(self.active_tab()),
                 Some(RevealIntent::NearestEdge),
@@ -1125,12 +1231,34 @@ impl EditorModel {
             return;
         }
         match selection_line_span(self.active_tab()) {
-            Some((first, last, true)) => self.indent_selected_lines(first, last),
+            Some((first, last, _)) => self.indent_selected_lines(first, last),
             _ => {
-                let unit = self.active_tab().language_config().indent.indent_unit();
-                self.replace_text(None, unit, UndoBoundary::Break);
+                if self.input_mode == InputMode::Standard {
+                    let request = text_input::tab_request(self.active_tab());
+                    self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+                } else {
+                    let unit = self.active_tab().language_config().indent.indent_unit();
+                    self.replace_text(None, unit, UndoBoundary::Break);
+                }
             }
         }
+    }
+    fn indent_lines_at_cursor(&mut self) {
+        if self.active_tab().selection_set().has_multiple()
+            && self.apply_optional_edit_request(
+                line_edit::indent_selection_set_request(self.active_tab()),
+                Some(RevealIntent::NearestEdge),
+            )
+        {
+            return;
+        }
+        let (first, last) = selection_line_span(self.active_tab())
+            .map(|(first, last, _)| (first, last))
+            .unwrap_or_else(|| {
+                let line = self.active_cursor_position().line;
+                (line, line)
+            });
+        self.indent_selected_lines(first, last);
     }
     fn outdent_at_cursor(&mut self) {
         if self.active_tab().selection_set().has_multiple()
@@ -1206,11 +1334,19 @@ impl EditorModel {
         );
     }
     pub fn clipboard_unavailable(&mut self) {
+        self.owned_clipboard = None;
         self.status = "Clipboard does not currently contain plain text.".to_string();
     }
     pub fn paste_text(&mut self, text: String) {
         let line_count = text.lines().count();
-        if let Some(request) = multi_selection::paste_request(self.active_tab(), &text, UndoBoundary::Break) {
+        let linewise = self
+            .owned_clipboard
+            .as_ref()
+            .is_some_and(|owned| owned.kind == ClipboardKind::Linewise && owned.text == text);
+        if linewise {
+            let request = text_input::linewise_paste_request(self.active_tab(), text);
+            self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
+        } else if let Some(request) = multi_selection::paste_request(self.active_tab(), &text, UndoBoundary::Break) {
             self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
         } else {
             self.replace_text(None, text, UndoBoundary::Break);
@@ -1360,4 +1496,14 @@ fn linewise_range_at_char(buffer: &ropey::Rope, char_index: usize) -> Range<usiz
         '\r' => (start - 1)..range.end,
         _ => range,
     }
+}
+
+fn linewise_clipboard_text(tab: &EditorTab, char_index: usize) -> String {
+    let buffer = tab.buffer();
+    let range = line_range_at_char(buffer, char_index);
+    let mut text = buffer.slice(range).to_string();
+    if !text.ends_with(['\n', '\r']) {
+        text.push_str(text_input::preferred_newline(tab));
+    }
+    text
 }

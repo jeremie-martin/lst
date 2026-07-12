@@ -66,20 +66,15 @@ fn line_number_modes_render_absolute_relative_and_hybrid_text() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn theme_button_cycles_visible_theme_label() -> TestResult {
-    support::run_x11_test("chrome-theme-cycle", |session| {
+fn configured_theme_is_visible_without_a_status_bar_toggle() -> TestResult {
+    support::run_x11_test("chrome-configured-theme", |session| {
+        session.seed_settings("version = 1\n[appearance]\ntheme = \"dark\"\n")?;
         let (mut editor, _path) = session.open("scratch")?;
 
-        let initial = editor.wait_state("initial theme", secs(2), |record| {
-            record.theme_name == "Light" && record.theme_button_bounds_px.is_some()
+        let configured = editor.wait_state("configured theme", secs(2), |record| {
+            record.theme_name == "Dark" && record.theme_button_bounds_px.is_none()
         })?;
-        assert_eq!(initial.theme_name, "Light", "{initial:?}");
-
-        editor.click_theme_button()?;
-        editor.wait_state("cycled theme", secs(2), |record| record.theme_name == "Dark")?;
-
-        editor.click_theme_button()?;
-        editor.wait_state("initial theme restored", secs(2), |record| record.theme_name == "Light")?;
+        assert_eq!(configured.theme_name, "Dark", "{configured:?}");
         Ok(())
     })
 }

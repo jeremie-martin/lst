@@ -4,12 +4,34 @@
 desktop editing is the primary interaction model. Vim remains available as an
 explicit mode, but new general editing behavior must work without it.
 
+## Dogfooding Current Source
+
+Use the repository installer before evaluating daily-driver behavior:
+
+```sh
+./install.sh
+~/.local/bin/lst --version
+```
+
+The version line includes the Cargo package version, full Git revision, and a
+`-dirty` suffix when the source working tree has changes. The installer builds in
+release mode and refuses to report success unless the installed identity exactly
+matches the source build. This keeps window-manager launchers and terminal runs
+on the same revision being reviewed.
+
 ## Defaults
 
 - Launching without a path creates a timestamped scratchpad.
 - Standard input mode is active unless `--vim` or the Vim setting is selected.
 - Scratchpads autosave. Ordinary files require an explicit save.
 - Closing a modified ordinary file asks whether to save, discard, or cancel.
+  Quitting with several modified files opens one review with a decision and
+  save result for every document.
+- Closing a non-empty scratchpad copies it to CLIPBOARD and PRIMARY and archives
+  it in recent history. Closing or quitting an ordinary file never replaces
+  either selection. If no desktop clipboard owner can keep a scratchpad copy
+  alive after process exit, the editor stays open once with a visible warning;
+  a second `Ctrl+Q` explicitly quits anyway while the disk copy remains.
 - Word wrap, absolute line numbers, cursor blink, and the light theme are enabled
   by default.
 
@@ -17,11 +39,23 @@ explicit mode, but new general editing behavior must work without it.
 
 - `Ctrl+Shift+P` opens the searchable command palette.
 - `Ctrl+,` opens settings.
+- Settings opens with search focused; its font chooser and destructive reset
+  confirmation are keyboard-operable.
 - The application menu exposes the common file, navigation, and preference
   commands without requiring shortcut knowledge.
-- `Ctrl+F` and `Ctrl+H` open find and replace. The visible controls cover
-  previous/next, replace-one/all, case, whole-word, regex, and selection scope.
+- `Ctrl+F` always opens or refocuses Find. Its disclosure arrow expands a
+  second, aligned Replace row; `Ctrl+H` opens that expanded form directly.
+  The visible controls cover previous/next, replace-one/all, case, whole-word,
+  regex, and selection scope.
+- `Ctrl+P` opens compact recent-file quick open; `Ctrl+R` opens the full recent
+  view. Both distinguish regular files and scratchpads. The pinned all-tabs
+  button provides keyboard access to every tab even when the strip overflows.
 - The status bar exposes the active language and its explicit override menu.
+
+External changes reload clean files in place. A dirty file gets a non-modal,
+per-tab banner with Reload, Keep Mine, Save As, and version-scoped Dismiss
+actions. A deleted backing file remains an explicit save-or-discard state and
+is never silently treated as clean.
 
 ## Settings
 

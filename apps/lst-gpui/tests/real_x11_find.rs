@@ -59,6 +59,25 @@ fn submitting_find_query_advances_to_next_match() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn repeated_ctrl_f_refocuses_without_closing_or_collapsing_replace() -> TestResult {
+    support::run_x11_test("find-idempotent-open", |session| {
+        let path = session.seed_file("find-idempotent.txt", "alpha beta alpha")?;
+        let mut editor = session.open_file("find-idempotent", &path)?;
+
+        editor.keys("<C-h>")?;
+        editor.wait_state("replace opens expanded", secs(2), |record| {
+            record.find.visible && record.find.show_replace && record.focused_input == "find_query"
+        })?;
+        editor.keys("<C-f><C-f>")?;
+        editor.wait_state("find remains expanded and query focused", secs(2), |record| {
+            record.find.visible && record.find.show_replace && record.focused_input == "find_query"
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn workspace_shortcuts_work_while_find_inputs_are_focused() -> TestResult {
     support::run_x11_test("find-workspace-shortcuts", |session| {
         let first = session.seed_file("find-shortcuts-first.txt", "first")?;
@@ -113,7 +132,7 @@ fn workspace_shortcuts_work_while_find_inputs_are_focused() -> TestResult {
                 && record.focused_input == "editor"
         })?;
 
-        editor.keys("<C-h><tab>")?;
+        editor.keys("<C-h>")?;
         editor.wait_state("replace focus before tab switch", secs(2), |record| {
             record.find.visible && record.find.show_replace && record.focused_input == "find_replace"
         })?;
@@ -160,17 +179,8 @@ fn tab_strip_buttons_work_while_find_query_is_focused() -> TestResult {
                 && record.recent_panel_selected_path.as_deref() == Some(recent_path.as_str())
         })?;
         editor.keys("<escape>")?;
-        let before_theme = editor.wait_state("recent panel closed before theme click", secs(5), |record| {
+        editor.wait_state("recent panel closed", secs(5), |record| {
             !record.recent_panel_open && record.focused_input == "editor"
-        })?;
-
-        editor.keys("<C-f>")?;
-        editor.wait_state("find query focus before theme click", secs(2), |record| {
-            record.find.visible && record.focused_input == "find_query"
-        })?;
-        editor.click_theme_button()?;
-        editor.wait_state("theme button from find focus", secs(5), |record| {
-            record.find.visible && record.theme_name != before_theme.theme_name
         })?;
         Ok(())
     })

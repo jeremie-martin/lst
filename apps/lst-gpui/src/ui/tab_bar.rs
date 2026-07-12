@@ -14,7 +14,6 @@ pub struct TabBar {
     end_children: SmallVec<[AnyElement; 2]>,
     children: SmallVec<[AnyElement; 4]>,
     scroll_handle: Option<ScrollHandle>,
-    active_child: Option<usize>,
 }
 
 impl TabBar {
@@ -26,7 +25,6 @@ impl TabBar {
             end_children: SmallVec::new(),
             children: SmallVec::new(),
             scroll_handle: None,
-            active_child: None,
         }
     }
 
@@ -44,11 +42,6 @@ impl TabBar {
         self.end_children.push(element.into_any_element());
         self
     }
-
-    pub fn active_child(mut self, index: usize) -> Self {
-        self.active_child = Some(index);
-        self
-    }
 }
 
 impl ParentElement for TabBar {
@@ -61,9 +54,6 @@ impl RenderOnce for TabBar {
     fn render(self, window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
         let rem_size = window.rem_size();
         let tabs_scroll = if let Some(scroll_handle) = self.scroll_handle {
-            if let Some(active_child) = self.active_child {
-                scroll_handle.scroll_to_item(active_child);
-            }
             div()
                 .id("tabs-scroll")
                 .flex()

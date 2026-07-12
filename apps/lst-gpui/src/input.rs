@@ -5,7 +5,7 @@ use gpui::{
 use lst_editor::{
     selection::{drag_selection_range, line_range_at_char, paragraph_range_at_char, word_range_at_char},
     vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
-    EditorCommand, InputMode, RevealIntent, Selection,
+    EditorCommand, InputMode, RevealIntent, Selection, TabId,
 };
 use ropey::Rope;
 use std::{ops::Range, time::Instant};
@@ -13,7 +13,10 @@ use std::{ops::Range, time::Instant};
 use crate::{
     elapsed_ms,
     ui::theme::metrics,
-    viewport::{code_origin_x, row_contains_cursor, scroll_left_for, scroll_to_top, scroll_top_for, x_for_global_char},
+    viewport::{
+        code_origin_x, row_contains_cursor, scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for,
+        x_for_global_char,
+    },
     workspace_action::workspace_fallback_command,
     FocusTarget, LstGpuiApp,
 };
@@ -25,6 +28,18 @@ pub(crate) enum DragSelectionMode {
     Word(Range<usize>),
     Line(Range<usize>),
     Paragraph(Range<usize>),
+    PendingMove {
+        source: Range<usize>,
+        clicked: usize,
+        tab_id: TabId,
+        revision: u64,
+    },
+    MovingSelection {
+        source: Range<usize>,
+        drop: usize,
+        tab_id: TabId,
+        revision: u64,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +66,30 @@ impl LstGpuiApp {
         self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);
         let index = self.active_char_index_for_point(event.position);
+        let gutter_click = self.model.show_gutter()
+            && self
+                .active_view()
+                .geometry
+                .borrow()
+                .bounds
+                .is_some_and(|_| event.position.x < self.active_view().geometry.borrow().code_origin_x_at_paint);
+
+        if gutter_click && !event.modifiers.alt {
+            let clicked = line_range_at_char(self.active_tab().buffer(), index);
+            if event.modifiers.shift {
+                let anchor_index = self.model.selection_set().primary().anchor();
+                let anchor = line_range_at_char(self.active_tab().buffer(), anchor_index);
+                self.start_drag_selection(DragSelectionMode::Line(anchor.clone()), event.position);
+                self.select_active_drag_range(anchor, clicked, cx);
+            } else {
+                self.start_drag_selection(DragSelectionMode::Line(clicked.clone()), event.position);
+                self.select_active_range(clicked, cx);
+            }
+            self.sync_primary_selection(cx);
+            self.schedule_drag_autoscroll(window, cx);
+            cx.notify();
+            return;
+        }
         if event.modifiers.alt {
             // Single Alt-click on a point already covered by a multi-cursor
             // selection toggles that cursor off. Drops through to the add
@@ -91,6 +130,24 @@ impl LstGpuiApp {
             self.sync_primary_selection(cx);
             cx.notify();
             return;
+        }
+
+        if event.click_count == 1 {
+            let primary = self.model.selection();
+            let source = primary.range();
+            if primary.has_selection() && source.contains(&index) {
+                self.start_drag_selection(
+                    DragSelectionMode::PendingMove {
+                        source,
+                        clicked: index,
+                        tab_id: self.model.active_tab_id(),
+                        revision: self.active_tab().revision(),
+                    },
+                    event.position,
+                );
+                cx.notify();
+                return;
+            }
         }
 
         if let Some((mode, range)) = self.click_selection_mode_and_range(event.click_count, index) {
@@ -151,12 +208,27 @@ impl LstGpuiApp {
         }
     }
 
+    pub(crate) fn on_right_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        self.cancel_drag_selection();
+        let index = self.active_char_index_for_point(event.position);
+        let inside_selection = self
+            .model
+            .selection_set()
+            .as_slice()
+            .iter()
+            .any(|selection| selection.range().contains(&index));
+        if !inside_selection {
+            self.update_model(cx, true, |model| model.move_to_char(index, false, None));
+        }
+        self.open_context_menu(event.position, cx);
+    }
+
     pub(crate) fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.update_drag_selection(event, window, cx);
     }
 
-    pub(crate) fn on_mouse_up(&mut self, _event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.finish_drag_selection(cx);
+    pub(crate) fn on_mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_drag_selection(event, cx);
     }
 
     fn start_drag_selection(&mut self, mode: DragSelectionMode, point: Point<Pixels>) {
@@ -174,6 +246,30 @@ impl LstGpuiApp {
         };
         drag.last_point = event.position;
 
+        let pending = match drag.mode.clone() {
+            DragSelectionMode::PendingMove {
+                source,
+                tab_id,
+                revision,
+                ..
+            } => Some((source, tab_id, revision, drag.anchor_point)),
+            _ => None,
+        };
+        if let Some((source, tab_id, revision, anchor)) = pending {
+            if !drag_threshold_reached(anchor, event.position, self.ui_scale()) {
+                return;
+            }
+            let drop = self.active_char_index_for_point(event.position);
+            if let Some(drag) = self.selection_drag.as_mut() {
+                drag.mode = DragSelectionMode::MovingSelection {
+                    source,
+                    drop,
+                    tab_id,
+                    revision,
+                };
+            }
+        }
+
         if !self.apply_drag_selection_at_point(event.position, cx) {
             return;
         }
@@ -181,8 +277,31 @@ impl LstGpuiApp {
         cx.notify();
     }
 
-    fn finish_drag_selection(&mut self, cx: &mut Context<Self>) {
-        self.cancel_drag_selection();
+    fn finish_drag_selection(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) {
+        let Some(drag) = self.selection_drag.take() else {
+            return;
+        };
+        match drag.mode {
+            DragSelectionMode::PendingMove {
+                clicked,
+                tab_id,
+                revision,
+                ..
+            } if self.model.active_tab_id() == tab_id && self.active_tab().revision() == revision => {
+                self.update_model(cx, true, |model| model.move_to_char(clicked, false, None));
+            }
+            DragSelectionMode::MovingSelection {
+                source,
+                drop,
+                tab_id,
+                revision,
+            } if self.model.active_tab_id() == tab_id && self.active_tab().revision() == revision => {
+                self.update_model(cx, true, |model| {
+                    model.drag_selection_to(source, drop, event.modifiers.control);
+                });
+            }
+            _ => {}
+        }
         self.sync_primary_selection(cx);
         cx.notify();
     }
@@ -218,6 +337,15 @@ impl LstGpuiApp {
                 let current = paragraph_range_at_char(self.active_tab().buffer(), index);
                 self.select_active_drag_range(anchor, current, cx);
             }
+            Some(DragSelectionMode::MovingSelection { .. }) => {
+                if let Some(drag) = self.selection_drag.as_mut() {
+                    if let DragSelectionMode::MovingSelection { drop, .. } = &mut drag.mode {
+                        *drop = index;
+                    }
+                }
+                return true;
+            }
+            Some(DragSelectionMode::PendingMove { .. }) => return false,
             None => return false,
         }
         self.queue_cursor_reveal(RevealIntent::NearestEdge);
@@ -251,7 +379,12 @@ impl LstGpuiApp {
         let Some(drag) = self.selection_drag.as_ref() else {
             return;
         };
-        if drag.autoscroll_active || self.drag_autoscroll_target().is_none() {
+        if matches!(&drag.mode, DragSelectionMode::PendingMove { .. }) {
+            return;
+        }
+        if drag.autoscroll_active
+            || (self.drag_autoscroll_target().is_none() && self.drag_horizontal_autoscroll_target().is_none())
+        {
             return;
         }
         if let Some(drag) = self.selection_drag.as_mut() {
@@ -268,12 +401,19 @@ impl LstGpuiApp {
         };
         drag.autoscroll_active = false;
 
-        if let Some(target) = self.drag_autoscroll_target() {
+        let vertical = self.drag_autoscroll_target();
+        let horizontal = self.drag_horizontal_autoscroll_target();
+        if let Some(target) = vertical {
             scroll_to_top(&self.active_view().scroll, target);
+        }
+        if let Some(target) = horizontal {
+            scroll_to_left(&self.active_view().scroll, target);
+        }
+        if vertical.is_some() || horizontal.is_some() {
             if let Some(position) = self.selection_drag.as_ref().map(|drag| drag.last_point) {
                 self.apply_drag_selection_at_point(position, cx);
+                cx.notify();
             }
-            cx.notify();
         }
         self.schedule_drag_autoscroll(window, cx);
     }
@@ -286,6 +426,20 @@ impl LstGpuiApp {
         let view = self.active_view();
         let current = scroll_top_for(&view.scroll);
         let max = view.scroll.max_offset().height.max(px(0.0));
+        let target = (current + delta).max(px(0.0)).min(max);
+        (target != current).then_some(target)
+    }
+
+    fn drag_horizontal_autoscroll_target(&self) -> Option<Pixels> {
+        if self.model.show_wrap() {
+            return None;
+        }
+        let position = self.selection_drag.as_ref()?.last_point;
+        let bounds = self.active_view().geometry.borrow().bounds?;
+        let delta = drag_horizontal_autoscroll_delta(position, bounds, self.ui_scale())?;
+        let view = self.active_view();
+        let current = scroll_left_for(&view.scroll);
+        let max = view.scroll.max_offset().width.max(px(0.0));
         let target = (current + delta).max(px(0.0)).min(max);
         (target != current).then_some(target)
     }
@@ -308,6 +462,20 @@ impl LstGpuiApp {
             model.set_selection(Selection::from_range(selection, reversed));
         });
     }
+
+    pub(crate) fn selection_drag_drop_char(&self) -> Option<usize> {
+        match &self.selection_drag.as_ref()?.mode {
+            DragSelectionMode::MovingSelection { source, drop, .. } if !(source.start..=source.end).contains(drop) => {
+                Some(*drop)
+            }
+            _ => None,
+        }
+    }
+}
+
+fn drag_threshold_reached(from: Point<Pixels>, to: Point<Pixels>, scale: f32) -> bool {
+    let threshold = metrics::px_for_scale(4.0, scale);
+    (to.x - from.x).abs() >= threshold || (to.y - from.y).abs() >= threshold
 }
 
 pub(crate) fn drag_autoscroll_delta(position: Point<Pixels>, bounds: Bounds<Pixels>, scale: f32) -> Option<Pixels> {
@@ -330,6 +498,23 @@ pub(crate) fn drag_autoscroll_delta(position: Point<Pixels>, bounds: Bounds<Pixe
             (metrics::row_height() * rows).min(metrics::row_height() * 3.0),
             scale,
         ))
+    } else {
+        None
+    }
+}
+
+fn drag_horizontal_autoscroll_delta(position: Point<Pixels>, bounds: Bounds<Pixels>, scale: f32) -> Option<Pixels> {
+    const EDGE_PX: f32 = 36.0;
+    let edge = metrics::px_for_scale(EDGE_PX, scale);
+    let left_edge = bounds.left() + edge;
+    let right_edge = bounds.right() - edge;
+    let max_step = metrics::px_for_scale(metrics::row_height() * 3.0, scale);
+    if position.x < left_edge {
+        let distance = ((left_edge - position.x) / px(1.0)).min(EDGE_PX * scale * 2.0);
+        Some(-metrics::px_for_scale(metrics::row_height() * (0.5 + distance / (EDGE_PX * scale)), scale).min(max_step))
+    } else if position.x > right_edge {
+        let distance = ((position.x - right_edge) / px(1.0)).min(EDGE_PX * scale * 2.0);
+        Some(metrics::px_for_scale(metrics::row_height() * (0.5 + distance / (EDGE_PX * scale)), scale).min(max_step))
     } else {
         None
     }
@@ -541,6 +726,9 @@ impl EntityInputHandler for LstGpuiApp {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editor_input_is_focused() {
+            return;
+        }
         self.x11_ctrl_k_pending = false;
         self.update_model(cx, true, |model| {
             model.clear_marked_text();
@@ -554,6 +742,9 @@ impl EntityInputHandler for LstGpuiApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.editor_input_is_focused() {
+            return;
+        }
         let apply_started = Instant::now();
         let range = {
             let tab = self.active_tab();
@@ -579,6 +770,9 @@ impl EntityInputHandler for LstGpuiApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.editor_input_is_focused() {
+            return;
+        }
         let apply_started = Instant::now();
         let range = {
             let tab = self.active_tab();
@@ -664,7 +858,12 @@ impl LstGpuiApp {
     }
 
     fn editor_input_is_focused(&self) -> bool {
-        !self.recent.is_open() && self.focus_last_applied == crate::FocusTarget::Editor
+        !self.recent.is_open()
+            && self.workspace_surface == crate::WorkspaceSurface::None
+            && self.close_prompt.is_none()
+            && self.quit_review.is_none()
+            && self.cleanup_confirmation.is_none()
+            && self.focus_last_applied == crate::FocusTarget::Editor
     }
 }
 
@@ -787,4 +986,18 @@ pub(crate) fn utf16_range_to_char_range_in_text(text: &str, range: &Range<usize>
         chars
     };
     endpoint(range.start)..endpoint(range.end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_move_threshold_is_four_scaled_pixels_on_either_axis() {
+        let origin = point(px(10.0), px(20.0));
+        assert!(!drag_threshold_reached(origin, point(px(13.9), px(20.0)), 1.0));
+        assert!(drag_threshold_reached(origin, point(px(14.0), px(20.0)), 1.0));
+        assert!(!drag_threshold_reached(origin, point(px(10.0), px(27.9)), 2.0));
+        assert!(drag_threshold_reached(origin, point(px(10.0), px(28.0)), 2.0));
+    }
 }

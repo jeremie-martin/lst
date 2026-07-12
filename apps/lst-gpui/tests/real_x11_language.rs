@@ -116,6 +116,43 @@ fn tab_and_soft_tab_backspace_use_language_indent_unit() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn backspace_between_an_empty_configured_pair_removes_both_delimiters() -> TestResult {
+    support::run_x11_test("language-pair-backspace", |session| {
+        let path = session.seed_file("pair-backspace.rs", "")?;
+        let mut editor = session.open_file("language-pair-backspace", &path)?;
+
+        editor.keys("(<bs>")?;
+        editor.save_then_expect_file(&path, "")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn enter_between_braces_creates_an_indented_inner_line() -> TestResult {
+    expect_edit(
+        "language-smart-enter-pair",
+        "smart-enter.rs",
+        "",
+        "{<enter>value",
+        "{\n    value\n}",
+    )
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn tab_advances_to_the_next_language_indent_stop() -> TestResult {
+    expect_edit(
+        "language-next-tab-stop",
+        "next-tab-stop.rs",
+        "  value",
+        "<C-home><right><right><tab>",
+        "    value",
+    )
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn close_brace_dedents_only_for_languages_with_brace_blocks() -> TestResult {
     support::run_x11_test("language-auto-dedent", |session| {
         let rust = session.seed_file("dedent.rs", "        ")?;

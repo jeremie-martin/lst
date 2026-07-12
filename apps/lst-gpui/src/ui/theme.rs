@@ -10,13 +10,6 @@ pub(crate) enum ThemeId {
 impl Global for ThemeId {}
 
 impl ThemeId {
-    pub(crate) fn next(self) -> Self {
-        match self {
-            Self::Dark => Self::Light,
-            Self::Light => Self::Dark,
-        }
-    }
-
     pub(crate) fn theme(self) -> Theme {
         match self {
             Self::Dark => DARK,
@@ -281,16 +274,16 @@ pub mod metrics {
     pub const WINDOW_HEIGHT: f32 = 860.0;
     pub const SHELL_GAP: f32 = 8.0;
     pub const SHELL_EDGE_PAD: f32 = SHELL_GAP;
-    pub const STATUS_HEIGHT_PAD: f32 = 10.0;
+    pub const STATUS_HEIGHT_PAD: f32 = 2.0;
 
-    pub const TAB_HEIGHT: f32 = 30.0;
-    pub const TAB_MIN_WIDTH: f32 = 128.0;
+    pub const TAB_HEIGHT: f32 = 34.0;
+    pub const TAB_MIN_WIDTH: f32 = 96.0;
     pub const TAB_MAX_WIDTH: f32 = 220.0;
     pub const TAB_HORIZONTAL_PAD: f32 = 10.0;
-    pub const TAB_SLOT_WIDTH: f32 = 18.0;
+    pub const TAB_SLOT_WIDTH: f32 = 28.0;
     pub const TAB_TEXT_SIZE: f32 = 12.0;
     pub const TAB_TEXT_LINE_HEIGHT: f32 = 16.0;
-    pub const ICON_BUTTON_SIZE: f32 = 16.0;
+    pub const ICON_BUTTON_SIZE: f32 = 28.0;
 
     pub const INPUT_HEIGHT: f32 = 30.0;
     pub const INPUT_HORIZONTAL_PAD: f32 = 12.0;
@@ -305,8 +298,8 @@ pub mod metrics {
     pub const GUTTER_LEFT_PAD: f32 = 12.0;
     pub const WRAP_CHAR_WIDTH_FALLBACK: f32 = 7.8;
     pub const SCROLLBAR_TRACK_WIDTH: f32 = 10.0;
-    pub const SCROLLBAR_THUMB_WIDTH: f32 = 4.0;
-    pub const SCROLLBAR_EDGE_PAD: f32 = 3.0;
+    pub const SCROLLBAR_THUMB_WIDTH: f32 = 6.0;
+    pub const SCROLLBAR_EDGE_PAD: f32 = 2.0;
     pub const SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 24.0;
 
     static CODE_FONT_SIZE_BITS: AtomicU32 = AtomicU32::new(DEFAULT_CODE_FONT_SIZE.to_bits());

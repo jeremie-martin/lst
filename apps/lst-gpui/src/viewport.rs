@@ -4,9 +4,10 @@ use crate::{
 };
 use gpui::{fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString, TextRun, Window};
 use lst_editor::wrap::{
-    build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, wrap_segments, WrapLayout, WrappedSegment,
+    build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, visual_line_count, wrap_segments, WrapLayout,
+    WrappedSegment,
 };
-use lst_editor::{vim, EditorTab, GutterMode, Selection, SelectionSet};
+use lst_editor::{vim, DisplayLine, EditorTab, GutterMode, Selection, SelectionSet};
 use ropey::Rope;
 use std::{
     cell::RefCell,
@@ -17,7 +18,7 @@ use std::{
     time::Instant,
 };
 
-use crate::syntax::{CachedSyntaxHighlights, SyntaxMode, SyntaxSpan};
+use crate::syntax::{CachedSyntaxHighlights, SyntaxInvalidation, SyntaxMode, SyntaxSpan};
 
 #[derive(Clone)]
 struct CachedShapedLine {
@@ -44,6 +45,62 @@ impl ViewportCache {
     pub(crate) fn clear_shaped_lines(&mut self) {
         self.code_lines.clear();
         self.gutter_lines.clear();
+    }
+
+    /// Invalidate revision-dependent layout and shaping while retaining the
+    /// previous per-line syntax snapshot. The syntax synchronizer patches the
+    /// affected line window immediately after this call.
+    pub(crate) fn invalidate_content_layout(&mut self) {
+        self.code_lines.clear();
+        self.gutter_lines.clear();
+        self.max_unwrapped_line_width = None;
+    }
+
+    /// Advance a cached wrapped-row index after a same-line-topology edit.
+    /// Only changed lines are remeasured; later row starts receive one cheap
+    /// integer shift instead of re-tokenizing every line in the document.
+    pub(crate) fn patch_wrap_layout(&mut self, buffer: &Rope, revision: u64, invalidation: &SyntaxInvalidation) {
+        if invalidation.is_full() {
+            self.wrap_layout = None;
+            return;
+        }
+        let Some(mut cached) = self.wrap_layout.take() else {
+            return;
+        };
+        let line_count = buffer.len_lines();
+        if cached.layout.line_row_starts.len() != line_count.saturating_add(1) {
+            return;
+        }
+        let lines = invalidation.line_range(line_count);
+        if lines.is_empty() {
+            cached.revision = revision;
+            self.wrap_layout = Some(cached);
+            return;
+        }
+
+        let old_end = cached.layout.line_row_starts[lines.end];
+        let mut next_start = cached.layout.line_row_starts[lines.start];
+        for line_ix in lines.clone() {
+            cached.layout.line_row_starts[line_ix] = next_start;
+            let row_count = if cached.layout.show_wrap {
+                let mut line = buffer.line(line_ix).to_string();
+                while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
+                    line.pop();
+                }
+                visual_line_count(&line, cached.layout.wrap_columns)
+            } else {
+                1
+            };
+            next_start = next_start.saturating_add(row_count);
+        }
+        cached.layout.line_row_starts[lines.end] = next_start;
+        let row_delta = next_start as isize - old_end as isize;
+        for row_start in &mut cached.layout.line_row_starts[lines.end.saturating_add(1)..] {
+            *row_start = row_start.saturating_add_signed(row_delta);
+        }
+        cached.layout.total_rows = cached.layout.total_rows.saturating_add_signed(row_delta).max(1);
+        cached.revision = revision;
+        self.wrap_layout = Some(cached);
     }
 }
 
@@ -113,7 +170,7 @@ pub(crate) struct CachedWrapLayout {
 }
 
 pub(crate) struct WrapLayoutInput<'a> {
-    pub(crate) lines: &'a [String],
+    pub(crate) lines: &'a [DisplayLine],
     pub(crate) revision: u64,
     pub(crate) viewport_width: Pixels,
     pub(crate) char_width: Pixels,
@@ -124,7 +181,7 @@ pub(crate) struct WrapLayoutInput<'a> {
 
 pub(crate) struct ViewportPreparation<'a> {
     pub(crate) buffer: &'a Rope,
-    pub(crate) lines: &'a [String],
+    pub(crate) lines: &'a [DisplayLine],
     pub(crate) revision: u64,
     pub(crate) syntax_mode: SyntaxMode,
     pub(crate) show_gutter: bool,
@@ -150,6 +207,7 @@ pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) vim_mode: vim::Mode,
     pub(crate) focused: bool,
     pub(crate) cursor_visible: bool,
+    pub(crate) drop_cursor: Option<usize>,
     pub(crate) paint_state: ViewportPaintState,
     pub(crate) scale: f32,
     pub(crate) horizontal_scroll: Pixels,
@@ -376,7 +434,7 @@ pub(crate) fn x_for_display_char(
 
 pub(crate) fn max_unwrapped_line_width(
     cache: &mut ViewportCache,
-    lines: &[String],
+    lines: &[DisplayLine],
     revision: u64,
     char_width: Pixels,
     scale: f32,
@@ -763,12 +821,18 @@ fn paint_range_background(
 
     let start = range.start.max(row.line_start_char).min(row.display_end_char);
     let end = range.end.min(row.display_end_char);
-    if end <= start {
+    let selects_line_ending = row.logical_end_char > row.display_end_char
+        && range.start <= row.display_end_char
+        && range.end > row.display_end_char;
+    if end <= start && !selects_line_ending {
         return;
     }
 
     let start_x = code_origin_x + x_for_global_char(row, start).unwrap_or_else(|| px(0.0));
-    let end_x = code_origin_x + x_for_global_char(row, end).unwrap_or_else(|| px(0.0));
+    let mut end_x = code_origin_x + x_for_global_char(row, end).unwrap_or_else(|| px(0.0));
+    if selects_line_ending {
+        end_x += metrics::px_for_scale(metrics::code_font_size() * 0.55, scale);
+    }
     window.paint_quad(fill(
         Bounds::from_corners(
             point(start_x, row.row_top),
@@ -819,6 +883,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         vim_mode,
         focused,
         cursor_visible,
+        drop_cursor,
         paint_state,
         scale,
         horizontal_scroll,
@@ -911,6 +976,18 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             }
         }
 
+        if let Some(drop_cursor) = drop_cursor.filter(|drop| row_contains_cursor(&row, *drop)) {
+            let cursor_x = code_origin_x
+                + x_for_global_char(&row, drop_cursor.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(cursor_x, row.row_top),
+                    size(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale), row_height),
+                ),
+                rgb(theme.role.accent),
+            ));
+        }
+
         if show_gutter {
             window.paint_quad(fill(
                 Bounds::new(
@@ -973,6 +1050,7 @@ mod tests {
         ViewportCache {
             syntax_highlights: Some(CachedSyntaxHighlights {
                 language: SyntaxLanguage::Rust,
+                revision: 0,
                 lines,
                 line_byte_lens,
             }),
@@ -1031,5 +1109,29 @@ mod tests {
         let mut cache = cache_with_highlights(vec![7u32], vec![vec![rust_keyword_span(0, 2)]]);
         let spans = line_syntax_spans(&mut cache, 9, 0, SyntaxMode::TreeSitter(SyntaxLanguage::Rust));
         assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn patched_wrap_layout_matches_a_full_rebuild() {
+        let before = (0..200)
+            .map(|line| format!("line {line} has enough words to wrap across rows"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let after = before.replacen("line 100", "line 100 with substantially more content", 1);
+        let before_lines = before.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+        let after_lines = after.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+        let mut cache = ViewportCache {
+            wrap_layout: Some(CachedWrapLayout {
+                revision: 0,
+                layout: build_wrap_layout(&before_lines, 12, true),
+            }),
+            ..Default::default()
+        };
+
+        cache.patch_wrap_layout(&Rope::from_str(&after), 1, &SyntaxInvalidation::Lines(99..102));
+
+        let patched = cache.wrap_layout.expect("patch should retain layout");
+        assert_eq!(patched.revision, 1);
+        assert_eq!(patched.layout, build_wrap_layout(&after_lines, 12, true));
     }
 }
