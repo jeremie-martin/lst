@@ -151,40 +151,38 @@ impl LstGpuiApp {
                         ),
                 )
         };
-        let mut items = (0..self.model.tab_count())
+        let items = (0..self.model.tab_count())
             .map(|ix| self.render_tab(ix, cx).into_any_element())
             .collect::<Vec<_>>();
-        items.push(
-            div()
-                .flex()
-                .flex_none()
-                .h(metrics::px_for_scale(metrics::TAB_HEIGHT, scale))
-                .px_2()
-                .items_center()
-                .border_r_1()
-                .border_color(rgb(theme.role.border))
-                .on_children_prepainted({
-                    let entity = entity.clone();
-                    move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
-                        let captured = bounds.first().copied();
-                        entity.update(cx, |this, _| {
-                            this.new_tab_button_bounds_px = captured;
-                        });
-                    }
-                })
-                .child(
-                    IconButton::new("new-tab-button", IconKind::Plus, theme)
-                        .tooltip("New scratchpad (Ctrl+N)")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _window, cx| {
-                                this.request_new_tab(cx);
-                                cx.stop_propagation();
-                            }),
-                        ),
-                )
-                .into_any_element(),
-        );
+        let new_tab_button = div()
+            .flex()
+            .flex_none()
+            .h(metrics::px_for_scale(metrics::TAB_HEIGHT, scale))
+            .px_2()
+            .items_center()
+            .border_r_1()
+            .border_color(rgb(theme.role.border))
+            .on_children_prepainted({
+                let entity = entity.clone();
+                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                    let captured = bounds.first().copied();
+                    entity.update(cx, |this, _| {
+                        this.new_tab_button_bounds_px = captured;
+                    });
+                }
+            })
+            .child(
+                IconButton::new("new-tab-button", IconKind::Plus, theme)
+                    .tooltip("New scratchpad (Ctrl+N)")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _window, cx| {
+                            this.request_new_tab(cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .into_any_element();
 
         let start_controls = div()
             .flex()
@@ -220,7 +218,9 @@ impl LstGpuiApp {
 
         TabBar::new("editor-tabs", theme)
             .start_child(start_controls)
+            .end_child(new_tab_button)
             .track_scroll(&self.tab_bar_scroll)
+            .active_child(self.model.active_index())
             .children(items)
     }
 

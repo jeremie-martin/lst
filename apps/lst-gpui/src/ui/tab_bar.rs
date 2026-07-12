@@ -11,8 +11,10 @@ pub struct TabBar {
     id: gpui::ElementId,
     theme: Theme,
     start_children: SmallVec<[AnyElement; 2]>,
+    end_children: SmallVec<[AnyElement; 2]>,
     children: SmallVec<[AnyElement; 4]>,
     scroll_handle: Option<ScrollHandle>,
+    active_child: Option<usize>,
 }
 
 impl TabBar {
@@ -21,8 +23,10 @@ impl TabBar {
             id: id.into(),
             theme,
             start_children: SmallVec::new(),
+            end_children: SmallVec::new(),
             children: SmallVec::new(),
             scroll_handle: None,
+            active_child: None,
         }
     }
 
@@ -33,6 +37,16 @@ impl TabBar {
 
     pub fn start_child(mut self, element: impl IntoElement) -> Self {
         self.start_children.push(element.into_any_element());
+        self
+    }
+
+    pub fn end_child(mut self, element: impl IntoElement) -> Self {
+        self.end_children.push(element.into_any_element());
+        self
+    }
+
+    pub fn active_child(mut self, index: usize) -> Self {
+        self.active_child = Some(index);
         self
     }
 }
@@ -46,24 +60,27 @@ impl ParentElement for TabBar {
 impl RenderOnce for TabBar {
     fn render(self, window: &mut gpui::Window, _cx: &mut App) -> impl IntoElement {
         let rem_size = window.rem_size();
-        let tabs_row = div().id("tabs-row").flex().h_full().children(self.children);
-
         let tabs_scroll = if let Some(scroll_handle) = self.scroll_handle {
+            if let Some(active_child) = self.active_child {
+                scroll_handle.scroll_to_item(active_child);
+            }
             div()
                 .id("tabs-scroll")
+                .flex()
                 .h_full()
                 .overflow_x_scroll()
                 .overflow_y_hidden()
                 .track_scroll(&scroll_handle)
-                .child(tabs_row)
+                .children(self.children)
                 .into_any_element()
         } else {
             div()
                 .id("tabs-scroll")
+                .flex()
                 .h_full()
                 .overflow_x_scroll()
                 .overflow_y_hidden()
-                .child(tabs_row)
+                .children(self.children)
                 .into_any_element()
         };
 
@@ -92,5 +109,16 @@ impl RenderOnce for TabBar {
                 ),
             )
             .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(tabs_scroll))
+            .children(
+                (!self.end_children.is_empty()).then_some(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .h_full()
+                        .items_center()
+                        .children(self.end_children)
+                        .into_any_element(),
+                ),
+            )
     }
 }

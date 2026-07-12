@@ -55,3 +55,25 @@ fn closing_last_tab_selects_left_neighbor() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn new_tab_button_remains_usable_when_tabs_overflow() -> TestResult {
+    support::run_x11_test("tabs-overflow-new-tab-visible", |session| {
+        let files = (0..12)
+            .map(|index| {
+                session.seed_file(
+                    &format!("overflow-tab-with-a-long-name-{index:02}.txt"),
+                    &index.to_string(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut editor = session.open_files("tabs-overflow-new-tab-visible", &files)?;
+
+        editor.click_new_tab_button()?;
+        editor.wait_state("new overflow tab active", secs(5), |record| {
+            record.active_tab_index == files.len() && record.status_message == "Created a new scratchpad."
+        })?;
+        Ok(())
+    })
+}
