@@ -61,7 +61,7 @@ def main() -> int:
                     "lst-gpui",
                     "--test",
                     "real_x11_daily_driver",
-                    "standard_alt_shift_up_duplicates_line_above",
+                    "standard_duplicate_line_above",
                     "--",
                     "--ignored",
                     "--exact",

@@ -208,13 +208,13 @@ fn app_menu_does_not_dim_the_editor() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn standard_alt_shift_up_duplicates_line_above() -> TestResult {
+fn standard_duplicate_line_above() -> TestResult {
     support::run_x11_test("daily-driver-duplicate-up", |session| {
         let path = session.seed_file("duplicate.txt", "alpha\nbeta")?;
         let mut editor = session.open_file("duplicate", &path)?;
 
         editor.click_at_text(1, 2)?;
-        editor.keys("<A-S-up>")?;
+        editor.keys("<C-A-S-up>")?;
         editor.save_then_expect_file(&path, "alpha\nbeta\nbeta")?;
         Ok(())
     })

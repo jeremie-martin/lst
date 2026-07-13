@@ -464,3 +464,39 @@ fn smart_enter_per_cursor_indent_lands_each_cursor_at_inherited_column() -> Test
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn alt_shift_down_adds_adjacent_line_cursors() -> TestResult {
+    support::run_x11_test("multi-cursor-alt-shift-down", |session| {
+        let path = session.seed_file("alt-shift-down.txt", "aaa\nbbb\nccc")?;
+        let mut editor = session.open_file("alt-shift-down", &path)?;
+
+        // alt-shift-down stacks a cursor onto each successive line below.
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<A-S-down><A-S-down>")?;
+        editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
+
+        editor.keys("x")?;
+        editor.save_then_expect_file(&path, "xaaa\nxbbb\nxccc")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn alt_shift_up_adds_adjacent_line_cursors() -> TestResult {
+    support::run_x11_test("multi-cursor-alt-shift-up", |session| {
+        let path = session.seed_file("alt-shift-up.txt", "aaa\nbbb\nccc")?;
+        let mut editor = session.open_file("alt-shift-up", &path)?;
+
+        // alt-shift-up mirrors the behavior upward from the bottom line.
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<down><down><A-S-up><A-S-up>")?;
+        editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
+
+        editor.keys("x")?;
+        editor.save_then_expect_file(&path, "xaaa\nxbbb\nxccc")?;
+        Ok(())
+    })
+}
