@@ -142,7 +142,7 @@ fn cursor_identifier_highlights_exact_visible_whole_word_occurrences() -> TestRe
     support::run_x11_test("chrome-identifier-highlights", |session| {
         let path = session.seed_file(
             "identifier-highlights.txt",
-            "alpha beta alpha\nalphabet alpha ALPHA\ncafe\u{301}_count cafe\u{301}_count cafe\n",
+            "alpha  beta alpha\nalphabet alpha ALPHA\ncafe\u{301}_count cafe\u{301}_count cafe\n",
         )?;
         let mut editor = session.open_file("chrome-identifier-highlights", &path)?;
         editor.place_cursor_at_document_start()?;
@@ -154,25 +154,37 @@ fn cursor_identifier_highlights_exact_visible_whole_word_occurrences() -> TestRe
                 .iter()
                 .map(|range| (range.start, range.end))
                 .collect::<Vec<_>>()
-                == vec![(0, 5), (11, 16), (26, 31)]
+                == vec![(0, 5), (12, 17), (27, 32)]
         })?;
         assert_eq!(alpha.viewport.occurrence_highlights.len(), 3, "{alpha:?}");
 
         editor.keys("<right><right><right><right><right>")?;
-        editor.wait_state("spacing has no passive highlight", secs(2), |record| {
-            record.cursors[0].head_col == 5 && record.viewport.occurrence_highlights.is_empty()
-        })?;
-
-        editor.keys("<right>")?;
-        let beta = editor.wait_state("beta occurrence", secs(2), |record| {
-            record.cursors[0].head_col == 6
+        editor.wait_state("word trailing edge remains highlighted", secs(2), |record| {
+            record.cursors[0].head_col == 5
                 && record
                     .viewport
                     .occurrence_highlights
                     .iter()
                     .map(|range| (range.start, range.end))
                     .collect::<Vec<_>>()
-                    == vec![(6, 10)]
+                    == vec![(0, 5), (12, 17), (27, 32)]
+        })?;
+
+        editor.keys("<right>")?;
+        editor.wait_state("separator interior has no passive highlight", secs(2), |record| {
+            record.cursors[0].head_col == 6 && record.viewport.occurrence_highlights.is_empty()
+        })?;
+
+        editor.keys("<right>")?;
+        let beta = editor.wait_state("beta occurrence", secs(2), |record| {
+            record.cursors[0].head_col == 7
+                && record
+                    .viewport
+                    .occurrence_highlights
+                    .iter()
+                    .map(|range| (range.start, range.end))
+                    .collect::<Vec<_>>()
+                    == vec![(7, 11)]
         })?;
         assert_eq!(beta.viewport.occurrence_highlights.len(), 1, "{beta:?}");
 
@@ -184,9 +196,48 @@ fn cursor_identifier_highlights_exact_visible_whole_word_occurrences() -> TestRe
                 .iter()
                 .map(|range| (range.start, range.end))
                 .collect::<Vec<_>>()
-                == vec![(38, 49), (50, 61)]
+                == vec![(39, 50), (51, 62)]
         })?;
         assert_eq!(decomposed.viewport.occurrence_highlights.len(), 2, "{decomposed:?}");
+
+        editor.keys("<C-end>alpha")?;
+        editor.wait_state("typing does not retrigger passive highlights", secs(2), |record| {
+            record.cursors[0].head_col == 5 && record.viewport.occurrence_highlights.is_empty()
+        })?;
+
+        editor.keys("<C-f><esc>")?;
+        editor.wait_state(
+            "returning editor focus retriggers passive highlights",
+            secs(2),
+            |record| {
+                record.cursors[0].head_col == 5
+                    && record
+                        .viewport
+                        .occurrence_highlights
+                        .iter()
+                        .map(|range| (range.start, range.end))
+                        .collect::<Vec<_>>()
+                        == vec![(0, 5), (12, 17), (27, 32), (68, 73)]
+            },
+        )?;
+
+        editor.keys("x<bs>")?;
+        editor.wait_state("later editing clears focus-triggered highlights", secs(2), |record| {
+            record.cursors[0].head_col == 5 && record.viewport.occurrence_highlights.is_empty()
+        })?;
+
+        editor.keys("<left>")?;
+        let after_motion = editor.wait_state("explicit motion retriggers passive highlights", secs(2), |record| {
+            record.cursors[0].head_col == 4
+                && record
+                    .viewport
+                    .occurrence_highlights
+                    .iter()
+                    .map(|range| (range.start, range.end))
+                    .collect::<Vec<_>>()
+                    == vec![(0, 5), (12, 17), (27, 32), (68, 73)]
+        })?;
+        assert_eq!(after_motion.viewport.occurrence_highlights.len(), 4, "{after_motion:?}");
         Ok(())
     })
 }

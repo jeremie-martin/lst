@@ -43,6 +43,10 @@ baseline can preserve a bad decision just as easily as a good one.
   wrapped windows, and expands only to the surrounding identifier boundaries.
   Do not traverse one long identifier once per painted row or allocate a copy
   of the whole document on every cursor movement.
+- Drive passive decorations from interaction state, not incidental paint state.
+  Typing invalidates occurrence highlights; editor focus or an explicit caret
+  move establishes the next query. Both caret edges belong to the word they
+  touch, while separator interiors do not.
 - Define decoration precedence explicitly: current line, passive occurrences,
   search matches, active search match, selections, text, then carets.
 - Cache keys must contain every input that changes visible output, including

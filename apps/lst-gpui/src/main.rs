@@ -29,8 +29,8 @@ use crate::ui::{
 use input::ActiveDragSelection;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
-    EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FileStamp, FocusTarget, InputMode, Position,
-    RevealIntent, TabId, UNTITLED_PREFIX,
+    selection::identifier_range_at_char, EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FileStamp,
+    FocusTarget, InputMode, Position, RevealIntent, Selection, TabId, UNTITLED_PREFIX,
 };
 use recent::{default_recent_files_path, normalize_recent_path, RecentOrigin, RecentView};
 use ropey::Rope;
@@ -337,6 +337,11 @@ struct LstGpuiApp {
     cleanup_confirmation: Option<CleanupConfirmation>,
     cleanup_message: Option<String>,
     clipboard_quit_bypass: Option<ScratchpadClipboardPayload>,
+    /// A passive word highlight exists only after focus or a cursor-only
+    /// transition. Its source revision makes an edit invalidate it by
+    /// construction instead of letting paint infer a new query from the
+    /// post-edit caret position.
+    passive_occurrence_query: Option<PassiveOccurrenceQuery>,
     cursor_visible: bool,
     /// Surfaced through the state trace so real-X11 tests can click the
     /// find chips without relying on fixed shell geometry.
@@ -363,6 +368,13 @@ struct LstGpuiApp {
     settings: SettingsStore,
     input_mode_cli_override: bool,
     _shell_subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PassiveOccurrenceQuery {
+    tab_id: TabId,
+    revision: u64,
+    word: String,
 }
 
 #[derive(Clone, Debug)]
@@ -504,6 +516,7 @@ impl LstGpuiApp {
             cleanup_confirmation: None,
             cleanup_message: None,
             clipboard_quit_bypass: None,
+            passive_occurrence_query: None,
             cursor_visible: true,
             find_chip_bounds_px: FindChipBounds::default(),
             app_menu_button_bounds_px: None,
@@ -522,6 +535,9 @@ impl LstGpuiApp {
         };
         let show_wrap = app.model.show_wrap();
         app.sync_tab_views(show_wrap);
+        // The production window focuses the editor immediately after
+        // construction, which is itself a valid occurrence trigger.
+        app.refresh_passive_occurrence_query();
 
         app._shell_subscriptions
             .push(cx.subscribe(&find_query_input, |this, _, event: &InputFieldEvent, cx| {
@@ -608,6 +624,11 @@ impl LstGpuiApp {
 
     pub(crate) fn set_focus(&mut self, target: FocusTarget) {
         if self.focus_target != target {
+            if target == FocusTarget::Editor {
+                self.refresh_passive_occurrence_query();
+            } else {
+                self.passive_occurrence_query = None;
+            }
             diagnostics::record_label("focus_queued", focus_trace_label(target));
             self.focus_target = target;
         }
@@ -662,6 +683,7 @@ impl LstGpuiApp {
             window.focus(&self.focus_handle);
             self.focus_last_applied = FocusTarget::Editor;
             self.force_editor_focus = false;
+            self.refresh_passive_occurrence_query();
             return;
         }
 
@@ -741,6 +763,32 @@ impl LstGpuiApp {
         (tab.id(), tab.revision(), tab.selection())
     }
 
+    fn refresh_passive_occurrence_query(&mut self) {
+        let tab = self.model.active_tab();
+        let selection = tab.selection();
+        self.passive_occurrence_query = (!selection.has_selection())
+            .then(|| identifier_range_at_char(tab.buffer(), selection.head()))
+            .flatten()
+            .map(|range| PassiveOccurrenceQuery {
+                tab_id: tab.id(),
+                revision: tab.revision(),
+                word: tab.buffer().slice(range).to_string(),
+            });
+    }
+
+    fn reconcile_passive_occurrence_query(&mut self, old: &(TabId, u64, Selection), new: &(TabId, u64, Selection)) {
+        if old.0 != new.0 {
+            self.refresh_passive_occurrence_query();
+        } else if old.1 != new.1 {
+            // Text input, edits, undo, reload, and every other buffer mutation
+            // invalidate the trigger. A later explicit cursor move or focus
+            // transition creates a fresh query.
+            self.passive_occurrence_query = None;
+        } else if old.2 != new.2 {
+            self.refresh_passive_occurrence_query();
+        }
+    }
+
     fn update_model(
         &mut self,
         cx: &mut Context<Self>,
@@ -769,6 +817,7 @@ impl LstGpuiApp {
             self.tab_bar_scroll.scroll_to_item(self.model.active_index());
         }
         let new_primary_state = self.primary_selection_state();
+        self.reconcile_passive_occurrence_query(&old_primary_state, &new_primary_state);
         // Own the X11 PRIMARY selection only when the selection changed within
         // the same tab: switching tabs must not clobber another application's
         // selection with this tab's stale one. Comparing (tab, revision,

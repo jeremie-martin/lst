@@ -8,7 +8,7 @@ use gpui::{
     InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement,
     Pixels, Render, SharedString, Stateful, StatefulInteractiveElement, Styled, Window,
 };
-use lst_editor::{selection::identifier_range_at_char, EditorCommand as Command, TabId};
+use lst_editor::{EditorCommand as Command, TabId};
 
 use crate::recent::{RecentFilter, RecentOrigin, RecentPresentation, RecentPreviewState};
 use crate::syntax::syntax_mode_for_language;
@@ -1893,10 +1893,11 @@ impl Render for LstGpuiApp {
         let show_search_decorations = self.model.find().visible;
         let (revision, syntax_mode, buffer, selection_set, occurrence_query, search_matches, active_search_match) = {
             let active_tab = self.model.active_tab();
-            let occurrence_query = (active_tab.selection_set().is_single() && !active_tab.selection().has_selection())
-                .then(|| identifier_range_at_char(active_tab.buffer(), active_tab.cursor_char()))
-                .flatten()
-                .map(|range| active_tab.buffer().slice(range).to_string());
+            let occurrence_query = self
+                .passive_occurrence_query
+                .as_ref()
+                .filter(|query| query.tab_id == active_tab.id() && query.revision == active_tab.revision())
+                .map(|query| query.word.clone());
             (
                 active_tab.revision(),
                 syntax_mode_for_language(active_tab.language()),

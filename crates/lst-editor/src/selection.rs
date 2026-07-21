@@ -787,9 +787,11 @@ pub fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     (line_start + start_char)..(line_start + end_char)
 }
 
-/// Returns the identifier containing `char_index`, or the identifier ending
-/// exactly at the display-line end. Unlike [`word_range_at_char`], whitespace
-/// and punctuation never produce a range.
+/// Returns the identifier touching the caret at `char_index`. The lookup is
+/// right-biased inside an identifier and left-biased at its trailing edge, so
+/// both caret positions at either end of a word resolve to that word. Unlike
+/// [`word_range_at_char`], whitespace and punctuation away from an identifier
+/// never produce a range.
 pub fn identifier_range_at_char(buffer: &Rope, char_index: usize) -> Option<Range<usize>> {
     let clamped = char_index.min(buffer.len_chars());
     let line = buffer.char_to_line(clamped);
@@ -797,7 +799,7 @@ pub fn identifier_range_at_char(buffer: &Rope, char_index: usize) -> Option<Rang
     let display_end = line_start + display_line_char_len(buffer, line);
     let probe = if clamped < display_end && is_identifier_occurrence_char(buffer.char(clamped)) {
         clamped
-    } else if clamped == display_end && clamped > line_start && is_identifier_occurrence_char(buffer.char(clamped - 1))
+    } else if clamped <= display_end && clamped > line_start && is_identifier_occurrence_char(buffer.char(clamped - 1))
     {
         clamped - 1
     } else {
@@ -1101,13 +1103,16 @@ mod identifier_tests {
     use super::*;
 
     #[test]
-    fn identifier_range_ignores_spacing_and_symbols_but_includes_line_end() {
-        let buffer = Rope::from_str("alpha + beta\n");
+    fn identifier_range_includes_both_edges_but_not_separator_interiors() {
+        let buffer = Rope::from_str("alpha  + beta\n");
 
         assert_eq!(identifier_range_at_char(&buffer, 1), Some(0..5));
-        assert_eq!(identifier_range_at_char(&buffer, 5), None);
+        assert_eq!(identifier_range_at_char(&buffer, 5), Some(0..5));
         assert_eq!(identifier_range_at_char(&buffer, 6), None);
-        assert_eq!(identifier_range_at_char(&buffer, 12), Some(8..12));
+        assert_eq!(identifier_range_at_char(&buffer, 7), None);
+        assert_eq!(identifier_range_at_char(&buffer, 8), None);
+        assert_eq!(identifier_range_at_char(&buffer, 9), Some(9..13));
+        assert_eq!(identifier_range_at_char(&buffer, 13), Some(9..13));
     }
 
     #[test]
