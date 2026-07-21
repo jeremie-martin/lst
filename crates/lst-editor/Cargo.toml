@@ -11,6 +11,7 @@ internal-invariants = []
 regex = { workspace = true }
 ropey = { workspace = true }
 unicode-segmentation = { workspace = true }
+unicode-ident = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

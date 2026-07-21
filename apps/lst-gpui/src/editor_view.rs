@@ -11,9 +11,9 @@ use crate::{
         theme::metrics,
     },
     viewport::{
-        byte_index_to_char, code_char_width, code_origin_pad, ensure_wrap_layout, line_display_text, max_scroll_left,
-        max_scroll_top, scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for, visual_row_for_char,
-        x_for_display_char, WrapLayoutInput,
+        byte_index_to_char, code_char_width, ensure_wrap_layout, line_display_text, max_scroll_left, max_scroll_top,
+        scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for, visual_row_for_char, x_for_display_char,
+        ViewportLayoutMetrics, WrapLayoutInput,
     },
     EditorScrollbarDrag, EditorTabView, FocusTarget, LstGpuiApp,
 };
@@ -128,7 +128,7 @@ impl LstGpuiApp {
         self.active_view().geometry.borrow().painted_wrap_columns
     }
 
-    pub(crate) fn status_details(&self) -> String {
+    pub(crate) fn status_detail_segments(&self) -> Vec<String> {
         let tab = self.active_tab();
         let (line, column) = self.active_cursor_line_col();
         let mut parts = vec![
@@ -170,7 +170,11 @@ impl LstGpuiApp {
             };
             parts.push(format!("Match {current}/{}", self.model.find().matches.len()));
         }
-        parts.join("  ")
+        parts
+    }
+
+    pub(crate) fn status_details(&self) -> String {
+        self.status_detail_segments().join("  ")
     }
 
     pub(crate) fn move_vertical(&mut self, delta: isize, select: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -197,6 +201,12 @@ impl LstGpuiApp {
         let layout = {
             let mut cache = cache.borrow_mut();
             let char_width = code_char_width(&mut cache, window, self.ui_scale(), self.theme(cx));
+            let layout_metrics = ViewportLayoutMetrics::new(
+                self.model.show_gutter(),
+                self.model.active_tab().line_count(),
+                char_width,
+                self.ui_scale(),
+            );
             ensure_wrap_layout(
                 &mut cache,
                 WrapLayoutInput {
@@ -204,7 +214,7 @@ impl LstGpuiApp {
                     revision,
                     viewport_width,
                     char_width,
-                    show_gutter: self.model.show_gutter(),
+                    layout_metrics,
                     show_wrap: self.model.show_wrap(),
                     scale: self.ui_scale(),
                 },
@@ -368,7 +378,7 @@ impl LstGpuiApp {
         }
 
         let scroll_left = scroll_left_for(&view.scroll);
-        let pad = code_origin_pad(self.model.show_gutter(), self.ui_scale());
+        let pad = geometry.code_origin_pad_at_paint;
         let visible_width = (viewport_bounds.size.width - pad).max(px(0.0));
         if visible_width <= px(0.0) {
             return false;
@@ -453,7 +463,7 @@ impl LstGpuiApp {
             // the scroll-staleness handling above.
             return self.active_tab().cursor_char();
         }
-        let code_origin_x = bounds.left() + code_origin_pad(self.model.show_gutter(), self.ui_scale());
+        let code_origin_x = bounds.left() + geometry.code_origin_pad_at_paint;
 
         let row_height = self.ui_px(metrics::row_height());
         let row = if geometry.rows.is_empty() {

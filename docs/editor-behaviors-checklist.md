@@ -223,11 +223,13 @@ multi-cursor policy is intentionally separate.
 - [x] **Soft wrap** - long logical lines wrap visually and cursor movement respects visual rows.
 - [x] **Visual vs logical line motion** - the editor distinguishes visual-row and logical-line movement.
 - [x] **Line numbers** - absolute, relative, and hybrid line-number modes are available. X11: `real_x11_chrome.rs`.
+- [x] **Capacity-aware gutter** - the gutter reserves three digits, grows and shrinks at decimal line-count boundaries, shares the editor background, and emphasizes cursor-bearing line numbers. X11: `real_x11_chrome.rs`; visual: `real_x11_visual.rs`.
 - [x] **Zoom controls** - keyboard zoom in/out/reset updates the visible status bar and returns to the default size. X11: `real_x11_chrome.rs`.
 - [x] **Theme toggle** - the visible theme control cycles the active theme label. X11: `real_x11_chrome.rs`.
 - [x] **Syntax highlighting** - tree-sitter highlighting for Rust, Python, JavaScript/JSX, TypeScript/TSX, JSON, TOML, YAML, Markdown, HTML, and CSS, with incremental reparsing, language injection (e.g. Markdown fenced code), and theme-driven colors. Covered by in-crate parser tests (`apps/lst-gpui/src/syntax`); no real-display color coverage yet.
 - [ ] **Ruler / column guides** - visible column guides can be shown.
 - [x] **Current line highlight** - the cursor line is visibly highlighted.
+- [x] **Identifier occurrence highlight** - a single collapsed cursor highlights exact, case-sensitive, Unicode whole-identifier occurrences around painted character windows. Adjacent wrapped windows are merged before identifier-boundary expansion, so an extreme identifier is traversed once rather than once per row. X11: `real_x11_chrome.rs`; visual: `real_x11_visual.rs`.
 - [x] **Cursor blink** - all visible carets share the configured editor blink state.
 - [x] **Scroll margin** - vertical and horizontal cursor reveal keep margin around the cursor.
 - [x] **Visible scrollbar when content overflows** - scrollbars appear and can be used when content overflows.
@@ -274,7 +276,7 @@ multi-cursor policy is intentionally separate.
 
 ## Summary
 
-- **Done:** 130
+- **Done:** 132
 - **Partial:** 13
 - **Missing:** 26
 
@@ -290,7 +292,7 @@ and the real-display X11 suite.
 
 1. Multi-cursor policy gaps: Vim-mode behavior, page/document-edge movement, join-line clusters, and find/replace over multiple selections.
 2. Selection polish: syntax-aware expand selection, additive drag selection, target-cursor drag behavior, and optional keyboard column selection.
-3. Visual polish: cursor blink, primary-cursor distinction, ruler/indent guides, minimap, and large-cursor-count responsiveness.
+3. Visual polish: primary-cursor distinction, ruler/indent guides, minimap, and large-cursor-count responsiveness.
 4. Jump list / navigation history.
 5. User-configurable keybindings and user-facing language override UI.
 6. Paste indentation, clipboard history, encoding preservation, and crash recovery.

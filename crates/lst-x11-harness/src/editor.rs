@@ -235,6 +235,205 @@ impl<'a> Editor<'a> {
         window::is_viewable(&self.display.conn, self.window.id)
     }
 
+    /// Raise the editor above overlapping desktop windows and give its client
+    /// window keyboard focus. Physical-display visual tests need both: the
+    /// compositor overlay observes the pixels users see, while setting X11
+    /// input focus alone does not change stacking order.
+    pub fn raise_and_focus(&mut self) -> Result<()> {
+        self.move_to_current_desktop()?;
+        let mut frame = self.window.id;
+        loop {
+            let parent = self.display.conn.query_tree(frame)?.reply()?.parent;
+            if parent == self.display.root || parent == x11rb::NONE {
+                break;
+            }
+            frame = parent;
+        }
+        self.move_frame_onscreen(frame)?;
+        self.display
+            .conn
+            .configure_window(
+                frame,
+                &xproto::ConfigureWindowAux::new().stack_mode(xproto::StackMode::ABOVE),
+            )?
+            .check()?;
+        let keep_above = xproto::ClientMessageEvent::new(
+            32,
+            self.window.id,
+            self.display.atoms.net_wm_state,
+            [1, self.display.atoms.net_wm_state_above, 0, 2, 0],
+        );
+        self.display
+            .conn
+            .send_event(
+                false,
+                self.display.root,
+                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
+                keep_above,
+            )?
+            .check()?;
+        let activate = xproto::ClientMessageEvent::new(
+            32,
+            self.window.id,
+            self.display.atoms.net_active_window,
+            [2, x11rb::CURRENT_TIME, 0, 0, 0],
+        );
+        self.display
+            .conn
+            .send_event(
+                false,
+                self.display.root,
+                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
+                activate,
+            )?
+            .check()?;
+        self.focus_for_keyboard()?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let state = self
+                .display
+                .conn
+                .get_property(
+                    false,
+                    self.window.id,
+                    self.display.atoms.net_wm_state,
+                    xproto::AtomEnum::ATOM,
+                    0,
+                    32,
+                )?
+                .reply()?;
+            if state
+                .value32()
+                .is_some_and(|mut values| values.any(|atom| atom == self.display.atoms.net_wm_state_above))
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::other("window manager did not raise editor above overlapping windows").into());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn move_to_current_desktop(&self) -> Result<()> {
+        let current = self
+            .display
+            .conn
+            .get_property(
+                false,
+                self.display.root,
+                self.display.atoms.net_current_desktop,
+                xproto::AtomEnum::CARDINAL,
+                0,
+                1,
+            )?
+            .reply()?
+            .value32()
+            .and_then(|mut values| values.next());
+        let Some(current) = current else {
+            return Ok(());
+        };
+
+        let desktop = xproto::ClientMessageEvent::new(
+            32,
+            self.window.id,
+            self.display.atoms.net_wm_desktop,
+            [current, 2, 0, 0, 0],
+        );
+        self.display
+            .conn
+            .send_event(
+                false,
+                self.display.root,
+                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
+                desktop,
+            )?
+            .check()?;
+        self.display.conn.flush()?;
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let assigned = self
+                .display
+                .conn
+                .get_property(
+                    false,
+                    self.window.id,
+                    self.display.atoms.net_wm_desktop,
+                    xproto::AtomEnum::CARDINAL,
+                    0,
+                    1,
+                )?
+                .reply()?
+                .value32()
+                .and_then(|mut values| values.next());
+            if assigned.is_none_or(|desktop| desktop == current || desktop == u32::MAX) {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(
+                    io::Error::other(format!("window manager did not move editor to desktop {current}")).into(),
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn move_frame_onscreen(&self, frame: xproto::Window) -> Result<()> {
+        let root_geometry = self.display.conn.get_geometry(self.display.root)?.reply()?;
+        let client_geometry = self.display.conn.get_geometry(self.window.id)?.reply()?;
+        let origin = self
+            .display
+            .conn
+            .translate_coordinates(self.window.id, self.display.root, 0, 0)?
+            .reply()?;
+        let right = i32::from(origin.dst_x) + i32::from(client_geometry.width);
+        let bottom = i32::from(origin.dst_y) + i32::from(client_geometry.height);
+        if origin.dst_x >= 0
+            && origin.dst_y >= 0
+            && right <= i32::from(root_geometry.width)
+            && bottom <= i32::from(root_geometry.height)
+        {
+            return Ok(());
+        }
+
+        self.display
+            .conn
+            .configure_window(frame, &xproto::ConfigureWindowAux::new().x(0).y(0))?
+            .check()?;
+        self.display.conn.flush()?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let origin = self
+                .display
+                .conn
+                .translate_coordinates(self.window.id, self.display.root, 0, 0)?
+                .reply()?;
+            let right = i32::from(origin.dst_x) + i32::from(client_geometry.width);
+            let bottom = i32::from(origin.dst_y) + i32::from(client_geometry.height);
+            if origin.dst_x >= 0
+                && origin.dst_y >= 0
+                && right <= i32::from(root_geometry.width)
+                && bottom <= i32::from(root_geometry.height)
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::other(format!(
+                    "window manager left editor outside the root after placement: ({}, {}) {}x{} on {}x{}",
+                    origin.dst_x,
+                    origin.dst_y,
+                    client_geometry.width,
+                    client_geometry.height,
+                    root_geometry.width,
+                    root_geometry.height,
+                ))
+                .into());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn focus_for_keyboard(&mut self) -> Result<()> {
         self.display
             .conn

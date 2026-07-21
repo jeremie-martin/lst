@@ -1,6 +1,6 @@
 use gpui::{
-    div, px, rgb, AnyElement, App, CursorStyle, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    SharedString, Stateful, StatefulInteractiveElement, Styled,
+    div, prelude::FluentBuilder, px, rgb, AnyElement, App, CursorStyle, InteractiveElement, IntoElement, ParentElement,
+    RenderOnce, SharedString, Stateful, StatefulInteractiveElement, Styled,
 };
 use smallvec::SmallVec;
 
@@ -10,6 +10,7 @@ use crate::ui::theme::{metrics, Theme};
 pub struct Tab {
     div: Stateful<gpui::Div>,
     active: bool,
+    separator_before: bool,
     theme: Theme,
     group_name: SharedString,
     children: SmallVec<[AnyElement; 2]>,
@@ -22,6 +23,7 @@ impl Tab {
         Self {
             div: div().id(id.clone()),
             active: false,
+            separator_before: false,
             theme,
             group_name: format!("tab-{id:?}").into(),
             children: SmallVec::new(),
@@ -31,6 +33,11 @@ impl Tab {
 
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
+        self
+    }
+
+    pub fn separator_before(mut self, separator_before: bool) -> Self {
+        self.separator_before = separator_before;
         self
     }
 
@@ -74,14 +81,15 @@ impl RenderOnce for Tab {
             .relative()
             .flex()
             .flex_none()
-            .h(metrics::px_for_rem(metrics::TAB_HEIGHT, rem_size))
+            .h_full()
             .min_w(metrics::px_for_rem(metrics::TAB_MIN_WIDTH, rem_size))
             .max_w(metrics::px_for_rem(metrics::TAB_MAX_WIDTH, rem_size))
             .px(metrics::px_for_rem(metrics::TAB_HORIZONTAL_PAD, rem_size))
             .gap(metrics::px_for_rem(metrics::SHELL_GAP, rem_size))
             .items_center()
-            .border_r_1()
-            .border_color(rgb(self.theme.role.border))
+            .when(self.separator_before, |tab| {
+                tab.border_l_1().border_color(rgb(self.theme.role.border))
+            })
             .bg(background)
             .cursor(CursorStyle::PointingHand)
             .hover(move |style| style.bg(rgb(hover_bg)))

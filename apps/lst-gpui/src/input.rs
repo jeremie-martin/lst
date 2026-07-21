@@ -14,8 +14,7 @@ use crate::{
     elapsed_ms,
     ui::theme::metrics,
     viewport::{
-        code_origin_pad, code_origin_x, row_contains_cursor, scroll_left_for, scroll_to_left, scroll_to_top,
-        scroll_top_for, x_for_global_char,
+        row_contains_cursor, scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for, x_for_global_char,
     },
     workspace_action::workspace_fallback_command,
     FocusTarget, LstGpuiApp,
@@ -66,17 +65,13 @@ impl LstGpuiApp {
         self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);
         let index = self.active_char_index_for_point(event.position);
-        // The gutter is painted as a fixed column at the element's left edge;
-        // code_origin_x_at_paint is horizontal-scroll-adjusted and drifts left
-        // of it once the view is scrolled right.
-        let gutter_edge = code_origin_pad(true, self.ui_scale());
-        let gutter_click = self.model.show_gutter()
-            && self
-                .active_view()
-                .geometry
-                .borrow()
-                .bounds
-                .is_some_and(|bounds| event.position.x < bounds.left() + gutter_edge);
+        let gutter_click = {
+            let geometry = self.active_view().geometry.borrow();
+            self.model.show_gutter()
+                && geometry
+                    .bounds
+                    .is_some_and(|bounds| event.position.x < bounds.left() + geometry.gutter_width_at_paint)
+        };
 
         if gutter_click && !event.modifiers.alt {
             let clicked = line_range_at_char(self.active_tab().buffer(), index);
@@ -800,7 +795,7 @@ impl EntityInputHandler for LstGpuiApp {
     fn bounds_for_range(
         &mut self,
         range_utf16: Range<usize>,
-        element_bounds: Bounds<Pixels>,
+        _element_bounds: Bounds<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
@@ -812,12 +807,7 @@ impl EntityInputHandler for LstGpuiApp {
             .rows
             .iter()
             .rfind(|row| row_contains_cursor(row, range.start))?;
-        let origin_x = code_origin_x(
-            element_bounds.left(),
-            self.model.show_gutter(),
-            self.ui_scale(),
-            scroll_left_for(&active_view.scroll),
-        );
+        let origin_x = geometry.code_origin_x_at_paint;
         let start_x = origin_x + x_for_global_char(row, range.start).unwrap_or_else(|| gpui::px(0.0));
         let end_x =
             origin_x + x_for_global_char(row, range.end.min(row.display_end_char)).unwrap_or_else(|| gpui::px(0.0));

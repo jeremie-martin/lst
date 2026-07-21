@@ -15,6 +15,7 @@ criterion = "0.8"
 regex = "1.11"
 ropey = "1.6.1"
 unicode-segmentation = "1.12"
+unicode-ident = "1.0"
 
 [profile.release]
 opt-level = 3

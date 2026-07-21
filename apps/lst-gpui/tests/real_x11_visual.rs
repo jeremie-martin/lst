@@ -10,7 +10,8 @@ mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use lst_x11_harness::{Editor, Screenshot, ScreenshotDiff};
 
@@ -18,35 +19,58 @@ use support::{secs, EditorTestExt, ScratchpadSession, SupportResult, TestResult}
 
 const CAPTURE_QUIET: Duration = Duration::from_millis(150);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
+const COMPOSITOR_CORNER_MASK_PX: u16 = 8;
+const STATE_PRESENTATION_SETTLE: Duration = Duration::from_millis(1_500);
+const PRESENTATION_SETTLE: Duration = Duration::from_millis(500);
 const FRESH_LAUNCHES: usize = 3;
-const RAISE_CLICK: (i32, i32) = (1320, 20);
 const VISUAL_FIXTURE_ROOT: &str = "/tmp/lst-x11-visual-fixtures";
 
 #[derive(Clone, Copy)]
 struct VisualScenario {
     name: &'static str,
+    theme: &'static str,
     capture: fn(&mut ScratchpadSession, usize) -> SupportResult<Screenshot>,
 }
 
 const SCENARIOS: &[VisualScenario] = &[
     VisualScenario {
         name: "clean-editor",
+        theme: "dark",
         capture: capture_clean_editor,
     },
     VisualScenario {
+        name: "clean-editor-light",
+        theme: "light",
+        capture: capture_clean_editor_light,
+    },
+    VisualScenario {
         name: "dirty-tab",
+        theme: "dark",
         capture: capture_dirty_tab,
     },
     VisualScenario {
         name: "find-panel",
+        theme: "dark",
         capture: capture_find_panel,
     },
     VisualScenario {
+        name: "identifier-highlights",
+        theme: "dark",
+        capture: capture_identifier_highlights,
+    },
+    VisualScenario {
+        name: "scrolled-gutter",
+        theme: "dark",
+        capture: capture_scrolled_gutter,
+    },
+    VisualScenario {
         name: "recent-files",
+        theme: "dark",
         capture: capture_recent_files,
     },
     VisualScenario {
         name: "multi-cursor-status",
+        theme: "dark",
         capture: capture_multi_cursor_status,
     },
 ];
@@ -55,9 +79,12 @@ const SCENARIOS: &[VisualScenario] = &[
 #[ignore = "requires a real X11 display plus xclip"]
 fn visual_scenarios_are_exactly_repeatable() -> TestResult {
     support::run_x11_test("visual-repeatability", |session| {
-        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\n[appearance]\ntheme = 'dark'\n")?;
         let update_baselines = std::env::var_os("LST_UPDATE_VISUAL_BASELINES").is_some();
         for scenario in SCENARIOS {
+            session.seed_settings(&format!(
+                "version = 1\n[editor]\ncursor_blink = false\n[appearance]\ntheme = '{}'\n",
+                scenario.theme
+            ))?;
             let expected = (scenario.capture)(session, 0)?;
             expected.write_ppm(session.artifacts().join(format!("{}-expected.ppm", scenario.name)))?;
             if update_baselines {
@@ -112,6 +139,25 @@ fn capture_clean_editor(session: &mut ScratchpadSession, run: usize) -> SupportR
     settled_screenshot(&mut editor, &artifacts, "clean-editor-same-window")
 }
 
+fn capture_clean_editor_light(session: &mut ScratchpadSession, run: usize) -> SupportResult<Screenshot> {
+    let dir = reset_fixture_dir("clean-editor-light")?;
+    let path = write_fixture(
+        &dir,
+        "main.rs",
+        "fn main() {\n    println!(\"visual snapshot\");\n}\n\nfn helper() -> usize {\n    42\n}\n",
+    )?;
+    let path_text = path_text(&path);
+    let artifacts = session.artifacts().to_path_buf();
+    let mut editor = session.open_file(&format!("visual-clean-editor-light-{run}"), &path)?;
+    prepare_visual_window(&mut editor)?;
+    editor.wait_state("visual light editor ready", secs(5), |record| {
+        record.active_tab_path.as_deref() == Some(path_text.as_str())
+            && record.theme_name == "Light"
+            && record.viewport.bounds_size_px.is_some()
+    })?;
+    settled_screenshot(&mut editor, &artifacts, "clean-editor-light-same-window")
+}
+
 fn capture_dirty_tab(session: &mut ScratchpadSession, run: usize) -> SupportResult<Screenshot> {
     let dir = reset_fixture_dir("dirty-tab")?;
     let path = write_fixture(&dir, "dirty.md", "alpha\nbeta\ngamma\n")?;
@@ -138,6 +184,42 @@ fn capture_find_panel(session: &mut ScratchpadSession, run: usize) -> SupportRes
     settled_screenshot(&mut editor, &artifacts, "find-panel-same-window")
 }
 
+fn capture_identifier_highlights(session: &mut ScratchpadSession, run: usize) -> SupportResult<Screenshot> {
+    let dir = reset_fixture_dir("identifier-highlights")?;
+    let path = write_fixture(
+        &dir,
+        "identifiers.rs",
+        "let target = source;\nlet copy = target;\nlet target_count = target;\n",
+    )?;
+    let artifacts = session.artifacts().to_path_buf();
+    let mut editor = session.open_file(&format!("visual-identifier-highlights-{run}"), &path)?;
+    prepare_visual_window(&mut editor)?;
+    editor.place_cursor_at_document_start()?;
+    editor.keys("<C-g>1:5<enter>")?;
+    editor.wait_state("visual identifier highlights ready", secs(5), |record| {
+        record.viewport.occurrence_highlights.len() == 3
+    })?;
+    settled_screenshot(&mut editor, &artifacts, "identifier-highlights-same-window")
+}
+
+fn capture_scrolled_gutter(session: &mut ScratchpadSession, run: usize) -> SupportResult<Screenshot> {
+    session.seed_settings(
+        "version = 1\n[editor]\ncursor_blink = false\nword_wrap = false\n[appearance]\ntheme = 'dark'\n",
+    )?;
+    let dir = reset_fixture_dir("scrolled-gutter")?;
+    let mut contents = "leading_identifier ".repeat(180);
+    contents.push_str("visible_tail");
+    let path = write_fixture(&dir, "long-line.txt", &contents)?;
+    let artifacts = session.artifacts().to_path_buf();
+    let mut editor = session.open_file(&format!("visual-scrolled-gutter-{run}"), &path)?;
+    prepare_visual_window(&mut editor)?;
+    editor.keys("<C-end>")?;
+    editor.wait_state("visual horizontal scroll ready", secs(5), |record| {
+        record.viewport.scroll_left_px > record.viewport.char_width_px * 20.0 && record.viewport.gutter_width_px > 0.0
+    })?;
+    settled_screenshot(&mut editor, &artifacts, "scrolled-gutter-same-window")
+}
+
 fn capture_recent_files(session: &mut ScratchpadSession, run: usize) -> SupportResult<Screenshot> {
     let dir = reset_fixture_dir("recent-files")?;
     let active = write_fixture(&dir, "active.md", "active editor tab\n")?;
@@ -158,8 +240,8 @@ fn capture_recent_files(session: &mut ScratchpadSession, run: usize) -> SupportR
         record.recent_panel_open
             && record.focused_input == "recent_query"
             && record.recent_panel_selected_path.as_deref() == Some(first_recent.as_str())
+            && !record.recent_panel_content_search_pending
     })?;
-    editor.wait_quiet(Duration::from_millis(500), CAPTURE_TIMEOUT)?;
     settled_screenshot(&mut editor, &artifacts, "recent-files-same-window")
 }
 
@@ -178,17 +260,37 @@ fn capture_multi_cursor_status(session: &mut ScratchpadSession, run: usize) -> S
 }
 
 fn settled_screenshot(editor: &mut Editor<'_>, artifacts: &Path, label: &str) -> SupportResult<Screenshot> {
-    editor.wait_quiet(CAPTURE_QUIET, CAPTURE_TIMEOUT)?;
-    let first = editor.screenshot()?;
-    editor.wait_quiet(CAPTURE_QUIET, CAPTURE_TIMEOUT)?;
-    let second = editor.screenshot()?;
-    assert_screenshot_exact(artifacts, label, &second, &first)?;
-    Ok(second)
+    let deadline = Instant::now() + CAPTURE_TIMEOUT;
+    // A state-trace record proves that app state and layout are ready, but
+    // presentation through the physical compositor can lag that record.
+    thread::sleep(STATE_PRESENTATION_SETTLE);
+    let mut previous = visual_screenshot(editor)?;
+    loop {
+        thread::sleep(CAPTURE_QUIET);
+        let current = visual_screenshot(editor)?;
+        if current.diff(&previous)?.is_exact() {
+            return Ok(current);
+        }
+        if Instant::now() >= deadline {
+            assert_screenshot_exact(artifacts, label, &current, &previous)?;
+            unreachable!("a non-exact screenshot comparison returns an error");
+        }
+        previous = current;
+    }
+}
+
+fn visual_screenshot(editor: &mut Editor<'_>) -> SupportResult<Screenshot> {
+    editor.raise_and_focus()?;
+    // Raising an occluded Vulkan window makes its latest backing image
+    // eligible for composition, but the overlay can still contain the last
+    // presented frame for a short interval. Sample only after that frame has
+    // reached the compositor.
+    thread::sleep(PRESENTATION_SETTLE);
+    editor.screenshot()?.mask_corner_squares(COMPOSITOR_CORNER_MASK_PX)
 }
 
 fn prepare_visual_window(editor: &mut Editor<'_>) -> SupportResult<()> {
-    editor.click_at(RAISE_CLICK.0, RAISE_CLICK.1)?;
-    editor.wait_quiet(CAPTURE_QUIET, CAPTURE_TIMEOUT)?;
+    editor.raise_and_focus()?;
     Ok(())
 }
 

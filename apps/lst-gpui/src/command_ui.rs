@@ -371,14 +371,14 @@ impl LstGpuiApp {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(metrics::px_for_scale(13.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_LG, scale))
                             .text_color(rgb(theme.role.text))
                             .child(spec.title),
                     )
                     .child(
                         div()
                             .flex_none()
-                            .text_size(metrics::px_for_scale(11.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
                             .text_color(rgb(theme.role.text_muted))
                             .child(spec.category),
                     )
@@ -386,7 +386,7 @@ impl LstGpuiApp {
                         row.child(
                             div()
                                 .flex_none()
-                                .text_size(metrics::px_for_scale(11.0, scale))
+                                .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
                                 .text_color(rgb(theme.role.text_subtle))
                                 .child(shortcut),
                         )
@@ -519,7 +519,7 @@ impl LstGpuiApp {
                                         div()
                                             .min_w_0()
                                             .truncate()
-                                            .text_size(metrics::px_for_scale(12.0, scale))
+                                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                                             .text_color(rgb(theme.role.text))
                                             .child(label),
                                     ),
@@ -529,7 +529,7 @@ impl LstGpuiApp {
                                     div()
                                         .min_w_0()
                                         .truncate()
-                                        .text_size(metrics::px_for_scale(10.0, scale))
+                                        .text_size(metrics::px_for_scale(metrics::UI_TEXT_XS, scale))
                                         .text_color(rgb(theme.role.text_muted))
                                         .child(path),
                                 )
@@ -609,14 +609,14 @@ impl LstGpuiApp {
                     .on_click(cx.listener(move |this, _, _, cx| this.queue_palette_command(command, cx)))
                     .child(
                         div()
-                            .text_size(metrics::px_for_scale(12.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                             .text_color(rgb(theme.role.text))
                             .child(spec.title),
                     )
                     .when_some(preferred_shortcut(&spec.shortcuts), |row, shortcut| {
                         row.child(
                             div()
-                                .text_size(metrics::px_for_scale(11.0, scale))
+                                .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
                                 .text_color(rgb(theme.role.text_muted))
                                 .child(shortcut),
                         )
@@ -729,7 +729,7 @@ impl LstGpuiApp {
                 div()
                     .id("language-menu")
                     .absolute()
-                    .right(metrics::px_for_scale(16.0, scale))
+                    .right(metrics::px_for_scale(metrics::FLOATING_MENU_EDGE_INSET, scale))
                     .bottom(metrics::px_for_scale(42.0, scale))
                     .w(metrics::px_for_scale(280.0, scale))
                     .max_h(metrics::px_for_scale(480.0, scale))
@@ -791,14 +791,14 @@ impl LstGpuiApp {
                     .on_click(cx.listener(move |this, _, _, cx| this.queue_palette_command(command, cx)))
                     .child(
                         div()
-                            .text_size(metrics::px_for_scale(12.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                             .text_color(rgb(theme.role.text))
                             .child(spec.title),
                     )
                     .when_some(preferred_shortcut(&spec.shortcuts), |row, shortcut| {
                         row.child(
                             div()
-                                .text_size(metrics::px_for_scale(11.0, scale))
+                                .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
                                 .text_color(rgb(theme.role.text_muted))
                                 .child(shortcut),
                         )
@@ -861,7 +861,7 @@ fn language_row(
         } else {
             theme.role.panel_bg
         }))
-        .text_size(metrics::px_for_scale(12.0, scale))
+        .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
         .text_color(rgb(if keyboard_selected || checked {
             theme.role.text
         } else {

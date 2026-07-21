@@ -3,6 +3,7 @@ use std::io;
 use std::path::Path;
 
 use x11rb::connection::Connection as _;
+use x11rb::protocol::composite::ConnectionExt as _;
 use x11rb::protocol::xproto::{self, ConnectionExt as _, Format, ImageOrder, Visualtype};
 use x11rb::rust_connection::RustConnection;
 
@@ -41,6 +42,34 @@ impl Screenshot {
         body.extend_from_slice(&self.rgb_pixels);
         fs::write(path, body)?;
         Ok(())
+    }
+
+    /// Normalize only the four compositor-owned corner squares. Unlike an
+    /// inset, this preserves every non-corner pixel along the application
+    /// edges so visual tests continue to cover shell and separator borders.
+    pub fn mask_corner_squares(&self, pixels: u16) -> Result<Self> {
+        let doubled = pixels
+            .checked_mul(2)
+            .ok_or_else(|| io::Error::other("screenshot corner mask overflow"))?;
+        if doubled > self.width || doubled > self.height {
+            return Err(io::Error::other("screenshot corner mask overlaps itself").into());
+        }
+
+        let mut masked = self.clone();
+        for y in 0..self.height {
+            let corner_row = y < pixels || y >= self.height - pixels;
+            if !corner_row {
+                continue;
+            }
+            for x in 0..self.width {
+                if x >= pixels && x < self.width - pixels {
+                    continue;
+                }
+                let start = (usize::from(y) * usize::from(self.width) + usize::from(x)) * 3;
+                masked.rgb_pixels[start..start + 3].fill(0);
+            }
+        }
+        Ok(masked)
     }
 
     pub fn diff(&self, expected: &Self) -> Result<ScreenshotDiff> {
@@ -169,18 +198,52 @@ pub(crate) fn capture_window(
     window: xproto::Window,
 ) -> Result<Screenshot> {
     let geometry = conn.get_geometry(window)?.reply()?;
-    let origin = conn.translate_coordinates(window, root, 0, 0)?.reply()?;
+    let overlay = conn.composite_get_overlay_window(root)?.reply()?.overlay_win;
+    let overlay_geometry = conn.get_geometry(overlay)?.reply()?;
+    let origin = conn.translate_coordinates(window, overlay, 0, 0)?.reply()?;
+    let capture_right = i32::from(origin.dst_x) + i32::from(geometry.width);
+    let capture_bottom = i32::from(origin.dst_y) + i32::from(geometry.height);
+    if origin.dst_x < 0
+        || origin.dst_y < 0
+        || capture_right > i32::from(overlay_geometry.width)
+        || capture_bottom > i32::from(overlay_geometry.height)
+    {
+        conn.composite_release_overlay_window(root)?.check()?;
+        return Err(io::Error::other(format!(
+            "editor capture rectangle ({}, {}) {}x{} falls outside compositor overlay {}x{}",
+            origin.dst_x,
+            origin.dst_y,
+            geometry.width,
+            geometry.height,
+            overlay_geometry.width,
+            overlay_geometry.height,
+        ))
+        .into());
+    }
     let reply = conn
         .get_image(
             xproto::ImageFormat::Z_PIXMAP,
-            root,
+            overlay,
             origin.dst_x,
             origin.dst_y,
             geometry.width,
             geometry.height,
             u32::MAX,
         )?
-        .reply()?;
+        .reply();
+    let released = conn.composite_release_overlay_window(root)?.check();
+    let reply = reply.map_err(|error| {
+        io::Error::other(format!(
+            "could not capture editor at ({}, {}) {}x{} from compositor overlay {}x{}: {error}",
+            origin.dst_x,
+            origin.dst_y,
+            geometry.width,
+            geometry.height,
+            overlay_geometry.width,
+            overlay_geometry.height,
+        ))
+    })?;
+    released?;
 
     let setup = conn.setup();
     let format = setup
@@ -357,5 +420,26 @@ mod tests {
         assert_eq!(diff.first_diff, Some((1, 1)));
         assert_eq!(diff.changed_bounds, Some((1, 1, 1, 1)));
         assert_eq!(diff.grid_changed_pixels[4], 1);
+    }
+
+    #[test]
+    fn corner_mask_preserves_non_corner_edges() {
+        let image = Screenshot {
+            width: 4,
+            height: 3,
+            rgb_pixels: (0..12).flat_map(|value| [value, value, value]).collect(),
+        };
+
+        let masked = image.mask_corner_squares(1).unwrap();
+
+        assert_eq!(masked.width, 4);
+        assert_eq!(masked.height, 3);
+        assert_eq!(
+            masked.rgb_pixels,
+            vec![
+                0, 0, 0, 1, 1, 1, 2, 2, 2, 0, 0, 0, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 0, 0, 0, 9, 9, 9, 10, 10, 10,
+                0, 0, 0,
+            ]
+        );
     }
 }

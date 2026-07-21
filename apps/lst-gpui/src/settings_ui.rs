@@ -345,7 +345,7 @@ impl LstGpuiApp {
 
     fn invalidate_editor_typography(&mut self) {
         for view in self.tab_views.values_mut() {
-            view.invalidate_visual_state();
+            view.cache.borrow_mut().invalidate_typography();
         }
     }
 
@@ -1189,7 +1189,7 @@ impl LstGpuiApp {
             content.push(settings_content_item(
                 div()
                     .py_2()
-                    .text_size(metrics::px_for_scale(12.0, scale))
+                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                     .text_color(rgb(theme.role.error_text))
                     .child(error),
                 scale,
@@ -1218,7 +1218,7 @@ impl LstGpuiApp {
             content.push(settings_content_item(
                 div()
                     .py_8()
-                    .text_size(metrics::px_for_scale(13.0, scale))
+                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_LG, scale))
                     .text_color(rgb(theme.role.text_muted))
                     .child(format!("No settings match “{search_query}”.")),
                 scale,
@@ -1251,7 +1251,7 @@ impl LstGpuiApp {
                     .child(
                         div()
                             .flex_none()
-                            .text_size(metrics::px_for_scale(16.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_TITLE, scale))
                             .text_color(rgb(theme.role.text))
                             .child("Settings"),
                     )
@@ -1324,13 +1324,13 @@ impl LstGpuiApp {
                     .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
                         div()
-                            .text_size(metrics::px_for_scale(15.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_HEADING, scale))
                             .text_color(rgb(theme.role.text))
                             .child("Reset all settings?"),
                     )
                     .child(
                         div()
-                            .text_size(metrics::px_for_scale(12.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                             .text_color(rgb(theme.role.text_subtle))
                             .child(
                                 "This restores editor, appearance, file, and keybinding preferences to their defaults.",
@@ -1381,7 +1381,7 @@ fn settings_section(label: &'static str, theme: Theme, scale: f32) -> impl IntoE
         .pb_2()
         .border_b_1()
         .border_color(rgb(theme.role.border))
-        .text_size(metrics::px_for_scale(13.0, scale))
+        .text_size(metrics::px_for_scale(metrics::UI_TEXT_LG, scale))
         .text_color(rgb(theme.role.text))
         .child(label)
 }
@@ -1418,7 +1418,7 @@ fn setting_row(
             div()
                 .flex_1()
                 .min_w_0()
-                .text_size(metrics::px_for_scale(12.0, scale))
+                .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                 .text_color(rgb(theme.role.text_subtle))
                 .child(label.into()),
         )
@@ -1467,7 +1467,7 @@ fn setting_choice(
         } else {
             theme.role.text
         }))
-        .text_size(metrics::px_for_scale(11.0, scale))
+        .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.bg(rgb(hover_bg)))
         .active(move |style| style.bg(rgb(pressed_bg)).opacity(0.82))
@@ -1496,7 +1496,7 @@ fn font_family_option(
             theme.role.panel_bg
         }))
         .text_color(rgb(theme.role.text))
-        .text_size(metrics::px_for_scale(11.0, scale))
+        .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
         .child(family)
@@ -1528,7 +1528,7 @@ fn danger_choice(
         }))
         .bg(rgb(theme.role.control_bg))
         .text_color(rgb(theme.role.error_text))
-        .text_size(metrics::px_for_scale(11.0, scale))
+        .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
         .child(label)
@@ -1542,7 +1542,7 @@ fn setting_value(value: impl Into<String>, theme: Theme, scale: f32) -> impl Int
     div()
         .max_w(metrics::px_for_scale(430.0, scale))
         .truncate()
-        .text_size(metrics::px_for_scale(11.0, scale))
+        .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
         .text_color(rgb(theme.role.text_muted))
         .child(value.into())
 }

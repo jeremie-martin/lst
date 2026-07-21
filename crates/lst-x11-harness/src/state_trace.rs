@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-pub const STATE_TRACE_SCHEMA_VERSION: u32 = 7;
+pub const STATE_TRACE_SCHEMA_VERSION: u32 = 8;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StateTraceRecord {
@@ -138,7 +138,7 @@ impl TraceCursor {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TraceRange {
     pub start: usize,
     pub end: usize,
@@ -187,6 +187,10 @@ pub struct TraceViewport {
     /// Combine with `char_width_px` to convert col → x.
     #[serde(default)]
     pub code_origin_x_px: f32,
+    #[serde(default)]
+    pub gutter_width_px: f32,
+    #[serde(default)]
+    pub occurrence_highlights: Vec<TraceRange>,
     pub rows: Vec<TraceRow>,
 }
 

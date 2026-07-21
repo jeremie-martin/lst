@@ -58,7 +58,7 @@ size where relevant.
 | --- | --- | --- |
 | `large-paste` | `paste_complete_ms` | Copies the large Rust corpus, switches to a second file tab, waits for app-traced select/tab/paste completion, saves once, then verifies the target file exactly matches the corpus. |
 | `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload into the generated medium Rust corpus, waits for every app-traced text input plus the next paint, saves once, then verifies the saved file exactly matches the expected text. |
-| `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using the generated large Rust corpus. |
+| `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using the generated large Rust corpus. After the primary typing measurement it moves the caret into the final identifier and reports visible-range occurrence-highlight cost. |
 | `scroll-highlighted` | `scroll_overrun_ms` | Scrolls down and back through the large Rust file on a fixed input schedule, then waits for redraw quiet. |
 | `scroll-plain` | `scroll_overrun_ms` | Same scroll trace using the generated large plain-text corpus, so syntax highlighting is out of the path. |
 | `open-large` | `open_to_quiet_ms` | Measures process spawn through benchmark window discovery and redraw quiet on the large Rust file. |

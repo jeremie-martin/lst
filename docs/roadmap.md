@@ -57,3 +57,5 @@ controls are visible. Remaining near-term work is:
   private invariants when a refactor touches those internals.
 - Performance work should use one benchmark scenario and one primary metric at a
   time, as described in `docs/performance-optimization.md`.
+- UI work follows the layout, typography, color, rendering, and review contract
+  in `docs/ui-quality.md`.

@@ -8,6 +8,8 @@
 
 mod support;
 
+use std::time::Duration;
+
 use support::{secs, EditorTestExt, TestResult};
 
 #[test]
@@ -60,9 +62,19 @@ fn home_and_end_target_the_current_wrapped_visual_row() -> TestResult {
         let path = session.seed_file("wrapped-boundaries.txt", &text)?;
         let mut editor = session.open_file("wrapped-visual-boundaries", &path)?;
 
-        let wrapped = editor.wait_state("multiple wrapped rows", secs(5), |record| {
+        editor.wait_state("multiple wrapped rows", secs(5), |record| {
             record.viewport.rows.iter().filter(|row| row.logical_line == 0).count() >= 2
         })?;
+        // Window discovery can observe the requested launch geometry before
+        // the nested window manager applies its final tile. Wait for a real
+        // DAMAGE-quiet interval, then consume the most recent trace so the
+        // click target and asserted boundaries describe one settled layout.
+        editor.wait_quiet(Duration::from_millis(500), secs(5))?;
+        let wrapped = editor.read_state()?;
+        assert!(
+            wrapped.viewport.rows.iter().filter(|row| row.logical_line == 0).count() >= 2,
+            "{wrapped:?}"
+        );
         let segments = wrapped
             .viewport
             .rows

@@ -150,7 +150,7 @@ impl Render for Tooltip {
             .border_1()
             .border_color(rgb(self.theme.role.border))
             .bg(rgb(self.theme.role.control_bg))
-            .text_size(metrics::px_for_rem(11.0, window.rem_size()))
+            .text_size(metrics::px_for_rem(metrics::UI_TEXT_SM, window.rem_size()))
             .text_color(rgb(self.theme.role.text))
             .child(self.text.clone())
     }

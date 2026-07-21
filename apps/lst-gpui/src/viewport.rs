@@ -7,7 +7,10 @@ use lst_editor::wrap::{
     build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, visual_line_count, wrap_segments, WrapLayout,
     WrappedSegment,
 };
-use lst_editor::{vim, DisplayLine, EditorTab, GutterMode, Selection, SelectionSet};
+use lst_editor::{
+    selection::{identifier_occurrence_ranges_in_text, is_identifier_occurrence_char},
+    vim, DisplayLine, EditorTab, GutterMode, Selection, SelectionSet,
+};
 use ropey::Rope;
 use std::{
     cell::RefCell,
@@ -35,6 +38,15 @@ pub(crate) struct ViewportCache {
     pub(crate) wrap_layout: Option<CachedWrapLayout>,
     max_unwrapped_line_width: Option<CachedUnwrappedLineWidth>,
     code_char_width: Option<CachedCodeCharWidth>,
+    occurrence_highlights: Option<CachedOccurrenceHighlights>,
+}
+
+#[derive(Clone)]
+struct CachedOccurrenceHighlights {
+    revision: u64,
+    query: String,
+    scan_windows: Vec<Range<usize>>,
+    ranges: Rc<[Range<usize>]>,
 }
 
 impl ViewportCache {
@@ -54,6 +66,15 @@ impl ViewportCache {
         self.code_lines.clear();
         self.gutter_lines.clear();
         self.max_unwrapped_line_width = None;
+    }
+
+    /// Invalidate every cache whose output depends on the configured editor
+    /// font. Content edits deliberately retain the measured character width;
+    /// a font-family change must not.
+    pub(crate) fn invalidate_typography(&mut self) {
+        self.clear_shaped_lines();
+        self.max_unwrapped_line_width = None;
+        self.code_char_width = None;
     }
 
     /// Advance a cached wrapped-row index after a same-line-topology edit.
@@ -133,6 +154,7 @@ pub(crate) struct PaintedRow {
 
 pub(crate) struct ViewportPaintState {
     pub(crate) rows: Vec<PaintedRow>,
+    pub(crate) occurrence_highlights: Rc<[Range<usize>]>,
 }
 
 #[derive(Default)]
@@ -156,11 +178,83 @@ pub(crate) struct ViewportGeometry {
     /// time so the state-trace channel and other consumers can convert
     /// (line, col) → pixels without `window.line_height()`.
     pub(crate) painted_row_height: Pixels,
+    /// Width reserved for the gutter at paint time. Zero when line numbers
+    /// are hidden. Mouse input and tracing consume this captured value rather
+    /// than independently reconstructing layout.
+    pub(crate) gutter_width_at_paint: Pixels,
+    /// Horizontal padding before code, including the dynamic gutter when it
+    /// is visible.
+    pub(crate) code_origin_pad_at_paint: Pixels,
     /// Window-local x where the first code character of an unwrapped line
     /// is painted (i.e., `bounds.left() + gutter_pad - horizontal_scroll`).
     /// Captured at paint time so consumers can convert (col) → window x via
     /// `code_origin_x_at_paint + col * painted_char_width`.
     pub(crate) code_origin_x_at_paint: Pixels,
+    /// Passive identifier occurrences that were visible in the prepared row
+    /// window. Stored with geometry because they are observable paint state.
+    pub(crate) occurrence_highlights: Rc<[Range<usize>]>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GutterLayout {
+    pub(crate) width: Pixels,
+    pub(crate) text_right: Pixels,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ViewportLayoutMetrics {
+    gutter: Option<GutterLayout>,
+    code_origin_pad: Pixels,
+}
+
+impl ViewportLayoutMetrics {
+    pub(crate) fn new(show_gutter: bool, line_count: usize, char_width: Pixels, scale: f32) -> Self {
+        let gutter = show_gutter.then(|| {
+            let digits = decimal_digits(line_count).max(metrics::GUTTER_MIN_DIGITS);
+            let left_pad = metrics::px_for_scale(metrics::GUTTER_LEFT_PAD, scale);
+            let right_pad = metrics::px_for_scale(metrics::GUTTER_RIGHT_PAD, scale);
+            let text_width = char_width * digits as f32;
+            let width = left_pad + text_width + right_pad;
+            GutterLayout {
+                width,
+                text_right: width - right_pad,
+            }
+        });
+        let code_origin_pad = gutter.map_or_else(
+            || metrics::px_for_scale(metrics::EDITOR_LEFT_PAD, scale),
+            |gutter| gutter.width,
+        );
+        Self {
+            gutter,
+            code_origin_pad,
+        }
+    }
+
+    pub(crate) fn gutter(self) -> Option<GutterLayout> {
+        self.gutter
+    }
+
+    pub(crate) fn gutter_width(self) -> Pixels {
+        self.gutter.map_or(px(0.0), |gutter| gutter.width)
+    }
+
+    pub(crate) fn code_origin_pad(self) -> Pixels {
+        self.code_origin_pad
+    }
+
+    pub(crate) fn code_origin_x(self, element_left: Pixels, horizontal_scroll: Pixels) -> Pixels {
+        element_left + self.code_origin_pad - horizontal_scroll
+    }
+}
+
+fn decimal_digits(mut value: usize) -> usize {
+    value = value.max(1);
+    let mut digits = 1;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits
 }
 
 #[derive(Clone)]
@@ -174,7 +268,7 @@ pub(crate) struct WrapLayoutInput<'a> {
     pub(crate) revision: u64,
     pub(crate) viewport_width: Pixels,
     pub(crate) char_width: Pixels,
-    pub(crate) show_gutter: bool,
+    pub(crate) layout_metrics: ViewportLayoutMetrics,
     pub(crate) show_wrap: bool,
     pub(crate) scale: f32,
 }
@@ -184,10 +278,11 @@ pub(crate) struct ViewportPreparation<'a> {
     pub(crate) lines: &'a [DisplayLine],
     pub(crate) revision: u64,
     pub(crate) syntax_mode: SyntaxMode,
-    pub(crate) show_gutter: bool,
+    pub(crate) layout_metrics: ViewportLayoutMetrics,
     pub(crate) gutter_mode: GutterMode,
     pub(crate) cursor_line: usize,
     pub(crate) cursor_lines: &'a [usize],
+    pub(crate) occurrence_query: Option<&'a str>,
     pub(crate) show_wrap: bool,
     pub(crate) viewport_scroll: &'a ScrollHandle,
     pub(crate) viewport_cache: &'a Rc<RefCell<ViewportCache>>,
@@ -200,7 +295,7 @@ pub(crate) struct ViewportPreparation<'a> {
 
 pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) bounds: Bounds<Pixels>,
-    pub(crate) show_gutter: bool,
+    pub(crate) layout_metrics: ViewportLayoutMetrics,
     pub(crate) selection_set: SelectionSet,
     pub(crate) search_matches: &'a [Range<usize>],
     pub(crate) active_search_match: Option<&'a Range<usize>>,
@@ -360,19 +455,6 @@ fn text_runs_for_segment(
     (runs, style_key)
 }
 
-pub(crate) fn code_origin_pad(show_gutter: bool, scale: f32) -> Pixels {
-    if show_gutter {
-        metrics::px_for_scale(metrics::GUTTER_WIDTH, scale)
-    } else {
-        metrics::px_for_scale(metrics::EDITOR_LEFT_PAD, scale)
-    }
-}
-
-/// X coordinate (in window-space pixels) where the code area begins.
-pub(crate) fn code_origin_x(element_left: Pixels, show_gutter: bool, scale: f32, horizontal_scroll: Pixels) -> Pixels {
-    element_left + code_origin_pad(show_gutter, scale) - horizontal_scroll
-}
-
 pub(crate) fn code_char_width(cache: &mut ViewportCache, window: &mut Window, scale: f32, theme: Theme) -> Pixels {
     let font_size = metrics::px_for_scale(metrics::code_font_size(), scale);
     let theme_key = theme.style_key();
@@ -498,7 +580,7 @@ fn shape_display_line(text: &str, scale: f32, theme: Theme, window: &mut Window)
 fn wrap_columns_for_viewport(
     viewport_width: Pixels,
     char_width: Pixels,
-    show_gutter: bool,
+    layout_metrics: ViewportLayoutMetrics,
     show_wrap: bool,
     scale: f32,
 ) -> usize {
@@ -507,7 +589,7 @@ fn wrap_columns_for_viewport(
     }
 
     let content_width =
-        (viewport_width - code_origin_pad(show_gutter, scale) - metrics::px_for_scale(metrics::CURSOR_WIDTH, scale))
+        (viewport_width - layout_metrics.code_origin_pad() - metrics::px_for_scale(metrics::CURSOR_WIDTH, scale))
             .max(px(1.0));
     let char_width = (char_width / px(1.0)).max(metrics::WRAP_CHAR_WIDTH_FALLBACK * scale);
     ((content_width / px(1.0)) / char_width).floor().max(1.0) as usize
@@ -519,11 +601,11 @@ pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInp
         revision,
         viewport_width,
         char_width,
-        show_gutter,
+        layout_metrics,
         show_wrap,
         scale,
     } = input;
-    let wrap_columns = wrap_columns_for_viewport(viewport_width, char_width, show_gutter, show_wrap, scale);
+    let wrap_columns = wrap_columns_for_viewport(viewport_width, char_width, layout_metrics, show_wrap, scale);
     if let Some(layout) = cache.wrap_layout.as_ref() {
         if layout.revision == revision
             && layout.layout.wrap_columns == wrap_columns
@@ -633,16 +715,126 @@ fn shape_cached_segment(
     Some(shaped)
 }
 
+fn expand_identifier_window(buffer: &Rope, mut window: Range<usize>) -> Range<usize> {
+    window.start = window.start.min(buffer.len_chars());
+    window.end = window.end.min(buffer.len_chars()).max(window.start);
+    let prefix_chars = buffer
+        .chars_at(window.start)
+        .reversed()
+        .take_while(|ch| is_identifier_occurrence_char(*ch))
+        .count();
+    let suffix_chars = buffer
+        .chars_at(window.end)
+        .take_while(|ch| is_identifier_occurrence_char(*ch))
+        .count();
+    window.start -= prefix_chars;
+    window.end += suffix_chars;
+    window
+}
+
+fn push_merged_window(windows: &mut Vec<Range<usize>>, window: Range<usize>) {
+    if window.is_empty() {
+        return;
+    }
+    if let Some(previous) = windows.last_mut() {
+        if window.start <= previous.end {
+            previous.end = previous.end.max(window.end);
+            return;
+        }
+    }
+    windows.push(window);
+}
+
+fn occurrence_scan_windows(
+    buffer: &Rope,
+    rows: &[PaintedRow],
+    bounds: Bounds<Pixels>,
+    layout_metrics: ViewportLayoutMetrics,
+    horizontal_scroll: Pixels,
+) -> Vec<Range<usize>> {
+    let code_origin_x = layout_metrics.code_origin_x(bounds.left(), horizontal_scroll);
+    let code_clip_left = bounds.left() + layout_metrics.gutter_width();
+    let visible_start_x = (code_clip_left - code_origin_x).max(px(0.0));
+    let visible_end_x = (bounds.right() - code_origin_x).max(visible_start_x);
+    let mut windows: Vec<Range<usize>> = Vec::new();
+
+    for row in rows {
+        let Some(code_line) = row.code_line.as_ref() else {
+            continue;
+        };
+        let text = code_line.text.as_ref();
+        let text_len_chars = text.chars().count();
+        let local_start = byte_index_to_char(text, code_line.closest_index_for_x(visible_start_x)).saturating_sub(1);
+        let local_end = byte_index_to_char(text, code_line.closest_index_for_x(visible_end_x))
+            .saturating_add(1)
+            .min(text_len_chars);
+        push_merged_window(
+            &mut windows,
+            row.line_start_char + local_start..row.line_start_char + local_end,
+        );
+    }
+
+    // Wrapped rows commonly describe adjacent pieces of the same logical
+    // line. Merge those visible pieces before walking to identifier
+    // boundaries so one pathological identifier is traversed once, not once
+    // per painted row.
+    let mut expanded = Vec::with_capacity(windows.len());
+    for window in windows {
+        push_merged_window(&mut expanded, expand_identifier_window(buffer, window));
+    }
+    expanded
+}
+
+fn visible_occurrence_highlights(
+    cache: &mut ViewportCache,
+    buffer: &Rope,
+    revision: u64,
+    query: Option<&str>,
+    scan_windows: Vec<Range<usize>>,
+) -> Rc<[Range<usize>]> {
+    let Some(query) = query else {
+        return Rc::from([]);
+    };
+    if let Some(cached) = cache.occurrence_highlights.as_ref() {
+        if cached.revision == revision && cached.query == query && cached.scan_windows == scan_windows {
+            return cached.ranges.clone();
+        }
+    }
+
+    let started = diagnostics::trace_enabled().then(Instant::now);
+    let mut ranges = Vec::new();
+    for window in &scan_windows {
+        let text = buffer.slice(window.clone()).to_string();
+        ranges.extend(
+            identifier_occurrence_ranges_in_text(&text, query)
+                .into_iter()
+                .map(|range| window.start + range.start..window.start + range.end),
+        );
+    }
+    if let Some(started) = started {
+        diagnostics::record_ms("occurrence_highlight_ms", started.elapsed().as_secs_f64() * 1000.0);
+    }
+    let ranges: Rc<[Range<usize>]> = ranges.into();
+    cache.occurrence_highlights = Some(CachedOccurrenceHighlights {
+        revision,
+        query: query.to_string(),
+        scan_windows,
+        ranges: ranges.clone(),
+    });
+    ranges
+}
+
 pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, window: &mut Window) -> ViewportPaintState {
     let ViewportPreparation {
         buffer,
         lines,
         revision,
         syntax_mode,
-        show_gutter,
+        layout_metrics,
         gutter_mode,
         cursor_line,
         cursor_lines,
+        occurrence_query,
         show_wrap,
         viewport_scroll,
         viewport_cache,
@@ -652,6 +844,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         scale,
         theme,
     } = input;
+    let show_gutter = layout_metrics.gutter().is_some();
     let row_height = metrics::px_for_scale(metrics::row_height(), scale);
     let viewport_height = if bounds.size.height > px(0.0) {
         bounds.size.height
@@ -670,7 +863,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         underline: None,
         strikethrough: None,
     };
-    let gutter_run = TextRun {
+    let gutter_muted_run = TextRun {
         len: 0,
         font,
         color: rgb(theme.role.text_muted).into(),
@@ -687,7 +880,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
             revision,
             viewport_width: bounds.size.width,
             char_width,
-            show_gutter,
+            layout_metrics,
             show_wrap,
             scale,
         },
@@ -761,11 +954,21 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
                 None
             };
             let gutter_line = if let Some(gutter_text) = gutter_text.as_ref() {
+                let cursor_line_number = cursor_lines.binary_search(&line_ix).is_ok();
+                let gutter_run = TextRun {
+                    color: rgb(if cursor_line_number {
+                        theme.role.text
+                    } else {
+                        theme.role.text_muted
+                    })
+                    .into(),
+                    ..gutter_muted_run.clone()
+                };
                 shape_cached_line(
                     &mut cache.gutter_lines,
                     line_ix,
                     SharedString::from(gutter_text.clone()),
-                    theme.style_key(),
+                    theme.style_key() * 2 + u64::from(cursor_line_number),
                     &gutter_run,
                     font_size,
                     window,
@@ -791,6 +994,10 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         }
     }
 
+    let scan_windows = occurrence_scan_windows(buffer, &rows, bounds, layout_metrics, scroll_left);
+    let occurrence_highlights =
+        visible_occurrence_highlights(&mut cache, buffer, revision, occurrence_query, scan_windows);
+
     *viewport_geometry.borrow_mut() = ViewportGeometry {
         bounds: Some(bounds),
         painted_revision: revision,
@@ -800,10 +1007,16 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         painted_wrap_columns: show_wrap.then_some(layout.wrap_columns),
         painted_char_width: char_width,
         painted_row_height: row_height,
-        code_origin_x_at_paint: code_origin_x(bounds.left(), show_gutter, scale, scroll_left),
+        gutter_width_at_paint: layout_metrics.gutter_width(),
+        code_origin_pad_at_paint: layout_metrics.code_origin_pad(),
+        code_origin_x_at_paint: layout_metrics.code_origin_x(bounds.left(), scroll_left),
+        occurrence_highlights: occurrence_highlights.clone(),
     };
 
-    ViewportPaintState { rows }
+    ViewportPaintState {
+        rows,
+        occurrence_highlights,
+    }
 }
 
 fn paint_range_background(
@@ -876,7 +1089,7 @@ fn paint_cursors(selection_set: &SelectionSet) -> Vec<PaintCursor> {
 pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window, cx: &mut App) {
     let ViewportPaintInput {
         bounds,
-        show_gutter,
+        layout_metrics,
         selection_set,
         search_matches,
         active_search_match,
@@ -889,25 +1102,41 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         horizontal_scroll,
         theme,
     } = input;
+    let ViewportPaintState {
+        rows,
+        occurrence_highlights,
+    } = paint_state;
     let line_height = window.line_height();
     let row_height = metrics::px_for_scale(metrics::row_height(), scale);
-    let gutter_origin_x = bounds.left() + metrics::px_for_scale(metrics::GUTTER_LEFT_PAD, scale);
-    let gutter_width = metrics::px_for_scale(metrics::GUTTER_WIDTH - metrics::GUTTER_LEFT_PAD - 8.0, scale);
-    let code_origin_x = code_origin_x(bounds.left(), show_gutter, scale, horizontal_scroll);
+    let gutter = layout_metrics.gutter();
+    let code_origin_x = layout_metrics.code_origin_x(bounds.left(), horizontal_scroll);
     let selections = selection_set.as_slice();
     let cursors = paint_cursors(&selection_set);
 
-    for row in paint_state.rows {
+    for row in rows {
         let selection_head_in_row = cursors.iter().any(|cursor| row_contains_cursor(&row, cursor.char));
-        let row_bounds = Bounds::new(point(bounds.left(), row.row_top), size(bounds.size.width, row_height));
-        window.paint_quad(fill(
-            row_bounds,
-            if selection_head_in_row {
-                rgb(theme.role.current_line_bg)
-            } else {
-                rgb(theme.role.editor_bg)
-            },
-        ));
+        if selection_head_in_row {
+            let highlight_left = bounds.left() + layout_metrics.gutter_width();
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(highlight_left, row.row_top),
+                    size((bounds.right() - highlight_left).max(px(0.0)), row_height),
+                ),
+                rgb(theme.role.current_line_bg),
+            ));
+        }
+
+        for occurrence in items_overlapping_row(occurrence_highlights.as_ref(), &row, Clone::clone) {
+            paint_range_background(
+                &row,
+                occurrence,
+                code_origin_x,
+                row_height,
+                scale,
+                theme.role.occurrence_match_bg,
+                window,
+            );
+        }
 
         for search_match in items_overlapping_row(search_matches, &row, Clone::clone) {
             paint_range_background(
@@ -988,16 +1217,16 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             ));
         }
 
-        if show_gutter {
+        if let Some(gutter) = gutter {
+            // The gutter shares the editor color, but it still owns a fixed
+            // occlusion layer. Without this fill, horizontally scrolled text
+            // and decorations can paint underneath the line numbers.
             window.paint_quad(fill(
-                Bounds::new(
-                    point(bounds.left(), row.row_top),
-                    size(metrics::px_for_scale(metrics::GUTTER_WIDTH, scale), row_height),
-                ),
-                rgb(theme.role.gutter_bg),
+                Bounds::new(point(bounds.left(), row.row_top), size(gutter.width, row_height)),
+                rgb(theme.role.editor_bg),
             ));
             if let Some(gutter_line) = row.gutter_line.as_ref() {
-                let gutter_x = gutter_origin_x + (gutter_width - gutter_line.width);
+                let gutter_x = bounds.left() + gutter.text_right - gutter_line.width;
                 let _ = gutter_line.paint(point(gutter_x, row.row_top), line_height, window, cx);
             }
         }
@@ -1064,6 +1293,55 @@ mod tests {
             end,
             role: SyntaxRole::Keyword,
         }
+    }
+
+    #[test]
+    fn gutter_layout_is_stable_through_three_digits_and_grows_by_one_digit() {
+        let char_width = px(8.0);
+        let one = ViewportLayoutMetrics::new(true, 1, char_width, 1.0);
+        let nine_ninety_nine = ViewportLayoutMetrics::new(true, 999, char_width, 1.0);
+        let one_thousand = ViewportLayoutMetrics::new(true, 1_000, char_width, 1.0);
+
+        assert_eq!(one.gutter_width(), nine_ninety_nine.gutter_width());
+        assert_eq!(
+            one_thousand.gutter_width() - nine_ninety_nine.gutter_width(),
+            char_width
+        );
+    }
+
+    #[test]
+    fn identifier_scan_windows_expand_only_to_the_surrounding_identifier() {
+        let buffer = Rope::from_str("prefix alpha_suffix omega");
+
+        assert_eq!(expand_identifier_window(&buffer, 10..12), 7..19);
+    }
+
+    #[test]
+    fn adjacent_wrapped_windows_merge_before_identifier_expansion() {
+        let buffer = Rope::from_str(&"a".repeat(30_000));
+        let mut windows = Vec::new();
+        for start in (0..7_224).step_by(168) {
+            push_merged_window(&mut windows, start..(start + 168));
+        }
+
+        assert_eq!(windows, vec![0..7_224]);
+        assert_eq!(expand_identifier_window(&buffer, windows.remove(0)), 0..30_000);
+    }
+
+    #[test]
+    fn typography_invalidation_discards_the_measured_character_width() {
+        let mut cache = ViewportCache {
+            code_char_width: Some(CachedCodeCharWidth {
+                font_size: px(13.0),
+                theme_key: 1,
+                width: px(8.0),
+            }),
+            ..ViewportCache::default()
+        };
+
+        cache.invalidate_typography();
+
+        assert!(cache.code_char_width.is_none());
     }
 
     #[test]

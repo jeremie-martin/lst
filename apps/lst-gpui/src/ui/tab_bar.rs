@@ -78,10 +78,10 @@ impl RenderOnce for TabBar {
             .id(self.id)
             .flex()
             .w_full()
-            .h(metrics::px_for_rem(metrics::TAB_HEIGHT + 1.0, rem_size))
+            .h(metrics::px_for_rem(metrics::TAB_HEIGHT, rem_size))
             .overflow_hidden()
             .bg(rgb(self.theme.role.panel_bg))
-            .border_1()
+            .border_b_1()
             .border_color(rgb(self.theme.role.border))
             .children(
                 (!self.start_children.is_empty()).then_some(
@@ -89,7 +89,7 @@ impl RenderOnce for TabBar {
                         .flex_none()
                         .flex()
                         .h_full()
-                        .px(metrics::px_for_rem(metrics::SHELL_EDGE_PAD, rem_size))
+                        .px(metrics::px_for_rem(metrics::TAB_BAR_EDGE_PAD, rem_size))
                         .gap(metrics::px_for_rem(metrics::SHELL_GAP, rem_size))
                         .items_center()
                         .border_r_1()
@@ -106,6 +106,8 @@ impl RenderOnce for TabBar {
                         .flex()
                         .h_full()
                         .items_center()
+                        .border_l_1()
+                        .border_color(rgb(self.theme.role.border))
                         .children(self.end_children)
                         .into_any_element(),
                 ),

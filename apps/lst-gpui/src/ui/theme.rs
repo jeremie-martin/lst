@@ -61,11 +61,11 @@ pub(crate) struct RoleColors {
     pub(crate) accent_text: u32,
     pub(crate) error_text: u32,
     pub(crate) selection_bg: u32,
+    pub(crate) occurrence_match_bg: u32,
     pub(crate) search_match_bg: u32,
     pub(crate) search_active_match_bg: u32,
     pub(crate) caret: u32,
     pub(crate) current_line_bg: u32,
-    pub(crate) gutter_bg: u32,
     pub(crate) scrollbar_thumb: u32,
     pub(crate) scrollbar_thumb_active: u32,
 }
@@ -153,11 +153,11 @@ const DARK: Theme = Theme {
         accent_text: 0xFFFFFF,
         error_text: 0xF14C4C,
         selection_bg: 0x264F78,
+        occurrence_match_bg: 0x2C3E50,
         search_match_bg: 0x3A3D41,
         search_active_match_bg: 0x6B4F1D,
         caret: 0xCCCCCC,
         current_line_bg: 0x2A2D2E,
-        gutter_bg: 0x181818,
         scrollbar_thumb: 0x5A5A5A,
         scrollbar_thumb_active: 0x808080,
     },
@@ -199,11 +199,11 @@ const LIGHT: Theme = Theme {
         accent_text: 0xFFFFFF,
         error_text: 0xCF222E,
         selection_bg: 0xADD6FF,
+        occurrence_match_bg: 0xE2EEF9,
         search_match_bg: 0xFFF2CC,
         search_active_match_bg: 0xF4B400,
         caret: 0x1F2328,
         current_line_bg: 0xF6F8FA,
-        gutter_bg: 0xF6F8FA,
         scrollbar_thumb: 0xB8B8B8,
         scrollbar_thumb_active: 0x8C8C8C,
     },
@@ -234,6 +234,17 @@ pub mod typography {
 
     pub const PRIMARY_FONT_FAMILY: &str = "TX-02";
 
+    fn font_with_fallbacks(family: impl Into<String>) -> Font {
+        let mut font = font(family.into());
+        font.fallbacks = Some(FontFallbacks::from_fonts(vec![
+            "JetBrains Mono".to_string(),
+            ".ZedMono".to_string(),
+            "Lilex".to_string(),
+            "IBM Plex Mono".to_string(),
+        ]));
+        font
+    }
+
     fn configured_family() -> &'static RwLock<String> {
         static FAMILY: OnceLock<RwLock<String>> = OnceLock::new();
         FAMILY.get_or_init(|| RwLock::new(PRIMARY_FONT_FAMILY.to_string()))
@@ -250,14 +261,14 @@ pub mod typography {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        let mut font = font(family);
-        font.fallbacks = Some(FontFallbacks::from_fonts(vec![
-            "JetBrains Mono".to_string(),
-            ".ZedMono".to_string(),
-            "Lilex".to_string(),
-            "IBM Plex Mono".to_string(),
-        ]));
-        font
+        font_with_fallbacks(family)
+    }
+
+    /// Chrome typography is stable even when the user changes the editor
+    /// font. Keeping both roles explicit prevents status and input geometry
+    /// from changing as an accidental side effect of a code-font preference.
+    pub fn ui_font() -> Font {
+        font_with_fallbacks(PRIMARY_FONT_FAMILY)
     }
 }
 
@@ -273,8 +284,18 @@ pub mod metrics {
     pub const WINDOW_WIDTH: f32 = 1360.0;
     pub const WINDOW_HEIGHT: f32 = 860.0;
     pub const SHELL_GAP: f32 = 8.0;
-    pub const SHELL_EDGE_PAD: f32 = SHELL_GAP;
-    pub const STATUS_HEIGHT_PAD: f32 = 2.0;
+    pub const TAB_BAR_EDGE_PAD: f32 = SHELL_GAP;
+    pub const FLOATING_MENU_EDGE_INSET: f32 = 16.0;
+    pub const UI_TEXT_XS: f32 = 10.0;
+    pub const UI_TEXT_SM: f32 = 11.0;
+    pub const UI_TEXT_SM_LINE_HEIGHT: f32 = 15.0;
+    pub const UI_TEXT_MD: f32 = 12.0;
+    pub const UI_TEXT_LG: f32 = 13.0;
+    pub const UI_TEXT_HEADING: f32 = 15.0;
+    pub const UI_TEXT_TITLE: f32 = 16.0;
+    pub const STATUS_TEXT_SIZE: f32 = UI_TEXT_MD;
+    pub const STATUS_TEXT_LINE_HEIGHT: f32 = 18.0;
+    pub const STATUS_VERTICAL_PAD: f32 = 4.0;
 
     pub const TAB_HEIGHT: f32 = 34.0;
     pub const TAB_MIN_WIDTH: f32 = 96.0;
@@ -291,11 +312,12 @@ pub mod metrics {
     pub const INPUT_TEXT_LINE_HEIGHT: f32 = 18.0;
 
     pub const DEFAULT_CODE_FONT_SIZE: f32 = 13.0;
-    pub const GUTTER_WIDTH: f32 = 58.0;
+    pub const GUTTER_MIN_DIGITS: usize = 3;
+    pub const GUTTER_LEFT_PAD: f32 = 8.0;
+    pub const GUTTER_RIGHT_PAD: f32 = 14.0;
     pub const CURSOR_WIDTH: f32 = 2.0;
     pub const VIEWPORT_OVERSCAN_LINES: usize = 6;
     pub const EDITOR_LEFT_PAD: f32 = 18.0;
-    pub const GUTTER_LEFT_PAD: f32 = 12.0;
     pub const WRAP_CHAR_WIDTH_FALLBACK: f32 = 7.8;
     pub const SCROLLBAR_TRACK_WIDTH: f32 = 10.0;
     pub const SCROLLBAR_THUMB_WIDTH: f32 = 6.0;

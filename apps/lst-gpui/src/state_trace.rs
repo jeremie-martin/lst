@@ -24,7 +24,7 @@ use crate::{
     WorkspaceSurface,
 };
 
-pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 7;
+pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 8;
 
 /// Holds the state-trace path and emitter state. Constructed once at app
 /// init from the env var; subsequent calls to `try_emit` are no-ops when
@@ -217,6 +217,8 @@ pub(crate) struct TraceViewport {
     /// Window-local x of the first code char on an unwrapped line. See
     /// `viewport::ViewportGeometry::code_origin_x_at_paint` for details.
     pub code_origin_x_px: f32,
+    pub gutter_width_px: f32,
+    pub occurrence_highlights: Vec<TraceRange>,
     pub rows: Vec<TraceRow>,
 }
 
@@ -506,6 +508,15 @@ impl LstGpuiApp {
             scroll_top_px: f32::from(geometry.scroll_top_at_paint),
             scroll_left_px: f32::from(geometry.scroll_left_at_paint),
             code_origin_x_px: f32::from(geometry.code_origin_x_at_paint),
+            gutter_width_px: f32::from(geometry.gutter_width_at_paint),
+            occurrence_highlights: geometry
+                .occurrence_highlights
+                .iter()
+                .map(|range| TraceRange {
+                    start: range.start,
+                    end: range.end,
+                })
+                .collect(),
             rows,
         }
     }

@@ -81,6 +81,11 @@ DISPLAY=:0 cargo nextest run --profile x11-tdd -p lst-gpui --tests --run-ignored
 DISPLAY=:0 cargo nextest run --profile x11-regression -p lst-gpui --tests --run-ignored only
 ```
 
+Visual baselines compare exact pixels after normalizing four small corner
+squares. The mask excludes compositor-owned rounded-corner antialiasing while
+preserving every non-corner pixel along the tab, viewport, status-bar, and side
+edges.
+
 The `x11-nested` profile is the blocking accepted-behavior filter. It includes
 every `real_x11_*` suite except `real_x11_visual`. `x11-stress` runs the physical
 set repeatedly for flake detection; use `--stress-count` with `x11-nested`, as

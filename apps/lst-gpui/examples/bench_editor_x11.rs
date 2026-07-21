@@ -40,6 +40,7 @@ const BUTTON_LEFT: u8 = 1;
 const BUTTON_WHEEL_UP: u8 = 4;
 const BUTTON_WHEEL_DOWN: u8 = 5;
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
+const KEYSYM_LEFT: u32 = 0xff51;
 const KEYSYM_TAB: u32 = 0xff09;
 const KEYSYM_SPACE: u32 = 0x20;
 
@@ -563,6 +564,26 @@ impl Bench {
             )?;
             let damage_events = 0u64;
             let typing_input_to_quiet_ms = elapsed_ms(typing_started);
+            if scenario == Scenario::TypingLarge {
+                let occurrence_count = read_editor_trace(&trace_path)?
+                    .count("occurrence_highlight_ms")
+                    .unwrap_or(0);
+                // The fixed payload ends with a space immediately before the
+                // original corpus. Move into its final identifier after the
+                // primary typing timing so this scenario also samples the
+                // passive occurrence path without changing saved text.
+                for _ in 0..2 {
+                    inject_key_press(&self.conn, self.root, self.keycodes.left)?;
+                    inject_key_release(&self.conn, self.root, self.keycodes.left)?;
+                }
+                self.conn.flush()?;
+                wait_for_trace_count(
+                    &trace_path,
+                    "occurrence_highlight_ms",
+                    occurrence_count + 1,
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
+            }
             let save_count = read_editor_trace(&trace_path)?.count("save_complete").unwrap_or(0);
             let save_started = Instant::now();
             inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.s)?;
@@ -620,6 +641,20 @@ impl Bench {
                 "viewport_paint_ms_sum",
                 "viewport_paint_ms_max",
                 "viewport_paint_ms_count",
+            );
+            // No identifier under the caret is a valid zero-work fast path,
+            // so keep the benchmark schema stable even when no occurrence
+            // timing sample was emitted.
+            metrics.set("occurrence_highlight_ms_sum", 0.0);
+            metrics.set("occurrence_highlight_ms_max", 0.0);
+            metrics.set("occurrence_highlight_ms_count", 0.0);
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "occurrence_highlight_ms",
+                "occurrence_highlight_ms_sum",
+                "occurrence_highlight_ms_max",
+                "occurrence_highlight_ms_count",
             );
             Ok(metrics)
         })();
@@ -1106,6 +1141,9 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "save_verify_ms",
             "viewport_prepare_ms_sum",
             "viewport_prepare_ms_max",
+            "occurrence_highlight_ms_sum",
+            "occurrence_highlight_ms_max",
+            "occurrence_highlight_ms_count",
             "viewport_paint_ms_sum",
             "viewport_paint_ms_max",
             "user_cpu_ms",
@@ -1984,6 +2022,7 @@ impl Atoms {
 
 struct Keycodes {
     control_l: xproto::Keycode,
+    left: xproto::Keycode,
     a: xproto::Keycode,
     c: xproto::Keycode,
     f: xproto::Keycode,
@@ -2011,6 +2050,7 @@ impl Keycodes {
 
         Ok(Self {
             control_l: find_keycode(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
+            left: find_keycode(&reply, setup.min_keycode, KEYSYM_LEFT, active_group)?,
             a: *lower.get(&'a').expect("resolved lowercase a"),
             c: *lower.get(&'c').expect("resolved lowercase c"),
             f: *lower.get(&'f').expect("resolved lowercase f"),
@@ -2144,6 +2184,13 @@ mod tests {
     }
 
     #[test]
+    fn typing_payload_supports_the_post_typing_identifier_probe() {
+        let payload = typing_payload(TYPING_CHARS);
+        assert!(payload.ends_with("s "));
+        assert_eq!(payload.chars().count(), TYPING_CHARS);
+    }
+
+    #[test]
     fn median_uses_upper_middle_for_existing_benchmark_style() {
         assert_eq!(median_f64(&[4.0, 1.0, 2.0]).unwrap(), 2.0);
         assert_eq!(median_f64(&[4.0, 1.0, 2.0, 3.0]).unwrap(), 3.0);
@@ -2158,5 +2205,20 @@ mod tests {
         assert_eq!(trace.max("text_input_apply_ms"), Some(2.5));
         assert_eq!(trace.count("text_input_apply_ms"), Some(2));
         assert_eq!(trace.last("find_query_len"), Some(3.0));
+    }
+
+    #[test]
+    fn aggregate_overrides_zero_defaults_when_samples_exist() {
+        let trace = EditorTrace::parse("occurrence_highlight_ms=0.25\noccurrence_highlight_ms=0.75\n");
+        let mut metrics = RunMetrics::new(1, 1);
+        metrics.set("sum", 0.0);
+        metrics.set("max", 0.0);
+        metrics.set("count", 0.0);
+
+        add_trace_aggregate(&mut metrics, &trace, "occurrence_highlight_ms", "sum", "max", "count");
+
+        assert_eq!(metrics.get("sum").unwrap(), 1.0);
+        assert_eq!(metrics.get("max").unwrap(), 0.75);
+        assert_eq!(metrics.get("count").unwrap(), 2.0);
     }
 }

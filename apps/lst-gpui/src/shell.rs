@@ -8,13 +8,13 @@ use gpui::{
     InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement,
     Pixels, Render, SharedString, Stateful, StatefulInteractiveElement, Styled, Window,
 };
-use lst_editor::{EditorCommand as Command, TabId};
+use lst_editor::{selection::identifier_range_at_char, EditorCommand as Command, TabId};
 
 use crate::recent::{RecentFilter, RecentOrigin, RecentPresentation, RecentPreviewState};
 use crate::syntax::syntax_mode_for_language;
 use crate::viewport::{
-    buffer_content_height, code_char_width, code_origin_pad, ensure_wrap_layout, max_unwrapped_line_width,
-    paint_viewport, prepare_viewport_paint_state, scroll_left_for, ViewportPaintInput, ViewportPreparation,
+    buffer_content_height, code_char_width, ensure_wrap_layout, max_unwrapped_line_width, paint_viewport,
+    prepare_viewport_paint_state, scroll_left_for, ViewportLayoutMetrics, ViewportPaintInput, ViewportPreparation,
     WrapLayoutInput,
 };
 use crate::workspace_action::attach_workspace_actions;
@@ -68,6 +68,7 @@ impl LstGpuiApp {
 
         UiTab::new(("tab", ix), theme)
             .active(active)
+            .separator_before(ix > 0)
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
                     this.hovered_tab = Some(ix);
@@ -141,7 +142,6 @@ impl LstGpuiApp {
     }
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let scale = self.ui_scale();
         let theme = self.theme(cx);
         let entity = cx.entity();
         let recent_button = {
@@ -170,11 +170,9 @@ impl LstGpuiApp {
         let all_tabs_button = div()
             .flex()
             .flex_none()
-            .h(metrics::px_for_scale(metrics::TAB_HEIGHT, scale))
+            .h_full()
             .px_1()
             .items_center()
-            .border_l_1()
-            .border_color(rgb(theme.role.border))
             .on_children_prepainted({
                 let entity = entity.clone();
                 move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
@@ -196,11 +194,9 @@ impl LstGpuiApp {
         let new_tab_button = div()
             .flex()
             .flex_none()
-            .h(metrics::px_for_scale(metrics::TAB_HEIGHT, scale))
+            .h_full()
             .px_2()
             .items_center()
-            .border_r_1()
-            .border_color(rgb(theme.role.border))
             .on_children_prepainted({
                 let entity = entity.clone();
                 move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
@@ -306,7 +302,6 @@ impl LstGpuiApp {
             .child(
                 div()
                     .flex_none()
-                    .font(typography::primary_font())
                     .text_size(metrics::px_for_scale(metrics::INPUT_TEXT_SIZE, scale))
                     .text_color(rgb(theme.role.text_muted))
                     .child(match_label),
@@ -652,7 +647,7 @@ impl LstGpuiApp {
                     } else {
                         theme.role.panel_bg
                     }))
-                    .text_size(metrics::px_for_scale(11.0, scale))
+                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
                     .text_color(rgb(if active { theme.role.text } else { theme.role.text_muted }))
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |style| style.bg(rgb(theme.role.control_bg)))
@@ -730,14 +725,14 @@ impl LstGpuiApp {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(metrics::px_for_scale(12.0, scale))
+                                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                                     .text_color(rgb(theme.role.text))
                                     .child(file_name),
                             )
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(metrics::px_for_scale(10.0, scale))
+                                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_XS, scale))
                                     .text_color(rgb(theme.role.text_muted))
                                     .child(parent),
                             ),
@@ -749,7 +744,7 @@ impl LstGpuiApp {
                             .py_1()
                             .rounded_sm()
                             .bg(rgb(theme.role.control_bg))
-                            .text_size(metrics::px_for_scale(10.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_XS, scale))
                             .text_color(rgb(theme.role.text_subtle))
                             .child(match origin {
                                 RecentOrigin::Regular => "File",
@@ -819,7 +814,7 @@ impl LstGpuiApp {
                             .child(filters)
                             .child(
                                 div()
-                                    .text_size(metrics::px_for_scale(10.0, scale))
+                                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_XS, scale))
                                     .text_color(rgb(theme.role.text_muted))
                                     .child(if searching {
                                         "Searching contents…".to_string()
@@ -860,7 +855,7 @@ impl LstGpuiApp {
                                             div()
                                                 .px_3()
                                                 .py_3()
-                                                .text_size(metrics::px_for_scale(12.0, scale))
+                                                .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                                                 .text_color(rgb(theme.role.text_muted))
                                                 .child(message),
                                         )
@@ -950,7 +945,7 @@ impl LstGpuiApp {
                     .child(
                         div()
                             .flex_none()
-                            .text_size(metrics::px_for_scale(10.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_XS, scale))
                             .text_color(rgb(theme.role.text_muted))
                             .child(match origin {
                                 RecentOrigin::Regular => "File",
@@ -962,8 +957,8 @@ impl LstGpuiApp {
                 div()
                     .flex_none()
                     .truncate()
-                    .text_size(metrics::px_for_scale(11.0, scale))
-                    .line_height(metrics::px_for_scale(15.0, scale))
+                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
+                    .line_height(metrics::px_for_scale(metrics::UI_TEXT_SM_LINE_HEIGHT, scale))
                     .text_color(rgb(theme.role.text_muted))
                     .child(parent),
             )
@@ -974,8 +969,8 @@ impl LstGpuiApp {
                     .overflow_hidden()
                     .whitespace_normal()
                     .line_clamp(6)
-                    .text_size(metrics::px_for_scale(11.0, scale))
-                    .line_height(metrics::px_for_scale(15.0, scale))
+                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
+                    .line_height(metrics::px_for_scale(metrics::UI_TEXT_SM_LINE_HEIGHT, scale))
                     .text_color(rgb(preview_color))
                     .child(preview_text),
             )
@@ -1159,14 +1154,14 @@ impl LstGpuiApp {
                     .gap_1()
                     .child(
                         div()
-                            .text_size(metrics::px_for_scale(12.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                             .text_color(rgb(theme.role.text))
                             .child("This file changed on disk"),
                     )
                     .child(
                         div()
                             .truncate()
-                            .text_size(metrics::px_for_scale(11.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
                             .text_color(rgb(theme.role.text_muted))
                             .child(identity),
                     ),
@@ -1190,7 +1185,8 @@ impl LstGpuiApp {
         let scale = self.ui_scale();
         let theme = self.theme(cx);
         self.theme_name_rendered = theme.name.to_string();
-        let status_details = self.status_details();
+        let status_segments = self.status_detail_segments();
+        let status_details = status_segments.join("  ");
         self.status_details_rendered = status_details.clone();
         self.cleanup_button_bounds_px = None;
         self.theme_button_bounds_px = None;
@@ -1201,14 +1197,17 @@ impl LstGpuiApp {
             .items_center()
             .gap_3()
             .px_3()
-            .py(metrics::px_for_scale(metrics::STATUS_HEIGHT_PAD, scale))
+            .py(metrics::px_for_scale(metrics::STATUS_VERTICAL_PAD, scale))
             .bg(rgb(theme.role.panel_bg))
-            .border_1()
+            .border_t_1()
             .border_color(rgb(theme.role.border))
+            .text_size(metrics::px_for_scale(metrics::STATUS_TEXT_SIZE, scale))
+            .line_height(metrics::px_for_scale(metrics::STATUS_TEXT_LINE_HEIGHT, scale))
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
                     .truncate()
-                    .text_sm()
                     .text_color(rgb(theme.role.text_subtle))
                     .child(
                         self.cleanup_message
@@ -1219,9 +1218,10 @@ impl LstGpuiApp {
             .child(
                 div()
                     .flex()
-                    .flex_none()
+                    .min_w_0()
+                    .overflow_hidden()
                     .items_center()
-                    .gap_2()
+                    .gap_3()
                     .child(
                         div()
                             .id("language-mode-button")
@@ -1230,8 +1230,7 @@ impl LstGpuiApp {
                             .h(metrics::px_for_scale(22.0, scale))
                             .px_2()
                             .rounded_sm()
-                            .text_size(metrics::px_for_scale(11.0, scale))
-                            .text_color(rgb(theme.role.text_muted))
+                            .text_color(rgb(theme.role.text_subtle))
                             .cursor(CursorStyle::PointingHand)
                             .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1248,11 +1247,17 @@ impl LstGpuiApp {
                     )
                     .child(
                         div()
-                            .flex_none()
-                            .font(typography::primary_font())
-                            .text_size(metrics::px_for_scale(12.0, scale))
-                            .text_color(rgb(theme.role.text_muted))
-                            .child(status_details),
+                            .flex()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .items_center()
+                            .gap_2()
+                            .text_color(rgb(theme.role.text_subtle))
+                            .children(
+                                status_segments
+                                    .into_iter()
+                                    .map(|segment| div().flex_none().child(segment).into_any_element()),
+                            ),
                     ),
             )
     }
@@ -1335,21 +1340,21 @@ impl LstGpuiApp {
                     .bg(rgb(theme.role.panel_bg))
                     .child(
                         div()
-                            .text_size(metrics::px_for_scale(15.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_HEADING, scale))
                             .text_color(rgb(theme.role.text))
                             .child("Save changes before closing?"),
                     )
                     .child(
                         div()
                             .whitespace_normal()
-                            .text_size(metrics::px_for_scale(12.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                             .text_color(rgb(theme.role.text_subtle))
                             .child(identity),
                     )
                     .when(saving, |panel| {
                         panel.child(
                             div()
-                                .text_size(metrics::px_for_scale(12.0, scale))
+                                .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                                 .text_color(rgb(theme.role.text_muted))
                                 .child("Saving…"),
                         )
@@ -1358,7 +1363,7 @@ impl LstGpuiApp {
                         panel.child(
                             div()
                                 .whitespace_normal()
-                                .text_size(metrics::px_for_scale(12.0, scale))
+                                .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                                 .text_color(rgb(theme.role.error_text))
                                 .child(format!("Save failed: {message}")),
                         )
@@ -1459,14 +1464,14 @@ impl LstGpuiApp {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(metrics::px_for_scale(12.0, scale))
+                                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                                     .text_color(rgb(theme.role.text))
                                     .child(item.identity),
                             )
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(metrics::px_for_scale(11.0, scale))
+                                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
                                     .text_color(rgb(status_color))
                                     .child(status),
                             ),
@@ -1483,7 +1488,7 @@ impl LstGpuiApp {
                             } else {
                                 theme.role.control_bg
                             }))
-                            .text_size(metrics::px_for_scale(11.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
                             .text_color(rgb(if item.decision == QuitReviewDecision::Save {
                                 theme.role.accent_text
                             } else {
@@ -1555,13 +1560,13 @@ impl LstGpuiApp {
                     .bg(rgb(theme.role.panel_bg))
                     .child(
                         div()
-                            .text_size(metrics::px_for_scale(16.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_TITLE, scale))
                             .text_color(rgb(theme.role.text))
                             .child("Review changes before quitting"),
                     )
                     .child(
                         div()
-                            .text_size(metrics::px_for_scale(12.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                             .text_color(rgb(theme.role.text_subtle))
                             .child("Choose Save or Discard for each document. Use ↑/↓ and Space to change a choice."),
                     )
@@ -1581,7 +1586,7 @@ impl LstGpuiApp {
                         panel.child(
                             div()
                                 .whitespace_normal()
-                                .text_size(metrics::px_for_scale(12.0, scale))
+                                .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                                 .text_color(rgb(
                                     if message.starts_with("Some") || message.starts_with("Could not") {
                                         theme.role.error_text
@@ -1657,14 +1662,14 @@ impl LstGpuiApp {
                     .bg(rgb(theme.role.panel_bg))
                     .child(
                         div()
-                            .text_size(metrics::px_for_scale(15.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_HEADING, scale))
                             .text_color(rgb(theme.role.text))
                             .child("Clean up the entire document?"),
                     )
                     .child(
                         div()
                             .whitespace_normal()
-                            .text_size(metrics::px_for_scale(12.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                             .text_color(rgb(theme.role.text_subtle))
                             .child(format!(
                                 "No text is selected in {identity}. The complete document will be sent to the configured AI service."
@@ -1886,13 +1891,18 @@ impl Render for LstGpuiApp {
             code_char_width(&mut cache, window, scale, theme)
         };
         let show_search_decorations = self.model.find().visible;
-        let (revision, syntax_mode, buffer, selection_set, search_matches, active_search_match) = {
+        let (revision, syntax_mode, buffer, selection_set, occurrence_query, search_matches, active_search_match) = {
             let active_tab = self.model.active_tab();
+            let occurrence_query = (active_tab.selection_set().is_single() && !active_tab.selection().has_selection())
+                .then(|| identifier_range_at_char(active_tab.buffer(), active_tab.cursor_char()))
+                .flatten()
+                .map(|range| active_tab.buffer().slice(range).to_string());
             (
                 active_tab.revision(),
                 syntax_mode_for_language(active_tab.language()),
                 active_tab.buffer().clone(),
                 active_tab.selection_set().clone(),
+                occurrence_query,
                 if show_search_decorations {
                     self.model.find_match_ranges()
                 } else {
@@ -1919,6 +1929,7 @@ impl Render for LstGpuiApp {
             lines
         };
         let line_texts = self.model.active_tab_lines();
+        let layout_metrics = ViewportLayoutMetrics::new(show_gutter, buffer.len_lines(), char_width, scale);
         let total_content_height = {
             let mut cache = active_cache.borrow_mut();
             let layout = ensure_wrap_layout(
@@ -1928,7 +1939,7 @@ impl Render for LstGpuiApp {
                     revision,
                     viewport_width,
                     char_width,
-                    show_gutter,
+                    layout_metrics,
                     show_wrap,
                     scale,
                 },
@@ -1946,7 +1957,7 @@ impl Render for LstGpuiApp {
                 theme,
                 window,
             );
-            code_origin_pad(show_gutter, scale) + width + char_width * 2.0
+            layout_metrics.code_origin_pad() + width + char_width * 2.0
         });
         let viewport_scroll = active_scroll;
         let scrollbar_scroll = viewport_scroll.clone();
@@ -1976,15 +1987,13 @@ impl Render for LstGpuiApp {
             .track_focus(&surface_focus_handle)
             .on_key_down(cx.listener(Self::on_surface_key_down))
             .bg(rgb(theme.role.app_bg))
+            .font(typography::ui_font())
             .text_color(rgb(theme.role.text))
             .child(
                 div()
                     .flex_grow()
                     .flex()
                     .flex_col()
-                    .px(metrics::px_for_scale(metrics::SHELL_EDGE_PAD, self.ui_scale()))
-                    .py(metrics::px_for_scale(metrics::SHELL_EDGE_PAD, self.ui_scale()))
-                    .gap_2()
                     .child(self.render_tab_strip(cx))
                     .when(file_conflict_open, |column| {
                         column.child(self.render_file_conflict_banner(cx))
@@ -2003,12 +2012,7 @@ impl Render for LstGpuiApp {
                                     .h_full()
                                     .w_full()
                                     .overflow_hidden()
-                                    .border_1()
-                                    .border_color(rgb(theme.role.border))
                                     .bg(rgb(theme.role.editor_bg))
-                                    .font(typography::primary_font())
-                                    .text_size(metrics::px_for_scale(metrics::code_font_size(), self.ui_scale()))
-                                    .line_height(metrics::px_for_scale(metrics::row_height(), self.ui_scale()))
                                     .when(recent_cards_open, |viewport| {
                                         viewport.child(self.render_recent_cards_view(cx))
                                     })
@@ -2068,10 +2072,12 @@ impl Render for LstGpuiApp {
                                                                             lines: line_texts.as_ref(),
                                                                             revision,
                                                                             syntax_mode,
-                                                                            show_gutter,
+                                                                            layout_metrics,
                                                                             gutter_mode,
                                                                             cursor_line,
                                                                             cursor_lines: &cursor_lines,
+                                                                            occurrence_query: occurrence_query
+                                                                                .as_deref(),
                                                                             show_wrap,
                                                                             viewport_scroll: &viewport_scroll,
                                                                             viewport_cache: &viewport_cache,
@@ -2123,7 +2129,7 @@ impl Render for LstGpuiApp {
                                                                 paint_viewport(
                                                                     ViewportPaintInput {
                                                                         bounds,
-                                                                        show_gutter,
+                                                                        layout_metrics,
                                                                         selection_set: selection_set.clone(),
                                                                         search_matches: &search_matches,
                                                                         active_search_match: active_search_match
@@ -2148,7 +2154,16 @@ impl Render for LstGpuiApp {
                                                                 }
                                                             },
                                                         )
-                                                        .size_full(),
+                                                        .size_full()
+                                                        .font(typography::primary_font())
+                                                        .text_size(metrics::px_for_scale(
+                                                            metrics::code_font_size(),
+                                                            self.ui_scale(),
+                                                        ))
+                                                        .line_height(metrics::px_for_scale(
+                                                            metrics::row_height(),
+                                                            self.ui_scale(),
+                                                        )),
                                                     ),
                                             )
                                             .child(self.render_editor_scrollbar(
@@ -2244,7 +2259,7 @@ fn file_conflict_button(
         .px_3()
         .rounded_sm()
         .bg(rgb(background))
-        .text_size(metrics::px_for_scale(11.0, scale))
+        .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
         .text_color(rgb(foreground))
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))

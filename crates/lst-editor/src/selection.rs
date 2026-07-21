@@ -489,6 +489,13 @@ pub(crate) fn vim_token_class(ch: char, big: bool) -> TokenClass {
 pub(crate) fn is_identifier_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
+
+/// Language-neutral identifier continuation used by passive occurrence
+/// highlighting. Unicode combining marks are continuations even though
+/// `char::is_alphanumeric` does not classify them as alphanumeric.
+pub fn is_identifier_occurrence_char(ch: char) -> bool {
+    ch == '_' || unicode_ident::is_xid_continue(ch)
+}
 fn is_symbol_char(ch: char) -> bool {
     !ch.is_whitespace() && !is_identifier_char(ch)
 }
@@ -779,6 +786,68 @@ pub fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     let end_char = char_index_at_cell(&cells, end, line_chars);
     (line_start + start_char)..(line_start + end_char)
 }
+
+/// Returns the identifier containing `char_index`, or the identifier ending
+/// exactly at the display-line end. Unlike [`word_range_at_char`], whitespace
+/// and punctuation never produce a range.
+pub fn identifier_range_at_char(buffer: &Rope, char_index: usize) -> Option<Range<usize>> {
+    let clamped = char_index.min(buffer.len_chars());
+    let line = buffer.char_to_line(clamped);
+    let line_start = buffer.line_to_char(line);
+    let display_end = line_start + display_line_char_len(buffer, line);
+    let probe = if clamped < display_end && is_identifier_occurrence_char(buffer.char(clamped)) {
+        clamped
+    } else if clamped == display_end && clamped > line_start && is_identifier_occurrence_char(buffer.char(clamped - 1))
+    {
+        clamped - 1
+    } else {
+        return None;
+    };
+
+    let start = probe
+        - buffer
+            .chars_at(probe)
+            .reversed()
+            .take_while(|ch| is_identifier_occurrence_char(*ch))
+            .count();
+    let end = probe
+        + 1
+        + buffer
+            .chars_at(probe + 1)
+            .take_while(|ch| is_identifier_occurrence_char(*ch))
+            .count();
+    Some(start..end)
+}
+
+/// Finds exact, whole-identifier occurrences in `text`, returning character
+/// offsets relative to the start of `text`. Invalid identifier queries have no
+/// matches, so callers cannot accidentally turn punctuation into passive
+/// occurrence highlights.
+pub fn identifier_occurrence_ranges_in_text(text: &str, query: &str) -> Vec<Range<usize>> {
+    if query.is_empty() || !query.chars().all(is_identifier_occurrence_char) {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::new();
+    let mut run_start = None;
+    let mut char_index = 0usize;
+    for (byte_index, ch) in text.char_indices() {
+        if is_identifier_occurrence_char(ch) {
+            run_start.get_or_insert((byte_index, char_index));
+        } else if let Some((start_byte, start_char)) = run_start.take() {
+            if &text[start_byte..byte_index] == query {
+                ranges.push(start_char..char_index);
+            }
+        }
+        char_index += 1;
+    }
+    if let Some((start_byte, start_char)) = run_start {
+        if &text[start_byte..] == query {
+            ranges.push(start_char..char_index);
+        }
+    }
+    ranges
+}
 pub fn next_grapheme_column(line: &str, column: usize) -> usize {
     let total = line.chars().count();
     if column >= total {
@@ -1025,4 +1094,43 @@ pub(crate) fn display_line_char_len(buffer: &Rope, line_ix: usize) -> usize {
 pub(crate) fn char_at_line_column(buffer: &Rope, line_ix: usize, column: usize) -> usize {
     let line = line_ix.min(buffer.len_lines().saturating_sub(1));
     buffer.line_to_char(line) + column.min(display_line_char_len(buffer, line))
+}
+
+#[cfg(test)]
+mod identifier_tests {
+    use super::*;
+
+    #[test]
+    fn identifier_range_ignores_spacing_and_symbols_but_includes_line_end() {
+        let buffer = Rope::from_str("alpha + beta\n");
+
+        assert_eq!(identifier_range_at_char(&buffer, 1), Some(0..5));
+        assert_eq!(identifier_range_at_char(&buffer, 5), None);
+        assert_eq!(identifier_range_at_char(&buffer, 6), None);
+        assert_eq!(identifier_range_at_char(&buffer, 12), Some(8..12));
+    }
+
+    #[test]
+    fn identifier_occurrences_are_exact_case_whole_unicode_identifiers() {
+        assert_eq!(
+            identifier_occurrence_ranges_in_text("café cafe caféine café", "café"),
+            vec![0..4, 18..22]
+        );
+        assert!(identifier_occurrence_ranges_in_text("left + right", "+").is_empty());
+    }
+
+    #[test]
+    fn decomposed_combining_marks_remain_inside_identifier_boundaries() {
+        let text = "cafe\u{301}_count plain cafe\u{301}_count cafe";
+        let buffer = Rope::from_str(text);
+
+        let range = identifier_range_at_char(&buffer, 0).expect("identifier at document start");
+        assert_eq!(range, 0..11);
+        assert_eq!(buffer.slice(range).to_string(), "cafe\u{301}_count");
+        assert_eq!(
+            identifier_occurrence_ranges_in_text(text, "cafe\u{301}_count"),
+            vec![0..11, 18..29]
+        );
+        assert_eq!(identifier_occurrence_ranges_in_text(text, "cafe"), vec![30..34]);
+    }
 }
