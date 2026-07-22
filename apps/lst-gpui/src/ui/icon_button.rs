@@ -111,6 +111,9 @@ impl RenderOnce for IconButton {
             .w(metrics::px_for_rem(metrics::ICON_BUTTON_SIZE, rem_size))
             .h(metrics::px_for_rem(metrics::ICON_BUTTON_SIZE, rem_size))
             .rounded_sm()
+            .when(self.emphasized, |button| {
+                button.border_1().border_color(rgb(self.theme.role.control_border))
+            })
             .bg(background)
             .when(self.disabled, |button| button.opacity(0.55))
             .when(interactive, |s| {

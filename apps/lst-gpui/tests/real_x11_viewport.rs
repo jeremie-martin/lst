@@ -102,3 +102,84 @@ fn typing_at_wrapped_line_end_keeps_cursor_visible() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn light_window_stays_operable_at_responsive_size_and_zoom_extremes() -> TestResult {
+    support::run_x11_test("viewport-responsive-light", |session| {
+        session.seed_settings(
+            "version = 1\n[editor]\nword_wrap = true\n[appearance]\ntheme = 'light'\nzoom_level = 8\n",
+        )?;
+        let path = session.seed_file("responsive-light.txt", &format!("{}\n", "wrapped text ".repeat(80)))?;
+        let mut editor = session.open_file("viewport-responsive-light", &path)?;
+        editor.resize(900, 600)?;
+
+        let maximized = editor.wait_state("maximum-zoom light viewport", secs(5), |record| {
+            record.theme_name == "Light"
+                && record.word_wrap_enabled
+                && record.status_bar.contains("Zoom 214%")
+                && record
+                    .viewport
+                    .bounds_size_px
+                    .is_some_and(|(width, height)| width > 0.0 && height > 0.0)
+        })?;
+        assert!(!maximized.viewport.rows.is_empty(), "{maximized:?}");
+
+        editor.keys("<C-0>")?;
+        editor.resize(640, 480)?;
+        editor.wait_state("narrow 100-percent light viewport", secs(5), |record| {
+            record.theme_name == "Light"
+                && record.word_wrap_enabled
+                && !record.status_bar.contains("Zoom")
+                && !record.viewport.rows.is_empty()
+        })?;
+
+        editor.keys("<C-f>")?;
+        editor.wait_state("find in narrow light window", secs(2), |record| {
+            record.find.visible && record.focused_input == "find_query"
+        })?;
+        editor.keys("<esc><C-,>")?;
+        editor.wait_state("settings in narrow light window", secs(2), |record| {
+            record.workspace_surface == "settings" && record.focused_input == "settings"
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn dark_window_stays_operable_at_responsive_size_and_zoom_extremes() -> TestResult {
+    support::run_x11_test("viewport-responsive-dark", |session| {
+        session.seed_settings(
+            "version = 1\n[editor]\nword_wrap = false\n[appearance]\ntheme = 'dark'\nzoom_level = 8\n",
+        )?;
+        let path = session.seed_file("responsive-dark.txt", &"unwrapped".repeat(400))?;
+        let mut editor = session.open_file("viewport-responsive-dark", &path)?;
+        editor.resize(900, 600)?;
+
+        editor.wait_state("compact dark viewport", secs(5), |record| {
+            record.theme_name == "Dark"
+                && !record.word_wrap_enabled
+                && record.status_bar.contains("Zoom 214%")
+                && !record.viewport.rows.is_empty()
+        })?;
+
+        editor.keys("<C-0>")?;
+        editor.resize(640, 480)?;
+        editor.wait_state("narrow 100-percent dark viewport", secs(5), |record| {
+            record.theme_name == "Dark"
+                && !record.word_wrap_enabled
+                && !record.status_bar.contains("Zoom")
+                && !record.viewport.rows.is_empty()
+        })?;
+        editor.keys("<C-S-p>")?;
+        editor.wait_state("palette in compact dark window", secs(2), |record| {
+            record.workspace_surface == "command_palette" && record.focused_input == "command_palette"
+        })?;
+        editor.keys("<esc><C-g>")?;
+        editor.wait_state("goto in compact dark window", secs(2), |record| {
+            record.goto_line_input.is_some() && record.focused_input == "goto_line"
+        })?;
+        Ok(())
+    })
+}

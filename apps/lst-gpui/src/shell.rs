@@ -22,7 +22,7 @@ use crate::{
     diagnostics, runtime::tab_identity, ClosePromptStatus, FocusTarget, LstGpuiApp, QuitReviewDecision,
     QuitReviewItemStatus,
 };
-use std::time::Instant;
+use std::{rc::Rc, time::Instant};
 
 #[derive(Clone)]
 struct TabDrag {
@@ -1868,12 +1868,13 @@ impl Render for LstGpuiApp {
         let gutter_mode = self.model.gutter_mode();
         let theme = self.theme(cx);
         let scale = self.ui_scale();
-        let (active_scroll, active_cache, active_geometry) = {
+        let (active_scroll, active_cache, active_geometry, active_structure) = {
             let active_view = self.active_view();
             (
                 active_view.scroll.clone(),
                 active_view.cache.clone(),
                 active_view.geometry.clone(),
+                active_view.structure.clone(),
             )
         };
         let viewport_width = active_geometry
@@ -1934,6 +1935,7 @@ impl Render for LstGpuiApp {
             )
         };
         let drop_cursor = self.selection_drag_drop_char();
+        let prepare_selection_set = selection_set.clone();
         let cursor_line = self.model.active_tab().cursor_position().line;
         let cursor_lines: Vec<usize> = {
             let tab = self.model.active_tab();
@@ -1949,6 +1951,21 @@ impl Render for LstGpuiApp {
             lines
         };
         let line_texts = self.model.active_tab_lines();
+        let match_brackets = self.settings.settings.editor.match_brackets;
+        let bracket_pair_colorization = self.settings.settings.editor.bracket_pair_colorization;
+        let bracket_pair_guides = self.settings.settings.editor.bracket_pair_guides;
+        let bracket_pair_horizontal_guides = self.settings.settings.editor.bracket_pair_horizontal_guides;
+        let indent_guides = self.settings.settings.editor.indent_guides;
+        let highlight_active_indent_guide = self.settings.settings.editor.highlight_active_indent_guide;
+        let render_whitespace = self.settings.settings.editor.render_whitespace;
+        let render_control_characters = self.settings.settings.editor.render_control_characters;
+        let rulers: Rc<[u16]> = self.settings.settings.editor.rulers.as_slice().into();
+        let paint_rulers = rulers;
+        let indent_width = self
+            .model
+            .active_tab()
+            .language()
+            .map_or(4, |language| language.config().indent.width());
         let layout_metrics = ViewportLayoutMetrics::new(show_gutter, buffer.len_lines(), char_width, scale);
         let total_content_height = {
             let mut cache = active_cache.borrow_mut();
@@ -2116,6 +2133,17 @@ impl Render for LstGpuiApp {
                                                                             char_width,
                                                                             scale: ui_scale,
                                                                             theme,
+                                                                            selection_set: &prepare_selection_set,
+                                                                            structure: &active_structure,
+                                                                            match_brackets,
+                                                                            bracket_pair_colorization,
+                                                                            bracket_pair_guides,
+                                                                            bracket_pair_horizontal_guides,
+                                                                            indent_guides,
+                                                                            highlight_active_indent_guide,
+                                                                            indent_width,
+                                                                            render_whitespace,
+                                                                            render_control_characters,
                                                                         },
                                                                         window,
                                                                     );
@@ -2172,6 +2200,8 @@ impl Render for LstGpuiApp {
                                                                         scale: ui_scale,
                                                                         horizontal_scroll,
                                                                         theme,
+                                                                        rulers: paint_rulers.as_ref(),
+                                                                        char_width,
                                                                     },
                                                                     window,
                                                                     cx,
@@ -2280,6 +2310,11 @@ fn file_conflict_button(
     } else {
         theme.role.text
     };
+    let hover_background = if primary {
+        theme.role.accent
+    } else {
+        theme.role.control_bg_hover
+    };
     div()
         .id(id)
         .flex()
@@ -2292,7 +2327,7 @@ fn file_conflict_button(
         .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
         .text_color(rgb(foreground))
         .cursor(CursorStyle::PointingHand)
-        .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
+        .hover(move |style| style.bg(rgb(hover_background)))
         .active(move |style| style.opacity(0.82))
         .child(label)
 }

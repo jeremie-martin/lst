@@ -63,6 +63,7 @@ size where relevant.
 | `scroll-plain` | `scroll_overrun_ms` | Same scroll trace using the generated large plain-text corpus, so syntax highlighting is out of the path. |
 | `open-large` | `open_to_quiet_ms` | Measures process spawn through benchmark window discovery and redraw quiet on the large Rust file. |
 | `search-large` | `search_reindex_ms` | Opens find through `Ctrl+F`, waits for the real find-query focus transition, types `fn `, waits for redraw quiet, and reads the completed in-app find reindex trace. |
+| `multi-cursor-1k` | `viewport_paint_ms` | Creates 1,000 visible/near-visible carets, waits for redraw quiet, and reports cursor preparation and paint cost; a separate probe proves the configured 10,000-cursor cap and status feedback. |
 
 The default runner contract is one priming run and seven measured repetitions.
 Use `--repetitions <n>` and `--priming <n>` only when characterizing variance or
@@ -71,6 +72,14 @@ shortening a local smoke test.
 The GPUI app writes internal benchmark trace values only when
 `LST_BENCH_TRACE_FILE` is set by the runner. Normal editor runs do not create
 trace files.
+
+Structural and large-cursor changes additionally report
+`structure_decorations_ms`, `smart_select_ms`, `viewport_prepare_ms`, and
+`viewport_paint_ms`. On the reference machine, target p95 is below 2 ms for
+structural decorations and below 8 ms for 1,000-cursor viewport preparation
+plus paint. `typing-large` and `scroll-highlighted` median regressions must stay
+within 10%; when run-to-run variance exceeds 5%, rerun with 15 measured
+repetitions before drawing a conclusion.
 
 For edit-heavy scenarios, the primary timing is based on app trace completion
 rather than XDamage quiet periods. This avoids scoring caret/focus animations as

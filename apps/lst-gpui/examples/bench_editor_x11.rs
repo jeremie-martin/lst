@@ -94,7 +94,8 @@ fn print_usage() {
 
 Options:
   --scenario <name>     all, large-paste, typing-medium, typing-large,
-                        scroll-highlighted, scroll-plain, open-large, search-large
+                        scroll-highlighted, scroll-plain, open-large, search-large,
+                        multi-cursor-1k
                         (default: all)
   --repetitions <n>     measured repetitions after priming (default: 7)
   --priming <n>         unreported warm-up runs (default: 1)
@@ -113,6 +114,7 @@ enum Scenario {
     ScrollPlain,
     OpenLarge,
     SearchLarge,
+    MultiCursor1k,
 }
 
 impl Scenario {
@@ -126,6 +128,7 @@ impl Scenario {
             "scroll-plain" => Ok(Self::ScrollPlain),
             "open-large" => Ok(Self::OpenLarge),
             "search-large" => Ok(Self::SearchLarge),
+            "multi-cursor-1k" => Ok(Self::MultiCursor1k),
             _ => Err(format!("unknown scenario: {value}")),
         }
     }
@@ -140,6 +143,7 @@ impl Scenario {
                 Self::ScrollPlain,
                 Self::OpenLarge,
                 Self::SearchLarge,
+                Self::MultiCursor1k,
             ],
             scenario => vec![scenario],
         }
@@ -155,6 +159,7 @@ impl Scenario {
             Self::ScrollPlain => "scroll-plain",
             Self::OpenLarge => "open-large",
             Self::SearchLarge => "search-large",
+            Self::MultiCursor1k => "multi-cursor-1k",
         }
     }
 
@@ -166,6 +171,7 @@ impl Scenario {
             Self::ScrollHighlighted | Self::ScrollPlain => "scroll_overrun_ms",
             Self::OpenLarge => "open_to_quiet_ms",
             Self::SearchLarge => "search_reindex_ms",
+            Self::MultiCursor1k => "viewport_paint_ms",
         }
     }
 
@@ -173,6 +179,7 @@ impl Scenario {
         match self {
             Self::TypingMedium => CorpusKind::MediumRust,
             Self::ScrollPlain => CorpusKind::LargePlain,
+            Self::MultiCursor1k => CorpusKind::MultiCursor1k,
             Self::All
             | Self::LargePaste
             | Self::TypingLarge
@@ -188,6 +195,7 @@ enum CorpusKind {
     MediumRust,
     LargeRust,
     LargePlain,
+    MultiCursor1k,
 }
 
 impl CorpusKind {
@@ -195,6 +203,7 @@ impl CorpusKind {
         match self {
             Self::MediumRust | Self::LargeRust => "rs",
             Self::LargePlain => "txt",
+            Self::MultiCursor1k => "txt",
         }
     }
 
@@ -202,6 +211,7 @@ impl CorpusKind {
         match self {
             Self::MediumRust | Self::LargeRust => "rust-tree-sitter",
             Self::LargePlain => "plain",
+            Self::MultiCursor1k => "plain",
         }
     }
 
@@ -210,6 +220,7 @@ impl CorpusKind {
             Self::MediumRust => "generated-medium-rust",
             Self::LargeRust => "generated-large-rust",
             Self::LargePlain => "generated-large-plain",
+            Self::MultiCursor1k => "generated-multi-cursor-1k",
         }
     }
 }
@@ -307,6 +318,9 @@ impl Bench {
                 }
                 Scenario::OpenLarge => self.run_open_large(scenario, &corpus, run_index, args.keep_temp_on_failure)?,
                 Scenario::SearchLarge => self.run_search(scenario, &corpus, run_index, args.keep_temp_on_failure)?,
+                Scenario::MultiCursor1k => {
+                    self.run_multi_cursor_1k(scenario, &corpus, run_index, args.keep_temp_on_failure)?
+                }
             };
 
             if let Some((width, height)) = expected_window {
@@ -952,6 +966,122 @@ impl Bench {
         result
     }
 
+    fn run_multi_cursor_1k(
+        &self,
+        scenario: Scenario,
+        corpus: &Corpus,
+        run_index: usize,
+        keep_temp_on_failure: bool,
+    ) -> Result<RunMetrics, Box<dyn Error>> {
+        let file_path = temp_path(scenario, run_index, "file", corpus.extension);
+        let trace_path = temp_path(scenario, run_index, "trace", "log");
+        fs::write(&file_path, &corpus.text)?;
+
+        let title = bench_title(scenario, run_index);
+        let files = [file_path.as_path()];
+        let mut child = self.spawn_editor(&files, &title, Some(&trace_path))?;
+        let pid = child.id();
+
+        let result = (|| {
+            let startup_started = Instant::now();
+            let window = find_window(
+                &self.conn,
+                self.root,
+                &self.atoms,
+                pid,
+                &title,
+                &mut child,
+                Duration::from_millis(WINDOW_DISCOVERY_TIMEOUT_MS),
+            )?;
+            let damage = damage::DamageWrapper::create(&self.conn, window.id, damage::ReportLevel::NON_EMPTY)?;
+            self.conn.flush()?;
+            let _ = wait_for_damage_quiet(
+                &self.conn,
+                damage.damage(),
+                window.id,
+                &mut child,
+                Duration::from_millis(QUIET_MS),
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let startup_ms = elapsed_ms(startup_started);
+
+            focus_window_for_keyboard(&self.conn, &window)?;
+            let _ = wait_for_damage_quiet(
+                &self.conn,
+                damage.damage(),
+                window.id,
+                &mut child,
+                Duration::from_millis(QUIET_MS),
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let before = proc_sample(pid)?;
+            let trace_before = read_editor_trace(&trace_path)?;
+            let paint_count = trace_before.count("viewport_paint_ms").unwrap_or(0);
+            let command_count = trace_line_count(&trace_path, "command_complete=select_all_occurrences");
+            let started = Instant::now();
+            inject_ctrl_shift_chord(
+                &self.conn,
+                self.root,
+                self.keycodes.control_l,
+                self.keycodes.shift_l,
+                self.keycodes.l,
+            )?;
+            wait_for_trace_line_count(
+                &trace_path,
+                "command_complete=select_all_occurrences",
+                command_count + 1,
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            wait_for_trace_count(
+                &trace_path,
+                "viewport_paint_ms",
+                paint_count + 1,
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let damage_events = wait_for_damage_quiet(
+                &self.conn,
+                damage.damage(),
+                window.id,
+                &mut child,
+                Duration::from_millis(QUIET_MS),
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let multi_cursor_ready_ms = elapsed_ms(started);
+            let after = proc_sample(pid)?;
+            let trace = read_editor_trace(&trace_path)?;
+            let cursor_count = trace
+                .last("cursor_count")
+                .ok_or_else(|| io::Error::other("multi-cursor benchmark produced no cursor count"))?;
+            if cursor_count as usize != 1_000 {
+                return Err(io::Error::other(format!(
+                    "multi-cursor benchmark produced {cursor_count} cursors, expected 1000"
+                ))
+                .into());
+            }
+
+            let mut metrics = RunMetrics::new(window.width, window.height);
+            metrics.set("startup_ms", startup_ms);
+            metrics.set("multi_cursor_ready_ms", multi_cursor_ready_ms);
+            metrics.set("cursor_count", cursor_count);
+            metrics.set("damage_events", damage_events as f64);
+            add_trace_last(&mut metrics, &trace, "viewport_prepare_ms", "viewport_prepare_ms");
+            add_trace_last(&mut metrics, &trace, "viewport_paint_ms", "viewport_paint_ms");
+            add_trace_last(
+                &mut metrics,
+                &trace,
+                "structure_decorations_ms",
+                "structure_decorations_ms",
+            );
+            add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
+            Ok(metrics)
+        })();
+
+        let terminate_result = terminate_child(&mut child);
+        cleanup_paths_if([file_path, trace_path], result.is_ok() || !keep_temp_on_failure);
+        terminate_result?;
+        result
+    }
+
     fn spawn_editor(&self, files: &[&Path], title: &str, trace_path: Option<&Path>) -> Result<Child, Box<dyn Error>> {
         let mut command = Command::new(&self.editor);
         command
@@ -1003,6 +1133,7 @@ impl Corpus {
             CorpusKind::MediumRust => generated_rust_corpus(MEDIUM_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
             CorpusKind::LargeRust => generated_rust_corpus(LARGE_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
             CorpusKind::LargePlain => generated_plain_corpus(LARGE_PLAIN_LINES),
+            CorpusKind::MultiCursor1k => generated_multi_cursor_corpus(),
         };
         Self {
             label: kind.label().to_string(),
@@ -1059,6 +1190,16 @@ fn generated_plain_corpus(lines: usize) -> String {
             line_ix % 31,
             line_ix % 127
         ));
+    }
+    text
+}
+
+fn generated_multi_cursor_corpus() -> String {
+    let line = "x ".repeat(25);
+    let mut text = String::with_capacity((line.len() + 1) * 40);
+    for _ in 0..40 {
+        text.push_str(&line);
+        text.push('\n');
     }
     text
 }
@@ -1209,6 +1350,18 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "find_match_count",
             "find_query_len",
             "trace_wall_ms",
+            "damage_events",
+            "user_cpu_ms",
+            "sys_cpu_ms",
+            "cpu_ms",
+            "peak_rss_mb",
+        ],
+        Scenario::MultiCursor1k => &[
+            "viewport_paint_ms",
+            "viewport_prepare_ms",
+            "structure_decorations_ms",
+            "multi_cursor_ready_ms",
+            "cursor_count",
             "damage_events",
             "user_cpu_ms",
             "sys_cpu_ms",
@@ -1633,6 +1786,23 @@ fn inject_shift_chord(
     inject_key_press(conn, root, keycode)?;
     inject_key_release(conn, root, keycode)?;
     inject_key_release(conn, root, shift_keycode)?;
+    conn.flush()?;
+    Ok(())
+}
+
+fn inject_ctrl_shift_chord(
+    conn: &RustConnection,
+    root: xproto::Window,
+    control_keycode: xproto::Keycode,
+    shift_keycode: xproto::Keycode,
+    keycode: xproto::Keycode,
+) -> Result<(), Box<dyn Error>> {
+    inject_key_press(conn, root, control_keycode)?;
+    inject_key_press(conn, root, shift_keycode)?;
+    inject_key_press(conn, root, keycode)?;
+    inject_key_release(conn, root, keycode)?;
+    inject_key_release(conn, root, shift_keycode)?;
+    inject_key_release(conn, root, control_keycode)?;
     conn.flush()?;
     Ok(())
 }
@@ -2073,6 +2243,7 @@ struct Keycodes {
     a: xproto::Keycode,
     c: xproto::Keycode,
     f: xproto::Keycode,
+    l: xproto::Keycode,
     s: xproto::Keycode,
     tab: xproto::Keycode,
     v: xproto::Keycode,
@@ -2103,6 +2274,7 @@ impl Keycodes {
             a: *lower.get(&'a').expect("resolved lowercase a"),
             c: *lower.get(&'c').expect("resolved lowercase c"),
             f: *lower.get(&'f').expect("resolved lowercase f"),
+            l: *lower.get(&'l').expect("resolved lowercase l"),
             s: *lower.get(&'s').expect("resolved lowercase s"),
             tab: find_keycode(&reply, setup.min_keycode, KEYSYM_TAB, active_group)?,
             v: *lower.get(&'v').expect("resolved lowercase v"),
@@ -2192,6 +2364,7 @@ mod tests {
                 Scenario::ScrollPlain,
                 Scenario::OpenLarge,
                 Scenario::SearchLarge,
+                Scenario::MultiCursor1k,
             ]
         );
     }
@@ -2210,6 +2383,7 @@ mod tests {
         assert_eq!(primary_metrics["scroll-plain"], "scroll_overrun_ms");
         assert_eq!(primary_metrics["open-large"], "open_to_quiet_ms");
         assert_eq!(primary_metrics["search-large"], "search_reindex_ms");
+        assert_eq!(primary_metrics["multi-cursor-1k"], "viewport_paint_ms");
     }
 
     #[test]
@@ -2230,6 +2404,13 @@ mod tests {
         assert_eq!(plain.label, "generated-large-plain");
         assert_eq!(plain.extension, "txt");
         assert!(!plain.text.contains("fn "));
+
+        let multi_cursor = Corpus::load(CorpusKind::MultiCursor1k);
+        assert_eq!(multi_cursor.label, "generated-multi-cursor-1k");
+        assert_eq!(
+            multi_cursor.text.split_whitespace().filter(|word| *word == "x").count(),
+            1_000
+        );
     }
 
     #[test]

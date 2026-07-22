@@ -35,6 +35,13 @@ baseline can preserve a bad decision just as easily as a good one.
   is the editor background and has no divider.
 - Check small muted text against its actual surface in both themes. Do not rely
   on a color name such as `muted` as evidence that contrast is sufficient.
+- Audit normal small text and bracket glyphs at 4.5:1 or better against their
+  real surface. Focus outlines, control boundaries, guides, and other
+  non-text indicators target 3:1. Disabled controls are the deliberate
+  exception, not a source for active-state colors.
+- Interactive controls use one state order: disabled, pressed, selected,
+  hovered, with a separate focus outline. A selected value and keyboard focus
+  are different states and must remain independently visible.
 
 ## Rendering and latency
 
@@ -54,9 +61,15 @@ baseline can preserve a bad decision just as easily as a good one.
   painted windows, and keep match endpoints on grapheme boundaries. When a
   literal, non-whole-word find query already represents the same text, let the
   find decorations own those pixels and skip the duplicate selection scan.
-- Define decoration precedence explicitly: current line, passive occurrences,
-  selected-text matches, search matches, active search match, selections,
-  text, then carets.
+- Define decoration precedence explicitly: rulers and guides, current line,
+  passive occurrences and selected-text matches, bracket backgrounds, search
+  matches, selections, text and bracket colors, whitespace/control markers,
+  bracket outlines, then carets.
+- Structural decoration lookup must be logarithmic plus visible output. Use
+  sorted bracket tokens and the pair-parent chain; never scan every pair for
+  every cursor or every historical scope for a viewport near end-of-file.
+- Cursor preparation slices the sorted cursor set once per painted row. Do not
+  re-scan every cursor to answer each row's current-line and caret questions.
 - Cache keys must contain every input that changes visible output, including
   theme, active state, revision, query, and visible range where applicable.
 - Exercise `typing-large`, scrolling, and search benchmarks after changing a
@@ -74,6 +87,9 @@ baseline can preserve a bad decision just as easily as a good one.
   alone is insufficient if a physical compositor captured another surface.
 - Include zoom, narrow-window, long-label, empty-state, multi-cursor, wrapped,
   and scrolled cases when they can stress the changed contract.
+- Exercise settings and dialogs at 640×480/100% and 900×600/maximum zoom, in
+  both themes, with wrapping and panels open. Controls may wrap; labels must
+  not overlap, clip critical actions, or create two owners for one border.
 - Prefer construction that prevents misalignment over a regression test that
   merely detects it. Tests guard the contract; ownership should make the
   invalid composition difficult to express.

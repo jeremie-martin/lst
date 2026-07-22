@@ -1,7 +1,9 @@
 mod catalog;
 mod highlight;
 
-pub(crate) use highlight::{SyntaxInvalidation, TabSyntaxState};
+pub(crate) use highlight::{
+    plain_structural_snapshot, StructuralPair, StructuralSnapshot, StructuralToken, SyntaxInvalidation, TabSyntaxState,
+};
 
 use crate::ui::theme::SyntaxRole;
 use lst_editor::Language;
@@ -146,6 +148,36 @@ mod tests {
     }
 
     #[test]
+    fn structural_pairs_exclude_quotes_and_delimiters_inside_strings() {
+        let source = "fn main() { let text = \"([{}])\"; call(1); }\n";
+        let buffer = ropey::Rope::from_str(source);
+        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, 0).unwrap();
+        let structure = state.structure();
+        assert_eq!(structure.pairs.len(), 3, "{structure:?}");
+        assert!(structure
+            .tokens
+            .iter()
+            .all(|token| { !matches!(buffer.char(token.at), '\"' | '\'') }));
+    }
+
+    #[test]
+    fn tsx_angle_pairs_are_tags_not_comparison_operators() {
+        let source = "const less = a < b; const view = <div>{less}</div>;\n";
+        let buffer = ropey::Rope::from_str(source);
+        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Tsx, &buffer, 0).unwrap();
+        let angle_positions: Vec<usize> = state
+            .structure()
+            .tokens
+            .iter()
+            .filter(|token| matches!(buffer.char(token.at), '<' | '>'))
+            .map(|token| token.at)
+            .collect();
+        let comparison = source.chars().position(|ch| ch == '<').unwrap();
+        assert!(!angle_positions.contains(&comparison), "{angle_positions:?}");
+        assert_eq!(angle_positions.len(), 4, "{angle_positions:?}");
+    }
+
+    #[test]
     fn markdown_with_rust_fence_paints_both_layers() {
         let source = "# Title\n\n```rust\nfn main() {}\n```\n";
         let (lines, _) = full_parse(SyntaxLanguage::Markdown, source);
@@ -162,6 +194,34 @@ mod tests {
             fn_roles.contains(&crate::ui::theme::SyntaxRole::Keyword),
             "expected rust keyword in injected fence, got {:?}",
             fn_roles
+        );
+    }
+
+    #[test]
+    fn markdown_fence_uses_injected_rust_for_structure_and_selection() {
+        let source = "```rust\nfn fenced() { let text = \"([\"; call(1); }\n```\n";
+        let buffer = ropey::Rope::from_str(source);
+        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &buffer, 0).unwrap();
+        let call_start = source.find("call(1)").unwrap();
+        let call_open = call_start + "call".len();
+        let call_close = call_start + "call(1".len();
+        assert!(state
+            .structure()
+            .pairs
+            .iter()
+            .any(|pair| pair.open == call_open && pair.close == call_close));
+
+        let string_start = source.find("([\"").unwrap();
+        assert!(state
+            .structure()
+            .tokens
+            .iter()
+            .all(|token| { token.at != string_start && token.at != string_start + 1 }));
+
+        let ranges = state.selection_ranges_at(&[call_start + 1]);
+        assert!(
+            ranges.contains(&(call_start..call_start + "call(1)".len())),
+            "injected call expression missing from {ranges:?}"
         );
     }
 

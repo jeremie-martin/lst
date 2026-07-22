@@ -469,7 +469,7 @@ impl LstGpuiApp {
                     theme.role.panel_bg
                 };
                 let hover_background = if selected {
-                    theme.role.accent
+                    theme.role.selection_bg
                 } else {
                     theme.role.control_bg_hover
                 };
@@ -584,7 +584,7 @@ impl LstGpuiApp {
                     theme.role.panel_bg
                 };
                 let hover_background = if selected {
-                    theme.role.accent
+                    theme.role.selection_bg
                 } else {
                     theme.role.control_bg_hover
                 };
@@ -766,7 +766,7 @@ impl LstGpuiApp {
                     theme.role.panel_bg
                 };
                 let hover_background = if selected {
-                    theme.role.accent
+                    theme.role.selection_bg
                 } else {
                     theme.role.control_bg_hover
                 };

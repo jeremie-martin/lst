@@ -6,7 +6,30 @@ use crate::ui::theme::SyntaxRole;
 use lst_editor::{BufferDelta, BufferEdit};
 use ropey::Rope;
 use std::ops::Range;
-use tree_sitter::{InputEdit, Parser, Point, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{InputEdit, Node, Parser, Point, QueryCursor, StreamingIterator, Tree};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StructuralPair {
+    pub(crate) open: usize,
+    pub(crate) close: usize,
+    pub(crate) depth: u16,
+    pub(crate) parent: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StructuralToken {
+    pub(crate) at: usize,
+    pub(crate) depth: u16,
+    pub(crate) matched: bool,
+    pub(crate) pair: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StructuralSnapshot {
+    pub(crate) revision: u64,
+    pub(crate) pairs: Vec<StructuralPair>,
+    pub(crate) tokens: Vec<StructuralToken>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SyntaxInvalidation {
@@ -60,6 +83,7 @@ pub(crate) struct TabSyntaxState {
     /// Snapshot of the buffer at `revision`. `Rope::clone` is O(1) (it
     /// shares the internal node tree), so storing it is cheap.
     parsed_buffer: Rope,
+    structure: StructuralSnapshot,
 }
 
 impl TabSyntaxState {
@@ -68,12 +92,14 @@ impl TabSyntaxState {
         let mut parser = Parser::new();
         parser.set_language(&grammar.language).ok()?;
         let tree = parse_rope(&mut parser, buffer, None)?;
+        let structure = structural_snapshot(language, &tree, buffer, revision);
         Some(Self {
             language,
             revision,
             parser,
             tree,
             parsed_buffer: buffer.clone(),
+            structure,
         })
     }
 
@@ -129,7 +155,68 @@ impl TabSyntaxState {
         };
         self.parsed_buffer = new_buffer.clone();
         self.revision = new_revision;
+        self.structure = structural_snapshot(self.language, &self.tree, new_buffer, new_revision);
         invalidation
+    }
+
+    pub(crate) fn structure(&self) -> &StructuralSnapshot {
+        &self.structure
+    }
+
+    /// Returns parser-owned selection ranges as plain character offsets.
+    /// Callers never observe tree-sitter nodes or byte coordinates.
+    pub(crate) fn selection_ranges_at(&self, char_offsets: &[usize]) -> Vec<Range<usize>> {
+        let mut byte_ranges = Vec::new();
+        let root_grammar = catalog::root_grammar(self.language);
+        let root_config = catalog::grammar(root_grammar);
+        let injections = collect_rope_injection_matches(
+            &self.tree,
+            &self.parsed_buffer,
+            root_config,
+            0..self.parsed_buffer.len_bytes(),
+        );
+        for &char_offset in char_offsets {
+            let byte = self
+                .parsed_buffer
+                .char_to_byte(char_offset.min(self.parsed_buffer.len_chars()));
+            let root = self.tree.root_node();
+            let Some(mut node) = root.descendant_for_byte_range(byte, byte.saturating_add(1)) else {
+                continue;
+            };
+            loop {
+                if node.start_byte() < node.end_byte() {
+                    byte_ranges.push(node.byte_range());
+                }
+                let Some(parent) = node.parent() else { break };
+                node = parent;
+            }
+            for injection in injections
+                .iter()
+                .filter(|injection| injection.content_start <= byte && byte <= injection.content_end)
+            {
+                let content = injection.content_start..injection.content_end;
+                let source = self.parsed_buffer.byte_slice(content.clone()).to_string();
+                let Some(tree) = parse_sub_source(injection.embedded, source.as_bytes()) else {
+                    continue;
+                };
+                collect_injected_selection_ranges(
+                    injection.embedded,
+                    &tree,
+                    source.as_bytes(),
+                    injection.content_start,
+                    byte.saturating_sub(injection.content_start),
+                    &mut byte_ranges,
+                );
+            }
+        }
+        let mut ranges: Vec<Range<usize>> = byte_ranges
+            .into_iter()
+            .filter(|range| range.start < range.end && range.end <= self.parsed_buffer.len_bytes())
+            .map(|range| self.parsed_buffer.byte_to_char(range.start)..self.parsed_buffer.byte_to_char(range.end))
+            .collect();
+        ranges.sort_by_key(|range| (range.end.saturating_sub(range.start), range.start, range.end));
+        ranges.dedup();
+        ranges
     }
 
     #[cfg(test)]
@@ -174,6 +261,306 @@ impl TabSyntaxState {
 
         emit_non_overlapping_spans(&captures, &mut spans, &line_starts, &display_ends, byte_range);
         (spans, line_byte_lens)
+    }
+}
+
+fn collect_injected_selection_ranges(
+    grammar: GrammarId,
+    tree: &Tree,
+    source: &[u8],
+    byte_offset: usize,
+    local_byte: usize,
+    out: &mut Vec<Range<usize>>,
+) {
+    if let Some(mut node) = tree
+        .root_node()
+        .descendant_for_byte_range(local_byte, local_byte.saturating_add(1))
+    {
+        loop {
+            if node.start_byte() < node.end_byte() {
+                out.push(byte_offset + node.start_byte()..byte_offset + node.end_byte());
+            }
+            let Some(parent) = node.parent() else { break };
+            node = parent;
+        }
+    }
+    let config = catalog::grammar(grammar);
+    for injection in collect_injection_matches(tree, source, config, 0..source.len()) {
+        if !(injection.content_start <= local_byte && local_byte <= injection.content_end) {
+            continue;
+        }
+        let sub_source = &source[injection.content_start..injection.content_end];
+        let Some(sub_tree) = parse_sub_source(injection.embedded, sub_source) else {
+            continue;
+        };
+        collect_injected_selection_ranges(
+            injection.embedded,
+            &sub_tree,
+            sub_source,
+            byte_offset + injection.content_start,
+            local_byte.saturating_sub(injection.content_start),
+            out,
+        );
+    }
+}
+
+fn structural_snapshot(language: SyntaxLanguage, tree: &Tree, buffer: &Rope, revision: u64) -> StructuralSnapshot {
+    #[derive(Clone, Copy)]
+    struct Delimiter {
+        byte: usize,
+        ch: char,
+    }
+
+    fn collect(node: Node<'_>, grammar: GrammarId, byte_offset: usize, out: &mut Vec<Delimiter>) {
+        if node.child_count() == 0 {
+            let kind = node.kind().as_bytes();
+            if kind.len() == 1 {
+                let ch = kind[0] as char;
+                let basic = matches!(ch, '(' | ')' | '[' | ']' | '{' | '}');
+                let angle = matches!(ch, '<' | '>') && angle_is_structural(grammar, node);
+                if (basic || angle) && node.end_byte() == node.start_byte() + 1 {
+                    out.push(Delimiter {
+                        byte: byte_offset + node.start_byte(),
+                        ch,
+                    });
+                }
+            } else if angle_is_structural(grammar, node) {
+                let angle = match kind {
+                    b"</" => Some((node.start_byte(), '<')),
+                    b"/>" => Some((node.end_byte().saturating_sub(1), '>')),
+                    _ => None,
+                };
+                if let Some((byte, ch)) = angle {
+                    out.push(Delimiter {
+                        byte: byte_offset + byte,
+                        ch,
+                    });
+                }
+            }
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect(child, grammar, byte_offset, out);
+        }
+    }
+
+    fn collect_injected(
+        grammar: GrammarId,
+        tree: &Tree,
+        source: &[u8],
+        byte_offset: usize,
+        streams: &mut Vec<Vec<Delimiter>>,
+    ) {
+        let config = catalog::grammar(grammar);
+        let injections = collect_injection_matches(tree, source, config, 0..source.len());
+        let mut delimiters = Vec::new();
+        collect(tree.root_node(), grammar, byte_offset, &mut delimiters);
+        delimiters.retain(|delimiter| {
+            let local_byte = delimiter.byte.saturating_sub(byte_offset);
+            !injections
+                .iter()
+                .any(|injection| injection.content_start <= local_byte && local_byte < injection.content_end)
+        });
+        streams.push(delimiters);
+
+        for injection in injections {
+            if injection.content_end <= injection.content_start {
+                continue;
+            }
+            let sub_source = &source[injection.content_start..injection.content_end];
+            let Some(sub_tree) = parse_sub_source(injection.embedded, sub_source) else {
+                continue;
+            };
+            collect_injected(
+                injection.embedded,
+                &sub_tree,
+                sub_source,
+                byte_offset + injection.content_start,
+                streams,
+            );
+        }
+    }
+
+    fn matching(open: char, close: char) -> bool {
+        matches!((open, close), ('(', ')') | ('[', ']') | ('{', '}') | ('<', '>'))
+    }
+
+    let root_grammar = catalog::root_grammar(language);
+    let root_config = catalog::grammar(root_grammar);
+    let root_injections = collect_rope_injection_matches(tree, buffer, root_config, 0..buffer.len_bytes());
+    let mut streams = Vec::new();
+    let mut root_delimiters = Vec::new();
+    collect(tree.root_node(), root_grammar, 0, &mut root_delimiters);
+    root_delimiters.retain(|delimiter| {
+        !root_injections
+            .iter()
+            .any(|injection| injection.content_start <= delimiter.byte && delimiter.byte < injection.content_end)
+    });
+    streams.push(root_delimiters);
+    for injection in root_injections {
+        if injection.content_end <= injection.content_start {
+            continue;
+        }
+        let source = buffer
+            .byte_slice(injection.content_start..injection.content_end)
+            .to_string();
+        let Some(sub_tree) = parse_sub_source(injection.embedded, source.as_bytes()) else {
+            continue;
+        };
+        collect_injected(
+            injection.embedded,
+            &sub_tree,
+            source.as_bytes(),
+            injection.content_start,
+            &mut streams,
+        );
+    }
+
+    let mut pairs = Vec::new();
+    let mut unmatched = Vec::new();
+    for mut delimiters in streams {
+        delimiters.sort_by_key(|delimiter| delimiter.byte);
+        delimiters.dedup_by_key(|delimiter| delimiter.byte);
+        let mut stack: Vec<Delimiter> = Vec::new();
+        for delimiter in delimiters {
+            if matches!(delimiter.ch, '(' | '[' | '{' | '<') {
+                stack.push(delimiter);
+            } else if let Some(open) = stack.last().copied().filter(|open| matching(open.ch, delimiter.ch)) {
+                stack.pop();
+                pairs.push(StructuralPair {
+                    open: buffer.byte_to_char(open.byte),
+                    close: buffer.byte_to_char(delimiter.byte),
+                    depth: 0,
+                    parent: None,
+                });
+            } else {
+                unmatched.push(buffer.byte_to_char(delimiter.byte));
+            }
+        }
+        unmatched.extend(stack.into_iter().map(|delimiter| buffer.byte_to_char(delimiter.byte)));
+    }
+    pairs.sort_by_key(|pair| pair.open);
+    pairs.dedup_by_key(|pair| (pair.open, pair.close));
+    assign_pair_parents(&mut pairs);
+    unmatched.sort_unstable();
+    unmatched.dedup();
+
+    let mut tokens = Vec::with_capacity(pairs.len() * 2 + unmatched.len());
+    for (pair_index, pair) in pairs.iter().enumerate() {
+        tokens.push(StructuralToken {
+            at: pair.open,
+            depth: pair.depth,
+            matched: true,
+            pair: Some(pair_index),
+        });
+        tokens.push(StructuralToken {
+            at: pair.close,
+            depth: pair.depth,
+            matched: true,
+            pair: Some(pair_index),
+        });
+    }
+    tokens.extend(unmatched.into_iter().map(|at| StructuralToken {
+        at,
+        depth: 0,
+        matched: false,
+        pair: None,
+    }));
+    tokens.sort_by_key(|token| token.at);
+    StructuralSnapshot {
+        revision,
+        pairs,
+        tokens,
+    }
+}
+
+fn angle_is_structural(grammar: GrammarId, node: Node<'_>) -> bool {
+    if !matches!(grammar, GrammarId::Jsx | GrammarId::Tsx | GrammarId::Html) {
+        return false;
+    }
+    node.parent().is_some_and(|parent| {
+        let kind = parent.kind();
+        kind.contains("tag") || kind.contains("element") || kind.contains("fragment")
+    })
+}
+
+pub(crate) fn plain_structural_snapshot(
+    buffer: &Rope,
+    revision: u64,
+    structural_pairs: &[(char, char)],
+) -> StructuralSnapshot {
+    let mut stack: Vec<(usize, char)> = Vec::new();
+    let mut pairs = Vec::new();
+    let mut unmatched = Vec::new();
+    for (at, ch) in buffer.chars().enumerate() {
+        if structural_pairs.iter().any(|(open, _)| *open == ch) {
+            stack.push((at, ch));
+        } else if let Some((_, open)) = stack.last().copied() {
+            if structural_pairs
+                .iter()
+                .any(|(pair_open, close)| *pair_open == open && *close == ch)
+            {
+                let (open_at, _) = stack.pop().expect("last established a stack item");
+                pairs.push(StructuralPair {
+                    open: open_at,
+                    close: at,
+                    depth: u16::try_from(stack.len()).unwrap_or(u16::MAX),
+                    parent: None,
+                });
+            } else if structural_pairs.iter().any(|(_, close)| *close == ch) {
+                unmatched.push(at);
+            }
+        } else if structural_pairs.iter().any(|(_, close)| *close == ch) {
+            unmatched.push(at);
+        }
+    }
+    unmatched.extend(stack.into_iter().map(|(at, _)| at));
+    pairs.sort_by_key(|pair| pair.open);
+    assign_pair_parents(&mut pairs);
+    let mut tokens = Vec::with_capacity(pairs.len() * 2 + unmatched.len());
+    for (pair_index, pair) in pairs.iter().enumerate() {
+        tokens.push(StructuralToken {
+            at: pair.open,
+            depth: pair.depth,
+            matched: true,
+            pair: Some(pair_index),
+        });
+        tokens.push(StructuralToken {
+            at: pair.close,
+            depth: pair.depth,
+            matched: true,
+            pair: Some(pair_index),
+        });
+    }
+    tokens.extend(unmatched.into_iter().map(|at| StructuralToken {
+        at,
+        depth: 0,
+        matched: false,
+        pair: None,
+    }));
+    tokens.sort_by_key(|token| token.at);
+    StructuralSnapshot {
+        revision,
+        pairs,
+        tokens,
+    }
+}
+
+fn assign_pair_parents(pairs: &mut [StructuralPair]) {
+    let mut stack: Vec<usize> = Vec::new();
+    for index in 0..pairs.len() {
+        while stack
+            .last()
+            .is_some_and(|parent| pairs[*parent].close < pairs[index].close)
+        {
+            stack.pop();
+        }
+        pairs[index].parent = stack.last().copied();
+        pairs[index].depth = pairs[index]
+            .parent
+            .map_or(0, |parent| pairs[parent].depth.saturating_add(1));
+        stack.push(index);
     }
 }
 

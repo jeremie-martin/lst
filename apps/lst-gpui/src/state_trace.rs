@@ -24,7 +24,7 @@ use crate::{
     WorkspaceSurface,
 };
 
-pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 8;
+pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 9;
 
 /// Holds the state-trace path and emitter state. Constructed once at app
 /// init from the env var; subsequent calls to `try_emit` are no-ops when
@@ -127,6 +127,9 @@ pub(crate) struct StateTraceRecord {
     pub workspace_surface: &'static str,
     pub workspace_surface_selected_index: Option<usize>,
     pub settings_selected_item: Option<&'static str>,
+    pub settings_value_editor_item: Option<&'static str>,
+    pub settings_value_error: Option<String>,
+    pub editor_polish: TraceEditorPolish,
     pub word_wrap_enabled: bool,
     pub close_prompt_file: Option<String>,
     pub close_prompt_status: Option<&'static str>,
@@ -197,6 +200,22 @@ pub(crate) struct TraceFind {
     pub chip_bounds_px: TraceFindChipBounds,
 }
 
+#[derive(Serialize)]
+pub(crate) struct TraceEditorPolish {
+    pub match_brackets: &'static str,
+    pub bracket_pair_colorization: bool,
+    pub bracket_pair_guides: &'static str,
+    pub bracket_pair_horizontal_guides: &'static str,
+    pub indent_guides: bool,
+    pub highlight_active_indent_guide: bool,
+    pub render_whitespace: &'static str,
+    pub render_control_characters: bool,
+    pub rulers: Vec<u16>,
+    pub smart_select_subwords: bool,
+    pub smart_select_include_whitespace: bool,
+    pub multi_cursor_limit: usize,
+}
+
 #[derive(Serialize, Default)]
 pub(crate) struct TraceFindChipBounds {
     pub case_sensitive: Option<(f32, f32, f32, f32)>,
@@ -220,6 +239,12 @@ pub(crate) struct TraceViewport {
     pub gutter_width_px: f32,
     pub occurrence_highlights: Vec<TraceRange>,
     pub selection_match_highlights: Vec<TraceRange>,
+    pub bracket_matches: Vec<TraceRange>,
+    pub structural_pair_count: usize,
+    pub unmatched_bracket_count: usize,
+    pub guide_count: usize,
+    pub whitespace_marker_count: usize,
+    pub control_marker_count: usize,
     pub rows: Vec<TraceRow>,
 }
 
@@ -365,6 +390,37 @@ impl LstGpuiApp {
             settings_selected_item: (self.workspace_surface == WorkspaceSurface::Settings)
                 .then(|| self.settings_selection.selected_id())
                 .flatten(),
+            settings_value_editor_item: match self.settings_overlay {
+                crate::settings_ui::SettingsOverlay::ValueEditor { item } => Some(item.id()),
+                _ => None,
+            },
+            settings_value_error: self.settings_value_error.clone(),
+            editor_polish: TraceEditorPolish {
+                match_brackets: match self.settings.settings.editor.match_brackets {
+                    crate::settings::MatchBracketsSetting::Never => "never",
+                    crate::settings::MatchBracketsSetting::Near => "near",
+                    crate::settings::MatchBracketsSetting::Always => "always",
+                },
+                bracket_pair_colorization: self.settings.settings.editor.bracket_pair_colorization,
+                bracket_pair_guides: trace_guide_mode(self.settings.settings.editor.bracket_pair_guides),
+                bracket_pair_horizontal_guides: trace_guide_mode(
+                    self.settings.settings.editor.bracket_pair_horizontal_guides,
+                ),
+                indent_guides: self.settings.settings.editor.indent_guides,
+                highlight_active_indent_guide: self.settings.settings.editor.highlight_active_indent_guide,
+                render_whitespace: match self.settings.settings.editor.render_whitespace {
+                    crate::settings::RenderWhitespaceSetting::None => "none",
+                    crate::settings::RenderWhitespaceSetting::Boundary => "boundary",
+                    crate::settings::RenderWhitespaceSetting::Selection => "selection",
+                    crate::settings::RenderWhitespaceSetting::Trailing => "trailing",
+                    crate::settings::RenderWhitespaceSetting::All => "all",
+                },
+                render_control_characters: self.settings.settings.editor.render_control_characters,
+                rulers: self.settings.settings.editor.rulers.as_slice().to_vec(),
+                smart_select_subwords: self.settings.settings.editor.smart_select_subwords,
+                smart_select_include_whitespace: self.settings.settings.editor.smart_select_include_whitespace,
+                multi_cursor_limit: self.settings.settings.editor.multi_cursor_limit,
+            },
             word_wrap_enabled: self.model.show_wrap(),
             close_prompt_file: self
                 .close_prompt
@@ -439,7 +495,9 @@ impl LstGpuiApp {
         {
             "command_palette"
         } else if self.workspace_surface == WorkspaceSurface::Settings
-            && (self.settings_search_focus_handle.is_focused(window) || self.surface_focus_handle.is_focused(window))
+            && (self.settings_search_focus_handle.is_focused(window)
+                || self.settings_value_focus_handle.is_focused(window)
+                || self.surface_focus_handle.is_focused(window))
         {
             "settings"
         } else if self.workspace_surface == WorkspaceSurface::TabList && self.surface_focus_handle.is_focused(window) {
@@ -526,8 +584,29 @@ impl LstGpuiApp {
                     end: range.end,
                 })
                 .collect(),
+            bracket_matches: geometry
+                .bracket_matches
+                .iter()
+                .map(|range| TraceRange {
+                    start: range.start,
+                    end: range.end,
+                })
+                .collect(),
+            structural_pair_count: geometry.structural_pair_count,
+            unmatched_bracket_count: geometry.unmatched_bracket_count,
+            guide_count: geometry.guide_count,
+            whitespace_marker_count: geometry.whitespace_marker_count,
+            control_marker_count: geometry.control_marker_count,
             rows,
         }
+    }
+}
+
+fn trace_guide_mode(mode: crate::settings::GuideMode) -> &'static str {
+    match mode {
+        crate::settings::GuideMode::Off => "off",
+        crate::settings::GuideMode::Active => "active",
+        crate::settings::GuideMode::All => "all",
     }
 }
 

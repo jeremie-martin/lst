@@ -1048,9 +1048,9 @@ impl Render for InputField {
         let focused = self.focus_handle.is_focused(window);
         let theme = current_theme(cx);
         let border = if focused {
-            rgb(theme.role.accent)
+            rgb(theme.role.focus_outline)
         } else {
-            rgb(theme.role.border)
+            rgb(theme.role.control_border)
         };
         let key_context = self
             .extra_key_context

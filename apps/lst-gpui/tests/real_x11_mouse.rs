@@ -173,6 +173,66 @@ fn drag_text_selects_range() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn alt_drag_adds_a_freeform_selection_without_replacing_existing_selections() -> TestResult {
+    support::run_x11_test("mouse-alt-drag-add", |session| {
+        let path = session.seed_file("alt-drag.txt", "alpha\nbravo\ncharlie")?;
+        let mut editor = session.open_file("alt-drag-add", &path)?;
+
+        editor.drag_text((0, 1), (0, 4), ChordMods::default())?;
+        let original = editor.read_state()?.cursors[0];
+        let original_range = (original.anchor_char, original.head_char);
+        let original_width = original.anchor_col.abs_diff(original.head_col);
+        editor.drag_text((1, 1), (1, 4), ChordMods::ALT)?;
+
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 2, "{record:?}");
+        assert_eq!(
+            (record.cursors[0].anchor_char, record.cursors[0].head_char),
+            original_range,
+            "{record:?}"
+        );
+        assert_eq!(record.cursors[1].anchor_line, 1, "{record:?}");
+        assert_eq!(record.cursors[1].head_line, 1, "{record:?}");
+        assert_eq!(
+            record.cursors[1].anchor_col.abs_diff(record.cursors[1].head_col),
+            original_width,
+            "{record:?}"
+        );
+        assert_eq!(record.primary_cursor_index, 1, "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn dragging_a_secondary_selection_moves_only_that_target_and_preserves_the_set() -> TestResult {
+    support::run_x11_test("mouse-drag-secondary-selection", |session| {
+        let path = session.seed_file("drag-secondary.txt", "one two three four")?;
+        let mut editor = session.open_file("drag-secondary", &path)?;
+
+        editor.drag_text((0, 0), (0, 3), ChordMods::default())?;
+        editor.drag_text((0, 8), (0, 13), ChordMods::ALT)?;
+        editor.drag_text((0, 10), (0, 18), ChordMods::default())?;
+
+        editor.save_then_expect_file(&path, "one two  fourthree")?;
+        let record = editor.read_state()?;
+        let ranges: Vec<(usize, usize)> = record
+            .cursors
+            .iter()
+            .map(|cursor| {
+                (
+                    cursor.anchor_char.min(cursor.head_char),
+                    cursor.anchor_char.max(cursor.head_char),
+                )
+            })
+            .collect();
+        assert_eq!(ranges, [(0, 3), (13, 18)], "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn drag_text_followed_by_typing_replaces_selection() -> TestResult {
     // End-to-end sanity: text-coordinate drag interacts with the rest of
     // the editor pipeline the same way a pixel-coordinate drag would.

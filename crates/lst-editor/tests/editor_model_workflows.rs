@@ -492,7 +492,8 @@ fn active_undo_history_retains_more_than_the_old_hundred_group_limit() {
 fn selection_drag_move_and_copy_are_atomic_and_reselect_the_destination() {
     let mut moved = ModelHarness::new("abcdef");
     moved.model.set_selection(Selection::from_range(1..3, false));
-    assert!(moved.model.drag_selection_to(1..3, 6, false));
+    let token = moved.model.selection_drag_token_at(1).unwrap();
+    assert!(moved.model.drag_selection_token_to(&token, 6, false));
     moved.sync_effects();
     assert_eq!(moved.text(), "adefbc");
     assert_eq!(moved.model.selection().range(), 4..6);
@@ -502,7 +503,8 @@ fn selection_drag_move_and_copy_are_atomic_and_reselect_the_destination() {
 
     let mut copied = ModelHarness::new("abcdef");
     copied.model.set_selection(Selection::from_range(1..3, false));
-    assert!(copied.model.drag_selection_to(1..3, 6, true));
+    let token = copied.model.selection_drag_token_at(1).unwrap();
+    assert!(copied.model.drag_selection_token_to(&token, 6, true));
     copied.sync_effects();
     assert_eq!(copied.text(), "abcdefbc");
     assert_eq!(copied.model.selection().range(), 6..8);
@@ -511,14 +513,29 @@ fn selection_drag_move_and_copy_are_atomic_and_reselect_the_destination() {
 
     let mut moved_earlier = ModelHarness::new("abcdef");
     moved_earlier.model.set_selection(Selection::from_range(3..5, false));
-    assert!(moved_earlier.model.drag_selection_to(3..5, 1, false));
+    let token = moved_earlier.model.selection_drag_token_at(3).unwrap();
+    assert!(moved_earlier.model.drag_selection_token_to(&token, 1, false));
     assert_eq!(moved_earlier.text(), "adebcf");
     assert_eq!(moved_earlier.model.selection().range(), 1..3);
 
     let mut inside = ModelHarness::new("abcdef");
     inside.model.set_selection(Selection::from_range(1..4, false));
-    assert!(!inside.model.drag_selection_to(1..4, 2, false));
-    assert!(!inside.model.drag_selection_to(1..4, 4, true));
+    let token = inside.model.selection_drag_token_at(1).unwrap();
+    assert!(!inside.model.drag_selection_token_to(&token, 2, false));
+    assert!(!inside.model.drag_selection_token_to(&token, 4, true));
     assert_eq!(inside.text(), "abcdef");
     assert_eq!(inside.model.selection().range(), 1..4);
+}
+
+#[test]
+fn selection_drag_tokens_reject_stale_document_revisions() {
+    let mut harness = ModelHarness::new("abcdef");
+    harness.model.set_selection(Selection::from_range(1..3, false));
+    let token = harness.model.selection_drag_token_at(1).unwrap();
+    harness
+        .model
+        .replace_text(Some(6..6), "!".to_string(), UndoBoundary::Break);
+
+    assert!(!harness.model.drag_selection_token_to(&token, 6, false));
+    assert_eq!(harness.text(), "abcdef!");
 }

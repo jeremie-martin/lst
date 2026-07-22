@@ -227,6 +227,53 @@ impl<'a> Editor<'a> {
         self.window.id
     }
 
+    /// Requests a client-area resize and waits until the X server reports
+    /// the new geometry. This is intentionally a real window-manager path,
+    /// not a synthetic viewport override.
+    pub fn resize(&mut self, width: u16, height: u16) -> Result<()> {
+        if width == 0 || height == 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "editor window size must be non-zero").into());
+        }
+        let before = self
+            .read_state()
+            .ok()
+            .map(|state| (state.seq, state.viewport.bounds_size_px));
+        let window_id = format!("0x{:x}", self.window.id);
+        let geometry = format!("0,-1,-1,{width},{height}");
+        let status = Command::new("wmctrl")
+            .args(["-i", "-r", window_id.as_str(), "-e", geometry.as_str()])
+            .status()?;
+        if !status.success() {
+            return Err(io::Error::other(format!("editor window resize: wmctrl exited with {status}")).into());
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let geometry = self.display.conn.get_geometry(self.window.id)?.reply()?;
+            if geometry.width == width && geometry.height == height {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "editor window resize: requested {width}x{height}, observed {}x{}",
+                        geometry.width, geometry.height
+                    ),
+                )
+                .into());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        self.wait_state("editor window resize paint", TEXT_VIEWPORT_TIMEOUT, |state| {
+            state.viewport.bounds_size_px.is_some()
+                && before
+                    .as_ref()
+                    .is_none_or(|(seq, bounds)| state.seq > *seq && state.viewport.bounds_size_px != *bounds)
+        })?;
+        Ok(())
+    }
+
     pub fn screenshot(&self) -> Result<Screenshot> {
         screenshot::capture_window(&self.display.conn, self.display.root, self.window.id)
     }

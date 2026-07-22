@@ -5,7 +5,7 @@ use gpui::{
 use lst_editor::{
     selection::{drag_selection_range, line_range_at_char, paragraph_range_at_char, word_range_at_char},
     vim::{self, Key as VimKey, Modifiers as VimModifiers, NamedKey as VimNamedKey},
-    EditorCommand, InputMode, RevealIntent, Selection, TabId,
+    EditorCommand, InputMode, RevealIntent, Selection, SelectionDragToken, SelectionSet,
 };
 use ropey::Rope;
 use std::{ops::Range, time::Instant};
@@ -23,21 +23,23 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(crate) enum DragSelectionMode {
     Character,
+    AdditiveCharacter {
+        anchor: usize,
+        base: SelectionSet,
+    },
     Column(usize),
     Word(Range<usize>),
     Line(Range<usize>),
     Paragraph(Range<usize>),
     PendingMove {
+        token: SelectionDragToken,
         source: Range<usize>,
         clicked: usize,
-        tab_id: TabId,
-        revision: u64,
     },
     MovingSelection {
+        token: SelectionDragToken,
         source: Range<usize>,
         drop: usize,
-        tab_id: TabId,
-        revision: u64,
     },
 }
 
@@ -112,7 +114,17 @@ impl LstGpuiApp {
                 return;
             }
 
-            self.start_drag_selection(DragSelectionMode::Column(index), event.position);
+            if event.modifiers.shift {
+                self.start_drag_selection(DragSelectionMode::Column(index), event.position);
+            } else {
+                self.start_drag_selection(
+                    DragSelectionMode::AdditiveCharacter {
+                        anchor: index,
+                        base: self.model.selection_set().clone(),
+                    },
+                    event.position,
+                );
+            }
             self.update_model(cx, true, |model| {
                 model.add_cursor_at_char(index);
             });
@@ -132,15 +144,20 @@ impl LstGpuiApp {
         }
 
         if event.click_count == 1 {
-            let primary = self.model.selection();
-            let source = primary.range();
-            if primary.has_selection() && source.contains(&index) {
+            if let Some(token) = self.model.selection_drag_token_at(index) {
+                let source = self
+                    .model
+                    .selection_set()
+                    .as_slice()
+                    .iter()
+                    .find(|selection| selection.has_selection() && selection.range().contains(&index))
+                    .expect("the drag token proves a selected target")
+                    .range();
                 self.start_drag_selection(
                     DragSelectionMode::PendingMove {
+                        token,
                         source,
                         clicked: index,
-                        tab_id: self.model.active_tab_id(),
-                        revision: self.active_tab().revision(),
                     },
                     event.position,
                 );
@@ -246,26 +263,16 @@ impl LstGpuiApp {
         drag.last_point = event.position;
 
         let pending = match drag.mode.clone() {
-            DragSelectionMode::PendingMove {
-                source,
-                tab_id,
-                revision,
-                ..
-            } => Some((source, tab_id, revision, drag.anchor_point)),
+            DragSelectionMode::PendingMove { token, source, .. } => Some((token, source, drag.anchor_point)),
             _ => None,
         };
-        if let Some((source, tab_id, revision, anchor)) = pending {
+        if let Some((token, source, anchor)) = pending {
             if !drag_threshold_reached(anchor, event.position, self.ui_scale()) {
                 return;
             }
             let drop = self.active_char_index_for_point(event.position);
             if let Some(drag) = self.selection_drag.as_mut() {
-                drag.mode = DragSelectionMode::MovingSelection {
-                    source,
-                    drop,
-                    tab_id,
-                    revision,
-                };
+                drag.mode = DragSelectionMode::MovingSelection { token, source, drop };
             }
         }
 
@@ -281,22 +288,14 @@ impl LstGpuiApp {
             return;
         };
         match drag.mode {
-            DragSelectionMode::PendingMove {
-                clicked,
-                tab_id,
-                revision,
-                ..
-            } if self.model.active_tab_id() == tab_id && self.active_tab().revision() == revision => {
+            DragSelectionMode::PendingMove { token, clicked, .. }
+                if self.model.selection_drag_token_is_current(&token) =>
+            {
                 self.update_model(cx, true, |model| model.move_to_char(clicked, false, None));
             }
-            DragSelectionMode::MovingSelection {
-                source,
-                drop,
-                tab_id,
-                revision,
-            } if self.model.active_tab_id() == tab_id && self.active_tab().revision() == revision => {
+            DragSelectionMode::MovingSelection { token, drop, .. } => {
                 self.update_model(cx, true, |model| {
-                    model.drag_selection_to(source, drop, event.modifiers.control);
+                    model.drag_selection_token_to(&token, drop, event.modifiers.control);
                 });
             }
             _ => {}
@@ -316,6 +315,17 @@ impl LstGpuiApp {
             Some(DragSelectionMode::Character) => {
                 self.update_model(cx, true, |model| {
                     model.move_to_char(index, true, None);
+                });
+            }
+            Some(DragSelectionMode::AdditiveCharacter { anchor, base }) => {
+                let (range, reversed) = if index < anchor {
+                    (index..anchor, true)
+                } else {
+                    (anchor..index, false)
+                };
+                self.update_model(cx, true, |model| {
+                    model.set_selection_set(base);
+                    model.add_selection_range(range, reversed);
                 });
             }
             Some(DragSelectionMode::Column(anchor)) => {

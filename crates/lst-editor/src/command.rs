@@ -45,6 +45,7 @@ pub enum EditorCommand {
     SelectAll,
     SmartExpandSelection,
     SmartShrinkSelection,
+    JumpToBracket,
     SelectNextOccurrence,
     SelectAllOccurrences,
     SelectAllFindMatches,
@@ -53,6 +54,10 @@ pub enum EditorCommand {
     AddCursorAbove,
     AddCursorBelow,
     AddCursorsToSelectedLineEnds,
+    ColumnSelectLeft,
+    ColumnSelectRight,
+    ColumnSelectUp,
+    ColumnSelectDown,
     SelectCurrentLine,
     SelectCurrentParagraph,
     Undo,
@@ -163,22 +168,13 @@ impl EditorModel {
                     self.queue_effect(super::EditorEffect::WritePrimary(text));
                 }
             }
-            SmartExpandSelection => reveal_if!(
-                self,
-                self.apply_selection_motion(None, |tab, selection| super::smart_expanded_selection(
-                    tab.buffer(),
-                    selection
-                )),
-                RevealIntent::NearestEdge
-            ),
-            SmartShrinkSelection => reveal_if!(
-                self,
-                self.apply_selection_motion(None, |tab, selection| super::smart_shrunk_selection(
-                    tab.buffer(),
-                    selection
-                )),
-                RevealIntent::NearestEdge
-            ),
+            SmartExpandSelection => {
+                self.smart_expand_selection_with_candidates(&[], true, true);
+            }
+            SmartShrinkSelection => {
+                self.smart_shrink_selection_from_history();
+            }
+            JumpToBracket => {}
             SelectNextOccurrence => self.select_next_occurrence(),
             SelectAllOccurrences => self.select_all_occurrences(),
             SelectAllFindMatches => self.select_all_find_matches(),
@@ -187,6 +183,18 @@ impl EditorModel {
             AddCursorAbove => self.add_cursor_on_adjacent_line(-1),
             AddCursorBelow => self.add_cursor_on_adjacent_line(1),
             AddCursorsToSelectedLineEnds => self.add_cursors_to_selected_line_ends(),
+            ColumnSelectLeft => {
+                self.column_select(0, -1);
+            }
+            ColumnSelectRight => {
+                self.column_select(0, 1);
+            }
+            ColumnSelectUp => {
+                self.column_select(-1, 0);
+            }
+            ColumnSelectDown => {
+                self.column_select(1, 0);
+            }
             SelectCurrentLine => {
                 let tab = self.active_tab();
                 self.assign_selection(Selection::from_range(
@@ -276,5 +284,6 @@ impl EditorModel {
             JumpNextBookmark => self.jump_bookmark(true),
             JumpPreviousBookmark => self.jump_bookmark(false),
         }
+        self.enforce_multi_cursor_limit();
     }
 }

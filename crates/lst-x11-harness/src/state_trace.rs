@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-pub const STATE_TRACE_SCHEMA_VERSION: u32 = 8;
+pub const STATE_TRACE_SCHEMA_VERSION: u32 = 9;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StateTraceRecord {
@@ -52,6 +52,12 @@ pub struct StateTraceRecord {
     pub workspace_surface_selected_index: Option<usize>,
     #[serde(default)]
     pub settings_selected_item: Option<String>,
+    #[serde(default)]
+    pub settings_value_editor_item: Option<String>,
+    #[serde(default)]
+    pub settings_value_error: Option<String>,
+    #[serde(default)]
+    pub editor_polish: TraceEditorPolish,
     #[serde(default)]
     pub word_wrap_enabled: bool,
     #[serde(default)]
@@ -174,6 +180,34 @@ pub struct TraceFindChipBounds {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TraceEditorPolish {
+    #[serde(default)]
+    pub match_brackets: String,
+    #[serde(default)]
+    pub bracket_pair_colorization: bool,
+    #[serde(default)]
+    pub bracket_pair_guides: String,
+    #[serde(default)]
+    pub bracket_pair_horizontal_guides: String,
+    #[serde(default)]
+    pub indent_guides: bool,
+    #[serde(default)]
+    pub highlight_active_indent_guide: bool,
+    #[serde(default)]
+    pub render_whitespace: String,
+    #[serde(default)]
+    pub render_control_characters: bool,
+    #[serde(default)]
+    pub rulers: Vec<u16>,
+    #[serde(default)]
+    pub smart_select_subwords: bool,
+    #[serde(default)]
+    pub smart_select_include_whitespace: bool,
+    #[serde(default)]
+    pub multi_cursor_limit: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TraceViewport {
     #[serde(default)]
     pub scale_factor: f32,
@@ -193,6 +227,18 @@ pub struct TraceViewport {
     pub occurrence_highlights: Vec<TraceRange>,
     #[serde(default)]
     pub selection_match_highlights: Vec<TraceRange>,
+    #[serde(default)]
+    pub bracket_matches: Vec<TraceRange>,
+    #[serde(default)]
+    pub structural_pair_count: usize,
+    #[serde(default)]
+    pub unmatched_bracket_count: usize,
+    #[serde(default)]
+    pub guide_count: usize,
+    #[serde(default)]
+    pub whitespace_marker_count: usize,
+    #[serde(default)]
+    pub control_marker_count: usize,
     pub rows: Vec<TraceRow>,
 }
 

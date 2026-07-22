@@ -1,5 +1,6 @@
 use crate::{
     diagnostics,
+    settings::{GuideMode, MatchBracketsSetting, RenderWhitespaceSetting},
     ui::theme::{metrics, typography, Theme},
 };
 use gpui::{fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString, TextRun, Window};
@@ -23,7 +24,10 @@ use std::{
     time::Instant,
 };
 
-use crate::syntax::{CachedSyntaxHighlights, SyntaxInvalidation, SyntaxMode, SyntaxSpan};
+use crate::syntax::{
+    CachedSyntaxHighlights, StructuralPair, StructuralSnapshot, StructuralToken, SyntaxInvalidation, SyntaxMode,
+    SyntaxSpan,
+};
 
 #[derive(Clone)]
 struct CachedShapedLine {
@@ -42,6 +46,7 @@ pub(crate) struct ViewportCache {
     code_char_width: Option<CachedCodeCharWidth>,
     occurrence_highlights: Option<CachedOccurrenceHighlights>,
     selection_match_highlights: Option<CachedSelectionMatchHighlights>,
+    marker_lines: HashMap<usize, CachedShapedLine>,
 }
 
 #[derive(Clone)]
@@ -168,6 +173,30 @@ pub(crate) struct ViewportPaintState {
     pub(crate) rows: Vec<PaintedRow>,
     pub(crate) occurrence_highlights: Rc<[Range<usize>]>,
     pub(crate) selection_match_highlights: Rc<[Range<usize>]>,
+    structure: StructurePaintState,
+}
+
+#[derive(Clone, Default)]
+struct StructurePaintState {
+    bracket_matches: Rc<[Range<usize>]>,
+    guides: Rc<[PaintGuide]>,
+    markers: Rc<[PaintMarker]>,
+}
+
+#[derive(Clone)]
+struct PaintGuide {
+    row_top: Pixels,
+    start_column: f32,
+    end_column: f32,
+    horizontal: bool,
+    active: bool,
+}
+
+#[derive(Clone)]
+struct PaintMarker {
+    at: usize,
+    shaped: ShapedLine,
+    whitespace: bool,
 }
 
 #[derive(Default)]
@@ -210,6 +239,12 @@ pub(crate) struct ViewportGeometry {
     /// selected range. Stored separately from passive caret occurrences so
     /// focus and edit triggers cannot blur the two interaction contracts.
     pub(crate) selection_match_highlights: Rc<[Range<usize>]>,
+    pub(crate) bracket_matches: Rc<[Range<usize>]>,
+    pub(crate) structural_pair_count: usize,
+    pub(crate) unmatched_bracket_count: usize,
+    pub(crate) guide_count: usize,
+    pub(crate) whitespace_marker_count: usize,
+    pub(crate) control_marker_count: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -310,6 +345,17 @@ pub(crate) struct ViewportPreparation<'a> {
     pub(crate) char_width: Pixels,
     pub(crate) scale: f32,
     pub(crate) theme: Theme,
+    pub(crate) selection_set: &'a SelectionSet,
+    pub(crate) structure: &'a StructuralSnapshot,
+    pub(crate) match_brackets: MatchBracketsSetting,
+    pub(crate) bracket_pair_colorization: bool,
+    pub(crate) bracket_pair_guides: GuideMode,
+    pub(crate) bracket_pair_horizontal_guides: GuideMode,
+    pub(crate) indent_guides: bool,
+    pub(crate) highlight_active_indent_guide: bool,
+    pub(crate) indent_width: usize,
+    pub(crate) render_whitespace: RenderWhitespaceSetting,
+    pub(crate) render_control_characters: bool,
 }
 
 pub(crate) struct ViewportPaintInput<'a> {
@@ -326,6 +372,8 @@ pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) scale: f32,
     pub(crate) horizontal_scroll: Pixels,
     pub(crate) theme: Theme,
+    pub(crate) rulers: &'a [u16],
+    pub(crate) char_width: Pixels,
 }
 pub(crate) fn buffer_content_height(visual_rows: usize, scale: f32) -> Pixels {
     metrics::px_for_scale((visual_rows.max(1) as f32) * metrics::row_height(), scale)
@@ -407,6 +455,119 @@ fn line_syntax_spans(
             .and_then(|highlights| highlights.lines.get(line_ix))
             .cloned()
             .unwrap_or_default(),
+    }
+}
+
+fn bracket_role(token: StructuralToken) -> crate::ui::theme::SyntaxRole {
+    use crate::ui::theme::SyntaxRole;
+    if !token.matched {
+        return SyntaxRole::Error;
+    }
+    const ROLES: [SyntaxRole; 6] = [
+        SyntaxRole::Function,
+        SyntaxRole::Emphasis,
+        SyntaxRole::Type,
+        SyntaxRole::Keyword,
+        SyntaxRole::String,
+        SyntaxRole::Constant,
+    ];
+    ROLES[usize::from(token.depth) % ROLES.len()]
+}
+
+fn overlay_bracket_spans(
+    line_text: &str,
+    line_start_char: usize,
+    spans: Vec<SyntaxSpan>,
+    structure: &StructuralSnapshot,
+) -> Vec<SyntaxSpan> {
+    let line_chars = line_text.chars().count();
+    let line_end_char = line_start_char + line_chars;
+    let first = structure.tokens.partition_point(|token| token.at < line_start_char);
+    let last = first + structure.tokens[first..].partition_point(|token| token.at < line_end_char);
+    let tokens = &structure.tokens[first..last];
+    if tokens.is_empty() {
+        return spans;
+    }
+
+    let mut overrides = Vec::with_capacity(tokens.len());
+    let mut span_index = 0usize;
+    for &token in tokens {
+        let local_char = token.at - line_start_char;
+        let start = char_to_byte_index(line_text, local_char);
+        let end = char_to_byte_index(line_text, local_char + 1);
+        while span_index < spans.len() && spans[span_index].end <= start {
+            span_index += 1;
+        }
+        let existing = spans
+            .get(span_index)
+            .filter(|span| span.start <= start && start < span.end)
+            .map(|span| span.role);
+        if existing.is_none_or(|role| {
+            matches!(
+                role,
+                crate::ui::theme::SyntaxRole::Punctuation | crate::ui::theme::SyntaxRole::Operator
+            )
+        }) {
+            overrides.push(SyntaxSpan {
+                start,
+                end,
+                role: bracket_role(token),
+            });
+        }
+    }
+    if overrides.is_empty() {
+        return spans;
+    }
+
+    let mut merged = Vec::with_capacity(spans.len() + overrides.len() * 2);
+    let mut override_index = 0usize;
+    for span in spans {
+        while override_index < overrides.len() && overrides[override_index].end <= span.start {
+            push_syntax_span(&mut merged, overrides[override_index].clone());
+            override_index += 1;
+        }
+        let mut cursor = span.start;
+        while override_index < overrides.len() && overrides[override_index].start < span.end {
+            let override_span = &overrides[override_index];
+            if cursor < override_span.start {
+                push_syntax_span(
+                    &mut merged,
+                    SyntaxSpan {
+                        start: cursor,
+                        end: override_span.start,
+                        role: span.role,
+                    },
+                );
+            }
+            push_syntax_span(&mut merged, override_span.clone());
+            cursor = override_span.end;
+            override_index += 1;
+        }
+        if cursor < span.end {
+            push_syntax_span(
+                &mut merged,
+                SyntaxSpan {
+                    start: cursor,
+                    end: span.end,
+                    role: span.role,
+                },
+            );
+        }
+    }
+    for override_span in overrides.into_iter().skip(override_index) {
+        push_syntax_span(&mut merged, override_span);
+    }
+    merged
+}
+
+fn push_syntax_span(spans: &mut Vec<SyntaxSpan>, span: SyntaxSpan) {
+    if let Some(previous) = spans
+        .last_mut()
+        .filter(|previous| previous.end == span.start && previous.role == span.role)
+    {
+        previous.end = span.end;
+    } else {
+        spans.push(span);
     }
 }
 
@@ -913,6 +1074,145 @@ fn visible_selection_match_highlights(
     ranges
 }
 
+fn pair_for_head(structure: &StructuralSnapshot, head: usize, enclosing: bool) -> Option<&StructuralPair> {
+    let touched = |at: usize| {
+        structure
+            .tokens
+            .binary_search_by_key(&at, |token| token.at)
+            .ok()
+            .and_then(|index| structure.tokens[index].pair)
+            .and_then(|index| structure.pairs.get(index))
+    };
+    touched(head)
+        .or_else(|| head.checked_sub(1).and_then(touched))
+        .or_else(|| {
+            if !enclosing {
+                return None;
+            }
+            let mut index = structure.pairs.partition_point(|pair| pair.open < head).checked_sub(1);
+            while let Some(pair_index) = index {
+                let pair = &structure.pairs[pair_index];
+                if pair.close >= head {
+                    return Some(pair);
+                }
+                index = pair.parent;
+            }
+            None
+        })
+}
+
+fn visible_structure_pairs(
+    structure: &StructuralSnapshot,
+    visible_start: usize,
+    visible_end: usize,
+) -> Vec<&StructuralPair> {
+    let first_visible_open = structure.pairs.partition_point(|pair| pair.open < visible_start);
+    let after_visible_open = structure.pairs.partition_point(|pair| pair.open <= visible_end);
+    let mut indices: Vec<usize> = (first_visible_open..after_visible_open).collect();
+    let mut ancestor = first_visible_open.checked_sub(1);
+    while let Some(index) = ancestor {
+        let pair = &structure.pairs[index];
+        if pair.close >= visible_start {
+            indices.push(index);
+        }
+        ancestor = pair.parent;
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    indices.into_iter().map(|index| &structure.pairs[index]).collect()
+}
+
+fn bracket_matches(
+    structure: &StructuralSnapshot,
+    selections: &SelectionSet,
+    mode: MatchBracketsSetting,
+) -> Vec<Range<usize>> {
+    if mode == MatchBracketsSetting::Never {
+        return Vec::new();
+    }
+    let enclosing = mode == MatchBracketsSetting::Always;
+    let mut ranges = Vec::new();
+    for selection in selections.as_slice() {
+        if let Some(pair) = pair_for_head(structure, selection.head(), enclosing) {
+            ranges.push(pair.open..pair.open + 1);
+            ranges.push(pair.close..pair.close + 1);
+        }
+    }
+    ranges.sort_by_key(|range| range.start);
+    ranges.dedup();
+    ranges
+}
+
+fn leading_visual_column(text: &str, tab_width: usize) -> usize {
+    text.chars()
+        .take_while(|ch| matches!(ch, ' ' | '\t'))
+        .fold(0, |column, ch| {
+            if ch == '\t' {
+                column + tab_width - column % tab_width
+            } else {
+                column + 1
+            }
+        })
+}
+
+fn char_visual_column(text: &str, char_offset: usize, tab_width: usize) -> usize {
+    text.chars().take(char_offset).fold(0, |column, ch| {
+        if ch == '\t' {
+            column + tab_width - column % tab_width
+        } else {
+            column + 1
+        }
+    })
+}
+
+fn control_picture(ch: char) -> Option<char> {
+    match ch {
+        '\0'..='\u{001f}' if !matches!(ch, '\t' | '\n' | '\r') => char::from_u32(0x2400 + u32::from(ch)),
+        '\u{007f}' => Some('\u{2421}'),
+        '\u{0080}'..='\u{009f}' => Some('\u{25c7}'),
+        '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}' | '\u{feff}' => Some('\u{25c7}'),
+        '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => Some('\u{21c4}'),
+        _ => None,
+    }
+}
+
+fn whitespace_positions(text: &str, mode: RenderWhitespaceSetting) -> Vec<(usize, char)> {
+    if mode == RenderWhitespaceSetting::None {
+        return Vec::new();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let first_non_whitespace = chars.iter().position(|ch| !matches!(ch, ' ' | '\t'));
+    let last_non_whitespace = chars.iter().rposition(|ch| !matches!(ch, ' ' | '\t'));
+    let mut positions = Vec::new();
+    for (index, &ch) in chars.iter().enumerate() {
+        if !matches!(ch, ' ' | '\t') {
+            continue;
+        }
+        let in_run = ch == ' '
+            && ((index > 0 && chars[index - 1] == ' ') || (index + 1 < chars.len() && chars[index + 1] == ' '));
+        let leading = first_non_whitespace.is_none_or(|first| index < first);
+        let trailing = last_non_whitespace.is_none_or(|last| index > last);
+        let visible = match mode {
+            RenderWhitespaceSetting::None => false,
+            RenderWhitespaceSetting::Selection | RenderWhitespaceSetting::All => true,
+            RenderWhitespaceSetting::Trailing => trailing,
+            RenderWhitespaceSetting::Boundary => ch == '\t' || leading || trailing || in_run,
+        };
+        if visible {
+            positions.push((index, if ch == '\t' { '\u{2192}' } else { '\u{00b7}' }));
+        }
+    }
+    positions
+}
+
+fn selection_set_contains(selection_set: &SelectionSet, at: usize) -> bool {
+    let selections = selection_set.as_slice();
+    let candidate = selections.partition_point(|selection| selection.range().end <= at);
+    selections
+        .get(candidate)
+        .is_some_and(|selection| selection.range().contains(&at))
+}
+
 pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, window: &mut Window) -> ViewportPaintState {
     let ViewportPreparation {
         buffer,
@@ -934,6 +1234,17 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         char_width,
         scale,
         theme,
+        selection_set,
+        structure,
+        match_brackets,
+        bracket_pair_colorization,
+        bracket_pair_guides,
+        bracket_pair_horizontal_guides,
+        indent_guides,
+        highlight_active_indent_guide,
+        indent_width,
+        render_whitespace,
+        render_control_characters,
     } = input;
     let show_gutter = layout_metrics.gutter().is_some();
     let row_height = metrics::px_for_scale(metrics::row_height(), scale);
@@ -994,14 +1305,17 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         .skip(first_line)
     {
         let display_source = trim_display_line(line);
-        let highlight_spans = line_syntax_spans(&mut cache, line_ix, display_source.len(), syntax_mode);
+        let line_start_char = buffer.line_to_char(line_ix);
+        let mut highlight_spans = line_syntax_spans(&mut cache, line_ix, display_source.len(), syntax_mode);
+        if bracket_pair_colorization && structure.revision == revision {
+            highlight_spans = overlay_bracket_spans(display_source, line_start_char, highlight_spans, structure);
+        }
         let display_len = display_source.chars().count();
         let logical_end_char = if line_ix + 1 < buffer.len_lines() {
             buffer.line_to_char(line_ix + 1)
         } else {
             buffer.len_chars()
         };
-        let line_start_char = buffer.line_to_char(line_ix);
         let segments = if show_wrap {
             wrap_segments(display_source, layout.wrap_columns)
         } else {
@@ -1085,6 +1399,220 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         }
     }
 
+    let structure_started = diagnostics::trace_enabled().then(Instant::now);
+    let structure_current = structure.revision == revision;
+    let primary_head = selection_set.primary().head();
+    let active_pair = structure_current
+        .then(|| pair_for_head(structure, primary_head, true))
+        .flatten();
+    let mut guides = Vec::new();
+    let mut indent_cache = HashMap::new();
+    let primary_line = buffer.char_to_line(primary_head.min(buffer.len_chars()));
+    let before_visible = (0..first_line).rev().find_map(|line| {
+        let text = trim_display_line(&lines[line]);
+        (!text.trim().is_empty()).then(|| leading_visual_column(text, indent_width))
+    });
+    let after_visible = (last_visible_line + 1..lines.len()).find_map(|line| {
+        let text = trim_display_line(&lines[line]);
+        (!text.trim().is_empty()).then(|| leading_visual_column(text, indent_width))
+    });
+    let raw_visible: Vec<Option<usize>> = (first_line..=last_visible_line)
+        .map(|line| {
+            let text = trim_display_line(&lines[line]);
+            (!text.trim().is_empty()).then(|| leading_visual_column(text, indent_width))
+        })
+        .collect();
+    let mut previous = before_visible;
+    let mut previous_indents = Vec::with_capacity(raw_visible.len());
+    for raw in &raw_visible {
+        if raw.is_some() {
+            previous = *raw;
+        }
+        previous_indents.push(previous);
+    }
+    let mut next = after_visible;
+    let mut next_indents = vec![None; raw_visible.len()];
+    for (index, raw) in raw_visible.iter().enumerate().rev() {
+        if raw.is_some() {
+            next = *raw;
+        }
+        next_indents[index] = next;
+    }
+    for (offset, raw) in raw_visible.into_iter().enumerate() {
+        let indent = raw.unwrap_or_else(|| match (previous_indents[offset], next_indents[offset]) {
+            (Some(before), Some(after)) => before.min(after),
+            (Some(indent), None) | (None, Some(indent)) => indent,
+            (None, None) => 0,
+        });
+        indent_cache.insert(first_line + offset, indent);
+    }
+    let primary_indent = indent_cache.get(&primary_line).copied().unwrap_or_else(|| {
+        let text = trim_display_line(&lines[primary_line]);
+        leading_visual_column(text, indent_width)
+    });
+    if indent_guides && indent_width > 0 {
+        for row in &rows {
+            let line_ix = buffer.char_to_line(row.line_start_char.min(buffer.len_chars()));
+            let indent = indent_cache.get(&line_ix).copied().unwrap_or(0);
+            for column in (indent_width..=indent).step_by(indent_width) {
+                guides.push(PaintGuide {
+                    row_top: row.row_top,
+                    start_column: column as f32,
+                    end_column: column as f32,
+                    horizontal: false,
+                    active: highlight_active_indent_guide && line_ix == primary_line && column == primary_indent,
+                });
+            }
+        }
+    }
+
+    let visible_char_start = rows.first().map_or(0, |row| row.line_start_char);
+    let visible_char_end = rows.last().map_or(0, |row| row.logical_end_char);
+    let visible_pairs = visible_structure_pairs(structure, visible_char_start, visible_char_end);
+
+    let guide_pairs: Vec<(&StructuralPair, bool)> = if !structure_current {
+        Vec::new()
+    } else {
+        match bracket_pair_guides {
+            GuideMode::Off => Vec::new(),
+            GuideMode::Active => active_pair.into_iter().map(|pair| (pair, true)).collect(),
+            GuideMode::All => visible_pairs
+                .iter()
+                .copied()
+                .map(|pair| (pair, active_pair == Some(pair)))
+                .collect(),
+        }
+    };
+    for (pair, active) in guide_pairs {
+        let open_line = buffer.char_to_line(pair.open);
+        let close_line = buffer.char_to_line(pair.close);
+        let open_text = trim_display_line(&lines[open_line]);
+        let open_column = char_visual_column(
+            open_text,
+            pair.open.saturating_sub(buffer.line_to_char(open_line)),
+            indent_width,
+        );
+        for row in &rows {
+            let line_ix = buffer.char_to_line(row.line_start_char.min(buffer.len_chars()));
+            if open_line <= line_ix && line_ix <= close_line {
+                guides.push(PaintGuide {
+                    row_top: row.row_top,
+                    start_column: open_column as f32,
+                    end_column: open_column as f32,
+                    horizontal: false,
+                    active,
+                });
+            }
+        }
+    }
+
+    let horizontal_pairs: Vec<(&StructuralPair, bool)> = if !structure_current {
+        Vec::new()
+    } else {
+        match bracket_pair_horizontal_guides {
+            GuideMode::Off => Vec::new(),
+            GuideMode::Active => active_pair.into_iter().map(|pair| (pair, true)).collect(),
+            GuideMode::All => visible_pairs
+                .iter()
+                .copied()
+                .map(|pair| (pair, active_pair == Some(pair)))
+                .collect(),
+        }
+    };
+    for (pair, active) in horizontal_pairs {
+        let close_line = buffer.char_to_line(pair.close);
+        let close_text = trim_display_line(&lines[close_line]);
+        let close_column = char_visual_column(
+            close_text,
+            pair.close.saturating_sub(buffer.line_to_char(close_line)),
+            indent_width,
+        );
+        let open_line = buffer.char_to_line(pair.open);
+        let open_text = trim_display_line(&lines[open_line]);
+        let open_column = char_visual_column(
+            open_text,
+            pair.open.saturating_sub(buffer.line_to_char(open_line)),
+            indent_width,
+        );
+        for row in rows.iter().filter(|row| {
+            buffer.char_to_line(row.line_start_char.min(buffer.len_chars())) == close_line
+                && row_contains_cursor(row, pair.close)
+        }) {
+            guides.push(PaintGuide {
+                row_top: row.row_top,
+                start_column: open_column.min(close_column) as f32,
+                end_column: open_column.max(close_column) as f32,
+                horizontal: true,
+                active,
+            });
+        }
+    }
+
+    let marker_run = TextRun {
+        len: 0,
+        font: typography::primary_font(),
+        color: rgb(theme.role.whitespace).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let mut markers = Vec::new();
+    for (line_ix, line) in lines
+        .iter()
+        .enumerate()
+        .take(last_visible_line.saturating_add(1))
+        .skip(first_line)
+    {
+        let text = trim_display_line(line);
+        let line_start = buffer.line_to_char(line_ix);
+        let mut candidates: Vec<(usize, char, bool)> = whitespace_positions(text, render_whitespace)
+            .into_iter()
+            .map(|(offset, glyph)| (line_start + offset, glyph, true))
+            .filter(|(at, _, _)| {
+                render_whitespace != RenderWhitespaceSetting::Selection || selection_set_contains(selection_set, *at)
+            })
+            .collect();
+        if render_control_characters {
+            candidates.extend(
+                text.chars()
+                    .enumerate()
+                    .filter_map(|(offset, ch)| control_picture(ch).map(|glyph| (line_start + offset, glyph, false))),
+            );
+        }
+        for (at, glyph, whitespace) in candidates {
+            if !rows.iter().any(|row| row_contains_cursor(row, at)) {
+                continue;
+            }
+            let text = SharedString::from(glyph.to_string());
+            if let Some(shaped) = shape_cached_line(
+                &mut cache.marker_lines,
+                glyph as usize,
+                text,
+                theme.style_key(),
+                &marker_run,
+                font_size,
+                window,
+            ) {
+                markers.push(PaintMarker { at, shaped, whitespace });
+            }
+        }
+    }
+    markers.sort_by_key(|marker| marker.at);
+    let structural_pair_count = if structure_current { structure.pairs.len() } else { 0 };
+    let unmatched_bracket_count = if structure_current {
+        structure.tokens.iter().filter(|token| !token.matched).count()
+    } else {
+        0
+    };
+    let structure = StructurePaintState {
+        bracket_matches: bracket_matches(structure, selection_set, match_brackets).into(),
+        guides: guides.into(),
+        markers: markers.into(),
+    };
+    if let Some(started) = structure_started {
+        diagnostics::record_ms("structure_decorations_ms", started.elapsed().as_secs_f64() * 1000.0);
+    }
+
     let visible_windows = painted_character_windows(&rows, bounds, layout_metrics, scroll_left);
     let occurrence_highlights = visible_occurrence_highlights(
         &mut cache,
@@ -1116,12 +1644,19 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         code_origin_x_at_paint: layout_metrics.code_origin_x(bounds.left(), scroll_left),
         occurrence_highlights: occurrence_highlights.clone(),
         selection_match_highlights: selection_match_highlights.clone(),
+        bracket_matches: structure.bracket_matches.clone(),
+        structural_pair_count,
+        unmatched_bracket_count,
+        guide_count: structure.guides.len(),
+        whitespace_marker_count: structure.markers.iter().filter(|marker| marker.whitespace).count(),
+        control_marker_count: structure.markers.iter().filter(|marker| !marker.whitespace).count(),
     };
 
     ViewportPaintState {
         rows,
         occurrence_highlights,
         selection_match_highlights,
+        structure,
     }
 }
 
@@ -1164,6 +1699,57 @@ fn paint_range_background(
     ));
 }
 
+fn range_bounds(
+    row: &PaintedRow,
+    range: &Range<usize>,
+    code_origin_x: Pixels,
+    row_height: Pixels,
+    scale: f32,
+) -> Option<Bounds<Pixels>> {
+    if range.start == range.end || range.end <= row.line_start_char || range.start >= row.logical_end_char {
+        return None;
+    }
+    let start = range.start.max(row.line_start_char).min(row.display_end_char);
+    let end = range.end.min(row.display_end_char);
+    if end <= start {
+        return None;
+    }
+    let start_x = code_origin_x + x_for_global_char(row, start)?;
+    let end_x = code_origin_x + x_for_global_char(row, end)?;
+    Some(Bounds::from_corners(
+        point(start_x, row.row_top),
+        point(
+            end_x.max(start_x + metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)),
+            row.row_top + row_height,
+        ),
+    ))
+}
+
+fn paint_outline(bounds: Bounds<Pixels>, width: Pixels, color: u32, window: &mut Window) {
+    window.paint_quad(fill(
+        Bounds::new(bounds.origin, size(bounds.size.width, width)),
+        rgb(color),
+    ));
+    window.paint_quad(fill(
+        Bounds::new(
+            point(bounds.left(), bounds.bottom() - width),
+            size(bounds.size.width, width),
+        ),
+        rgb(color),
+    ));
+    window.paint_quad(fill(
+        Bounds::new(bounds.origin, size(width, bounds.size.height)),
+        rgb(color),
+    ));
+    window.paint_quad(fill(
+        Bounds::new(
+            point(bounds.right() - width, bounds.top()),
+            size(width, bounds.size.height),
+        ),
+        rgb(color),
+    ));
+}
+
 /// Slices the (document-order, non-overlapping) `items` down to those whose
 /// char range overlaps `row`'s painted span. Shared by search matches and
 /// selections, both of which uphold that ordering invariant.
@@ -1195,6 +1781,15 @@ fn paint_cursors(selection_set: &SelectionSet) -> Vec<PaintCursor> {
         .collect()
 }
 
+fn cursors_in_row<'a>(cursors: &'a [PaintCursor], row: &PaintedRow) -> &'a [PaintCursor] {
+    let first = cursors.partition_point(|cursor| cursor.char < row.line_start_char);
+    let last = first
+        + cursors[first..].partition_point(|cursor| {
+            cursor.char < row.logical_end_char || (row.cursor_end_inclusive && cursor.char == row.logical_end_char)
+        });
+    &cursors[first..last]
+}
+
 pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window, cx: &mut App) {
     let ViewportPaintInput {
         bounds,
@@ -1210,11 +1805,14 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         scale,
         horizontal_scroll,
         theme,
+        rulers,
+        char_width,
     } = input;
     let ViewportPaintState {
         rows,
         occurrence_highlights,
         selection_match_highlights,
+        structure,
     } = paint_state;
     let line_height = window.line_height();
     let row_height = metrics::px_for_scale(metrics::row_height(), scale);
@@ -1223,8 +1821,50 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
     let selections = selection_set.as_slice();
     let cursors = paint_cursors(&selection_set);
 
+    for &column in rulers {
+        let x = code_origin_x + char_width * f32::from(column);
+        window.paint_quad(fill(
+            Bounds::new(
+                point(x, bounds.top()),
+                size(metrics::px_for_scale(1.0, scale), bounds.size.height),
+            ),
+            rgb(theme.role.ruler),
+        ));
+    }
+    for guide in structure.guides.iter() {
+        let color = if guide.active {
+            theme.role.guide_active
+        } else {
+            theme.role.guide
+        };
+        if guide.horizontal {
+            let start = code_origin_x + char_width * guide.start_column;
+            let end = code_origin_x + char_width * guide.end_column;
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(start, guide.row_top + row_height - metrics::px_for_scale(1.0, scale)),
+                    size(
+                        (end - start).max(metrics::px_for_scale(1.0, scale)),
+                        metrics::px_for_scale(1.0, scale),
+                    ),
+                ),
+                rgb(color),
+            ));
+        } else {
+            let x = code_origin_x + char_width * guide.start_column;
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(x, guide.row_top),
+                    size(metrics::px_for_scale(1.0, scale), row_height),
+                ),
+                rgb(color),
+            ));
+        }
+    }
+
     for row in rows {
-        let selection_head_in_row = cursors.iter().any(|cursor| row_contains_cursor(&row, cursor.char));
+        let row_cursors = cursors_in_row(&cursors, &row);
+        let selection_head_in_row = !row_cursors.is_empty();
         if selection_head_in_row {
             let highlight_left = bounds.left() + layout_metrics.gutter_width();
             window.paint_quad(fill(
@@ -1260,6 +1900,18 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 row_height,
                 scale,
                 theme.role.selection_match_bg,
+                window,
+            );
+        }
+
+        for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), &row, Clone::clone) {
+            paint_range_background(
+                &row,
+                bracket,
+                code_origin_x,
+                row_height,
+                scale,
+                theme.role.bracket_match_bg,
                 window,
             );
         }
@@ -1308,8 +1960,29 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             let _ = code_line.paint(point(code_origin_x, row.row_top), line_height, window, cx);
         }
 
+        let marker_first = structure
+            .markers
+            .partition_point(|marker| marker.at < row.line_start_char);
+        let marker_last = marker_first
+            + structure.markers[marker_first..].partition_point(|marker| row_contains_cursor(&row, marker.at));
+        for marker in &structure.markers[marker_first..marker_last] {
+            let x = code_origin_x + x_for_global_char(&row, marker.at).unwrap_or_else(|| px(0.0));
+            let _ = marker.shaped.paint(point(x, row.row_top), line_height, window, cx);
+        }
+
+        for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), &row, Clone::clone) {
+            if let Some(bounds) = range_bounds(&row, bracket, code_origin_x, row_height, scale) {
+                paint_outline(
+                    bounds,
+                    metrics::px_for_scale(1.0, scale),
+                    theme.role.bracket_match_outline,
+                    window,
+                );
+            }
+        }
+
         if focused && cursor_visible {
-            for cursor in cursors.iter().filter(|cursor| row_contains_cursor(&row, cursor.char)) {
+            for cursor in row_cursors {
                 let cursor_char = cursor.char;
                 let block_cursor = vim_mode == vim::Mode::Normal && cursor.collapsed;
                 let cursor_x = code_origin_x

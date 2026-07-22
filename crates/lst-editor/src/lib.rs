@@ -42,6 +42,55 @@ pub enum RevealIntent {
     Top,
     Bottom,
 }
+
+/// A parser-derived selection boundary expressed exclusively in validated
+/// editor character coordinates. UI integrations can build these from any
+/// parser without exposing parser nodes to the editor model.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructuralSelectionCandidate {
+    range: Range<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StructuralBracketPair {
+    open: usize,
+    close: usize,
+}
+
+/// Opaque proof that a drag began on a specific selection snapshot. Applying
+/// it later revalidates the tab, revision, selections, and target range before
+/// any edit is constructed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectionDragToken {
+    tab_id: TabId,
+    revision: u64,
+    selections: SelectionSet,
+    target: usize,
+}
+
+impl StructuralBracketPair {
+    pub fn new(open: usize, close: usize, document_len: usize) -> Option<Self> {
+        (open < close && close < document_len).then_some(Self { open, close })
+    }
+
+    pub fn open(self) -> usize {
+        self.open
+    }
+
+    pub fn close(self) -> usize {
+        self.close
+    }
+}
+
+impl StructuralSelectionCandidate {
+    pub fn new(range: Range<usize>, document_len: usize) -> Option<Self> {
+        (range.start < range.end && range.end <= document_len).then_some(Self { range })
+    }
+
+    pub fn range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditorEffect {
     Focus(FocusTarget),
@@ -113,7 +162,7 @@ use crate::{
     tab_set::TabSet,
     transaction::{EditOutcome, EditRequest, SelectionAfter, TextChange, TextChangeSet},
 };
-use std::{ops::Range, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc};
 pub const UNTITLED_PREFIX: &str = "untitled";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabCloseRequest {
@@ -137,6 +186,24 @@ pub struct EditorModel {
     owned_clipboard: Option<OwnedClipboard>,
     overtype: bool,
     wrap_layout_cache: Option<ModelWrapLayoutCache>,
+    smart_selection_history: Option<SmartSelectionHistory>,
+    multi_cursor_limit: usize,
+    column_selection: Option<ColumnSelectionState>,
+}
+
+struct SmartSelectionHistory {
+    tab_id: TabId,
+    revision: u64,
+    expanded: SelectionSet,
+    previous: Vec<SelectionSet>,
+}
+
+struct ColumnSelectionState {
+    tab_id: TabId,
+    revision: u64,
+    anchor: usize,
+    head: usize,
+    result: SelectionSet,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ClipboardKind {
@@ -177,6 +244,9 @@ impl EditorModel {
             owned_clipboard: None,
             overtype: false,
             wrap_layout_cache: None,
+            smart_selection_history: None,
+            multi_cursor_limit: 10_000,
+            column_selection: None,
         }
     }
     fn alloc_tab_id(&mut self) -> TabId {
@@ -954,41 +1024,310 @@ impl EditorModel {
     }
     pub fn set_selection_set(&mut self, selection_set: SelectionSet) {
         self.active_tab_mut().set_selection_set(selection_set);
+        self.enforce_multi_cursor_limit();
     }
-    /// Moves or copies `source` to `drop` as one undoable edit. Coordinates
-    /// are from the pre-edit buffer; dropping on either source boundary or
-    /// anywhere inside the source is intentionally a no-op.
-    pub fn drag_selection_to(&mut self, source: Range<usize>, drop: usize, copy: bool) -> bool {
+
+    pub fn set_multi_cursor_limit(&mut self, limit: usize) {
+        self.multi_cursor_limit = limit.clamp(1, 10_000);
+        self.enforce_multi_cursor_limit();
+    }
+
+    fn column_select(&mut self, line_delta: isize, column_delta: isize) -> bool {
+        let tab_id = self.active_tab_id();
+        let revision = self.active_tab().revision();
+        let current = self.active_tab().selection_set().clone();
+        let (anchor, head) = self
+            .column_selection
+            .as_ref()
+            .filter(|state| state.tab_id == tab_id && state.revision == revision && state.result == current)
+            .map_or_else(
+                || {
+                    let primary = current.primary();
+                    (primary.anchor(), primary.head())
+                },
+                |state| (state.anchor, state.head),
+            );
         let buffer = self.active_tab().buffer();
-        let source = selection::floor_grapheme_boundary(buffer, source.start)
-            ..selection::ceil_grapheme_boundary(buffer, source.end);
+        let position = char_to_position(buffer, head);
+        let target_line = if line_delta < 0 {
+            position.line.saturating_sub(line_delta.unsigned_abs())
+        } else {
+            position
+                .line
+                .saturating_add(line_delta as usize)
+                .min(buffer.len_lines().saturating_sub(1))
+        };
+        let line_text = selection::line_display_text(buffer, target_line);
+        let target_column = if column_delta < 0 {
+            selection::previous_grapheme_column(&line_text, position.column)
+        } else if column_delta > 0 {
+            selection::next_grapheme_column(&line_text, position.column)
+        } else {
+            position.column.min(line_text.chars().count())
+        };
+        let target = char_at_line_column(buffer, target_line, target_column);
+        let Some(next) = multi_selection::rectangular_selection_set(self.active_tab(), anchor, target) else {
+            return false;
+        };
+        if next == current {
+            return false;
+        }
+        self.active_tab_mut().set_selection_set(next);
+        self.enforce_multi_cursor_limit();
+        let result = self.active_tab().selection_set().clone();
+        self.column_selection = Some(ColumnSelectionState {
+            tab_id,
+            revision,
+            anchor,
+            head: target,
+            result,
+        });
+        self.queue_reveal(RevealIntent::NearestEdge);
+        true
+    }
+
+    fn enforce_multi_cursor_limit(&mut self) -> bool {
+        let set = self.active_tab().selection_set();
+        if set.as_slice().len() <= self.multi_cursor_limit {
+            return false;
+        }
+        let mut indices: Vec<usize> = (0..self.multi_cursor_limit).collect();
+        let primary = set.primary_index();
+        if primary >= self.multi_cursor_limit {
+            if let Some(last) = indices.last_mut() {
+                *last = primary;
+            }
+            indices.sort_unstable();
+        }
+        let primary = indices
+            .iter()
+            .position(|index| *index == primary)
+            .expect("the limited set always retains its primary selection");
+        let selections = indices.into_iter().map(|index| set.as_slice()[index]).collect();
+        let limited = SelectionSet::from_selections(selections, primary)
+            .expect("an ordered subset of a valid selection set remains valid");
+        self.active_tab_mut().set_selection_set(limited);
+        self.status = format!(
+            "Multi-cursor limit reached; kept {} selections.",
+            self.multi_cursor_limit
+        );
+        true
+    }
+
+    pub fn smart_expand_selection_with_candidates(
+        &mut self,
+        candidates: &[StructuralSelectionCandidate],
+        select_subwords: bool,
+        include_whitespace: bool,
+    ) -> bool {
+        let tab_id = self.active_tab_id();
+        let revision = self.active_tab().revision();
+        let before = self.active_tab().selection_set().clone();
+        let ranges: Vec<Range<usize>> = candidates.iter().map(StructuralSelectionCandidate::range).collect();
+        let changed = self.apply_selection_motion(None, |tab, selection| {
+            smart_expanded_selection_with_candidates(
+                tab.buffer(),
+                selection,
+                &ranges,
+                select_subwords,
+                include_whitespace,
+            )
+        });
+        if !changed {
+            return false;
+        }
+        let expanded = self.active_tab().selection_set().clone();
+        match self.smart_selection_history.as_mut() {
+            Some(history) if history.tab_id == tab_id && history.revision == revision && history.expanded == before => {
+                history.previous.push(before);
+                history.expanded = expanded;
+            }
+            _ => {
+                self.smart_selection_history = Some(SmartSelectionHistory {
+                    tab_id,
+                    revision,
+                    expanded,
+                    previous: vec![before],
+                });
+            }
+        }
+        self.queue_reveal(RevealIntent::NearestEdge);
+        true
+    }
+
+    pub fn smart_shrink_selection_from_history(&mut self) -> bool {
+        let tab_id = self.active_tab_id();
+        let revision = self.active_tab().revision();
+        let current = self.active_tab().selection_set().clone();
+        let Some(history) = self.smart_selection_history.as_mut() else {
+            return false;
+        };
+        if history.tab_id != tab_id || history.revision != revision || history.expanded != current {
+            self.smart_selection_history = None;
+            return false;
+        }
+        let Some(previous) = history.previous.pop() else {
+            return false;
+        };
+        history.expanded = previous.clone();
+        self.active_tab_mut().set_selection_set(previous);
+        self.queue_reveal(RevealIntent::NearestEdge);
+        true
+    }
+
+    pub fn jump_to_bracket_pairs(&mut self, pairs: &[StructuralBracketPair]) -> bool {
+        let mut counterparts = HashMap::with_capacity(pairs.len().saturating_mul(2));
+        for pair in pairs {
+            counterparts.insert(pair.open, pair.close);
+            counterparts.insert(pair.close, pair.open);
+        }
+        let changed = self.apply_selection_transform(|_, _, selection| {
+            let head = selection.head();
+            let target = counterparts
+                .get(&head)
+                .copied()
+                .or_else(|| {
+                    head.checked_sub(1)
+                        .and_then(|before| counterparts.get(&before).copied())
+                })
+                .unwrap_or(head);
+            SelectionTransform::new(Selection::collapsed(target))
+        });
+        if changed {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+        changed
+    }
+
+    pub fn selection_drag_token_at(&self, offset: usize) -> Option<SelectionDragToken> {
+        let target = self
+            .active_tab()
+            .selection_set()
+            .as_slice()
+            .iter()
+            .position(|selection| selection.has_selection() && selection.range().contains(&offset))?;
+        Some(SelectionDragToken {
+            tab_id: self.active_tab_id(),
+            revision: self.active_tab().revision(),
+            selections: self.active_tab().selection_set().clone(),
+            target,
+        })
+    }
+
+    pub fn selection_drag_token_is_current(&self, token: &SelectionDragToken) -> bool {
+        token.tab_id == self.active_tab_id()
+            && token.revision == self.active_tab().revision()
+            && token.selections == *self.active_tab().selection_set()
+    }
+
+    pub fn drag_selection_token_to(&mut self, token: &SelectionDragToken, drop: usize, copy: bool) -> bool {
+        if !self.selection_drag_token_is_current(token) {
+            return false;
+        }
+        let source = token.selections.as_slice()[token.target].range();
+        let buffer = self.active_tab().buffer();
         let drop = selection::floor_grapheme_boundary(buffer, drop.min(buffer.len_chars()));
-        if source.start >= source.end || (source.start..=source.end).contains(&drop) {
+        if source.start >= source.end
+            || (source.start..=source.end).contains(&drop)
+            || token
+                .selections
+                .as_slice()
+                .iter()
+                .enumerate()
+                .any(|(index, selection)| {
+                    if index == token.target {
+                        return false;
+                    }
+                    let range = selection.range();
+                    range.start <= drop && drop <= range.end
+                })
+        {
             return false;
         }
 
         let text = buffer.slice(source.clone()).to_string();
         let selected_len = text.chars().count();
-        let selection_after = SelectionAfter::InsertedRange {
-            range: 0..selected_len,
-            reversed: false,
-        };
-        let request = if copy {
-            EditRequest::single(EditKind::Other, UndoBoundary::Break, drop..drop, text)
-                .with_selection_after(selection_after)
-        } else {
-            let (changes, insertion_index) = if drop < source.start {
-                (vec![TextChange::insert(drop, text), TextChange::delete(source)], 0)
-            } else {
-                (vec![TextChange::delete(source), TextChange::insert(drop, text)], 1)
-            };
-            EditRequest::from_changes(
-                EditKind::Other,
-                UndoBoundary::Break,
-                TextChangeSet::new(changes, insertion_index),
+        let (changes, insertion_index, inserted_start) = if copy {
+            (vec![TextChange::insert(drop, text)], 0, drop)
+        } else if drop < source.start {
+            (
+                vec![TextChange::insert(drop, text), TextChange::delete(source.clone())],
+                0,
+                drop,
             )
-            .with_selection_after(selection_after)
+        } else {
+            (
+                vec![TextChange::delete(source.clone()), TextChange::insert(drop, text)],
+                1,
+                drop - selected_len,
+            )
         };
+
+        let map_offset = |offset: usize| -> usize {
+            if copy {
+                if offset >= drop {
+                    offset + selected_len
+                } else {
+                    offset
+                }
+            } else if drop < source.start {
+                if offset < drop {
+                    offset
+                } else if offset <= source.start {
+                    offset + selected_len
+                } else if offset >= source.end {
+                    offset
+                } else {
+                    inserted_start
+                }
+            } else if offset <= source.start {
+                offset
+            } else if offset < source.end {
+                inserted_start
+            } else if offset < drop {
+                offset - selected_len
+            } else {
+                offset
+            }
+        };
+        let mut mapped: Vec<(Selection, bool)> = token
+            .selections
+            .as_slice()
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, selection)| {
+                if index == token.target {
+                    (
+                        Selection::from_range(inserted_start..inserted_start + selected_len, false),
+                        true,
+                    )
+                } else {
+                    (
+                        Selection::new(map_offset(selection.anchor()), map_offset(selection.head())),
+                        false,
+                    )
+                }
+            })
+            .collect();
+        mapped.sort_by_key(|(selection, _)| {
+            let range = selection.range();
+            (range.start, range.end)
+        });
+        let Some(primary) = mapped.iter().position(|(_, target)| *target) else {
+            return false;
+        };
+        let Ok(selection_after) =
+            SelectionSet::from_selections(mapped.into_iter().map(|(selection, _)| selection).collect(), primary)
+        else {
+            return false;
+        };
+        let request = EditRequest::from_changes(
+            EditKind::Other,
+            UndoBoundary::Break,
+            TextChangeSet::new(changes, insertion_index),
+        )
+        .with_selection_after(SelectionAfter::Exact(selection_after));
         let outcome = self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
         if outcome.text_changed {
             self.status = if copy {
@@ -1068,6 +1407,7 @@ impl EditorModel {
         let after = before.with_added_selection(selection);
         if after != before {
             self.active_tab_mut().set_selection_state(after);
+            self.enforce_multi_cursor_limit();
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
@@ -1126,6 +1466,7 @@ impl EditorModel {
         };
         if *self.active_tab().selection_set() != selection_set {
             self.active_tab_mut().set_selection_set(selection_set);
+            self.enforce_multi_cursor_limit();
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
@@ -1440,55 +1781,73 @@ fn selection_line_span(tab: &EditorTab) -> Option<(usize, usize, bool)> {
     Some((start.line, last.max(start.line), spans))
 }
 
-fn smart_expanded_selection(buffer: &ropey::Rope, selection: Selection) -> Selection {
+fn smart_expanded_selection_with_candidates(
+    buffer: &ropey::Rope,
+    selection: Selection,
+    candidates: &[Range<usize>],
+    select_subwords: bool,
+    include_whitespace: bool,
+) -> Selection {
     let range = selection.range();
     let reversed = selection.is_reversed();
-    if range.start < range.end {
-        if let Some(expanded) = expand_to_adjacent_pair(buffer, range.clone()) {
-            return Selection::from_range(expanded, reversed);
+    if range.start == range.end {
+        if let Some(word) = selection::identifier_range_at_char(buffer, selection.cursor()) {
+            if select_subwords {
+                let subword = selection::previous_subword_boundary(buffer, selection.cursor()).max(word.start)
+                    ..selection::next_subword_boundary(buffer, selection.cursor()).min(word.end);
+                if subword.start < subword.end && subword != word {
+                    return Selection::from_range(subword, reversed);
+                }
+            }
+            return Selection::from_range(word, reversed);
         }
-        return selection;
     }
-    let word = word_range_at_char(buffer, selection.cursor());
-    if word.start < word.end {
-        Selection::from_range(word, false)
-    } else {
-        selection
+
+    let word = selection::identifier_range_at_char(buffer, selection.cursor());
+    if let Some(word) = word.filter(|word| {
+        word.start <= range.start && word.end >= range.end && (word.start != range.start || word.end != range.end)
+    }) {
+        return Selection::from_range(word, reversed);
     }
-}
-fn smart_shrunk_selection(buffer: &ropey::Rope, selection: Selection) -> Selection {
-    let range = selection.range();
-    if range.end.saturating_sub(range.start) < 2 {
-        return selection;
+
+    if let Some(candidate) = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.start <= range.start
+                && candidate.end >= range.end
+                && (candidate.start < range.start || candidate.end > range.end)
+        })
+        .min_by_key(|candidate| (candidate.end - candidate.start, candidate.start))
+    {
+        let mut expanded = candidate.clone();
+        if include_whitespace {
+            while expanded.end < buffer.len_chars()
+                && !matches!(buffer.char(expanded.end), '\n' | '\r')
+                && buffer.char(expanded.end).is_whitespace()
+            {
+                expanded.end += 1;
+            }
+        }
+        return Selection::from_range(expanded, reversed);
     }
-    let Some(open) = rope_char(buffer, range.start) else {
-        return selection;
-    };
-    let Some(close) = rope_char(buffer, range.end - 1) else {
-        return selection;
-    };
-    if matching_delimiter(open, close) {
-        Selection::from_range(range.start + 1..range.end - 1, selection.is_reversed())
-    } else {
-        selection
+
+    if range.start > 0 && range.end < buffer.len_chars() {
+        let open = buffer.char(range.start - 1);
+        let close = buffer.char(range.end);
+        if matches!((open, close), ('(', ')') | ('[', ']') | ('{', '}')) {
+            return Selection::from_range(range.start - 1..range.end + 1, reversed);
+        }
     }
-}
-fn expand_to_adjacent_pair(buffer: &ropey::Rope, range: Range<usize>) -> Option<Range<usize>> {
-    if range.start == 0 || range.end >= buffer.len_chars() {
-        return None;
+
+    let line = line_range_at_char(buffer, selection.cursor());
+    if line.start <= range.start && line.end >= range.end && line != range {
+        return Selection::from_range(line, reversed);
     }
-    let open = rope_char(buffer, range.start - 1)?;
-    let close = rope_char(buffer, range.end)?;
-    matching_delimiter(open, close).then_some(range.start - 1..range.end + 1)
-}
-fn rope_char(buffer: &ropey::Rope, char_index: usize) -> Option<char> {
-    (char_index < buffer.len_chars()).then(|| buffer.char(char_index))
-}
-fn matching_delimiter(open: char, close: char) -> bool {
-    matches!(
-        (open, close),
-        ('(', ')') | ('[', ']') | ('{', '}') | ('"', '"') | ('\'', '\'') | ('`', '`')
-    )
+    let document = 0..buffer.len_chars();
+    if document != range {
+        return Selection::from_range(document, reversed);
+    }
+    selection
 }
 fn display_line_char_len(tab: &EditorTab, line_ix: usize) -> usize {
     buffer_display_line_char_len(tab.buffer(), line_ix)

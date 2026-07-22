@@ -29,7 +29,10 @@ positions, visible modes/panels/status text, or viewport-observable geometry.
 - [x] **Page up/down** - page motion is viewport-relative and reaches document edges predictably. X11: `real_x11_motion.rs`.
 - [x] **Half-page scroll** - Vim `Ctrl-D` / `Ctrl-U` move by half a viewport.
 - [x] **Scroll without moving cursor** - scroll commands can reposition the viewport without changing the cursor.
-- [x] **Matching bracket jump** - Vim `%` jumps between matching brackets.
+- [x] **Matching bracket jump** - Vim `%` and the configurable
+  `navigation.jump_to_bracket` command jump between syntax-aware structural
+  brackets; the standard command uses `Ctrl-Shift-\`. Quotes remain auto-close
+  pairs but are not structural brackets. X11: `real_x11_polish.rs`.
 - [x] **Go to line** - the goto panel accepts a line number, moves there, and returns focus to editing. X11: `real_x11_workflows.rs`, `real_x11_state_trace.rs`.
 - [x] **Go to column** - the goto panel accepts `line:column` and clamps out-of-range values. X11: `real_x11_workflows.rs`.
 - [ ] **Jump list / navigation history** - jumps between meaningful prior locations.
@@ -48,7 +51,11 @@ positions, visible modes/panels/status text, or viewport-observable geometry.
 - [x] **Shift-click extends** - shift-click extends from the existing caret/anchor to the clicked position. X11: `real_x11_mouse.rs`.
 - [x] **Column / block selection** - a rectangular selection gesture creates one selection or cursor per touched line. X11: `real_x11_multi_cursor_spec.rs`.
 - [x] **Select all** - `Ctrl-A` selects the full buffer, and typing replaces it. X11: `real_x11_modifiers.rs`.
-- [ ] **Expand selection to enclosing scope** - smart selection expands to syntactic or textual enclosing scopes.
+- [x] **Expand selection to enclosing scope** - smart selection expands through
+  subword, word, injected/host syntax ranges, logical line, and document;
+  shrink reverses the exact per-tab selection-set history. Plain or malformed
+  text retains textual fallback behavior. X11: `real_x11_polish.rs`,
+  `real_x11_multi_cursor_spec.rs`.
 - [~] **Multi-cursor / multi-selection** - see the dedicated section below.
 - [x] **Select line / select paragraph** - keyboard, Vim, and mouse workflows can select whole lines and paragraphs.
 
@@ -98,7 +105,10 @@ multi-cursor policy is intentionally separate.
 - [x] **Horizontal motions per cursor** - character, word, line-boundary, and smart-home motions move every cursor independently. X11: `real_x11_multi_cursor.rs`, `real_x11_multi_cursor_spec.rs`, `real_x11_multi_cursor_tdd.rs`.
 - [~] **Vertical motions per cursor** - line movement and duplicate-target coalescing are covered; page, half-page, and document-edge multi-cursor policy remains open. X11: `real_x11_motion.rs`, `real_x11_multi_cursor_tdd.rs`.
 - [~] **Shift-extend per cursor** - shift-modified character, word, home, and end motions extend each cursor's selection independently; page/document shifted multi-cursor motion remains open. X11: `real_x11_multi_cursor_spec.rs`, `real_x11_multi_cursor_tdd.rs`.
-- [~] **Shift-Alt-Right / Shift-Alt-Left smart expand/shrink per cursor** - smart selection applies to every cursor for the covered textual pair cases; richer syntax-aware expansion remains open. X11: `real_x11_multi_cursor_spec.rs`.
+- [x] **Shift-Alt-Right / Shift-Alt-Left smart expand/shrink per cursor** - smart
+  selection applies the same validated syntax hierarchy to every cursor and
+  shrink restores the exact prior multi-selection. X11:
+  `real_x11_polish.rs`, `real_x11_multi_cursor_spec.rs`.
 
 ### Per-Cursor Editing
 
@@ -136,17 +146,20 @@ multi-cursor policy is intentionally separate.
 ### Mouse Gestures
 
 - [x] **Alt-click toggle** - add/remove cursor at a clicked text position. X11: `real_x11_mouse.rs`.
-- [~] **Alt-drag additive selection** - additive free-form range selection is not complete.
+- [x] **Alt-drag additive selection** - adds a free-form range while preserving
+  the existing cursor set.
 - [x] **Shift-Alt-drag column selection** - creates a rectangular cursor/selection set. X11: `real_x11_multi_cursor_spec.rs`.
 - [ ] **Middle-click drag column selection** - optional platform-dependent column selection gesture.
-- [ ] **Drag extends only target cursor** - dragging one multi-cursor selection leaves the others intact.
+- [x] **Drag extends only target cursor** - dragging moves (or Ctrl-copies) the
+  selected range under the pointer and remaps every other selection. An opaque
+  tab/revision/selection token rejects stale drops.
 
 ### Visual Feedback
 
 - [x] **All selections painted** - every active selection is visibly highlighted.
 - [x] **All cursors painted** - every active cursor is visible.
-- [ ] **All cursors blink in phase** - cursor blink state is synchronized across cursors.
-- [ ] **Primary-cursor distinction** - the primary cursor has a subtle visible distinction.
+- [x] **All cursors blink in phase** - cursor blink state is synchronized across cursors.
+- [x] **Primary-cursor distinction** - the primary cursor has a subtle visible distinction.
 - [~] **Reveal targets primary or last-moved cursor** - movement keeps the relevant cursor visible, but last-moved behavior is not complete.
 - [x] **Off-screen cursor indicator** - UI indicates when cursors exist outside the viewport. X11: `real_x11_off_screen_cursor_tdd.rs`.
 - [x] **Gutter marker for cursor-bearing lines** - line-number gutter reflects all lines with active cursors.
@@ -155,7 +168,9 @@ multi-cursor policy is intentionally separate.
 ### Column / Block Selection
 
 - [x] **Shift-Alt-drag creates rectangular selection** - rectangular selection creates the expected per-line cursor set. X11: `real_x11_multi_cursor_spec.rs`.
-- [ ] **Keyboard column selection policy** - VS Code documents column-selection commands but no Linux default shortcut; decide whether `lst` exposes an explicit Linux binding.
+- [x] **Keyboard column selection policy** - column-left/right/up/down commands
+  are available to custom keybindings and the command palette, with no Linux
+  defaults.
 - [x] **Defined short-line policy** - short lines clamp to their line end and duplicate cursor positions coalesce.
 - [x] **Insert in column mode** - insertion applies at every column-aligned cursor. X11: `real_x11_multi_cursor_spec.rs`.
 - [x] **Backspace in column mode** - deletion applies at every column-aligned cursor. X11: `real_x11_multi_cursor_spec.rs`.
@@ -165,8 +180,12 @@ multi-cursor policy is intentionally separate.
 - [x] **IME composition routes to primary only** - composition affects only the primary cursor while secondary cursors stay inert.
 - [ ] **Macro recording policy defined** - decide whether macros are single-cursor only or record a whole multi-cursor operation.
 - [ ] **Language service responsiveness under multi-cursor** - diagnostics, completions, and highlighting remain stable and responsive with multiple cursors once language services exist.
-- [~] **Smooth ordinary multi-cursor rendering** - ordinary cursor counts render without visible stutter, but large-count behavior is not fully specified.
-- [ ] **Responsive at 1k cursors** - large cursor counts stay responsive or are capped/warned intentionally.
+- [x] **Smooth ordinary multi-cursor rendering** - paint slices the ordered
+  cursor set by visible row and shares one blink phase.
+- [~] **Responsive at 1k cursors** - the viewport does visible-row slicing and
+  cursor creation is capped by a configurable, enforced limit (10,000 by
+  default) with status feedback. The X11 1k benchmark remains the performance
+  gate.
 
 ## Editing Primitives
 
@@ -227,7 +246,9 @@ multi-cursor policy is intentionally separate.
 - [x] **Zoom controls** - keyboard zoom in/out/reset updates the visible status bar and returns to the default size. X11: `real_x11_chrome.rs`.
 - [x] **Theme toggle** - the visible theme control cycles the active theme label. X11: `real_x11_chrome.rs`.
 - [x] **Syntax highlighting** - tree-sitter highlighting for Rust, Python, JavaScript/JSX, TypeScript/TSX, JSON, TOML, YAML, Markdown, HTML, and CSS, with incremental reparsing, language injection (e.g. Markdown fenced code), and theme-driven colors. Covered by in-crate parser tests (`apps/lst-gpui/src/syntax`); no real-display color coverage yet.
-- [ ] **Ruler / column guides** - visible column guides can be shown.
+- [x] **Ruler / column guides** - up to 16 validated visual columns (1–1000)
+  can be configured through TOML or the keyboard-operable Settings value
+  editor. X11: `real_x11_polish.rs`.
 - [x] **Current line highlight** - the cursor line is visibly highlighted.
 - [x] **Identifier occurrence highlight** - editor focus or an explicit caret move onto either edge or the interior of an identifier highlights exact, case-sensitive, Unicode whole-identifier occurrences around painted character windows. Editing clears the passive highlights and does not infer a new query from the post-edit caret; a later focus or caret move retriggers them. Adjacent wrapped windows are merged before identifier-boundary expansion, so an extreme identifier is traversed once rather than once per row. X11: `real_x11_chrome.rs`; visual: `real_x11_visual.rs`.
 - [x] **Selected-text match highlight** - a meaningful single-line selection of at most 200 characters highlights exact, case-sensitive substring matches around the painted character windows while excluding every selected range. Equal multi-selections share the query; mixed text, empty selections, whitespace-only text, and multiline text disable it. Match endpoints remain grapheme-aligned. X11: `real_x11_chrome.rs`; visual: `real_x11_visual.rs`.
@@ -237,7 +258,9 @@ multi-cursor policy is intentionally separate.
 - [x] **Visible scrollbar when content overflows** - scrollbars appear and can be used when content overflows.
 - [x] **Horizontal scroll on long lines** - with soft wrap off, horizontal scrolling keeps the cursor visible.
 - [ ] **Minimap** - a minimap is available for large files.
-- [ ] **Indent guides** - indentation structure can be displayed.
+- [x] **Indent guides** - visual-column indentation guides include blank-line
+  scope inheritance and a primary-cursor active guide. Bracket guides win the
+  active emphasis when they overlap.
 
 ## File & Buffer
 

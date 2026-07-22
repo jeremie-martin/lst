@@ -52,6 +52,9 @@ pub struct LanguageConfig {
     pub line_comment: Option<&'static str>,
     pub block_comment: Option<(&'static str, &'static str)>,
     pub auto_pairs: &'static [(char, char)],
+    /// Delimiters that participate in structural matching. Quotes remain
+    /// auto-close pairs, but are intentionally excluded from this list.
+    pub structural_pairs: &'static [(char, char)],
     pub auto_pair_suppress_quotes: &'static [char],
     pub auto_dedent_closers: &'static [char],
 }
@@ -69,6 +72,8 @@ const PAIRS_ANGLE: &[(char, char)] = &[
     ('`', '`'),
     ('<', '>'),
 ];
+const STRUCTURAL_BASIC: &[(char, char)] = &[('(', ')'), ('[', ']'), ('{', '}')];
+const STRUCTURAL_ANGLE: &[(char, char)] = &[('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
 const CL_BR: &[char] = &['}'];
 const CL_NO: &[char] = &[];
 const SUP_SQ: &[char] = &['\''];
@@ -79,6 +84,7 @@ const fn lc(
     line_comment: Option<&'static str>,
     block_comment: Option<(&'static str, &'static str)>,
     auto_pairs: &'static [(char, char)],
+    structural_pairs: &'static [(char, char)],
     auto_pair_suppress_quotes: &'static [char],
     auto_dedent_closers: &'static [char],
 ) -> LanguageConfig {
@@ -87,6 +93,7 @@ const fn lc(
         line_comment,
         block_comment,
         auto_pairs,
+        structural_pairs,
         auto_pair_suppress_quotes,
         auto_dedent_closers,
     }
@@ -96,23 +103,23 @@ const fn sp(width: usize) -> IndentStyle {
     IndentStyle::Spaces { width }
 }
 const CONFIGS: &[LanguageConfig] = &[
-    lc(sp(4), Some("//"), BLOCK_C, PAIRS_NO_SQ, SUP_SQ, CL_BR), // Rust
-    lc(sp(4), Some("#"), None, PAIRS_BASIC, SUP_NO, CL_NO),     // Python
-    lc(sp(2), Some("//"), BLOCK_C, PAIRS_BASIC, SUP_NO, CL_BR), // JavaScript
-    lc(sp(2), Some("//"), BLOCK_C, PAIRS_ANGLE, SUP_NO, CL_BR), // Jsx
-    lc(sp(2), Some("//"), BLOCK_C, PAIRS_BASIC, SUP_NO, CL_BR), // TypeScript
-    lc(sp(2), Some("//"), BLOCK_C, PAIRS_ANGLE, SUP_NO, CL_BR), // Tsx
-    lc(sp(2), None, None, PAIRS_BASIC, SUP_NO, CL_BR),          // Json
-    lc(sp(2), Some("//"), BLOCK_C, PAIRS_BASIC, SUP_NO, CL_BR), // Jsonc
-    lc(sp(4), Some("#"), None, PAIRS_BASIC, SUP_NO, CL_NO),     // Toml
-    lc(sp(2), Some("#"), None, PAIRS_BASIC, SUP_NO, CL_NO),     // Yaml
-    lc(sp(2), None, BLOCK_HTML, PAIRS_BASIC, SUP_NO, CL_NO),    // Markdown
-    lc(sp(2), None, BLOCK_HTML, PAIRS_ANGLE, SUP_NO, CL_NO),    // Html
-    lc(sp(2), None, BLOCK_C, PAIRS_BASIC, SUP_NO, CL_BR),       // Css
-    lc(sp(2), Some("//"), BLOCK_C, PAIRS_BASIC, SUP_NO, CL_BR), // Scss
-    lc(sp(4), Some("#"), None, PAIRS_BASIC, SUP_NO, CL_NO),     // Shell
-    lc(sp(4), Some("#"), None, PAIRS_BASIC, SUP_NO, CL_NO),     // Bash
-    lc(sp(4), Some("#"), None, PAIRS_BASIC, SUP_NO, CL_NO),     // Zsh
+    lc(sp(4), Some("//"), BLOCK_C, PAIRS_NO_SQ, STRUCTURAL_BASIC, SUP_SQ, CL_BR), // Rust
+    lc(sp(4), Some("#"), None, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_NO),     // Python
+    lc(sp(2), Some("//"), BLOCK_C, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_BR), // JavaScript
+    lc(sp(2), Some("//"), BLOCK_C, PAIRS_ANGLE, STRUCTURAL_ANGLE, SUP_NO, CL_BR), // Jsx
+    lc(sp(2), Some("//"), BLOCK_C, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_BR), // TypeScript
+    lc(sp(2), Some("//"), BLOCK_C, PAIRS_ANGLE, STRUCTURAL_ANGLE, SUP_NO, CL_BR), // Tsx
+    lc(sp(2), None, None, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_BR),          // Json
+    lc(sp(2), Some("//"), BLOCK_C, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_BR), // Jsonc
+    lc(sp(4), Some("#"), None, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_NO),     // Toml
+    lc(sp(2), Some("#"), None, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_NO),     // Yaml
+    lc(sp(2), None, BLOCK_HTML, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_NO),    // Markdown
+    lc(sp(2), None, BLOCK_HTML, PAIRS_ANGLE, STRUCTURAL_ANGLE, SUP_NO, CL_NO),    // Html
+    lc(sp(2), None, BLOCK_C, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_BR),       // Css
+    lc(sp(2), Some("//"), BLOCK_C, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_BR), // Scss
+    lc(sp(4), Some("#"), None, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_NO),     // Shell
+    lc(sp(4), Some("#"), None, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_NO),     // Bash
+    lc(sp(4), Some("#"), None, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_NO),     // Zsh
 ];
 
 impl Language {
@@ -187,7 +194,7 @@ fn detect_from_shebang(first_line: &str) -> Option<Language> {
     }
 }
 
-const CONFIG_DEFAULT: LanguageConfig = lc(sp(4), None, None, PAIRS_BASIC, SUP_NO, CL_BR);
+const CONFIG_DEFAULT: LanguageConfig = lc(sp(4), None, None, PAIRS_BASIC, STRUCTURAL_BASIC, SUP_NO, CL_BR);
 
 pub(crate) const DEFAULT_CONFIG: &LanguageConfig = &CONFIG_DEFAULT;
 

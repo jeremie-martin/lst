@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use std::{
     collections::BTreeMap,
     env, fs, io,
@@ -42,6 +42,76 @@ pub(crate) enum LineNumbersSetting {
     Hybrid,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum MatchBracketsSetting {
+    Never,
+    Near,
+    #[default]
+    Always,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum GuideMode {
+    Off,
+    #[default]
+    Active,
+    All,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RenderWhitespaceSetting {
+    None,
+    Boundary,
+    #[default]
+    Selection,
+    Trailing,
+    All,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub(crate) struct RulerColumns(Vec<u16>);
+
+impl RulerColumns {
+    pub(crate) const MAX_COUNT: usize = 16;
+    pub(crate) const MAX_COLUMN: u16 = 1_000;
+
+    pub(crate) fn new(mut columns: Vec<u16>) -> Result<Self, String> {
+        if columns.len() > Self::MAX_COUNT {
+            return Err(format!("rulers accepts at most {} columns", Self::MAX_COUNT));
+        }
+        if let Some(column) = columns
+            .iter()
+            .copied()
+            .find(|column| !(1..=Self::MAX_COLUMN).contains(column))
+        {
+            return Err(format!(
+                "ruler column {column} is outside the supported range 1..={}",
+                Self::MAX_COLUMN
+            ));
+        }
+        columns.sort_unstable();
+        columns.dedup();
+        Ok(Self(columns))
+    }
+
+    pub(crate) fn as_slice(&self) -> &[u16] {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for RulerColumns {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(Vec::<u16>::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub(crate) struct EditorSettings {
@@ -51,6 +121,18 @@ pub(crate) struct EditorSettings {
     pub(crate) cursor_blink: bool,
     pub(crate) font_family: String,
     pub(crate) font_size: u16,
+    pub(crate) match_brackets: MatchBracketsSetting,
+    pub(crate) bracket_pair_colorization: bool,
+    pub(crate) bracket_pair_guides: GuideMode,
+    pub(crate) bracket_pair_horizontal_guides: GuideMode,
+    pub(crate) indent_guides: bool,
+    pub(crate) highlight_active_indent_guide: bool,
+    pub(crate) render_whitespace: RenderWhitespaceSetting,
+    pub(crate) render_control_characters: bool,
+    pub(crate) rulers: RulerColumns,
+    pub(crate) smart_select_subwords: bool,
+    pub(crate) smart_select_include_whitespace: bool,
+    pub(crate) multi_cursor_limit: usize,
 }
 
 impl Default for EditorSettings {
@@ -62,6 +144,18 @@ impl Default for EditorSettings {
             cursor_blink: true,
             font_family: "TX-02".to_string(),
             font_size: 13,
+            match_brackets: MatchBracketsSetting::Always,
+            bracket_pair_colorization: true,
+            bracket_pair_guides: GuideMode::Active,
+            bracket_pair_horizontal_guides: GuideMode::Active,
+            indent_guides: true,
+            highlight_active_indent_guide: true,
+            render_whitespace: RenderWhitespaceSetting::Selection,
+            render_control_characters: true,
+            rulers: RulerColumns::default(),
+            smart_select_subwords: true,
+            smart_select_include_whitespace: true,
+            multi_cursor_limit: 10_000,
         }
     }
 }
@@ -258,6 +352,7 @@ impl AppSettings {
     fn normalized(mut self) -> Self {
         self.version = CONFIG_VERSION;
         self.editor.font_size = self.editor.font_size.clamp(8, 40);
+        self.editor.multi_cursor_limit = self.editor.multi_cursor_limit.clamp(1, 10_000);
         self.appearance.zoom_level = self.appearance.zoom_level.clamp(-4, 8);
         if self.editor.font_family.trim().is_empty() {
             self.editor.font_family = EditorSettings::default().font_family;
@@ -289,6 +384,42 @@ fn write_settings_to_document(document: &mut DocumentMut, settings: &AppSettings
     document["editor"]["cursor_blink"] = value(settings.editor.cursor_blink);
     document["editor"]["font_family"] = value(&settings.editor.font_family);
     document["editor"]["font_size"] = value(i64::from(settings.editor.font_size));
+    document["editor"]["match_brackets"] = value(match settings.editor.match_brackets {
+        MatchBracketsSetting::Never => "never",
+        MatchBracketsSetting::Near => "near",
+        MatchBracketsSetting::Always => "always",
+    });
+    document["editor"]["bracket_pair_colorization"] = value(settings.editor.bracket_pair_colorization);
+    document["editor"]["bracket_pair_guides"] = value(match settings.editor.bracket_pair_guides {
+        GuideMode::Off => "off",
+        GuideMode::Active => "active",
+        GuideMode::All => "all",
+    });
+    document["editor"]["bracket_pair_horizontal_guides"] =
+        value(match settings.editor.bracket_pair_horizontal_guides {
+            GuideMode::Off => "off",
+            GuideMode::Active => "active",
+            GuideMode::All => "all",
+        });
+    document["editor"]["indent_guides"] = value(settings.editor.indent_guides);
+    document["editor"]["highlight_active_indent_guide"] = value(settings.editor.highlight_active_indent_guide);
+    document["editor"]["render_whitespace"] = value(match settings.editor.render_whitespace {
+        RenderWhitespaceSetting::None => "none",
+        RenderWhitespaceSetting::Boundary => "boundary",
+        RenderWhitespaceSetting::Selection => "selection",
+        RenderWhitespaceSetting::Trailing => "trailing",
+        RenderWhitespaceSetting::All => "all",
+    });
+    document["editor"]["render_control_characters"] = value(settings.editor.render_control_characters);
+    let mut rulers = Array::new();
+    for &column in settings.editor.rulers.as_slice() {
+        rulers.push(i64::from(column));
+    }
+    document["editor"]["rulers"] = Item::Value(rulers.into());
+    document["editor"]["smart_select_subwords"] = value(settings.editor.smart_select_subwords);
+    document["editor"]["smart_select_include_whitespace"] = value(settings.editor.smart_select_include_whitespace);
+    document["editor"]["multi_cursor_limit"] =
+        value(i64::try_from(settings.editor.multi_cursor_limit).unwrap_or(10_000));
 
     ensure_table(document, "appearance");
     document["appearance"]["theme"] = value(match settings.appearance.theme {
@@ -361,6 +492,33 @@ mod tests {
         assert_eq!(settings.editor.input_mode, InputModeSetting::Vim);
         assert_eq!(settings.editor.font_size, 40);
         assert_eq!(settings.appearance.zoom_level, -4);
+        assert_eq!(settings.editor.multi_cursor_limit, 10_000);
+    }
+
+    #[test]
+    fn polish_defaults_are_quiet_and_structurally_aware() {
+        let editor = EditorSettings::default();
+        assert_eq!(editor.match_brackets, MatchBracketsSetting::Always);
+        assert!(editor.bracket_pair_colorization);
+        assert_eq!(editor.bracket_pair_guides, GuideMode::Active);
+        assert_eq!(editor.bracket_pair_horizontal_guides, GuideMode::Active);
+        assert!(editor.indent_guides);
+        assert!(editor.highlight_active_indent_guide);
+        assert_eq!(editor.render_whitespace, RenderWhitespaceSetting::Selection);
+        assert!(editor.render_control_characters);
+        assert!(editor.rulers.as_slice().is_empty());
+        assert!(editor.smart_select_subwords);
+        assert!(editor.smart_select_include_whitespace);
+        assert_eq!(editor.multi_cursor_limit, 10_000);
+    }
+
+    #[test]
+    fn rulers_are_sorted_deduplicated_and_strictly_validated() {
+        let settings: AppSettings = toml_edit::de::from_str("version = 1\n[editor]\nrulers = [120, 80, 80]\n").unwrap();
+        assert_eq!(settings.editor.rulers.as_slice(), &[80, 120]);
+
+        assert!(toml_edit::de::from_str::<AppSettings>("version = 1\n[editor]\nrulers = [0]\n").is_err());
+        assert!(toml_edit::de::from_str::<AppSettings>("version = 1\n[editor]\nrulers = [1001]\n").is_err());
     }
 
     #[test]

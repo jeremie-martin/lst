@@ -72,6 +72,14 @@ pub(crate) struct RoleColors {
     pub(crate) current_line_inactive_bg: u32,
     pub(crate) scrollbar_thumb: u32,
     pub(crate) scrollbar_thumb_active: u32,
+    pub(crate) guide: u32,
+    pub(crate) guide_active: u32,
+    pub(crate) ruler: u32,
+    pub(crate) whitespace: u32,
+    pub(crate) bracket_match_bg: u32,
+    pub(crate) bracket_match_outline: u32,
+    pub(crate) focus_outline: u32,
+    pub(crate) control_border: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -93,6 +101,7 @@ pub(crate) enum SyntaxRole {
     Escape,
     Punctuation,
     Label,
+    Error,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +123,7 @@ pub(crate) struct SyntaxColors {
     pub(crate) escape: u32,
     pub(crate) punctuation: u32,
     pub(crate) label: u32,
+    pub(crate) error: u32,
 }
 
 impl SyntaxColors {
@@ -136,6 +146,7 @@ impl SyntaxColors {
             SyntaxRole::Escape => self.escape,
             SyntaxRole::Punctuation => self.punctuation,
             SyntaxRole::Label => self.label,
+            SyntaxRole::Error => self.error,
         }
     }
 }
@@ -152,7 +163,7 @@ const DARK: Theme = Theme {
         border: 0x3C3C3C,
         text: 0xCCCCCC,
         text_subtle: 0xA6A6A6,
-        text_muted: 0x808080,
+        text_muted: 0x8F8F8F,
         accent: 0x0078D4,
         accent_text: 0xFFFFFF,
         error_text: 0xF14C4C,
@@ -168,6 +179,14 @@ const DARK: Theme = Theme {
         current_line_inactive_bg: 0x242526,
         scrollbar_thumb: 0x5A5A5A,
         scrollbar_thumb_active: 0x808080,
+        guide: 0x6B6B6B,
+        guide_active: 0xA6A6A6,
+        ruler: 0x6B6B6B,
+        whitespace: 0x8F8F8F,
+        bracket_match_bg: 0x3B514D,
+        bracket_match_outline: 0xA6A6A6,
+        focus_outline: 0x4DAAFA,
+        control_border: 0x7A7A7A,
     },
     syntax: SyntaxColors {
         comment: 0x6A9955,
@@ -185,8 +204,9 @@ const DARK: Theme = Theme {
         reference: 0x9CDCFE,
         property: 0x9CDCFE,
         escape: 0xD7BA7D,
-        punctuation: 0x808080,
+        punctuation: 0x8F8F8F,
         label: 0x9CDCFE,
+        error: 0xF14C4C,
     },
 };
 
@@ -218,6 +238,14 @@ const LIGHT: Theme = Theme {
         current_line_inactive_bg: 0xFAFBFC,
         scrollbar_thumb: 0xB8B8B8,
         scrollbar_thumb_active: 0x8C8C8C,
+        guide: 0x8A8A8A,
+        guide_active: 0x4B5563,
+        ruler: 0x8A8A8A,
+        whitespace: 0x6E7781,
+        bracket_match_bg: 0xDCEFEA,
+        bracket_match_outline: 0x4B5563,
+        focus_outline: 0x0969DA,
+        control_border: 0x737373,
     },
     syntax: SyntaxColors {
         comment: 0x008000,
@@ -237,6 +265,7 @@ const LIGHT: Theme = Theme {
         escape: 0x811F3F,
         punctuation: 0x6E7781,
         label: 0x001080,
+        error: 0xCF222E,
     },
 };
 

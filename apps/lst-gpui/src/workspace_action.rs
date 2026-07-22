@@ -103,7 +103,7 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("cmd-+", WS, WorkspaceCommand::ZoomIn),
     b("ctrl--", WS, WorkspaceCommand::ZoomOut),
     b("cmd--", WS, WorkspaceCommand::ZoomOut),
-    b("ctrl-0", WS, WorkspaceCommand::ZoomReset),
+    fb("ctrl-0", WS, WorkspaceCommand::ZoomReset),
     b("cmd-0", WS, WorkspaceCommand::ZoomReset),
     b("ctrl-c", EDITOR, model(Command::CopySelection)),
     b("cmd-c", EDITOR, model(Command::CopySelection)),
@@ -111,7 +111,7 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("cmd-x", EDITOR, model(Command::CutSelection)),
     b("ctrl-v", EDITOR, model(Command::RequestPaste)),
     b("cmd-v", EDITOR, model(Command::RequestPaste)),
-    b("ctrl-z", EDITOR, model(Command::Undo)),
+    fb("ctrl-z", EDITOR, model(Command::Undo)),
     b("cmd-z", EDITOR, model(Command::Undo)),
     b("ctrl-y", EDITOR, model(Command::Redo)),
     b("ctrl-shift-z", EDITOR, model(Command::Redo)),
@@ -160,6 +160,8 @@ const BINDINGS: &[WorkspaceBinding] = &[
     fb("ctrl-shift-right", EDITOR, model(Command::MoveWord(false, true))),
     b("alt-shift-left", EDITOR, model(Command::SmartShrinkSelection)),
     b("alt-shift-right", EDITOR, model(Command::SmartExpandSelection)),
+    fb("ctrl-shift-\\", EDITOR, model(Command::JumpToBracket)),
+    b("cmd-shift-\\", EDITOR, model(Command::JumpToBracket)),
     b("shift-up", EDITOR, WorkspaceCommand::MoveVertical(-1, true)),
     b("shift-down", EDITOR, WorkspaceCommand::MoveVertical(1, true)),
     b("ctrl-up", EDITOR, WorkspaceCommand::ScrollLines(-1)),
@@ -270,6 +272,13 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("cmd-alt-enter", FIND, model(Command::ReplaceAllMatches)),
 ];
 
+const UNBOUND_BINDINGS: &[WorkspaceBinding] = &[
+    b("", EDITOR, model(Command::ColumnSelectLeft)),
+    b("", EDITOR, model(Command::ColumnSelectRight)),
+    b("", EDITOR, model(Command::ColumnSelectUp)),
+    b("", EDITOR, model(Command::ColumnSelectDown)),
+];
+
 pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> Vec<KeyBinding> {
     let overridden: HashSet<&str> = overrides.keys().map(String::as_str).collect();
     let mut bindings = BINDINGS
@@ -286,7 +295,11 @@ pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> V
         })
         .collect::<Vec<_>>();
     for (id, keystrokes) in overrides {
-        let Some(default) = BINDINGS.iter().find(|binding| command_id(binding.command) == id) else {
+        let Some(default) = BINDINGS
+            .iter()
+            .chain(UNBOUND_BINDINGS)
+            .find(|binding| command_id(binding.command) == id)
+        else {
             continue;
         };
         for keystroke in keystrokes {
@@ -411,6 +424,7 @@ pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
             SelectAll => "selection.select_all",
             SmartExpandSelection => "selection.expand",
             SmartShrinkSelection => "selection.shrink",
+            JumpToBracket => "navigation.jump_to_bracket",
             SelectNextOccurrence => "selection.add_next_occurrence",
             SelectAllOccurrences => "selection.select_all_occurrences",
             SelectAllFindMatches => "selection.select_all_find_matches",
@@ -419,6 +433,10 @@ pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
             AddCursorAbove => "selection.add_cursor_above",
             AddCursorBelow => "selection.add_cursor_below",
             AddCursorsToSelectedLineEnds => "selection.add_cursors_line_ends",
+            ColumnSelectLeft => "selection.column_left",
+            ColumnSelectRight => "selection.column_right",
+            ColumnSelectUp => "selection.column_up",
+            ColumnSelectDown => "selection.column_down",
             SelectCurrentLine => "selection.select_line",
             SelectCurrentParagraph => "selection.select_paragraph",
             Undo => "edit.undo",
@@ -488,6 +506,20 @@ pub(crate) fn command_specs(overrides: &BTreeMap<String, Vec<String>>) -> Vec<Co
             shortcuts,
         });
     }
+    for binding in UNBOUND_BINDINGS {
+        let id = command_id(binding.command);
+        if indices.contains_key(id) {
+            continue;
+        }
+        indices.insert(id, specs.len());
+        specs.push(CommandSpec {
+            id,
+            title: command_title(id),
+            category: command_category(id),
+            command: binding.command,
+            shortcuts: overrides.get(id).cloned().unwrap_or_default(),
+        });
+    }
     // Commands intentionally discoverable only through the palette live here
     // rather than carrying a hidden or misleading default shortcut.
     let cleanup_id = command_id(WorkspaceCommand::CleanupText);
@@ -542,6 +574,10 @@ fn command_title(id: &str) -> String {
         "selection.add_next_occurrence" => Some("Add Selection to Next Match"),
         "selection.select_all_occurrences" => Some("Select All Occurrences"),
         "selection.add_cursors_line_ends" => Some("Add Cursors to Line Ends"),
+        "selection.column_left" => Some("Column Select Left"),
+        "selection.column_right" => Some("Column Select Right"),
+        "selection.column_up" => Some("Column Select Up"),
+        "selection.column_down" => Some("Column Select Down"),
         "edit.toggle_line_comment" => Some("Toggle Line Comment"),
         "edit.toggle_block_comment" => Some("Toggle Block Comment"),
         "edit.indent_lines" => Some("Indent Lines"),
@@ -698,6 +734,14 @@ fn fallback_keystroke(key: &str, modifiers: Modifiers) -> Option<String> {
     if key.is_empty() {
         return None;
     }
+    // X11 may report the shifted keysym rather than the physical key used by
+    // GPUI's binding parser. Canonicalize only the two punctuation keys that
+    // have fallback bindings, preserving Shift in the modifier prefix.
+    let key = match (key.as_str(), modifiers.shift) {
+        ("?", true) => "/",
+        ("|", true) => "\\",
+        _ => key.as_str(),
+    };
 
     let mut keystroke = String::new();
     if modifiers.control {
@@ -712,7 +756,7 @@ fn fallback_keystroke(key: &str, modifiers: Modifiers) -> Option<String> {
     if modifiers.shift {
         keystroke.push_str("shift-");
     }
-    keystroke.push_str(&key);
+    keystroke.push_str(key);
     Some(keystroke)
 }
 
@@ -741,5 +785,23 @@ mod tests {
         assert_eq!(lines.command, WorkspaceCommand::Model(Command::IndentLines));
         assert_eq!(lines.title, "Indent Lines");
         assert_eq!(lines.shortcuts, ["alt-i"]);
+    }
+
+    #[test]
+    fn x11_fallback_canonicalizes_shifted_punctuation_keysyms() {
+        let modifiers = Modifiers {
+            control: true,
+            shift: true,
+            ..Modifiers::default()
+        };
+
+        assert_eq!(
+            workspace_fallback_command("?", modifiers),
+            Some(WorkspaceCommand::Model(Command::ToggleBlockComment))
+        );
+        assert_eq!(
+            workspace_fallback_command("|", modifiers),
+            Some(WorkspaceCommand::Model(Command::JumpToBracket))
+        );
     }
 }

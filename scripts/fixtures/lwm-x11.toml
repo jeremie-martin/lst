@@ -6,3 +6,10 @@ border_width = 2
 [workspaces]
 count = 1
 names = ["test"]
+
+# The production editor is an ordinary resizable desktop window. Keep it
+# floating in the nested behavior lane so responsive tests exercise the same
+# WM-mediated size changes a user can make on a normal desktop.
+[[rules]]
+match = { class = "^lst$" }
+apply = { floating = true, geometry = { x = 10, y = 10, width = 1896, height = 1056 } }

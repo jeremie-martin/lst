@@ -30,7 +30,7 @@ use input::ActiveDragSelection;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
     selection::identifier_range_at_char, EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FileStamp,
-    FocusTarget, InputMode, Position, RevealIntent, Selection, TabId, UNTITLED_PREFIX,
+    FocusTarget, InputMode, Language, Position, RevealIntent, Selection, TabId, UNTITLED_PREFIX,
 };
 use recent::{default_recent_files_path, normalize_recent_path, RecentOrigin, RecentView};
 use ropey::Rope;
@@ -235,16 +235,29 @@ pub(crate) struct EditorTabView {
     cache: Rc<RefCell<ViewportCache>>,
     geometry: Rc<RefCell<ViewportGeometry>>,
     syntax_state: Option<crate::syntax::TabSyntaxState>,
+    structure_key: (Option<Language>, u64),
+    structure: Rc<crate::syntax::StructuralSnapshot>,
 }
 
 impl EditorTabView {
     fn new(tab: &ModelEditorTab) -> Self {
+        let language = tab.language();
+        let revision = tab.revision();
+        let structural_pairs = language.map_or(&[('(', ')'), ('[', ']'), ('{', '}')][..], |language| {
+            language.config().structural_pairs
+        });
         Self {
-            revision: tab.revision(),
+            revision,
             scroll: ScrollHandle::new(),
             cache: Rc::new(RefCell::new(ViewportCache::default())),
             geometry: Rc::new(RefCell::new(ViewportGeometry::default())),
             syntax_state: None,
+            structure_key: (language, revision),
+            structure: Rc::new(crate::syntax::plain_structural_snapshot(
+                tab.buffer(),
+                revision,
+                structural_pairs,
+            )),
         }
     }
 
@@ -277,6 +290,7 @@ struct LstGpuiApp {
     recent_focus_handle: FocusHandle,
     command_palette_focus_handle: FocusHandle,
     settings_search_focus_handle: FocusHandle,
+    settings_value_focus_handle: FocusHandle,
     window_title_override: Option<String>,
     model: EditorModel,
     tab_views: HashMap<TabId, EditorTabView>,
@@ -296,6 +310,8 @@ struct LstGpuiApp {
     recent_query_input: Entity<InputField>,
     command_palette_input: Entity<InputField>,
     settings_search_input: Entity<InputField>,
+    settings_value_input: Entity<InputField>,
+    settings_value_error: Option<String>,
     settings_scroll: ScrollHandle,
     quit_review_scroll: ScrollHandle,
     settings_overlay: settings_ui::SettingsOverlay,
@@ -466,9 +482,11 @@ impl LstGpuiApp {
         });
         let settings_search_input =
             cx.new(|cx| InputField::new(cx, "Search settings and keybindings").with_key_context("Settings"));
+        let settings_value_input = cx.new(|cx| InputField::new(cx, "Enter a value").with_key_context("SettingsValue"));
         let recent_focus_handle = recent_query_input.read(cx).focus_handle();
         let command_palette_focus_handle = command_palette_input.read(cx).focus_handle();
         let settings_search_focus_handle = settings_search_input.read(cx).focus_handle();
+        let settings_value_focus_handle = settings_value_input.read(cx).focus_handle();
         let find_query_focus_handle = find_query_input.read(cx).focus_handle();
         let find_replace_focus_handle = find_replace_input.read(cx).focus_handle();
         let goto_line_focus_handle = goto_line_input.read(cx).focus_handle();
@@ -489,6 +507,7 @@ impl LstGpuiApp {
             settings::LineNumbersSetting::Relative => lst_editor::GutterMode::Relative,
             settings::LineNumbersSetting::Hybrid => lst_editor::GutterMode::Hybrid,
         });
+        model.set_multi_cursor_limit(settings.settings.editor.multi_cursor_limit);
         let mut recent = RecentView::load(recent_files_path);
         for tab in model.tabs() {
             if !tab.is_scratchpad() {
@@ -507,6 +526,7 @@ impl LstGpuiApp {
             recent_focus_handle,
             command_palette_focus_handle,
             settings_search_focus_handle,
+            settings_value_focus_handle,
             window_title_override: launch.window_title.clone(),
             model,
             tab_views: HashMap::new(),
@@ -526,6 +546,8 @@ impl LstGpuiApp {
             recent_query_input: recent_query_input.clone(),
             command_palette_input: command_palette_input.clone(),
             settings_search_input: settings_search_input.clone(),
+            settings_value_input: settings_value_input.clone(),
+            settings_value_error: None,
             settings_scroll: ScrollHandle::new(),
             quit_review_scroll: ScrollHandle::new(),
             settings_overlay: settings_ui::SettingsOverlay::None,
@@ -618,6 +640,11 @@ impl LstGpuiApp {
                 this.handle_settings_search_input_event(event, cx)
             }),
         );
+        app._shell_subscriptions.push(
+            cx.subscribe(&settings_value_input, |this, _, event: &InputFieldEvent, cx| {
+                this.handle_settings_value_input_event(event, cx)
+            }),
+        );
 
         app
     }
@@ -693,7 +720,9 @@ impl LstGpuiApp {
             return;
         }
         if self.workspace_surface == WorkspaceSurface::Settings {
-            let handle = if self.settings_overlay.wants_surface_focus() || self.settings_selection.is_active() {
+            let handle = if matches!(self.settings_overlay, settings_ui::SettingsOverlay::ValueEditor { .. }) {
+                self.settings_value_input.read(cx).focus_handle()
+            } else if self.settings_overlay.wants_surface_focus() || self.settings_selection.is_active() {
                 self.surface_focus_handle.clone()
             } else {
                 self.settings_search_input.read(cx).focus_handle()
@@ -923,6 +952,17 @@ impl LstGpuiApp {
 
         let SyntaxMode::TreeSitter(syntax_lang) = syntax_mode else {
             view.syntax_state = None;
+            if view.structure_key != (language, revision) {
+                let structural_pairs = language.map_or(&[('(', ')'), ('[', ']'), ('{', '}')][..], |language| {
+                    language.config().structural_pairs
+                });
+                view.structure = Rc::new(crate::syntax::plain_structural_snapshot(
+                    &buffer,
+                    revision,
+                    structural_pairs,
+                ));
+                view.structure_key = (language, revision);
+            }
             let mut cache = view.cache.borrow_mut();
             let previous_line_count = cache
                 .wrap_layout
@@ -982,8 +1022,19 @@ impl LstGpuiApp {
                 cache.syntax_highlights = None;
                 cache.clear_code_lines();
             }
+            let structural_pairs = language.map_or(&[('(', ')'), ('[', ']'), ('{', '}')][..], |language| {
+                language.config().structural_pairs
+            });
+            view.structure = Rc::new(crate::syntax::plain_structural_snapshot(
+                &buffer,
+                revision,
+                structural_pairs,
+            ));
+            view.structure_key = (language, revision);
             return;
         };
+        view.structure = Rc::new(state.structure().clone());
+        view.structure_key = (language, revision);
         let mut cache = view.cache.borrow_mut();
         refresh_syntax_cache(&mut cache, state, &buffer, revision, invalidation);
     }
@@ -999,9 +1050,51 @@ impl LstGpuiApp {
     fn execute_model_command(&mut self, cx: &mut Context<Self>, command: Command) {
         let trace_label = command_trace_label(command);
         let trace_started = diagnostics::trace_enabled().then(Instant::now);
-        self.update_model(cx, true, |model| model.execute(command));
+        if command == Command::SmartExpandSelection {
+            let smart_started = diagnostics::trace_enabled().then(Instant::now);
+            let document_len = self.model.active_tab().len_chars();
+            let heads: Vec<usize> = self
+                .model
+                .active_tab()
+                .selection_set()
+                .as_slice()
+                .iter()
+                .map(lst_editor::Selection::head)
+                .collect();
+            let candidates: Vec<lst_editor::StructuralSelectionCandidate> = self
+                .active_view()
+                .syntax_state
+                .as_ref()
+                .map(|state| state.selection_ranges_at(&heads))
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|range| lst_editor::StructuralSelectionCandidate::new(range, document_len))
+                .collect();
+            let select_subwords = self.settings.settings.editor.smart_select_subwords;
+            let include_whitespace = self.settings.settings.editor.smart_select_include_whitespace;
+            self.update_model(cx, true, |model| {
+                model.smart_expand_selection_with_candidates(&candidates, select_subwords, include_whitespace);
+            });
+            if let Some(started) = smart_started {
+                diagnostics::record_ms("smart_select_ms", started.elapsed().as_secs_f64() * 1000.0);
+            }
+        } else if command == Command::JumpToBracket {
+            let document_len = self.model.active_tab().len_chars();
+            let structure = self.active_view().structure.clone();
+            let pairs: Vec<lst_editor::StructuralBracketPair> = structure
+                .pairs
+                .iter()
+                .filter_map(|pair| lst_editor::StructuralBracketPair::new(pair.open, pair.close, document_len))
+                .collect();
+            self.update_model(cx, true, |model| {
+                model.jump_to_bracket_pairs(&pairs);
+            });
+        } else {
+            self.update_model(cx, true, |model| model.execute(command));
+        }
         if let Some(label) = trace_label {
             diagnostics::record_label("command_complete", label);
+            diagnostics::record_usize("cursor_count", self.model.active_tab().selection_set().as_slice().len());
             if let Some(started) = trace_started {
                 diagnostics::record_ms(&format!("command_{label}_ms"), started.elapsed().as_secs_f64() * 1000.0);
             }
@@ -1269,6 +1362,7 @@ fn command_trace_label(command: Command) -> Option<&'static str> {
         Command::PrevTab => Some("previous_tab"),
         Command::RequestPaste => Some("request_paste"),
         Command::RequestSave => Some("request_save"),
+        Command::SelectAllOccurrences => Some("select_all_occurrences"),
         _ => None,
     }
 }

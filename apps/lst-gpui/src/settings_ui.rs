@@ -7,7 +7,10 @@ use rfd::FileDialog;
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    settings::{AppSettings, AutosaveMode, InputModeSetting, LineNumbersSetting, SettingsStore, ThemePreference},
+    settings::{
+        AppSettings, AutosaveMode, GuideMode, InputModeSetting, LineNumbersSetting, MatchBracketsSetting,
+        RenderWhitespaceSetting, RulerColumns, SettingsStore, ThemePreference,
+    },
     theme_for_preference,
     ui::{
         input_keybindings,
@@ -26,6 +29,18 @@ pub(crate) enum SettingsItem {
     CursorBlink,
     FontFamily,
     FontSize,
+    MatchBrackets,
+    BracketColorization,
+    BracketGuides,
+    HorizontalBracketGuides,
+    IndentGuides,
+    ActiveIndentGuide,
+    RenderWhitespace,
+    ControlCharacters,
+    Rulers,
+    SmartSelectSubwords,
+    SmartSelectWhitespace,
+    MultiCursorLimit,
     Theme,
     Zoom,
     Autosave,
@@ -36,13 +51,25 @@ pub(crate) enum SettingsItem {
 }
 
 impl SettingsItem {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 25] = [
         Self::InputMode,
         Self::WordWrap,
         Self::LineNumbers,
         Self::CursorBlink,
         Self::FontFamily,
         Self::FontSize,
+        Self::MatchBrackets,
+        Self::BracketColorization,
+        Self::BracketGuides,
+        Self::HorizontalBracketGuides,
+        Self::IndentGuides,
+        Self::ActiveIndentGuide,
+        Self::RenderWhitespace,
+        Self::ControlCharacters,
+        Self::Rulers,
+        Self::SmartSelectSubwords,
+        Self::SmartSelectWhitespace,
+        Self::MultiCursorLimit,
         Self::Theme,
         Self::Zoom,
         Self::Autosave,
@@ -60,6 +87,18 @@ impl SettingsItem {
             Self::CursorBlink => "cursor_blink",
             Self::FontFamily => "font_family",
             Self::FontSize => "font_size",
+            Self::MatchBrackets => "match_brackets",
+            Self::BracketColorization => "bracket_pair_colorization",
+            Self::BracketGuides => "bracket_pair_guides",
+            Self::HorizontalBracketGuides => "bracket_pair_horizontal_guides",
+            Self::IndentGuides => "indent_guides",
+            Self::ActiveIndentGuide => "highlight_active_indent_guide",
+            Self::RenderWhitespace => "render_whitespace",
+            Self::ControlCharacters => "render_control_characters",
+            Self::Rulers => "rulers",
+            Self::SmartSelectSubwords => "smart_select_subwords",
+            Self::SmartSelectWhitespace => "smart_select_include_whitespace",
+            Self::MultiCursorLimit => "multi_cursor_limit",
             Self::Theme => "theme",
             Self::Zoom => "zoom",
             Self::Autosave => "autosave",
@@ -84,6 +123,23 @@ impl SettingsItem {
                 "TX-02 JetBrains Mono Lilex IBM Plex Mono",
             ],
             Self::FontSize => &["Editor", "Font size", "text size"],
+            Self::MatchBrackets => &["Editor", "Match brackets", "Never Near Always", "delimiter"],
+            Self::BracketColorization => &["Editor", "Bracket pair colorization", "rainbow", "delimiter"],
+            Self::BracketGuides => &["Editor", "Bracket pair guides", "Off Active All", "vertical"],
+            Self::HorizontalBracketGuides => &["Editor", "Horizontal bracket guides", "Off Active All", "delimiter"],
+            Self::IndentGuides => &["Editor", "Indent guides", "indentation", "vertical"],
+            Self::ActiveIndentGuide => &["Editor", "Highlight active indent guide", "indentation"],
+            Self::RenderWhitespace => &[
+                "Editor",
+                "Render whitespace",
+                "None Boundary Selection Trailing All",
+                "spaces tabs",
+            ],
+            Self::ControlCharacters => &["Editor", "Render control characters", "bidi zero width C0 C1"],
+            Self::Rulers => &["Editor", "Rulers", "columns", "vertical guides"],
+            Self::SmartSelectSubwords => &["Editor", "Smart select subwords", "camel case selection"],
+            Self::SmartSelectWhitespace => &["Editor", "Smart select include whitespace", "selection expand"],
+            Self::MultiCursorLimit => &["Editor", "Multi cursor limit", "carets performance"],
             Self::Theme => &["Appearance", "Theme", "System", "Dark", "Light"],
             Self::Zoom => &["Appearance", "Zoom", "scale", "magnification"],
             Self::Autosave => &["Files", "Autosave", "Scratchpads", "All files", "automatic save"],
@@ -143,6 +199,9 @@ pub(crate) enum SettingsOverlay {
     },
     ResetConfirmation {
         selected: ResetConfirmationChoice,
+    },
+    ValueEditor {
+        item: SettingsItem,
     },
 }
 
@@ -211,7 +270,7 @@ pub(crate) enum ResetConfirmationChoice {
 
 impl SettingsOverlay {
     pub(crate) fn wants_surface_focus(self) -> bool {
-        !matches!(self, Self::None)
+        matches!(self, Self::FontMenu { .. } | Self::ResetConfirmation { .. })
     }
 }
 
@@ -255,6 +314,7 @@ impl LstGpuiApp {
                 LineNumbersSetting::Relative => GutterMode::Relative,
                 LineNumbersSetting::Hybrid => GutterMode::Hybrid,
             });
+            model.set_multi_cursor_limit(values.editor.multi_cursor_limit);
         });
         self.zoom_level = values.appearance.zoom_level;
         self.set_theme(
@@ -318,6 +378,122 @@ impl LstGpuiApp {
     fn toggle_cursor_blink_setting(&mut self, cx: &mut Context<Self>) {
         self.settings.settings.editor.cursor_blink = !self.settings.settings.editor.cursor_blink;
         self.persist_settings(cx);
+    }
+
+    fn set_polish_setting(&mut self, item: SettingsItem, forward: bool, cx: &mut Context<Self>) {
+        let editor = &mut self.settings.settings.editor;
+        match item {
+            SettingsItem::MatchBrackets => {
+                editor.match_brackets = match (editor.match_brackets, forward) {
+                    (MatchBracketsSetting::Never, true) | (MatchBracketsSetting::Always, false) => {
+                        MatchBracketsSetting::Near
+                    }
+                    (MatchBracketsSetting::Near, true) | (MatchBracketsSetting::Never, false) => {
+                        MatchBracketsSetting::Always
+                    }
+                    (MatchBracketsSetting::Always, true) | (MatchBracketsSetting::Near, false) => {
+                        MatchBracketsSetting::Never
+                    }
+                };
+            }
+            SettingsItem::BracketGuides => {
+                editor.bracket_pair_guides = cycle_guide_mode(editor.bracket_pair_guides, forward);
+            }
+            SettingsItem::HorizontalBracketGuides => {
+                editor.bracket_pair_horizontal_guides =
+                    cycle_guide_mode(editor.bracket_pair_horizontal_guides, forward);
+            }
+            SettingsItem::RenderWhitespace => {
+                editor.render_whitespace = cycle_whitespace_mode(editor.render_whitespace, forward);
+            }
+            SettingsItem::BracketColorization => editor.bracket_pair_colorization = forward,
+            SettingsItem::IndentGuides => editor.indent_guides = forward,
+            SettingsItem::ActiveIndentGuide => editor.highlight_active_indent_guide = forward,
+            SettingsItem::ControlCharacters => editor.render_control_characters = forward,
+            SettingsItem::SmartSelectSubwords => editor.smart_select_subwords = forward,
+            SettingsItem::SmartSelectWhitespace => editor.smart_select_include_whitespace = forward,
+            _ => return,
+        }
+        self.persist_settings(cx);
+    }
+
+    fn open_settings_value_editor(&mut self, item: SettingsItem, window: &mut Window, cx: &mut Context<Self>) {
+        let text = match item {
+            SettingsItem::Rulers => self
+                .settings
+                .settings
+                .editor
+                .rulers
+                .as_slice()
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+            SettingsItem::MultiCursorLimit => self.settings.settings.editor.multi_cursor_limit.to_string(),
+            _ => return,
+        };
+        self.settings_value_error = None;
+        self.settings_overlay = SettingsOverlay::ValueEditor { item };
+        self.settings_value_input
+            .update(cx, |input, cx| input.set_text(&text, cx));
+        window.focus(&self.settings_value_input.read(cx).focus_handle());
+        cx.notify();
+    }
+
+    pub(crate) fn handle_settings_value_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
+        match event {
+            InputFieldEvent::Changed(_) => {
+                self.settings_value_error = None;
+                cx.notify();
+            }
+            InputFieldEvent::Cancelled => {
+                self.settings_overlay = SettingsOverlay::None;
+                self.settings_value_error = None;
+                cx.notify();
+            }
+            InputFieldEvent::Submitted => self.commit_settings_value_editor(cx),
+            InputFieldEvent::NextRequested | InputFieldEvent::PreviousRequested | InputFieldEvent::Navigate(_) => {}
+        }
+    }
+
+    fn commit_settings_value_editor(&mut self, cx: &mut Context<Self>) {
+        let SettingsOverlay::ValueEditor { item } = self.settings_overlay else {
+            return;
+        };
+        let text = self.settings_value_input.read(cx).text().trim().to_string();
+        let result = match item {
+            SettingsItem::Rulers => parse_ruler_columns(&text).map(|rulers| {
+                self.settings.settings.editor.rulers = rulers;
+            }),
+            SettingsItem::MultiCursorLimit => text
+                .parse::<usize>()
+                .map_err(|_| "Enter a whole number from 1 to 10000.".to_string())
+                .and_then(|limit| {
+                    (1..=10_000)
+                        .contains(&limit)
+                        .then_some(limit)
+                        .ok_or_else(|| "Enter a whole number from 1 to 10000.".to_string())
+                })
+                .map(|limit| {
+                    self.settings.settings.editor.multi_cursor_limit = limit;
+                }),
+            _ => return,
+        };
+        match result {
+            Ok(()) => {
+                if item == SettingsItem::MultiCursorLimit {
+                    let limit = self.settings.settings.editor.multi_cursor_limit;
+                    self.update_model(cx, false, |model| model.set_multi_cursor_limit(limit));
+                }
+                self.settings_value_error = None;
+                self.settings_overlay = SettingsOverlay::None;
+                self.persist_settings(cx);
+            }
+            Err(error) => {
+                self.settings_value_error = Some(error);
+                cx.notify();
+            }
+        }
     }
 
     fn set_font_family(&mut self, family: &'static str, window: &mut Window, cx: &mut Context<Self>) {
@@ -386,6 +562,7 @@ impl LstGpuiApp {
             model.set_input_mode(InputMode::Standard);
             model.set_show_wrap(settings.editor.word_wrap);
             model.set_gutter_mode(GutterMode::Absolute);
+            model.set_multi_cursor_limit(settings.editor.multi_cursor_limit);
         });
         self.set_theme(
             theme_for_preference(settings.appearance.theme, cx.window_appearance()),
@@ -494,6 +671,7 @@ impl LstGpuiApp {
 
     fn dismiss_settings_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_overlay = SettingsOverlay::None;
+        self.settings_value_error = None;
         if self.settings_selection.is_active() {
             window.focus(&self.surface_focus_handle);
         } else {
@@ -560,6 +738,16 @@ impl LstGpuiApp {
                 self.set_font_family(choice.name(), window, cx);
             }
             SettingsItem::FontSize => self.adjust_font_size(if forward { 1 } else { -1 }, cx),
+            SettingsItem::MatchBrackets
+            | SettingsItem::BracketColorization
+            | SettingsItem::BracketGuides
+            | SettingsItem::HorizontalBracketGuides
+            | SettingsItem::IndentGuides
+            | SettingsItem::ActiveIndentGuide
+            | SettingsItem::RenderWhitespace
+            | SettingsItem::ControlCharacters
+            | SettingsItem::SmartSelectSubwords
+            | SettingsItem::SmartSelectWhitespace => self.set_polish_setting(item, forward, cx),
             SettingsItem::Theme => {
                 let current = self.settings.settings.appearance.theme;
                 self.set_theme_setting(
@@ -596,7 +784,10 @@ impl LstGpuiApp {
                     self.toggle_final_newline_setting(cx);
                 }
             }
-            SettingsItem::ScratchpadDirectory | SettingsItem::Reset => {}
+            SettingsItem::Rulers
+            | SettingsItem::MultiCursorLimit
+            | SettingsItem::ScratchpadDirectory
+            | SettingsItem::Reset => {}
         }
     }
 
@@ -620,6 +811,21 @@ impl LstGpuiApp {
             SettingsItem::FinalNewline => self.toggle_final_newline_setting(cx),
             SettingsItem::ScratchpadDirectory => self.choose_scratchpad_directory(cx),
             SettingsItem::Reset => self.request_settings_reset(window, cx),
+            SettingsItem::Rulers | SettingsItem::MultiCursorLimit => {
+                self.open_settings_value_editor(item, window, cx);
+            }
+            SettingsItem::BracketColorization
+            | SettingsItem::IndentGuides
+            | SettingsItem::ActiveIndentGuide
+            | SettingsItem::ControlCharacters
+            | SettingsItem::SmartSelectSubwords
+            | SettingsItem::SmartSelectWhitespace => {
+                self.adjust_settings_item(item, !polish_bool_value(&self.settings.settings, item), window, cx);
+            }
+            SettingsItem::MatchBrackets
+            | SettingsItem::BracketGuides
+            | SettingsItem::HorizontalBracketGuides
+            | SettingsItem::RenderWhitespace => self.adjust_settings_item(item, true, window, cx),
             SettingsItem::LineNumbers | SettingsItem::FontSize | SettingsItem::Theme | SettingsItem::Zoom => {
                 self.adjust_settings_item(item, true, window, cx);
             }
@@ -678,6 +884,7 @@ impl LstGpuiApp {
                 },
                 _ => {}
             },
+            SettingsOverlay::ValueEditor { .. } => {}
             SettingsOverlay::None => {
                 let modifiers = event.keystroke.modifiers;
                 if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
@@ -724,12 +931,30 @@ impl LstGpuiApp {
         let show_cursor_blink = visible_items.contains(&SettingsItem::CursorBlink);
         let show_font_family = visible_items.contains(&SettingsItem::FontFamily);
         let show_font_size = visible_items.contains(&SettingsItem::FontSize);
+        let polish_items = [
+            SettingsItem::MatchBrackets,
+            SettingsItem::BracketColorization,
+            SettingsItem::BracketGuides,
+            SettingsItem::HorizontalBracketGuides,
+            SettingsItem::IndentGuides,
+            SettingsItem::ActiveIndentGuide,
+            SettingsItem::RenderWhitespace,
+            SettingsItem::ControlCharacters,
+            SettingsItem::Rulers,
+            SettingsItem::SmartSelectSubwords,
+            SettingsItem::SmartSelectWhitespace,
+            SettingsItem::MultiCursorLimit,
+        ]
+        .into_iter()
+        .filter(|item| visible_items.contains(item))
+        .collect::<Vec<_>>();
         let show_editor = show_input_mode
             || show_word_wrap
             || show_line_numbers
             || show_cursor_blink
             || show_font_family
-            || show_font_size;
+            || show_font_size
+            || !polish_items.is_empty();
         let show_theme = visible_items.contains(&SettingsItem::Theme);
         let show_zoom = visible_items.contains(&SettingsItem::Zoom);
         let show_appearance = show_theme || show_zoom;
@@ -1061,6 +1286,23 @@ impl LstGpuiApp {
                 scale,
             ));
         }
+        for item in polish_items {
+            item_scroll_indices.insert(item, content.len());
+            let value = polish_value(&settings, item);
+            let selected = selected_item == Some(item);
+            let active = polish_bool_value(&settings, item)
+                || matches!(self.settings_overlay, SettingsOverlay::ValueEditor { item: active } if active == item);
+            let control = setting_choice(item.id(), value, active, theme, scale).on_click(cx.listener(
+                move |this, _, window, cx| {
+                    this.settings_selection.select(item);
+                    this.activate_settings_item(window, cx);
+                },
+            ));
+            content.push(settings_content_item(
+                setting_row(polish_label(item), control.into_any_element(), selected, theme, scale),
+                scale,
+            ));
+        }
         if show_appearance {
             content.push(settings_content_item(
                 settings_section("Appearance", theme, scale),
@@ -1283,6 +1525,77 @@ impl LstGpuiApp {
                 matches!(self.settings_overlay, SettingsOverlay::ResetConfirmation { .. }),
                 |surface| surface.child(self.render_settings_reset_confirmation(theme, scale, cx)),
             )
+            .when(
+                matches!(self.settings_overlay, SettingsOverlay::ValueEditor { .. }),
+                |surface| surface.child(self.render_settings_value_editor(theme, scale, cx)),
+            )
+    }
+
+    fn render_settings_value_editor(&mut self, theme: Theme, scale: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let item = match self.settings_overlay {
+            SettingsOverlay::ValueEditor { item } => item,
+            _ => SettingsItem::Rulers,
+        };
+        let hint = match item {
+            SettingsItem::Rulers => "Comma-separated columns from 1 to 1000; at most 16.",
+            SettingsItem::MultiCursorLimit => "Whole number from 1 to 10000.",
+            _ => "Enter a value.",
+        };
+        div()
+            .id("settings-value-scrim")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::rgba(0x00000066))
+            .occlude()
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| this.dismiss_settings_overlay(window, cx)),
+            )
+            .child(
+                div()
+                    .id("settings-value-editor")
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .w(metrics::px_for_scale(420.0, scale))
+                    .max_w_full()
+                    .p_4()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(theme.role.control_border))
+                    .bg(rgb(theme.role.panel_bg))
+                    .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_HEADING, scale))
+                            .text_color(rgb(theme.role.text))
+                            .child(polish_label(item)),
+                    )
+                    .child(self.settings_value_input.clone())
+                    .child(
+                        div()
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
+                            .text_color(rgb(theme.role.text_subtle))
+                            .child(hint),
+                    )
+                    .when_some(self.settings_value_error.clone(), |dialog, error| {
+                        dialog.child(
+                            div()
+                                .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
+                                .text_color(rgb(theme.role.error_text))
+                                .child(error),
+                        )
+                    })
+                    .child(
+                        div()
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
+                            .text_color(rgb(theme.role.text_muted))
+                            .child("Enter to save · Esc to cancel"),
+                    ),
+            )
     }
 
     fn render_settings_reset_confirmation(
@@ -1375,6 +1688,112 @@ fn settings_query_matches(query: &str, fields: &[&str]) -> bool {
     query.split_whitespace().all(|term| haystack.contains(term))
 }
 
+fn cycle_guide_mode(mode: GuideMode, forward: bool) -> GuideMode {
+    match (mode, forward) {
+        (GuideMode::Off, true) | (GuideMode::All, false) => GuideMode::Active,
+        (GuideMode::Active, true) | (GuideMode::Off, false) => GuideMode::All,
+        (GuideMode::All, true) | (GuideMode::Active, false) => GuideMode::Off,
+    }
+}
+
+fn cycle_whitespace_mode(mode: RenderWhitespaceSetting, forward: bool) -> RenderWhitespaceSetting {
+    use RenderWhitespaceSetting::{All, Boundary, None, Selection, Trailing};
+    match (mode, forward) {
+        (None, true) | (Selection, false) => Boundary,
+        (Boundary, true) | (Trailing, false) => Selection,
+        (Selection, true) | (All, false) => Trailing,
+        (Trailing, true) | (None, false) => All,
+        (All, true) | (Boundary, false) => None,
+    }
+}
+
+fn parse_ruler_columns(text: &str) -> Result<RulerColumns, String> {
+    if text.trim().is_empty() {
+        return RulerColumns::new(Vec::new());
+    }
+    let columns = text
+        .split([',', ' ', '\t'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.parse::<u16>()
+                .map_err(|_| format!("{part:?} is not a valid ruler column."))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    RulerColumns::new(columns)
+}
+
+fn polish_bool_value(settings: &AppSettings, item: SettingsItem) -> bool {
+    match item {
+        SettingsItem::BracketColorization => settings.editor.bracket_pair_colorization,
+        SettingsItem::IndentGuides => settings.editor.indent_guides,
+        SettingsItem::ActiveIndentGuide => settings.editor.highlight_active_indent_guide,
+        SettingsItem::ControlCharacters => settings.editor.render_control_characters,
+        SettingsItem::SmartSelectSubwords => settings.editor.smart_select_subwords,
+        SettingsItem::SmartSelectWhitespace => settings.editor.smart_select_include_whitespace,
+        _ => false,
+    }
+}
+
+fn polish_value(settings: &AppSettings, item: SettingsItem) -> String {
+    match item {
+        SettingsItem::MatchBrackets => match settings.editor.match_brackets {
+            MatchBracketsSetting::Never => "Never",
+            MatchBracketsSetting::Near => "Near",
+            MatchBracketsSetting::Always => "Always",
+        }
+        .to_string(),
+        SettingsItem::BracketGuides => guide_mode_label(settings.editor.bracket_pair_guides).to_string(),
+        SettingsItem::HorizontalBracketGuides => {
+            guide_mode_label(settings.editor.bracket_pair_horizontal_guides).to_string()
+        }
+        SettingsItem::RenderWhitespace => match settings.editor.render_whitespace {
+            RenderWhitespaceSetting::None => "None",
+            RenderWhitespaceSetting::Boundary => "Boundary",
+            RenderWhitespaceSetting::Selection => "Selection",
+            RenderWhitespaceSetting::Trailing => "Trailing",
+            RenderWhitespaceSetting::All => "All",
+        }
+        .to_string(),
+        SettingsItem::Rulers => {
+            let columns = settings.editor.rulers.as_slice();
+            if columns.is_empty() {
+                "None".to_string()
+            } else {
+                columns.iter().map(u16::to_string).collect::<Vec<_>>().join(", ")
+            }
+        }
+        SettingsItem::MultiCursorLimit => settings.editor.multi_cursor_limit.to_string(),
+        _ if polish_bool_value(settings, item) => "On".to_string(),
+        _ => "Off".to_string(),
+    }
+}
+
+fn guide_mode_label(mode: GuideMode) -> &'static str {
+    match mode {
+        GuideMode::Off => "Off",
+        GuideMode::Active => "Active",
+        GuideMode::All => "All",
+    }
+}
+
+fn polish_label(item: SettingsItem) -> &'static str {
+    match item {
+        SettingsItem::MatchBrackets => "Match brackets",
+        SettingsItem::BracketColorization => "Bracket pair colorization",
+        SettingsItem::BracketGuides => "Bracket pair guides",
+        SettingsItem::HorizontalBracketGuides => "Horizontal bracket guides",
+        SettingsItem::IndentGuides => "Indent guides",
+        SettingsItem::ActiveIndentGuide => "Highlight active indent guide",
+        SettingsItem::RenderWhitespace => "Render whitespace",
+        SettingsItem::ControlCharacters => "Render control characters",
+        SettingsItem::Rulers => "Rulers",
+        SettingsItem::SmartSelectSubwords => "Smart select subwords",
+        SettingsItem::SmartSelectWhitespace => "Smart select include whitespace",
+        SettingsItem::MultiCursorLimit => "Multi-cursor limit",
+        _ => "Editor setting",
+    }
+}
+
 fn settings_section(label: &'static str, theme: Theme, scale: f32) -> impl IntoElement {
     div()
         .pt_5()
@@ -1411,9 +1830,13 @@ fn setting_row(
         .gap_4()
         .min_h(metrics::px_for_scale(42.0, scale))
         .py_1()
-        .border_b_1()
-        .border_color(rgb(theme.role.border))
-        .when(selected, |row| row.rounded_sm().bg(rgb(theme.role.selection_bg)))
+        .when(!selected, |row| row.border_b_1().border_color(rgb(theme.role.border)))
+        .when(selected, |row| {
+            row.rounded_sm()
+                .border_1()
+                .border_color(rgb(theme.role.focus_outline))
+                .bg(rgb(theme.role.selection_bg))
+        })
         .child(
             div()
                 .flex_1()
@@ -1432,7 +1855,7 @@ fn segmented_control(children: Vec<AnyElement>, theme: Theme) -> impl IntoElemen
         .overflow_hidden()
         .rounded_sm()
         .border_1()
-        .border_color(rgb(theme.role.border))
+        .border_color(rgb(theme.role.control_border))
         .children(children)
 }
 
@@ -1524,7 +1947,7 @@ fn danger_choice(
         .border_color(rgb(if selected {
             theme.role.error_text
         } else {
-            theme.role.border
+            theme.role.control_border
         }))
         .bg(rgb(theme.role.control_bg))
         .text_color(rgb(theme.role.error_text))
@@ -1549,7 +1972,7 @@ fn setting_value(value: impl Into<String>, theme: Theme, scale: f32) -> impl Int
 
 #[cfg(test)]
 mod tests {
-    use super::{settings_query_matches, FontFamilyChoice};
+    use super::{parse_ruler_columns, settings_query_matches, FontFamilyChoice};
 
     #[test]
     fn settings_search_matches_all_terms_across_labels_and_metadata() {
@@ -1579,5 +2002,19 @@ mod tests {
             FontFamilyChoice::JetBrainsMono
         );
         assert_eq!(FontFamilyChoice::from_name("User Custom Font"), FontFamilyChoice::Tx02);
+    }
+
+    #[test]
+    fn ruler_editor_normalizes_valid_columns() {
+        let columns = parse_ruler_columns("120, 80  120").expect("valid ruler columns");
+        assert_eq!(columns.as_slice(), &[80, 120]);
+        assert!(parse_ruler_columns("").expect("empty ruler list").as_slice().is_empty());
+    }
+
+    #[test]
+    fn ruler_editor_rejects_malformed_or_out_of_range_columns() {
+        assert!(parse_ruler_columns("80, nope").is_err());
+        assert!(parse_ruler_columns("0").is_err());
+        assert!(parse_ruler_columns("1001").is_err());
     }
 }
