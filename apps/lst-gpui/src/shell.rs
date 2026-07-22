@@ -1891,19 +1891,38 @@ impl Render for LstGpuiApp {
             code_char_width(&mut cache, window, scale, theme)
         };
         let show_search_decorations = self.model.find().visible;
-        let (revision, syntax_mode, buffer, selection_set, occurrence_query, search_matches, active_search_match) = {
+        let (
+            revision,
+            syntax_mode,
+            buffer,
+            selection_set,
+            occurrence_query,
+            selection_match_query,
+            search_matches,
+            active_search_match,
+        ) = {
             let active_tab = self.model.active_tab();
             let occurrence_query = self
                 .passive_occurrence_query
                 .as_ref()
                 .filter(|query| query.tab_id == active_tab.id() && query.revision == active_tab.revision())
                 .map(|query| query.word.clone());
+            let selection_match_query = self
+                .selection_match_query
+                .as_ref()
+                .filter(|query| query.tab_id == active_tab.id() && query.revision == active_tab.revision())
+                .filter(|query| {
+                    let find = self.model.find();
+                    !show_search_decorations || find.use_regex || find.whole_word || find.query != query.text
+                })
+                .map(|query| (query.text.clone(), query.selected_ranges.clone()));
             (
                 active_tab.revision(),
                 syntax_mode_for_language(active_tab.language()),
                 active_tab.buffer().clone(),
                 active_tab.selection_set().clone(),
                 occurrence_query,
+                selection_match_query,
                 if show_search_decorations {
                     self.model.find_match_ranges()
                 } else {
@@ -2079,6 +2098,16 @@ impl Render for LstGpuiApp {
                                                                             cursor_lines: &cursor_lines,
                                                                             occurrence_query: occurrence_query
                                                                                 .as_deref(),
+                                                                            selection_match_query:
+                                                                                selection_match_query
+                                                                                    .as_ref()
+                                                                                    .map(|query| query.0.as_str()),
+                                                                            selected_match_ranges:
+                                                                                selection_match_query
+                                                                                    .as_ref()
+                                                                                    .map_or(&[], |query| {
+                                                                                        query.1.as_slice()
+                                                                                    }),
                                                                             show_wrap,
                                                                             viewport_scroll: &viewport_scroll,
                                                                             viewport_cache: &viewport_cache,

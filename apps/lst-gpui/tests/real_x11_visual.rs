@@ -5,6 +5,9 @@
 //! Run with
 //!
 //!     cargo nextest run --profile x11 -p lst-gpui --test real_x11_visual --run-ignored only
+//!
+//! Set `LST_VISUAL_SCENARIO=name` to run one scenario while reviewing or
+//! updating a focused baseline.
 
 mod support;
 
@@ -59,6 +62,16 @@ const SCENARIOS: &[VisualScenario] = &[
         capture: capture_identifier_highlights,
     },
     VisualScenario {
+        name: "inactive-selection",
+        theme: "dark",
+        capture: capture_inactive_selection,
+    },
+    VisualScenario {
+        name: "selection-highlights-light",
+        theme: "light",
+        capture: capture_selection_highlights_light,
+    },
+    VisualScenario {
         name: "scrolled-gutter",
         theme: "dark",
         capture: capture_scrolled_gutter,
@@ -77,10 +90,34 @@ const SCENARIOS: &[VisualScenario] = &[
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn visual_scenarios_are_exactly_repeatable() -> TestResult {
-    support::run_x11_test("visual-repeatability", |session| {
+fn core_visual_scenarios_are_exactly_repeatable() -> TestResult {
+    run_visual_scenarios("visual-core-repeatability", &SCENARIOS[..5])
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn editor_state_visual_scenarios_are_exactly_repeatable() -> TestResult {
+    run_visual_scenarios("visual-editor-state-repeatability", &SCENARIOS[5..])
+}
+
+fn run_visual_scenarios(label: &str, scenarios: &[VisualScenario]) -> TestResult {
+    support::run_x11_test(label, |session| {
         let update_baselines = std::env::var_os("LST_UPDATE_VISUAL_BASELINES").is_some();
-        for scenario in SCENARIOS {
+        let requested = std::env::var("LST_VISUAL_SCENARIO").ok();
+        if requested
+            .as_deref()
+            .is_some_and(|name| !SCENARIOS.iter().any(|scenario| scenario.name == name))
+        {
+            return Err(format!("unknown visual scenario {:?}", requested.as_deref().unwrap()).into());
+        }
+        let selected = scenarios
+            .iter()
+            .filter(|scenario| requested.as_deref().is_none_or(|name| name == scenario.name))
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Ok(());
+        }
+        for scenario in selected {
             session.seed_settings(&format!(
                 "version = 1\n[editor]\ncursor_blink = false\n[appearance]\ntheme = '{}'\n",
                 scenario.theme
@@ -202,6 +239,34 @@ fn capture_identifier_highlights(session: &mut ScratchpadSession, run: usize) ->
     settled_screenshot(&mut editor, &artifacts, "identifier-highlights-same-window")
 }
 
+fn capture_inactive_selection(session: &mut ScratchpadSession, run: usize) -> SupportResult<Screenshot> {
+    let dir = reset_fixture_dir("inactive-selection")?;
+    let path = write_fixture(&dir, "selection.txt", "alpha alphabet alpha\nsecond alpha line\n")?;
+    let artifacts = session.artifacts().to_path_buf();
+    let mut editor = session.open_file(&format!("visual-inactive-selection-{run}"), &path)?;
+    prepare_visual_window(&mut editor)?;
+    editor.place_cursor_at_document_start()?;
+    editor.keys("<S-right><S-right><S-right><S-right><S-right><C-g>")?;
+    editor.wait_state("visual inactive selection ready", secs(5), |record| {
+        record.focused_input == "goto_line" && record.viewport.selection_match_highlights.len() == 3
+    })?;
+    settled_screenshot(&mut editor, &artifacts, "inactive-selection-same-window")
+}
+
+fn capture_selection_highlights_light(session: &mut ScratchpadSession, run: usize) -> SupportResult<Screenshot> {
+    let dir = reset_fixture_dir("selection-highlights-light")?;
+    let path = write_fixture(&dir, "selection.txt", "alpha alphabet alpha\nsecond alpha line\n")?;
+    let artifacts = session.artifacts().to_path_buf();
+    let mut editor = session.open_file(&format!("visual-selection-highlights-light-{run}"), &path)?;
+    prepare_visual_window(&mut editor)?;
+    editor.place_cursor_at_document_start()?;
+    editor.keys("<S-right><S-right><S-right><S-right><S-right>")?;
+    editor.wait_state("visual light selection ready", secs(5), |record| {
+        record.focused_input == "editor" && record.viewport.selection_match_highlights.len() == 3
+    })?;
+    settled_screenshot(&mut editor, &artifacts, "selection-highlights-light-same-window")
+}
+
 fn capture_scrolled_gutter(session: &mut ScratchpadSession, run: usize) -> SupportResult<Screenshot> {
     session.seed_settings(
         "version = 1\n[editor]\ncursor_blink = false\nword_wrap = false\n[appearance]\ntheme = 'dark'\n",
@@ -254,7 +319,9 @@ fn capture_multi_cursor_status(session: &mut ScratchpadSession, run: usize) -> S
     editor.place_cursor_at_document_start()?;
     editor.keys("<C-d><C-d>")?;
     editor.wait_state("visual multi cursor ready", secs(5), |record| {
-        record.cursors.len() == 2 && record.status_bar.contains("2 cursors")
+        record.cursors.len() == 2
+            && record.status_bar.contains("2 cursors")
+            && record.viewport.selection_match_highlights.len() == 1
     })?;
     settled_screenshot(&mut editor, &artifacts, "multi-cursor-same-window")
 }

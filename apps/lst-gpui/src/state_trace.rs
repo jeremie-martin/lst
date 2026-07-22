@@ -219,6 +219,7 @@ pub(crate) struct TraceViewport {
     pub code_origin_x_px: f32,
     pub gutter_width_px: f32,
     pub occurrence_highlights: Vec<TraceRange>,
+    pub selection_match_highlights: Vec<TraceRange>,
     pub rows: Vec<TraceRow>,
 }
 
@@ -511,6 +512,14 @@ impl LstGpuiApp {
             gutter_width_px: f32::from(geometry.gutter_width_at_paint),
             occurrence_highlights: geometry
                 .occurrence_highlights
+                .iter()
+                .map(|range| TraceRange {
+                    start: range.start,
+                    end: range.end,
+                })
+                .collect(),
+            selection_match_highlights: geometry
+                .selection_match_highlights
                 .iter()
                 .map(|range| TraceRange {
                     start: range.start,

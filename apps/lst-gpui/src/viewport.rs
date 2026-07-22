@@ -8,7 +8,9 @@ use lst_editor::wrap::{
     WrappedSegment,
 };
 use lst_editor::{
-    selection::{identifier_occurrence_ranges_in_text, is_identifier_occurrence_char},
+    selection::{
+        exact_text_occurrence_ranges_in_text, identifier_occurrence_ranges_in_text, is_identifier_occurrence_char,
+    },
     vim, DisplayLine, EditorTab, GutterMode, Selection, SelectionSet,
 };
 use ropey::Rope;
@@ -39,6 +41,7 @@ pub(crate) struct ViewportCache {
     max_unwrapped_line_width: Option<CachedUnwrappedLineWidth>,
     code_char_width: Option<CachedCodeCharWidth>,
     occurrence_highlights: Option<CachedOccurrenceHighlights>,
+    selection_match_highlights: Option<CachedSelectionMatchHighlights>,
 }
 
 #[derive(Clone)]
@@ -46,6 +49,15 @@ struct CachedOccurrenceHighlights {
     revision: u64,
     query: String,
     scan_windows: Vec<Range<usize>>,
+    ranges: Rc<[Range<usize>]>,
+}
+
+#[derive(Clone)]
+struct CachedSelectionMatchHighlights {
+    revision: u64,
+    query: String,
+    visible_windows: Vec<Range<usize>>,
+    selected_ranges: Vec<Range<usize>>,
     ranges: Rc<[Range<usize>]>,
 }
 
@@ -155,6 +167,7 @@ pub(crate) struct PaintedRow {
 pub(crate) struct ViewportPaintState {
     pub(crate) rows: Vec<PaintedRow>,
     pub(crate) occurrence_highlights: Rc<[Range<usize>]>,
+    pub(crate) selection_match_highlights: Rc<[Range<usize>]>,
 }
 
 #[derive(Default)]
@@ -193,6 +206,10 @@ pub(crate) struct ViewportGeometry {
     /// Passive identifier occurrences that were visible in the prepared row
     /// window. Stored with geometry because they are observable paint state.
     pub(crate) occurrence_highlights: Rc<[Range<usize>]>,
+    /// Exact matches for the current explicit selection, excluding every
+    /// selected range. Stored separately from passive caret occurrences so
+    /// focus and edit triggers cannot blur the two interaction contracts.
+    pub(crate) selection_match_highlights: Rc<[Range<usize>]>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -283,6 +300,8 @@ pub(crate) struct ViewportPreparation<'a> {
     pub(crate) cursor_line: usize,
     pub(crate) cursor_lines: &'a [usize],
     pub(crate) occurrence_query: Option<&'a str>,
+    pub(crate) selection_match_query: Option<&'a str>,
+    pub(crate) selected_match_ranges: &'a [Range<usize>],
     pub(crate) show_wrap: bool,
     pub(crate) viewport_scroll: &'a ScrollHandle,
     pub(crate) viewport_cache: &'a Rc<RefCell<ViewportCache>>,
@@ -745,8 +764,7 @@ fn push_merged_window(windows: &mut Vec<Range<usize>>, window: Range<usize>) {
     windows.push(window);
 }
 
-fn occurrence_scan_windows(
-    buffer: &Rope,
+fn painted_character_windows(
     rows: &[PaintedRow],
     bounds: Bounds<Pixels>,
     layout_metrics: ViewportLayoutMetrics,
@@ -774,15 +792,38 @@ fn occurrence_scan_windows(
         );
     }
 
+    windows
+}
+
+fn occurrence_scan_windows(buffer: &Rope, visible_windows: &[Range<usize>]) -> Vec<Range<usize>> {
     // Wrapped rows commonly describe adjacent pieces of the same logical
     // line. Merge those visible pieces before walking to identifier
     // boundaries so one pathological identifier is traversed once, not once
     // per painted row.
-    let mut expanded = Vec::with_capacity(windows.len());
-    for window in windows {
-        push_merged_window(&mut expanded, expand_identifier_window(buffer, window));
+    let mut expanded = Vec::with_capacity(visible_windows.len());
+    for window in visible_windows {
+        push_merged_window(&mut expanded, expand_identifier_window(buffer, window.clone()));
     }
     expanded
+}
+
+fn text_match_scan_windows(buffer_len: usize, visible_windows: &[Range<usize>], query_len: usize) -> Vec<Range<usize>> {
+    let overlap = query_len.saturating_sub(1);
+    let mut expanded = Vec::with_capacity(visible_windows.len());
+    for window in visible_windows {
+        push_merged_window(
+            &mut expanded,
+            window.start.saturating_sub(overlap)..window.end.saturating_add(overlap).min(buffer_len),
+        );
+    }
+    expanded
+}
+
+fn overlaps_any_sorted(candidate: &Range<usize>, ranges: &[Range<usize>]) -> bool {
+    let index = ranges.partition_point(|range| range.end <= candidate.start);
+    ranges
+        .get(index)
+        .is_some_and(|range| range.start < candidate.end && candidate.start < range.end)
 }
 
 fn visible_occurrence_highlights(
@@ -824,6 +865,54 @@ fn visible_occurrence_highlights(
     ranges
 }
 
+fn visible_selection_match_highlights(
+    cache: &mut ViewportCache,
+    buffer: &Rope,
+    revision: u64,
+    query: Option<&str>,
+    selected_ranges: &[Range<usize>],
+    visible_windows: Vec<Range<usize>>,
+) -> Rc<[Range<usize>]> {
+    let Some(query) = query else {
+        return Rc::from([]);
+    };
+    if let Some(cached) = cache.selection_match_highlights.as_ref() {
+        if cached.revision == revision
+            && cached.query == query
+            && cached.visible_windows == visible_windows
+            && cached.selected_ranges == selected_ranges
+        {
+            return cached.ranges.clone();
+        }
+    }
+
+    let started = diagnostics::trace_enabled().then(Instant::now);
+    let scan_windows = text_match_scan_windows(buffer.len_chars(), &visible_windows, query.chars().count());
+    let mut ranges = Vec::new();
+    for window in &scan_windows {
+        let text = buffer.slice(window.clone()).to_string();
+        ranges.extend(
+            exact_text_occurrence_ranges_in_text(&text, query)
+                .into_iter()
+                .map(|range| window.start + range.start..window.start + range.end)
+                .filter(|range| overlaps_any_sorted(range, &visible_windows))
+                .filter(|range| !overlaps_any_sorted(range, selected_ranges)),
+        );
+    }
+    if let Some(started) = started {
+        diagnostics::record_ms("selection_match_highlight_ms", started.elapsed().as_secs_f64() * 1000.0);
+    }
+    let ranges: Rc<[Range<usize>]> = ranges.into();
+    cache.selection_match_highlights = Some(CachedSelectionMatchHighlights {
+        revision,
+        query: query.to_string(),
+        visible_windows,
+        selected_ranges: selected_ranges.to_vec(),
+        ranges: ranges.clone(),
+    });
+    ranges
+}
+
 pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, window: &mut Window) -> ViewportPaintState {
     let ViewportPreparation {
         buffer,
@@ -835,6 +924,8 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         cursor_line,
         cursor_lines,
         occurrence_query,
+        selection_match_query,
+        selected_match_ranges,
         show_wrap,
         viewport_scroll,
         viewport_cache,
@@ -994,9 +1085,22 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         }
     }
 
-    let scan_windows = occurrence_scan_windows(buffer, &rows, bounds, layout_metrics, scroll_left);
-    let occurrence_highlights =
-        visible_occurrence_highlights(&mut cache, buffer, revision, occurrence_query, scan_windows);
+    let visible_windows = painted_character_windows(&rows, bounds, layout_metrics, scroll_left);
+    let occurrence_highlights = visible_occurrence_highlights(
+        &mut cache,
+        buffer,
+        revision,
+        occurrence_query,
+        occurrence_scan_windows(buffer, &visible_windows),
+    );
+    let selection_match_highlights = visible_selection_match_highlights(
+        &mut cache,
+        buffer,
+        revision,
+        selection_match_query,
+        selected_match_ranges,
+        visible_windows,
+    );
 
     *viewport_geometry.borrow_mut() = ViewportGeometry {
         bounds: Some(bounds),
@@ -1011,11 +1115,13 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         code_origin_pad_at_paint: layout_metrics.code_origin_pad(),
         code_origin_x_at_paint: layout_metrics.code_origin_x(bounds.left(), scroll_left),
         occurrence_highlights: occurrence_highlights.clone(),
+        selection_match_highlights: selection_match_highlights.clone(),
     };
 
     ViewportPaintState {
         rows,
         occurrence_highlights,
+        selection_match_highlights,
     }
 }
 
@@ -1073,15 +1179,18 @@ fn items_overlapping_row<'a, T>(items: &'a [T], row: &PaintedRow, range_of: impl
 struct PaintCursor {
     char: usize,
     collapsed: bool,
+    primary: bool,
 }
 
 fn paint_cursors(selection_set: &SelectionSet) -> Vec<PaintCursor> {
     selection_set
         .as_slice()
         .iter()
-        .map(|selection| PaintCursor {
+        .enumerate()
+        .map(|(index, selection)| PaintCursor {
             char: selection.cursor(),
             collapsed: !selection.has_selection(),
+            primary: index == selection_set.primary_index(),
         })
         .collect()
 }
@@ -1105,6 +1214,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
     let ViewportPaintState {
         rows,
         occurrence_highlights,
+        selection_match_highlights,
     } = paint_state;
     let line_height = window.line_height();
     let row_height = metrics::px_for_scale(metrics::row_height(), scale);
@@ -1122,7 +1232,11 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                     point(highlight_left, row.row_top),
                     size((bounds.right() - highlight_left).max(px(0.0)), row_height),
                 ),
-                rgb(theme.role.current_line_bg),
+                rgb(if focused {
+                    theme.role.current_line_bg
+                } else {
+                    theme.role.current_line_inactive_bg
+                }),
             ));
         }
 
@@ -1134,6 +1248,18 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 row_height,
                 scale,
                 theme.role.occurrence_match_bg,
+                window,
+            );
+        }
+
+        for selection_match in items_overlapping_row(selection_match_highlights.as_ref(), &row, Clone::clone) {
+            paint_range_background(
+                &row,
+                selection_match,
+                code_origin_x,
+                row_height,
+                scale,
+                theme.role.selection_match_bg,
                 window,
             );
         }
@@ -1169,7 +1295,11 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 code_origin_x,
                 row_height,
                 scale,
-                theme.role.selection_bg,
+                if focused {
+                    theme.role.selection_bg
+                } else {
+                    theme.role.selection_inactive_bg
+                },
                 window,
             );
         }
@@ -1197,9 +1327,17 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 window.paint_quad(fill(
                     Bounds::new(point(cursor_x, row.row_top), size(cursor_width, row_height)),
                     if block_cursor {
-                        rgb(theme.role.selection_bg)
+                        rgb(if cursor.primary {
+                            theme.role.selection_bg
+                        } else {
+                            theme.role.selection_inactive_bg
+                        })
                     } else {
-                        rgb(theme.role.caret)
+                        rgb(if cursor.primary {
+                            theme.role.caret
+                        } else {
+                            theme.role.caret_secondary
+                        })
                     },
                 ));
             }

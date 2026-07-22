@@ -230,6 +230,8 @@ multi-cursor policy is intentionally separate.
 - [ ] **Ruler / column guides** - visible column guides can be shown.
 - [x] **Current line highlight** - the cursor line is visibly highlighted.
 - [x] **Identifier occurrence highlight** - editor focus or an explicit caret move onto either edge or the interior of an identifier highlights exact, case-sensitive, Unicode whole-identifier occurrences around painted character windows. Editing clears the passive highlights and does not infer a new query from the post-edit caret; a later focus or caret move retriggers them. Adjacent wrapped windows are merged before identifier-boundary expansion, so an extreme identifier is traversed once rather than once per row. X11: `real_x11_chrome.rs`; visual: `real_x11_visual.rs`.
+- [x] **Selected-text match highlight** - a meaningful single-line selection of at most 200 characters highlights exact, case-sensitive substring matches around the painted character windows while excluding every selected range. Equal multi-selections share the query; mixed text, empty selections, whitespace-only text, and multiline text disable it. Match endpoints remain grapheme-aligned. X11: `real_x11_chrome.rs`; visual: `real_x11_visual.rs`.
+- [x] **Focus and multi-cursor visual hierarchy** - editor blur preserves context with quieter selection and current-line roles; focused selections stay strongest, and secondary carets are visually subordinate to the primary caret. Dark and light theme roles are explicit rather than inferred from generic muted colors. Visual: `real_x11_visual.rs`.
 - [x] **Cursor blink** - all visible carets share the configured editor blink state.
 - [x] **Scroll margin** - vertical and horizontal cursor reveal keep margin around the cursor.
 - [x] **Visible scrollbar when content overflows** - scrollbars appear and can be used when content overflows.
@@ -276,7 +278,7 @@ multi-cursor policy is intentionally separate.
 
 ## Summary
 
-- **Done:** 132
+- **Done:** 134
 - **Partial:** 13
 - **Missing:** 26
 
@@ -292,7 +294,7 @@ and the real-display X11 suite.
 
 1. Multi-cursor policy gaps: Vim-mode behavior, page/document-edge movement, join-line clusters, and find/replace over multiple selections.
 2. Selection polish: syntax-aware expand selection, additive drag selection, target-cursor drag behavior, and optional keyboard column selection.
-3. Visual polish: primary-cursor distinction, ruler/indent guides, minimap, and large-cursor-count responsiveness.
+3. Visual polish: ruler/indent guides, minimap, and large-cursor-count responsiveness.
 4. Jump list / navigation history.
 5. User-configurable keybindings and user-facing language override UI.
 6. Paste indentation, clipboard history, encoding preservation, and crash recovery.

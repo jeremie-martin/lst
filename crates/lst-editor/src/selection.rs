@@ -850,6 +850,38 @@ pub fn identifier_occurrence_ranges_in_text(text: &str, query: &str) -> Vec<Rang
     }
     ranges
 }
+
+/// Finds exact, non-overlapping text occurrences whose endpoints both land
+/// on extended-grapheme boundaries. This is deliberately less semantic than
+/// identifier occurrence matching: an explicit selection may contain spaces
+/// or punctuation and should match that exact text, while never highlighting
+/// half of a user-perceived character.
+pub fn exact_text_occurrence_ranges_in_text(text: &str, query: &str) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let cells = cells_of_str(text);
+    let text_char_len = text.chars().count();
+    text.match_indices(query)
+        .filter_map(|(start_byte, matched)| {
+            let end_byte = start_byte + matched.len();
+            let start_cell = cell_partition_by_byte(&cells, start_byte);
+            let end_cell = cell_partition_by_byte(&cells, end_byte);
+            let start_aligned = cells
+                .get(start_cell)
+                .map_or(start_byte == text.len(), |cell| cell.byte_start == start_byte);
+            let end_aligned = cells
+                .get(end_cell)
+                .map_or(end_byte == text.len(), |cell| cell.byte_start == end_byte);
+            (start_aligned && end_aligned).then(|| {
+                let start_char = cells.get(start_cell).map_or(text_char_len, |cell| cell.char_start);
+                let end_char = cells.get(end_cell).map_or(text_char_len, |cell| cell.char_start);
+                start_char..end_char
+            })
+        })
+        .collect()
+}
 pub fn next_grapheme_column(line: &str, column: usize) -> usize {
     let total = line.chars().count();
     if column >= total {
@@ -1137,5 +1169,17 @@ mod identifier_tests {
             vec![0..11, 18..29]
         );
         assert_eq!(identifier_occurrence_ranges_in_text(text, "cafe"), vec![30..34]);
+    }
+
+    #[test]
+    fn exact_text_occurrences_require_complete_grapheme_boundaries() {
+        let text = "cafe\u{301} cafe cafe\u{301}";
+
+        assert_eq!(exact_text_occurrence_ranges_in_text(text, "cafe"), vec![6..10]);
+        assert_eq!(
+            exact_text_occurrence_ranges_in_text(text, "cafe\u{301}"),
+            vec![0..5, 11..16]
+        );
+        assert_eq!(exact_text_occurrence_ranges_in_text("a.b a.b", ".b"), vec![1..3, 5..7]);
     }
 }

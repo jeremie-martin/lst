@@ -84,7 +84,12 @@ DISPLAY=:0 cargo nextest run --profile x11-regression -p lst-gpui --tests --run-
 Visual baselines compare exact pixels after normalizing four small corner
 squares. The mask excludes compositor-owned rounded-corner antialiasing while
 preserving every non-corner pixel along the tab, viewport, status-bar, and side
-edges.
+edges. A single scenario can be reviewed with
+`LST_VISUAL_SCENARIO=identifier-highlights`; add
+`LST_UPDATE_VISUAL_BASELINES=1` only when intentionally replacing its baseline.
+Always inspect the expected image itself: the physical path reads composed
+desktop pixels, so a stable capture of an occluding or underlying window is not
+a valid baseline.
 
 The `x11-nested` profile is the blocking accepted-behavior filter. It includes
 every `real_x11_*` suite except `real_x11_visual`. `x11-stress` runs the physical

@@ -191,6 +191,8 @@ pub struct TraceViewport {
     pub gutter_width_px: f32,
     #[serde(default)]
     pub occurrence_highlights: Vec<TraceRange>,
+    #[serde(default)]
+    pub selection_match_highlights: Vec<TraceRange>,
     pub rows: Vec<TraceRow>,
 }
 

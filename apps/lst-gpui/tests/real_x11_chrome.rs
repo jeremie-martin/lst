@@ -290,3 +290,105 @@ fn identifier_highlights_are_bounded_to_the_horizontal_viewport() -> TestResult 
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn explicit_selection_highlights_exact_text_but_not_the_selections_themselves() -> TestResult {
+    support::run_x11_test("chrome-selection-match-highlights", |session| {
+        let path = session.seed_file("selection-match-highlights.txt", "alpha alphabet alpha\nalpha beta\n")?;
+        let mut editor = session.open_file("chrome-selection-match-highlights", &path)?;
+        editor.place_cursor_at_document_start()?;
+
+        editor.keys("<S-right><S-right><S-right><S-right><S-right>")?;
+        editor.wait_state("selected text matches exclude active selection", secs(5), |record| {
+            record.viewport.occurrence_highlights.is_empty()
+                && record
+                    .viewport
+                    .selection_match_highlights
+                    .iter()
+                    .map(|range| (range.start, range.end))
+                    .collect::<Vec<_>>()
+                    == vec![(6, 11), (15, 20), (21, 26)]
+        })?;
+
+        editor.keys("<C-f>")?;
+        editor.wait_state(
+            "find suppresses duplicate selected-text decoration",
+            secs(2),
+            |record| {
+                record.focused_input == "find_query"
+                    && record.find.query == "alpha"
+                    && record.find.match_count == 4
+                    && record.viewport.selection_match_highlights.is_empty()
+            },
+        )?;
+        editor.keys("<esc>")?;
+        editor.wait_state("closing find restores selected-text decoration", secs(2), |record| {
+            record.focused_input == "editor" && record.viewport.selection_match_highlights.len() == 3
+        })?;
+
+        editor.keys("<S-left>")?;
+        editor.wait_state("partial selection matches substrings", secs(2), |record| {
+            record
+                .viewport
+                .selection_match_highlights
+                .iter()
+                .map(|range| (range.start, range.end))
+                .collect::<Vec<_>>()
+                == vec![(6, 10), (15, 19), (21, 25)]
+        })?;
+
+        editor.keys("<home><right><right><right><right><right><S-right>")?;
+        editor.wait_state("whitespace-only selection has no text matches", secs(2), |record| {
+            record.cursors[0].anchor_col == 5
+                && record.cursors[0].head_col == 6
+                && record.viewport.selection_match_highlights.is_empty()
+        })?;
+
+        editor.keys("<home><S-down>")?;
+        editor.wait_state("multiline selection has no text matches", secs(2), |record| {
+            record.cursors[0].anchor_line == 0
+                && record.cursors[0].head_line == 1
+                && record.viewport.selection_match_highlights.is_empty()
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn selection_match_limit_and_multi_cursor_agreement_are_explicit() -> TestResult {
+    support::run_x11_test("chrome-selection-match-boundaries", |session| {
+        let long = "x".repeat(201);
+        let path = session.seed_file(
+            "selection-match-boundaries.txt",
+            &format!("{long}\n{long}\nfoo foo\nbar foo\n"),
+        )?;
+        let mut editor = session.open_file("chrome-selection-match-boundaries", &path)?;
+        editor.place_cursor_at_document_start()?;
+
+        editor.keys("<S-end>")?;
+        editor.wait_state("selection over match limit is ignored", secs(5), |record| {
+            record.cursors[0].head_col == 201 && record.viewport.selection_match_highlights.is_empty()
+        })?;
+
+        editor.keys("<S-left>")?;
+        editor.wait_state("selection at match limit is highlighted", secs(2), |record| {
+            record.cursors[0].head_col == 200
+                && record
+                    .viewport
+                    .selection_match_highlights
+                    .iter()
+                    .any(|range| range.start == 202 && range.end == 402)
+        })?;
+
+        editor.keys("<C-g>3:1<enter><S-right><S-right><S-right><C-A-down>")?;
+        editor.wait_state("different selected texts disable shared matches", secs(2), |record| {
+            record.cursors.len() == 2
+                && record.cursors[0].anchor_line == 2
+                && record.cursors[1].anchor_line == 3
+                && record.viewport.selection_match_highlights.is_empty()
+        })?;
+        Ok(())
+    })
+}

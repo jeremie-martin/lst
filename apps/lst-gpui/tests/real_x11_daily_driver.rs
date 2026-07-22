@@ -181,7 +181,7 @@ fn all_tabs_and_application_menu_are_fully_keyboard_operable() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn app_menu_does_not_dim_the_editor() -> TestResult {
+fn app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line() -> TestResult {
     support::run_x11_test("daily-driver-menu-backdrop", |session| {
         session.seed_settings("version = 1\n[editor]\ncursor_blink = false\n")?;
         let (mut editor, _path) = session.open("scratch")?;
@@ -195,12 +195,38 @@ fn app_menu_does_not_dim_the_editor() -> TestResult {
         editor.wait_quiet(secs(1), secs(5))?;
         let after = editor.screenshot()?;
         let diff = after.diff(&before)?;
-        let (_, _, max_x, max_y) = diff.changed_bounds.ok_or("opening the app menu changed no pixels")?;
+        diff.changed_bounds.ok_or("opening the app menu changed no pixels")?;
         let scale = open.viewport.scale_factor.max(1.0);
+        let cursor_line = open.cursors[open.primary_cursor_index].head_line;
+        let row = open
+            .viewport
+            .first_row_for_line(cursor_line)
+            .ok_or("current cursor line is outside the painted viewport")?;
+        let menu_right = (340.0 * scale).ceil() as usize;
+        let menu_bottom = (430.0 * scale).ceil() as usize;
+        let line_top = (row.top_px * scale).floor().max(0.0) as usize;
+        let line_bottom = ((row.top_px + open.viewport.line_height_px) * scale).ceil() as usize;
+        let screenshot_width = usize::from(after.width);
+        let outside_allowed = before
+            .rgb_pixels
+            .chunks_exact(3)
+            .zip(after.rgb_pixels.chunks_exact(3))
+            .enumerate()
+            .filter(|(index, (before_pixel, after_pixel))| {
+                if before_pixel == after_pixel {
+                    return false;
+                }
+                let x = index % screenshot_width;
+                let y = index / screenshot_width;
+                let in_menu = x < menu_right && y < menu_bottom;
+                let in_current_line = (line_top..line_bottom).contains(&y);
+                !(in_menu || in_current_line)
+            })
+            .count();
 
         assert!(
-            f32::from(max_x) < 340.0 * scale && f32::from(max_y) < 430.0 * scale,
-            "app menu changed pixels outside its bounds, indicating a tinted backdrop: {diff:?}"
+            outside_allowed == 0,
+            "app menu changed {outside_allowed} pixels outside its surface and the intentional inactive current-line row, indicating a tinted backdrop: {diff:?}"
         );
         Ok(())
     })

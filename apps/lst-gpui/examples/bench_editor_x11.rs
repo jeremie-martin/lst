@@ -41,6 +41,8 @@ const BUTTON_WHEEL_UP: u8 = 4;
 const BUTTON_WHEEL_DOWN: u8 = 5;
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
 const KEYSYM_LEFT: u32 = 0xff51;
+const KEYSYM_RIGHT: u32 = 0xff53;
+const KEYSYM_SHIFT_L: u32 = 0xffe1;
 const KEYSYM_TAB: u32 = 0xff09;
 const KEYSYM_SPACE: u32 = 0x20;
 
@@ -583,6 +585,21 @@ impl Bench {
                     occurrence_count + 1,
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
+
+                let selection_match_count = read_editor_trace(&trace_path)?
+                    .count("selection_match_highlight_ms")
+                    .unwrap_or(0);
+                // Select that one-character identifier after measuring its
+                // passive form. This keeps the saved text unchanged while
+                // sampling the bounded explicit-selection scanner on the
+                // same large document.
+                inject_shift_chord(&self.conn, self.root, self.keycodes.shift_l, self.keycodes.right)?;
+                wait_for_trace_count(
+                    &trace_path,
+                    "selection_match_highlight_ms",
+                    selection_match_count + 1,
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
             }
             let save_count = read_editor_trace(&trace_path)?.count("save_complete").unwrap_or(0);
             let save_started = Instant::now();
@@ -655,6 +672,17 @@ impl Bench {
                 "occurrence_highlight_ms_sum",
                 "occurrence_highlight_ms_max",
                 "occurrence_highlight_ms_count",
+            );
+            metrics.set("selection_match_highlight_ms_sum", 0.0);
+            metrics.set("selection_match_highlight_ms_max", 0.0);
+            metrics.set("selection_match_highlight_ms_count", 0.0);
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "selection_match_highlight_ms",
+                "selection_match_highlight_ms_sum",
+                "selection_match_highlight_ms_max",
+                "selection_match_highlight_ms_count",
             );
             Ok(metrics)
         })();
@@ -1144,6 +1172,9 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "occurrence_highlight_ms_sum",
             "occurrence_highlight_ms_max",
             "occurrence_highlight_ms_count",
+            "selection_match_highlight_ms_sum",
+            "selection_match_highlight_ms_max",
+            "selection_match_highlight_ms_count",
             "viewport_paint_ms_sum",
             "viewport_paint_ms_max",
             "user_cpu_ms",
@@ -1592,6 +1623,20 @@ fn inject_ctrl_chord(
     Ok(())
 }
 
+fn inject_shift_chord(
+    conn: &RustConnection,
+    root: xproto::Window,
+    shift_keycode: xproto::Keycode,
+    keycode: xproto::Keycode,
+) -> Result<(), Box<dyn Error>> {
+    inject_key_press(conn, root, shift_keycode)?;
+    inject_key_press(conn, root, keycode)?;
+    inject_key_release(conn, root, keycode)?;
+    inject_key_release(conn, root, shift_keycode)?;
+    conn.flush()?;
+    Ok(())
+}
+
 fn inject_text(
     conn: &RustConnection,
     root: xproto::Window,
@@ -2023,6 +2068,8 @@ impl Atoms {
 struct Keycodes {
     control_l: xproto::Keycode,
     left: xproto::Keycode,
+    right: xproto::Keycode,
+    shift_l: xproto::Keycode,
     a: xproto::Keycode,
     c: xproto::Keycode,
     f: xproto::Keycode,
@@ -2051,6 +2098,8 @@ impl Keycodes {
         Ok(Self {
             control_l: find_keycode(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
             left: find_keycode(&reply, setup.min_keycode, KEYSYM_LEFT, active_group)?,
+            right: find_keycode(&reply, setup.min_keycode, KEYSYM_RIGHT, active_group)?,
+            shift_l: find_keycode(&reply, setup.min_keycode, KEYSYM_SHIFT_L, active_group)?,
             a: *lower.get(&'a').expect("resolved lowercase a"),
             c: *lower.get(&'c').expect("resolved lowercase c"),
             f: *lower.get(&'f').expect("resolved lowercase f"),

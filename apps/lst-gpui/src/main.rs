@@ -40,6 +40,7 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
+    ops::Range,
     path::PathBuf,
     process,
     rc::Rc,
@@ -342,6 +343,11 @@ struct LstGpuiApp {
     /// construction instead of letting paint infer a new query from the
     /// post-edit caret position.
     passive_occurrence_query: Option<PassiveOccurrenceQuery>,
+    /// Exact textual matches exist only for a short, single-line, meaningful
+    /// selection shared by every cursor. Keeping the query and the selected
+    /// ranges together makes excluding the selections themselves part of the
+    /// decoration's representation, not a paint-time convention.
+    selection_match_query: Option<SelectionMatchQuery>,
     cursor_visible: bool,
     /// Surfaced through the state trace so real-X11 tests can click the
     /// find chips without relying on fixed shell geometry.
@@ -375,6 +381,49 @@ struct PassiveOccurrenceQuery {
     tab_id: TabId,
     revision: u64,
     word: String,
+}
+
+const SELECTION_MATCH_MAX_CHARS: usize = 200;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SelectionMatchQuery {
+    tab_id: TabId,
+    revision: u64,
+    text: String,
+    selected_ranges: Vec<Range<usize>>,
+}
+
+fn selection_match_query(tab: &ModelEditorTab) -> Option<SelectionMatchQuery> {
+    let selections = tab.selection_set().as_slice();
+    let primary_range = tab.selection_set().primary().range();
+    let primary_len = primary_range.end.saturating_sub(primary_range.start);
+    if primary_len == 0 || primary_len > SELECTION_MATCH_MAX_CHARS {
+        return None;
+    }
+
+    let text = tab.buffer().slice(primary_range).to_string();
+    if text.contains(['\n', '\r']) || text.chars().all(char::is_whitespace) {
+        return None;
+    }
+
+    let mut selected_ranges = Vec::with_capacity(selections.len());
+    for selection in selections {
+        let range = selection.range();
+        if range.is_empty()
+            || range.end.saturating_sub(range.start) != primary_len
+            || !tab.buffer().slice(range.clone()).chars().eq(text.chars())
+        {
+            return None;
+        }
+        selected_ranges.push(range);
+    }
+
+    Some(SelectionMatchQuery {
+        tab_id: tab.id(),
+        revision: tab.revision(),
+        text,
+        selected_ranges,
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -517,6 +566,7 @@ impl LstGpuiApp {
             cleanup_message: None,
             clipboard_quit_bypass: None,
             passive_occurrence_query: None,
+            selection_match_query: None,
             cursor_visible: true,
             find_chip_bounds_px: FindChipBounds::default(),
             app_menu_button_bounds_px: None,
@@ -538,6 +588,7 @@ impl LstGpuiApp {
         // The production window focuses the editor immediately after
         // construction, which is itself a valid occurrence trigger.
         app.refresh_passive_occurrence_query();
+        app.refresh_selection_match_query();
 
         app._shell_subscriptions
             .push(cx.subscribe(&find_query_input, |this, _, event: &InputFieldEvent, cx| {
@@ -776,6 +827,10 @@ impl LstGpuiApp {
             });
     }
 
+    fn refresh_selection_match_query(&mut self) {
+        self.selection_match_query = selection_match_query(self.model.active_tab());
+    }
+
     fn reconcile_passive_occurrence_query(&mut self, old: &(TabId, u64, Selection), new: &(TabId, u64, Selection)) {
         if old.0 != new.0 {
             self.refresh_passive_occurrence_query();
@@ -818,6 +873,11 @@ impl LstGpuiApp {
         }
         let new_primary_state = self.primary_selection_state();
         self.reconcile_passive_occurrence_query(&old_primary_state, &new_primary_state);
+        // Unlike a passive caret word, an explicit selection remains an
+        // intentional query across unrelated edits. Re-derive its bounded
+        // snapshot after every model transition so secondary cursors and
+        // replacement edits cannot leave stale exclusions behind.
+        self.refresh_selection_match_query();
         // Own the X11 PRIMARY selection only when the selection changed within
         // the same tab: switching tabs must not clobber another application's
         // selection with this tab's stale one. Comparing (tab, revision,

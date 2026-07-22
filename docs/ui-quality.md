@@ -28,9 +28,9 @@ baseline can preserve a bad decision just as easily as a good one.
 - Choose sizes from the shared UI type scale. Different sizes are welcome when
   they express hierarchy; adjacent peers should not drift by one pixel without
   a reason.
-- Use semantic theme roles. Selection, passive occurrence, search, active
-  search, caret, and current-line states must remain distinguishable in both
-  themes.
+- Use semantic theme roles. Active and inactive selections/current lines,
+  selected-text matches, passive occurrences, search states, and primary and
+  secondary carets must form a distinguishable hierarchy in both themes.
 - Prefer foreground emphasis for active gutter numbers. The gutter background
   is the editor background and has no divider.
 - Check small muted text against its actual surface in both themes. Do not rely
@@ -47,8 +47,16 @@ baseline can preserve a bad decision just as easily as a good one.
   Typing invalidates occurrence highlights; editor focus or an explicit caret
   move establishes the next query. Both caret edges belong to the word they
   touch, while separator interiors do not.
+- Treat an explicit selection as a different query from a passive caret word.
+  Selected-text matches are exact and case-sensitive, exclude every selected
+  range, and are disabled for multiline, whitespace-only, over-200-character,
+  or mutually different multi-selections. Scan only query-length-expanded
+  painted windows, and keep match endpoints on grapheme boundaries. When a
+  literal, non-whole-word find query already represents the same text, let the
+  find decorations own those pixels and skip the duplicate selection scan.
 - Define decoration precedence explicitly: current line, passive occurrences,
-  search matches, active search match, selections, text, then carets.
+  selected-text matches, search matches, active search match, selections,
+  text, then carets.
 - Cache keys must contain every input that changes visible output, including
   theme, active state, revision, query, and visible range where applicable.
 - Exercise `typing-large`, scrolling, and search benchmarks after changing a
@@ -62,7 +70,8 @@ baseline can preserve a bad decision just as easily as a good one.
 - Specify observable behavior through X11: geometry thresholds, visible
   decoration ranges, pointer mapping, focus, and responsive state.
 - Maintain exact-pixel baselines for representative dark and light surfaces.
-  Review the image itself before accepting a baseline update.
+  Review the image itself before accepting a baseline update; repeatability
+  alone is insufficient if a physical compositor captured another surface.
 - Include zoom, narrow-window, long-label, empty-state, multi-cursor, wrapped,
   and scrolled cases when they can stress the changed contract.
 - Prefer construction that prevents misalignment over a regression test that
