@@ -37,17 +37,62 @@ Run one scenario while optimizing a specific path:
 
 ```bash
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario large-paste
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario mixed-paste --position end
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario typing-large
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario typing-plain
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario scroll-highlighted
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario search-large
 ```
 
+Override a scenario's normal corpus to exercise the large-file operating
+envelope directly:
+
+```bash
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
+  --scenario typing-large --corpus huge-rust-50k
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
+  --scenario open-large --corpus huge-plain-500k
+
+# Exercise the horizontal-extent path used when word wrap is disabled.
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
+  --scenario typing-plain --corpus huge-plain-500k --typing-no-wrap
+
+# Compare the same operation near the beginning, middle, and tail.
+for position in top middle end; do
+  DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
+    --scenario typing-plain --corpus huge-plain-500k --position "$position"
+done
+
+for position in top middle end; do
+  DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
+    --scenario scroll-plain --corpus huge-plain-500k --position "$position"
+done
+
+# Reproduce concat-style mixed-code paste and post-paste typing at both
+# normal and 500,000-line scale. The saved target is verified exactly.
+for position in top middle end; do
+  DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
+    --scenario mixed-paste --position "$position"
+done
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
+  --scenario mixed-paste --corpus huge-mixed-concat-500k --position middle
+```
+
+`huge-rust-50k` contains at least 50,000 syntax-highlighted lines;
+`huge-plain-500k` contains 500,000 plain-text rows. These opt-in corpora are
+not added to `--scenario all`, keeping the normal regression pass short.
+`mixed-concat` deterministically concatenates Rust, JavaScript, JSON, Python,
+and HTML fragments into more than 50,000 delimiter-dense lines;
+`huge-mixed-concat-500k` applies the same workload above 500,000 lines.
+
 The runner requires a real X11 desktop session with XTEST and XDamage. `Xvfb` is
 not representative for this GPUI path on this host because GPUI surface creation
 needs a real presentation backend.
 
-The `large-paste` scenario also uses `xclip` to observe the X11 clipboard.
+The `large-paste` scenario uses `xclip` to observe the clipboard copied by the
+editor. `mixed-paste` seeds its deterministic corpus through an external
+`xclip` owner, matching a shell-to-editor paste while keeping source-tab load
+and editor-owned clipboard serving outside the measurement.
 
 ## Scenarios
 
@@ -58,6 +103,7 @@ size where relevant.
 | Scenario | Primary metric | Completion condition |
 | --- | --- | --- |
 | `large-paste` | `paste_complete_ms` | Copies the large Rust corpus, switches to a second file tab, waits for app-traced select/tab/paste completion, saves once, then verifies the target file exactly matches the corpus. |
+| `mixed-paste` | `paste_input_to_paint_ms` | Copies the deterministic concat-style mixed-language corpus through X11 into a plain document, waits for the first completed paint, types 320 characters at the requested top/middle/end position, saves once, and verifies the result exactly. |
 | `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload into the generated medium Rust corpus, waits for every app-traced text input plus the next paint, saves once, then verifies the saved file exactly matches the expected text. |
 | `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using the generated large Rust corpus. After the primary typing measurement it moves into and selects the final identifier, reporting both passive-occurrence and explicit-selection visible-range highlight costs. |
 | `typing-plain` | `typing_ms_per_char` | Same typing path over the generated one-million-byte plain-text corpus, isolating framework-neutral editing and plain structural decoration maintenance from tree-sitter work. |

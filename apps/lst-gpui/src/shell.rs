@@ -1951,7 +1951,6 @@ impl Render for LstGpuiApp {
             lines.dedup();
             lines
         };
-        let line_texts = self.model.active_tab_lines();
         let match_brackets = self.settings.settings.editor.match_brackets;
         let bracket_pair_colorization = self.settings.settings.editor.bracket_pair_colorization;
         let bracket_pair_guides = self.settings.settings.editor.bracket_pair_guides;
@@ -1973,7 +1972,7 @@ impl Render for LstGpuiApp {
             let layout = ensure_wrap_layout(
                 &mut cache,
                 WrapLayoutInput {
-                    lines: line_texts.as_ref(),
+                    buffer: &buffer,
                     revision,
                     viewport_width,
                     char_width,
@@ -1986,15 +1985,7 @@ impl Render for LstGpuiApp {
         };
         let total_content_width = (!show_wrap).then(|| {
             let mut cache = active_cache.borrow_mut();
-            let width = max_unwrapped_line_width(
-                &mut cache,
-                line_texts.as_ref(),
-                revision,
-                char_width,
-                scale,
-                theme,
-                window,
-            );
+            let width = max_unwrapped_line_width(&mut cache, &buffer, revision, char_width, scale, theme, window);
             layout_metrics.code_origin_pad() + width + char_width * 2.0
         });
         let viewport_scroll = active_scroll;
@@ -2111,7 +2102,6 @@ impl Render for LstGpuiApp {
                                                                     let paint_state = prepare_viewport_paint_state(
                                                                         ViewportPreparation {
                                                                             buffer: &buffer,
-                                                                            lines: line_texts.as_ref(),
                                                                             revision,
                                                                             syntax_mode,
                                                                             syntax_state: active_syntax_state

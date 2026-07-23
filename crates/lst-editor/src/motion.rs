@@ -4,7 +4,7 @@ use crate::{
         next_grapheme_boundary, previous_grapheme_boundary, CursorGoal, Position, Selection, SelectionState,
         SelectionTransform,
     },
-    tab::{DisplayLine, EditorTab},
+    tab::EditorTab,
     wrap,
 };
 pub(crate) fn horizontal(tab: &EditorTab, delta: isize, select: bool) -> Option<SelectionState> {
@@ -62,7 +62,6 @@ pub(crate) fn vertical(tab: &EditorTab, delta: isize, select: bool, snap: bool) 
 }
 pub(crate) fn display_rows_with_layout(
     tab: &EditorTab,
-    lines: &[DisplayLine],
     layout: &wrap::WrapLayout,
     delta: isize,
     select: bool,
@@ -74,9 +73,15 @@ pub(crate) fn display_rows_with_layout(
     map(tab, |index, selection| {
         let position = char_to_position(tab.buffer(), selection.cursor());
         let goal = goal_for(tab, index, selection);
-        let preferred = display_preferred(tab, lines, layout, position, goal);
-        let row_target =
-            wrap::display_row_target(lines, position.line, position.column, Some(preferred), delta, layout);
+        let preferred = display_preferred(tab, layout, position, goal);
+        let row_target = wrap::display_row_target_in_rope(
+            tab.buffer(),
+            position.line,
+            position.column,
+            Some(preferred),
+            delta,
+            layout,
+        );
         let target = row_target
             .map(|target| position_to_char(tab.buffer(), Position::new(target.line, target.column)))
             .or_else(|| snap.then(|| vertical_boundary_target(tab, delta)).flatten())
@@ -98,7 +103,6 @@ pub(crate) fn line_boundary(tab: &EditorTab, to_end: bool, select: bool) -> Opti
 }
 pub(crate) fn visual_line_boundary(
     tab: &EditorTab,
-    lines: &[DisplayLine],
     wrap_columns: usize,
     show_wrap: bool,
     to_end: bool,
@@ -106,10 +110,10 @@ pub(crate) fn visual_line_boundary(
 ) -> Option<SelectionState> {
     map(tab, |_, selection| {
         let position = char_to_position(tab.buffer(), selection.cursor());
-        let text = lines.get(position.line).map(AsRef::as_ref).unwrap_or_default();
+        let text = crate::selection::line_display_text(tab.buffer(), position.line);
         let (segment_start, segment_end) = if show_wrap {
-            let segments = wrap::wrap_segments(text, wrap_columns);
-            let mut row = wrap::cursor_visual_row_in_line(text, position.column, wrap_columns);
+            let segments = wrap::wrap_segments(&text, wrap_columns);
+            let mut row = wrap::cursor_visual_row_in_line(&text, position.column, wrap_columns);
             // A cursor exactly on a wrap boundary counts as the end of the
             // previous row here, or End would walk down one row per press
             // and Home on that boundary would be a permanent no-op.
@@ -241,27 +245,21 @@ fn transform_with_goal(
     });
     SelectionTransform::with_columns(selection, goal, visible_column)
 }
-fn display_preferred(
-    tab: &EditorTab,
-    lines: &[DisplayLine],
-    layout: &wrap::WrapLayout,
-    position: Position,
-    goal: CursorGoal,
-) -> usize {
+fn display_preferred(tab: &EditorTab, layout: &wrap::WrapLayout, position: Position, goal: CursorGoal) -> usize {
     if !tab.selection_set().has_multiple() && tab.preferred_column().is_none() {
-        return current_visual_column(lines, layout, position);
+        return current_visual_column(tab.buffer(), layout, position);
     }
     match goal {
         CursorGoal::Column(column) => column,
         CursorGoal::LineEnd => display_line_char_len(tab, position.line),
     }
 }
-fn current_visual_column(lines: &[DisplayLine], layout: &wrap::WrapLayout, position: Position) -> usize {
-    let current_visual_row = wrap::visual_row_for_position(lines, position.line, position.column, layout)
+fn current_visual_column(buffer: &ropey::Rope, layout: &wrap::WrapLayout, position: Position) -> usize {
+    let current_visual_row = wrap::visual_row_for_position_in_rope(buffer, position.line, position.column, layout)
         .unwrap_or(layout.line_row_starts[position.line]);
     let row_in_line = current_visual_row.saturating_sub(layout.line_row_starts[position.line]);
-    let current_line = lines.get(position.line).map(AsRef::as_ref).unwrap_or_default();
-    let segments = wrap::wrap_segments(current_line, layout.wrap_columns);
+    let current_line = crate::selection::line_display_text(buffer, position.line);
+    let segments = wrap::wrap_segments(&current_line, layout.wrap_columns);
     let current_segment = segments
         .get(row_in_line)
         .or_else(|| segments.last())

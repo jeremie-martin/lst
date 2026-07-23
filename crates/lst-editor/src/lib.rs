@@ -270,7 +270,7 @@ impl EditorModel {
     pub fn take_active_buffer_delta(&mut self) -> BufferDelta {
         self.active_tab_mut().take_buffer_delta()
     }
-    fn ensure_active_wrap_layout(&mut self, wrap_columns: usize, lines: &[DisplayLine]) {
+    fn ensure_active_wrap_layout(&mut self, wrap_columns: usize) {
         let tab_id = self.active_tab_id();
         let revision = self.active_tab().revision();
         if self.wrap_layout_cache.as_ref().is_some_and(|cache| {
@@ -282,7 +282,7 @@ impl EditorModel {
             tab_id,
             revision,
             wrap_columns,
-            layout: wrap::build_wrap_layout(lines, wrap_columns, true),
+            layout: wrap::build_wrap_layout_for_rope(self.active_tab().buffer(), wrap_columns, true),
         });
     }
     pub fn tabs(&self) -> &[EditorTab] {
@@ -734,29 +734,20 @@ impl EditorModel {
             return self.apply_selection_state(motion::vertical(self.active_tab(), delta, select, snap));
         }
 
-        let lines = self.active_tab_lines();
-        self.ensure_active_wrap_layout(wrap_columns, lines.as_ref());
+        self.ensure_active_wrap_layout(wrap_columns);
         let state = {
             let layout = &self
                 .wrap_layout_cache
                 .as_ref()
                 .expect("wrap layout cache was just populated")
                 .layout;
-            motion::display_rows_with_layout(self.active_tab(), lines.as_ref(), layout, delta, select, snap)
+            motion::display_rows_with_layout(self.active_tab(), layout, delta, select, snap)
         };
         self.apply_selection_state(state)
     }
     pub fn move_visual_line_boundary(&mut self, to_end: bool, select: bool, wrap_columns: usize) {
         let show_wrap = self.show_wrap;
-        let lines = self.active_tab_lines();
-        let state = motion::visual_line_boundary(
-            self.active_tab(),
-            lines.as_ref(),
-            wrap_columns,
-            show_wrap,
-            to_end,
-            select,
-        );
+        let state = motion::visual_line_boundary(self.active_tab(), wrap_columns, show_wrap, to_end, select);
         self.move_with_reveal(state);
     }
     fn move_paged(&mut self, delta: isize, select: bool, wrap_columns: usize, snap: bool) {

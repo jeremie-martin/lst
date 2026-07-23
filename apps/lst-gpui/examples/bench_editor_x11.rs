@@ -2,7 +2,8 @@ use std::{
     collections::HashMap,
     env,
     error::Error,
-    fs, io,
+    fs,
+    io::{self, Write as _},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
@@ -34,12 +35,18 @@ const TYPING_CHARS: usize = 320;
 const SEARCH_QUERY: &str = "fn ";
 const MEDIUM_RUST_MODULES: usize = 64;
 const LARGE_RUST_MODULES: usize = 256;
+const HUGE_RUST_MODULES: usize = 768;
 const RUST_FUNCTIONS_PER_MODULE: usize = 8;
 const LARGE_PLAIN_LINES: usize = 18_000;
+const HUGE_PLAIN_LINES: usize = 500_000;
+const MIXED_CONCAT_BLOCKS: usize = 4_000;
+const HUGE_MIXED_CONCAT_BLOCKS: usize = 25_000;
 const BUTTON_LEFT: u8 = 1;
 const BUTTON_WHEEL_UP: u8 = 4;
 const BUTTON_WHEEL_DOWN: u8 = 5;
+const KEYSYM_ALT_L: u32 = 0xffe9;
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
+const KEYSYM_ENTER: u32 = 0xff0d;
 const KEYSYM_LEFT: u32 = 0xff51;
 const KEYSYM_RIGHT: u32 = 0xff53;
 const KEYSYM_SHIFT_L: u32 = 0xffe1;
@@ -93,12 +100,18 @@ fn print_usage() {
   cargo run --release -p lst-gpui --example bench_editor_x11 -- [options]
 
 Options:
-  --scenario <name>     all, large-paste, typing-medium, typing-large, typing-plain,
+  --scenario <name>     all, large-paste, mixed-paste, typing-medium, typing-large, typing-plain,
                         scroll-highlighted, scroll-plain, open-large, search-large,
                         multi-cursor-1k
                         (default: all)
+  --corpus <name>       override the scenario corpus: medium-rust, large-rust,
+                        huge-rust-50k, large-plain, huge-plain-500k, mixed-concat,
+                        huge-mixed-concat-500k
   --repetitions <n>     measured repetitions after priming (default: 7)
   --priming <n>         unreported warm-up runs (default: 1)
+  --position <name>     place typing, search, and scrolling at top, middle, or end
+                        (default: top)
+  --typing-no-wrap      toggle word wrap off before typing scenarios
   --keep-temp-on-failure
                         leave benchmark temp files in /tmp when a scenario fails"
     );
@@ -108,6 +121,7 @@ Options:
 enum Scenario {
     All,
     LargePaste,
+    MixedPaste,
     TypingMedium,
     TypingLarge,
     TypingPlain,
@@ -123,6 +137,7 @@ impl Scenario {
         match value {
             "all" => Ok(Self::All),
             "large-paste" => Ok(Self::LargePaste),
+            "mixed-paste" => Ok(Self::MixedPaste),
             "typing-medium" => Ok(Self::TypingMedium),
             "typing-large" => Ok(Self::TypingLarge),
             "typing-plain" => Ok(Self::TypingPlain),
@@ -139,6 +154,7 @@ impl Scenario {
         match self {
             Self::All => vec![
                 Self::LargePaste,
+                Self::MixedPaste,
                 Self::TypingMedium,
                 Self::TypingLarge,
                 Self::TypingPlain,
@@ -156,6 +172,7 @@ impl Scenario {
         match self {
             Self::All => "all",
             Self::LargePaste => "large-paste",
+            Self::MixedPaste => "mixed-paste",
             Self::TypingMedium => "typing-medium",
             Self::TypingLarge => "typing-large",
             Self::TypingPlain => "typing-plain",
@@ -171,6 +188,7 @@ impl Scenario {
         match self {
             Self::All => "primary_value",
             Self::LargePaste => "paste_complete_ms",
+            Self::MixedPaste => "paste_input_to_paint_ms",
             Self::TypingMedium | Self::TypingLarge | Self::TypingPlain => "typing_ms_per_char",
             Self::ScrollHighlighted | Self::ScrollPlain => "scroll_overrun_ms",
             Self::OpenLarge => "open_to_quiet_ms",
@@ -182,6 +200,7 @@ impl Scenario {
     fn corpus_kind(self) -> CorpusKind {
         match self {
             Self::TypingMedium => CorpusKind::MediumRust,
+            Self::MixedPaste => CorpusKind::MixedConcat,
             Self::TypingPlain => CorpusKind::LargePlain,
             Self::ScrollPlain => CorpusKind::LargePlain,
             Self::MultiCursor1k => CorpusKind::MultiCursor1k,
@@ -199,23 +218,40 @@ impl Scenario {
 enum CorpusKind {
     MediumRust,
     LargeRust,
+    HugeRust,
     LargePlain,
+    HugePlain,
+    MixedConcat,
+    HugeMixedConcat,
     MultiCursor1k,
 }
 
 impl CorpusKind {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "medium-rust" => Ok(Self::MediumRust),
+            "large-rust" => Ok(Self::LargeRust),
+            "huge-rust-50k" => Ok(Self::HugeRust),
+            "large-plain" => Ok(Self::LargePlain),
+            "huge-plain-500k" => Ok(Self::HugePlain),
+            "mixed-concat" => Ok(Self::MixedConcat),
+            "huge-mixed-concat-500k" => Ok(Self::HugeMixedConcat),
+            _ => Err(format!("unknown corpus: {value}")),
+        }
+    }
+
     fn extension(self) -> &'static str {
         match self {
-            Self::MediumRust | Self::LargeRust => "rs",
-            Self::LargePlain => "txt",
+            Self::MediumRust | Self::LargeRust | Self::HugeRust => "rs",
+            Self::LargePlain | Self::HugePlain | Self::MixedConcat | Self::HugeMixedConcat => "txt",
             Self::MultiCursor1k => "txt",
         }
     }
 
     fn highlight_label(self) -> &'static str {
         match self {
-            Self::MediumRust | Self::LargeRust => "rust-tree-sitter",
-            Self::LargePlain => "plain",
+            Self::MediumRust | Self::LargeRust | Self::HugeRust => "rust-tree-sitter",
+            Self::LargePlain | Self::HugePlain | Self::MixedConcat | Self::HugeMixedConcat => "plain",
             Self::MultiCursor1k => "plain",
         }
     }
@@ -224,8 +260,53 @@ impl CorpusKind {
         match self {
             Self::MediumRust => "generated-medium-rust",
             Self::LargeRust => "generated-large-rust",
+            Self::HugeRust => "generated-huge-rust-50k-lines",
             Self::LargePlain => "generated-large-plain",
+            Self::HugePlain => "generated-huge-plain-500k-lines",
+            Self::MixedConcat => "generated-mixed-language-concat",
+            Self::HugeMixedConcat => "generated-huge-mixed-language-concat-500k-lines",
             Self::MultiCursor1k => "generated-multi-cursor-1k",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocumentPosition {
+    Top,
+    Middle,
+    End,
+}
+
+impl DocumentPosition {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "top" => Ok(Self::Top),
+            "middle" => Ok(Self::Middle),
+            "end" => Ok(Self::End),
+            _ => Err(format!("unknown position: {value}")),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Middle => "middle",
+            Self::End => "end",
+        }
+    }
+
+    fn operation_line(self, line_count: usize) -> usize {
+        match self {
+            Self::Top => 0,
+            Self::Middle => line_count / 2,
+            Self::End => line_count.saturating_sub(2),
+        }
+    }
+
+    fn scroll_line(self, line_count: usize) -> usize {
+        match self {
+            Self::End => line_count.saturating_sub(2_000),
+            _ => self.operation_line(line_count),
         }
     }
 }
@@ -233,8 +314,11 @@ impl CorpusKind {
 #[derive(Debug)]
 struct Args {
     scenario: Scenario,
+    corpus: Option<CorpusKind>,
     repetitions: usize,
     priming_runs: usize,
+    position: DocumentPosition,
+    typing_no_wrap: bool,
     keep_temp_on_failure: bool,
 }
 
@@ -245,8 +329,11 @@ where
 {
     let mut args = Args {
         scenario: Scenario::All,
+        corpus: None,
         repetitions: DEFAULT_REPETITIONS,
         priming_runs: DEFAULT_PRIMING_RUNS,
+        position: DocumentPosition::Top,
+        typing_no_wrap: false,
         keep_temp_on_failure: false,
     };
     let mut raw_args = raw_args.into_iter().map(Into::into);
@@ -258,6 +345,10 @@ where
                     .next()
                     .ok_or_else(|| "--scenario requires a value".to_string())?;
                 args.scenario = Scenario::parse(&value)?;
+            }
+            "--corpus" => {
+                let value = raw_args.next().ok_or_else(|| "--corpus requires a value".to_string())?;
+                args.corpus = Some(CorpusKind::parse(&value)?);
             }
             "--repetitions" => {
                 let value = raw_args
@@ -273,6 +364,13 @@ where
                     .parse::<usize>()
                     .map_err(|_| format!("invalid --priming value: {value}"))?;
             }
+            "--position" => {
+                let value = raw_args
+                    .next()
+                    .ok_or_else(|| "--position requires a value".to_string())?;
+                args.position = DocumentPosition::parse(&value)?;
+            }
+            "--typing-no-wrap" => args.typing_no_wrap = true,
             "--keep-temp-on-failure" => args.keep_temp_on_failure = true,
             unknown => return Err(format!("unknown argument: {unknown}")),
         }
@@ -302,8 +400,47 @@ struct Bench {
 }
 
 impl Bench {
+    fn position_editor(
+        &self,
+        line: usize,
+        trace_path: &Path,
+        damage_id: damage::Damage,
+        window: xproto::Window,
+        child: &mut Child,
+    ) -> Result<(), Box<dyn Error>> {
+        let goto = self.keycodes.text_keycode('g').expect("benchmark resolves lowercase g");
+        inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, goto)?;
+        wait_for_trace_label(
+            trace_path,
+            "focus_applied",
+            "goto_line",
+            Duration::from_millis(TRACE_TIMEOUT_MS),
+        )?;
+        inject_text(&self.conn, self.root, &self.keycodes, &(line + 1).to_string())?;
+        let _ = wait_for_damage_quiet(
+            &self.conn,
+            damage_id,
+            window,
+            child,
+            Duration::from_millis(QUIET_MS),
+            Duration::from_millis(TRACE_TIMEOUT_MS),
+        )?;
+        inject_key_press(&self.conn, self.root, self.keycodes.enter)?;
+        inject_key_release(&self.conn, self.root, self.keycodes.enter)?;
+        self.conn.flush()?;
+        let _ = wait_for_damage_quiet(
+            &self.conn,
+            damage_id,
+            window,
+            child,
+            Duration::from_millis(QUIET_MS),
+            Duration::from_millis(TRACE_TIMEOUT_MS),
+        )?;
+        Ok(())
+    }
+
     fn run_scenario(&self, scenario: Scenario, args: &Args) -> Result<(), Box<dyn Error>> {
-        let corpus = Corpus::load(scenario.corpus_kind());
+        let corpus = Corpus::load(args.corpus.unwrap_or_else(|| scenario.corpus_kind()));
         let mut runs = Vec::with_capacity(args.repetitions);
         let mut expected_window = None;
         let total_runs = args.priming_runs + args.repetitions;
@@ -312,17 +449,24 @@ impl Bench {
             let measured = run_index >= args.priming_runs;
             let metrics = match scenario {
                 Scenario::All => unreachable!("all is expanded before execution"),
-                Scenario::LargePaste => {
-                    self.run_large_paste(scenario, &corpus, run_index, args.keep_temp_on_failure)?
+                Scenario::LargePaste | Scenario::MixedPaste => {
+                    self.run_large_paste(scenario, &corpus, run_index, args.position, args.keep_temp_on_failure)?
                 }
-                Scenario::TypingMedium | Scenario::TypingLarge | Scenario::TypingPlain => {
-                    self.run_typing(scenario, &corpus, run_index, args.keep_temp_on_failure)?
-                }
+                Scenario::TypingMedium | Scenario::TypingLarge | Scenario::TypingPlain => self.run_typing(
+                    scenario,
+                    &corpus,
+                    run_index,
+                    args.position,
+                    args.typing_no_wrap,
+                    args.keep_temp_on_failure,
+                )?,
                 Scenario::ScrollHighlighted | Scenario::ScrollPlain => {
-                    self.run_scroll(scenario, &corpus, run_index, args.keep_temp_on_failure)?
+                    self.run_scroll(scenario, &corpus, run_index, args.position, args.keep_temp_on_failure)?
                 }
                 Scenario::OpenLarge => self.run_open_large(scenario, &corpus, run_index, args.keep_temp_on_failure)?,
-                Scenario::SearchLarge => self.run_search(scenario, &corpus, run_index, args.keep_temp_on_failure)?,
+                Scenario::SearchLarge => {
+                    self.run_search(scenario, &corpus, run_index, args.position, args.keep_temp_on_failure)?
+                }
                 Scenario::MultiCursor1k => {
                     self.run_multi_cursor_1k(scenario, &corpus, run_index, args.keep_temp_on_failure)?
                 }
@@ -359,18 +503,40 @@ impl Bench {
         scenario: Scenario,
         corpus: &Corpus,
         run_index: usize,
+        position: DocumentPosition,
         keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
-        let source_path = temp_path(scenario, run_index, "source", "rs");
-        let target_path = temp_path(scenario, run_index, "target", "rs");
+        let mixed_paste = scenario == Scenario::MixedPaste;
+        let source_path = temp_path(scenario, run_index, "source", corpus.extension);
+        let target_path = temp_path(scenario, run_index, "target", if mixed_paste { "txt" } else { "rs" });
         let trace_path = temp_path(scenario, run_index, "trace", "log");
-        fs::write(&source_path, &corpus.text)?;
+        if !mixed_paste {
+            fs::write(&source_path, &corpus.text)?;
+        }
         fs::write(&target_path, "")?;
+        let post_paste_payload = mixed_paste.then(|| typing_payload(TYPING_CHARS));
+        let target_line = position.operation_line(corpus.lines);
+        let insertion_byte = line_start_byte(&corpus.text, target_line);
+        let expected_text = post_paste_payload.as_ref().map_or_else(
+            || corpus.text.clone(),
+            |payload| {
+                format!(
+                    "{}{payload}{}",
+                    &corpus.text[..insertion_byte],
+                    &corpus.text[insertion_byte..]
+                )
+            },
+        );
 
         let title = bench_title(scenario, run_index);
-        let files = [source_path.as_path(), target_path.as_path()];
+        let files = if mixed_paste {
+            vec![target_path.as_path()]
+        } else {
+            vec![source_path.as_path(), target_path.as_path()]
+        };
         let mut child = self.spawn_editor(&files, &title, Some(&trace_path))?;
         let pid = child.id();
+        let mut clipboard_owner = None;
 
         let result = (|| {
             let startup_started = Instant::now();
@@ -408,38 +574,45 @@ impl Bench {
             let before = proc_sample(pid)?;
             let trace_started = Instant::now();
 
-            let select_all_started = Instant::now();
-            let select_all_count = trace_line_count(&trace_path, "command_complete=select_all");
-            inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.a)?;
-            wait_for_trace_line_count(
-                &trace_path,
-                "command_complete=select_all",
-                select_all_count + 1,
-                Duration::from_millis(TRACE_TIMEOUT_MS),
-            )?;
             let damage_events = 0u64;
-            let select_all_ms = elapsed_ms(select_all_started);
+            let (select_all_ms, copy_clipboard_ms, tab_switch_ms) = if mixed_paste {
+                let seed_started = Instant::now();
+                clipboard_owner = Some(seed_clipboard(&self.conn, self.atoms.clipboard, &corpus.text)?);
+                (0.0, elapsed_ms(seed_started), 0.0)
+            } else {
+                let select_all_started = Instant::now();
+                let select_all_count = trace_line_count(&trace_path, "command_complete=select_all");
+                inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.a)?;
+                wait_for_trace_line_count(
+                    &trace_path,
+                    "command_complete=select_all",
+                    select_all_count + 1,
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
+                let select_all_ms = elapsed_ms(select_all_started);
 
-            let copy_started = Instant::now();
-            inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.c)?;
-            wait_for_clipboard_bytes(corpus.bytes, Duration::from_millis(CLIPBOARD_TIMEOUT_MS))?;
-            let copy_clipboard_ms = elapsed_ms(copy_started);
+                let copy_started = Instant::now();
+                inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.c)?;
+                wait_for_clipboard_bytes(corpus.bytes, Duration::from_millis(CLIPBOARD_TIMEOUT_MS))?;
+                let copy_clipboard_ms = elapsed_ms(copy_started);
 
-            let tab_started = Instant::now();
-            let tab_count = trace_line_count(&trace_path, "command_complete=next_tab");
-            inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.tab)?;
-            wait_for_trace_line_count(
-                &trace_path,
-                "command_complete=next_tab",
-                tab_count + 1,
-                Duration::from_millis(TRACE_TIMEOUT_MS),
-            )?;
-            let tab_switch_ms = elapsed_ms(tab_started);
+                let tab_started = Instant::now();
+                let tab_count = trace_line_count(&trace_path, "command_complete=next_tab");
+                inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.tab)?;
+                wait_for_trace_line_count(
+                    &trace_path,
+                    "command_complete=next_tab",
+                    tab_count + 1,
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
+                (select_all_ms, copy_clipboard_ms, elapsed_ms(tab_started))
+            };
 
             let paste_started = Instant::now();
             let paste_apply_count = read_editor_trace(&trace_path)?
                 .count("paste_clipboard_apply_ms")
                 .unwrap_or(0);
+            let paste_paint_count = read_editor_trace(&trace_path)?.count("viewport_paint_ms").unwrap_or(0);
             inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.v)?;
             wait_for_trace_count(
                 &trace_path,
@@ -449,6 +622,39 @@ impl Bench {
             )?;
             let paste_damage_events = 0u64;
             let paste_complete_ms = elapsed_ms(paste_started);
+            wait_for_trace_count(
+                &trace_path,
+                "viewport_paint_ms",
+                paste_paint_count + 1,
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let paste_input_to_paint_ms = elapsed_ms(paste_started);
+            let paste_trace = read_editor_trace(&trace_path)?;
+            if let Some(owner) = clipboard_owner.as_mut() {
+                terminate_child(owner)?;
+            }
+
+            let post_paste_typing_ms = if let Some(payload) = post_paste_payload.as_ref() {
+                self.position_editor(target_line, &trace_path, damage.damage(), window.id, &mut child)?;
+                reset_editor_trace(&trace_path)?;
+                let typing_started = Instant::now();
+                inject_text(&self.conn, self.root, &self.keycodes, payload)?;
+                wait_for_trace_count(
+                    &trace_path,
+                    "text_input_apply_ms",
+                    payload.chars().count(),
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
+                wait_for_trace_count(
+                    &trace_path,
+                    "viewport_paint_ms",
+                    1,
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
+                Some(elapsed_ms(typing_started))
+            } else {
+                None
+            };
 
             let save_count = read_editor_trace(&trace_path)?.count("save_complete").unwrap_or(0);
             let save_started = Instant::now();
@@ -461,7 +667,7 @@ impl Bench {
             )?;
             let save_complete_ms = elapsed_ms(save_started);
             let verify_started = Instant::now();
-            let final_stats = verify_file_text(&target_path, &corpus.text)?;
+            let final_stats = verify_file_text(&target_path, &expected_text)?;
             let save_verify_ms = elapsed_ms(verify_started);
 
             let trace_wall_ms = elapsed_ms(trace_started);
@@ -473,6 +679,14 @@ impl Bench {
             metrics.set("copy_clipboard_ms", copy_clipboard_ms);
             metrics.set("tab_switch_ms", tab_switch_ms);
             metrics.set("paste_complete_ms", paste_complete_ms);
+            metrics.set("paste_input_to_paint_ms", paste_input_to_paint_ms);
+            if let Some(post_paste_typing_ms) = post_paste_typing_ms {
+                metrics.set("post_paste_typing_ms", post_paste_typing_ms);
+                metrics.set(
+                    "post_paste_typing_ms_per_char",
+                    post_paste_typing_ms / TYPING_CHARS as f64,
+                );
+            }
             metrics.set("trace_wall_ms", trace_wall_ms);
             metrics.set("damage_events", damage_events as f64);
             metrics.set("paste_damage_events", paste_damage_events as f64);
@@ -481,28 +695,81 @@ impl Bench {
             metrics.set("final_file_bytes", final_stats.bytes as f64);
             metrics.set("final_file_lines", final_stats.lines as f64);
             add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
-            add_trace_last(&mut metrics, &trace, "paste_clipboard_apply_ms", "paste_apply_ms");
+            add_trace_last(&mut metrics, &paste_trace, "paste_clipboard_apply_ms", "paste_apply_ms");
             add_trace_last(
                 &mut metrics,
-                &trace,
+                &paste_trace,
                 "paste_clipboard_clipboard_read_ms",
                 "paste_clipboard_read_ms",
             );
-            add_trace_last(&mut metrics, &trace, "paste_clipboard_bytes", "paste_bytes");
-            add_trace_last(&mut metrics, &trace, "paste_clipboard_lines", "paste_lines");
-            add_trace_last(&mut metrics, &trace, "syntax_parse_update_ms", "syntax_parse_update_ms");
+            add_trace_last(&mut metrics, &paste_trace, "paste_clipboard_bytes", "paste_bytes");
+            add_trace_last(&mut metrics, &paste_trace, "paste_clipboard_lines", "paste_lines");
             add_trace_last(
                 &mut metrics,
-                &trace,
+                &paste_trace,
+                "syntax_parse_update_ms",
+                "syntax_parse_update_ms",
+            );
+            add_trace_last(
+                &mut metrics,
+                &paste_trace,
                 "syntax_structure_update_ms",
                 "syntax_structure_update_ms",
             );
             add_trace_last(
                 &mut metrics,
-                &trace,
+                &paste_trace,
                 "syntax_highlight_cache_ms",
                 "syntax_highlight_cache_ms",
             );
+            add_trace_last(
+                &mut metrics,
+                &paste_trace,
+                "plain_structure_update_ms",
+                "plain_structure_update_ms",
+            );
+            if mixed_paste {
+                add_trace_aggregate(
+                    &mut metrics,
+                    &trace,
+                    "text_input_apply_ms",
+                    "text_input_apply_ms_sum",
+                    "text_input_apply_ms_max",
+                    "text_input_apply_ms_count",
+                );
+                add_trace_aggregate_or_zero(
+                    &mut metrics,
+                    &trace,
+                    "plain_structure_update_ms",
+                    "plain_structure_update_ms_sum",
+                    "plain_structure_update_ms_max",
+                    "plain_structure_update_ms_count",
+                );
+                add_trace_aggregate_or_zero(
+                    &mut metrics,
+                    &trace,
+                    "viewport_rows_ms",
+                    "viewport_rows_ms_sum",
+                    "viewport_rows_ms_max",
+                    "viewport_rows_ms_count",
+                );
+                add_trace_aggregate_or_zero(
+                    &mut metrics,
+                    &trace,
+                    "structure_decorations_ms",
+                    "structure_decorations_ms_sum",
+                    "structure_decorations_ms_max",
+                    "structure_decorations_ms_count",
+                );
+                add_trace_aggregate_or_zero(
+                    &mut metrics,
+                    &trace,
+                    "viewport_visible_highlights_ms",
+                    "viewport_visible_highlights_ms_sum",
+                    "viewport_visible_highlights_ms_max",
+                    "viewport_visible_highlights_ms_count",
+                );
+            }
             add_trace_aggregate(
                 &mut metrics,
                 &trace,
@@ -530,11 +797,13 @@ impl Bench {
             Ok(metrics)
         })();
 
+        let clipboard_terminate_result = clipboard_owner.as_mut().map(terminate_child).transpose();
         let terminate_result = terminate_child(&mut child);
         cleanup_paths_if(
             [source_path, target_path, trace_path],
             result.is_ok() || !keep_temp_on_failure,
         );
+        clipboard_terminate_result?;
         terminate_result?;
         result
     }
@@ -544,6 +813,8 @@ impl Bench {
         scenario: Scenario,
         corpus: &Corpus,
         run_index: usize,
+        position: DocumentPosition,
+        no_wrap: bool,
         keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let file_path = temp_path(scenario, run_index, "file", corpus.extension);
@@ -551,7 +822,13 @@ impl Bench {
         fs::write(&file_path, &corpus.text)?;
 
         let payload = typing_payload(TYPING_CHARS);
-        let expected_text = format!("{payload}{}", corpus.text);
+        let target_line = position.operation_line(corpus.lines);
+        let insertion_byte = line_start_byte(&corpus.text, target_line);
+        let expected_text = format!(
+            "{}{payload}{}",
+            &corpus.text[..insertion_byte],
+            &corpus.text[insertion_byte..]
+        );
         let title = bench_title(scenario, run_index);
         let files = [file_path.as_path()];
         let mut child = self.spawn_editor(&files, &title, Some(&trace_path))?;
@@ -581,6 +858,19 @@ impl Bench {
             let startup_ms = elapsed_ms(startup_started);
 
             focus_window_for_keyboard(&self.conn, &window)?;
+            if no_wrap {
+                inject_modifier_chord(&self.conn, self.root, self.keycodes.alt_l, self.keycodes.z)?;
+                let _ = wait_for_damage_quiet(
+                    &self.conn,
+                    damage.damage(),
+                    window.id,
+                    &mut child,
+                    Duration::from_millis(QUIET_MS),
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
+            }
+            self.position_editor(target_line, &trace_path, damage.damage(), window.id, &mut child)?;
+            reset_editor_trace(&trace_path)?;
 
             let before = proc_sample(pid)?;
             let trace_started = Instant::now();
@@ -683,6 +973,22 @@ impl Bench {
                 "text_input_apply_ms_max",
                 "text_input_apply_ms_count",
             );
+            add_trace_aggregate_or_zero(
+                &mut metrics,
+                &trace,
+                "syntax_parse_update_ms",
+                "syntax_parse_update_ms_sum",
+                "syntax_parse_update_ms_max",
+                "syntax_parse_update_ms_count",
+            );
+            add_trace_aggregate_or_zero(
+                &mut metrics,
+                &trace,
+                "syntax_structure_update_ms",
+                "syntax_structure_update_ms_sum",
+                "syntax_structure_update_ms_max",
+                "syntax_structure_update_ms_count",
+            );
             add_trace_aggregate(
                 &mut metrics,
                 &trace,
@@ -747,6 +1053,7 @@ impl Bench {
         scenario: Scenario,
         corpus: &Corpus,
         run_index: usize,
+        position: DocumentPosition,
         keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let file_path = temp_path(scenario, run_index, "file", corpus.extension);
@@ -782,6 +1089,13 @@ impl Bench {
             let startup_ms = elapsed_ms(startup_started);
 
             focus_window(&self.conn, self.root, &window)?;
+            self.position_editor(
+                position.scroll_line(corpus.lines),
+                &trace_path,
+                damage.damage(),
+                window.id,
+                &mut child,
+            )?;
             inject_wheel_burst(&self.conn, self.root, BUTTON_WHEEL_DOWN, 20, Duration::from_millis(150))?;
             let _ = wait_for_damage_quiet(
                 &self.conn,
@@ -791,6 +1105,7 @@ impl Bench {
                 Duration::from_millis(QUIET_MS),
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
+            reset_editor_trace(&trace_path)?;
 
             let before = proc_sample(pid)?;
             let trace_started = Instant::now();
@@ -916,6 +1231,7 @@ impl Bench {
         scenario: Scenario,
         corpus: &Corpus,
         run_index: usize,
+        position: DocumentPosition,
         keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let file_path = temp_path(scenario, run_index, "file", corpus.extension);
@@ -951,6 +1267,13 @@ impl Bench {
             let startup_ms = elapsed_ms(startup_started);
 
             focus_window(&self.conn, self.root, &window)?;
+            self.position_editor(
+                position.operation_line(corpus.lines),
+                &trace_path,
+                damage.damage(),
+                window.id,
+                &mut child,
+            )?;
             let _ = wait_for_damage_quiet(
                 &self.conn,
                 damage.damage(),
@@ -959,6 +1282,7 @@ impl Bench {
                 Duration::from_millis(QUIET_MS),
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
+            reset_editor_trace(&trace_path)?;
             let before = proc_sample(pid)?;
             let trace_started = Instant::now();
             inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.f)?;
@@ -1186,7 +1510,11 @@ impl Corpus {
         let text = match kind {
             CorpusKind::MediumRust => generated_rust_corpus(MEDIUM_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
             CorpusKind::LargeRust => generated_rust_corpus(LARGE_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
+            CorpusKind::HugeRust => generated_rust_corpus(HUGE_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
             CorpusKind::LargePlain => generated_plain_corpus(LARGE_PLAIN_LINES),
+            CorpusKind::HugePlain => generated_plain_corpus(HUGE_PLAIN_LINES),
+            CorpusKind::MixedConcat => generated_mixed_concat_corpus(MIXED_CONCAT_BLOCKS),
+            CorpusKind::HugeMixedConcat => generated_mixed_concat_corpus(HUGE_MIXED_CONCAT_BLOCKS),
             CorpusKind::MultiCursor1k => generated_multi_cursor_corpus(),
         };
         Self {
@@ -1244,6 +1572,40 @@ fn generated_plain_corpus(lines: usize) -> String {
             line_ix % 31,
             line_ix % 127
         ));
+    }
+    text
+}
+
+fn generated_mixed_concat_corpus(blocks: usize) -> String {
+    let mut text = String::new();
+    text.push_str("Deterministic concat-style mixed-language benchmark corpus.\n");
+    for block in 0..blocks {
+        text.push_str(&format!("\n===== src/module_{block:05}.rs =====\n"));
+        text.push_str(&format!("pub fn compute_{block:05}(items: &[usize]) -> usize {{\n"));
+        text.push_str("    items.iter().map(|item| item.saturating_mul(2)).sum()\n");
+        text.push_str("}\n");
+        text.push_str(&format!(
+            "const ROW_{block:05}: (usize, [usize; 3]) = ({block}, [1, 2, 3]);\n"
+        ));
+
+        text.push_str(&format!("\n===== web/component_{block:05}.js =====\n"));
+        text.push_str(&format!("export function component{block:05}(value) {{\n"));
+        text.push_str("  return { value, nested: [value, { active: true }], render: () => `<b>${value}</b>` };\n");
+        text.push_str("}\n");
+
+        text.push_str(&format!("\n===== data/record_{block:05}.json =====\n"));
+        text.push_str(&format!(
+            "{{\"id\":{block},\"tags\":[\"alpha\",\"beta\"],\"meta\":{{\"enabled\":true,\"bounds\":[0,1]}}}}\n"
+        ));
+
+        text.push_str(&format!("\n===== scripts/task_{block:05}.py =====\n"));
+        text.push_str(&format!("def task_{block:05}(values):\n"));
+        text.push_str("    return {\"values\": [value * 2 for value in values], \"ok\": bool(values)}\n");
+
+        text.push_str(&format!("\n===== templates/card_{block:05}.html =====\n"));
+        text.push_str(
+            "<article class=\"card\"><header>{title}</header><section><span>[value]</span></section></article>\n",
+        );
     }
     text
 }
@@ -1308,6 +1670,8 @@ fn emit_summary(
     println!("window_client_px={}x{}", window_size.0, window_size.1);
     println!("priming_runs={}", args.priming_runs);
     println!("repetitions={}", args.repetitions);
+    println!("position={}", args.position.label());
+    println!("typing_word_wrap={}", if args.typing_no_wrap { "off" } else { "on" });
     println!("quiet_ms={QUIET_MS}");
     println!("primary_metric={primary_metric}");
     println!("primary_value={:.3}", primary_value);
@@ -1355,6 +1719,48 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "final_file_bytes",
             "final_file_lines",
         ],
+        Scenario::MixedPaste => &[
+            "paste_input_to_paint_ms",
+            "paste_complete_ms",
+            "select_all_ms",
+            "copy_clipboard_ms",
+            "tab_switch_ms",
+            "paste_apply_ms",
+            "paste_clipboard_read_ms",
+            "paste_bytes",
+            "paste_lines",
+            "plain_structure_update_ms",
+            "post_paste_typing_ms",
+            "post_paste_typing_ms_per_char",
+            "text_input_apply_ms_sum",
+            "text_input_apply_ms_max",
+            "text_input_apply_ms_count",
+            "plain_structure_update_ms_sum",
+            "plain_structure_update_ms_max",
+            "plain_structure_update_ms_count",
+            "viewport_rows_ms_sum",
+            "viewport_rows_ms_max",
+            "structure_decorations_ms_sum",
+            "structure_decorations_ms_max",
+            "viewport_visible_highlights_ms_sum",
+            "viewport_visible_highlights_ms_max",
+            "trace_wall_ms",
+            "save_complete_ms",
+            "save_verify_ms",
+            "viewport_prepare_ms_sum",
+            "viewport_prepare_ms_max",
+            "wrap_layout_patch_ms_sum",
+            "wrap_layout_patch_ms_max",
+            "wrap_layout_patch_ms_count",
+            "viewport_paint_ms_sum",
+            "viewport_paint_ms_max",
+            "user_cpu_ms",
+            "sys_cpu_ms",
+            "cpu_ms",
+            "peak_rss_mb",
+            "final_file_bytes",
+            "final_file_lines",
+        ],
         Scenario::TypingMedium | Scenario::TypingLarge | Scenario::TypingPlain => &[
             "typing_ms_per_char",
             "typing_send_ms",
@@ -1364,6 +1770,12 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "text_input_apply_ms_sum",
             "text_input_apply_ms_max",
             "text_input_apply_ms_count",
+            "syntax_parse_update_ms_sum",
+            "syntax_parse_update_ms_max",
+            "syntax_parse_update_ms_count",
+            "syntax_structure_update_ms_sum",
+            "syntax_structure_update_ms_max",
+            "syntax_structure_update_ms_count",
             "trace_wall_ms",
             "damage_events",
             "save_complete_ms",
@@ -1523,6 +1935,19 @@ fn add_trace_aggregate(
     }
 }
 
+fn add_trace_aggregate_or_zero(
+    metrics: &mut RunMetrics,
+    trace: &EditorTrace,
+    from: &str,
+    sum_name: &'static str,
+    max_name: &'static str,
+    count_name: &'static str,
+) {
+    metrics.set(sum_name, trace.sum(from).unwrap_or(0.0));
+    metrics.set(max_name, trace.max(from).unwrap_or(0.0));
+    metrics.set(count_name, trace.count(from).unwrap_or(0) as f64);
+}
+
 fn add_viewport_phase_aggregates(metrics: &mut RunMetrics, trace: &EditorTrace) {
     add_trace_aggregate(
         metrics,
@@ -1606,6 +2031,11 @@ fn read_editor_trace(path: &Path) -> Result<EditorTrace, Box<dyn Error>> {
         Err(error) => return Err(error.into()),
     };
     Ok(EditorTrace::parse(&contents))
+}
+
+fn reset_editor_trace(path: &Path) -> Result<(), Box<dyn Error>> {
+    fs::write(path, "")?;
+    Ok(())
 }
 
 fn wait_for_trace_label(path: &Path, label: &str, expected: &str, timeout: Duration) -> Result<(), Box<dyn Error>> {
@@ -1898,6 +2328,20 @@ fn inject_shift_chord(
     Ok(())
 }
 
+fn inject_modifier_chord(
+    conn: &RustConnection,
+    root: xproto::Window,
+    modifier_keycode: xproto::Keycode,
+    keycode: xproto::Keycode,
+) -> Result<(), Box<dyn Error>> {
+    inject_key_press(conn, root, modifier_keycode)?;
+    inject_key_press(conn, root, keycode)?;
+    inject_key_release(conn, root, keycode)?;
+    inject_key_release(conn, root, modifier_keycode)?;
+    conn.flush()?;
+    Ok(())
+}
+
 fn inject_ctrl_shift_chord(
     conn: &RustConnection,
     root: xproto::Window,
@@ -1922,11 +2366,17 @@ fn inject_text(
     text: &str,
 ) -> Result<(), Box<dyn Error>> {
     for ch in text.chars() {
-        let keycode = keycodes
-            .text_keycode(ch)
+        let (keycode, shift) = keycodes
+            .text_key(ch)
             .ok_or_else(|| io::Error::other(format!("unsupported benchmark input char: {ch:?}")))?;
+        if shift {
+            inject_key_press(conn, root, keycodes.shift_l)?;
+        }
         inject_key_press(conn, root, keycode)?;
         inject_key_release(conn, root, keycode)?;
+        if shift {
+            inject_key_release(conn, root, keycodes.shift_l)?;
+        }
     }
     conn.flush()?;
     Ok(())
@@ -2035,6 +2485,47 @@ fn verify_file_text(path: &Path, expected_text: &str) -> Result<FileStats, Box<d
         bytes: current.len() as u64,
         lines: current.lines().count(),
     })
+}
+
+fn seed_clipboard(conn: &RustConnection, clipboard: xproto::Atom, text: &str) -> Result<Child, Box<dyn Error>> {
+    let previous_owner = conn.get_selection_owner(clipboard)?.reply()?.owner;
+    let mut child = Command::new("xclip")
+        .args(["-selection", "clipboard", "-in", "-quiet"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = terminate_child(&mut child);
+        return Err(io::Error::other("xclip stdin was not piped").into());
+    };
+    let write_result = stdin.write_all(text.as_bytes());
+    drop(stdin);
+    if let Err(error) = write_result {
+        let _ = terminate_child(&mut child);
+        return Err(error.into());
+    }
+    let deadline = Instant::now() + Duration::from_millis(CLIPBOARD_TIMEOUT_MS);
+    let ready = (|| -> Result<(), Box<dyn Error>> {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Err(io::Error::other(format!("xclip exited with {status} before owning the clipboard")).into());
+            }
+            let owner = conn.get_selection_owner(clipboard)?.reply()?.owner;
+            if owner != NONE && owner != previous_owner {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::other("timed out waiting for xclip to own the clipboard").into());
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    })();
+    if let Err(error) = ready {
+        let _ = terminate_child(&mut child);
+        return Err(error);
+    }
+    Ok(child)
 }
 
 fn wait_for_clipboard_bytes(expected_bytes: u64, timeout: Duration) -> Result<(), Box<dyn Error>> {
@@ -2258,6 +2749,15 @@ fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
+fn line_start_byte(text: &str, line: usize) -> usize {
+    if line == 0 {
+        return 0;
+    }
+    text.match_indices('\n')
+        .nth(line - 1)
+        .map_or(text.len(), |(byte, _)| byte + 1)
+}
+
 fn typing_payload(chars: usize) -> String {
     let seed = "the quick brown fox jumps over a lazy dog ";
     seed.chars().cycle().take(chars).collect()
@@ -2328,6 +2828,7 @@ struct WindowInfo {
 }
 
 struct Atoms {
+    clipboard: xproto::Atom,
     net_wm_name: xproto::Atom,
     net_wm_pid: xproto::Atom,
     utf8_string: xproto::Atom,
@@ -2336,6 +2837,7 @@ struct Atoms {
 impl Atoms {
     fn intern(conn: &RustConnection) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
+            clipboard: intern_atom(conn, b"CLIPBOARD")?,
             net_wm_name: intern_atom(conn, b"_NET_WM_NAME")?,
             net_wm_pid: intern_atom(conn, b"_NET_WM_PID")?,
             utf8_string: intern_atom(conn, b"UTF8_STRING")?,
@@ -2344,7 +2846,9 @@ impl Atoms {
 }
 
 struct Keycodes {
+    alt_l: xproto::Keycode,
     control_l: xproto::Keycode,
+    enter: xproto::Keycode,
     left: xproto::Keycode,
     right: xproto::Keycode,
     shift_l: xproto::Keycode,
@@ -2355,8 +2859,10 @@ struct Keycodes {
     s: xproto::Keycode,
     tab: xproto::Keycode,
     v: xproto::Keycode,
+    z: xproto::Keycode,
     space: xproto::Keycode,
     lower: HashMap<char, xproto::Keycode>,
+    digits: HashMap<char, (xproto::Keycode, bool)>,
 }
 
 impl Keycodes {
@@ -2373,9 +2879,19 @@ impl Keycodes {
                 find_keycode(&reply, setup.min_keycode, u32::from(byte), active_group)?,
             );
         }
+        let mut digits = HashMap::new();
+        for byte in b'0'..=b'9' {
+            let ch = char::from(byte);
+            digits.insert(
+                ch,
+                find_keycode_and_shift(&reply, setup.min_keycode, u32::from(byte), active_group)?,
+            );
+        }
 
         Ok(Self {
+            alt_l: find_keycode(&reply, setup.min_keycode, KEYSYM_ALT_L, active_group)?,
             control_l: find_keycode(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
+            enter: find_keycode(&reply, setup.min_keycode, KEYSYM_ENTER, active_group)?,
             left: find_keycode(&reply, setup.min_keycode, KEYSYM_LEFT, active_group)?,
             right: find_keycode(&reply, setup.min_keycode, KEYSYM_RIGHT, active_group)?,
             shift_l: find_keycode(&reply, setup.min_keycode, KEYSYM_SHIFT_L, active_group)?,
@@ -2386,15 +2902,22 @@ impl Keycodes {
             s: *lower.get(&'s').expect("resolved lowercase s"),
             tab: find_keycode(&reply, setup.min_keycode, KEYSYM_TAB, active_group)?,
             v: *lower.get(&'v').expect("resolved lowercase v"),
+            z: *lower.get(&'z').expect("resolved lowercase z"),
             space: find_keycode(&reply, setup.min_keycode, KEYSYM_SPACE, active_group)?,
             lower,
+            digits,
         })
     }
 
     fn text_keycode(&self, ch: char) -> Option<xproto::Keycode> {
+        self.text_key(ch).map(|(keycode, _)| keycode)
+    }
+
+    fn text_key(&self, ch: char) -> Option<(xproto::Keycode, bool)> {
         match ch {
-            ' ' => Some(self.space),
-            'a'..='z' => self.lower.get(&ch).copied(),
+            ' ' => Some((self.space, false)),
+            'a'..='z' => self.lower.get(&ch).copied().map(|keycode| (keycode, false)),
+            '0'..='9' => self.digits.get(&ch).copied(),
             _ => None,
         }
     }
@@ -2435,6 +2958,32 @@ fn find_keycode(
     Err(io::Error::other(format!("could not resolve X11 keysym 0x{keysym:x}")).into())
 }
 
+fn find_keycode_and_shift(
+    reply: &xproto::GetKeyboardMappingReply,
+    min_keycode: xproto::Keycode,
+    keysym: u32,
+    active_group: usize,
+) -> Result<(xproto::Keycode, bool), Box<dyn Error>> {
+    let keysyms_per_keycode = reply.keysyms_per_keycode as usize;
+    let active_start = active_group.saturating_mul(2);
+    for start in [active_start, 0] {
+        for (index, group) in reply.keysyms.chunks(keysyms_per_keycode).enumerate() {
+            if group.get(start) == Some(&keysym) {
+                return Ok((min_keycode + index as u8, false));
+            }
+            if group.get(start + 1) == Some(&keysym) {
+                return Ok((min_keycode + index as u8, true));
+            }
+        }
+    }
+    for (index, group) in reply.keysyms.chunks(keysyms_per_keycode).enumerate() {
+        if let Some(level) = group.iter().position(|candidate| *candidate == keysym) {
+            return Ok((min_keycode + index as u8, level % 2 == 1));
+        }
+    }
+    Err(io::Error::other(format!("could not resolve X11 keysym 0x{keysym:x}")).into())
+}
+
 fn keysyms_match_group(group: &[u32], keysym: u32, start: usize) -> bool {
     let Some(window) = group.get(start..start.saturating_add(2)) else {
         return false;
@@ -2452,12 +3001,27 @@ mod tests {
 
     #[test]
     fn parses_targeted_scenario_and_counts() {
-        let args = parse_args_from(["--scenario", "typing-large", "--repetitions", "3", "--priming", "0"])
-            .expect("args should parse");
+        let args = parse_args_from([
+            "--scenario",
+            "typing-large",
+            "--corpus",
+            "huge-rust-50k",
+            "--repetitions",
+            "3",
+            "--priming",
+            "0",
+            "--position",
+            "end",
+            "--typing-no-wrap",
+        ])
+        .expect("args should parse");
 
         assert_eq!(args.scenario, Scenario::TypingLarge);
+        assert_eq!(args.corpus, Some(CorpusKind::HugeRust));
         assert_eq!(args.repetitions, 3);
         assert_eq!(args.priming_runs, 0);
+        assert_eq!(args.position, DocumentPosition::End);
+        assert!(args.typing_no_wrap);
     }
 
     #[test]
@@ -2466,6 +3030,7 @@ mod tests {
             Scenario::All.measured_cases(),
             vec![
                 Scenario::LargePaste,
+                Scenario::MixedPaste,
                 Scenario::TypingMedium,
                 Scenario::TypingLarge,
                 Scenario::TypingPlain,
@@ -2486,6 +3051,7 @@ mod tests {
         }
 
         assert_eq!(primary_metrics["large-paste"], "paste_complete_ms");
+        assert_eq!(primary_metrics["mixed-paste"], "paste_input_to_paint_ms");
         assert_eq!(primary_metrics["typing-medium"], "typing_ms_per_char");
         assert_eq!(primary_metrics["typing-large"], "typing_ms_per_char");
         assert_eq!(primary_metrics["typing-plain"], "typing_ms_per_char");
@@ -2510,10 +3076,35 @@ mod tests {
         assert!(large.lines > medium.lines);
         assert!(large.text.contains("fn "));
 
+        let huge_rust = Corpus::load(CorpusKind::HugeRust);
+        assert_eq!(huge_rust.label, "generated-huge-rust-50k-lines");
+        assert!(huge_rust.lines >= 50_000);
+        assert!(huge_rust.bytes > large.bytes);
+
         let plain = Corpus::load(CorpusKind::LargePlain);
         assert_eq!(plain.label, "generated-large-plain");
         assert_eq!(plain.extension, "txt");
         assert!(!plain.text.contains("fn "));
+
+        let huge_plain = Corpus::load(CorpusKind::HugePlain);
+        assert_eq!(huge_plain.label, "generated-huge-plain-500k-lines");
+        assert_eq!(huge_plain.lines, HUGE_PLAIN_LINES + 1);
+        assert!(huge_plain.bytes > huge_rust.bytes);
+
+        let mixed = Corpus::load(CorpusKind::MixedConcat);
+        assert_eq!(mixed.label, "generated-mixed-language-concat");
+        assert_eq!(mixed.extension, "txt");
+        assert!(mixed.lines >= 50_000);
+        assert!(mixed.text.contains("===== src/module_00000.rs ====="));
+        assert!(mixed.text.contains("===== web/component_00000.js ====="));
+        assert!(mixed.text.contains("===== data/record_00000.json ====="));
+        assert!(mixed.text.contains("===== scripts/task_00000.py ====="));
+        assert!(mixed.text.contains("===== templates/card_00000.html ====="));
+
+        let huge_mixed = Corpus::load(CorpusKind::HugeMixedConcat);
+        assert_eq!(huge_mixed.label, "generated-huge-mixed-language-concat-500k-lines");
+        assert!(huge_mixed.lines >= 500_000);
+        assert!(huge_mixed.bytes > mixed.bytes);
 
         let multi_cursor = Corpus::load(CorpusKind::MultiCursor1k);
         assert_eq!(multi_cursor.label, "generated-multi-cursor-1k");
@@ -2560,5 +3151,14 @@ mod tests {
         assert_eq!(metrics.get("sum").unwrap(), 1.0);
         assert_eq!(metrics.get("max").unwrap(), 0.75);
         assert_eq!(metrics.get("count").unwrap(), 2.0);
+    }
+
+    #[test]
+    fn line_start_byte_clamps_and_finds_requested_line() {
+        let text = "alpha\nbeta\ngamma";
+        assert_eq!(line_start_byte(text, 0), 0);
+        assert_eq!(line_start_byte(text, 1), 6);
+        assert_eq!(line_start_byte(text, 2), 11);
+        assert_eq!(line_start_byte(text, 99), text.len());
     }
 }

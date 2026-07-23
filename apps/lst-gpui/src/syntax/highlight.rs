@@ -24,11 +24,174 @@ pub(crate) struct StructuralToken {
     pub(crate) pair: Option<usize>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct StructuralSnapshot {
     pub(crate) revision: u64,
     pub(crate) pairs: Vec<StructuralPair>,
     pub(crate) tokens: Vec<StructuralToken>,
+    unmatched_count: usize,
+    offsets: StructuralOffsets,
+}
+
+#[derive(Clone, Debug, Default)]
+struct StructuralOffsets {
+    /// Fenwick tree over a difference array. A point update at token `i`
+    /// shifts every token in the suffix `i..`, while a prefix query resolves
+    /// one token's current position. It stays unallocated until an edit
+    /// actually shifts existing tokens.
+    suffix_shifts: Vec<isize>,
+}
+
+impl StructuralOffsets {
+    fn shift_suffix(&mut self, token_count: usize, first: usize, delta: isize) {
+        if first >= token_count || delta == 0 {
+            return;
+        }
+        if self.suffix_shifts.is_empty() {
+            self.suffix_shifts.resize(token_count + 1, 0);
+        }
+        debug_assert_eq!(self.suffix_shifts.len(), token_count + 1);
+        let mut index = first + 1;
+        while index <= token_count {
+            self.suffix_shifts[index] = self.suffix_shifts[index].saturating_add(delta);
+            index += index & index.wrapping_neg();
+        }
+    }
+
+    fn shift_at(&self, token_index: usize) -> isize {
+        if self.suffix_shifts.is_empty() {
+            return 0;
+        }
+        let mut index = token_index + 1;
+        let mut shift = 0isize;
+        while index > 0 {
+            shift = shift.saturating_add(self.suffix_shifts[index]);
+            index &= index - 1;
+        }
+        shift
+    }
+}
+
+impl StructuralSnapshot {
+    fn new(revision: u64, pairs: Vec<StructuralPair>, tokens: Vec<StructuralToken>) -> Self {
+        let unmatched_count = tokens.iter().filter(|token| !token.matched).count();
+        Self {
+            revision,
+            pairs,
+            tokens,
+            unmatched_count,
+            offsets: StructuralOffsets::default(),
+        }
+    }
+
+    pub(crate) fn unmatched_count(&self) -> usize {
+        self.unmatched_count
+    }
+
+    pub(crate) fn token_position(&self, index: usize) -> usize {
+        shifted_position(self.tokens[index].at, self.offsets.shift_at(index))
+    }
+
+    pub(crate) fn token_index_at_or_after(&self, at: usize) -> usize {
+        let mut start = 0usize;
+        let mut end = self.tokens.len();
+        while start < end {
+            let middle = start + (end - start) / 2;
+            if self.token_position(middle) < at {
+                start = middle + 1;
+            } else {
+                end = middle;
+            }
+        }
+        start
+    }
+
+    pub(crate) fn token_index_at(&self, at: usize) -> Option<usize> {
+        let index = self.token_index_at_or_after(at);
+        (index < self.tokens.len() && self.token_position(index) == at).then_some(index)
+    }
+
+    pub(crate) fn pair(&self, index: usize) -> StructuralPair {
+        let mut pair = self.pairs[index];
+        let open_token = self
+            .tokens
+            .binary_search_by_key(&pair.open, |token| token.at)
+            .expect("every structural pair has an opening token");
+        let close_token = self
+            .tokens
+            .binary_search_by_key(&pair.close, |token| token.at)
+            .expect("every structural pair has a closing token");
+        pair.open = self.token_position(open_token);
+        pair.close = self.token_position(close_token);
+        pair
+    }
+
+    pub(crate) fn pair_index_at_or_after_open(&self, at: usize) -> usize {
+        self.pair_partition_point(|open| open < at)
+    }
+
+    pub(crate) fn pair_index_after_open(&self, at: usize) -> usize {
+        self.pair_partition_point(|open| open <= at)
+    }
+
+    fn pair_partition_point(&self, predicate: impl Fn(usize) -> bool) -> usize {
+        let mut start = 0usize;
+        let mut end = self.pairs.len();
+        while start < end {
+            let middle = start + (end - start) / 2;
+            if predicate(self.pair(middle).open) {
+                start = middle + 1;
+            } else {
+                end = middle;
+            }
+        }
+        start
+    }
+
+    fn shift_tokens_from(&mut self, first: usize, delta: isize) {
+        self.offsets.shift_suffix(self.tokens.len(), first, delta);
+    }
+}
+
+impl PartialEq for StructuralSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.revision == other.revision
+            && self.pairs.len() == other.pairs.len()
+            && self.tokens.len() == other.tokens.len()
+            && self.unmatched_count == other.unmatched_count
+            && self
+                .pairs
+                .iter()
+                .zip(&other.pairs)
+                .enumerate()
+                .all(|(index, (left, right))| {
+                    left.depth == right.depth
+                        && left.parent == right.parent
+                        && self.pair(index).open == other.pair(index).open
+                        && self.pair(index).close == other.pair(index).close
+                })
+            && self
+                .tokens
+                .iter()
+                .zip(&other.tokens)
+                .enumerate()
+                .all(|(index, (left, right))| {
+                    left.depth == right.depth
+                        && left.matched == right.matched
+                        && left.pair == right.pair
+                        && self.token_position(index) == other.token_position(index)
+                })
+    }
+}
+
+impl Eq for StructuralSnapshot {}
+
+fn shifted_position(position: usize, shift: isize) -> usize {
+    if shift >= 0 {
+        position.saturating_add(shift as usize)
+    } else {
+        position.saturating_sub(shift.unsigned_abs())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +247,7 @@ pub(crate) struct TabSyntaxState {
     /// shares the internal node tree), so storing it is cheap.
     parsed_buffer: Rope,
     structure: Rc<RefCell<StructuralSnapshot>>,
+    root_injections: Vec<InjectionRegion>,
     structure_remapped_last_update: bool,
 }
 
@@ -98,7 +262,9 @@ impl TabSyntaxState {
             diagnostics::record_ms("syntax_parse_initial_ms", started.elapsed().as_secs_f64() * 1000.0);
         }
         let structure_started = diagnostics::trace_enabled().then(Instant::now);
-        let structure = structural_snapshot(language, &tree, buffer, revision);
+        let root_injections = collect_rope_injection_matches(&tree, buffer, grammar, 0..buffer.len_bytes());
+        let structure = structural_snapshot(language, &tree, buffer, revision, &root_injections);
+        let root_injections = injection_regions(buffer, &root_injections);
         if let Some(started) = structure_started {
             diagnostics::record_ms("syntax_structure_initial_ms", started.elapsed().as_secs_f64() * 1000.0);
         }
@@ -109,6 +275,7 @@ impl TabSyntaxState {
             tree,
             parsed_buffer: buffer.clone(),
             structure: Rc::new(RefCell::new(structure)),
+            root_injections,
             structure_remapped_last_update: false,
         })
     }
@@ -193,22 +360,62 @@ impl TabSyntaxState {
             }
             BufferDelta::Unchanged | BufferDelta::FullReplace => false,
         };
+        let mut verified_root_injections = None;
         let structure_remapped = parse_succeeded
             && !edits_touch_old_injection
             && !edits_touch_new_injection
-            && matches!(&delta, BufferDelta::Edits(edits) if can_remap_structural_snapshot(
-                &self.parsed_buffer,
-                new_buffer,
-                edits,
-                &changed_byte_ranges,
-            ));
+            && matches!(&delta, BufferDelta::Edits(edits) if {
+                if can_remap_structural_snapshot(
+                    &self.parsed_buffer,
+                    new_buffer,
+                    edits,
+                    &changed_byte_ranges,
+                ) {
+                    true
+                } else if edits.iter().all(|edit| {
+                    !self
+                        .parsed_buffer
+                        .slice(edit.range.start.min(self.parsed_buffer.len_chars())
+                            ..edit.range.end.min(self.parsed_buffer.len_chars()))
+                        .chars()
+                        .any(is_structural_candidate)
+                        && !edit.replacement.chars().any(is_structural_candidate)
+                }) {
+                    let mut regions = self.root_injections.clone();
+                    remap_injection_regions(&mut regions, edits);
+                    let safe = injection_regions_were_reused(&regions, new_buffer, &self.tree)
+                        && can_remap_structure_after_parse_change(
+                        &self.structure.borrow(),
+                        &regions,
+                        new_buffer,
+                        edits,
+                        &changed_byte_ranges,
+                        &self.tree,
+                        catalog::root_grammar(self.language),
+                    );
+                    verified_root_injections = safe.then_some(regions);
+                    safe
+                } else {
+                    false
+                }
+            });
         if structure_remapped {
             let BufferDelta::Edits(edits) = &delta else {
                 unreachable!("structure remapping only applies to edit deltas");
             };
             remap_structural_snapshot(&mut self.structure.borrow_mut(), edits, new_revision);
+            if let Some(regions) = verified_root_injections {
+                self.root_injections = regions;
+            } else {
+                remap_injection_regions(&mut self.root_injections, edits);
+            }
         } else {
-            *self.structure.borrow_mut() = structural_snapshot(self.language, &self.tree, new_buffer, new_revision);
+            let injections =
+                collect_rope_injection_matches(&self.tree, new_buffer, root_config, 0..new_buffer.len_bytes());
+            let regions = injection_regions(new_buffer, &injections);
+            *self.structure.borrow_mut() =
+                structural_snapshot(self.language, &self.tree, new_buffer, new_revision, &injections);
+            self.root_injections = regions;
         }
         if let Some(started) = structure_started {
             diagnostics::record_ms("syntax_structure_update_ms", started.elapsed().as_secs_f64() * 1000.0);
@@ -390,18 +597,172 @@ fn can_remap_structural_snapshot(
     })
 }
 
+fn can_remap_structure_after_parse_change(
+    snapshot: &StructuralSnapshot,
+    injection_regions: &[InjectionRegion],
+    new_buffer: &Rope,
+    edits: &[BufferEdit],
+    changed_byte_ranges: &[Range<usize>],
+    new_tree: &Tree,
+    grammar: GrammarId,
+) -> bool {
+    let changed_ranges = merge_byte_ranges(
+        changed_byte_ranges
+            .iter()
+            .map(|range| {
+                let start = range.start.min(new_buffer.len_bytes());
+                let end = range.end.min(new_buffer.len_bytes()).max(start);
+                start..end
+            })
+            .filter(|range| !range.is_empty())
+            .collect(),
+    );
+    if changed_ranges.is_empty() {
+        return true;
+    }
+    let injection_ranges = merge_byte_ranges(
+        injection_regions
+            .iter()
+            .map(|injection| new_buffer.char_to_byte(injection.start)..new_buffer.char_to_byte(injection.end))
+            .collect(),
+    );
+
+    let mut actual = Vec::new();
+    collect_structural_delimiters_in_ranges(new_tree.root_node(), grammar, &changed_ranges, &mut actual);
+    actual.retain(|(byte, _)| !ranges_contain(&injection_ranges, *byte));
+    actual.sort_unstable();
+    actual.dedup();
+
+    let offsets = OffsetMapper::new(edits);
+    let mut expected = Vec::new();
+    for (index, _) in snapshot.tokens.iter().enumerate() {
+        let at = offsets.map(snapshot.token_position(index)).min(new_buffer.len_chars());
+        if at == new_buffer.len_chars() {
+            continue;
+        }
+        let byte = new_buffer.char_to_byte(at);
+        if ranges_contain(&changed_ranges, byte) && !ranges_contain(&injection_ranges, byte) {
+            expected.push((byte, new_buffer.char(at)));
+        }
+    }
+    expected.sort_unstable();
+    expected.dedup();
+    actual == expected
+}
+
+fn injection_regions_were_reused(regions: &[InjectionRegion], buffer: &Rope, tree: &Tree) -> bool {
+    regions.iter().all(|region| {
+        let start = buffer.char_to_byte(region.start.min(buffer.len_chars()));
+        let end = buffer.char_to_byte(region.end.min(buffer.len_chars()));
+        if start >= end {
+            return false;
+        }
+        let Some(mut node) = tree.root_node().descendant_for_byte_range(start, end) else {
+            return false;
+        };
+        loop {
+            if node.id() == region.node_id {
+                return node.start_byte() == start
+                    && node.end_byte() == end
+                    && node.parent().map(|parent| parent.id()) == region.parent_id;
+            }
+            let Some(parent) = node.parent() else {
+                return false;
+            };
+            node = parent;
+        }
+    })
+}
+
+fn collect_structural_delimiters_in_ranges(
+    node: Node<'_>,
+    grammar: GrammarId,
+    ranges: &[Range<usize>],
+    out: &mut Vec<(usize, char)>,
+) {
+    if !ranges
+        .iter()
+        .any(|range| range.start < node.end_byte() && node.start_byte() < range.end)
+    {
+        return;
+    }
+    if node.child_count() == 0 {
+        let kind = node.kind().as_bytes();
+        let delimiter = if kind.len() == 1 && node.end_byte() == node.start_byte() + 1 {
+            let ch = kind[0] as char;
+            let basic = matches!(ch, '(' | ')' | '[' | ']' | '{' | '}');
+            let angle = matches!(ch, '<' | '>') && angle_is_structural(grammar, node);
+            (basic || angle).then_some((node.start_byte(), ch))
+        } else if angle_is_structural(grammar, node) {
+            match kind {
+                b"</" => Some((node.start_byte(), '<')),
+                b"/>" => Some((node.end_byte().saturating_sub(1), '>')),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(delimiter) = delimiter.filter(|(byte, _)| ranges_contain(ranges, *byte)) {
+            out.push(delimiter);
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_structural_delimiters_in_ranges(child, grammar, ranges, out);
+    }
+}
+
+fn merge_byte_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    ranges.sort_by_key(|range| range.start);
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if let Some(previous) = merged.last_mut().filter(|previous| range.start <= previous.end) {
+            previous.end = previous.end.max(range.end);
+        } else {
+            merged.push(range);
+        }
+    }
+    merged
+}
+
+fn ranges_contain(ranges: &[Range<usize>], value: usize) -> bool {
+    let index = ranges.partition_point(|range| range.start <= value);
+    index > 0 && value < ranges[index - 1].end
+}
+
 fn is_structural_candidate(ch: char) -> bool {
     matches!(ch, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>')
 }
 
 fn remap_structural_snapshot(snapshot: &mut StructuralSnapshot, edits: &[BufferEdit], revision: u64) {
-    let offsets = OffsetMapper::new(edits);
-    for pair in &mut snapshot.pairs {
-        pair.open = offsets.map(pair.open);
-        pair.close = offsets.map(pair.close);
+    let positions_unchanged = edits
+        .iter()
+        .all(|edit| edit.range.end.saturating_sub(edit.range.start) == edit.replacement.chars().count());
+    let last_token = snapshot
+        .tokens
+        .len()
+        .checked_sub(1)
+        .map_or(0, |index| snapshot.token_position(index));
+    let edits_follow_structure = edits.iter().all(|edit| edit.range.start > last_token);
+    if positions_unchanged || edits_follow_structure {
+        snapshot.revision = revision;
+        return;
     }
-    for token in &mut snapshot.tokens {
-        token.at = offsets.map(token.at);
+
+    let shifts: Vec<(usize, isize)> = edits
+        .iter()
+        .filter_map(|edit| {
+            let removed = edit.range.end.saturating_sub(edit.range.start);
+            let inserted = edit.replacement.chars().count();
+            let delta = isize::try_from(inserted)
+                .unwrap_or(isize::MAX)
+                .saturating_sub(isize::try_from(removed).unwrap_or(isize::MAX));
+            (delta != 0).then(|| (snapshot.token_index_at_or_after(edit.range.end), delta))
+        })
+        .collect();
+    for (first, delta) in shifts {
+        snapshot.shift_tokens_from(first, delta);
     }
     snapshot.revision = revision;
 }
@@ -431,6 +792,14 @@ impl<'a> OffsetMapper<'a> {
     fn map(&self, at: usize) -> usize {
         let completed = self.edits.partition_point(|edit| edit.range.end <= at);
         at.saturating_add_signed(self.shifts[completed])
+    }
+}
+
+fn remap_injection_regions(regions: &mut [InjectionRegion], edits: &[BufferEdit]) {
+    let offsets = OffsetMapper::new(edits);
+    for region in regions {
+        region.start = offsets.map(region.start);
+        region.end = offsets.map(region.end);
     }
 }
 
@@ -474,7 +843,13 @@ fn collect_injected_selection_ranges(
     }
 }
 
-fn structural_snapshot(language: SyntaxLanguage, tree: &Tree, buffer: &Rope, revision: u64) -> StructuralSnapshot {
+fn structural_snapshot(
+    language: SyntaxLanguage,
+    tree: &Tree,
+    buffer: &Rope,
+    revision: u64,
+    root_injections: &[InjectionMatch],
+) -> StructuralSnapshot {
     #[derive(Clone, Copy)]
     struct Delimiter {
         byte: usize,
@@ -557,8 +932,6 @@ fn structural_snapshot(language: SyntaxLanguage, tree: &Tree, buffer: &Rope, rev
     }
 
     let root_grammar = catalog::root_grammar(language);
-    let root_config = catalog::grammar(root_grammar);
-    let root_injections = collect_rope_injection_matches(tree, buffer, root_config, 0..buffer.len_bytes());
     let mut streams = Vec::new();
     let mut root_delimiters = Vec::new();
     collect(tree.root_node(), root_grammar, 0, &mut root_delimiters);
@@ -638,11 +1011,7 @@ fn structural_snapshot(language: SyntaxLanguage, tree: &Tree, buffer: &Rope, rev
         pair: None,
     }));
     tokens.sort_by_key(|token| token.at);
-    StructuralSnapshot {
-        revision,
-        pairs,
-        tokens,
-    }
+    StructuralSnapshot::new(revision, pairs, tokens)
 }
 
 fn angle_is_structural(grammar: GrammarId, node: Node<'_>) -> bool {
@@ -661,90 +1030,96 @@ pub(crate) fn plain_structural_snapshot(
     structural_pairs: &[(char, char)],
 ) -> StructuralSnapshot {
     let mut stack: Vec<(usize, char)> = Vec::new();
-    let mut pairs = Vec::new();
-    let mut unmatched = Vec::new();
+    let mut tokens = Vec::new();
     for (at, ch) in buffer.chars().enumerate() {
         if structural_pairs.iter().any(|(open, _)| *open == ch) {
-            stack.push((at, ch));
-        } else if let Some((_, open)) = stack.last().copied() {
-            if structural_pairs
-                .iter()
-                .any(|(pair_open, close)| *pair_open == open && *close == ch)
-            {
-                let (open_at, _) = stack.pop().expect("last established a stack item");
-                pairs.push(StructuralPair {
-                    open: open_at,
-                    close: at,
-                    depth: u16::try_from(stack.len()).unwrap_or(u16::MAX),
-                    parent: None,
-                });
-            } else if structural_pairs.iter().any(|(_, close)| *close == ch) {
-                unmatched.push(at);
-            }
-        } else if structural_pairs.iter().any(|(_, close)| *close == ch) {
-            unmatched.push(at);
+            let token_index = tokens.len();
+            tokens.push(StructuralToken {
+                at,
+                depth: 0,
+                matched: false,
+                pair: None,
+            });
+            stack.push((token_index, ch));
+            continue;
+        }
+        if !structural_pairs.iter().any(|(_, close)| *close == ch) {
+            continue;
+        }
+        let close_index = tokens.len();
+        tokens.push(StructuralToken {
+            at,
+            depth: 0,
+            matched: false,
+            pair: None,
+        });
+        let Some((open_index, _)) = stack
+            .last()
+            .copied()
+            .filter(|(_, open)| structural_pairs.iter().any(|pair| pair.0 == *open && pair.1 == ch))
+        else {
+            continue;
+        };
+        stack.pop();
+        tokens[open_index].matched = true;
+        tokens[open_index].pair = Some(close_index);
+        tokens[close_index].matched = true;
+        tokens[close_index].pair = Some(open_index);
+    }
+
+    let mut pairs = Vec::with_capacity(tokens.len() / 2);
+    for open_index in 0..tokens.len() {
+        let Some(close_index) = tokens[open_index].pair.filter(|close_index| *close_index > open_index) else {
+            continue;
+        };
+        let pair_index = pairs.len();
+        pairs.push(StructuralPair {
+            open: tokens[open_index].at,
+            close: tokens[close_index].at,
+            depth: 0,
+            parent: None,
+        });
+        tokens[open_index].pair = Some(pair_index);
+        tokens[close_index].pair = Some(pair_index);
+    }
+    assign_pair_parents(&mut pairs);
+    for token in &mut tokens {
+        if let Some(pair) = token.pair.filter(|_| token.matched) {
+            token.depth = pairs[pair].depth;
         }
     }
-    unmatched.extend(stack.into_iter().map(|(at, _)| at));
-    pairs.sort_by_key(|pair| pair.open);
-    assign_pair_parents(&mut pairs);
-    let mut tokens = Vec::with_capacity(pairs.len() * 2 + unmatched.len());
-    for (pair_index, pair) in pairs.iter().enumerate() {
-        tokens.push(StructuralToken {
-            at: pair.open,
-            depth: pair.depth,
-            matched: true,
-            pair: Some(pair_index),
-        });
-        tokens.push(StructuralToken {
-            at: pair.close,
-            depth: pair.depth,
-            matched: true,
-            pair: Some(pair_index),
-        });
-    }
-    tokens.extend(unmatched.into_iter().map(|at| StructuralToken {
-        at,
-        depth: 0,
-        matched: false,
-        pair: None,
-    }));
-    tokens.sort_by_key(|token| token.at);
-    StructuralSnapshot {
-        revision,
-        pairs,
-        tokens,
-    }
+    StructuralSnapshot::new(revision, pairs, tokens)
 }
 
 pub(crate) fn update_plain_structural_snapshot(
-    previous: &StructuralSnapshot,
+    structure: &mut StructuralSnapshot,
     buffer: &Rope,
     revision: u64,
     structural_pairs: &[(char, char)],
     delta: &BufferDelta,
-) -> (StructuralSnapshot, bool) {
+) -> bool {
     let BufferDelta::Edits(edits) = delta else {
-        return (plain_structural_snapshot(buffer, revision, structural_pairs), false);
+        *structure = plain_structural_snapshot(buffer, revision, structural_pairs);
+        return false;
     };
     let can_remap = edits.iter().all(|edit| {
-        let first_token = previous.tokens.partition_point(|token| token.at < edit.range.start);
+        let first_token = structure.token_index_at_or_after(edit.range.start);
         !edit
             .replacement
             .chars()
             .any(|ch| structural_pairs.iter().any(|(open, close)| *open == ch || *close == ch))
-            && previous
+            && structure
                 .tokens
                 .get(first_token)
-                .is_none_or(|token| token.at >= edit.range.end)
+                .is_none_or(|_| structure.token_position(first_token) >= edit.range.end)
     });
     if !can_remap {
-        return (plain_structural_snapshot(buffer, revision, structural_pairs), false);
+        *structure = plain_structural_snapshot(buffer, revision, structural_pairs);
+        return false;
     }
 
-    let mut structure = previous.clone();
-    remap_structural_snapshot(&mut structure, edits, revision);
-    (structure, true)
+    remap_structural_snapshot(structure, edits, revision);
+    true
 }
 
 fn assign_pair_parents(pairs: &mut [StructuralPair]) {
@@ -784,10 +1159,38 @@ struct InjectionMatch {
     content_start: usize,
     content_end: usize,
     embedded: GrammarId,
+    node_id: usize,
+    parent_id: Option<usize>,
     /// Default tree-sitter spec: with `injection.include-children` unset,
     /// host captures fully inside the injection content range are
     /// suppressed and only the embedded grammar paints.
     include_children: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InjectionRegion {
+    start: usize,
+    end: usize,
+    embedded: GrammarId,
+    include_children: bool,
+    node_id: usize,
+    parent_id: Option<usize>,
+}
+
+fn injection_regions(buffer: &Rope, injections: &[InjectionMatch]) -> Vec<InjectionRegion> {
+    let mut regions = injections
+        .iter()
+        .map(|injection| InjectionRegion {
+            start: buffer.byte_to_char(injection.content_start),
+            end: buffer.byte_to_char(injection.content_end),
+            embedded: injection.embedded,
+            include_children: injection.include_children,
+            node_id: injection.node_id,
+            parent_id: injection.parent_id,
+        })
+        .collect::<Vec<_>>();
+    regions.sort_by_key(|region| (region.start, region.end));
+    regions
 }
 
 fn parse_rope(parser: &mut Parser, buffer: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
@@ -966,6 +1369,8 @@ fn collect_rope_injection_matches(
             content_start: node.start_byte(),
             content_end: node.end_byte(),
             embedded,
+            node_id: node.id(),
+            parent_id: node.parent().map(|parent| parent.id()),
             include_children,
         });
     }
@@ -1105,6 +1510,8 @@ fn collect_injection_matches(
             content_start: node.start_byte(),
             content_end: node.end_byte(),
             embedded: embedded_grammar,
+            node_id: node.id(),
+            parent_id: node.parent().map(|parent| parent.id()),
             include_children,
         });
     }

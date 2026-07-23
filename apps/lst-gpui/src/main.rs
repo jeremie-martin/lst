@@ -966,21 +966,23 @@ impl LstGpuiApp {
                 let structural_pairs = language.map_or(&[('(', ')'), ('[', ']'), ('{', '}')][..], |language| {
                     language.config().structural_pairs
                 });
-                let (structure, structure_remapped) = if view.structure_key.0 == language {
+                let structure_started = diagnostics::trace_enabled().then(Instant::now);
+                let structure_remapped = if view.structure_key.0 == language {
                     crate::syntax::update_plain_structural_snapshot(
-                        &view.structure.borrow(),
+                        &mut view.structure.borrow_mut(),
                         &buffer,
                         revision,
                         structural_pairs,
                         &delta,
                     )
                 } else {
-                    (
-                        crate::syntax::plain_structural_snapshot(&buffer, revision, structural_pairs),
-                        false,
-                    )
+                    *view.structure.borrow_mut() =
+                        crate::syntax::plain_structural_snapshot(&buffer, revision, structural_pairs);
+                    false
                 };
-                *view.structure.borrow_mut() = structure;
+                if let Some(started) = structure_started {
+                    diagnostics::record_ms("plain_structure_update_ms", started.elapsed().as_secs_f64() * 1000.0);
+                }
                 view.structure_key = (language, revision);
                 let mut cache = view.cache.borrow_mut();
                 let previous_line_count = cache
@@ -989,8 +991,11 @@ impl LstGpuiApp {
                     .map(|layout| layout.layout.line_row_starts.len().saturating_sub(1));
                 let invalidation = SyntaxInvalidation::from_buffer_delta(&buffer, &delta, previous_line_count);
                 cache.patch_wrap_layout(&buffer, revision, &invalidation);
+                cache.patch_unwrapped_line_width(revision, &invalidation, buffer.len_lines());
+                let invalidated_lines = invalidation.line_range(buffer.len_lines());
+                cache.clear_text_lines_in(invalidated_lines.clone());
                 if structure_remapped && !invalidation.is_full() {
-                    cache.clear_code_lines_in(invalidation.line_range(buffer.len_lines()));
+                    cache.clear_code_lines_in(invalidated_lines);
                 } else {
                     cache.clear_code_lines();
                 }
@@ -1007,6 +1012,7 @@ impl LstGpuiApp {
                 .map(|layout| layout.layout.line_row_starts.len().saturating_sub(1));
             let invalidation = SyntaxInvalidation::from_buffer_delta(&buffer, &delta, previous_line_count);
             cache.patch_wrap_layout(&buffer, revision, &invalidation);
+            cache.patch_unwrapped_line_width(revision, &invalidation, buffer.len_lines());
             if cache.syntax_highlights.is_some() {
                 cache.syntax_highlights = None;
                 cache.clear_code_lines();
@@ -1058,13 +1064,10 @@ impl LstGpuiApp {
         };
         let Some(state) = view.syntax_state.as_ref() else {
             // parse_initial failed (grammar / ABI mismatch). Wipe any
-            // stale spans so the renderer doesn't keep painting last
-            // language's colors using the byte-length guard.
+            // revision-dependent text, layout, and syntax artifacts before
+            // falling back to plain rendering.
             let mut cache = view.cache.borrow_mut();
-            if cache.syntax_highlights.is_some() {
-                cache.syntax_highlights = None;
-            }
-            cache.clear_code_lines();
+            cache.invalidate_after_parser_failure();
             let structural_pairs = language.map_or(&[('(', ')'), ('[', ']'), ('{', '}')][..], |language| {
                 language.config().structural_pairs
             });
@@ -1123,9 +1126,8 @@ impl LstGpuiApp {
             let document_len = self.model.active_tab().len_chars();
             let pairs: Vec<lst_editor::StructuralBracketPair> = {
                 let structure = self.active_view().structure.borrow();
-                structure
-                    .pairs
-                    .iter()
+                (0..structure.pairs.len())
+                    .map(|index| structure.pair(index))
                     .filter_map(|pair| lst_editor::StructuralBracketPair::new(pair.open, pair.close, document_len))
                     .collect()
             };
@@ -1352,6 +1354,7 @@ fn refresh_syntax_cache(
 ) {
     let line_count = buffer.len_lines();
     cache.patch_wrap_layout(buffer, revision, &invalidation);
+    cache.patch_unwrapped_line_width(revision, &invalidation, line_count);
     let can_patch = !invalidation.is_full()
         && cache.syntax_highlights.as_ref().is_some_and(|highlights| {
             highlights.language == state.language
@@ -1380,6 +1383,7 @@ fn refresh_syntax_cache(
             valid_lines: vec![false; line_count],
         });
     }
+    cache.clear_text_lines_in(line_range.clone());
     if can_patch && structure_remapped {
         cache.clear_code_lines_in(line_range);
     } else {

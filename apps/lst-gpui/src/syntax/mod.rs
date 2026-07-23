@@ -312,6 +312,33 @@ mod tests {
     }
 
     #[test]
+    fn prefix_edit_reuses_unchanged_macro_injection_structure() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let mut before = String::from("// generated source\n");
+        for item in 0..512 {
+            before.push_str(&format!("fn item_{item}() {{ println!(\"item {{}}\", {item}); }}\n"));
+        }
+        let after = format!("x{before}");
+        let before_buffer = ropey::Rope::from_str(&before);
+        let after_buffer = ropey::Rope::from_str(&after);
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &before_buffer, 0).unwrap();
+
+        state.update(
+            &after_buffer,
+            BufferDelta::Edits(vec![BufferEdit {
+                range: 0..0,
+                replacement: "x".to_string(),
+            }]),
+            1,
+        );
+
+        assert!(state.structure_was_remapped());
+        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &after_buffer, 1).unwrap();
+        assert_eq!(&*state.structure(), &*fresh_state.structure());
+    }
+
+    #[test]
     fn edit_that_changes_delimiter_syntax_rebuilds_structure() {
         use lst_editor::{BufferDelta, BufferEdit};
 
@@ -385,10 +412,10 @@ mod tests {
 
         let pairs = &[('(', ')'), ('[', ']'), ('{', '}')];
         let before = ropey::Rope::from_str("{ alpha }\n");
-        let previous = plain_structural_snapshot(&before, 0, pairs);
+        let mut structure = plain_structural_snapshot(&before, 0, pairs);
         let inserted = ropey::Rope::from_str("{ xalpha }\n");
-        let (remapped, was_remapped) = update_plain_structural_snapshot(
-            &previous,
+        let was_remapped = update_plain_structural_snapshot(
+            &mut structure,
             &inserted,
             1,
             pairs,
@@ -398,11 +425,11 @@ mod tests {
             }]),
         );
         assert!(was_remapped);
-        assert_eq!(remapped, plain_structural_snapshot(&inserted, 1, pairs));
+        assert_eq!(structure, plain_structural_snapshot(&inserted, 1, pairs));
 
         let removed = ropey::Rope::from_str(" xalpha }\n");
-        let (rebuilt, was_remapped) = update_plain_structural_snapshot(
-            &remapped,
+        let was_remapped = update_plain_structural_snapshot(
+            &mut structure,
             &removed,
             2,
             pairs,
@@ -412,7 +439,71 @@ mod tests {
             }]),
         );
         assert!(!was_remapped);
-        assert_eq!(rebuilt, plain_structural_snapshot(&removed, 2, pairs));
+        assert_eq!(structure, plain_structural_snapshot(&removed, 2, pairs));
+    }
+
+    #[test]
+    fn plain_append_after_dense_structure_reuses_snapshot_storage() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let pairs = &[('(', ')'), ('[', ']'), ('{', '}')];
+        let before_text = "{}[]()\n".repeat(10_000);
+        let before = ropey::Rope::from_str(&before_text);
+        let mut structure = plain_structural_snapshot(&before, 0, pairs);
+        let pairs_ptr = structure.pairs.as_ptr();
+        let tokens_ptr = structure.tokens.as_ptr();
+        let at = before.len_chars();
+        let after = ropey::Rope::from_str(&(before_text + "x"));
+
+        let was_remapped = update_plain_structural_snapshot(
+            &mut structure,
+            &after,
+            1,
+            pairs,
+            &BufferDelta::Edits(vec![BufferEdit {
+                range: at..at,
+                replacement: "x".to_string(),
+            }]),
+        );
+
+        assert!(was_remapped);
+        assert_eq!(structure.revision, 1);
+        assert_eq!(structure.pairs.as_ptr(), pairs_ptr);
+        assert_eq!(structure.tokens.as_ptr(), tokens_ptr);
+        assert_eq!(structure, plain_structural_snapshot(&after, 1, pairs));
+    }
+
+    #[test]
+    fn plain_middle_edit_shifts_dense_structure_lazily() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let pairs = &[('(', ')'), ('[', ']'), ('{', '}')];
+        let before_text = "{}[]()\n".repeat(10_000);
+        let before = ropey::Rope::from_str(&before_text);
+        let mut structure = plain_structural_snapshot(&before, 0, pairs);
+        let pairs_ptr = structure.pairs.as_ptr();
+        let tokens_ptr = structure.tokens.as_ptr();
+        let last_token_index = structure.tokens.len() - 1;
+        let raw_last_position = structure.tokens[last_token_index].at;
+        let after = ropey::Rope::from_str(&format!("x{before_text}"));
+
+        let was_remapped = update_plain_structural_snapshot(
+            &mut structure,
+            &after,
+            1,
+            pairs,
+            &BufferDelta::Edits(vec![BufferEdit {
+                range: 0..0,
+                replacement: "x".to_string(),
+            }]),
+        );
+
+        assert!(was_remapped);
+        assert_eq!(structure.pairs.as_ptr(), pairs_ptr);
+        assert_eq!(structure.tokens.as_ptr(), tokens_ptr);
+        assert_eq!(structure.tokens[last_token_index].at, raw_last_position);
+        assert_eq!(structure.token_position(last_token_index), raw_last_position + 1);
+        assert_eq!(structure, plain_structural_snapshot(&after, 1, pairs));
     }
 
     #[test]

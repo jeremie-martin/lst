@@ -58,6 +58,7 @@ fn smart_home_toggles_between_first_non_blank_and_column_zero() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn home_and_end_target_the_current_wrapped_visual_row() -> TestResult {
     support::run_x11_test("motion-wrapped-visual-boundaries", |session| {
+        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\n")?;
         let text = "alpha beta gamma delta ".repeat(30);
         let path = session.seed_file("wrapped-boundaries.txt", &text)?;
         let mut editor = session.open_file("wrapped-visual-boundaries", &path)?;

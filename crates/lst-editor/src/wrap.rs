@@ -1,4 +1,5 @@
 use crate::selection::{cells_of_str, GraphemeCell};
+use ropey::{Rope, RopeSlice};
 
 const TAB_WIDTH: usize = 8;
 
@@ -90,6 +91,58 @@ pub fn build_wrap_layout<T: AsRef<str>>(lines: &[T], wrap_columns: usize, show_w
     }
 }
 
+pub fn build_wrap_layout_for_rope(buffer: &Rope, wrap_columns: usize, show_wrap: bool) -> WrapLayout {
+    let line_count = buffer.len_lines();
+    let wrap_columns = wrap_columns.max(1);
+    if !show_wrap {
+        return WrapLayout {
+            show_wrap,
+            wrap_columns,
+            line_row_starts: (0..=line_count).collect(),
+            total_rows: line_count.max(1),
+        };
+    }
+
+    let mut line_row_starts = Vec::with_capacity(line_count.saturating_add(1));
+    let mut total_rows = 0usize;
+    line_row_starts.push(0);
+    for line in buffer.lines() {
+        total_rows = total_rows.saturating_add(visual_line_count_for_rope_line(line, wrap_columns));
+        line_row_starts.push(total_rows);
+    }
+    WrapLayout {
+        show_wrap,
+        wrap_columns,
+        line_row_starts,
+        total_rows: total_rows.max(1),
+    }
+}
+
+/// Count the wrapped rows for one rope line without materializing ordinary
+/// short ASCII lines. Complex and potentially wrapping text falls back to the
+/// same grapheme-aware implementation used everywhere else.
+pub fn visual_line_count_for_rope_line(line: RopeSlice<'_>, max_cols: usize) -> usize {
+    let max_cols = max_cols.max(1);
+    let display = trim_rope_display_line(line);
+    if display.len_chars() <= max_cols
+        && display
+            .chunks()
+            .all(|chunk| chunk.bytes().all(|byte| byte.is_ascii() && byte != b'\t'))
+    {
+        1
+    } else {
+        visual_line_count(&display.to_string(), max_cols)
+    }
+}
+
+fn trim_rope_display_line(line: RopeSlice<'_>) -> RopeSlice<'_> {
+    let mut end = line.len_chars();
+    while end > 0 && matches!(line.char(end - 1), '\n' | '\r') {
+        end -= 1;
+    }
+    line.slice(..end)
+}
+
 pub fn line_for_visual_row(layout: &WrapLayout, visual_row: usize) -> usize {
     layout
         .line_row_starts
@@ -109,6 +162,23 @@ pub fn visual_row_for_position<T: AsRef<str>>(
     let display_column = column.min(display_text.chars().count());
     let row_in_line = if layout.show_wrap {
         cursor_visual_row_in_line(display_text, display_column, layout.wrap_columns)
+    } else {
+        0
+    };
+    Some(line_start_row + row_in_line)
+}
+
+pub fn visual_row_for_position_in_rope(
+    buffer: &Rope,
+    line: usize,
+    column: usize,
+    layout: &WrapLayout,
+) -> Option<usize> {
+    let line_start_row = layout.line_row_starts.get(line).copied()?;
+    let display_text = crate::selection::line_display_text(buffer, line);
+    let display_column = column.min(display_text.chars().count());
+    let row_in_line = if layout.show_wrap {
+        cursor_visual_row_in_line(&display_text, display_column, layout.wrap_columns)
     } else {
         0
     };
@@ -150,6 +220,54 @@ pub fn display_row_target<T: AsRef<str>>(
     let target_line = line_for_visual_row(layout, target_visual_row);
     let target_text = trim_display_line(lines.get(target_line)?.as_ref());
     let target_segments = wrap_segments(target_text, layout.wrap_columns);
+    let target_row_in_line = target_visual_row - layout.line_row_starts[target_line];
+    let target_segment = target_segments
+        .get(target_row_in_line)
+        .or_else(|| target_segments.last())
+        .expect("wrap_segments always returns at least one segment");
+    let target_column = target_segment.start_col + preferred_column.min(target_segment.text.chars().count());
+
+    Some(DisplayRowTarget {
+        line: target_line,
+        column: target_column,
+        preferred_column,
+    })
+}
+
+pub fn display_row_target_in_rope(
+    buffer: &Rope,
+    line: usize,
+    column: usize,
+    preferred_column: Option<usize>,
+    delta: isize,
+    layout: &WrapLayout,
+) -> Option<DisplayRowTarget> {
+    if buffer.len_lines() == 0 || !layout.show_wrap {
+        return None;
+    }
+
+    let display_text = crate::selection::line_display_text(buffer, line);
+    let column = column.min(display_text.chars().count());
+    let segment_row = cursor_visual_row_in_line(&display_text, column, layout.wrap_columns);
+    let visual_row = layout.line_row_starts.get(line).copied()? + segment_row;
+    let target_visual_row = if delta.is_negative() {
+        visual_row.saturating_sub(delta.unsigned_abs())
+    } else {
+        (visual_row + delta as usize).min(layout.total_rows.saturating_sub(1))
+    };
+    if target_visual_row == visual_row {
+        return None;
+    }
+
+    let segments = wrap_segments(&display_text, layout.wrap_columns);
+    let current_segment = segments
+        .get(segment_row)
+        .or_else(|| segments.last())
+        .expect("wrap_segments always returns at least one segment");
+    let preferred_column = preferred_column.unwrap_or_else(|| column.saturating_sub(current_segment.start_col));
+    let target_line = line_for_visual_row(layout, target_visual_row);
+    let target_text = crate::selection::line_display_text(buffer, target_line);
+    let target_segments = wrap_segments(&target_text, layout.wrap_columns);
     let target_row_in_line = target_visual_row - layout.line_row_starts[target_line];
     let target_segment = target_segments
         .get(target_row_in_line)

@@ -5,14 +5,14 @@ use crate::{
 };
 use gpui::{fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString, TextRun, Window};
 use lst_editor::wrap::{
-    build_wrap_layout, cursor_visual_row_in_line, line_for_visual_row, visual_line_count, wrap_segments, WrapLayout,
-    WrappedSegment,
+    build_wrap_layout_for_rope, cursor_visual_row_in_line, line_for_visual_row, visual_line_count_for_rope_line,
+    wrap_segments, WrapLayout, WrappedSegment,
 };
 use lst_editor::{
     selection::{
         exact_text_occurrence_ranges_in_text, identifier_occurrence_ranges_in_text, is_identifier_occurrence_char,
     },
-    vim, DisplayLine, EditorTab, GutterMode, Selection, SelectionSet,
+    vim, EditorTab, GutterMode, Selection, SelectionSet,
 };
 use ropey::Rope;
 use std::{
@@ -44,11 +44,13 @@ struct CachedShapedLine {
 #[derive(Default)]
 pub(crate) struct ViewportCache {
     code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
+    display_lines: HashMap<usize, SharedString>,
     wrapped_lines: HashMap<(usize, Option<usize>), Rc<[WrappedSegment]>>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
     pub(crate) syntax_highlights: Option<CachedSyntaxHighlights>,
     pub(crate) wrap_layout: Option<CachedWrapLayout>,
     max_unwrapped_line_width: Option<CachedUnwrappedLineWidth>,
+    unwrapped_line_width_invalidation: Option<PendingLineWidthInvalidation>,
     code_char_width: Option<CachedCodeCharWidth>,
     occurrence_highlights: Option<CachedOccurrenceHighlights>,
     selection_match_highlights: Option<CachedSelectionMatchHighlights>,
@@ -84,6 +86,14 @@ impl ViewportCache {
         self.code_lines.retain(|(line_ix, _, _), _| !lines.contains(line_ix));
     }
 
+    pub(crate) fn clear_text_lines_in(&mut self, lines: Range<usize>) {
+        if lines.is_empty() {
+            return;
+        }
+        self.display_lines.retain(|line_ix, _| !lines.contains(line_ix));
+        self.wrapped_lines.retain(|(line_ix, _), _| !lines.contains(line_ix));
+    }
+
     pub(crate) fn clear_shaped_lines(&mut self) {
         self.code_lines.clear();
         self.gutter_lines.clear();
@@ -94,16 +104,27 @@ impl ViewportCache {
     /// affected line window immediately after this call.
     pub(crate) fn invalidate_content_layout(&mut self) {
         self.code_lines.clear();
+        self.display_lines.clear();
+        self.wrapped_lines.clear();
+        self.max_unwrapped_line_width = None;
+        self.unwrapped_line_width_invalidation = None;
         self.invalidate_content_layout_preserving_code_lines();
+    }
+
+    /// A failed parser setup falls back to plain rendering. Every cached text
+    /// and layout artifact may have been produced for an older revision or
+    /// language, so the fallback transition owns their full invalidation.
+    pub(crate) fn invalidate_after_parser_failure(&mut self) {
+        self.syntax_highlights = None;
+        self.invalidate_content_layout();
+        self.wrap_layout = None;
     }
 
     /// Invalidate revision-dependent measurements after an edit, retaining
     /// shaped code rows until syntax synchronization identifies the exact
     /// semantic line window that changed.
     pub(crate) fn invalidate_content_layout_preserving_code_lines(&mut self) {
-        self.wrapped_lines.clear();
         self.gutter_lines.clear();
-        self.max_unwrapped_line_width = None;
     }
 
     /// Invalidate every cache whose output depends on the configured editor
@@ -112,7 +133,50 @@ impl ViewportCache {
     pub(crate) fn invalidate_typography(&mut self) {
         self.clear_shaped_lines();
         self.max_unwrapped_line_width = None;
+        self.unwrapped_line_width_invalidation = None;
         self.code_char_width = None;
+    }
+
+    /// Preserve the horizontal extent across ordinary edits. If the previous
+    /// widest line was untouched, no-wrap mode can remeasure only this small
+    /// line window instead of rescanning the whole document.
+    pub(crate) fn patch_unwrapped_line_width(
+        &mut self,
+        revision: u64,
+        invalidation: &SyntaxInvalidation,
+        line_count: usize,
+    ) {
+        if invalidation.is_full() {
+            self.max_unwrapped_line_width = None;
+            self.unwrapped_line_width_invalidation = None;
+            return;
+        }
+        let Some(cached) = self.max_unwrapped_line_width else {
+            return;
+        };
+        let lines = invalidation.line_range(line_count);
+        if lines.is_empty() {
+            if let Some(pending) = self.unwrapped_line_width_invalidation.as_mut() {
+                pending.revision = revision;
+            } else {
+                self.max_unwrapped_line_width = Some(CachedUnwrappedLineWidth { revision, ..cached });
+            }
+            return;
+        }
+        match self.unwrapped_line_width_invalidation.as_mut() {
+            Some(pending) if pending.base_revision == cached.revision => {
+                pending.revision = revision;
+                pending.lines.start = pending.lines.start.min(lines.start);
+                pending.lines.end = pending.lines.end.max(lines.end);
+            }
+            _ => {
+                self.unwrapped_line_width_invalidation = Some(PendingLineWidthInvalidation {
+                    base_revision: cached.revision,
+                    revision,
+                    lines,
+                });
+            }
+        }
     }
 
     /// Advance a cached wrapped-row index after a same-line-topology edit.
@@ -151,11 +215,7 @@ impl ViewportCache {
         for line_ix in lines.clone() {
             layout.line_row_starts[line_ix] = next_start;
             let row_count = if layout.show_wrap {
-                let mut line = buffer.line(line_ix).to_string();
-                while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
-                    line.pop();
-                }
-                visual_line_count(&line, layout.wrap_columns)
+                visual_line_count_for_rope_line(buffer.line(line_ix), layout.wrap_columns)
             } else {
                 1
             };
@@ -178,6 +238,13 @@ struct CachedUnwrappedLineWidth {
     char_width: Pixels,
     font_size: Pixels,
     width: Pixels,
+    line_ix: usize,
+}
+
+struct PendingLineWidthInvalidation {
+    base_revision: u64,
+    revision: u64,
+    lines: Range<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -346,7 +413,7 @@ pub(crate) struct CachedWrapLayout {
 }
 
 pub(crate) struct WrapLayoutInput<'a> {
-    pub(crate) lines: &'a [DisplayLine],
+    pub(crate) buffer: &'a Rope,
     pub(crate) revision: u64,
     pub(crate) viewport_width: Pixels,
     pub(crate) char_width: Pixels,
@@ -357,7 +424,6 @@ pub(crate) struct WrapLayoutInput<'a> {
 
 pub(crate) struct ViewportPreparation<'a> {
     pub(crate) buffer: &'a Rope,
-    pub(crate) lines: &'a [DisplayLine],
     pub(crate) revision: u64,
     pub(crate) syntax_mode: SyntaxMode,
     pub(crate) syntax_state: Option<&'a TabSyntaxState>,
@@ -448,6 +514,14 @@ pub(crate) fn line_display_text(buffer: &Rope, line_ix: usize) -> SharedString {
         line.pop();
     }
     SharedString::from(line)
+}
+
+fn cached_line_display_text(cache: &mut ViewportCache, buffer: &Rope, line_ix: usize) -> SharedString {
+    cache
+        .display_lines
+        .entry(line_ix)
+        .or_insert_with(|| line_display_text(buffer, line_ix))
+        .clone()
 }
 
 fn char_to_byte_index(text: &str, char_ix: usize) -> usize {
@@ -567,17 +641,17 @@ fn overlay_bracket_spans(
 ) -> Vec<SyntaxSpan> {
     let line_chars = line_text.chars().count();
     let line_end_char = line_start_char + line_chars;
-    let first = structure.tokens.partition_point(|token| token.at < line_start_char);
-    let last = first + structure.tokens[first..].partition_point(|token| token.at < line_end_char);
-    let tokens = &structure.tokens[first..last];
-    if tokens.is_empty() {
+    let first = structure.token_index_at_or_after(line_start_char);
+    let last = structure.token_index_at_or_after(line_end_char);
+    if first == last {
         return spans;
     }
 
-    let mut overrides = Vec::with_capacity(tokens.len());
+    let mut overrides = Vec::with_capacity(last - first);
     let mut span_index = 0usize;
-    for &token in tokens {
-        let local_char = token.at - line_start_char;
+    for token_index in first..last {
+        let token = structure.tokens[token_index];
+        let local_char = structure.token_position(token_index) - line_start_char;
         let start = char_to_byte_index(line_text, local_char);
         let end = char_to_byte_index(line_text, local_char + 1);
         while span_index < spans.len() && spans[span_index].end <= start {
@@ -784,7 +858,7 @@ pub(crate) fn x_for_display_char(
 
 pub(crate) fn max_unwrapped_line_width(
     cache: &mut ViewportCache,
-    lines: &[DisplayLine],
+    buffer: &Rope,
     revision: u64,
     char_width: Pixels,
     scale: f32,
@@ -796,17 +870,39 @@ pub(crate) fn max_unwrapped_line_width(
         if cached.revision == revision && cached.char_width == char_width && cached.font_size == font_size {
             return cached.width;
         }
+        if cached.char_width == char_width
+            && cached.font_size == font_size
+            && cache.unwrapped_line_width_invalidation.as_ref().is_some_and(|pending| {
+                pending.base_revision == cached.revision
+                    && pending.revision == revision
+                    && !pending.lines.contains(&cached.line_ix)
+            })
+        {
+            let pending = cache
+                .unwrapped_line_width_invalidation
+                .take()
+                .expect("checked pending line-width invalidation");
+            let mut updated = CachedUnwrappedLineWidth { revision, ..cached };
+            for line_ix in pending.lines {
+                let line_width = unwrapped_rope_line_width(buffer.line(line_ix), char_width, scale, theme, window);
+                if line_width > updated.width {
+                    updated.width = line_width;
+                    updated.line_ix = line_ix;
+                }
+            }
+            cache.max_unwrapped_line_width = Some(updated);
+            return updated.width;
+        }
     }
 
     let mut width = px(0.0);
-    for line in lines {
-        let display_line = trim_display_line(line);
-        let line_width = if is_plain_monospace_text(display_line) {
-            char_width * display_line.chars().count() as f32
-        } else {
-            shape_display_line(display_line, scale, theme, window).map_or(px(0.0), |line| line.width)
-        };
-        width = width.max(line_width);
+    let mut widest_line = 0;
+    for (line_ix, line) in buffer.lines().enumerate() {
+        let line_width = unwrapped_rope_line_width(line, char_width, scale, theme, window);
+        if line_width > width {
+            width = line_width;
+            widest_line = line_ix;
+        }
     }
 
     cache.max_unwrapped_line_width = Some(CachedUnwrappedLineWidth {
@@ -814,8 +910,33 @@ pub(crate) fn max_unwrapped_line_width(
         char_width,
         font_size,
         width,
+        line_ix: widest_line,
     });
+    cache.unwrapped_line_width_invalidation = None;
     width
+}
+
+fn unwrapped_rope_line_width(
+    line: ropey::RopeSlice<'_>,
+    char_width: Pixels,
+    scale: f32,
+    theme: Theme,
+    window: &mut Window,
+) -> Pixels {
+    let mut end = line.len_chars();
+    while end > 0 && matches!(line.char(end - 1), '\n' | '\r') {
+        end -= 1;
+    }
+    let display = line.slice(..end);
+    if display
+        .chunks()
+        .all(|chunk| chunk.bytes().all(|byte| byte.is_ascii() && byte != b'\t'))
+    {
+        char_width * display.len_chars() as f32
+    } else {
+        let display = display.to_string();
+        shape_display_line(&display, scale, theme, window).map_or(px(0.0), |line| line.width)
+    }
 }
 
 fn is_plain_monospace_text(text: &str) -> bool {
@@ -865,7 +986,7 @@ fn wrap_columns_for_viewport(
 
 pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInput<'_>) -> Rc<WrapLayout> {
     let WrapLayoutInput {
-        lines,
+        buffer,
         revision,
         viewport_width,
         char_width,
@@ -878,7 +999,7 @@ pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInp
         if layout.revision == revision
             && layout.layout.wrap_columns == wrap_columns
             && layout.layout.show_wrap == show_wrap
-            && layout.layout.line_row_starts.len() == lines.len() + 1
+            && layout.layout.line_row_starts.len() == buffer.len_lines() + 1
         {
             return layout.layout.clone();
         }
@@ -888,7 +1009,7 @@ pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInp
     cache.wrapped_lines.clear();
 
     let started = diagnostics::trace_enabled().then(Instant::now);
-    let layout = Rc::new(build_wrap_layout(lines, wrap_columns, show_wrap));
+    let layout = Rc::new(build_wrap_layout_for_rope(buffer, wrap_columns, show_wrap));
     if let Some(started) = started {
         diagnostics::record_ms("wrap_layout_ms", started.elapsed().as_secs_f64() * 1000.0);
     }
@@ -1176,14 +1297,12 @@ fn visible_selection_match_highlights(
     ranges
 }
 
-fn pair_for_head(structure: &StructuralSnapshot, head: usize, enclosing: bool) -> Option<&StructuralPair> {
+fn pair_for_head(structure: &StructuralSnapshot, head: usize, enclosing: bool) -> Option<StructuralPair> {
     let touched = |at: usize| {
         structure
-            .tokens
-            .binary_search_by_key(&at, |token| token.at)
-            .ok()
+            .token_index_at(at)
             .and_then(|index| structure.tokens[index].pair)
-            .and_then(|index| structure.pairs.get(index))
+            .map(|index| structure.pair(index))
     };
     touched(head)
         .or_else(|| head.checked_sub(1).and_then(touched))
@@ -1191,9 +1310,9 @@ fn pair_for_head(structure: &StructuralSnapshot, head: usize, enclosing: bool) -
             if !enclosing {
                 return None;
             }
-            let mut index = structure.pairs.partition_point(|pair| pair.open < head).checked_sub(1);
+            let mut index = structure.pair_index_at_or_after_open(head).checked_sub(1);
             while let Some(pair_index) = index {
-                let pair = &structure.pairs[pair_index];
+                let pair = structure.pair(pair_index);
                 if pair.close >= head {
                     return Some(pair);
                 }
@@ -1207,13 +1326,13 @@ fn visible_structure_pairs(
     structure: &StructuralSnapshot,
     visible_start: usize,
     visible_end: usize,
-) -> Vec<&StructuralPair> {
-    let first_visible_open = structure.pairs.partition_point(|pair| pair.open < visible_start);
-    let after_visible_open = structure.pairs.partition_point(|pair| pair.open <= visible_end);
+) -> Vec<StructuralPair> {
+    let first_visible_open = structure.pair_index_at_or_after_open(visible_start);
+    let after_visible_open = structure.pair_index_after_open(visible_end);
     let mut indices: Vec<usize> = (first_visible_open..after_visible_open).collect();
     let mut ancestor = first_visible_open.checked_sub(1);
     while let Some(index) = ancestor {
-        let pair = &structure.pairs[index];
+        let pair = structure.pair(index);
         if pair.close >= visible_start {
             indices.push(index);
         }
@@ -1221,7 +1340,7 @@ fn visible_structure_pairs(
     }
     indices.sort_unstable();
     indices.dedup();
-    indices.into_iter().map(|index| &structure.pairs[index]).collect()
+    indices.into_iter().map(|index| structure.pair(index)).collect()
 }
 
 fn bracket_matches(
@@ -1255,6 +1374,19 @@ fn leading_visual_column(text: &str, tab_width: usize) -> usize {
                 column + 1
             }
         })
+}
+
+fn rope_line_indent(buffer: &Rope, line_ix: usize, tab_width: usize) -> Option<usize> {
+    let mut column = 0;
+    for ch in buffer.line(line_ix).chars() {
+        match ch {
+            ' ' => column += 1,
+            '\t' => column += tab_width - column % tab_width,
+            ch if ch.is_whitespace() => {}
+            _ => return Some(column),
+        }
+    }
+    None
 }
 
 fn char_visual_column(text: &str, char_offset: usize, tab_width: usize) -> usize {
@@ -1318,7 +1450,6 @@ fn selection_set_contains(selection_set: &SelectionSet, at: usize) -> bool {
 pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, window: &mut Window) -> ViewportPaintState {
     let ViewportPreparation {
         buffer,
-        lines,
         revision,
         syntax_mode,
         syntax_state,
@@ -1383,7 +1514,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     let layout = ensure_wrap_layout(
         &mut cache,
         WrapLayoutInput {
-            lines,
+            buffer,
             revision,
             viewport_width: bounds.size.width,
             char_width,
@@ -1412,17 +1543,16 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         .wrapped_lines
         .retain(|(line_ix, _), _| *line_ix >= cached_first_line && *line_ix <= cached_last_line);
     cache
+        .display_lines
+        .retain(|line_ix, _| *line_ix >= cached_first_line && *line_ix <= cached_last_line);
+    cache
         .gutter_lines
         .retain(|line_ix, _| show_gutter && *line_ix >= cached_first_line && *line_ix <= cached_last_line);
 
     let mut rows = Vec::new();
-    for (line_ix, line) in lines
-        .iter()
-        .enumerate()
-        .take(last_visible_line.saturating_add(1))
-        .skip(first_line)
-    {
-        let display_source = trim_display_line(line);
+    for line_ix in first_line..last_visible_line.saturating_add(1).min(buffer.len_lines()) {
+        let line = cached_line_display_text(&mut cache, buffer, line_ix);
+        let display_source = line.as_ref();
         let line_start_char = buffer.line_to_char(line_ix);
         let display_len = display_source.chars().count();
         let logical_end_char = if line_ix + 1 < buffer.len_lines() {
@@ -1544,19 +1674,13 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     let mut guides = Vec::new();
     let mut indent_cache = HashMap::new();
     let primary_line = buffer.char_to_line(primary_head.min(buffer.len_chars()));
-    let before_visible = (0..first_line).rev().find_map(|line| {
-        let text = trim_display_line(&lines[line]);
-        (!text.trim().is_empty()).then(|| leading_visual_column(text, indent_width))
-    });
-    let after_visible = (last_visible_line + 1..lines.len()).find_map(|line| {
-        let text = trim_display_line(&lines[line]);
-        (!text.trim().is_empty()).then(|| leading_visual_column(text, indent_width))
-    });
+    let before_visible = (0..first_line)
+        .rev()
+        .find_map(|line| rope_line_indent(buffer, line, indent_width));
+    let after_visible =
+        (last_visible_line + 1..buffer.len_lines()).find_map(|line| rope_line_indent(buffer, line, indent_width));
     let raw_visible: Vec<Option<usize>> = (first_line..=last_visible_line)
-        .map(|line| {
-            let text = trim_display_line(&lines[line]);
-            (!text.trim().is_empty()).then(|| leading_visual_column(text, indent_width))
-        })
+        .map(|line| rope_line_indent(buffer, line, indent_width))
         .collect();
     let mut previous = before_visible;
     let mut previous_indents = Vec::with_capacity(raw_visible.len());
@@ -1583,8 +1707,8 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         indent_cache.insert(first_line + offset, indent);
     }
     let primary_indent = indent_cache.get(&primary_line).copied().unwrap_or_else(|| {
-        let text = trim_display_line(&lines[primary_line]);
-        leading_visual_column(text, indent_width)
+        let text = cached_line_display_text(&mut cache, buffer, primary_line);
+        leading_visual_column(text.as_ref(), indent_width)
     });
     if indent_guides && indent_width > 0 {
         for row in &rows {
@@ -1606,7 +1730,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     let visible_char_end = rows.last().map_or(0, |row| row.logical_end_char);
     let visible_pairs = visible_structure_pairs(structure, visible_char_start, visible_char_end);
 
-    let guide_pairs: Vec<(&StructuralPair, bool)> = if !structure_current {
+    let guide_pairs: Vec<(StructuralPair, bool)> = if !structure_current {
         Vec::new()
     } else {
         match bracket_pair_guides {
@@ -1622,9 +1746,9 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     for (pair, active) in guide_pairs {
         let open_line = buffer.char_to_line(pair.open);
         let close_line = buffer.char_to_line(pair.close);
-        let open_text = trim_display_line(&lines[open_line]);
+        let open_text = cached_line_display_text(&mut cache, buffer, open_line);
         let open_column = char_visual_column(
-            open_text,
+            open_text.as_ref(),
             pair.open.saturating_sub(buffer.line_to_char(open_line)),
             indent_width,
         );
@@ -1642,7 +1766,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         }
     }
 
-    let horizontal_pairs: Vec<(&StructuralPair, bool)> = if !structure_current {
+    let horizontal_pairs: Vec<(StructuralPair, bool)> = if !structure_current {
         Vec::new()
     } else {
         match bracket_pair_horizontal_guides {
@@ -1657,16 +1781,16 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     };
     for (pair, active) in horizontal_pairs {
         let close_line = buffer.char_to_line(pair.close);
-        let close_text = trim_display_line(&lines[close_line]);
+        let close_text = cached_line_display_text(&mut cache, buffer, close_line);
         let close_column = char_visual_column(
-            close_text,
+            close_text.as_ref(),
             pair.close.saturating_sub(buffer.line_to_char(close_line)),
             indent_width,
         );
         let open_line = buffer.char_to_line(pair.open);
-        let open_text = trim_display_line(&lines[open_line]);
+        let open_text = cached_line_display_text(&mut cache, buffer, open_line);
         let open_column = char_visual_column(
-            open_text,
+            open_text.as_ref(),
             pair.open.saturating_sub(buffer.line_to_char(open_line)),
             indent_width,
         );
@@ -1693,13 +1817,9 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         strikethrough: None,
     };
     let mut markers = Vec::new();
-    for (line_ix, line) in lines
-        .iter()
-        .enumerate()
-        .take(last_visible_line.saturating_add(1))
-        .skip(first_line)
-    {
-        let text = trim_display_line(line);
+    for line_ix in first_line..last_visible_line.saturating_add(1).min(buffer.len_lines()) {
+        let line = cached_line_display_text(&mut cache, buffer, line_ix);
+        let text = line.as_ref();
         let line_start = buffer.line_to_char(line_ix);
         let mut candidates: Vec<(usize, char, bool)> = whitespace_positions(text, render_whitespace)
             .into_iter()
@@ -1736,7 +1856,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     markers.sort_by_key(|marker| marker.at);
     let structural_pair_count = if structure_current { structure.pairs.len() } else { 0 };
     let unmatched_bracket_count = if structure_current {
-        structure.tokens.iter().filter(|token| !token.matched).count()
+        structure.unmatched_count()
     } else {
         0
     };
@@ -2379,20 +2499,87 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let after = before.replacen("line 100", "line 100 with substantially more content", 1);
-        let before_lines = before.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
-        let after_lines = after.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+        let before_buffer = Rope::from_str(&before);
+        let after_buffer = Rope::from_str(&after);
         let mut cache = ViewportCache {
             wrap_layout: Some(CachedWrapLayout {
                 revision: 0,
-                layout: Rc::new(build_wrap_layout(&before_lines, 12, true)),
+                layout: Rc::new(build_wrap_layout_for_rope(&before_buffer, 12, true)),
             }),
             ..Default::default()
         };
 
-        cache.patch_wrap_layout(&Rope::from_str(&after), 1, &SyntaxInvalidation::Lines(99..102));
+        cache.patch_wrap_layout(&after_buffer, 1, &SyntaxInvalidation::Lines(99..102));
 
         let patched = cache.wrap_layout.expect("patch should retain layout");
         assert_eq!(patched.revision, 1);
-        assert_eq!(*patched.layout, build_wrap_layout(&after_lines, 12, true));
+        assert_eq!(*patched.layout, build_wrap_layout_for_rope(&after_buffer, 12, true));
+    }
+
+    #[test]
+    fn unwrapped_width_cache_unions_edits_until_the_next_measurement() {
+        let mut cache = ViewportCache {
+            max_unwrapped_line_width: Some(CachedUnwrappedLineWidth {
+                revision: 7,
+                char_width: px(8.0),
+                font_size: px(13.0),
+                width: px(800.0),
+                line_ix: 50,
+            }),
+            ..Default::default()
+        };
+
+        cache.patch_unwrapped_line_width(8, &SyntaxInvalidation::Lines(10..12), 100);
+        cache.patch_unwrapped_line_width(8, &SyntaxInvalidation::Lines(0..0), 100);
+        assert_eq!(
+            cache
+                .max_unwrapped_line_width
+                .expect("cached width should remain")
+                .revision,
+            7,
+            "an empty render-path sync must not hide pending line measurements"
+        );
+        cache.patch_unwrapped_line_width(9, &SyntaxInvalidation::Lines(20..22), 100);
+
+        let pending = cache
+            .unwrapped_line_width_invalidation
+            .as_ref()
+            .expect("edits should remain pending until no-wrap width is requested");
+        assert_eq!(pending.base_revision, 7);
+        assert_eq!(pending.revision, 9);
+        assert_eq!(pending.lines, 10..22);
+
+        cache.patch_unwrapped_line_width(10, &SyntaxInvalidation::Full, 100);
+        assert!(cache.max_unwrapped_line_width.is_none());
+        assert!(cache.unwrapped_line_width_invalidation.is_none());
+    }
+
+    #[test]
+    fn parser_failure_invalidates_cached_display_text_and_layout() {
+        let mut cache = cache_with_highlights(vec![3], vec![Vec::new()]);
+        cache.display_lines.insert(0, SharedString::from("old"));
+        cache
+            .wrapped_lines
+            .insert((0, Some(80)), Rc::from(Vec::<WrappedSegment>::new()));
+        cache.wrap_layout = Some(CachedWrapLayout {
+            revision: 4,
+            layout: Rc::new(build_wrap_layout_for_rope(&Rope::from_str("old"), 80, true)),
+        });
+        cache.max_unwrapped_line_width = Some(CachedUnwrappedLineWidth {
+            revision: 4,
+            char_width: px(8.0),
+            font_size: px(13.0),
+            width: px(24.0),
+            line_ix: 0,
+        });
+
+        cache.invalidate_after_parser_failure();
+
+        assert!(cache.syntax_highlights.is_none());
+        assert!(cache.display_lines.is_empty());
+        assert!(cache.wrapped_lines.is_empty());
+        assert!(cache.wrap_layout.is_none());
+        assert!(cache.max_unwrapped_line_width.is_none());
+        assert!(cache.unwrapped_line_width_invalidation.is_none());
     }
 }

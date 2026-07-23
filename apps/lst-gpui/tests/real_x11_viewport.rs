@@ -3,6 +3,7 @@
 
 mod support;
 
+use lst_x11_harness::{clipboard::write_clipboard_text, Selection};
 use support::{secs, EditorTestExt, TestResult};
 
 fn row_covers_char(record: &lst_x11_harness::StateTraceRecord, line: usize, ch: usize) -> bool {
@@ -65,6 +66,30 @@ fn alt_z_no_wrap_reveals_horizontal_cursor_and_wrap_resets_scroll() -> TestResul
                 && record.viewport.scroll_left_px <= 1.0
         })?;
         assert!(wrapped.viewport.scroll_left_px <= 1.0, "{wrapped:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn no_wrap_line_growth_updates_horizontal_extent() -> TestResult {
+    support::run_x11_test("viewport-no-wrap-line-growth", |session| {
+        let path = session.seed_file("growing-wide.txt", "short")?;
+        let mut editor = session.open_file("viewport-no-wrap-line-growth", &path)?;
+
+        editor.send_keys_settle("<A-z>")?;
+        editor.wait_state("no-wrap status", secs(5), |record| {
+            record.status_bar.contains("No Wrap")
+        })?;
+        editor.keys("<C-end>")?;
+        write_clipboard_text(Selection::Clipboard, &"x".repeat(400))?;
+        editor.keys("<C-v>")?;
+
+        let grown = editor.wait_state("grown line end remains horizontally reachable", secs(10), |record| {
+            record.viewport.scroll_left_px > record.viewport.char_width_px * 10.0
+                && matches!(record.cursors.as_slice(), [cursor] if cursor.head_col >= 405)
+        })?;
+        assert!(grown.viewport.scroll_left_px > 0.0, "{grown:?}");
         Ok(())
     })
 }
