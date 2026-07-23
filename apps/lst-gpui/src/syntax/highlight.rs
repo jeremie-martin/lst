@@ -2,10 +2,10 @@ use super::{
     catalog::{self, GrammarId},
     SyntaxLanguage, SyntaxSpan,
 };
-use crate::ui::theme::SyntaxRole;
+use crate::{diagnostics, ui::theme::SyntaxRole};
 use lst_editor::{BufferDelta, BufferEdit};
 use ropey::Rope;
-use std::ops::Range;
+use std::{cell::RefCell, ops::Range, rc::Rc, time::Instant};
 use tree_sitter::{InputEdit, Node, Parser, Point, QueryCursor, StreamingIterator, Tree};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,7 +83,8 @@ pub(crate) struct TabSyntaxState {
     /// Snapshot of the buffer at `revision`. `Rope::clone` is O(1) (it
     /// shares the internal node tree), so storing it is cheap.
     parsed_buffer: Rope,
-    structure: StructuralSnapshot,
+    structure: Rc<RefCell<StructuralSnapshot>>,
+    structure_remapped_last_update: bool,
 }
 
 impl TabSyntaxState {
@@ -91,15 +92,24 @@ impl TabSyntaxState {
         let grammar = catalog::grammar(catalog::root_grammar(language));
         let mut parser = Parser::new();
         parser.set_language(&grammar.language).ok()?;
+        let parse_started = diagnostics::trace_enabled().then(Instant::now);
         let tree = parse_rope(&mut parser, buffer, None)?;
+        if let Some(started) = parse_started {
+            diagnostics::record_ms("syntax_parse_initial_ms", started.elapsed().as_secs_f64() * 1000.0);
+        }
+        let structure_started = diagnostics::trace_enabled().then(Instant::now);
         let structure = structural_snapshot(language, &tree, buffer, revision);
+        if let Some(started) = structure_started {
+            diagnostics::record_ms("syntax_structure_initial_ms", started.elapsed().as_secs_f64() * 1000.0);
+        }
         Some(Self {
             language,
             revision,
             parser,
             tree,
             parsed_buffer: buffer.clone(),
-            structure,
+            structure: Rc::new(RefCell::new(structure)),
+            structure_remapped_last_update: false,
         })
     }
 
@@ -108,24 +118,41 @@ impl TabSyntaxState {
     /// alter line topology intentionally fall back to `Full`; ordinary typing
     /// keeps all unaffected per-line spans.
     pub(crate) fn update(&mut self, new_buffer: &Rope, delta: BufferDelta, new_revision: u64) -> SyntaxInvalidation {
-        let invalidation = match delta {
+        let parse_started = diagnostics::trace_enabled().then(Instant::now);
+        let mut changed_byte_ranges = Vec::new();
+        let mut parse_succeeded = true;
+        let root_config = catalog::grammar(catalog::root_grammar(self.language));
+        let edits_touch_old_injection = match &delta {
+            BufferDelta::Edits(edits) => edits_touch_injected_syntax(
+                &self.tree,
+                &self.parsed_buffer,
+                root_config,
+                edits.iter().map(|edit| edit.range.clone()),
+            ),
+            BufferDelta::Unchanged | BufferDelta::FullReplace => false,
+        };
+        let invalidation = match &delta {
             BufferDelta::Unchanged => {
                 // A changed revision without a delta means a consumer missed
                 // an edit batch. Reparse and rebuild rather than guessing.
                 if let Some(tree) = parse_rope(&mut self.parser, new_buffer, None) {
                     self.tree = tree;
+                } else {
+                    parse_succeeded = false;
                 }
                 SyntaxInvalidation::Full
             }
             BufferDelta::FullReplace => {
                 if let Some(tree) = parse_rope(&mut self.parser, new_buffer, None) {
                     self.tree = tree;
+                } else {
+                    parse_succeeded = false;
                 }
                 SyntaxInvalidation::Full
             }
             BufferDelta::Edits(edits) => {
                 let line_topology_changed = self.parsed_buffer.len_lines() != new_buffer.len_lines();
-                let mut changed_lines = edited_line_range(new_buffer, &edits);
+                let mut changed_lines = edited_line_range(new_buffer, edits);
                 // Apply edits in reverse order so each edit's pre-batch
                 // coordinates (in `self.parsed_buffer`) stay valid — later
                 // edits don't shift earlier positions.
@@ -135,12 +162,15 @@ impl TabSyntaxState {
                 }
                 if let Some(tree) = parse_rope(&mut self.parser, new_buffer, Some(&self.tree)) {
                     for range in self.tree.changed_ranges(&tree) {
+                        changed_byte_ranges.push(range.start_byte..range.end_byte);
                         include_line_range(
                             &mut changed_lines,
                             range.start_point.row..range.end_point.row.saturating_add(1),
                         );
                     }
                     self.tree = tree;
+                } else {
+                    parse_succeeded = false;
                 }
                 if line_topology_changed {
                     SyntaxInvalidation::Full
@@ -153,14 +183,53 @@ impl TabSyntaxState {
                 }
             }
         };
+        if let Some(started) = parse_started {
+            diagnostics::record_ms("syntax_parse_update_ms", started.elapsed().as_secs_f64() * 1000.0);
+        }
+        let structure_started = diagnostics::trace_enabled().then(Instant::now);
+        let edits_touch_new_injection = match &delta {
+            BufferDelta::Edits(edits) => {
+                edits_touch_injected_syntax(&self.tree, new_buffer, root_config, post_edit_ranges(edits))
+            }
+            BufferDelta::Unchanged | BufferDelta::FullReplace => false,
+        };
+        let structure_remapped = parse_succeeded
+            && !edits_touch_old_injection
+            && !edits_touch_new_injection
+            && matches!(&delta, BufferDelta::Edits(edits) if can_remap_structural_snapshot(
+                &self.parsed_buffer,
+                new_buffer,
+                edits,
+                &changed_byte_ranges,
+            ));
+        if structure_remapped {
+            let BufferDelta::Edits(edits) = &delta else {
+                unreachable!("structure remapping only applies to edit deltas");
+            };
+            remap_structural_snapshot(&mut self.structure.borrow_mut(), edits, new_revision);
+        } else {
+            *self.structure.borrow_mut() = structural_snapshot(self.language, &self.tree, new_buffer, new_revision);
+        }
+        if let Some(started) = structure_started {
+            diagnostics::record_ms("syntax_structure_update_ms", started.elapsed().as_secs_f64() * 1000.0);
+        }
         self.parsed_buffer = new_buffer.clone();
         self.revision = new_revision;
-        self.structure = structural_snapshot(self.language, &self.tree, new_buffer, new_revision);
+        self.structure_remapped_last_update = structure_remapped;
         invalidation
     }
 
-    pub(crate) fn structure(&self) -> &StructuralSnapshot {
-        &self.structure
+    #[cfg(test)]
+    pub(crate) fn structure(&self) -> std::cell::Ref<'_, StructuralSnapshot> {
+        self.structure.borrow()
+    }
+
+    pub(crate) fn shared_structure(&self) -> Rc<RefCell<StructuralSnapshot>> {
+        self.structure.clone()
+    }
+
+    pub(crate) fn structure_was_remapped(&self) -> bool {
+        self.structure_remapped_last_update
     }
 
     /// Returns parser-owned selection ranges as plain character offsets.
@@ -261,6 +330,107 @@ impl TabSyntaxState {
 
         emit_non_overlapping_spans(&captures, &mut spans, &line_starts, &display_ends, byte_range);
         (spans, line_byte_lens)
+    }
+}
+
+fn edits_touch_injected_syntax(
+    tree: &Tree,
+    buffer: &Rope,
+    config: &catalog::GrammarConfig,
+    ranges: impl IntoIterator<Item = Range<usize>>,
+) -> bool {
+    if config.injections.is_none() || buffer.len_chars() == 0 {
+        return false;
+    }
+    let len_chars = buffer.len_chars();
+    ranges.into_iter().any(|range| {
+        // Include one character of context on both sides so edits to an
+        // injection boundary (a fence, tag, or template delimiter) query the
+        // containing injection pattern as well as edits within its content.
+        let start = range.start.min(len_chars);
+        let end = range.end.min(len_chars).max(start);
+        let context_start = start.saturating_sub(1);
+        let context_end = end.max(start.saturating_add(1)).saturating_add(1).min(len_chars);
+        let bytes = buffer.char_to_byte(context_start)..buffer.char_to_byte(context_end);
+        !collect_rope_injection_matches(tree, buffer, config, bytes).is_empty()
+    })
+}
+
+fn post_edit_ranges(edits: &[BufferEdit]) -> impl Iterator<Item = Range<usize>> + '_ {
+    let mut shift = 0isize;
+    edits.iter().map(move |edit| {
+        let start = edit.range.start.saturating_add_signed(shift);
+        let inserted = edit.replacement.chars().count();
+        let removed = edit.range.end.saturating_sub(edit.range.start);
+        shift = shift.saturating_add(
+            isize::try_from(inserted).unwrap_or(isize::MAX) - isize::try_from(removed).unwrap_or(isize::MAX),
+        );
+        start..start.saturating_add(inserted)
+    })
+}
+
+fn can_remap_structural_snapshot(
+    old_buffer: &Rope,
+    new_buffer: &Rope,
+    edits: &[BufferEdit],
+    changed_byte_ranges: &[Range<usize>],
+) -> bool {
+    for edit in edits {
+        let removed = edit.range.start.min(old_buffer.len_chars())..edit.range.end.min(old_buffer.len_chars());
+        if old_buffer.slice(removed).chars().any(is_structural_candidate)
+            || edit.replacement.chars().any(is_structural_candidate)
+        {
+            return false;
+        }
+    }
+    changed_byte_ranges.iter().all(|range| {
+        let start = range.start.min(new_buffer.len_bytes());
+        let end = range.end.min(new_buffer.len_bytes()).max(start);
+        !new_buffer.byte_slice(start..end).chars().any(is_structural_candidate)
+    })
+}
+
+fn is_structural_candidate(ch: char) -> bool {
+    matches!(ch, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>')
+}
+
+fn remap_structural_snapshot(snapshot: &mut StructuralSnapshot, edits: &[BufferEdit], revision: u64) {
+    let offsets = OffsetMapper::new(edits);
+    for pair in &mut snapshot.pairs {
+        pair.open = offsets.map(pair.open);
+        pair.close = offsets.map(pair.close);
+    }
+    for token in &mut snapshot.tokens {
+        token.at = offsets.map(token.at);
+    }
+    snapshot.revision = revision;
+}
+
+/// Maps pre-edit character offsets through a normalized, sorted edit batch.
+/// Building prefix shifts once keeps structural remapping O(tokens log edits)
+/// for large multi-cursor transactions instead of O(tokens * edits).
+struct OffsetMapper<'a> {
+    edits: &'a [BufferEdit],
+    shifts: Vec<isize>,
+}
+
+impl<'a> OffsetMapper<'a> {
+    fn new(edits: &'a [BufferEdit]) -> Self {
+        let mut shifts = Vec::with_capacity(edits.len() + 1);
+        shifts.push(0isize);
+        for edit in edits {
+            let removed = edit.range.end.saturating_sub(edit.range.start);
+            let inserted = edit.replacement.chars().count();
+            shifts.push(shifts.last().copied().unwrap_or_default().saturating_add(
+                isize::try_from(inserted).unwrap_or(isize::MAX) - isize::try_from(removed).unwrap_or(isize::MAX),
+            ));
+        }
+        Self { edits, shifts }
+    }
+
+    fn map(&self, at: usize) -> usize {
+        let completed = self.edits.partition_point(|edit| edit.range.end <= at);
+        at.saturating_add_signed(self.shifts[completed])
     }
 }
 
@@ -545,6 +715,36 @@ pub(crate) fn plain_structural_snapshot(
         pairs,
         tokens,
     }
+}
+
+pub(crate) fn update_plain_structural_snapshot(
+    previous: &StructuralSnapshot,
+    buffer: &Rope,
+    revision: u64,
+    structural_pairs: &[(char, char)],
+    delta: &BufferDelta,
+) -> (StructuralSnapshot, bool) {
+    let BufferDelta::Edits(edits) = delta else {
+        return (plain_structural_snapshot(buffer, revision, structural_pairs), false);
+    };
+    let can_remap = edits.iter().all(|edit| {
+        let first_token = previous.tokens.partition_point(|token| token.at < edit.range.start);
+        !edit
+            .replacement
+            .chars()
+            .any(|ch| structural_pairs.iter().any(|(open, close)| *open == ch || *close == ch))
+            && previous
+                .tokens
+                .get(first_token)
+                .is_none_or(|token| token.at >= edit.range.end)
+    });
+    if !can_remap {
+        return (plain_structural_snapshot(buffer, revision, structural_pairs), false);
+    }
+
+    let mut structure = previous.clone();
+    remap_structural_snapshot(&mut structure, edits, revision);
+    (structure, true)
 }
 
 fn assign_pair_parents(pairs: &mut [StructuralPair]) {

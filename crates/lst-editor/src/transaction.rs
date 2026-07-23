@@ -82,20 +82,20 @@ impl TextChangeSet {
         map_offset_to_inserted_end(&self.changes, offset)
     }
 
-    pub(crate) fn normalized_for_len(&self, len: usize) -> Self {
-        let changes = self
-            .changes
-            .iter()
-            .map(|change| TextChange::replace(clamped_range(change.range.clone(), len), change.replacement.clone()))
-            .collect();
-        Self {
-            changes,
-            primary: self.primary,
+    pub(crate) fn normalized_for_len(mut self, len: usize) -> Self {
+        for change in &mut self.changes {
+            change.range = clamped_range(change.range.clone(), len);
         }
+        self
     }
 
     pub(crate) fn primary_inserted_range(&self) -> Range<usize> {
         inserted_range_for_change(&self.changes, self.primary)
+    }
+
+    /// Transfers normalized changes to the tab without copying replacement buffers.
+    pub(crate) fn into_changes(self) -> Vec<TextChange> {
+        self.changes
     }
 }
 

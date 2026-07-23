@@ -26,8 +26,13 @@ use std::{
 
 use crate::syntax::{
     CachedSyntaxHighlights, StructuralPair, StructuralSnapshot, StructuralToken, SyntaxInvalidation, SyntaxMode,
-    SyntaxSpan,
+    SyntaxSpan, TabSyntaxState,
 };
+
+/// Keep a bounded shaping working set around the viewport. This is large
+/// enough to make short scroll reversals and page-up/page-down reuse glyph
+/// layouts, while still bounding per-tab cache memory on huge documents.
+const SHAPED_LINE_CACHE_MARGIN: usize = 1_024;
 
 #[derive(Clone)]
 struct CachedShapedLine {
@@ -39,6 +44,7 @@ struct CachedShapedLine {
 #[derive(Default)]
 pub(crate) struct ViewportCache {
     code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
+    wrapped_lines: HashMap<(usize, Option<usize>), Rc<[WrappedSegment]>>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
     pub(crate) syntax_highlights: Option<CachedSyntaxHighlights>,
     pub(crate) wrap_layout: Option<CachedWrapLayout>,
@@ -71,6 +77,13 @@ impl ViewportCache {
         self.code_lines.clear();
     }
 
+    pub(crate) fn clear_code_lines_in(&mut self, lines: Range<usize>) {
+        if lines.is_empty() {
+            return;
+        }
+        self.code_lines.retain(|(line_ix, _, _), _| !lines.contains(line_ix));
+    }
+
     pub(crate) fn clear_shaped_lines(&mut self) {
         self.code_lines.clear();
         self.gutter_lines.clear();
@@ -81,6 +94,14 @@ impl ViewportCache {
     /// affected line window immediately after this call.
     pub(crate) fn invalidate_content_layout(&mut self) {
         self.code_lines.clear();
+        self.invalidate_content_layout_preserving_code_lines();
+    }
+
+    /// Invalidate revision-dependent measurements after an edit, retaining
+    /// shaped code rows until syntax synchronization identifies the exact
+    /// semantic line window that changed.
+    pub(crate) fn invalidate_content_layout_preserving_code_lines(&mut self) {
+        self.wrapped_lines.clear();
         self.gutter_lines.clear();
         self.max_unwrapped_line_width = None;
     }
@@ -98,6 +119,14 @@ impl ViewportCache {
     /// Only changed lines are remeasured; later row starts receive one cheap
     /// integer shift instead of re-tokenizing every line in the document.
     pub(crate) fn patch_wrap_layout(&mut self, buffer: &Rope, revision: u64, invalidation: &SyntaxInvalidation) {
+        let started = diagnostics::trace_enabled().then(Instant::now);
+        self.patch_wrap_layout_inner(buffer, revision, invalidation);
+        if let Some(started) = started {
+            diagnostics::record_ms("wrap_layout_patch_ms", started.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+
+    fn patch_wrap_layout_inner(&mut self, buffer: &Rope, revision: u64, invalidation: &SyntaxInvalidation) {
         if invalidation.is_full() {
             self.wrap_layout = None;
             return;
@@ -105,8 +134,9 @@ impl ViewportCache {
         let Some(mut cached) = self.wrap_layout.take() else {
             return;
         };
+        let layout = Rc::make_mut(&mut cached.layout);
         let line_count = buffer.len_lines();
-        if cached.layout.line_row_starts.len() != line_count.saturating_add(1) {
+        if layout.line_row_starts.len() != line_count.saturating_add(1) {
             return;
         }
         let lines = invalidation.line_range(line_count);
@@ -116,27 +146,27 @@ impl ViewportCache {
             return;
         }
 
-        let old_end = cached.layout.line_row_starts[lines.end];
-        let mut next_start = cached.layout.line_row_starts[lines.start];
+        let old_end = layout.line_row_starts[lines.end];
+        let mut next_start = layout.line_row_starts[lines.start];
         for line_ix in lines.clone() {
-            cached.layout.line_row_starts[line_ix] = next_start;
-            let row_count = if cached.layout.show_wrap {
+            layout.line_row_starts[line_ix] = next_start;
+            let row_count = if layout.show_wrap {
                 let mut line = buffer.line(line_ix).to_string();
                 while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
                     line.pop();
                 }
-                visual_line_count(&line, cached.layout.wrap_columns)
+                visual_line_count(&line, layout.wrap_columns)
             } else {
                 1
             };
             next_start = next_start.saturating_add(row_count);
         }
-        cached.layout.line_row_starts[lines.end] = next_start;
+        layout.line_row_starts[lines.end] = next_start;
         let row_delta = next_start as isize - old_end as isize;
-        for row_start in &mut cached.layout.line_row_starts[lines.end.saturating_add(1)..] {
+        for row_start in &mut layout.line_row_starts[lines.end.saturating_add(1)..] {
             *row_start = row_start.saturating_add_signed(row_delta);
         }
-        cached.layout.total_rows = cached.layout.total_rows.saturating_add_signed(row_delta).max(1);
+        layout.total_rows = layout.total_rows.saturating_add_signed(row_delta).max(1);
         cached.revision = revision;
         self.wrap_layout = Some(cached);
     }
@@ -170,7 +200,7 @@ pub(crate) struct PaintedRow {
 }
 
 pub(crate) struct ViewportPaintState {
-    pub(crate) rows: Vec<PaintedRow>,
+    pub(crate) rows: Rc<[PaintedRow]>,
     pub(crate) occurrence_highlights: Rc<[Range<usize>]>,
     pub(crate) selection_match_highlights: Rc<[Range<usize>]>,
     structure: StructurePaintState,
@@ -209,7 +239,7 @@ pub(crate) struct ViewportGeometry {
     /// painted for this content" — otherwise they compare a fresh cursor
     /// position against last revision's char ranges.
     pub(crate) painted_revision: u64,
-    pub(crate) rows: Vec<PaintedRow>,
+    pub(crate) rows: Rc<[PaintedRow]>,
     pub(crate) scroll_top_at_paint: Pixels,
     pub(crate) scroll_left_at_paint: Pixels,
     pub(crate) painted_wrap_columns: Option<usize>,
@@ -312,7 +342,7 @@ fn decimal_digits(mut value: usize) -> usize {
 #[derive(Clone)]
 pub(crate) struct CachedWrapLayout {
     pub(crate) revision: u64,
-    pub(crate) layout: WrapLayout,
+    pub(crate) layout: Rc<WrapLayout>,
 }
 
 pub(crate) struct WrapLayoutInput<'a> {
@@ -330,6 +360,7 @@ pub(crate) struct ViewportPreparation<'a> {
     pub(crate) lines: &'a [DisplayLine],
     pub(crate) revision: u64,
     pub(crate) syntax_mode: SyntaxMode,
+    pub(crate) syntax_state: Option<&'a TabSyntaxState>,
     pub(crate) layout_metrics: ViewportLayoutMetrics,
     pub(crate) gutter_mode: GutterMode,
     pub(crate) cursor_line: usize,
@@ -445,6 +476,7 @@ fn line_syntax_spans(
             .syntax_highlights
             .as_ref()
             .filter(|highlights| highlights.language == language)
+            .filter(|highlights| highlights.valid_lines.get(line_ix).copied().unwrap_or(false))
             .filter(|highlights| {
                 highlights
                     .line_byte_lens
@@ -455,6 +487,59 @@ fn line_syntax_spans(
             .and_then(|highlights| highlights.lines.get(line_ix))
             .cloned()
             .unwrap_or_default(),
+    }
+}
+
+pub(crate) fn ensure_syntax_cache_for_lines(
+    cache: &mut ViewportCache,
+    state: &TabSyntaxState,
+    revision: u64,
+    requested: Range<usize>,
+) {
+    let Some(highlights) = cache.syntax_highlights.as_ref() else {
+        return;
+    };
+    if highlights.language != state.language
+        || highlights.revision != revision
+        || state.revision != revision
+        || highlights.lines.len() != highlights.valid_lines.len()
+    {
+        return;
+    }
+
+    let line_count = highlights.lines.len();
+    let requested = requested.start.min(line_count)..requested.end.min(line_count);
+    let mut missing = Vec::new();
+    let mut line = requested.start;
+    while line < requested.end {
+        if highlights.valid_lines[line] {
+            line += 1;
+            continue;
+        }
+        let start = line;
+        line += 1;
+        while line < requested.end && !highlights.valid_lines[line] {
+            line += 1;
+        }
+        missing.push(start..line);
+    }
+    if missing.is_empty() {
+        return;
+    }
+
+    let started = diagnostics::trace_enabled().then(Instant::now);
+    let highlights = cache
+        .syntax_highlights
+        .as_mut()
+        .expect("syntax cache was validated above");
+    for range in missing {
+        let (lines, line_byte_lens) = state.compute_spans_for_lines(range.clone());
+        highlights.lines[range.clone()].clone_from_slice(&lines);
+        highlights.line_byte_lens[range.clone()].clone_from_slice(&line_byte_lens);
+        highlights.valid_lines[range].fill(true);
+    }
+    if let Some(started) = started {
+        diagnostics::record_ms("syntax_highlight_cache_ms", started.elapsed().as_secs_f64() * 1000.0);
     }
 }
 
@@ -578,7 +663,7 @@ fn text_runs_for_segment(
     spans: &[SyntaxSpan],
     base_run: &TextRun,
     theme: Theme,
-) -> (Vec<TextRun>, u64) {
+) -> Vec<TextRun> {
     let segment_start = char_to_byte_index(line_text, segment_start_col);
     let segment_end = char_to_byte_index(line_text, segment_end_col);
     let segment_len = segment_end.saturating_sub(segment_start);
@@ -595,11 +680,6 @@ fn text_runs_for_segment(
             });
         }
     }
-
-    let mut hasher = DefaultHasher::new();
-    theme.style_key().hash(&mut hasher);
-    local_spans.hash(&mut hasher);
-    let style_key = hasher.finish();
 
     let mut runs = Vec::new();
     let mut cursor = 0;
@@ -632,7 +712,15 @@ fn text_runs_for_segment(
         });
     }
 
-    (runs, style_key)
+    runs
+}
+
+fn code_style_key(theme: Theme, syntax_mode: SyntaxMode, bracket_pair_colorization: bool) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    theme.style_key().hash(&mut hasher);
+    syntax_mode.hash(&mut hasher);
+    bracket_pair_colorization.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub(crate) fn code_char_width(cache: &mut ViewportCache, window: &mut Window, scale: f32, theme: Theme) -> Pixels {
@@ -775,7 +863,7 @@ fn wrap_columns_for_viewport(
     ((content_width / px(1.0)) / char_width).floor().max(1.0) as usize
 }
 
-pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInput<'_>) -> WrapLayout {
+pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInput<'_>) -> Rc<WrapLayout> {
     let WrapLayoutInput {
         lines,
         revision,
@@ -797,9 +885,10 @@ pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInp
     }
 
     cache.code_lines.clear();
+    cache.wrapped_lines.clear();
 
     let started = diagnostics::trace_enabled().then(Instant::now);
-    let layout = build_wrap_layout(lines, wrap_columns, show_wrap);
+    let layout = Rc::new(build_wrap_layout(lines, wrap_columns, show_wrap));
     if let Some(started) = started {
         diagnostics::record_ms("wrap_layout_ms", started.elapsed().as_secs_f64() * 1000.0);
     }
@@ -866,7 +955,7 @@ fn shape_cached_line(
 fn shape_cached_segment(
     cache: &mut HashMap<(usize, usize, usize), CachedShapedLine>,
     key: (usize, usize, usize),
-    text: SharedString,
+    text: &str,
     runs: &[TextRun],
     style_key: u64,
     font_size: Pixels,
@@ -877,11 +966,12 @@ fn shape_cached_segment(
     }
 
     if let Some(cached) = cache.get(&key) {
-        if cached.text == text && cached.style_key == style_key {
+        if cached.text.as_ref() == text && cached.style_key == style_key {
             return Some(cached.shaped.clone());
         }
     }
 
+    let text = SharedString::from(text.to_string());
     let shaped = window.text_system().shape_line(text.clone(), font_size, runs, None);
 
     cache.insert(
@@ -893,6 +983,18 @@ fn shape_cached_segment(
         },
     );
     Some(shaped)
+}
+
+fn cached_segment(
+    cache: &HashMap<(usize, usize, usize), CachedShapedLine>,
+    key: (usize, usize, usize),
+    text: &str,
+    style_key: u64,
+) -> Option<ShapedLine> {
+    cache
+        .get(&key)
+        .filter(|cached| cached.text.as_ref() == text && cached.style_key == style_key)
+        .map(|cached| cached.shaped.clone())
 }
 
 fn expand_identifier_window(buffer: &Rope, mut window: Range<usize>) -> Range<usize> {
@@ -1219,6 +1321,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         lines,
         revision,
         syntax_mode,
+        syntax_state,
         layout_metrics,
         gutter_mode,
         cursor_line,
@@ -1273,8 +1376,10 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         underline: None,
         strikethrough: None,
     };
+    let code_style_key = code_style_key(theme, syntax_mode, bracket_pair_colorization);
 
     let mut cache = viewport_cache.borrow_mut();
+    let rows_started = diagnostics::trace_enabled().then(Instant::now);
     let layout = ensure_wrap_layout(
         &mut cache,
         WrapLayoutInput {
@@ -1290,12 +1395,25 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     let visible_rows = visible_visual_row_range(scroll_top, viewport_height, layout.total_rows, row_height);
     let first_line = line_for_visual_row(&layout, visible_rows.start);
     let last_visible_line = line_for_visual_row(&layout, visible_rows.end.saturating_sub(1));
+    if let Some(syntax_state) = syntax_state {
+        ensure_syntax_cache_for_lines(
+            &mut cache,
+            syntax_state,
+            revision,
+            first_line..last_visible_line.saturating_add(1),
+        );
+    }
+    let cached_first_line = first_line.saturating_sub(SHAPED_LINE_CACHE_MARGIN);
+    let cached_last_line = last_visible_line.saturating_add(SHAPED_LINE_CACHE_MARGIN);
     cache
         .code_lines
-        .retain(|(line_ix, _, _), _| *line_ix >= first_line && *line_ix <= last_visible_line);
+        .retain(|(line_ix, _, _), _| *line_ix >= cached_first_line && *line_ix <= cached_last_line);
+    cache
+        .wrapped_lines
+        .retain(|(line_ix, _), _| *line_ix >= cached_first_line && *line_ix <= cached_last_line);
     cache
         .gutter_lines
-        .retain(|line_ix, _| show_gutter && *line_ix >= first_line && *line_ix <= last_visible_line);
+        .retain(|line_ix, _| show_gutter && *line_ix >= cached_first_line && *line_ix <= cached_last_line);
 
     let mut rows = Vec::new();
     for (line_ix, line) in lines
@@ -1306,28 +1424,32 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     {
         let display_source = trim_display_line(line);
         let line_start_char = buffer.line_to_char(line_ix);
-        let mut highlight_spans = line_syntax_spans(&mut cache, line_ix, display_source.len(), syntax_mode);
-        if bracket_pair_colorization && structure.revision == revision {
-            highlight_spans = overlay_bracket_spans(display_source, line_start_char, highlight_spans, structure);
-        }
         let display_len = display_source.chars().count();
         let logical_end_char = if line_ix + 1 < buffer.len_lines() {
             buffer.line_to_char(line_ix + 1)
         } else {
             buffer.len_chars()
         };
-        let segments = if show_wrap {
-            wrap_segments(display_source, layout.wrap_columns)
-        } else {
-            vec![WrappedSegment {
-                start_col: 0,
-                end_col: display_len,
-                text: display_source.to_string(),
-            }]
-        };
+        let segment_key = (line_ix, show_wrap.then_some(layout.wrap_columns));
+        let segments = cache
+            .wrapped_lines
+            .entry(segment_key)
+            .or_insert_with(|| {
+                if show_wrap {
+                    wrap_segments(display_source, layout.wrap_columns).into()
+                } else {
+                    Rc::from([WrappedSegment {
+                        start_col: 0,
+                        end_col: display_len,
+                        text: display_source.to_string(),
+                    }])
+                }
+            })
+            .clone();
         let segment_count = segments.len();
+        let mut highlight_spans = None;
 
-        for (segment_ix, segment) in segments.into_iter().enumerate() {
+        for (segment_ix, segment) in segments.iter().enumerate() {
             let visual_row = layout.line_row_starts[line_ix] + segment_ix;
             if !visible_rows.contains(&visual_row) {
                 continue;
@@ -1336,23 +1458,34 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
             let row_top = bounds.top() + row_height * visual_row as f32 - scroll_top;
             let segment_start_char = line_start_char + segment.start_col;
             let segment_end_char = line_start_char + segment.end_col;
-            let (code_runs, style_key) = text_runs_for_segment(
-                display_source,
-                segment.start_col,
-                segment.end_col,
-                &highlight_spans,
-                &code_run,
-                theme,
-            );
-            let code_line = shape_cached_segment(
-                &mut cache.code_lines,
-                (line_ix, segment.start_col, segment.end_col),
-                SharedString::from(segment.text),
-                &code_runs,
-                style_key,
-                font_size,
-                window,
-            );
+            let segment_cache_key = (line_ix, segment.start_col, segment.end_col);
+            let code_line = cached_segment(&cache.code_lines, segment_cache_key, &segment.text, code_style_key)
+                .or_else(|| {
+                    let highlight_spans = highlight_spans.get_or_insert_with(|| {
+                        let mut spans = line_syntax_spans(&mut cache, line_ix, display_source.len(), syntax_mode);
+                        if bracket_pair_colorization && structure.revision == revision {
+                            spans = overlay_bracket_spans(display_source, line_start_char, spans, structure);
+                        }
+                        spans
+                    });
+                    let code_runs = text_runs_for_segment(
+                        display_source,
+                        segment.start_col,
+                        segment.end_col,
+                        highlight_spans,
+                        &code_run,
+                        theme,
+                    );
+                    shape_cached_segment(
+                        &mut cache.code_lines,
+                        segment_cache_key,
+                        &segment.text,
+                        &code_runs,
+                        code_style_key,
+                        font_size,
+                        window,
+                    )
+                });
             let gutter_text = if show_gutter && segment_ix == 0 {
                 Some(gutter_mode.format(line_ix, cursor_line, cursor_lines))
             } else {
@@ -1397,6 +1530,9 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
                 gutter_text,
             });
         }
+    }
+    if let Some(started) = rows_started {
+        diagnostics::record_ms("viewport_rows_ms", started.elapsed().as_secs_f64() * 1000.0);
     }
 
     let structure_started = diagnostics::trace_enabled().then(Instant::now);
@@ -1613,6 +1749,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         diagnostics::record_ms("structure_decorations_ms", started.elapsed().as_secs_f64() * 1000.0);
     }
 
+    let highlights_started = diagnostics::trace_enabled().then(Instant::now);
     let visible_windows = painted_character_windows(&rows, bounds, layout_metrics, scroll_left);
     let occurrence_highlights = visible_occurrence_highlights(
         &mut cache,
@@ -1629,7 +1766,14 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         selected_match_ranges,
         visible_windows,
     );
+    if let Some(started) = highlights_started {
+        diagnostics::record_ms(
+            "viewport_visible_highlights_ms",
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
+    }
 
+    let rows: Rc<[PaintedRow]> = rows.into();
     *viewport_geometry.borrow_mut() = ViewportGeometry {
         bounds: Some(bounds),
         painted_revision: revision,
@@ -1862,8 +2006,8 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         }
     }
 
-    for row in rows {
-        let row_cursors = cursors_in_row(&cursors, &row);
+    for row in rows.iter() {
+        let row_cursors = cursors_in_row(&cursors, row);
         let selection_head_in_row = !row_cursors.is_empty();
         if selection_head_in_row {
             let highlight_left = bounds.left() + layout_metrics.gutter_width();
@@ -1880,9 +2024,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             ));
         }
 
-        for occurrence in items_overlapping_row(occurrence_highlights.as_ref(), &row, Clone::clone) {
+        for occurrence in items_overlapping_row(occurrence_highlights.as_ref(), row, Clone::clone) {
             paint_range_background(
-                &row,
+                row,
                 occurrence,
                 code_origin_x,
                 row_height,
@@ -1892,9 +2036,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             );
         }
 
-        for selection_match in items_overlapping_row(selection_match_highlights.as_ref(), &row, Clone::clone) {
+        for selection_match in items_overlapping_row(selection_match_highlights.as_ref(), row, Clone::clone) {
             paint_range_background(
-                &row,
+                row,
                 selection_match,
                 code_origin_x,
                 row_height,
@@ -1904,9 +2048,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             );
         }
 
-        for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), &row, Clone::clone) {
+        for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), row, Clone::clone) {
             paint_range_background(
-                &row,
+                row,
                 bracket,
                 code_origin_x,
                 row_height,
@@ -1916,9 +2060,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             );
         }
 
-        for search_match in items_overlapping_row(search_matches, &row, Clone::clone) {
+        for search_match in items_overlapping_row(search_matches, row, Clone::clone) {
             paint_range_background(
-                &row,
+                row,
                 search_match,
                 code_origin_x,
                 row_height,
@@ -1930,7 +2074,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
 
         if let Some(active_search_match) = active_search_match {
             paint_range_background(
-                &row,
+                row,
                 active_search_match,
                 code_origin_x,
                 row_height,
@@ -1940,9 +2084,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             );
         }
 
-        for selection in items_overlapping_row(selections, &row, Selection::range) {
+        for selection in items_overlapping_row(selections, row, Selection::range) {
             paint_range_background(
-                &row,
+                row,
                 &selection.range(),
                 code_origin_x,
                 row_height,
@@ -1964,14 +2108,14 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             .markers
             .partition_point(|marker| marker.at < row.line_start_char);
         let marker_last = marker_first
-            + structure.markers[marker_first..].partition_point(|marker| row_contains_cursor(&row, marker.at));
+            + structure.markers[marker_first..].partition_point(|marker| row_contains_cursor(row, marker.at));
         for marker in &structure.markers[marker_first..marker_last] {
-            let x = code_origin_x + x_for_global_char(&row, marker.at).unwrap_or_else(|| px(0.0));
+            let x = code_origin_x + x_for_global_char(row, marker.at).unwrap_or_else(|| px(0.0));
             let _ = marker.shaped.paint(point(x, row.row_top), line_height, window, cx);
         }
 
-        for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), &row, Clone::clone) {
-            if let Some(bounds) = range_bounds(&row, bracket, code_origin_x, row_height, scale) {
+        for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), row, Clone::clone) {
+            if let Some(bounds) = range_bounds(row, bracket, code_origin_x, row_height, scale) {
                 paint_outline(
                     bounds,
                     metrics::px_for_scale(1.0, scale),
@@ -1986,10 +2130,10 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 let cursor_char = cursor.char;
                 let block_cursor = vim_mode == vim::Mode::Normal && cursor.collapsed;
                 let cursor_x = code_origin_x
-                    + x_for_global_char(&row, cursor_char.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
+                    + x_for_global_char(row, cursor_char.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
                 let cursor_width = if block_cursor {
                     let next_x = code_origin_x
-                        + x_for_global_char(&row, (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)))
+                        + x_for_global_char(row, (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)))
                             .unwrap_or_else(|| {
                                 cursor_x + metrics::px_for_scale(metrics::code_font_size() * 0.55, scale)
                             });
@@ -2016,9 +2160,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             }
         }
 
-        if let Some(drop_cursor) = drop_cursor.filter(|drop| row_contains_cursor(&row, *drop)) {
+        if let Some(drop_cursor) = drop_cursor.filter(|drop| row_contains_cursor(row, *drop)) {
             let cursor_x = code_origin_x
-                + x_for_global_char(&row, drop_cursor.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
+                + x_for_global_char(row, drop_cursor.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
             window.paint_quad(fill(
                 Bounds::new(
                     point(cursor_x, row.row_top),
@@ -2087,12 +2231,14 @@ mod tests {
     use crate::ui::theme::SyntaxRole;
 
     fn cache_with_highlights(line_byte_lens: Vec<u32>, lines: Vec<Vec<SyntaxSpan>>) -> ViewportCache {
+        let valid_lines = vec![true; lines.len()];
         ViewportCache {
             syntax_highlights: Some(CachedSyntaxHighlights {
                 language: SyntaxLanguage::Rust,
                 revision: 0,
                 lines,
                 line_byte_lens,
+                valid_lines,
             }),
             ..Default::default()
         }
@@ -2104,6 +2250,32 @@ mod tests {
             end,
             role: SyntaxRole::Keyword,
         }
+    }
+
+    #[test]
+    fn syntax_cache_materializes_only_requested_lines() {
+        let source = "let first = 1;\nfn second() {}\nlet third = 3;\n";
+        let buffer = Rope::from_str(source);
+        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, 7).unwrap();
+        let line_count = buffer.len_lines();
+        let mut cache = ViewportCache {
+            syntax_highlights: Some(CachedSyntaxHighlights {
+                language: SyntaxLanguage::Rust,
+                revision: 7,
+                lines: vec![Vec::new(); line_count],
+                line_byte_lens: vec![0; line_count],
+                valid_lines: vec![false; line_count],
+            }),
+            ..Default::default()
+        };
+
+        ensure_syntax_cache_for_lines(&mut cache, &state, 7, 1..2);
+
+        let highlights = cache.syntax_highlights.unwrap();
+        assert_eq!(highlights.valid_lines, [false, true, false, false]);
+        assert!(highlights.lines[0].is_empty());
+        assert!(highlights.lines[1].iter().any(|span| span.role == SyntaxRole::Keyword));
+        assert!(highlights.lines[2].is_empty());
     }
 
     #[test]
@@ -2212,7 +2384,7 @@ mod tests {
         let mut cache = ViewportCache {
             wrap_layout: Some(CachedWrapLayout {
                 revision: 0,
-                layout: build_wrap_layout(&before_lines, 12, true),
+                layout: Rc::new(build_wrap_layout(&before_lines, 12, true)),
             }),
             ..Default::default()
         };
@@ -2221,6 +2393,6 @@ mod tests {
 
         let patched = cache.wrap_layout.expect("patch should retain layout");
         assert_eq!(patched.revision, 1);
-        assert_eq!(patched.layout, build_wrap_layout(&after_lines, 12, true));
+        assert_eq!(*patched.layout, build_wrap_layout(&after_lines, 12, true));
     }
 }

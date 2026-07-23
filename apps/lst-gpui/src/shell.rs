@@ -1868,13 +1868,14 @@ impl Render for LstGpuiApp {
         let gutter_mode = self.model.gutter_mode();
         let theme = self.theme(cx);
         let scale = self.ui_scale();
-        let (active_scroll, active_cache, active_geometry, active_structure) = {
+        let (active_scroll, active_cache, active_geometry, active_structure, active_syntax_state) = {
             let active_view = self.active_view();
             (
                 active_view.scroll.clone(),
                 active_view.cache.clone(),
                 active_view.geometry.clone(),
                 active_view.structure.clone(),
+                active_view.syntax_state.clone(),
             )
         };
         let viewport_width = active_geometry
@@ -2103,12 +2104,18 @@ impl Render for LstGpuiApp {
                                                                         diagnostics::trace_enabled().then(Instant::now);
                                                                     let previous_wrap_columns =
                                                                         viewport_geometry.borrow().painted_wrap_columns;
+                                                                    let active_structure = active_structure.borrow();
+                                                                    let active_syntax_state = active_syntax_state
+                                                                        .as_ref()
+                                                                        .map(|state| state.borrow());
                                                                     let paint_state = prepare_viewport_paint_state(
                                                                         ViewportPreparation {
                                                                             buffer: &buffer,
                                                                             lines: line_texts.as_ref(),
                                                                             revision,
                                                                             syntax_mode,
+                                                                            syntax_state: active_syntax_state
+                                                                                .as_deref(),
                                                                             layout_metrics,
                                                                             gutter_mode,
                                                                             cursor_line,

@@ -461,7 +461,7 @@ impl EditorTab {
     fn record_full_replace(&mut self) {
         self.buffer_delta = BufferDelta::FullReplace;
     }
-    fn record_edits(&mut self, changes: &[TextChange]) {
+    fn record_edits(&mut self, changes: Vec<TextChange>) {
         // If a prior delta has not yet been consumed, downgrade to
         // FullReplace — compositing two edit batches in pre-batch coords
         // would require re-mapping the second through the first, and that
@@ -472,10 +472,10 @@ impl EditorTab {
         }
         self.buffer_delta = BufferDelta::Edits(
             changes
-                .iter()
+                .into_iter()
                 .map(|change| BufferEdit {
-                    range: change.range.clone(),
-                    replacement: change.replacement.clone(),
+                    range: change.range,
+                    replacement: change.replacement,
                 })
                 .collect(),
         );
@@ -613,7 +613,8 @@ impl EditorTab {
     pub(crate) fn apply_edit_request(&mut self, request: EditRequest) -> EditOutcome {
         let len = self.len_chars();
         let normalized_changes = request.changes.normalized_for_len(len);
-        let changes = normalized_changes.as_slice().to_vec();
+        let primary_inserted_range = normalized_changes.primary_inserted_range();
+        let changes = normalized_changes.into_changes();
         let changes_text = changes_modify_text(&self.buffer, &changes);
         let selection_before = self.selection.clone();
         let marked_range_before = self.marked_range.clone();
@@ -628,7 +629,7 @@ impl EditorTab {
         self.apply_normalized_change(
             changes,
             changes_text,
-            normalized_changes.primary_inserted_range(),
+            primary_inserted_range,
             request.selection_after,
             request.marked_range_after,
         );
@@ -658,7 +659,6 @@ impl EditorTab {
             None
         };
         if changes_text {
-            self.record_edits(&changes);
             remap_bookmarks_after_changes(&self.buffer, &mut self.bookmarks, &changes);
             for change in changes.iter().rev() {
                 if let Some(lines) = cached_lines.as_mut() {
@@ -671,6 +671,7 @@ impl EditorTab {
                 }
                 apply_change_to_buffer(&mut self.buffer, change);
             }
+            self.record_edits(changes);
         }
         let selection = selection_after_edit(selection_after, primary_inserted_range.clone(), &self.buffer);
         self.selection.replace_set(selection);

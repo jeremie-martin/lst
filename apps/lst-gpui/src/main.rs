@@ -234,9 +234,9 @@ pub(crate) struct EditorTabView {
     scroll: ScrollHandle,
     cache: Rc<RefCell<ViewportCache>>,
     geometry: Rc<RefCell<ViewportGeometry>>,
-    syntax_state: Option<crate::syntax::TabSyntaxState>,
+    syntax_state: Option<Rc<RefCell<crate::syntax::TabSyntaxState>>>,
     structure_key: (Option<Language>, u64),
-    structure: Rc<crate::syntax::StructuralSnapshot>,
+    structure: Rc<RefCell<crate::syntax::StructuralSnapshot>>,
 }
 
 impl EditorTabView {
@@ -253,11 +253,11 @@ impl EditorTabView {
             geometry: Rc::new(RefCell::new(ViewportGeometry::default())),
             syntax_state: None,
             structure_key: (language, revision),
-            structure: Rc::new(crate::syntax::plain_structural_snapshot(
+            structure: Rc::new(RefCell::new(crate::syntax::plain_structural_snapshot(
                 tab.buffer(),
                 revision,
                 structural_pairs,
-            )),
+            ))),
         }
     }
 
@@ -275,6 +275,12 @@ impl EditorTabView {
         // reparses cheap. Cleared only on language change or
         // unrecoverable parse failure, both handled inside
         // sync_active_syntax_state.
+    }
+
+    fn invalidate_after_edit(&mut self) {
+        self.cache
+            .borrow_mut()
+            .invalidate_content_layout_preserving_code_lines();
     }
 }
 
@@ -809,11 +815,15 @@ impl LstGpuiApp {
                 .tab_views
                 .entry(tab.id())
                 .or_insert_with(|| EditorTabView::new(tab));
-            if view.revision != tab.revision() || old_show_wrap != show_wrap {
+            let revision_changed = view.revision != tab.revision();
+            let wrap_changed = old_show_wrap != show_wrap;
+            if revision_changed || wrap_changed {
                 view.revision = tab.revision();
-                view.invalidate_visual_state();
-                if old_show_wrap != show_wrap {
+                if wrap_changed {
+                    view.invalidate_visual_state();
                     scroll_to_left(&view.scroll, px(0.0));
+                } else {
+                    view.invalidate_after_edit();
                 }
             }
         }
@@ -956,12 +966,39 @@ impl LstGpuiApp {
                 let structural_pairs = language.map_or(&[('(', ')'), ('[', ']'), ('{', '}')][..], |language| {
                     language.config().structural_pairs
                 });
-                view.structure = Rc::new(crate::syntax::plain_structural_snapshot(
-                    &buffer,
-                    revision,
-                    structural_pairs,
-                ));
+                let (structure, structure_remapped) = if view.structure_key.0 == language {
+                    crate::syntax::update_plain_structural_snapshot(
+                        &view.structure.borrow(),
+                        &buffer,
+                        revision,
+                        structural_pairs,
+                        &delta,
+                    )
+                } else {
+                    (
+                        crate::syntax::plain_structural_snapshot(&buffer, revision, structural_pairs),
+                        false,
+                    )
+                };
+                *view.structure.borrow_mut() = structure;
                 view.structure_key = (language, revision);
+                let mut cache = view.cache.borrow_mut();
+                let previous_line_count = cache
+                    .wrap_layout
+                    .as_ref()
+                    .map(|layout| layout.layout.line_row_starts.len().saturating_sub(1));
+                let invalidation = SyntaxInvalidation::from_buffer_delta(&buffer, &delta, previous_line_count);
+                cache.patch_wrap_layout(&buffer, revision, &invalidation);
+                if structure_remapped && !invalidation.is_full() {
+                    cache.clear_code_lines_in(invalidation.line_range(buffer.len_lines()));
+                } else {
+                    cache.clear_code_lines();
+                }
+                if cache.syntax_highlights.is_some() {
+                    cache.syntax_highlights = None;
+                    cache.clear_code_lines();
+                }
+                return;
             }
             let mut cache = view.cache.borrow_mut();
             let previous_line_count = cache
@@ -982,36 +1019,42 @@ impl LstGpuiApp {
         let language_changed = view
             .syntax_state
             .as_ref()
-            .is_some_and(|state| state.language != syntax_lang);
+            .is_some_and(|state| state.borrow().language != syntax_lang);
         if language_changed {
             view.syntax_state = None;
         }
 
-        let already_current = view
-            .syntax_state
-            .as_ref()
-            .is_some_and(|state| state.language == syntax_lang && state.revision == revision);
+        let already_current = view.syntax_state.as_ref().is_some_and(|state| {
+            let state = state.borrow();
+            state.language == syntax_lang && state.revision == revision
+        });
         if already_current {
             if !syntax_cache_is_current(&view.cache.borrow(), syntax_lang, revision) {
                 if let Some(state) = view.syntax_state.as_ref() {
+                    let state = state.borrow();
                     let mut cache = view.cache.borrow_mut();
-                    refresh_syntax_cache(&mut cache, state, &buffer, revision, SyntaxInvalidation::Full);
+                    refresh_syntax_cache(&mut cache, &state, &buffer, revision, SyntaxInvalidation::Full, false);
                 }
             }
             return;
         }
 
-        let invalidation = match view.syntax_state.as_mut() {
+        let (invalidation, structure_remapped) = match view.syntax_state.as_mut() {
             None => {
                 // Freshly-opened tab or recovery after a parse failure /
                 // language switch. The delta we drained at line above is
                 // discarded on purpose: parse_initial reads the whole
                 // buffer, so any pending edits are already reflected.
                 let _ = delta;
-                view.syntax_state = TabSyntaxState::parse_initial(syntax_lang, &buffer, revision);
-                SyntaxInvalidation::Full
+                view.syntax_state = TabSyntaxState::parse_initial(syntax_lang, &buffer, revision)
+                    .map(|state| Rc::new(RefCell::new(state)));
+                (SyntaxInvalidation::Full, false)
             }
-            Some(state) => state.update(&buffer, delta, revision),
+            Some(state) => {
+                let mut state = state.borrow_mut();
+                let invalidation = state.update(&buffer, delta, revision);
+                (invalidation, state.structure_was_remapped())
+            }
         };
         let Some(state) = view.syntax_state.as_ref() else {
             // parse_initial failed (grammar / ABI mismatch). Wipe any
@@ -1020,23 +1063,21 @@ impl LstGpuiApp {
             let mut cache = view.cache.borrow_mut();
             if cache.syntax_highlights.is_some() {
                 cache.syntax_highlights = None;
-                cache.clear_code_lines();
             }
+            cache.clear_code_lines();
             let structural_pairs = language.map_or(&[('(', ')'), ('[', ']'), ('{', '}')][..], |language| {
                 language.config().structural_pairs
             });
-            view.structure = Rc::new(crate::syntax::plain_structural_snapshot(
-                &buffer,
-                revision,
-                structural_pairs,
-            ));
+            *view.structure.borrow_mut() =
+                crate::syntax::plain_structural_snapshot(&buffer, revision, structural_pairs);
             view.structure_key = (language, revision);
             return;
         };
-        view.structure = Rc::new(state.structure().clone());
+        let state = state.borrow();
+        view.structure = state.shared_structure();
         view.structure_key = (language, revision);
         let mut cache = view.cache.borrow_mut();
-        refresh_syntax_cache(&mut cache, state, &buffer, revision, invalidation);
+        refresh_syntax_cache(&mut cache, &state, &buffer, revision, invalidation, structure_remapped);
     }
 
     /// Render-path entry point: ensures the active tab has up-to-date
@@ -1065,7 +1106,7 @@ impl LstGpuiApp {
                 .active_view()
                 .syntax_state
                 .as_ref()
-                .map(|state| state.selection_ranges_at(&heads))
+                .map(|state| state.borrow().selection_ranges_at(&heads))
                 .unwrap_or_default()
                 .into_iter()
                 .filter_map(|range| lst_editor::StructuralSelectionCandidate::new(range, document_len))
@@ -1080,12 +1121,14 @@ impl LstGpuiApp {
             }
         } else if command == Command::JumpToBracket {
             let document_len = self.model.active_tab().len_chars();
-            let structure = self.active_view().structure.clone();
-            let pairs: Vec<lst_editor::StructuralBracketPair> = structure
-                .pairs
-                .iter()
-                .filter_map(|pair| lst_editor::StructuralBracketPair::new(pair.open, pair.close, document_len))
-                .collect();
+            let pairs: Vec<lst_editor::StructuralBracketPair> = {
+                let structure = self.active_view().structure.borrow();
+                structure
+                    .pairs
+                    .iter()
+                    .filter_map(|pair| lst_editor::StructuralBracketPair::new(pair.open, pair.close, document_len))
+                    .collect()
+            };
             self.update_model(cx, true, |model| {
                 model.jump_to_bracket_pairs(&pairs);
             });
@@ -1305,6 +1348,7 @@ fn refresh_syntax_cache(
     buffer: &Rope,
     revision: u64,
     invalidation: SyntaxInvalidation,
+    structure_remapped: bool,
 ) {
     let line_count = buffer.len_lines();
     cache.patch_wrap_layout(buffer, revision, &invalidation);
@@ -1313,30 +1357,34 @@ fn refresh_syntax_cache(
             highlights.language == state.language
                 && highlights.lines.len() == line_count
                 && highlights.line_byte_lens.len() == line_count
+                && highlights.valid_lines.len() == line_count
         });
     let line_range = if can_patch {
         invalidation.line_range(line_count)
     } else {
         0..line_count
     };
-    let (lines, line_byte_lens) = state.compute_spans_for_lines(line_range.clone());
     if can_patch {
         let highlights = cache
             .syntax_highlights
             .as_mut()
             .expect("can_patch requires an existing syntax cache");
-        highlights.lines[line_range.clone()].clone_from_slice(&lines);
-        highlights.line_byte_lens[line_range].clone_from_slice(&line_byte_lens);
+        highlights.valid_lines[line_range.clone()].fill(false);
         highlights.revision = revision;
     } else {
         cache.syntax_highlights = Some(CachedSyntaxHighlights {
             language: state.language,
             revision,
-            lines,
-            line_byte_lens,
+            lines: vec![Vec::new(); line_count],
+            line_byte_lens: vec![0; line_count],
+            valid_lines: vec![false; line_count],
         });
     }
-    cache.clear_code_lines();
+    if can_patch && structure_remapped {
+        cache.clear_code_lines_in(line_range);
+    } else {
+        cache.clear_code_lines();
+    }
 }
 
 fn char_to_line_col(buffer: &Rope, char_offset: usize) -> (usize, usize) {
@@ -1469,7 +1517,13 @@ mod syntax_cache_tests {
             tab.buffer(),
             tab.revision(),
             SyntaxInvalidation::Full,
+            false,
         );
+        assert!(cache
+            .syntax_highlights
+            .as_ref()
+            .is_some_and(|highlights| highlights.valid_lines.iter().all(|valid| !valid)));
+        crate::viewport::ensure_syntax_cache_for_lines(&mut cache, &state, tab.revision(), 0..1);
 
         let highlights = cache
             .syntax_highlights

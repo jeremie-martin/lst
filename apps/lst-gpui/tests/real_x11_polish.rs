@@ -28,6 +28,28 @@ fn enclosing_brackets_are_decorated_and_the_jump_command_uses_the_same_pairs() -
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn injected_brackets_stop_matching_after_selection_is_quoted() -> TestResult {
+    support::run_x11_test("polish-injected-bracket-edit", |session| {
+        let path = session.seed_file("injected.md", "```rust\nfn fenced() { let value = (1 + 2); }\n```\n")?;
+        let mut editor = session.open_file("polish-injected-bracket-edit", &path)?;
+
+        let initial = editor.wait_state("injected brackets parsed", secs(5), |record| {
+            record.viewport.structural_pair_count == 3
+        })?;
+        assert_eq!(initial.viewport.structural_pair_count, 3);
+
+        editor.click_at_text(1, 26)?;
+        editor.keys("<S-right><S-right><S-right><S-right><S-right><S-right><S-right>\"")?;
+        editor.wait_state("quoted injected brackets excluded", secs(5), |record| {
+            record.viewport.structural_pair_count == 2
+        })?;
+        editor.save_then_expect_file(&path, "```rust\nfn fenced() { let value = \"(1 + 2)\"; }\n```\n")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn syntax_selection_expands_in_layers_and_shrinks_the_exact_history() -> TestResult {
     support::run_x11_test("polish-smart-selection", |session| {
         let path = session.seed_file("smart.rs", "fn main() { let camelCase = call(1); }\n")?;

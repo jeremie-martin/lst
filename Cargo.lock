@@ -3153,6 +3153,7 @@ name = "lst-editor"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "memchr",
  "regex",
  "ropey",
  "serde",

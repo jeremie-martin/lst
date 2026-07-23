@@ -38,6 +38,7 @@ Run one scenario while optimizing a specific path:
 ```bash
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario large-paste
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario typing-large
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario typing-plain
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario scroll-highlighted
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario search-large
 ```
@@ -59,6 +60,7 @@ size where relevant.
 | `large-paste` | `paste_complete_ms` | Copies the large Rust corpus, switches to a second file tab, waits for app-traced select/tab/paste completion, saves once, then verifies the target file exactly matches the corpus. |
 | `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload into the generated medium Rust corpus, waits for every app-traced text input plus the next paint, saves once, then verifies the saved file exactly matches the expected text. |
 | `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using the generated large Rust corpus. After the primary typing measurement it moves into and selects the final identifier, reporting both passive-occurrence and explicit-selection visible-range highlight costs. |
+| `typing-plain` | `typing_ms_per_char` | Same typing path over the generated one-million-byte plain-text corpus, isolating framework-neutral editing and plain structural decoration maintenance from tree-sitter work. |
 | `scroll-highlighted` | `scroll_overrun_ms` | Scrolls down and back through the large Rust file on a fixed input schedule, then waits for redraw quiet. |
 | `scroll-plain` | `scroll_overrun_ms` | Same scroll trace using the generated large plain-text corpus, so syntax highlighting is out of the path. |
 | `open-large` | `open_to_quiet_ms` | Measures process spawn through benchmark window discovery and redraw quiet on the large Rust file. |

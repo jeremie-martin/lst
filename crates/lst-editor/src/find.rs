@@ -5,6 +5,7 @@ use crate::{
     transaction::{EditRequest, SelectionAfter, TextChange, TextChangeSet},
     TabId,
 };
+use memchr::{memchr, memchr2};
 use regex::{Regex, RegexBuilder};
 use ropey::Rope;
 use std::ops::Range;
@@ -112,13 +113,13 @@ impl FindState {
         self.indexed_revision = None;
     }
 
-    // Single source of truth for query interpretation — keeps
-    // `compute_matches_in_text` and the replace paths in lock-step.
+    // Single source of truth for query interpretation — keeps the indexing
+    // and replace paths in lock-step.
     fn build_regex(&self) -> Result<Regex, regex::Error> {
         build_query_regex(&self.query, self.case_sensitive, self.whole_word, self.use_regex)
     }
 
-    fn compute_matches_in_text(&mut self, text: &str) {
+    fn compute_matches_in_rope(&mut self, buffer: &Rope) {
         let previous_active = self.active;
         self.matches.clear();
         self.error = None;
@@ -127,7 +128,7 @@ impl FindState {
             return;
         }
 
-        if self.compute_ascii_literal_matches(text) {
+        if self.compute_ascii_literal_matches(buffer) {
             self.set_active_after_reindex(previous_active);
             return;
         }
@@ -141,7 +142,7 @@ impl FindState {
             }
         };
 
-        for (line_idx, line) in text.lines().enumerate() {
+        for_each_text_line(buffer, |line_idx, line| {
             let line_byte_len = line.len();
             let mut cells = None;
             for m in regex.find_iter(line) {
@@ -173,18 +174,21 @@ impl FindState {
                     char_len: end_col - col,
                 });
             }
-        }
+        });
         self.set_active_after_reindex(previous_active);
     }
 
-    fn compute_ascii_literal_matches(&mut self, text: &str) -> bool {
-        if self.use_regex || self.whole_word || !self.query.is_ascii() || !text.is_ascii() {
+    fn compute_ascii_literal_matches(&mut self, buffer: &Rope) -> bool {
+        // UTF-8 uses exactly one byte per character iff the whole rope is
+        // ASCII. Ropey stores both totals in its tree, so this is a constant-
+        // time proof that byte offsets from the fast scanner are also columns.
+        if self.use_regex || self.whole_word || !self.query.is_ascii() || buffer.len_bytes() != buffer.len_chars() {
             return false;
         }
 
         let query = self.query.as_bytes();
         let ignore_case = !self.case_sensitive && !query.iter().any(|byte| byte.is_ascii_uppercase());
-        for (line_idx, line) in text.lines().enumerate() {
+        for_each_text_line(buffer, |line_idx, line| {
             for_each_ascii_literal_match(line.as_bytes(), query, ignore_case, |col| {
                 self.matches.push(MatchPos {
                     line: line_idx,
@@ -192,7 +196,7 @@ impl FindState {
                     char_len: query.len(),
                 });
             });
-        }
+        });
         true
     }
 
@@ -269,7 +273,7 @@ impl FindState {
             self.clear_results();
             return;
         }
-        self.compute_matches_in_text(&tab.buffer_text());
+        self.compute_matches_in_rope(tab.buffer());
         if let Some(scope) = self.scope.selection_range_for(tab.id()) {
             let buffer = tab.buffer();
             let len = buffer.len_chars();
@@ -496,6 +500,36 @@ fn expand_match_replacement(regex: &Regex, line: &str, byte_start_in_line: usize
     template.to_string()
 }
 
+/// Visits lines with the same terminator semantics as `str::lines` without
+/// flattening the whole rope. Lines wholly contained in one rope chunk stay
+/// borrowed; only a line crossing a chunk boundary uses the carry buffer.
+fn for_each_text_line(buffer: &Rope, mut visit: impl FnMut(usize, &str)) {
+    let mut carry = String::new();
+    let mut line_index = 0usize;
+    for chunk in buffer.chunks() {
+        let mut rest = chunk;
+        while let Some(newline) = rest.find('\n') {
+            let part = &rest[..newline];
+            if carry.is_empty() {
+                visit(line_index, part.strip_suffix('\r').unwrap_or(part));
+            } else {
+                carry.push_str(part);
+                if carry.ends_with('\r') {
+                    carry.pop();
+                }
+                visit(line_index, &carry);
+                carry.clear();
+            }
+            line_index += 1;
+            rest = &rest[newline + 1..];
+        }
+        carry.push_str(rest);
+    }
+    if !carry.is_empty() {
+        visit(line_index, &carry);
+    }
+}
+
 /// Scans `text` for every (optionally case-insensitive) occurrence of the
 /// ASCII literal `query`, invoking `on_match` with each match's start byte.
 /// Matches are non-overlapping and advance past each hit; `query` must be
@@ -509,23 +543,62 @@ pub(crate) fn for_each_ascii_literal_match(
     let mut start = 0usize;
     let first = query[0];
     while start + query.len() <= text.len() {
-        let end = start + query.len();
-        let first_matches = if ignore_case {
-            text[start].eq_ignore_ascii_case(&first)
+        let relative = if ignore_case && first.is_ascii_alphabetic() {
+            memchr2(first.to_ascii_lowercase(), first.to_ascii_uppercase(), &text[start..])
         } else {
-            text[start] == first
+            memchr(first, &text[start..])
         };
-        let matched = first_matches
-            && if ignore_case {
-                text[start..end].eq_ignore_ascii_case(query)
-            } else {
-                &text[start..end] == query
-            };
+        let Some(relative) = relative else { break };
+        let candidate = start + relative;
+        let end = candidate + query.len();
+        if end > text.len() {
+            break;
+        }
+        let matched = if ignore_case {
+            text[candidate..end].eq_ignore_ascii_case(query)
+        } else {
+            &text[candidate..end] == query
+        };
         if matched {
-            on_match(start);
+            on_match(candidate);
             start = end;
         } else {
-            start += 1;
+            start = candidate + 1;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rope_line_iteration_matches_str_across_chunk_boundaries() {
+        let long = "x".repeat(4_096);
+        let text = format!("first\r\n{long}\n\nlone carriage\rreturn\nlast");
+        let rope = Rope::from_str(&text);
+        let mut actual = Vec::new();
+        for_each_text_line(&rope, |index, line| actual.push((index, line.to_string())));
+        let expected = text
+            .lines()
+            .enumerate()
+            .map(|(index, line)| (index, line.to_string()))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn ascii_literal_scanner_keeps_non_overlapping_and_case_semantics() {
+        let cases = [
+            ("aaaaa", "aa", false, vec![0, 2]),
+            ("xFn fn FN", "fn", true, vec![1, 4, 7]),
+            ("xFn fn FN", "fn", false, vec![4]),
+            ("a  a   a", "  ", false, vec![1, 4]),
+        ];
+        for (text, query, ignore_case, expected) in cases {
+            let mut actual = Vec::new();
+            for_each_ascii_literal_match(text.as_bytes(), query.as_bytes(), ignore_case, |at| actual.push(at));
+            assert_eq!(actual, expected, "{text:?} / {query:?}");
         }
     }
 }

@@ -93,7 +93,7 @@ fn print_usage() {
   cargo run --release -p lst-gpui --example bench_editor_x11 -- [options]
 
 Options:
-  --scenario <name>     all, large-paste, typing-medium, typing-large,
+  --scenario <name>     all, large-paste, typing-medium, typing-large, typing-plain,
                         scroll-highlighted, scroll-plain, open-large, search-large,
                         multi-cursor-1k
                         (default: all)
@@ -110,6 +110,7 @@ enum Scenario {
     LargePaste,
     TypingMedium,
     TypingLarge,
+    TypingPlain,
     ScrollHighlighted,
     ScrollPlain,
     OpenLarge,
@@ -124,6 +125,7 @@ impl Scenario {
             "large-paste" => Ok(Self::LargePaste),
             "typing-medium" => Ok(Self::TypingMedium),
             "typing-large" => Ok(Self::TypingLarge),
+            "typing-plain" => Ok(Self::TypingPlain),
             "scroll-highlighted" => Ok(Self::ScrollHighlighted),
             "scroll-plain" => Ok(Self::ScrollPlain),
             "open-large" => Ok(Self::OpenLarge),
@@ -139,6 +141,7 @@ impl Scenario {
                 Self::LargePaste,
                 Self::TypingMedium,
                 Self::TypingLarge,
+                Self::TypingPlain,
                 Self::ScrollHighlighted,
                 Self::ScrollPlain,
                 Self::OpenLarge,
@@ -155,6 +158,7 @@ impl Scenario {
             Self::LargePaste => "large-paste",
             Self::TypingMedium => "typing-medium",
             Self::TypingLarge => "typing-large",
+            Self::TypingPlain => "typing-plain",
             Self::ScrollHighlighted => "scroll-highlighted",
             Self::ScrollPlain => "scroll-plain",
             Self::OpenLarge => "open-large",
@@ -167,7 +171,7 @@ impl Scenario {
         match self {
             Self::All => "primary_value",
             Self::LargePaste => "paste_complete_ms",
-            Self::TypingMedium | Self::TypingLarge => "typing_ms_per_char",
+            Self::TypingMedium | Self::TypingLarge | Self::TypingPlain => "typing_ms_per_char",
             Self::ScrollHighlighted | Self::ScrollPlain => "scroll_overrun_ms",
             Self::OpenLarge => "open_to_quiet_ms",
             Self::SearchLarge => "search_reindex_ms",
@@ -178,6 +182,7 @@ impl Scenario {
     fn corpus_kind(self) -> CorpusKind {
         match self {
             Self::TypingMedium => CorpusKind::MediumRust,
+            Self::TypingPlain => CorpusKind::LargePlain,
             Self::ScrollPlain => CorpusKind::LargePlain,
             Self::MultiCursor1k => CorpusKind::MultiCursor1k,
             Self::All
@@ -310,7 +315,7 @@ impl Bench {
                 Scenario::LargePaste => {
                     self.run_large_paste(scenario, &corpus, run_index, args.keep_temp_on_failure)?
                 }
-                Scenario::TypingMedium | Scenario::TypingLarge => {
+                Scenario::TypingMedium | Scenario::TypingLarge | Scenario::TypingPlain => {
                     self.run_typing(scenario, &corpus, run_index, args.keep_temp_on_failure)?
                 }
                 Scenario::ScrollHighlighted | Scenario::ScrollPlain => {
@@ -485,6 +490,19 @@ impl Bench {
             );
             add_trace_last(&mut metrics, &trace, "paste_clipboard_bytes", "paste_bytes");
             add_trace_last(&mut metrics, &trace, "paste_clipboard_lines", "paste_lines");
+            add_trace_last(&mut metrics, &trace, "syntax_parse_update_ms", "syntax_parse_update_ms");
+            add_trace_last(
+                &mut metrics,
+                &trace,
+                "syntax_structure_update_ms",
+                "syntax_structure_update_ms",
+            );
+            add_trace_last(
+                &mut metrics,
+                &trace,
+                "syntax_highlight_cache_ms",
+                "syntax_highlight_cache_ms",
+            );
             add_trace_aggregate(
                 &mut metrics,
                 &trace,
@@ -492,6 +510,14 @@ impl Bench {
                 "viewport_prepare_ms_sum",
                 "viewport_prepare_ms_max",
                 "viewport_prepare_ms_count",
+            );
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "wrap_layout_patch_ms",
+                "wrap_layout_patch_ms_sum",
+                "wrap_layout_patch_ms_max",
+                "wrap_layout_patch_ms_count",
             );
             add_trace_aggregate(
                 &mut metrics,
@@ -668,6 +694,15 @@ impl Bench {
             add_trace_aggregate(
                 &mut metrics,
                 &trace,
+                "wrap_layout_patch_ms",
+                "wrap_layout_patch_ms_sum",
+                "wrap_layout_patch_ms_max",
+                "wrap_layout_patch_ms_count",
+            );
+            add_viewport_phase_aggregates(&mut metrics, &trace);
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
                 "viewport_paint_ms",
                 "viewport_paint_ms_sum",
                 "viewport_paint_ms_max",
@@ -715,11 +750,12 @@ impl Bench {
         keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let file_path = temp_path(scenario, run_index, "file", corpus.extension);
+        let trace_path = temp_path(scenario, run_index, "trace", "log");
         fs::write(&file_path, &corpus.text)?;
 
         let title = bench_title(scenario, run_index);
         let files = [file_path.as_path()];
-        let mut child = self.spawn_editor(&files, &title, None)?;
+        let mut child = self.spawn_editor(&files, &title, Some(&trace_path))?;
         let pid = child.id();
 
         let result = (|| {
@@ -783,6 +819,7 @@ impl Bench {
             let trace_wall_ms = elapsed_ms(trace_started);
             let scheduled_ms = (SCROLL_HALF_MS * 2) as f64;
             let after = proc_sample(pid)?;
+            let trace = read_editor_trace(&trace_path)?;
 
             let mut metrics = RunMetrics::new(window.width, window.height);
             metrics.set("startup_ms", startup_ms);
@@ -792,11 +829,28 @@ impl Bench {
             metrics.set("damage_events", damage_events as f64);
             metrics.set("damage_hz_proxy", damage_hz_proxy(damage_events, trace_wall_ms));
             add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "viewport_prepare_ms",
+                "viewport_prepare_ms_sum",
+                "viewport_prepare_ms_max",
+                "viewport_prepare_ms_count",
+            );
+            add_viewport_phase_aggregates(&mut metrics, &trace);
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "viewport_paint_ms",
+                "viewport_paint_ms_sum",
+                "viewport_paint_ms_max",
+                "viewport_paint_ms_count",
+            );
             Ok(metrics)
         })();
 
         let terminate_result = terminate_child(&mut child);
-        cleanup_paths_if([file_path], result.is_ok() || !keep_temp_on_failure);
+        cleanup_paths_if([file_path, trace_path], result.is_ok() || !keep_temp_on_failure);
         terminate_result?;
         result
     }
@@ -1279,6 +1333,9 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "paste_clipboard_read_ms",
             "paste_bytes",
             "paste_lines",
+            "syntax_parse_update_ms",
+            "syntax_structure_update_ms",
+            "syntax_highlight_cache_ms",
             "trace_wall_ms",
             "damage_events",
             "paste_damage_events",
@@ -1286,6 +1343,9 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "save_verify_ms",
             "viewport_prepare_ms_sum",
             "viewport_prepare_ms_max",
+            "wrap_layout_patch_ms_sum",
+            "wrap_layout_patch_ms_max",
+            "wrap_layout_patch_ms_count",
             "viewport_paint_ms_sum",
             "viewport_paint_ms_max",
             "user_cpu_ms",
@@ -1295,7 +1355,7 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "final_file_bytes",
             "final_file_lines",
         ],
-        Scenario::TypingMedium | Scenario::TypingLarge => &[
+        Scenario::TypingMedium | Scenario::TypingLarge | Scenario::TypingPlain => &[
             "typing_ms_per_char",
             "typing_send_ms",
             "typing_input_to_quiet_ms",
@@ -1310,6 +1370,15 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "save_verify_ms",
             "viewport_prepare_ms_sum",
             "viewport_prepare_ms_max",
+            "wrap_layout_patch_ms_sum",
+            "wrap_layout_patch_ms_max",
+            "wrap_layout_patch_ms_count",
+            "viewport_rows_ms_sum",
+            "viewport_rows_ms_max",
+            "structure_decorations_ms_sum",
+            "structure_decorations_ms_max",
+            "viewport_visible_highlights_ms_sum",
+            "viewport_visible_highlights_ms_max",
             "occurrence_highlight_ms_sum",
             "occurrence_highlight_ms_max",
             "occurrence_highlight_ms_count",
@@ -1331,6 +1400,18 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "trace_wall_ms",
             "damage_events",
             "damage_hz_proxy",
+            "viewport_prepare_ms_sum",
+            "viewport_prepare_ms_max",
+            "viewport_prepare_ms_count",
+            "viewport_rows_ms_sum",
+            "viewport_rows_ms_max",
+            "structure_decorations_ms_sum",
+            "structure_decorations_ms_max",
+            "viewport_visible_highlights_ms_sum",
+            "viewport_visible_highlights_ms_max",
+            "viewport_paint_ms_sum",
+            "viewport_paint_ms_max",
+            "viewport_paint_ms_count",
             "user_cpu_ms",
             "sys_cpu_ms",
             "cpu_ms",
@@ -1440,6 +1521,33 @@ fn add_trace_aggregate(
     if let Some(value) = trace.count(from) {
         metrics.set(count_name, value as f64);
     }
+}
+
+fn add_viewport_phase_aggregates(metrics: &mut RunMetrics, trace: &EditorTrace) {
+    add_trace_aggregate(
+        metrics,
+        trace,
+        "viewport_rows_ms",
+        "viewport_rows_ms_sum",
+        "viewport_rows_ms_max",
+        "viewport_rows_ms_count",
+    );
+    add_trace_aggregate(
+        metrics,
+        trace,
+        "structure_decorations_ms",
+        "structure_decorations_ms_sum",
+        "structure_decorations_ms_max",
+        "structure_decorations_ms_count",
+    );
+    add_trace_aggregate(
+        metrics,
+        trace,
+        "viewport_visible_highlights_ms",
+        "viewport_visible_highlights_ms_sum",
+        "viewport_visible_highlights_ms_max",
+        "viewport_visible_highlights_ms_count",
+    );
 }
 
 #[derive(Default, Debug)]
@@ -2360,6 +2468,7 @@ mod tests {
                 Scenario::LargePaste,
                 Scenario::TypingMedium,
                 Scenario::TypingLarge,
+                Scenario::TypingPlain,
                 Scenario::ScrollHighlighted,
                 Scenario::ScrollPlain,
                 Scenario::OpenLarge,
@@ -2379,6 +2488,7 @@ mod tests {
         assert_eq!(primary_metrics["large-paste"], "paste_complete_ms");
         assert_eq!(primary_metrics["typing-medium"], "typing_ms_per_char");
         assert_eq!(primary_metrics["typing-large"], "typing_ms_per_char");
+        assert_eq!(primary_metrics["typing-plain"], "typing_ms_per_char");
         assert_eq!(primary_metrics["scroll-highlighted"], "scroll_overrun_ms");
         assert_eq!(primary_metrics["scroll-plain"], "scroll_overrun_ms");
         assert_eq!(primary_metrics["open-large"], "open_to_quiet_ms");

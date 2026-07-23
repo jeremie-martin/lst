@@ -2,7 +2,8 @@ mod catalog;
 mod highlight;
 
 pub(crate) use highlight::{
-    plain_structural_snapshot, StructuralPair, StructuralSnapshot, StructuralToken, SyntaxInvalidation, TabSyntaxState,
+    plain_structural_snapshot, update_plain_structural_snapshot, StructuralPair, StructuralSnapshot, StructuralToken,
+    SyntaxInvalidation, TabSyntaxState,
 };
 
 use crate::ui::theme::SyntaxRole;
@@ -84,6 +85,10 @@ pub(crate) struct CachedSyntaxHighlights {
     /// onto lines whose bytes are still identical — keeping char/UTF-8
     /// boundaries valid and avoiding visible misalignment on the edited line.
     pub(crate) line_byte_lens: Vec<u32>,
+    /// Whether each line's spans and byte length have been materialized for
+    /// `revision`. Full-document parses allocate the slots cheaply; viewport
+    /// preparation fills only the visible working set.
+    pub(crate) valid_lines: Vec<bool>,
 }
 
 pub(crate) fn syntax_mode_for_language(language: Option<Language>) -> SyntaxMode {
@@ -301,6 +306,113 @@ mod tests {
         let (fresh_lines, fresh_lens) = full_parse(SyntaxLanguage::Rust, &after);
         assert_eq!(partial_lines, fresh_lines[changed_lines.clone()]);
         assert_eq!(partial_lens, fresh_lens[changed_lines]);
+        assert!(state.structure_was_remapped());
+        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &after_buffer, 1).unwrap();
+        assert_eq!(&*state.structure(), &*fresh_state.structure());
+    }
+
+    #[test]
+    fn edit_that_changes_delimiter_syntax_rebuilds_structure() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let before = "fn main() { let text = \"(\"; }\n";
+        let quote = before.find('\"').unwrap();
+        let mut after = before.to_string();
+        after.remove(quote);
+        let before_buffer = ropey::Rope::from_str(before);
+        let after_buffer = ropey::Rope::from_str(&after);
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &before_buffer, 0).unwrap();
+
+        state.update(
+            &after_buffer,
+            BufferDelta::Edits(vec![BufferEdit {
+                range: quote..quote + 1,
+                replacement: String::new(),
+            }]),
+            1,
+        );
+
+        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &after_buffer, 1).unwrap();
+        assert_eq!(&*state.structure(), &*fresh_state.structure());
+    }
+
+    #[test]
+    fn edit_inside_injected_rust_rebuilds_structure() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let before = "```rust\nfn fenced() { let value = (1 + 2); }\n```\n";
+        let expression_start = before.find("(1 + 2)").unwrap();
+        let expression_end = expression_start + "(1 + 2)".len();
+        let after = format!(
+            "{}\"{}\"{}",
+            &before[..expression_start],
+            &before[expression_start..expression_end],
+            &before[expression_end..]
+        );
+        let before_buffer = ropey::Rope::from_str(before);
+        let after_buffer = ropey::Rope::from_str(&after);
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &before_buffer, 0).unwrap();
+
+        state.update(
+            &after_buffer,
+            BufferDelta::Edits(vec![
+                BufferEdit {
+                    range: expression_start..expression_start,
+                    replacement: "\"".to_string(),
+                },
+                BufferEdit {
+                    range: expression_end..expression_end,
+                    replacement: "\"".to_string(),
+                },
+            ]),
+            1,
+        );
+
+        assert!(!state.structure_was_remapped());
+        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &after_buffer, 1).unwrap();
+        assert_eq!(&*state.structure(), &*fresh_state.structure());
+        let quoted_expression = after.find("(1 + 2)").unwrap();
+        assert!(state
+            .structure()
+            .tokens
+            .iter()
+            .all(|token| token.at != quoted_expression && token.at != quoted_expression + "(1 + 2)".len() - 1));
+    }
+
+    #[test]
+    fn plain_structure_updates_match_fresh_snapshots() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let pairs = &[('(', ')'), ('[', ']'), ('{', '}')];
+        let before = ropey::Rope::from_str("{ alpha }\n");
+        let previous = plain_structural_snapshot(&before, 0, pairs);
+        let inserted = ropey::Rope::from_str("{ xalpha }\n");
+        let (remapped, was_remapped) = update_plain_structural_snapshot(
+            &previous,
+            &inserted,
+            1,
+            pairs,
+            &BufferDelta::Edits(vec![BufferEdit {
+                range: 2..2,
+                replacement: "x".to_string(),
+            }]),
+        );
+        assert!(was_remapped);
+        assert_eq!(remapped, plain_structural_snapshot(&inserted, 1, pairs));
+
+        let removed = ropey::Rope::from_str(" xalpha }\n");
+        let (rebuilt, was_remapped) = update_plain_structural_snapshot(
+            &remapped,
+            &removed,
+            2,
+            pairs,
+            &BufferDelta::Edits(vec![BufferEdit {
+                range: 0..1,
+                replacement: String::new(),
+            }]),
+        );
+        assert!(!was_remapped);
+        assert_eq!(rebuilt, plain_structural_snapshot(&removed, 2, pairs));
     }
 
     #[test]
