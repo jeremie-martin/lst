@@ -6,8 +6,31 @@ use support::{secs, EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn guide_decorations_are_disabled_by_default() -> TestResult {
+    support::run_x11_test("polish-guides-default-off", |session| {
+        let path = session.seed_file("default-guides.rs", "fn main() {\n    let value = (1 + 2);\n}\n")?;
+        let mut editor = session.open_file("polish-guides-default-off", &path)?;
+
+        let state = editor.wait_state("default guide settings", secs(5), |record| {
+            record.viewport.structural_pair_count >= 3
+                && record.viewport.guide_count == 0
+                && record.editor_polish.bracket_pair_guides == "off"
+                && record.editor_polish.bracket_pair_horizontal_guides == "off"
+                && !record.editor_polish.indent_guides
+                && !record.editor_polish.highlight_active_indent_guide
+        })?;
+        assert_eq!(state.viewport.guide_count, 0);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn enclosing_brackets_are_decorated_and_the_jump_command_uses_the_same_pairs() -> TestResult {
     support::run_x11_test("polish-bracket-match", |session| {
+        session.seed_settings(
+            "version = 1\n[editor]\nbracket_pair_guides = 'active'\nbracket_pair_horizontal_guides = 'active'\nindent_guides = true\nhighlight_active_indent_guide = true\n",
+        )?;
         let path = session.seed_file("brackets.rs", "fn main() {\n    let value = (1 + 2);\n}\n")?;
         let mut editor = session.open_file("polish-bracket-match", &path)?;
 

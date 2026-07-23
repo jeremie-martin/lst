@@ -146,10 +146,10 @@ impl Default for EditorSettings {
             font_size: 13,
             match_brackets: MatchBracketsSetting::Always,
             bracket_pair_colorization: true,
-            bracket_pair_guides: GuideMode::Active,
-            bracket_pair_horizontal_guides: GuideMode::Active,
-            indent_guides: true,
-            highlight_active_indent_guide: true,
+            bracket_pair_guides: GuideMode::Off,
+            bracket_pair_horizontal_guides: GuideMode::Off,
+            indent_guides: false,
+            highlight_active_indent_guide: false,
             render_whitespace: RenderWhitespaceSetting::Selection,
             render_control_characters: true,
             rulers: RulerColumns::default(),
@@ -500,10 +500,10 @@ mod tests {
         let editor = EditorSettings::default();
         assert_eq!(editor.match_brackets, MatchBracketsSetting::Always);
         assert!(editor.bracket_pair_colorization);
-        assert_eq!(editor.bracket_pair_guides, GuideMode::Active);
-        assert_eq!(editor.bracket_pair_horizontal_guides, GuideMode::Active);
-        assert!(editor.indent_guides);
-        assert!(editor.highlight_active_indent_guide);
+        assert_eq!(editor.bracket_pair_guides, GuideMode::Off);
+        assert_eq!(editor.bracket_pair_horizontal_guides, GuideMode::Off);
+        assert!(!editor.indent_guides);
+        assert!(!editor.highlight_active_indent_guide);
         assert_eq!(editor.render_whitespace, RenderWhitespaceSetting::Selection);
         assert!(editor.render_control_characters);
         assert!(editor.rulers.as_slice().is_empty());
