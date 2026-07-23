@@ -230,6 +230,21 @@ struct EditorScrollbarDrag {
     grab_offset: Pixels,
 }
 
+/// In-flight smooth scroll toward a wheel-accumulated target. Lives on the
+/// app rather than the tab view because at most one animation can exist:
+/// wheel input only ever drives the active tab. `last_applied` is the offset
+/// the previous tick wrote; when the observed offset differs, another actor
+/// (cursor reveal, scrollbar drag, goto) moved the viewport and the
+/// animation yields instead of fighting it.
+#[derive(Clone, Copy, Debug)]
+struct SmoothScroll {
+    tab_id: TabId,
+    /// Non-negative (left, top) pixels-from-origin destination.
+    target: Point<Pixels>,
+    last_applied: Point<Pixels>,
+    last_tick: Instant,
+}
+
 pub(crate) struct EditorTabView {
     revision: u64,
     scroll: ScrollHandle,
@@ -341,6 +356,8 @@ struct LstGpuiApp {
     exit_discarded_revisions: HashMap<TabId, u64>,
     pending_reveal: Option<RevealIntent>,
     reveal_scheduled: bool,
+    smooth_scroll: Option<SmoothScroll>,
+    smooth_scroll_scheduled: bool,
     autosave_inflight: HashSet<PathBuf>,
     autosave_observed_revisions: HashMap<TabId, (u64, Instant)>,
     save_inflight: HashMap<PathBuf, usize>,
@@ -574,6 +591,8 @@ impl LstGpuiApp {
             exit_discarded_revisions: HashMap::new(),
             pending_reveal: None,
             reveal_scheduled: false,
+            smooth_scroll: None,
+            smooth_scroll_scheduled: false,
             autosave_inflight: HashSet::new(),
             autosave_observed_revisions: HashMap::new(),
             save_inflight: HashMap::new(),

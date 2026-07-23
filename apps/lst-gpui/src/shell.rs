@@ -2071,6 +2071,11 @@ impl Render for LstGpuiApp {
                                                     .size_full()
                                                     .cursor(CursorStyle::IBeam)
                                                     .block_mouse_except_scroll()
+                                                    // Painted after #buffer-scroll, so in the bubble
+                                                    // phase this listener runs first and can stop the
+                                                    // container's instant per-detent jump in favor of
+                                                    // the smooth-scroll animation.
+                                                    .on_scroll_wheel(cx.listener(Self::on_editor_scroll_wheel))
                                                     .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
                                                     .on_mouse_down(
                                                         MouseButton::Right,

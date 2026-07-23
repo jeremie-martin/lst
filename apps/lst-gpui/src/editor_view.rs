@@ -1,6 +1,9 @@
+use std::time::Instant;
+
 use gpui::{
-    canvas, div, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, InteractiveElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, ScrollHandle, Styled, Window,
+    canvas, div, point, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, InteractiveElement,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, ScrollDelta, ScrollHandle,
+    ScrollWheelEvent, Styled, Window,
 };
 use lst_editor::{EditorCommand as Command, EditorTab as ModelEditorTab, RevealIntent};
 
@@ -15,8 +18,31 @@ use crate::{
         scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for, visual_row_for_char, x_for_display_char,
         ViewportLayoutMetrics, WrapLayoutInput,
     },
-    EditorScrollbarDrag, EditorTabView, FocusTarget, LstGpuiApp,
+    EditorScrollbarDrag, EditorTabView, FocusTarget, LstGpuiApp, SmoothScroll,
 };
+
+/// Remaining distance shrinks by e⁻¹ every tau; ~90% of a detent lands
+/// within two taus (~70ms), keeping the motion visibly smooth while the
+/// response stays snappy.
+const SMOOTH_SCROLL_TAU_S: f32 = 0.03;
+/// Snap once the remainder drops under half a physical pixel.
+const SMOOTH_SCROLL_SNAP_PX: f32 = 0.5;
+
+/// One frame of exponential approach toward `target`. Deriving the blend
+/// factor from elapsed time keeps the feel identical at 60Hz and 144Hz.
+fn smooth_scroll_step(current: Point<Pixels>, target: Point<Pixels>, dt_s: f32) -> (Point<Pixels>, bool) {
+    let alpha = 1.0 - (-dt_s / SMOOTH_SCROLL_TAU_S).exp();
+    let next = point(
+        current.x + (target.x - current.x) * alpha,
+        current.y + (target.y - current.y) * alpha,
+    );
+    let snap = px(SMOOTH_SCROLL_SNAP_PX);
+    if (target.x - next.x).abs() < snap && (target.y - next.y).abs() < snap {
+        (target, true)
+    } else {
+        (next, false)
+    }
+}
 
 impl LstGpuiApp {
     pub(crate) fn active_tab(&self) -> &ModelEditorTab {
@@ -247,6 +273,88 @@ impl LstGpuiApp {
         scroll_to_top(&view.scroll, target);
         self.sync_viewport_state();
         cx.notify();
+    }
+
+    /// Wheel detents animate toward an accumulated target instead of jumping
+    /// a full detent (3 rows) in one frame. Trackpads emit fine-grained pixel
+    /// deltas that are already smooth, so those keep GPUI's stock instant
+    /// handling: the event is left to propagate to the scroll container, and
+    /// any running animation yields to it.
+    pub(crate) fn on_editor_scroll_wheel(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ScrollDelta::Lines(_) = event.delta else {
+            self.smooth_scroll = None;
+            return;
+        };
+        let delta = event.delta.pixel_delta(self.ui_px(metrics::row_height()));
+        let tab_id = self.model.active_tab_id();
+        let scroll = &self.active_view().scroll;
+        let current = point(scroll_left_for(scroll), scroll_top_for(scroll));
+        let base = match self.smooth_scroll {
+            Some(anim) if anim.tab_id == tab_id => anim.target,
+            _ => current,
+        };
+        // Wheel-down is a negative delta while targets count pixels from the
+        // origin. Clamping the target keeps detents past the edge from
+        // banking distance that would have to unwind before a reversal moves.
+        let target = point(
+            (base.x - delta.x).clamp(px(0.0), max_scroll_left(scroll)),
+            (base.y - delta.y).clamp(px(0.0), max_scroll_top(scroll)),
+        );
+        self.smooth_scroll = Some(SmoothScroll {
+            tab_id,
+            target,
+            last_applied: current,
+            last_tick: Instant::now(),
+        });
+        self.schedule_smooth_scroll(window, cx);
+        cx.stop_propagation();
+    }
+
+    fn schedule_smooth_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.smooth_scroll.is_none() || self.smooth_scroll_scheduled {
+            return;
+        }
+        self.smooth_scroll_scheduled = true;
+        cx.on_next_frame(window, |this, window, cx| {
+            this.smooth_scroll_scheduled = false;
+            this.tick_smooth_scroll(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn tick_smooth_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mut anim) = self.smooth_scroll else {
+            return;
+        };
+        if anim.tab_id != self.model.active_tab_id() {
+            self.smooth_scroll = None;
+            return;
+        }
+        let scroll = self.active_view().scroll.clone();
+        let current = point(scroll_left_for(&scroll), scroll_top_for(&scroll));
+        if current != anim.last_applied {
+            self.smooth_scroll = None;
+            return;
+        }
+        let now = Instant::now();
+        let (next, done) = smooth_scroll_step(current, anim.target, (now - anim.last_tick).as_secs_f32());
+        scroll_to_left(&scroll, next.x);
+        scroll_to_top(&scroll, next.y);
+        if done {
+            self.smooth_scroll = None;
+        } else {
+            anim.last_applied = point(scroll_left_for(&scroll), scroll_top_for(&scroll));
+            anim.last_tick = now;
+            self.smooth_scroll = Some(anim);
+        }
+        self.sync_viewport_state();
+        cx.notify();
+        self.schedule_smooth_scroll(window, cx);
     }
 
     pub(crate) fn sync_viewport_state(&mut self) {
