@@ -65,7 +65,7 @@ in favor of X11 coverage.
   missing files, partial lines, truncation, offset advancement, and latest-record
   semantics.
 - `crates/lst-x11-harness/src/screenshot.rs` has 1 image-capture self-test.
-- `apps/lst-gpui/examples/bench_editor_x11.rs` has 6 benchmark-runner tests for
+- `apps/lst-gpui/examples/bench_editor_x11.rs` has 10 benchmark-runner tests for
   scenario parsing, generated corpora, metric selection, medians, and trace
   aggregation.
 

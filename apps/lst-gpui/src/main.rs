@@ -55,6 +55,7 @@ use workspace_action::editor_keybindings;
 use workspace_action::WorkspaceCommand;
 
 pub(crate) const RECENT_CARD_BASIS: f32 = 260.0;
+const BACKGROUND_SYNTAX_PARSE_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExitSaveContinuation {
@@ -235,6 +236,7 @@ pub(crate) struct EditorTabView {
     cache: Rc<RefCell<ViewportCache>>,
     geometry: Rc<RefCell<ViewportGeometry>>,
     syntax_state: Option<Rc<RefCell<crate::syntax::TabSyntaxState>>>,
+    syntax_build_inflight: Option<(SyntaxLanguage, u64)>,
     structure_key: (Option<Language>, u64),
     structure: Rc<RefCell<crate::syntax::StructuralSnapshot>>,
 }
@@ -252,6 +254,7 @@ impl EditorTabView {
             cache: Rc::new(RefCell::new(ViewportCache::default())),
             geometry: Rc::new(RefCell::new(ViewportGeometry::default())),
             syntax_state: None,
+            syntax_build_inflight: None,
             structure_key: (language, revision),
             structure: Rc::new(RefCell::new(crate::syntax::plain_structural_snapshot(
                 tab.buffer(),
@@ -928,7 +931,7 @@ impl LstGpuiApp {
             }
         }
         self.sync_tab_views(old_show_wrap);
-        self.sync_active_syntax_state();
+        self.sync_active_syntax_state(cx);
         let effects = self.model.drain_effects();
         self.sync_find_inputs_if_changed(old_find_state.clone(), cx);
         if self.model.goto_line() != old_goto_line.as_deref() {
@@ -942,13 +945,11 @@ impl LstGpuiApp {
     }
 
     /// Keeps the active tab's syntax highlights in sync with the buffer.
-    /// Runs synchronously on the UI thread: an initial parse takes a few
-    /// ms for a typical file, an incremental reparse takes microseconds
-    /// thanks to the persistent `tree_sitter::Tree`. Called once per
-    /// `update_model` (catches edits + tab switches) and once before each
-    /// paint via `ensure_active_syntax_state` (catches files that were
-    /// opened without an edit cycle).
-    fn sync_active_syntax_state(&mut self) {
+    /// Typical files and cheap incremental edits stay synchronous; large
+    /// initial/full parses and edits in pathological injected regions use a
+    /// plain structural fallback while Tree-sitter rebuilds in the background.
+    /// Called from `update_model` and once before each paint.
+    fn sync_active_syntax_state(&mut self, cx: &mut Context<Self>) {
         let active_id = self.model.active_tab_id();
         let (language, revision, buffer) = {
             let tab = self.model.active_tab();
@@ -961,64 +962,27 @@ impl LstGpuiApp {
         };
 
         let SyntaxMode::TreeSitter(syntax_lang) = syntax_mode else {
-            view.syntax_state = None;
-            if view.structure_key != (language, revision) {
-                let structural_pairs = language.map_or(&[('(', ')'), ('[', ']'), ('{', '}')][..], |language| {
-                    language.config().structural_pairs
-                });
-                let structure_started = diagnostics::trace_enabled().then(Instant::now);
-                let structure_remapped = if view.structure_key.0 == language {
-                    crate::syntax::update_plain_structural_snapshot(
-                        &mut view.structure.borrow_mut(),
-                        &buffer,
-                        revision,
-                        structural_pairs,
-                        &delta,
-                    )
-                } else {
-                    *view.structure.borrow_mut() =
-                        crate::syntax::plain_structural_snapshot(&buffer, revision, structural_pairs);
-                    false
-                };
-                if let Some(started) = structure_started {
-                    diagnostics::record_ms("plain_structure_update_ms", started.elapsed().as_secs_f64() * 1000.0);
-                }
-                view.structure_key = (language, revision);
-                let mut cache = view.cache.borrow_mut();
-                let previous_line_count = cache
-                    .wrap_layout
-                    .as_ref()
-                    .map(|layout| layout.layout.line_row_starts.len().saturating_sub(1));
-                let invalidation = SyntaxInvalidation::from_buffer_delta(&buffer, &delta, previous_line_count);
-                cache.patch_wrap_layout(&buffer, revision, &invalidation);
-                cache.patch_unwrapped_line_width(revision, &invalidation, buffer.len_lines());
-                let invalidated_lines = invalidation.line_range(buffer.len_lines());
-                cache.clear_text_lines_in(invalidated_lines.clone());
-                if structure_remapped && !invalidation.is_full() {
-                    cache.clear_code_lines_in(invalidated_lines);
-                } else {
-                    cache.clear_code_lines();
-                }
-                if cache.syntax_highlights.is_some() {
-                    cache.syntax_highlights = None;
-                    cache.clear_code_lines();
-                }
-                return;
-            }
-            let mut cache = view.cache.borrow_mut();
-            let previous_line_count = cache
-                .wrap_layout
-                .as_ref()
-                .map(|layout| layout.layout.line_row_starts.len().saturating_sub(1));
-            let invalidation = SyntaxInvalidation::from_buffer_delta(&buffer, &delta, previous_line_count);
-            cache.patch_wrap_layout(&buffer, revision, &invalidation);
-            cache.patch_unwrapped_line_width(revision, &invalidation, buffer.len_lines());
-            if cache.syntax_highlights.is_some() {
-                cache.syntax_highlights = None;
-                cache.clear_code_lines();
-            }
+            view.syntax_build_inflight = None;
+            sync_plain_view_state(view, language, revision, &buffer, &delta);
             return;
         };
+
+        if view.syntax_build_inflight.is_some() {
+            sync_plain_view_state(view, language, revision, &buffer, &delta);
+            return;
+        }
+        let touches_oversized_injection = view
+            .syntax_state
+            .as_ref()
+            .is_some_and(|state| state.borrow().delta_touches_oversized_injection(&delta));
+        let background_build_required = buffer.len_bytes() >= BACKGROUND_SYNTAX_PARSE_BYTES
+            && (view.syntax_state.is_none() || delta_requires_background_syntax(&delta) || touches_oversized_injection);
+        if background_build_required {
+            view.syntax_build_inflight = Some((syntax_lang, revision));
+            sync_plain_view_state(view, language, revision, &buffer, &delta);
+            self.spawn_syntax_build(active_id, syntax_lang, revision, buffer, cx);
+            return;
+        }
 
         // Drop the existing state when the language switched out from under
         // us so we don't feed the wrong parser an incremental edit.
@@ -1083,12 +1047,73 @@ impl LstGpuiApp {
         refresh_syntax_cache(&mut cache, &state, &buffer, revision, invalidation, structure_remapped);
     }
 
+    fn spawn_syntax_build(
+        &mut self,
+        tab_id: TabId,
+        language: SyntaxLanguage,
+        revision: u64,
+        buffer: Rope,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let build = cx
+                .background_executor()
+                .spawn(async move {
+                    let started = Instant::now();
+                    let build = TabSyntaxState::build_initial(language, &buffer, revision);
+                    diagnostics::record_ms("syntax_background_build_ms", started.elapsed().as_secs_f64() * 1000.0);
+                    build
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                let current = app
+                    .model
+                    .tab_by_id(tab_id)
+                    .map(|tab| (tab.language(), tab.revision(), tab.buffer().clone()));
+                let Some(view) = app.tab_views.get_mut(&tab_id) else {
+                    return;
+                };
+                if view.syntax_build_inflight != Some((language, revision)) {
+                    return;
+                }
+                view.syntax_build_inflight = None;
+                let Some((current_language, current_revision, current_buffer)) = current else {
+                    return;
+                };
+                if current_revision != revision
+                    || syntax_mode_for_language(current_language) != SyntaxMode::TreeSitter(language)
+                {
+                    cx.notify();
+                    return;
+                }
+                let Some(build) = build else {
+                    return;
+                };
+                let state = build.into_state();
+                view.structure = state.shared_structure();
+                view.structure_key = (current_language, revision);
+                let mut cache = view.cache.borrow_mut();
+                refresh_syntax_cache(
+                    &mut cache,
+                    &state,
+                    &current_buffer,
+                    revision,
+                    SyntaxInvalidation::Full,
+                    false,
+                );
+                view.syntax_state = Some(Rc::new(RefCell::new(state)));
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Render-path entry point: ensures the active tab has up-to-date
     /// highlights, even for files that were opened without going through
     /// an `update_model` cycle (e.g. on first paint). Cheap when nothing
     /// has changed.
-    pub(crate) fn ensure_active_syntax_state(&mut self) {
-        self.sync_active_syntax_state();
+    pub(crate) fn ensure_active_syntax_state(&mut self, cx: &mut Context<Self>) {
+        self.sync_active_syntax_state(cx);
     }
 
     fn execute_model_command(&mut self, cx: &mut Context<Self>, command: Command) {
@@ -1342,6 +1367,81 @@ fn syntax_cache_is_current(cache: &ViewportCache, language: SyntaxLanguage, revi
         .syntax_highlights
         .as_ref()
         .is_some_and(|highlights| highlights.language == language && highlights.revision == revision)
+}
+
+fn delta_requires_background_syntax(delta: &lst_editor::BufferDelta) -> bool {
+    match delta {
+        lst_editor::BufferDelta::FullReplace => true,
+        lst_editor::BufferDelta::Edits(edits) => {
+            edits.iter().map(|edit| edit.replacement.len()).sum::<usize>() >= BACKGROUND_SYNTAX_PARSE_BYTES
+        }
+        lst_editor::BufferDelta::Unchanged => false,
+    }
+}
+
+fn sync_plain_view_state(
+    view: &mut EditorTabView,
+    language: Option<Language>,
+    revision: u64,
+    buffer: &Rope,
+    delta: &lst_editor::BufferDelta,
+) {
+    view.syntax_state = None;
+    if view.structure_key != (language, revision) {
+        let structural_pairs = language.map_or(&[('(', ')'), ('[', ']'), ('{', '}')][..], |language| {
+            language.config().structural_pairs
+        });
+        let structure_started = diagnostics::trace_enabled().then(Instant::now);
+        let structure_remapped = if view.structure_key.0 == language {
+            crate::syntax::update_plain_structural_snapshot(
+                &mut view.structure.borrow_mut(),
+                buffer,
+                revision,
+                structural_pairs,
+                delta,
+            )
+        } else {
+            *view.structure.borrow_mut() = crate::syntax::plain_structural_snapshot(buffer, revision, structural_pairs);
+            false
+        };
+        if let Some(started) = structure_started {
+            diagnostics::record_ms("plain_structure_update_ms", started.elapsed().as_secs_f64() * 1000.0);
+        }
+        view.structure_key = (language, revision);
+        let mut cache = view.cache.borrow_mut();
+        let previous_line_count = cache
+            .wrap_layout
+            .as_ref()
+            .map(|layout| layout.layout.line_row_starts.len().saturating_sub(1));
+        let invalidation = SyntaxInvalidation::from_buffer_delta(buffer, delta, previous_line_count);
+        cache.patch_wrap_layout(buffer, revision, &invalidation);
+        cache.patch_unwrapped_line_width(revision, &invalidation, buffer.len_lines());
+        let invalidated_lines = invalidation.line_range(buffer.len_lines());
+        cache.clear_text_lines_in(invalidated_lines.clone());
+        if structure_remapped && !invalidation.is_full() {
+            cache.clear_code_lines_in(invalidated_lines);
+        } else {
+            cache.clear_code_lines();
+        }
+        if cache.syntax_highlights.is_some() {
+            cache.syntax_highlights = None;
+            cache.clear_code_lines();
+        }
+        return;
+    }
+
+    let mut cache = view.cache.borrow_mut();
+    let previous_line_count = cache
+        .wrap_layout
+        .as_ref()
+        .map(|layout| layout.layout.line_row_starts.len().saturating_sub(1));
+    let invalidation = SyntaxInvalidation::from_buffer_delta(buffer, delta, previous_line_count);
+    cache.patch_wrap_layout(buffer, revision, &invalidation);
+    cache.patch_unwrapped_line_width(revision, &invalidation, buffer.len_lines());
+    if cache.syntax_highlights.is_some() {
+        cache.syntax_highlights = None;
+        cache.clear_code_lines();
+    }
 }
 
 fn refresh_syntax_cache(

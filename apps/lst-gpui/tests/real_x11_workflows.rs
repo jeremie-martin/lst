@@ -50,6 +50,22 @@ fn ctrl_v_pastes_system_clipboard_into_editor() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn large_markdown_paste_accepts_end_edit_while_syntax_builds() -> TestResult {
+    support::run_x11_test("workflow-large-markdown-paste", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+        let payload = format!("before\n\n<pre>\n{}", "x".repeat(300 * 1024));
+        let expected = format!("{payload}T");
+
+        write_clipboard_text(Selection::Clipboard, &payload)?;
+        editor.keys("<C-v>")?;
+        editor.keys("T")?;
+        editor.save_then_expect_file(&path, &expected)?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn goto_line_panel_moves_focus_back_to_editor_after_submit() -> TestResult {
     support::run_x11_test("workflow-goto-line", |session| {
         let path = session.seed_file("goto.txt", "alpha\nbeta\ngamma")?;

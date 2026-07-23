@@ -407,6 +407,85 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_edit_inside_injected_rust_remaps_verified_structure() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let before = "```rust\nfn fenced() { call(1); }\n```\n";
+        let insert_at = before.find("fenced").unwrap() + "fenced".len();
+        let mut after = before.to_string();
+        after.insert(insert_at, 'x');
+        let before_buffer = ropey::Rope::from_str(before);
+        let after_buffer = ropey::Rope::from_str(&after);
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &before_buffer, 0).unwrap();
+
+        state.update(
+            &after_buffer,
+            BufferDelta::Edits(vec![BufferEdit {
+                range: insert_at..insert_at,
+                replacement: "x".to_string(),
+            }]),
+            1,
+        );
+
+        assert!(state.structure_was_remapped());
+        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &after_buffer, 1).unwrap();
+        assert_eq!(&*state.structure(), &*fresh_state.structure());
+    }
+
+    #[test]
+    fn ordinary_edit_inside_many_markdown_inline_regions_remaps_structure() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let before = (0..1_000)
+            .map(|line| format!("paragraph {line}: alpha [label](target) omega\n"))
+            .collect::<String>();
+        let marker = "paragraph 500";
+        let insert_at = before.find(marker).unwrap() + marker.len();
+        let mut after = before.clone();
+        after.insert(insert_at, 'x');
+        let before_buffer = ropey::Rope::from_str(&before);
+        let after_buffer = ropey::Rope::from_str(&after);
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &before_buffer, 0).unwrap();
+
+        state.update(
+            &after_buffer,
+            BufferDelta::Edits(vec![BufferEdit {
+                range: insert_at..insert_at,
+                replacement: "x".to_string(),
+            }]),
+            1,
+        );
+
+        assert!(state.structure_was_remapped());
+        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &after_buffer, 1).unwrap();
+        assert_eq!(&*state.structure(), &*fresh_state.structure());
+    }
+
+    #[test]
+    fn edit_at_markdown_inline_start_remaps_structure() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let before = "alpha [label](target)\nbeta { value }\n";
+        let after = format!("x{before}");
+        let before_buffer = ropey::Rope::from_str(before);
+        let after_buffer = ropey::Rope::from_str(&after);
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &before_buffer, 0).unwrap();
+
+        state.update(
+            &after_buffer,
+            BufferDelta::Edits(vec![BufferEdit {
+                range: 0..0,
+                replacement: "x".to_string(),
+            }]),
+            1,
+        );
+
+        assert!(state.structure_was_remapped());
+        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &after_buffer, 1).unwrap();
+        assert_eq!(&*state.structure(), &*fresh_state.structure());
+    }
+
+    #[test]
     fn plain_structure_updates_match_fresh_snapshots() {
         use lst_editor::{BufferDelta, BufferEdit};
 

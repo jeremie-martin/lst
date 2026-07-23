@@ -107,6 +107,9 @@ Options:
   --corpus <name>       override the scenario corpus: medium-rust, large-rust,
                         huge-rust-50k, large-plain, huge-plain-500k, mixed-concat,
                         huge-mixed-concat-500k
+  --corpus-file <path>  use exact UTF-8 file contents for the mixed-paste scenario
+  --paste-target <name> mixed-paste destination language: plain or markdown
+                        (default: plain)
   --repetitions <n>     measured repetitions after priming (default: 7)
   --priming <n>         unreported warm-up runs (default: 1)
   --position <name>     place typing, search, and scrolling at top, middle, or end
@@ -311,13 +314,45 @@ impl DocumentPosition {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PasteTarget {
+    Plain,
+    Markdown,
+}
+
+impl PasteTarget {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "plain" => Ok(Self::Plain),
+            "markdown" => Ok(Self::Markdown),
+            _ => Err(format!("unknown paste target: {value}")),
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Plain => "txt",
+            Self::Markdown => "md",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Markdown => "markdown-tree-sitter",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Args {
     scenario: Scenario,
     corpus: Option<CorpusKind>,
+    corpus_file: Option<PathBuf>,
     repetitions: usize,
     priming_runs: usize,
     position: DocumentPosition,
+    paste_target: PasteTarget,
     typing_no_wrap: bool,
     keep_temp_on_failure: bool,
 }
@@ -330,9 +365,11 @@ where
     let mut args = Args {
         scenario: Scenario::All,
         corpus: None,
+        corpus_file: None,
         repetitions: DEFAULT_REPETITIONS,
         priming_runs: DEFAULT_PRIMING_RUNS,
         position: DocumentPosition::Top,
+        paste_target: PasteTarget::Plain,
         typing_no_wrap: false,
         keep_temp_on_failure: false,
     };
@@ -349,6 +386,12 @@ where
             "--corpus" => {
                 let value = raw_args.next().ok_or_else(|| "--corpus requires a value".to_string())?;
                 args.corpus = Some(CorpusKind::parse(&value)?);
+            }
+            "--corpus-file" => {
+                let value = raw_args
+                    .next()
+                    .ok_or_else(|| "--corpus-file requires a value".to_string())?;
+                args.corpus_file = Some(PathBuf::from(value));
             }
             "--repetitions" => {
                 let value = raw_args
@@ -370,10 +413,23 @@ where
                     .ok_or_else(|| "--position requires a value".to_string())?;
                 args.position = DocumentPosition::parse(&value)?;
             }
+            "--paste-target" => {
+                let value = raw_args
+                    .next()
+                    .ok_or_else(|| "--paste-target requires a value".to_string())?;
+                args.paste_target = PasteTarget::parse(&value)?;
+            }
             "--typing-no-wrap" => args.typing_no_wrap = true,
             "--keep-temp-on-failure" => args.keep_temp_on_failure = true,
             unknown => return Err(format!("unknown argument: {unknown}")),
         }
+    }
+
+    if args.corpus.is_some() && args.corpus_file.is_some() {
+        return Err("--corpus and --corpus-file cannot be combined".to_string());
+    }
+    if args.corpus_file.is_some() && args.scenario != Scenario::MixedPaste {
+        return Err("--corpus-file currently requires --scenario mixed-paste".to_string());
     }
 
     Ok(args)
@@ -440,7 +496,10 @@ impl Bench {
     }
 
     fn run_scenario(&self, scenario: Scenario, args: &Args) -> Result<(), Box<dyn Error>> {
-        let corpus = Corpus::load(args.corpus.unwrap_or_else(|| scenario.corpus_kind()));
+        let corpus = match args.corpus_file.as_deref() {
+            Some(path) => Corpus::load_file(path)?,
+            None => Corpus::load(args.corpus.unwrap_or_else(|| scenario.corpus_kind())),
+        };
         let mut runs = Vec::with_capacity(args.repetitions);
         let mut expected_window = None;
         let total_runs = args.priming_runs + args.repetitions;
@@ -449,9 +508,14 @@ impl Bench {
             let measured = run_index >= args.priming_runs;
             let metrics = match scenario {
                 Scenario::All => unreachable!("all is expanded before execution"),
-                Scenario::LargePaste | Scenario::MixedPaste => {
-                    self.run_large_paste(scenario, &corpus, run_index, args.position, args.keep_temp_on_failure)?
-                }
+                Scenario::LargePaste | Scenario::MixedPaste => self.run_large_paste(
+                    scenario,
+                    &corpus,
+                    run_index,
+                    args.position,
+                    args.paste_target,
+                    args.keep_temp_on_failure,
+                )?,
                 Scenario::TypingMedium | Scenario::TypingLarge | Scenario::TypingPlain => self.run_typing(
                     scenario,
                     &corpus,
@@ -504,11 +568,17 @@ impl Bench {
         corpus: &Corpus,
         run_index: usize,
         position: DocumentPosition,
+        paste_target: PasteTarget,
         keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let mixed_paste = scenario == Scenario::MixedPaste;
         let source_path = temp_path(scenario, run_index, "source", corpus.extension);
-        let target_path = temp_path(scenario, run_index, "target", if mixed_paste { "txt" } else { "rs" });
+        let target_path = temp_path(
+            scenario,
+            run_index,
+            "target",
+            if mixed_paste { paste_target.extension() } else { "rs" },
+        );
         let trace_path = temp_path(scenario, run_index, "trace", "log");
         if !mixed_paste {
             fs::write(&source_path, &corpus.text)?;
@@ -634,11 +704,33 @@ impl Bench {
                 terminate_child(owner)?;
             }
 
-            let post_paste_typing_ms = if let Some(payload) = post_paste_payload.as_ref() {
+            let (post_paste_first_key_ms, post_paste_typing_ms) = if let Some(payload) = post_paste_payload.as_ref() {
                 self.position_editor(target_line, &trace_path, damage.damage(), window.id, &mut child)?;
                 reset_editor_trace(&trace_path)?;
                 let typing_started = Instant::now();
-                inject_text(&self.conn, self.root, &self.keycodes, payload)?;
+                let mut payload_chars = payload.chars();
+                let first_char = payload_chars
+                    .next()
+                    .expect("mixed-paste typing payload is non-empty")
+                    .to_string();
+                let remaining = payload_chars.collect::<String>();
+                let first_key_started = Instant::now();
+                inject_text(&self.conn, self.root, &self.keycodes, &first_char)?;
+                wait_for_trace_count(
+                    &trace_path,
+                    "text_input_apply_ms",
+                    1,
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
+                wait_for_trace_count(
+                    &trace_path,
+                    "viewport_paint_ms",
+                    1,
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
+                let first_key_ms = elapsed_ms(first_key_started);
+                let first_paint_count = read_editor_trace(&trace_path)?.count("viewport_paint_ms").unwrap_or(0);
+                inject_text(&self.conn, self.root, &self.keycodes, &remaining)?;
                 wait_for_trace_count(
                     &trace_path,
                     "text_input_apply_ms",
@@ -648,12 +740,12 @@ impl Bench {
                 wait_for_trace_count(
                     &trace_path,
                     "viewport_paint_ms",
-                    1,
+                    first_paint_count + 1,
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
-                Some(elapsed_ms(typing_started))
+                (Some(first_key_ms), Some(elapsed_ms(typing_started)))
             } else {
-                None
+                (None, None)
             };
 
             let save_count = read_editor_trace(&trace_path)?.count("save_complete").unwrap_or(0);
@@ -680,6 +772,9 @@ impl Bench {
             metrics.set("tab_switch_ms", tab_switch_ms);
             metrics.set("paste_complete_ms", paste_complete_ms);
             metrics.set("paste_input_to_paint_ms", paste_input_to_paint_ms);
+            if let Some(post_paste_first_key_ms) = post_paste_first_key_ms {
+                metrics.set("post_paste_first_key_ms", post_paste_first_key_ms);
+            }
             if let Some(post_paste_typing_ms) = post_paste_typing_ms {
                 metrics.set("post_paste_typing_ms", post_paste_typing_ms);
                 metrics.set(
@@ -729,6 +824,43 @@ impl Bench {
                 "plain_structure_update_ms",
             );
             if mixed_paste {
+                for metric in [
+                    "syntax_structure_root_injections",
+                    "syntax_structure_root_collect_ms",
+                    "syntax_structure_markdown_inline_ranges",
+                    "syntax_structure_markdown_inline_parse_ms",
+                    "syntax_structure_markdown_inline_collect_ms",
+                    "syntax_structure_markdown_inline_regions_ms",
+                    "syntax_structure_other_injections",
+                    "syntax_structure_other_injections_ms",
+                    "syntax_structure_assemble_ms",
+                ] {
+                    add_trace_last_or_zero(&mut metrics, &paste_trace, metric, metric);
+                }
+                add_trace_last_or_zero(
+                    &mut metrics,
+                    &paste_trace,
+                    "syntax_parse_update_ms",
+                    "syntax_parse_update_ms",
+                );
+                add_trace_last_or_zero(
+                    &mut metrics,
+                    &paste_trace,
+                    "syntax_structure_update_ms",
+                    "syntax_structure_update_ms",
+                );
+                add_trace_last_or_zero(
+                    &mut metrics,
+                    &paste_trace,
+                    "syntax_highlight_cache_ms",
+                    "syntax_highlight_cache_ms",
+                );
+                add_trace_last_or_zero(
+                    &mut metrics,
+                    &paste_trace,
+                    "plain_structure_update_ms",
+                    "plain_structure_update_ms",
+                );
                 add_trace_aggregate(
                     &mut metrics,
                     &trace,
@@ -736,6 +868,22 @@ impl Bench {
                     "text_input_apply_ms_sum",
                     "text_input_apply_ms_max",
                     "text_input_apply_ms_count",
+                );
+                add_trace_aggregate_or_zero(
+                    &mut metrics,
+                    &trace,
+                    "syntax_parse_update_ms",
+                    "syntax_parse_update_ms_sum",
+                    "syntax_parse_update_ms_max",
+                    "syntax_parse_update_ms_count",
+                );
+                add_trace_aggregate_or_zero(
+                    &mut metrics,
+                    &trace,
+                    "syntax_structure_update_ms",
+                    "syntax_structure_update_ms_sum",
+                    "syntax_structure_update_ms_max",
+                    "syntax_structure_update_ms_count",
                 );
                 add_trace_aggregate_or_zero(
                     &mut metrics,
@@ -1526,6 +1674,18 @@ impl Corpus {
             highlight: kind.highlight_label(),
         }
     }
+
+    fn load_file(path: &Path) -> Result<Self, Box<dyn Error>> {
+        let text = fs::read_to_string(path)?;
+        Ok(Self {
+            label: format!("exact-file:{}", path.display()),
+            bytes: text.len() as u64,
+            lines: text.lines().count(),
+            text,
+            extension: "txt",
+            highlight: "plain",
+        })
+    }
 }
 
 fn generated_rust_corpus(module_count: usize, functions_per_module: usize) -> String {
@@ -1671,6 +1831,7 @@ fn emit_summary(
     println!("priming_runs={}", args.priming_runs);
     println!("repetitions={}", args.repetitions);
     println!("position={}", args.position.label());
+    println!("paste_target={}", args.paste_target.label());
     println!("typing_word_wrap={}", if args.typing_no_wrap { "off" } else { "on" });
     println!("quiet_ms={QUIET_MS}");
     println!("primary_metric={primary_metric}");
@@ -1729,12 +1890,31 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "paste_clipboard_read_ms",
             "paste_bytes",
             "paste_lines",
+            "syntax_parse_update_ms",
+            "syntax_structure_update_ms",
+            "syntax_highlight_cache_ms",
+            "syntax_structure_root_injections",
+            "syntax_structure_root_collect_ms",
+            "syntax_structure_markdown_inline_ranges",
+            "syntax_structure_markdown_inline_parse_ms",
+            "syntax_structure_markdown_inline_collect_ms",
+            "syntax_structure_markdown_inline_regions_ms",
+            "syntax_structure_other_injections",
+            "syntax_structure_other_injections_ms",
+            "syntax_structure_assemble_ms",
             "plain_structure_update_ms",
+            "post_paste_first_key_ms",
             "post_paste_typing_ms",
             "post_paste_typing_ms_per_char",
             "text_input_apply_ms_sum",
             "text_input_apply_ms_max",
             "text_input_apply_ms_count",
+            "syntax_parse_update_ms_sum",
+            "syntax_parse_update_ms_max",
+            "syntax_parse_update_ms_count",
+            "syntax_structure_update_ms_sum",
+            "syntax_structure_update_ms_max",
+            "syntax_structure_update_ms_count",
             "plain_structure_update_ms_sum",
             "plain_structure_update_ms_max",
             "plain_structure_update_ms_count",
@@ -1914,6 +2094,10 @@ fn add_trace_last(metrics: &mut RunMetrics, trace: &EditorTrace, from: &str, to:
     if let Some(value) = trace.last(from) {
         metrics.set(to, value);
     }
+}
+
+fn add_trace_last_or_zero(metrics: &mut RunMetrics, trace: &EditorTrace, from: &str, to: &'static str) {
+    metrics.set(to, trace.last(from).unwrap_or(0.0));
 }
 
 fn add_trace_aggregate(
@@ -3018,10 +3202,39 @@ mod tests {
 
         assert_eq!(args.scenario, Scenario::TypingLarge);
         assert_eq!(args.corpus, Some(CorpusKind::HugeRust));
+        assert_eq!(args.corpus_file, None);
         assert_eq!(args.repetitions, 3);
         assert_eq!(args.priming_runs, 0);
         assert_eq!(args.position, DocumentPosition::End);
+        assert_eq!(args.paste_target, PasteTarget::Plain);
         assert!(args.typing_no_wrap);
+    }
+
+    #[test]
+    fn exact_corpus_file_is_scoped_to_mixed_paste() {
+        let args = parse_args_from([
+            "--scenario",
+            "mixed-paste",
+            "--corpus-file",
+            "/tmp/exact-concat.txt",
+            "--paste-target",
+            "markdown",
+        ])
+        .expect("exact mixed-paste corpus should parse");
+        assert_eq!(args.corpus, None);
+        assert_eq!(args.corpus_file, Some(PathBuf::from("/tmp/exact-concat.txt")));
+        assert_eq!(args.paste_target, PasteTarget::Markdown);
+
+        assert!(parse_args_from(["--scenario", "typing-plain", "--corpus-file", "/tmp/exact-concat.txt",]).is_err());
+        assert!(parse_args_from([
+            "--scenario",
+            "mixed-paste",
+            "--corpus",
+            "mixed-concat",
+            "--corpus-file",
+            "/tmp/exact-concat.txt",
+        ])
+        .is_err());
     }
 
     #[test]

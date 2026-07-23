@@ -76,6 +76,15 @@ for position in top middle end; do
 done
 DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
   --scenario mixed-paste --corpus huge-mixed-concat-500k --position middle
+
+# Replay an exact UTF-8 shell payload into the Markdown/scratchpad syntax
+# path. --corpus-file is intentionally limited to mixed-paste so normal
+# benchmark corpora remain deterministic.
+DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
+  --scenario mixed-paste \
+  --corpus-file /tmp/concat-output.txt \
+  --paste-target markdown \
+  --position end
 ```
 
 `huge-rust-50k` contains at least 50,000 syntax-highlighted lines;
@@ -92,7 +101,11 @@ needs a real presentation backend.
 The `large-paste` scenario uses `xclip` to observe the clipboard copied by the
 editor. `mixed-paste` seeds its deterministic corpus through an external
 `xclip` owner, matching a shell-to-editor paste while keeping source-tab load
-and editor-owned clipboard serving outside the measurement.
+and editor-owned clipboard serving outside the measurement. It defaults to a
+plain-text destination; `--paste-target markdown` exercises the same
+Tree-sitter path as a scratchpad. The scenario reports both
+`paste_input_to_paint_ms` and `post_paste_first_key_ms`, followed by a
+320-character sustained-typing measurement.
 
 ## Scenarios
 
@@ -103,7 +116,7 @@ size where relevant.
 | Scenario | Primary metric | Completion condition |
 | --- | --- | --- |
 | `large-paste` | `paste_complete_ms` | Copies the large Rust corpus, switches to a second file tab, waits for app-traced select/tab/paste completion, saves once, then verifies the target file exactly matches the corpus. |
-| `mixed-paste` | `paste_input_to_paint_ms` | Copies the deterministic concat-style mixed-language corpus through X11 into a plain document, waits for the first completed paint, types 320 characters at the requested top/middle/end position, saves once, and verifies the result exactly. |
+| `mixed-paste` | `paste_input_to_paint_ms` | Copies a deterministic concat-style corpus—or an exact file supplied with `--corpus-file`—through X11 into a plain or Markdown target, waits for the first completed paint, measures the first post-paste key and 320-character typing at top/middle/end, saves once, and verifies the result exactly. |
 | `typing-medium` | `typing_ms_per_char` | Types a fixed lowercase payload into the generated medium Rust corpus, waits for every app-traced text input plus the next paint, saves once, then verifies the saved file exactly matches the expected text. |
 | `typing-large` | `typing_ms_per_char` | Same as `typing-medium`, using the generated large Rust corpus. After the primary typing measurement it moves into and selects the final identifier, reporting both passive-occurrence and explicit-selection visible-range highlight costs. |
 | `typing-plain` | `typing_ms_per_char` | Same typing path over the generated one-million-byte plain-text corpus, isolating framework-neutral editing and plain structural decoration maintenance from tree-sitter work. |

@@ -5,8 +5,14 @@ use super::{
 use crate::{diagnostics, ui::theme::SyntaxRole};
 use lst_editor::{BufferDelta, BufferEdit};
 use ropey::Rope;
-use std::{cell::RefCell, ops::Range, rc::Rc, time::Instant};
-use tree_sitter::{InputEdit, Node, Parser, Point, QueryCursor, StreamingIterator, Tree};
+use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc, time::Instant};
+use tree_sitter::{InputEdit, Node, Parser, Point, QueryCursor, Range as TsRange, StreamingIterator, Tree};
+
+/// Embedded grammars can be parsed synchronously during incremental updates.
+/// Keep one malformed fence or HTML block from turning the rest of a large
+/// Markdown document into an unbounded deep parse; the host grammar still
+/// paints a region that exceeds this budget.
+const MAX_EAGER_INJECTION_BYTES: usize = 128 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StructuralPair {
@@ -229,6 +235,39 @@ impl SyntaxInvalidation {
     }
 }
 
+#[derive(Default)]
+struct InjectionParsers {
+    parsers: HashMap<GrammarId, Parser>,
+}
+
+impl InjectionParsers {
+    fn parser(&mut self, grammar: GrammarId) -> Option<&mut Parser> {
+        Some(match self.parsers.entry(grammar) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let config = catalog::grammar(grammar);
+                let mut parser = Parser::new();
+                parser.set_language(&config.language).ok()?;
+                entry.insert(parser)
+            }
+        })
+    }
+
+    fn parse(&mut self, grammar: GrammarId, source: &[u8]) -> Option<Tree> {
+        self.parser(grammar)?.parse(source, None)
+    }
+
+    fn parse_rope_ranges(&mut self, grammar: GrammarId, source: &Rope, ranges: &[TsRange]) -> Option<Tree> {
+        let parser = self.parser(grammar)?;
+        parser.set_included_ranges(ranges).ok()?;
+        let tree = parse_rope(parser, source, None);
+        parser
+            .set_included_ranges(&[])
+            .expect("empty included ranges always restore full-document parsing");
+        tree
+    }
+}
+
 /// Per-tab parse state. Owns its own `Parser` and the most recent `Tree`
 /// for the buffer, plus a snapshot of the buffer the tree was parsed
 /// against (so the next incremental edit can be expressed against the
@@ -248,11 +287,46 @@ pub(crate) struct TabSyntaxState {
     parsed_buffer: Rope,
     structure: Rc<RefCell<StructuralSnapshot>>,
     root_injections: Vec<InjectionRegion>,
+    oversized_injections: Vec<Range<usize>>,
+    injection_parsers: InjectionParsers,
     structure_remapped_last_update: bool,
+}
+
+pub(crate) struct InitialSyntaxBuild {
+    language: SyntaxLanguage,
+    revision: u64,
+    parser: Parser,
+    tree: Tree,
+    parsed_buffer: Rope,
+    structure: StructuralSnapshot,
+    root_injections: Vec<InjectionRegion>,
+    oversized_injections: Vec<Range<usize>>,
+    injection_parsers: InjectionParsers,
+}
+
+impl InitialSyntaxBuild {
+    pub(crate) fn into_state(self) -> TabSyntaxState {
+        TabSyntaxState {
+            language: self.language,
+            revision: self.revision,
+            parser: self.parser,
+            tree: self.tree,
+            parsed_buffer: self.parsed_buffer,
+            structure: Rc::new(RefCell::new(self.structure)),
+            root_injections: self.root_injections,
+            oversized_injections: self.oversized_injections,
+            injection_parsers: self.injection_parsers,
+            structure_remapped_last_update: false,
+        }
+    }
 }
 
 impl TabSyntaxState {
     pub(crate) fn parse_initial(language: SyntaxLanguage, buffer: &Rope, revision: u64) -> Option<Self> {
+        Self::build_initial(language, buffer, revision).map(InitialSyntaxBuild::into_state)
+    }
+
+    pub(crate) fn build_initial(language: SyntaxLanguage, buffer: &Rope, revision: u64) -> Option<InitialSyntaxBuild> {
         let grammar = catalog::grammar(catalog::root_grammar(language));
         let mut parser = Parser::new();
         parser.set_language(&grammar.language).ok()?;
@@ -262,21 +336,33 @@ impl TabSyntaxState {
             diagnostics::record_ms("syntax_parse_initial_ms", started.elapsed().as_secs_f64() * 1000.0);
         }
         let structure_started = diagnostics::trace_enabled().then(Instant::now);
-        let root_injections = collect_rope_injection_matches(&tree, buffer, grammar, 0..buffer.len_bytes());
-        let structure = structural_snapshot(language, &tree, buffer, revision, &root_injections);
+        let (root_injections, oversized_injections) = partition_root_injections(
+            buffer,
+            collect_rope_injection_matches_unbounded(&tree, buffer, grammar, 0..buffer.len_bytes()),
+        );
+        let mut injection_parsers = InjectionParsers::default();
+        let structure = structural_snapshot(
+            language,
+            &tree,
+            buffer,
+            revision,
+            &root_injections,
+            &mut injection_parsers,
+        );
         let root_injections = injection_regions(buffer, &root_injections);
         if let Some(started) = structure_started {
             diagnostics::record_ms("syntax_structure_initial_ms", started.elapsed().as_secs_f64() * 1000.0);
         }
-        Some(Self {
+        Some(InitialSyntaxBuild {
             language,
             revision,
             parser,
             tree,
             parsed_buffer: buffer.clone(),
-            structure: Rc::new(RefCell::new(structure)),
+            structure,
             root_injections,
-            structure_remapped_last_update: false,
+            oversized_injections,
+            injection_parsers,
         })
     }
 
@@ -362,39 +448,30 @@ impl TabSyntaxState {
         };
         let mut verified_root_injections = None;
         let structure_remapped = parse_succeeded
-            && !edits_touch_old_injection
-            && !edits_touch_new_injection
             && matches!(&delta, BufferDelta::Edits(edits) if {
-                if can_remap_structural_snapshot(
+                if !edits_touch_old_injection
+                    && !edits_touch_new_injection
+                    && can_remap_structural_snapshot(
                     &self.parsed_buffer,
                     new_buffer,
                     edits,
                     &changed_byte_ranges,
                 ) {
                     true
-                } else if edits.iter().all(|edit| {
-                    !self
-                        .parsed_buffer
-                        .slice(edit.range.start.min(self.parsed_buffer.len_chars())
-                            ..edit.range.end.min(self.parsed_buffer.len_chars()))
-                        .chars()
-                        .any(is_structural_candidate)
-                        && !edit.replacement.chars().any(is_structural_candidate)
-                }) {
-                    let mut regions = self.root_injections.clone();
-                    remap_injection_regions(&mut regions, edits);
-                    let safe = injection_regions_were_reused(&regions, new_buffer, &self.tree)
-                        && can_remap_structure_after_parse_change(
-                        &self.structure.borrow(),
-                        &regions,
-                        new_buffer,
-                        edits,
-                        &changed_byte_ranges,
-                        &self.tree,
-                        catalog::root_grammar(self.language),
+                } else if root_config.injections.is_some() {
+                    verified_root_injections = verified_injection_remap(
+                        InjectionRemapInput {
+                            snapshot: &self.structure.borrow(),
+                            old_regions: &self.root_injections,
+                            new_buffer,
+                            edits,
+                            changed_byte_ranges: &changed_byte_ranges,
+                            new_tree: &self.tree,
+                            root_grammar: catalog::root_grammar(self.language),
+                        },
+                        &mut self.injection_parsers,
                     );
-                    verified_root_injections = safe.then_some(regions);
-                    safe
+                    verified_root_injections.is_some()
                 } else {
                     false
                 }
@@ -409,13 +486,28 @@ impl TabSyntaxState {
             } else {
                 remap_injection_regions(&mut self.root_injections, edits);
             }
+            remap_char_ranges(&mut self.oversized_injections, edits);
         } else {
-            let injections =
-                collect_rope_injection_matches(&self.tree, new_buffer, root_config, 0..new_buffer.len_bytes());
+            let (injections, oversized_injections) = partition_root_injections(
+                new_buffer,
+                collect_rope_injection_matches_unbounded(
+                    &self.tree,
+                    new_buffer,
+                    root_config,
+                    0..new_buffer.len_bytes(),
+                ),
+            );
             let regions = injection_regions(new_buffer, &injections);
-            *self.structure.borrow_mut() =
-                structural_snapshot(self.language, &self.tree, new_buffer, new_revision, &injections);
+            *self.structure.borrow_mut() = structural_snapshot(
+                self.language,
+                &self.tree,
+                new_buffer,
+                new_revision,
+                &injections,
+                &mut self.injection_parsers,
+            );
             self.root_injections = regions;
+            self.oversized_injections = oversized_injections;
         }
         if let Some(started) = structure_started {
             diagnostics::record_ms("syntax_structure_update_ms", started.elapsed().as_secs_f64() * 1000.0);
@@ -433,6 +525,17 @@ impl TabSyntaxState {
 
     pub(crate) fn shared_structure(&self) -> Rc<RefCell<StructuralSnapshot>> {
         self.structure.clone()
+    }
+
+    pub(crate) fn delta_touches_oversized_injection(&self, delta: &BufferDelta) -> bool {
+        let BufferDelta::Edits(edits) = delta else {
+            return false;
+        };
+        edits.iter().any(|edit| {
+            self.oversized_injections
+                .iter()
+                .any(|region| region.start <= edit.range.end && edit.range.start <= region.end)
+        })
     }
 
     pub(crate) fn structure_was_remapped(&self) -> bool {
@@ -624,6 +727,11 @@ fn can_remap_structure_after_parse_change(
         injection_regions
             .iter()
             .map(|injection| new_buffer.char_to_byte(injection.start)..new_buffer.char_to_byte(injection.end))
+            .filter(|injection| {
+                changed_ranges
+                    .iter()
+                    .any(|changed| changed.start < injection.end && injection.start < changed.end)
+            })
             .collect(),
     );
 
@@ -650,28 +758,168 @@ fn can_remap_structure_after_parse_change(
     actual == expected
 }
 
-fn injection_regions_were_reused(regions: &[InjectionRegion], buffer: &Rope, tree: &Tree) -> bool {
-    regions.iter().all(|region| {
-        let start = buffer.char_to_byte(region.start.min(buffer.len_chars()));
-        let end = buffer.char_to_byte(region.end.min(buffer.len_chars()));
-        if start >= end {
-            return false;
+struct InjectionRemapInput<'a> {
+    snapshot: &'a StructuralSnapshot,
+    old_regions: &'a [InjectionRegion],
+    new_buffer: &'a Rope,
+    edits: &'a [BufferEdit],
+    changed_byte_ranges: &'a [Range<usize>],
+    new_tree: &'a Tree,
+    root_grammar: GrammarId,
+}
+
+fn verified_injection_remap(
+    input: InjectionRemapInput<'_>,
+    injection_parsers: &mut InjectionParsers,
+) -> Option<Vec<InjectionRegion>> {
+    let InjectionRemapInput {
+        snapshot,
+        old_regions,
+        new_buffer,
+        edits,
+        changed_byte_ranges,
+        new_tree,
+        root_grammar,
+    } = input;
+    let offsets = OffsetMapper::new(edits);
+    let mut regions = old_regions.to_vec();
+    remap_injection_regions(&mut regions, edits);
+
+    let mut affected_bytes = changed_byte_ranges.to_vec();
+    for range in post_edit_ranges(edits) {
+        let start = range.start.min(new_buffer.len_chars());
+        let end = range.end.min(new_buffer.len_chars()).max(start);
+        let context_start = start.saturating_sub(1);
+        let context_end = end
+            .max(start.saturating_add(1))
+            .saturating_add(1)
+            .min(new_buffer.len_chars());
+        affected_bytes.push(new_buffer.char_to_byte(context_start)..new_buffer.char_to_byte(context_end));
+    }
+    let affected_bytes = merge_byte_ranges(
+        affected_bytes
+            .into_iter()
+            .map(|range| {
+                let start = range.start.min(new_buffer.len_bytes());
+                let end = range.end.min(new_buffer.len_bytes()).max(start);
+                start..end
+            })
+            .filter(|range| !range.is_empty())
+            .collect(),
+    );
+    if affected_bytes.is_empty() {
+        return None;
+    }
+    let affected_chars = affected_bytes
+        .iter()
+        .map(|range| new_buffer.byte_to_char(range.start)..new_buffer.byte_to_char(range.end))
+        .collect::<Vec<_>>();
+    let affected_indices = regions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, region)| {
+            affected_chars
+                .iter()
+                .any(|range| region.start <= range.end && range.start <= region.end)
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+
+    let root_config = catalog::grammar(root_grammar);
+    let mut actual_regions = Vec::new();
+    for range in &affected_bytes {
+        actual_regions.extend(injection_regions(
+            new_buffer,
+            &collect_rope_injection_matches(new_tree, new_buffer, root_config, range.clone()),
+        ));
+    }
+    actual_regions.retain(|region| {
+        affected_chars
+            .iter()
+            .any(|range| region.start <= range.end && range.start <= region.end)
+    });
+    actual_regions.sort_by_key(|region| (region.start, region.end));
+    actual_regions.dedup_by(|left, right| injection_region_shape(left) == injection_region_shape(right));
+
+    if actual_regions.len() != affected_indices.len() {
+        return None;
+    }
+    let mut verified = Vec::with_capacity(affected_indices.len());
+    for (index, actual) in affected_indices.into_iter().zip(actual_regions) {
+        let mapped = &regions[index];
+        if mapped.embedded != actual.embedded
+            || mapped.include_children != actual.include_children
+            || mapped.start >= actual.end
+            || actual.start >= mapped.end
+        {
+            return None;
         }
-        let Some(mut node) = tree.root_node().descendant_for_byte_range(start, end) else {
-            return false;
-        };
-        loop {
-            if node.id() == region.node_id {
-                return node.start_byte() == start
-                    && node.end_byte() == end
-                    && node.parent().map(|parent| parent.id()) == region.parent_id;
-            }
-            let Some(parent) = node.parent() else {
-                return false;
-            };
-            node = parent;
+        let old = &old_regions[index];
+        if !injected_structure_was_reused(snapshot, old, &actual, new_buffer, &offsets, injection_parsers) {
+            return None;
         }
-    })
+        verified.push((index, actual));
+    }
+    for (index, actual) in verified {
+        regions[index] = actual;
+    }
+    can_remap_structure_after_parse_change(
+        snapshot,
+        &regions,
+        new_buffer,
+        edits,
+        changed_byte_ranges,
+        new_tree,
+        root_grammar,
+    )
+    .then_some(regions)
+}
+
+fn injection_region_shape(region: &InjectionRegion) -> (usize, usize, GrammarId, bool) {
+    (region.start, region.end, region.embedded, region.include_children)
+}
+
+fn injected_structure_was_reused(
+    snapshot: &StructuralSnapshot,
+    old_region: &InjectionRegion,
+    new_region: &InjectionRegion,
+    new_buffer: &Rope,
+    offsets: &OffsetMapper<'_>,
+    injection_parsers: &mut InjectionParsers,
+) -> bool {
+    let actual = injected_structural_snapshot(new_buffer, new_region, injection_parsers);
+    let expected_pairs = (snapshot.pair_index_at_or_after_open(old_region.start)
+        ..snapshot.pair_index_after_open(old_region.end))
+        .filter_map(|index| {
+            let pair = snapshot.pair(index);
+            (pair.open >= old_region.start && pair.close < old_region.end)
+                .then(|| (offsets.map(pair.open), offsets.map(pair.close)))
+        })
+        .collect::<Vec<_>>();
+    let actual_pairs = (0..actual.pairs.len())
+        .map(|index| {
+            let pair = actual.pair(index);
+            (pair.open, pair.close)
+        })
+        .collect::<Vec<_>>();
+    if expected_pairs != actual_pairs {
+        return false;
+    }
+
+    let first = snapshot.token_index_at_or_after(old_region.start);
+    let last = snapshot.token_index_at_or_after(old_region.end);
+    let expected_unmatched = (first..last)
+        .filter(|index| !snapshot.tokens[*index].matched)
+        .map(|index| offsets.map(snapshot.token_position(index)))
+        .collect::<Vec<_>>();
+    let actual_unmatched = actual
+        .tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, token)| !token.matched)
+        .map(|(index, _)| actual.token_position(index))
+        .collect::<Vec<_>>();
+    expected_unmatched == actual_unmatched
 }
 
 fn collect_structural_delimiters_in_ranges(
@@ -803,6 +1051,14 @@ fn remap_injection_regions(regions: &mut [InjectionRegion], edits: &[BufferEdit]
     }
 }
 
+fn remap_char_ranges(ranges: &mut [Range<usize>], edits: &[BufferEdit]) {
+    let offsets = OffsetMapper::new(edits);
+    for range in ranges {
+        range.start = offsets.map(range.start);
+        range.end = offsets.map(range.end);
+    }
+}
+
 fn collect_injected_selection_ranges(
     grammar: GrammarId,
     tree: &Tree,
@@ -843,145 +1099,122 @@ fn collect_injected_selection_ranges(
     }
 }
 
-fn structural_snapshot(
-    language: SyntaxLanguage,
-    tree: &Tree,
+fn injected_structural_snapshot(
     buffer: &Rope,
-    revision: u64,
-    root_injections: &[InjectionMatch],
+    region: &InjectionRegion,
+    injection_parsers: &mut InjectionParsers,
 ) -> StructuralSnapshot {
-    #[derive(Clone, Copy)]
-    struct Delimiter {
-        byte: usize,
-        ch: char,
+    let start_byte = buffer.char_to_byte(region.start.min(buffer.len_chars()));
+    let end_byte = buffer.char_to_byte(region.end.min(buffer.len_chars()));
+    if start_byte >= end_byte {
+        return StructuralSnapshot::new(0, Vec::new(), Vec::new());
     }
-
-    fn collect(node: Node<'_>, grammar: GrammarId, byte_offset: usize, out: &mut Vec<Delimiter>) {
-        if node.child_count() == 0 {
-            let kind = node.kind().as_bytes();
-            if kind.len() == 1 {
-                let ch = kind[0] as char;
-                let basic = matches!(ch, '(' | ')' | '[' | ']' | '{' | '}');
-                let angle = matches!(ch, '<' | '>') && angle_is_structural(grammar, node);
-                if (basic || angle) && node.end_byte() == node.start_byte() + 1 {
-                    out.push(Delimiter {
-                        byte: byte_offset + node.start_byte(),
-                        ch,
-                    });
-                }
-            } else if angle_is_structural(grammar, node) {
-                let angle = match kind {
-                    b"</" => Some((node.start_byte(), '<')),
-                    b"/>" => Some((node.end_byte().saturating_sub(1), '>')),
-                    _ => None,
-                };
-                if let Some((byte, ch)) = angle {
-                    out.push(Delimiter {
-                        byte: byte_offset + byte,
-                        ch,
-                    });
-                }
-            }
-            return;
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect(child, grammar, byte_offset, out);
-        }
+    let source = buffer.byte_slice(start_byte..end_byte);
+    if !source
+        .bytes()
+        .any(|byte| matches!(byte, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>'))
+    {
+        return StructuralSnapshot::new(0, Vec::new(), Vec::new());
     }
-
-    fn collect_injected(
-        grammar: GrammarId,
-        tree: &Tree,
-        source: &[u8],
-        byte_offset: usize,
-        streams: &mut Vec<Vec<Delimiter>>,
-    ) {
-        let config = catalog::grammar(grammar);
-        let injections = collect_injection_matches(tree, source, config, 0..source.len());
-        let mut delimiters = Vec::new();
-        collect(tree.root_node(), grammar, byte_offset, &mut delimiters);
-        delimiters.retain(|delimiter| {
-            let local_byte = delimiter.byte.saturating_sub(byte_offset);
-            !injections
-                .iter()
-                .any(|injection| injection.content_start <= local_byte && local_byte < injection.content_end)
-        });
-        streams.push(delimiters);
-
-        for injection in injections {
-            if injection.content_end <= injection.content_start {
-                continue;
-            }
-            let sub_source = &source[injection.content_start..injection.content_end];
-            let Some(sub_tree) = parse_sub_source(injection.embedded, sub_source) else {
-                continue;
-            };
-            collect_injected(
-                injection.embedded,
-                &sub_tree,
-                sub_source,
-                byte_offset + injection.content_start,
-                streams,
-            );
-        }
-    }
-
-    fn matching(open: char, close: char) -> bool {
-        matches!((open, close), ('(', ')') | ('[', ']') | ('{', '}') | ('<', '>'))
-    }
-
-    let root_grammar = catalog::root_grammar(language);
+    let source = source.to_string();
+    let Some(tree) = injection_parsers.parse(region.embedded, source.as_bytes()) else {
+        return StructuralSnapshot::new(0, Vec::new(), Vec::new());
+    };
     let mut streams = Vec::new();
-    let mut root_delimiters = Vec::new();
-    collect(tree.root_node(), root_grammar, 0, &mut root_delimiters);
-    root_delimiters.retain(|delimiter| {
-        !root_injections
+    collect_injected_structural_streams(
+        region.embedded,
+        &tree,
+        source.as_bytes(),
+        start_byte,
+        &mut streams,
+        injection_parsers,
+    );
+    structural_snapshot_from_streams(buffer, 0, streams)
+}
+
+fn collect_injected_structural_streams(
+    grammar: GrammarId,
+    tree: &Tree,
+    source: &[u8],
+    byte_offset: usize,
+    streams: &mut Vec<Vec<(usize, char)>>,
+    injection_parsers: &mut InjectionParsers,
+) {
+    let config = catalog::grammar(grammar);
+    let injections = collect_injection_matches(tree, source, config, 0..source.len());
+    let injection_ranges = merge_byte_ranges(
+        injections
             .iter()
-            .any(|injection| injection.content_start <= delimiter.byte && delimiter.byte < injection.content_end)
-    });
-    streams.push(root_delimiters);
-    for injection in root_injections {
+            .map(|injection| injection.content_start..injection.content_end)
+            .collect(),
+    );
+    let mut delimiters = Vec::new();
+    let full_range = 0..source.len();
+    collect_structural_delimiters_in_ranges(
+        tree.root_node(),
+        grammar,
+        std::slice::from_ref(&full_range),
+        &mut delimiters,
+    );
+    delimiters.retain(|(byte, _)| !ranges_contain(&injection_ranges, *byte));
+    for (byte, _) in &mut delimiters {
+        *byte += byte_offset;
+    }
+    streams.push(delimiters);
+
+    for injection in injections {
         if injection.content_end <= injection.content_start {
             continue;
         }
-        let source = buffer
-            .byte_slice(injection.content_start..injection.content_end)
-            .to_string();
-        let Some(sub_tree) = parse_sub_source(injection.embedded, source.as_bytes()) else {
+        let sub_source = &source[injection.content_start..injection.content_end];
+        if !bytes_have_structural_candidate(sub_source) {
+            continue;
+        }
+        let Some(sub_tree) = injection_parsers.parse(injection.embedded, sub_source) else {
             continue;
         };
-        collect_injected(
+        collect_injected_structural_streams(
             injection.embedded,
             &sub_tree,
-            source.as_bytes(),
-            injection.content_start,
-            &mut streams,
+            sub_source,
+            byte_offset + injection.content_start,
+            streams,
+            injection_parsers,
         );
     }
+}
 
+fn structural_snapshot_from_streams(
+    buffer: &Rope,
+    revision: u64,
+    streams: Vec<Vec<(usize, char)>>,
+) -> StructuralSnapshot {
     let mut pairs = Vec::new();
     let mut unmatched = Vec::new();
     for mut delimiters in streams {
-        delimiters.sort_by_key(|delimiter| delimiter.byte);
-        delimiters.dedup_by_key(|delimiter| delimiter.byte);
-        let mut stack: Vec<Delimiter> = Vec::new();
-        for delimiter in delimiters {
-            if matches!(delimiter.ch, '(' | '[' | '{' | '<') {
-                stack.push(delimiter);
-            } else if let Some(open) = stack.last().copied().filter(|open| matching(open.ch, delimiter.ch)) {
+        delimiters.sort_by_key(|delimiter| delimiter.0);
+        delimiters.dedup_by_key(|delimiter| delimiter.0);
+        let mut stack: Vec<(usize, char)> = Vec::new();
+        for (byte, ch) in delimiters {
+            if matches!(ch, '(' | '[' | '{' | '<') {
+                stack.push((byte, ch));
+            } else if let Some((open_byte, _)) = stack
+                .last()
+                .copied()
+                .filter(|(_, open)| structural_delimiters_match(*open, ch))
+            {
                 stack.pop();
                 pairs.push(StructuralPair {
-                    open: buffer.byte_to_char(open.byte),
-                    close: buffer.byte_to_char(delimiter.byte),
+                    open: buffer.byte_to_char(open_byte),
+                    close: buffer.byte_to_char(byte),
                     depth: 0,
                     parent: None,
                 });
             } else {
-                unmatched.push(buffer.byte_to_char(delimiter.byte));
+                unmatched.push(buffer.byte_to_char(byte));
             }
         }
-        unmatched.extend(stack.into_iter().map(|delimiter| buffer.byte_to_char(delimiter.byte)));
+        unmatched.extend(stack.into_iter().map(|(byte, _)| buffer.byte_to_char(byte)));
     }
     pairs.sort_by_key(|pair| pair.open);
     pairs.dedup_by_key(|pair| (pair.open, pair.close));
@@ -1012,6 +1245,217 @@ fn structural_snapshot(
     }));
     tokens.sort_by_key(|token| token.at);
     StructuralSnapshot::new(revision, pairs, tokens)
+}
+
+fn structural_delimiters_match(open: char, close: char) -> bool {
+    matches!((open, close), ('(', ')') | ('[', ']') | ('{', '}') | ('<', '>'))
+}
+
+fn bytes_have_structural_candidate(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .any(|byte| matches!(byte, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>'))
+}
+
+fn structural_snapshot(
+    language: SyntaxLanguage,
+    tree: &Tree,
+    buffer: &Rope,
+    revision: u64,
+    root_injections: &[InjectionMatch],
+    injection_parsers: &mut InjectionParsers,
+) -> StructuralSnapshot {
+    fn collect_markdown_inline_ranges(
+        buffer: &Rope,
+        injections: &[&InjectionMatch],
+        streams: &mut Vec<Vec<(usize, char)>>,
+        injection_parsers: &mut InjectionParsers,
+    ) {
+        let included_ranges = injections
+            .iter()
+            .filter(|injection| injection.content_start < injection.content_end)
+            .map(|injection| {
+                let start_char = buffer.byte_to_char(injection.content_start);
+                let end_char = buffer.byte_to_char(injection.content_end);
+                TsRange {
+                    start_byte: injection.content_start,
+                    end_byte: injection.content_end,
+                    start_point: point_at_byte(buffer, start_char, injection.content_start),
+                    end_point: point_at_byte(buffer, end_char, injection.content_end),
+                }
+            })
+            .collect::<Vec<_>>();
+        if included_ranges.is_empty() {
+            return;
+        }
+        diagnostics::record_usize("syntax_structure_markdown_inline_ranges", included_ranges.len());
+        let parse_started = diagnostics::trace_enabled().then(Instant::now);
+        let Some(tree) = injection_parsers.parse_rope_ranges(GrammarId::MarkdownInline, buffer, &included_ranges)
+        else {
+            return;
+        };
+        if let Some(started) = parse_started {
+            diagnostics::record_ms(
+                "syntax_structure_markdown_inline_parse_ms",
+                started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
+        let config = catalog::grammar(GrammarId::MarkdownInline);
+        let collect_started = diagnostics::trace_enabled().then(Instant::now);
+        let mut all_delimiters = Vec::new();
+        let byte_ranges = included_ranges
+            .iter()
+            .map(|range| range.start_byte..range.end_byte)
+            .collect::<Vec<_>>();
+        collect_structural_delimiters_in_ranges(
+            tree.root_node(),
+            GrammarId::MarkdownInline,
+            &byte_ranges,
+            &mut all_delimiters,
+        );
+        all_delimiters.sort_by_key(|delimiter| delimiter.0);
+        if let Some(started) = collect_started {
+            diagnostics::record_ms(
+                "syntax_structure_markdown_inline_collect_ms",
+                started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
+        let regions_started = diagnostics::trace_enabled().then(Instant::now);
+        for injection in injections {
+            let range = injection.content_start..injection.content_end;
+            if range.is_empty()
+                || !buffer
+                    .byte_slice(range.clone())
+                    .bytes()
+                    .any(|byte| matches!(byte, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>'))
+            {
+                continue;
+            }
+            let nested = collect_rope_injection_matches(&tree, buffer, config, range.clone());
+            let nested_ranges = merge_byte_ranges(
+                nested
+                    .iter()
+                    .map(|injection| injection.content_start..injection.content_end)
+                    .collect(),
+            );
+            let first = all_delimiters.partition_point(|delimiter| delimiter.0 < range.start);
+            let last = all_delimiters.partition_point(|delimiter| delimiter.0 < range.end);
+            streams.push(
+                all_delimiters[first..last]
+                    .iter()
+                    .copied()
+                    .filter(|delimiter| !ranges_contain(&nested_ranges, delimiter.0))
+                    .collect(),
+            );
+
+            for nested in nested {
+                if nested.content_end <= nested.content_start {
+                    continue;
+                }
+                let source = buffer.byte_slice(nested.content_start..nested.content_end);
+                if !source
+                    .bytes()
+                    .any(|byte| matches!(byte, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>'))
+                {
+                    continue;
+                }
+                let source = source.to_string();
+                let Some(sub_tree) = injection_parsers.parse(nested.embedded, source.as_bytes()) else {
+                    continue;
+                };
+                collect_injected_structural_streams(
+                    nested.embedded,
+                    &sub_tree,
+                    source.as_bytes(),
+                    nested.content_start,
+                    streams,
+                    injection_parsers,
+                );
+            }
+        }
+        if let Some(started) = regions_started {
+            diagnostics::record_ms(
+                "syntax_structure_markdown_inline_regions_ms",
+                started.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
+    }
+
+    let root_grammar = catalog::root_grammar(language);
+    let mut streams = Vec::new();
+    diagnostics::record_usize("syntax_structure_root_injections", root_injections.len());
+    let root_collect_started = diagnostics::trace_enabled().then(Instant::now);
+    let mut root_delimiters = Vec::new();
+    let full_range = 0..buffer.len_bytes();
+    collect_structural_delimiters_in_ranges(
+        tree.root_node(),
+        root_grammar,
+        std::slice::from_ref(&full_range),
+        &mut root_delimiters,
+    );
+    let root_injection_ranges = merge_byte_ranges(
+        root_injections
+            .iter()
+            .map(|injection| injection.content_start..injection.content_end)
+            .collect(),
+    );
+    root_delimiters.retain(|delimiter| !ranges_contain(&root_injection_ranges, delimiter.0));
+    streams.push(root_delimiters);
+    if let Some(started) = root_collect_started {
+        diagnostics::record_ms(
+            "syntax_structure_root_collect_ms",
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
+    }
+    let mut markdown_inline = root_injections
+        .iter()
+        .filter(|injection| injection.embedded == GrammarId::MarkdownInline)
+        .collect::<Vec<_>>();
+    markdown_inline.sort_by_key(|injection| (injection.content_start, injection.content_end));
+    collect_markdown_inline_ranges(buffer, &markdown_inline, &mut streams, injection_parsers);
+    let other_injections = root_injections
+        .iter()
+        .filter(|injection| injection.embedded != GrammarId::MarkdownInline)
+        .collect::<Vec<_>>();
+    diagnostics::record_usize("syntax_structure_other_injections", other_injections.len());
+    let other_started = diagnostics::trace_enabled().then(Instant::now);
+    for injection in other_injections {
+        if injection.content_end <= injection.content_start {
+            continue;
+        }
+        let source = buffer.byte_slice(injection.content_start..injection.content_end);
+        if !source
+            .bytes()
+            .any(|byte| matches!(byte, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>'))
+        {
+            continue;
+        }
+        let source = source.to_string();
+        let Some(sub_tree) = injection_parsers.parse(injection.embedded, source.as_bytes()) else {
+            continue;
+        };
+        collect_injected_structural_streams(
+            injection.embedded,
+            &sub_tree,
+            source.as_bytes(),
+            injection.content_start,
+            &mut streams,
+            injection_parsers,
+        );
+    }
+    if let Some(started) = other_started {
+        diagnostics::record_ms(
+            "syntax_structure_other_injections_ms",
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
+    }
+
+    let assemble_started = diagnostics::trace_enabled().then(Instant::now);
+    let snapshot = structural_snapshot_from_streams(buffer, revision, streams);
+    if let Some(started) = assemble_started {
+        diagnostics::record_ms("syntax_structure_assemble_ms", started.elapsed().as_secs_f64() * 1000.0);
+    }
+    snapshot
 }
 
 fn angle_is_structural(grammar: GrammarId, node: Node<'_>) -> bool {
@@ -1315,7 +1759,7 @@ fn collect_rope_captures(
     }
 }
 
-fn collect_rope_injection_matches(
+fn collect_rope_injection_matches_unbounded(
     tree: &Tree,
     source: &Rope,
     config: &catalog::GrammarConfig,
@@ -1375,6 +1819,38 @@ fn collect_rope_injection_matches(
         });
     }
     out
+}
+
+fn collect_rope_injection_matches(
+    tree: &Tree,
+    source: &Rope,
+    config: &catalog::GrammarConfig,
+    byte_range: Range<usize>,
+) -> Vec<InjectionMatch> {
+    collect_rope_injection_matches_unbounded(tree, source, config, byte_range)
+        .into_iter()
+        .filter(injection_is_eager)
+        .collect()
+}
+
+fn injection_is_eager(injection: &InjectionMatch) -> bool {
+    injection.content_end.saturating_sub(injection.content_start) <= MAX_EAGER_INJECTION_BYTES
+}
+
+fn partition_root_injections(
+    buffer: &Rope,
+    injections: Vec<InjectionMatch>,
+) -> (Vec<InjectionMatch>, Vec<Range<usize>>) {
+    let mut eager = Vec::new();
+    let mut oversized = Vec::new();
+    for injection in injections {
+        if injection_is_eager(&injection) {
+            eager.push(injection);
+        } else {
+            oversized.push(buffer.byte_to_char(injection.content_start)..buffer.byte_to_char(injection.content_end));
+        }
+    }
+    (eager, oversized)
 }
 
 /// Walks the highlights query of `grammar` over `tree`, then recurses into
@@ -1482,6 +1958,9 @@ fn collect_injection_matches(
         let Some(node) = content_node else {
             continue;
         };
+        if node.end_byte().saturating_sub(node.start_byte()) > MAX_EAGER_INJECTION_BYTES {
+            continue;
+        }
         let settings = injections_query.property_settings(m.pattern_index);
         let language_property = settings
             .iter()
@@ -1719,4 +2198,50 @@ fn position_after_insertion(start: Point, replacement: &str) -> Point {
         bytes.len() - last_line_start
     };
     Point { row, column }
+}
+
+#[cfg(test)]
+mod injection_budget_tests {
+    use super::*;
+
+    fn markdown_injections(source: &str) -> Vec<InjectionMatch> {
+        let buffer = Rope::from_str(source);
+        let config = catalog::grammar(GrammarId::Markdown);
+        let mut parser = Parser::new();
+        parser.set_language(&config.language).unwrap();
+        let tree = parse_rope(&mut parser, &buffer, None).unwrap();
+        collect_rope_injection_matches(&tree, &buffer, config, 0..buffer.len_bytes())
+    }
+
+    #[test]
+    fn oversized_markdown_injection_stays_at_host_layer() {
+        let small = markdown_injections("<pre>\nsmall");
+        assert!(small.iter().any(|injection| injection.embedded == GrammarId::Html));
+
+        let oversized = format!("<pre>\n{}", "x".repeat(MAX_EAGER_INJECTION_BYTES));
+        assert!(markdown_injections(&oversized)
+            .iter()
+            .all(|injection| injection.embedded != GrammarId::Html));
+    }
+
+    #[test]
+    fn oversized_injection_marks_only_intersecting_edits_for_background_parse() {
+        let source = format!("before\n\n<pre>\n{}", "x".repeat(MAX_EAGER_INJECTION_BYTES));
+        let buffer = Rope::from_str(&source);
+        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &buffer, 0).unwrap();
+
+        assert!(
+            !state.delta_touches_oversized_injection(&BufferDelta::Edits(vec![BufferEdit {
+                range: 2..2,
+                replacement: "x".to_string(),
+            },]))
+        );
+        let inside = source.find("<pre>").unwrap() + "<pre>\n".len();
+        assert!(
+            state.delta_touches_oversized_injection(&BufferDelta::Edits(vec![BufferEdit {
+                range: inside..inside,
+                replacement: "x".to_string(),
+            },]))
+        );
+    }
 }

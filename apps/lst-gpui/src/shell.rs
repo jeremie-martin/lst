@@ -1852,7 +1852,7 @@ impl Render for LstGpuiApp {
         if let Some(command) = self.pending_workspace_command.take() {
             self.dispatch_workspace_command(command, window, cx);
         }
-        self.ensure_active_syntax_state();
+        self.ensure_active_syntax_state(cx);
         if self.window_title_override.is_none() {
             let active_tab = self.model.active_tab();
             let dirty = if active_tab.modified() || active_tab.backing_file_missing() {
