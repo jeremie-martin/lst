@@ -10,6 +10,21 @@ use support::{EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn opening_parenthesis_touching_word_inserts_only_opener() -> TestResult {
+    support::run_x11_test("text-input-pair-before-word", |session| {
+        let path = session.seed_file("pair-before-word.rs", "word")?;
+        let mut editor = session.open_file("text-input-pair-before-word", &path)?;
+
+        editor.place_cursor_at_document_start()?;
+        editor.keys("(")?;
+        editor.save_then_expect_file(&path, "(word")?;
+        editor.expect_cursor_heads(&[(0, 1)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn backspace_deletes_seeded_combining_cluster_as_one_character() -> TestResult {
     support::run_x11_test("text-input-grapheme-backspace", |session| {
         let path = session.seed_file("grapheme.txt", "e\u{301}x")?;

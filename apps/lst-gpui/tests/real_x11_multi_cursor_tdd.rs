@@ -413,7 +413,7 @@ fn delete_at_line_end_joins_next_line_for_each_cursor() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn auto_pair_inserts_matching_pair_at_each_cursor() -> TestResult {
     support::run_x11_test("multi-cursor-tdd-auto-pair-insert", |session| {
-        let path = session.seed_file("auto-pair-insert.txt", "alpha\nbeta\ngamma")?;
+        let path = session.seed_file("auto-pair-insert.txt", " alpha\n beta\n gamma")?;
         let mut editor = session.open_file("auto-pair-insert", &path)?;
 
         editor.place_cursor_at_document_start()?;
@@ -421,7 +421,7 @@ fn auto_pair_inserts_matching_pair_at_each_cursor() -> TestResult {
         editor.expect_cursor_heads(&[(0, 0), (1, 0), (2, 0)])?;
 
         editor.keys("(")?;
-        editor.save_then_expect_file(&path, "()alpha\n()beta\n()gamma")?;
+        editor.save_then_expect_file(&path, "() alpha\n() beta\n() gamma")?;
         editor.expect_cursor_heads(&[(0, 1), (1, 1), (2, 1)])?;
         Ok(())
     })

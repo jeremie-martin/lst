@@ -654,8 +654,12 @@ fn auto_pair_insert_edit(tab: &EditorTab, range: &Range<usize>, text: &str) -> O
         return None;
     }
 
+    let buffer = tab.buffer();
+    if range.end < buffer.len_chars() && is_identifier_char(buffer.char(range.end)) {
+        return None;
+    }
+
     if is_auto_pair_quote(ch) {
-        let buffer = tab.buffer();
         if range.start > 0 {
             let prev = buffer.char(range.start - 1);
             if prev == '\\' || prev == ch || is_identifier_char(prev) {
