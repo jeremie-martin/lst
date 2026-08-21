@@ -1715,17 +1715,27 @@ impl LstGpuiApp {
                 body,
             } => {
                 let recent_path = path.clone();
+                let recent_origin = self.model.tab_by_id(tab_id).map(|tab| {
+                    if tab.is_scratchpad() {
+                        RecentOrigin::Scratchpad
+                    } else {
+                        RecentOrigin::Regular
+                    }
+                });
+                let body_is_blank = body.trim().is_empty();
                 let mut saved = false;
-                let mut record_recent = false;
                 self.update_model(cx, true, |model| {
                     saved = model.autosave_finished_for_tab(tab_id, path, revision, stamp, body);
-                    record_recent = saved && model.tab_by_id(tab_id).is_some_and(|tab| !tab.is_scratchpad());
                 });
                 if saved {
                     self.file_conflicts.remove(&tab_id);
-                }
-                if record_recent {
-                    self.recent.record_with_origin(&recent_path, RecentOrigin::Regular);
+                    match recent_origin {
+                        Some(RecentOrigin::Scratchpad) if body_is_blank => {
+                            self.recent.prune_path(&recent_path);
+                        }
+                        Some(origin) => self.recent.record_with_origin(&recent_path, origin),
+                        None => {}
+                    }
                 }
             }
             FileWriteOutcome::Failed {

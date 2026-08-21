@@ -171,6 +171,35 @@ fn recent_panel_content_query_opens_file_matching_body() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn recent_panel_content_query_finds_open_autosaved_scratchpad() -> TestResult {
+    support::run_x11_test("recent-open-scratchpad-content", |session| {
+        let (mut editor, scratchpad) = session.open("recent-open-scratchpad-content")?;
+        let scratchpad_text = path_text(&scratchpad);
+
+        editor.keys("unique open scratchpad phrase")?;
+        editor.wait_state("scratchpad edit applied", secs(5), |record| record.active_tab_modified)?;
+        editor.expect_file(&scratchpad, "unique open scratchpad phrase")?;
+        editor.wait_state("open scratchpad autosaved", secs(5), |record| {
+            !record.active_tab_modified
+        })?;
+
+        editor.keys("<C-r>unique open scratchpad phrase")?;
+        editor.wait_state("open scratchpad content search pending", secs(5), |record| {
+            record.recent_panel_open
+                && record.recent_panel_query.as_deref() == Some("unique open scratchpad phrase")
+                && record.recent_panel_content_search_pending
+        })?;
+        editor.wait_state("open scratchpad selected by content", secs(10), |record| {
+            record.recent_panel_open
+                && !record.recent_panel_content_search_pending
+                && record.recent_panel_selected_path.as_deref() == Some(scratchpad_text.as_str())
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn recent_panel_empty_states_are_visible() -> TestResult {
     support::run_x11_test("recent-empty-states", |session| {
         let (mut editor, _scratchpad) = session.open("recent-empty-history")?;
