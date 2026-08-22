@@ -44,6 +44,10 @@ fn smooth_scroll_step(current: Point<Pixels>, target: Point<Pixels>, dt_s: f32) 
     }
 }
 
+fn clamp_scroll_target(target: Point<Pixels>, max_left: Pixels, max_top: Pixels) -> Point<Pixels> {
+    point(target.x.clamp(px(0.0), max_left), target.y.clamp(px(0.0), max_top))
+}
+
 impl LstGpuiApp {
     pub(crate) fn active_tab(&self) -> &ModelEditorTab {
         self.model.active_tab()
@@ -341,6 +345,7 @@ impl LstGpuiApp {
             self.smooth_scroll = None;
             return;
         }
+        anim.target = clamp_scroll_target(anim.target, max_scroll_left(&scroll), max_scroll_top(&scroll));
         let now = Instant::now();
         let (next, done) = smooth_scroll_step(current, anim.target, (now - anim.last_tick).as_secs_f32());
         scroll_to_left(&scroll, next.x);
@@ -815,5 +820,20 @@ impl LstGpuiApp {
             ScrollbarAxis::Vertical => self.editor_scrollbar_hovered = hovered,
             ScrollbarAxis::Horizontal => self.editor_horizontal_scrollbar_hovered = hovered,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smooth_scroll_target_tracks_a_shrinking_extent() {
+        let target = point(px(800.0), px(1_200.0));
+
+        assert_eq!(
+            clamp_scroll_target(target, px(300.0), px(400.0)),
+            point(px(300.0), px(400.0))
+        );
     }
 }

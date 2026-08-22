@@ -3,7 +3,7 @@ use std::ops::Range;
 use crate::{
     document::{char_to_position, EditKind, UndoBoundary},
     find::{build_query_regex, FindState},
-    selection::{char_at_line_column, word_range_at_char, Selection, SelectionSet},
+    selection::{char_at_line_column, word_range_at_char, Position, Selection, SelectionSet},
     tab::EditorTab,
     transaction::{offset_with_delta, EditRequest, SelectionAfter, TextChange, TextChangeSet},
 };
@@ -240,10 +240,9 @@ fn merge_delete_ranges(ranges: impl IntoIterator<Item = Range<usize>>) -> Vec<Ra
     merged
 }
 
-pub(crate) fn rectangular_selection_set(tab: &EditorTab, anchor: usize, head: usize) -> Option<SelectionSet> {
+pub(crate) fn rectangular_selection_set(tab: &EditorTab, anchor: usize, head: Position) -> Option<SelectionSet> {
     let buffer = tab.buffer();
     let anchor = char_to_position(buffer, anchor);
-    let head = char_to_position(buffer, head);
     let first_line = anchor.line.min(head.line);
     let last_line = anchor.line.max(head.line);
     let start_column = anchor.column.min(head.column);

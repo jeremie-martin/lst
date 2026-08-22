@@ -203,6 +203,7 @@ struct ColumnSelectionState {
     revision: u64,
     anchor: usize,
     head: usize,
+    preferred_column: usize,
     result: SelectionSet,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1020,23 +1021,46 @@ impl EditorModel {
 
     pub fn set_multi_cursor_limit(&mut self, limit: usize) {
         self.multi_cursor_limit = limit.clamp(1, 10_000);
-        self.enforce_multi_cursor_limit();
+        let limited_tabs: Vec<(TabId, SelectionSet)> = self
+            .tabs()
+            .iter()
+            .filter_map(|tab| {
+                Self::selection_set_limited_to(tab.selection_set(), self.multi_cursor_limit)
+                    .map(|selection_set| (tab.id(), selection_set))
+            })
+            .collect();
+        for (tab_id, selection_set) in &limited_tabs {
+            self.tab_mut_by_id(*tab_id)
+                .expect("a tab collected from the model remains present")
+                .set_selection_set(selection_set.clone());
+        }
+        if !limited_tabs.is_empty() {
+            self.status = format!(
+                "Multi-cursor limit reached; kept {} selections.",
+                self.multi_cursor_limit
+            );
+        }
     }
 
     fn column_select(&mut self, line_delta: isize, column_delta: isize) -> bool {
         let tab_id = self.active_tab_id();
         let revision = self.active_tab().revision();
         let current = self.active_tab().selection_set().clone();
-        let (anchor, head) = self
+        let (anchor, head, preferred_column) = self
             .column_selection
             .as_ref()
             .filter(|state| state.tab_id == tab_id && state.revision == revision && state.result == current)
             .map_or_else(
                 || {
                     let primary = current.primary();
-                    (primary.anchor(), primary.head())
+                    let head = primary.head();
+                    (
+                        primary.anchor(),
+                        head,
+                        char_to_position(self.active_tab().buffer(), head).column,
+                    )
                 },
-                |state| (state.anchor, state.head),
+                |state| (state.anchor, state.head, state.preferred_column),
             );
         let buffer = self.active_tab().buffer();
         let position = char_to_position(buffer, head);
@@ -1049,42 +1073,70 @@ impl EditorModel {
                 .min(buffer.len_lines().saturating_sub(1))
         };
         let line_text = selection::line_display_text(buffer, target_line);
+        let line_len = line_text.chars().count();
         let target_column = if column_delta < 0 {
-            selection::previous_grapheme_column(&line_text, position.column)
+            if preferred_column > line_len {
+                preferred_column - 1
+            } else {
+                selection::previous_grapheme_column(&line_text, preferred_column)
+            }
         } else if column_delta > 0 {
-            selection::next_grapheme_column(&line_text, position.column)
+            if preferred_column > line_len {
+                preferred_column.saturating_add(1)
+            } else {
+                selection::next_grapheme_column(&line_text, preferred_column)
+            }
         } else {
-            position.column.min(line_text.chars().count())
+            preferred_column
         };
         let target = char_at_line_column(buffer, target_line, target_column);
-        let Some(next) = multi_selection::rectangular_selection_set(self.active_tab(), anchor, target) else {
+        let Some(next) = multi_selection::rectangular_selection_set(
+            self.active_tab(),
+            anchor,
+            Position::new(target_line, target_column),
+        ) else {
             return false;
         };
-        if next == current {
-            return false;
+        let selection_changed = next != current;
+        if selection_changed {
+            self.active_tab_mut().set_selection_set(next);
+            self.enforce_multi_cursor_limit();
         }
-        self.active_tab_mut().set_selection_set(next);
-        self.enforce_multi_cursor_limit();
         let result = self.active_tab().selection_set().clone();
         self.column_selection = Some(ColumnSelectionState {
             tab_id,
             revision,
             anchor,
             head: target,
+            preferred_column: target_column,
             result,
         });
-        self.queue_reveal(RevealIntent::NearestEdge);
-        true
+        if selection_changed {
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+        selection_changed || target != head || target_column != preferred_column
     }
 
     fn enforce_multi_cursor_limit(&mut self) -> bool {
         let set = self.active_tab().selection_set();
-        if set.as_slice().len() <= self.multi_cursor_limit {
+        let Some(limited) = Self::selection_set_limited_to(set, self.multi_cursor_limit) else {
             return false;
+        };
+        self.active_tab_mut().set_selection_set(limited);
+        self.status = format!(
+            "Multi-cursor limit reached; kept {} selections.",
+            self.multi_cursor_limit
+        );
+        true
+    }
+
+    fn selection_set_limited_to(set: &SelectionSet, limit: usize) -> Option<SelectionSet> {
+        if set.as_slice().len() <= limit {
+            return None;
         }
-        let mut indices: Vec<usize> = (0..self.multi_cursor_limit).collect();
+        let mut indices: Vec<usize> = (0..limit).collect();
         let primary = set.primary_index();
-        if primary >= self.multi_cursor_limit {
+        if primary >= limit {
             if let Some(last) = indices.last_mut() {
                 *last = primary;
             }
@@ -1097,12 +1149,7 @@ impl EditorModel {
         let selections = indices.into_iter().map(|index| set.as_slice()[index]).collect();
         let limited = SelectionSet::from_selections(selections, primary)
             .expect("an ordered subset of a valid selection set remains valid");
-        self.active_tab_mut().set_selection_set(limited);
-        self.status = format!(
-            "Multi-cursor limit reached; kept {} selections.",
-            self.multi_cursor_limit
-        );
-        true
+        Some(limited)
     }
 
     pub fn smart_expand_selection_with_candidates(
@@ -1452,6 +1499,7 @@ impl EditorModel {
         }
     }
     pub fn set_rectangular_column_selection(&mut self, anchor: usize, head: usize) {
+        let head = char_to_position(self.active_tab().buffer(), head);
         let Some(selection_set) = multi_selection::rectangular_selection_set(self.active_tab(), anchor, head) else {
             return;
         };

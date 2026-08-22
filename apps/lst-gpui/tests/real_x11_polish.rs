@@ -179,6 +179,21 @@ fn configured_column_selection_command_grows_one_stable_rectangle() -> TestResul
     })
 }
 
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn keyboard_column_selection_restores_its_column_after_a_short_line() -> TestResult {
+    support::run_x11_test("polish-column-short-line", |session| {
+        session.seed_settings("version = 1\n[keybindings]\n\"selection.column_down\" = [\"ctrl-alt-m\"]\n")?;
+        let path = session.seed_file("column-short-line.txt", "abcdef\nx\nabcdef")?;
+        let mut editor = session.open_file("polish-column-short-line", &path)?;
+
+        editor.click_at_text(0, 5)?;
+        editor.keys("<C-A-m><C-A-m>")?;
+        editor.expect_cursor_heads(&[(0, 5), (1, 1), (2, 5)])?;
+        Ok(())
+    })
+}
+
 fn selection_width(record: &lst_x11_harness::StateTraceRecord) -> usize {
     let selection = &record.cursors[record.primary_cursor_index];
     selection.anchor_char.abs_diff(selection.head_char)

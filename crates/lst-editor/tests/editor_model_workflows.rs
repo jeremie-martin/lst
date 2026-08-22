@@ -1,8 +1,8 @@
 mod support;
 
 use lst_editor::{
-    EditorCommand, EditorEffect, FileStamp, InputMode, Language, LanguageMode, Position, SaveExpectation, Selection,
-    SelectionSet, TabCloseRequest, UndoBoundary,
+    EditorCommand, EditorEffect, EditorModel, EditorTab, FileStamp, InputMode, Language, LanguageMode, Position,
+    SaveExpectation, Selection, SelectionSet, TabCloseRequest, TabId, UndoBoundary,
 };
 use std::path::PathBuf;
 use support::{position_of, ModelHarness};
@@ -206,6 +206,48 @@ fn line_edit_and_multi_cursor_workflows_preserve_current_model_results() {
     assert_eq!(line_ends.selection_count(), 3);
     line_ends.paste_text("!");
     assert_eq!(line_ends.text(), "aa!\nbbbb!\nc!\n");
+}
+
+#[test]
+fn column_selection_restores_its_preferred_column_after_short_lines() {
+    let mut harness = ModelHarness::new("abcdef\nx\nabcdef");
+    harness.set_cursor(Position::new(0, 5));
+
+    harness.execute(EditorCommand::ColumnSelectDown);
+    harness.execute(EditorCommand::ColumnSelectDown);
+
+    assert_eq!(
+        harness.model.selection_set().as_slice(),
+        &[
+            Selection::collapsed(5),
+            Selection::collapsed(8),
+            Selection::collapsed(14)
+        ]
+    );
+}
+
+#[test]
+fn lowering_multi_cursor_limit_clamps_inactive_tabs_immediately() {
+    let first_id = TabId::from_raw(1);
+    let second_id = TabId::from_raw(2);
+    let first = EditorTab::from_path_with_stamp(first_id, PathBuf::from("first.txt"), "first", None);
+    let second = EditorTab::from_path_with_stamp(second_id, PathBuf::from("second.txt"), "second", None);
+    let mut model = EditorModel::from_tabs(first, vec![second], "Ready.".to_string());
+    model.set_active_tab(second_id);
+    model.set_selection_set(
+        SelectionSet::from_selections((0..4).map(Selection::collapsed).collect(), 3)
+            .expect("fixture selections are ordered"),
+    );
+    model.set_active_tab(first_id);
+
+    model.set_multi_cursor_limit(2);
+
+    let limited = model
+        .tab_by_id(second_id)
+        .expect("second tab remains open")
+        .selection_set();
+    assert_eq!(limited.as_slice(), &[Selection::collapsed(0), Selection::collapsed(3)]);
+    assert_eq!(limited.primary_index(), 1);
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{self, BufRead, BufReader, ErrorKind, Read},
+    io::{self, ErrorKind, Read},
     path::{Component, Path, PathBuf},
     process,
     sync::{
@@ -11,14 +11,13 @@ use std::{
     time::Duration,
 };
 
-use gpui::{Bounds, Context, Pixels, Window};
-use memchr::memmem;
-
 use crate::{
     ui::{InputFieldEvent, InputFieldNavigation},
     viewport::{reset_scroll, scroll_to_top},
     LstGpuiApp,
 };
+use gpui::{Bounds, Context, Pixels, Window};
+use memchr::memmem;
 
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -732,16 +731,12 @@ pub(crate) fn read_recent_preview(path: &Path) -> RecentPreviewRead {
 /// Returns every matching path, or `None` as soon as a newer query cancels
 /// this search.
 fn search_recent_content(paths: Vec<PathBuf>, search: &RecentContentSearch) -> Option<Vec<PathBuf>> {
-    let ascii_finder = search
-        .query
-        .is_ascii()
-        .then(|| memmem::Finder::new(search.query.as_bytes()));
     let mut matches = Vec::new();
     for path in paths {
         if search.is_cancelled() {
             return None;
         }
-        match recent_file_content_matches(&path, &search.query, ascii_finder.as_ref(), search) {
+        match recent_file_content_matches(&path, &search.query, search) {
             Some(true) => matches.push(path),
             Some(false) => {}
             None => return None,
@@ -750,47 +745,165 @@ fn search_recent_content(paths: Vec<PathBuf>, search: &RecentContentSearch) -> O
     Some(matches)
 }
 
-/// Searches one complete file while reusing a single line buffer. `None`
-/// means a newer query cancelled the work; file errors are ordinary misses.
-fn recent_file_content_matches(
-    path: &Path,
-    query: &str,
-    ascii_finder: Option<&memmem::Finder<'_>>,
-    search: &RecentContentSearch,
-) -> Option<bool> {
-    let file = match fs::File::open(path) {
+/// Incremental prefix matcher used by both byte and Unicode search paths.
+/// Its memory is proportional to the query, never the file or line length.
+struct StreamMatcher<T> {
+    needle: Vec<T>,
+    failure: Vec<usize>,
+    matched: usize,
+}
+
+impl<T: Eq> StreamMatcher<T> {
+    fn new(needle: Vec<T>) -> Self {
+        let mut failure = vec![0; needle.len()];
+        let mut matched = 0;
+        for index in 1..needle.len() {
+            while matched > 0 && needle[index] != needle[matched] {
+                matched = failure[matched - 1];
+            }
+            if needle[index] == needle[matched] {
+                matched += 1;
+                failure[index] = matched;
+            }
+        }
+        Self {
+            needle,
+            failure,
+            matched: 0,
+        }
+    }
+
+    fn push(&mut self, value: T) -> bool {
+        if self.needle.is_empty() {
+            return true;
+        }
+        while self.matched > 0 && value != self.needle[self.matched] {
+            self.matched = self.failure[self.matched - 1];
+        }
+        if value == self.needle[self.matched] {
+            self.matched += 1;
+        }
+        self.matched == self.needle.len()
+    }
+}
+
+/// Searches one complete file through fixed-size chunks. `None` means a
+/// newer query cancelled the work; file errors are ordinary misses.
+fn recent_file_content_matches(path: &Path, query: &str, search: &RecentContentSearch) -> Option<bool> {
+    let mut file = match fs::File::open(path) {
         Ok(file) => file,
         Err(_) => return Some(false),
     };
-    let mut reader = BufReader::with_capacity(CONTENT_SEARCH_BUFFER_BYTES, file);
-    let mut line = Vec::new();
+
+    if !query.is_ascii() {
+        return unicode_content_matches(file, query, search);
+    }
+
+    let mut needle = query.as_bytes().to_vec();
+    needle.make_ascii_lowercase();
+    let finder = memmem::Finder::new(&needle);
+    let mut buffer = [0; CONTENT_SEARCH_BUFFER_BYTES];
+    let mut window = Vec::new();
+    let mut saw_non_ascii = false;
     loop {
         if search.is_cancelled() {
             return None;
         }
-        line.clear();
-        match reader.read_until(b'\n', &mut line) {
-            Ok(0) => return Some(false),
-            Ok(_) => {}
+        let read = match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
             Err(_) => return Some(false),
+        };
+        for byte in &mut buffer[..read] {
+            saw_non_ascii |= !byte.is_ascii();
+            byte.make_ascii_lowercase();
         }
-
-        if let Some(finder) = ascii_finder {
-            line.make_ascii_lowercase();
-            if finder.find(&line).is_some() {
-                return Some(true);
-            }
-            if line.is_ascii() {
-                continue;
-            }
-        } else if line.is_ascii() {
-            continue;
-        }
-
-        if String::from_utf8_lossy(&line).to_lowercase().contains(query) {
+        window.extend_from_slice(&buffer[..read]);
+        if finder.find(&window).is_some() {
             return Some(true);
         }
+        let carry_len = needle.len().saturating_sub(1).min(window.len());
+        let carry_start = window.len() - carry_len;
+        window.copy_within(carry_start.., 0);
+        window.truncate(carry_len);
     }
+
+    if !saw_non_ascii {
+        return Some(false);
+    }
+
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return Some(false),
+    };
+    unicode_content_matches(file, query, search)
+}
+
+fn unicode_content_matches(mut file: fs::File, query: &str, search: &RecentContentSearch) -> Option<bool> {
+    let needle = query.chars().flat_map(char::to_lowercase).collect();
+    let mut matcher = StreamMatcher::new(needle);
+    let mut read_buffer = [0; CONTENT_SEARCH_BUFFER_BYTES];
+    let mut decode_buffer = Vec::with_capacity(CONTENT_SEARCH_BUFFER_BYTES + 3);
+    let mut incomplete = Vec::with_capacity(3);
+
+    loop {
+        if search.is_cancelled() {
+            return None;
+        }
+        let read = match file.read(&mut read_buffer) {
+            Ok(read) => read,
+            Err(_) => return Some(false),
+        };
+        if read == 0 {
+            return Some(!incomplete.is_empty() && matcher.push('\u{fffd}'));
+        }
+
+        decode_buffer.clear();
+        decode_buffer.extend_from_slice(&incomplete);
+        decode_buffer.extend_from_slice(&read_buffer[..read]);
+        incomplete.clear();
+
+        let mut cursor = 0;
+        while cursor < decode_buffer.len() {
+            match std::str::from_utf8(&decode_buffer[cursor..]) {
+                Ok(valid) => {
+                    if feed_lowercase(valid, &mut matcher) {
+                        return Some(true);
+                    }
+                    break;
+                }
+                Err(error) => {
+                    let valid_end = cursor + error.valid_up_to();
+                    let valid = std::str::from_utf8(&decode_buffer[cursor..valid_end])
+                        .expect("the UTF-8 validator's valid prefix is valid");
+                    if feed_lowercase(valid, &mut matcher) {
+                        return Some(true);
+                    }
+                    cursor = valid_end;
+                    if let Some(error_len) = error.error_len() {
+                        if matcher.push('\u{fffd}') {
+                            return Some(true);
+                        }
+                        cursor += error_len;
+                    } else {
+                        incomplete.extend_from_slice(&decode_buffer[cursor..]);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn feed_lowercase(text: &str, matcher: &mut StreamMatcher<char>) -> bool {
+    for ch in text.chars() {
+        for lowercase in ch.to_lowercase() {
+            if matcher.push(lowercase) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn preview_from_bytes(bytes: &[u8]) -> String {
@@ -1440,6 +1553,31 @@ mod tests {
         assert!(view.content_search_pending());
         assert!(view.finish_content_search(&second, Vec::new()));
         assert!(!view.content_search_pending());
+    }
+
+    #[test]
+    fn content_search_matches_across_fixed_chunks_without_line_buffering() {
+        let state = TestStateDir::new("chunked-content");
+        let path = state.root.join("minified.txt");
+        let mut body = vec![b'a'; CONTENT_SEARCH_BUFFER_BYTES - 3];
+        body.extend_from_slice(b"NeEdLe");
+        body.extend(std::iter::repeat_n(b'z', CONTENT_SEARCH_BUFFER_BYTES * 2));
+        fs::write(&path, body).expect("long-line fixture should be written");
+        let search = RecentContentSearch::new("needle".to_string());
+
+        assert_eq!(recent_file_content_matches(&path, &search.query, &search), Some(true));
+    }
+
+    #[test]
+    fn unicode_content_search_preserves_codepoints_split_across_chunks() {
+        let state = TestStateDir::new("chunked-unicode");
+        let path = state.root.join("unicode.txt");
+        let mut body = vec![b'a'; CONTENT_SEARCH_BUFFER_BYTES - 1];
+        body.extend_from_slice("ÄTAIL".as_bytes());
+        fs::write(&path, body).expect("Unicode fixture should be written");
+        let search = RecentContentSearch::new("ätail".to_string());
+
+        assert_eq!(recent_file_content_matches(&path, &search.query, &search), Some(true));
     }
 
     #[test]

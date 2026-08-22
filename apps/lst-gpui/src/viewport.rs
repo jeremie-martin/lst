@@ -38,13 +38,54 @@ const SHAPED_LINE_CACHE_MARGIN: usize = 1_024;
 struct CachedShapedLine {
     text: SharedString,
     style_key: u64,
+    font_size: Pixels,
     shaped: ShapedLine,
+}
+
+struct CachedDisplayLine {
+    text: SharedString,
+    whitespace_bounds: Option<WhitespaceBounds>,
+}
+
+#[derive(Clone, Copy)]
+struct WhitespaceBounds {
+    first_non_whitespace: Option<usize>,
+    last_non_whitespace: Option<usize>,
+}
+
+impl CachedDisplayLine {
+    fn new(text: SharedString) -> Self {
+        Self {
+            text,
+            whitespace_bounds: None,
+        }
+    }
+
+    fn whitespace_bounds(&mut self) -> WhitespaceBounds {
+        if let Some(bounds) = self.whitespace_bounds {
+            return bounds;
+        }
+        let mut first_non_whitespace = None;
+        let mut last_non_whitespace = None;
+        for (index, ch) in self.text.chars().enumerate() {
+            if !matches!(ch, ' ' | '\t') {
+                first_non_whitespace.get_or_insert(index);
+                last_non_whitespace = Some(index);
+            }
+        }
+        let bounds = WhitespaceBounds {
+            first_non_whitespace,
+            last_non_whitespace,
+        };
+        self.whitespace_bounds = Some(bounds);
+        bounds
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct ViewportCache {
     code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
-    display_lines: HashMap<usize, SharedString>,
+    display_lines: HashMap<usize, CachedDisplayLine>,
     wrapped_lines: HashMap<(usize, Option<usize>), Rc<[WrappedSegment]>>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
     pub(crate) syntax_highlights: Option<CachedSyntaxHighlights>,
@@ -97,6 +138,7 @@ impl ViewportCache {
     pub(crate) fn clear_shaped_lines(&mut self) {
         self.code_lines.clear();
         self.gutter_lines.clear();
+        self.marker_lines.clear();
     }
 
     /// Invalidate revision-dependent layout and shaping while retaining the
@@ -520,8 +562,17 @@ fn cached_line_display_text(cache: &mut ViewportCache, buffer: &Rope, line_ix: u
     cache
         .display_lines
         .entry(line_ix)
-        .or_insert_with(|| line_display_text(buffer, line_ix))
+        .or_insert_with(|| CachedDisplayLine::new(line_display_text(buffer, line_ix)))
+        .text
         .clone()
+}
+
+fn cached_line_whitespace_bounds(cache: &mut ViewportCache, buffer: &Rope, line_ix: usize) -> WhitespaceBounds {
+    cache
+        .display_lines
+        .entry(line_ix)
+        .or_insert_with(|| CachedDisplayLine::new(line_display_text(buffer, line_ix)))
+        .whitespace_bounds()
 }
 
 fn char_to_byte_index(text: &str, char_ix: usize) -> usize {
@@ -1047,7 +1098,7 @@ fn shape_cached_line(
     }
 
     if let Some(cached) = cache.get(&line_ix) {
-        if cached.text == text && cached.style_key == style_key {
+        if cached.text == text && cached.style_key == style_key && cached.font_size == font_size {
             return Some(cached.shaped.clone());
         }
     }
@@ -1067,6 +1118,7 @@ fn shape_cached_line(
         CachedShapedLine {
             text,
             style_key,
+            font_size,
             shaped: shaped.clone(),
         },
     );
@@ -1087,7 +1139,7 @@ fn shape_cached_segment(
     }
 
     if let Some(cached) = cache.get(&key) {
-        if cached.text.as_ref() == text && cached.style_key == style_key {
+        if cached.text.as_ref() == text && cached.style_key == style_key && cached.font_size == font_size {
             return Some(cached.shaped.clone());
         }
     }
@@ -1100,6 +1152,7 @@ fn shape_cached_segment(
         CachedShapedLine {
             text,
             style_key,
+            font_size,
             shaped: shaped.clone(),
         },
     );
@@ -1111,10 +1164,11 @@ fn cached_segment(
     key: (usize, usize, usize),
     text: &str,
     style_key: u64,
+    font_size: Pixels,
 ) -> Option<ShapedLine> {
     cache
         .get(&key)
-        .filter(|cached| cached.text.as_ref() == text && cached.style_key == style_key)
+        .filter(|cached| cached.text.as_ref() == text && cached.style_key == style_key && cached.font_size == font_size)
         .map(|cached| cached.shaped.clone())
 }
 
@@ -1410,41 +1464,81 @@ fn control_picture(ch: char) -> Option<char> {
     }
 }
 
-fn whitespace_positions(text: &str, mode: RenderWhitespaceSetting) -> Vec<(usize, char)> {
-    if mode == RenderWhitespaceSetting::None {
-        return Vec::new();
-    }
-    let chars: Vec<char> = text.chars().collect();
-    let first_non_whitespace = chars.iter().position(|ch| !matches!(ch, ' ' | '\t'));
-    let last_non_whitespace = chars.iter().rposition(|ch| !matches!(ch, ' ' | '\t'));
-    let mut positions = Vec::new();
-    for (index, &ch) in chars.iter().enumerate() {
-        if !matches!(ch, ' ' | '\t') {
-            continue;
-        }
-        let in_run = ch == ' '
-            && ((index > 0 && chars[index - 1] == ' ') || (index + 1 < chars.len() && chars[index + 1] == ' '));
-        let leading = first_non_whitespace.is_none_or(|first| index < first);
-        let trailing = last_non_whitespace.is_none_or(|last| index > last);
-        let visible = match mode {
-            RenderWhitespaceSetting::None => false,
-            RenderWhitespaceSetting::Selection | RenderWhitespaceSetting::All => true,
-            RenderWhitespaceSetting::Trailing => trailing,
-            RenderWhitespaceSetting::Boundary => ch == '\t' || leading || trailing || in_run,
-        };
-        if visible {
-            positions.push((index, if ch == '\t' { '\u{2192}' } else { '\u{00b7}' }));
-        }
-    }
-    positions
-}
-
 fn selection_set_contains(selection_set: &SelectionSet, at: usize) -> bool {
     let selections = selection_set.as_slice();
     let candidate = selections.partition_point(|selection| selection.range().end <= at);
     selections
         .get(candidate)
         .is_some_and(|selection| selection.range().contains(&at))
+}
+
+fn visible_marker_candidates(
+    cache: &mut ViewportCache,
+    buffer: &Rope,
+    visible_windows: &[Range<usize>],
+    render_whitespace: RenderWhitespaceSetting,
+    selection_set: &SelectionSet,
+    render_control_characters: bool,
+) -> Vec<(usize, char, bool)> {
+    if render_whitespace == RenderWhitespaceSetting::None && !render_control_characters {
+        return Vec::new();
+    }
+
+    let mut candidates = Vec::new();
+    for window in visible_windows {
+        let start = window.start.min(buffer.len_chars());
+        if start >= window.end || start == buffer.len_chars() {
+            continue;
+        }
+        let line_ix = buffer.char_to_line(start);
+        let line_start = buffer.line_to_char(line_ix);
+        let end = window.end.min(buffer.len_chars());
+        if start >= end {
+            continue;
+        }
+        debug_assert_eq!(
+            buffer.char_to_line(end - 1),
+            line_ix,
+            "painted windows stay within one logical line"
+        );
+        let whitespace_bounds = matches!(
+            render_whitespace,
+            RenderWhitespaceSetting::Trailing | RenderWhitespaceSetting::Boundary
+        )
+        .then(|| cached_line_whitespace_bounds(cache, buffer, line_ix));
+
+        for (offset, ch) in buffer.slice(start..end).chars().enumerate() {
+            let at = start + offset;
+            if matches!(ch, ' ' | '\t') && render_whitespace != RenderWhitespaceSetting::None {
+                let local = at - line_start;
+                let in_run = ch == ' '
+                    && (at.checked_sub(1).and_then(|before| buffer.get_char(before)) == Some(' ')
+                        || buffer.get_char(at + 1) == Some(' '));
+                let leading = whitespace_bounds
+                    .as_ref()
+                    .is_none_or(|bounds| bounds.first_non_whitespace.is_none_or(|first| local < first));
+                let trailing = whitespace_bounds
+                    .as_ref()
+                    .is_none_or(|bounds| bounds.last_non_whitespace.is_none_or(|last| local > last));
+                let visible = match render_whitespace {
+                    RenderWhitespaceSetting::None => false,
+                    RenderWhitespaceSetting::Selection => selection_set_contains(selection_set, at),
+                    RenderWhitespaceSetting::Trailing => trailing,
+                    RenderWhitespaceSetting::Boundary => ch == '\t' || leading || trailing || in_run,
+                    RenderWhitespaceSetting::All => true,
+                };
+                if visible {
+                    candidates.push((at, if ch == '\t' { '\u{2192}' } else { '\u{00b7}' }, true));
+                }
+            }
+            if render_control_characters {
+                if let Some(glyph) = control_picture(ch) {
+                    candidates.push((at, glyph, false));
+                }
+            }
+        }
+    }
+    candidates
 }
 
 pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, window: &mut Window) -> ViewportPaintState {
@@ -1589,33 +1683,39 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
             let segment_start_char = line_start_char + segment.start_col;
             let segment_end_char = line_start_char + segment.end_col;
             let segment_cache_key = (line_ix, segment.start_col, segment.end_col);
-            let code_line = cached_segment(&cache.code_lines, segment_cache_key, &segment.text, code_style_key)
-                .or_else(|| {
-                    let highlight_spans = highlight_spans.get_or_insert_with(|| {
-                        let mut spans = line_syntax_spans(&mut cache, line_ix, display_source.len(), syntax_mode);
-                        if bracket_pair_colorization && structure.revision == revision {
-                            spans = overlay_bracket_spans(display_source, line_start_char, spans, structure);
-                        }
-                        spans
-                    });
-                    let code_runs = text_runs_for_segment(
-                        display_source,
-                        segment.start_col,
-                        segment.end_col,
-                        highlight_spans,
-                        &code_run,
-                        theme,
-                    );
-                    shape_cached_segment(
-                        &mut cache.code_lines,
-                        segment_cache_key,
-                        &segment.text,
-                        &code_runs,
-                        code_style_key,
-                        font_size,
-                        window,
-                    )
+            let code_line = cached_segment(
+                &cache.code_lines,
+                segment_cache_key,
+                &segment.text,
+                code_style_key,
+                font_size,
+            )
+            .or_else(|| {
+                let highlight_spans = highlight_spans.get_or_insert_with(|| {
+                    let mut spans = line_syntax_spans(&mut cache, line_ix, display_source.len(), syntax_mode);
+                    if bracket_pair_colorization && structure.revision == revision {
+                        spans = overlay_bracket_spans(display_source, line_start_char, spans, structure);
+                    }
+                    spans
                 });
+                let code_runs = text_runs_for_segment(
+                    display_source,
+                    segment.start_col,
+                    segment.end_col,
+                    highlight_spans,
+                    &code_run,
+                    theme,
+                );
+                shape_cached_segment(
+                    &mut cache.code_lines,
+                    segment_cache_key,
+                    &segment.text,
+                    &code_runs,
+                    code_style_key,
+                    font_size,
+                    window,
+                )
+            });
             let gutter_text = if show_gutter && segment_ix == 0 {
                 Some(gutter_mode.format(line_ix, cursor_line, cursor_lines))
             } else {
@@ -1664,53 +1764,54 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     if let Some(started) = rows_started {
         diagnostics::record_ms("viewport_rows_ms", started.elapsed().as_secs_f64() * 1000.0);
     }
+    let visible_windows = painted_character_windows(&rows, bounds, layout_metrics, scroll_left);
 
     let structure_started = diagnostics::trace_enabled().then(Instant::now);
     let structure_current = structure.revision == revision;
-    let primary_head = selection_set.primary().head();
-    let active_pair = structure_current
-        .then(|| pair_for_head(structure, primary_head, true))
-        .flatten();
     let mut guides = Vec::new();
-    let mut indent_cache = HashMap::new();
-    let primary_line = buffer.char_to_line(primary_head.min(buffer.len_chars()));
-    let before_visible = (0..first_line)
-        .rev()
-        .find_map(|line| rope_line_indent(buffer, line, indent_width));
-    let after_visible =
-        (last_visible_line + 1..buffer.len_lines()).find_map(|line| rope_line_indent(buffer, line, indent_width));
-    let raw_visible: Vec<Option<usize>> = (first_line..=last_visible_line)
-        .map(|line| rope_line_indent(buffer, line, indent_width))
-        .collect();
-    let mut previous = before_visible;
-    let mut previous_indents = Vec::with_capacity(raw_visible.len());
-    for raw in &raw_visible {
-        if raw.is_some() {
-            previous = *raw;
-        }
-        previous_indents.push(previous);
-    }
-    let mut next = after_visible;
-    let mut next_indents = vec![None; raw_visible.len()];
-    for (index, raw) in raw_visible.iter().enumerate().rev() {
-        if raw.is_some() {
-            next = *raw;
-        }
-        next_indents[index] = next;
-    }
-    for (offset, raw) in raw_visible.into_iter().enumerate() {
-        let indent = raw.unwrap_or_else(|| match (previous_indents[offset], next_indents[offset]) {
-            (Some(before), Some(after)) => before.min(after),
-            (Some(indent), None) | (None, Some(indent)) => indent,
-            (None, None) => 0,
-        });
-        indent_cache.insert(first_line + offset, indent);
-    }
-    let primary_indent = indent_cache.get(&primary_line).copied().unwrap_or_else(|| {
-        let text = cached_line_display_text(&mut cache, buffer, primary_line);
-        leading_visual_column(text.as_ref(), indent_width)
-    });
     if indent_guides && indent_width > 0 {
+        let primary_head = selection_set.primary().head();
+        let primary_line = buffer.char_to_line(primary_head.min(buffer.len_chars()));
+        let before_visible = (0..first_line)
+            .rev()
+            .find_map(|line| rope_line_indent(buffer, line, indent_width));
+        let after_visible =
+            (last_visible_line + 1..buffer.len_lines()).find_map(|line| rope_line_indent(buffer, line, indent_width));
+        let raw_visible: Vec<Option<usize>> = (first_line..=last_visible_line)
+            .map(|line| rope_line_indent(buffer, line, indent_width))
+            .collect();
+        let mut previous = before_visible;
+        let mut previous_indents = Vec::with_capacity(raw_visible.len());
+        for raw in &raw_visible {
+            if raw.is_some() {
+                previous = *raw;
+            }
+            previous_indents.push(previous);
+        }
+        let mut next = after_visible;
+        let mut next_indents = vec![None; raw_visible.len()];
+        for (index, raw) in raw_visible.iter().enumerate().rev() {
+            if raw.is_some() {
+                next = *raw;
+            }
+            next_indents[index] = next;
+        }
+        let indent_cache: HashMap<usize, usize> = raw_visible
+            .into_iter()
+            .enumerate()
+            .map(|(offset, raw)| {
+                let indent = raw.unwrap_or_else(|| match (previous_indents[offset], next_indents[offset]) {
+                    (Some(before), Some(after)) => before.min(after),
+                    (Some(indent), None) | (None, Some(indent)) => indent,
+                    (None, None) => 0,
+                });
+                (first_line + offset, indent)
+            })
+            .collect();
+        let primary_indent = indent_cache.get(&primary_line).copied().unwrap_or_else(|| {
+            let text = cached_line_display_text(&mut cache, buffer, primary_line);
+            leading_visual_column(text.as_ref(), indent_width)
+        });
         for row in &rows {
             let line_ix = buffer.char_to_line(row.line_start_char.min(buffer.len_chars()));
             let indent = indent_cache.get(&line_ix).copied().unwrap_or(0);
@@ -1726,9 +1827,19 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         }
     }
 
-    let visible_char_start = rows.first().map_or(0, |row| row.line_start_char);
-    let visible_char_end = rows.last().map_or(0, |row| row.logical_end_char);
-    let visible_pairs = visible_structure_pairs(structure, visible_char_start, visible_char_end);
+    let guides_enabled = bracket_pair_guides != GuideMode::Off || bracket_pair_horizontal_guides != GuideMode::Off;
+    let active_pair = (structure_current && guides_enabled)
+        .then(|| pair_for_head(structure, selection_set.primary().head(), true))
+        .flatten();
+    let visible_pairs = if structure_current
+        && (bracket_pair_guides == GuideMode::All || bracket_pair_horizontal_guides == GuideMode::All)
+    {
+        let visible_char_start = rows.first().map_or(0, |row| row.line_start_char);
+        let visible_char_end = rows.last().map_or(0, |row| row.logical_end_char);
+        visible_structure_pairs(structure, visible_char_start, visible_char_end)
+    } else {
+        Vec::new()
+    };
 
     let guide_pairs: Vec<(StructuralPair, bool)> = if !structure_current {
         Vec::new()
@@ -1817,40 +1928,26 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         strikethrough: None,
     };
     let mut markers = Vec::new();
-    for line_ix in first_line..last_visible_line.saturating_add(1).min(buffer.len_lines()) {
-        let line = cached_line_display_text(&mut cache, buffer, line_ix);
-        let text = line.as_ref();
-        let line_start = buffer.line_to_char(line_ix);
-        let mut candidates: Vec<(usize, char, bool)> = whitespace_positions(text, render_whitespace)
-            .into_iter()
-            .map(|(offset, glyph)| (line_start + offset, glyph, true))
-            .filter(|(at, _, _)| {
-                render_whitespace != RenderWhitespaceSetting::Selection || selection_set_contains(selection_set, *at)
-            })
-            .collect();
-        if render_control_characters {
-            candidates.extend(
-                text.chars()
-                    .enumerate()
-                    .filter_map(|(offset, ch)| control_picture(ch).map(|glyph| (line_start + offset, glyph, false))),
-            );
-        }
-        for (at, glyph, whitespace) in candidates {
-            if !rows.iter().any(|row| row_contains_cursor(row, at)) {
-                continue;
-            }
-            let text = SharedString::from(glyph.to_string());
-            if let Some(shaped) = shape_cached_line(
-                &mut cache.marker_lines,
-                glyph as usize,
-                text,
-                theme.style_key(),
-                &marker_run,
-                font_size,
-                window,
-            ) {
-                markers.push(PaintMarker { at, shaped, whitespace });
-            }
+    let marker_candidates = visible_marker_candidates(
+        &mut cache,
+        buffer,
+        &visible_windows,
+        render_whitespace,
+        selection_set,
+        render_control_characters,
+    );
+    for (at, glyph, whitespace) in marker_candidates {
+        let text = SharedString::from(glyph.to_string());
+        if let Some(shaped) = shape_cached_line(
+            &mut cache.marker_lines,
+            glyph as usize,
+            text,
+            theme.style_key(),
+            &marker_run,
+            font_size,
+            window,
+        ) {
+            markers.push(PaintMarker { at, shaped, whitespace });
         }
     }
     markers.sort_by_key(|marker| marker.at);
@@ -1870,7 +1967,6 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     }
 
     let highlights_started = diagnostics::trace_enabled().then(Instant::now);
-    let visible_windows = painted_character_windows(&rows, bounds, layout_metrics, scroll_left);
     let occurrence_highlights = visible_occurrence_highlights(
         &mut cache,
         buffer,
@@ -2432,6 +2528,44 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_and_control_markers_scan_only_painted_character_windows() {
+        let buffer = Rope::from_str(&" ".repeat(200_000));
+        let visible = 100_000..100_008;
+        let selection_set = SelectionSet::single(Selection::from_range(100_002..100_005, false));
+        let mut cache = ViewportCache::default();
+
+        let candidates = visible_marker_candidates(
+            &mut cache,
+            &buffer,
+            std::slice::from_ref(&visible),
+            RenderWhitespaceSetting::Selection,
+            &selection_set,
+            false,
+        );
+
+        assert_eq!(
+            candidates.iter().map(|(at, _, _)| *at).collect::<Vec<_>>(),
+            (100_002..100_005).collect::<Vec<_>>()
+        );
+        assert!(
+            cache.display_lines.is_empty(),
+            "selection markers must not materialize or classify the whole logical line"
+        );
+
+        let controls = Rope::from_str(&"\u{1}".repeat(200_000));
+        let candidates = visible_marker_candidates(
+            &mut cache,
+            &controls,
+            std::slice::from_ref(&visible),
+            RenderWhitespaceSetting::None,
+            &selection_set,
+            true,
+        );
+        assert_eq!(candidates.len(), visible.len());
+        assert!(cache.display_lines.is_empty());
+    }
+
+    #[test]
     fn typography_invalidation_discards_the_measured_character_width() {
         let mut cache = ViewportCache {
             code_char_width: Some(CachedCodeCharWidth {
@@ -2557,7 +2691,9 @@ mod tests {
     #[test]
     fn parser_failure_invalidates_cached_display_text_and_layout() {
         let mut cache = cache_with_highlights(vec![3], vec![Vec::new()]);
-        cache.display_lines.insert(0, SharedString::from("old"));
+        cache
+            .display_lines
+            .insert(0, CachedDisplayLine::new(SharedString::from("old")));
         cache
             .wrapped_lines
             .insert((0, Some(80)), Rc::from(Vec::<WrappedSegment>::new()));
