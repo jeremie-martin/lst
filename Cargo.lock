@@ -3171,6 +3171,7 @@ dependencies = [
  "lst-editor",
  "lst-x11-harness",
  "lucide-icons",
+ "memchr",
  "rfd",
  "ropey",
  "serde",

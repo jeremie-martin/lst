@@ -1,13 +1,18 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{self, ErrorKind, Read},
+    io::{self, BufRead, BufReader, ErrorKind, Read},
     path::{Component, Path, PathBuf},
     process,
+    sync::{
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+        Arc,
+    },
     time::Duration,
 };
 
 use gpui::{Bounds, Context, Pixels, Window};
+use memchr::memmem;
 
 use crate::{
     ui::{InputFieldEvent, InputFieldNavigation},
@@ -23,13 +28,12 @@ const RECENT_CONTENT_SEARCH_DEBOUNCE_MS: u64 = 200;
 
 pub(crate) const RECENT_FILE_LIMIT: usize = 10_000;
 pub(crate) const RECENT_BATCH_SIZE: usize = 60;
-const CONTENT_SEARCH_FILE_LIMIT: usize = 500;
 
 const RECENT_FILE_HEADER_V1: &str = "lst-recent-files-v1";
 const RECENT_FILE_HEADER_V2: &str = "lst-recent-files-v2";
 const PREVIEW_BYTES: u64 = 4096;
 const PREVIEW_LINES: usize = 6;
-const SEARCH_BYTES: u64 = 64 * 1024;
+const CONTENT_SEARCH_BUFFER_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RecentPreviewRead {
@@ -166,6 +170,33 @@ pub(crate) struct RecentPage {
 }
 
 #[derive(Clone, Debug)]
+struct RecentContentSearch {
+    query: String,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl RecentContentSearch {
+    fn new(query: String) -> Self {
+        Self {
+            query,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancelled.store(true, AtomicOrdering::Relaxed);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(AtomicOrdering::Relaxed)
+    }
+
+    fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.cancelled, &other.cancelled)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct RecentFiles {
     state_path: Option<PathBuf>,
     entries: Vec<RecentEntry>,
@@ -250,9 +281,7 @@ struct RecentPanel {
     previews: HashMap<PathBuf, RecentPreviewState>,
     preview_jobs: HashSet<PathBuf>,
     content_matches: HashSet<PathBuf>,
-    content_search_inflight: HashSet<String>,
-    content_search_generation: u64,
-    content_search_pending: bool,
+    content_search: Option<RecentContentSearch>,
 }
 
 impl RecentPanel {
@@ -267,9 +296,13 @@ impl RecentPanel {
             previews: HashMap::new(),
             preview_jobs: HashSet::new(),
             content_matches: HashSet::new(),
-            content_search_inflight: HashSet::new(),
-            content_search_generation: 0,
-            content_search_pending: false,
+            content_search: None,
+        }
+    }
+
+    fn cancel_content_search(&mut self) {
+        if let Some(search) = self.content_search.take() {
+            search.cancel();
         }
     }
 }
@@ -299,25 +332,26 @@ impl RecentView {
 
     /// Opens the full recent-files view with a fresh query and the unified
     /// origin filter reset to `All`.
-    pub(crate) fn open(&mut self) -> Option<u64> {
-        self.open_with_presentation(RecentPresentation::Cards)
+    pub(crate) fn open(&mut self) {
+        self.open_with_presentation(RecentPresentation::Cards);
     }
 
     /// Opens the compact keyboard-first picker with the same data and filter
     /// semantics as the full recent-files view.
-    pub(crate) fn open_quick(&mut self) -> Option<u64> {
-        self.open_with_presentation(RecentPresentation::Quick)
+    pub(crate) fn open_quick(&mut self) {
+        self.open_with_presentation(RecentPresentation::Quick);
     }
 
-    fn open_with_presentation(&mut self, presentation: RecentPresentation) -> Option<u64> {
+    fn open_with_presentation(&mut self, presentation: RecentPresentation) {
         let mut panel = RecentPanel::fresh(presentation);
         Self::reset_selection_in(&mut panel, &self.files);
         self.panel = Some(panel);
-        None
     }
 
     pub(crate) fn close(&mut self) {
-        self.panel = None;
+        if let Some(mut panel) = self.panel.take() {
+            panel.cancel_content_search();
+        }
     }
 
     pub(crate) fn presentation(&self) -> RecentPresentation {
@@ -354,58 +388,49 @@ impl RecentView {
     }
 
     /// Updates the query and resets dependent state. Returns
-    /// `Some(generation)` if a debounced content search should be scheduled,
+    /// a cancellable request if a debounced content search should be scheduled,
     /// `None` when the query is empty or the panel is closed.
-    pub(crate) fn set_query(&mut self, text: String) -> Option<u64> {
+    fn set_query(&mut self, text: String) -> Option<RecentContentSearch> {
         let panel = self.panel.as_mut()?;
+        panel.cancel_content_search();
         panel.query = text;
         panel.visible_count = RECENT_BATCH_SIZE;
         panel.content_matches.clear();
         Self::reset_selection_in(panel, &self.files);
         if panel.query.trim().is_empty() {
-            panel.content_search_pending = false;
             None
         } else {
-            panel.content_search_generation = panel.content_search_generation.saturating_add(1);
-            panel.content_search_pending = true;
-            Some(panel.content_search_generation)
+            let search = RecentContentSearch::new(panel.query.trim().to_lowercase());
+            panel.content_search = Some(search.clone());
+            Some(search)
         }
     }
 
     pub(crate) fn content_search_pending(&self) -> bool {
-        self.panel.as_ref().is_some_and(|panel| panel.content_search_pending)
+        self.panel.as_ref().is_some_and(|panel| panel.content_search.is_some())
     }
 
-    pub(crate) fn search_still_relevant(&self, generation: u64, query: &str) -> bool {
-        self.panel.as_ref().is_some_and(|panel| {
-            panel.content_search_generation == generation && panel.query.trim().to_lowercase() == query
-        })
-    }
-
-    /// Marks `query` as in-flight. Returns true if the caller should spawn
-    /// the search task; false if it was already in-flight.
-    pub(crate) fn start_content_search(&mut self, query: String) -> bool {
-        let Some(panel) = self.panel.as_mut() else {
-            return false;
-        };
-        if panel.content_search_inflight.contains(&query) {
-            return false;
-        }
-        panel.content_search_inflight.insert(query);
-        true
+    fn search_still_relevant(&self, search: &RecentContentSearch) -> bool {
+        self.panel
+            .as_ref()
+            .and_then(|panel| panel.content_search.as_ref())
+            .is_some_and(|current| current.is_same(search))
     }
 
     /// Applies search results if they are still relevant; returns whether
     /// they were applied.
-    pub(crate) fn finish_content_search(&mut self, query: String, matches: Vec<PathBuf>) -> bool {
+    fn finish_content_search(&mut self, search: &RecentContentSearch, matches: Vec<PathBuf>) -> bool {
         let Some(panel) = self.panel.as_mut() else {
             return false;
         };
-        panel.content_search_inflight.remove(&query);
-        if panel.query.trim().to_lowercase() != query {
+        if !panel
+            .content_search
+            .as_ref()
+            .is_some_and(|current| current.is_same(search))
+        {
             return false;
         }
-        panel.content_search_pending = false;
+        panel.content_search = None;
         panel.content_matches = matches.into_iter().collect();
         Self::ensure_selection_in(panel, &self.files);
         true
@@ -492,6 +517,8 @@ impl RecentView {
                 .any(|entry| panel.filter.includes(entry.origin()));
             if query.is_empty() || filter_is_empty {
                 Some(panel.filter.empty_message().to_string())
+            } else if panel.content_search.is_some() {
+                None
             } else {
                 Some(format!("No matches for \"{query}\""))
             }
@@ -702,29 +729,68 @@ pub(crate) fn read_recent_preview(path: &Path) -> RecentPreviewRead {
     }
 }
 
-pub(crate) fn search_recent_content(paths: Vec<PathBuf>, query: &str) -> Vec<PathBuf> {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return Vec::new();
+/// Returns every matching path, or `None` as soon as a newer query cancels
+/// this search.
+fn search_recent_content(paths: Vec<PathBuf>, search: &RecentContentSearch) -> Option<Vec<PathBuf>> {
+    let ascii_finder = search
+        .query
+        .is_ascii()
+        .then(|| memmem::Finder::new(search.query.as_bytes()));
+    let mut matches = Vec::new();
+    for path in paths {
+        if search.is_cancelled() {
+            return None;
+        }
+        match recent_file_content_matches(&path, &search.query, ascii_finder.as_ref(), search) {
+            Some(true) => matches.push(path),
+            Some(false) => {}
+            None => return None,
+        }
     }
-
-    paths
-        .into_iter()
-        .take(CONTENT_SEARCH_FILE_LIMIT)
-        .filter(|path| recent_file_content_matches(path, &query))
-        .collect()
+    Some(matches)
 }
 
-fn recent_file_content_matches(path: &Path, query: &str) -> bool {
+/// Searches one complete file while reusing a single line buffer. `None`
+/// means a newer query cancelled the work; file errors are ordinary misses.
+fn recent_file_content_matches(
+    path: &Path,
+    query: &str,
+    ascii_finder: Option<&memmem::Finder<'_>>,
+    search: &RecentContentSearch,
+) -> Option<bool> {
     let file = match fs::File::open(path) {
         Ok(file) => file,
-        Err(_) => return false,
+        Err(_) => return Some(false),
     };
-    let mut bytes = Vec::new();
-    if file.take(SEARCH_BYTES).read_to_end(&mut bytes).is_err() {
-        return false;
+    let mut reader = BufReader::with_capacity(CONTENT_SEARCH_BUFFER_BYTES, file);
+    let mut line = Vec::new();
+    loop {
+        if search.is_cancelled() {
+            return None;
+        }
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) => return Some(false),
+            Ok(_) => {}
+            Err(_) => return Some(false),
+        }
+
+        if let Some(finder) = ascii_finder {
+            line.make_ascii_lowercase();
+            if finder.find(&line).is_some() {
+                return Some(true);
+            }
+            if line.is_ascii() {
+                continue;
+            }
+        } else if line.is_ascii() {
+            continue;
+        }
+
+        if String::from_utf8_lossy(&line).to_lowercase().contains(query) {
+            return Some(true);
+        }
     }
-    String::from_utf8_lossy(&bytes).to_lowercase().contains(query)
 }
 
 fn preview_from_bytes(bytes: &[u8]) -> String {
@@ -937,17 +1003,14 @@ impl LstGpuiApp {
             self.update_model(cx, false, |model| model.close_goto_line_panel());
         }
 
-        let pending_search = match presentation {
+        match presentation {
             RecentPresentation::Cards => self.recent.open(),
             RecentPresentation::Quick => self.recent.open_quick(),
-        };
+        }
         reset_scroll(&self.recent_scroll);
         self.recent_query_input.update(cx, |input, cx| input.set_text("", cx));
         let focus_handle = self.recent_query_input.read(cx).focus_handle();
         window.focus(&focus_handle);
-        if let Some(generation) = pending_search {
-            self.schedule_recent_content_search(generation, cx);
-        }
         self.spawn_recent_previews(cx);
         cx.notify();
     }
@@ -998,11 +1061,11 @@ impl LstGpuiApp {
     }
 
     fn update_recent_query(&mut self, text: String, cx: &mut Context<Self>) {
-        let pending_search = self.recent.set_query(text);
+        let search = self.recent.set_query(text);
         reset_scroll(&self.recent_scroll);
         self.spawn_recent_previews(cx);
-        if let Some(generation) = pending_search {
-            self.schedule_recent_content_search(generation, cx);
+        if let Some(search) = search {
+            self.schedule_recent_content_search(search, cx);
         }
     }
 
@@ -1054,43 +1117,42 @@ impl LstGpuiApp {
         }
     }
 
-    fn schedule_recent_content_search(&mut self, generation: u64, cx: &mut Context<Self>) {
-        let query = self.recent.query().trim().to_lowercase();
-        if query.is_empty() {
-            return;
-        }
+    fn schedule_recent_content_search(&mut self, search: RecentContentSearch, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(recent_content_search_debounce()).await;
             let _ = this.update(cx, |view, cx| {
-                if view.recent.search_still_relevant(generation, &query) {
-                    view.start_recent_content_search(query, cx);
+                if view.recent.search_still_relevant(&search) {
+                    view.start_recent_content_search(search, cx);
                 }
             });
         })
         .detach();
     }
 
-    fn start_recent_content_search(&mut self, query: String, cx: &mut Context<Self>) {
-        if !self.recent.start_content_search(query.clone()) {
-            return;
-        }
-
+    fn start_recent_content_search(&mut self, search: RecentContentSearch, cx: &mut Context<Self>) {
         let paths = self.recent.entries();
         cx.spawn(async move |this, cx| {
-            let search_query = query.clone();
-            let matches = cx
+            let background_search = search.clone();
+            let result = cx
                 .background_executor()
-                .spawn(async move { search_recent_content(paths, &search_query) })
+                .spawn(async move { search_recent_content(paths, &background_search) })
                 .await;
-            let _ = this.update(cx, |view, cx| {
-                view.finish_recent_content_search(query, matches, cx);
-            });
+            if let Some(matches) = result {
+                let _ = this.update(cx, |view, cx| {
+                    view.finish_recent_content_search(search, matches, cx);
+                });
+            }
         })
         .detach();
     }
 
-    fn finish_recent_content_search(&mut self, query: String, matches: Vec<PathBuf>, cx: &mut Context<Self>) {
-        if self.recent.finish_content_search(query, matches) {
+    fn finish_recent_content_search(
+        &mut self,
+        search: RecentContentSearch,
+        matches: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.recent.finish_content_search(&search, matches) {
             self.spawn_recent_previews(cx);
             cx.notify();
         }
@@ -1352,16 +1414,32 @@ mod tests {
         view.record_with_origin(&regular, RecentOrigin::Regular);
         view.record_with_origin(&scratchpad, RecentOrigin::Scratchpad);
 
-        let _ = view.open();
+        view.open();
         let _ = view.set_query("regular".to_string());
         assert!(view.set_filter(RecentFilter::Files));
         view.close();
-        let _ = view.open_quick();
+        view.open_quick();
 
         assert_eq!(view.presentation(), RecentPresentation::Quick);
         assert_eq!(view.filter(), RecentFilter::All);
         assert_eq!(view.query(), "");
         assert_eq!(view.page().total, 2);
+    }
+
+    #[test]
+    fn replacing_a_query_cancels_its_search_and_rejects_stale_results() {
+        let mut view = RecentView::load(None);
+        view.open();
+        let first = view.set_query("needle".to_string()).expect("first search");
+        let second = view.set_query("needle".to_string()).expect("replacement search");
+
+        assert!(first.is_cancelled());
+        assert!(!view.search_still_relevant(&first));
+        assert!(view.search_still_relevant(&second));
+        assert!(!view.finish_content_search(&first, Vec::new()));
+        assert!(view.content_search_pending());
+        assert!(view.finish_content_search(&second, Vec::new()));
+        assert!(!view.content_search_pending());
     }
 
     #[test]
@@ -1374,7 +1452,7 @@ mod tests {
         view.record_with_origin(&oldest_scratchpad, RecentOrigin::Scratchpad);
         view.record_with_origin(&regular, RecentOrigin::Regular);
         view.record_with_origin(&newest_scratchpad, RecentOrigin::Scratchpad);
-        let _ = view.open();
+        view.open();
 
         assert!(view.set_filter(RecentFilter::Scratchpads));
         assert_eq!(

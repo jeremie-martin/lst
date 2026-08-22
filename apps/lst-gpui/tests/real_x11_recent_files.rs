@@ -153,6 +153,7 @@ fn recent_panel_content_query_opens_file_matching_body() -> TestResult {
             record.recent_panel_open
                 && record.recent_panel_query.as_deref() == Some("needle")
                 && record.recent_panel_content_search_pending
+                && record.recent_panel_empty_message.is_none()
         })?;
         editor.wait_state("recent content filter selected target", secs(10), |record| {
             record.recent_panel_open
@@ -163,6 +164,37 @@ fn recent_panel_content_query_opens_file_matching_body() -> TestResult {
 
         editor.keys("<enter>")?;
         editor.wait_state("recent content match opened", secs(5), |record| {
+            !record.recent_panel_open && record.active_tab_path.as_deref() == Some(target_text.as_str())
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn recent_panel_content_query_searches_every_recent_file_completely() -> TestResult {
+    support::run_x11_test("recent-complete-content-query", |session| {
+        let mut paths = Vec::with_capacity(501);
+        for index in 0..500 {
+            paths.push(session.seed_file(&format!("haystack-{index:03}.txt"), "haystack\n")?);
+        }
+        let target_body = format!("{}deep corpus needle\n", "padding\n".repeat(9_000));
+        let target = session.seed_file("deep-target.txt", &target_body)?;
+        let target_text = path_text(&target);
+        paths.push(target.clone());
+        session.seed_recent_files(&paths)?;
+
+        let (mut editor, _scratchpad) = session.open("recent-complete-content-query")?;
+        editor.keys("<C-r>deep corpus needle")?;
+        editor.wait_state("complete recent content search selects target", secs(10), |record| {
+            record.recent_panel_open
+                && record.recent_panel_query.as_deref() == Some("deep corpus needle")
+                && !record.recent_panel_content_search_pending
+                && record.recent_panel_selected_path.as_deref() == Some(target_text.as_str())
+        })?;
+
+        editor.keys("<enter>")?;
+        editor.wait_state("deep recent content target opened", secs(5), |record| {
             !record.recent_panel_open && record.active_tab_path.as_deref() == Some(target_text.as_str())
         })?;
         Ok(())
