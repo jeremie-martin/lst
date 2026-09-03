@@ -1,6 +1,7 @@
-//! Under-review executable specs for save-time text policies.
+//! Accepted real-X11 behavior for save-time text policies.
 //!
-//! Two opt-in policies are pinned by these specs:
+//! The Settings UI and TOML configuration expose two opt-in policies. These
+//! tests use their environment overrides to isolate the file-writing boundary:
 //!
 //! - **Trim trailing whitespace on save**, activated by
 //!   `LST_SAVE_TRIM_TRAILING_WS=1`. When on, every line written to disk has
@@ -9,16 +10,8 @@
 //!   `LST_SAVE_ENSURE_FINAL_NEWLINE=1`. When on, a non-empty buffer that
 //!   does not already end with `\n` is written with one appended.
 //!
-//! The flags default off so existing users are unaffected — Markdown hard
-//! breaks and intentional trailing whitespace survive a normal save. They
-//! exist here as test seams in the spirit of `LST_LLM_FAKE_RESPONSE`; once
-//! a real settings surface lands, both opts move there.
-//!
-//! Specs run under the `x11-tdd` profile. Failures are diagnostic until the
-//! feature lands; once green and accepted, rename this file to
-//! `real_x11_save_options.rs` to promote it into the blocking `x11` lane.
-//!
-//!     cargo nextest run --profile x11-tdd -p lst-gpui --test real_x11_save_options_tdd --run-ignored only
+//! Both settings default off, preserving Markdown hard breaks and intentional
+//! trailing whitespace on a normal save.
 
 mod support;
 

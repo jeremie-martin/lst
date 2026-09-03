@@ -1,4 +1,4 @@
-//! Under-review executable specs for the `Insert` key toggling overtype mode.
+//! Accepted real-X11 behavior for the `Insert` key toggling overtype mode.
 //!
 //! Pinned contract:
 //!
@@ -14,11 +14,6 @@
 //! - Overtype persists across cursor motion until the user toggles it off
 //!   with another `Insert` press.
 //!
-//! Specs run under the `x11-tdd` profile. Promote to `real_x11_overtype.rs`
-//! once green.
-//!
-//!     cargo nextest run --profile x11-tdd -p lst-gpui --test real_x11_overtype_tdd --run-ignored only
-
 mod support;
 
 use support::{secs, EditorTestExt, TestResult};

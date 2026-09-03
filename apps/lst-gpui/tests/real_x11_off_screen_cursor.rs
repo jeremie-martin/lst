@@ -1,5 +1,5 @@
-//! Under-review executable specs for off-screen cursor indicators and
-//! viewport reveal across `Ctrl+Alt+Down` cursor extension.
+//! Accepted real-X11 behavior for off-screen cursor indicators and viewport
+//! reveal across `Ctrl+Alt+Down` cursor extension.
 //!
 //! Pinned contract:
 //!
@@ -17,11 +17,6 @@
 //! `record.viewport.rows` and `record.cursors`, so they are robust against
 //! viewport size changes between hosts.
 //!
-//! Specs run under the `x11-tdd` profile. Promote to
-//! `real_x11_off_screen_cursor.rs` once green.
-//!
-//!     cargo nextest run --profile x11-tdd -p lst-gpui --test real_x11_off_screen_cursor_tdd --run-ignored only
-
 mod support;
 
 use lst_x11_harness::StateTraceRecord;

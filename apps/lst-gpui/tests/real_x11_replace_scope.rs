@@ -1,8 +1,6 @@
-//! Under-review executable specs for "Replace All" honoring the
-//! find-in-selection scope.
+//! Accepted real-X11 behavior for "Replace All" honoring find-in-selection.
 //!
-//! Pinned chords (currently unbound in `keymap.rs` — both are TDD policy
-//! choices; both are free):
+//! Pinned chords:
 //!
 //! - `Alt+S` — toggle find-in-selection scope (`ToggleFindInSelection`).
 //!   When toggled with an active text selection, the scope captures that
@@ -15,11 +13,6 @@
 //! input. Typing populates the query; `Tab` advances focus to the replace
 //! input.
 //!
-//! Specs run under the `x11-tdd` profile. Promote to
-//! `real_x11_replace_scope.rs` once green.
-//!
-//!     cargo nextest run --profile x11-tdd -p lst-gpui --test real_x11_replace_scope_tdd --run-ignored only
-
 mod support;
 
 use support::{secs, EditorTestExt, TestResult};

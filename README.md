@@ -1,125 +1,108 @@
 # lst
 
-`lst` is a small GPUI desktop text editor.
+`lst` is a small Linux desktop text editor built with GPUI. It provides
+standard desktop editing by default and an optional, deliberately bounded Vim
+mode.
 
-Editor behavior lives in the framework-neutral `lst-editor` crate. The GPUI app
-owns rendering, widgets, desktop integration, and runtime effects.
+The editor supports multiple tabs and cursors, find and replace, soft wrap,
+line bookmarks, configurable keybindings, and tree-sitter highlighting for
+Rust, Python, JavaScript/JSX, TypeScript/TSX, JSON, TOML, YAML, Markdown, HTML,
+and CSS. Scratchpads autosave; ordinary files use explicit save and conflict
+handling.
 
-## Features
+## Run from source
 
-- Standard desktop editing by default, with multi-cursor and column selection,
-  complete find/replace, soft wrap, auto-pairing, and optional Vim mode.
-- Searchable command palette, application menu, visible settings, versioned
-  TOML configuration with live reload, and configurable keybindings.
-- Scratchpad-only autosave by default and explicit save/discard/cancel handling
-  for modified ordinary files.
-- Tree-sitter syntax highlighting for Rust, Python, JavaScript/JSX,
-  TypeScript/TSX, JSON, TOML, YAML, Markdown, HTML, and CSS, with incremental
-  reparsing, language injection (e.g. fenced code blocks in Markdown), and
-  theme-driven colors.
-- Line bookmarks: toggle with `Ctrl-Alt-K`, jump to the next/previous bookmark
-  with `Ctrl-Alt-L` / `Ctrl-Alt-J` (wraps around).
-- AI text cleanup for scratchpad transcripts is available from the command
-  palette. A selection is cleaned directly; cleaning an entire document first
-  requires an explicit in-app confirmation. A single undo restores the
-  original. Set `DEEPSEEK_API_KEY` (and optionally `DEEPSEEK_MODEL`) to enable
-  it.
+A Rust toolchain and a graphical session are required.
 
-## Active Layout
-
-- `apps/lst-gpui`: active GPUI desktop editor.
-- `crates/lst-editor`: framework-neutral editor model, document primitives, effects, and Vim state machine.
-
-## Build And Run
-
-```bash
+```sh
 cargo build --release -p lst-gpui
-./target/release/lst
 ./target/release/lst README.md
-./target/release/lst --title lst-scratchpad
-./target/release/lst --scratchpad-dir /path/to/notes
-./target/release/lst --vim README.md
-./target/release/lst --version
 ```
 
-Running without files creates a timestamped scratchpad note in
-`~/.local/share/lst/` by default. Use `--scratchpad-dir` to choose another
-scratchpad directory.
+Run `./target/release/lst --help` for the authoritative command-line options.
+Common forms are:
 
-Open the command palette with `Ctrl-Shift-P` and settings with `Ctrl-,`.
-Configuration is stored in `$XDG_CONFIG_HOME/lst/config.toml` or
-`~/.config/lst/config.toml`. See `docs/daily-driver.md` for the default behavior,
-setting schema, and standard key policy.
+```sh
+./target/release/lst                         # new scratchpad
+./target/release/lst file.rs notes.md        # open files in tabs
+./target/release/lst --vim file.rs           # start in Vim mode
+./target/release/lst --scratchpad-dir notes  # override scratchpad storage
+./target/release/lst --title lst-scratchpad  # override the window title
+```
+
+With no file arguments, `lst` creates a timestamped Markdown scratchpad in
+`~/.local/share/lst/`. Scratchpads are saved automatically. Closing a non-empty
+scratchpad also copies its contents to the desktop clipboard and primary
+selection; if the clipboard cannot remain available after exit, `lst` warns
+before quitting. Modified ordinary files always require an explicit save or
+discard decision.
+
+The main entry points are:
+
+- `Ctrl+Shift+P`: searchable command palette
+- `Ctrl+,`: settings
+- `Ctrl+P`: quick open from recent files
+- `Ctrl+R`: full recent-files view
+- `Ctrl+F` / `Ctrl+H`: find / replace
+- `Ctrl+G`: go to line or `line:column`
+
+The application menu and command palette expose the rest of the active command
+set and its current shortcuts.
 
 ## Install
 
-`install.sh` builds and installs the active GPUI editor in release mode to
-`~/.local/bin/lst` by default. It then compares the installed package version,
-Git revision, and dirty marker with the source build and fails on any mismatch.
+The installer requires Cargo, Git, fontconfig, and the `TX-02` font. It builds
+from the locked dependency set, installs `lst`, and verifies that the installed
+build identity matches the checkout.
 
-```bash
+```sh
 ./install.sh
 ~/.local/bin/lst --version
 ```
 
-Set `LST_PREFIX=/some/prefix` to change the install root.
-The installer verifies that the `TX-02` font is available because it is the
-default editor font. Application chrome uses the platform UI font.
+The default prefix is `~/.local`. Set `LST_PREFIX` to install elsewhere:
 
-For scratchpad window-manager rules, spawn `~/.local/bin/lst --title lst-scratchpad`.
-The GPUI window sets that title on X11/Wayland and uses `lst` as its app id /
-X11 `WM_CLASS`.
-
-## Testing
-
-Use the workspace suite as the active refactor gate:
-
-```bash
-cargo test
+```sh
+LST_PREFIX=/opt/lst ./install.sh
 ```
 
-Run accepted desktop behavior through a real, off-screen X11 server:
+## Configuration
 
-```bash
-./scripts/run_x11_nested.py
+Settings are available in the application and persist to
+`$XDG_CONFIG_HOME/lst/config.toml`, or `~/.config/lst/config.toml` when
+`XDG_CONFIG_HOME` is unset. The file reloads while the app is running.
+
+See [Configuration](docs/configuration.md) for the schema, keybinding format,
+and precedence rules.
+
+## AI text cleanup
+
+The **Clean Up Text with AI** command sends the active selection to DeepSeek.
+Without a selection, the application asks for confirmation before sending the
+whole document. The replacement is one undo step.
+
+```sh
+export DEEPSEEK_API_KEY=...
+# Optional; the built-in default is shown in apps/lst-gpui/src/llm.rs.
+export DEEPSEEK_MODEL=...
 ```
 
-This requires a host X11 session plus `Xephyr`, `lwm`, `wmctrl`, `xclip`, and
-Python Xlib. It sends real XTEST keyboard and mouse input to the production app
-without taking over the visible desktop. See `docs/x11-harness.md` for focused,
-stress, physical-display, and real-vs-nested qualification commands.
+## Development
 
-For deeper Vim state-machine coverage in the editor crate:
+The root manifest is a Cargo workspace. It is not an application crate.
 
-```bash
-cargo test -p lst-editor --features internal-invariants
-```
+- `apps/lst-gpui`: desktop application, rendering, input, and runtime effects
+- `crates/lst-editor`: framework-neutral editor model
+- `crates/lst-x11-harness`: real-X11 behavior-test driver
 
-## Performance
+Contributor rules and the normal verification commands are in
+[AGENTS.md](AGENTS.md). The remaining documentation has one subject per file:
 
-The active GPUI editor has a real-display X11 interaction benchmark. Build the
-release app and runner together:
-
-```bash
-cargo build --release -p lst-gpui --bin lst --example bench_editor_x11
-```
-
-Run the full smoke suite from a real X11 session:
-
-```bash
-DISPLAY=:1 ./target/release/examples/bench_editor_x11 --scenario all --repetitions 1 --priming 0
-```
-
-The physical-display form remains available for visual baselines and explicit
-diagnostics:
-
-```bash
-DISPLAY=:1 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
-```
-
-For stable baseline work, use the runner default of one priming run and seven
-measured repetitions. The benchmark contract is documented in
-`docs/performance-optimization.md`.
+- [Architecture](docs/architecture.md): ownership, data flow, and design invariants
+- [Testing](docs/testing.md): test placement and the real-X11 harness
+- [Performance](docs/performance.md): benchmark selection and comparison workflow
+- [Vim mode](docs/vim.md): supported scope and oracle maintenance
+- [Changelog](CHANGELOG.md): release history
 
 ## License
 

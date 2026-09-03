@@ -1,5 +1,5 @@
-//! Under-review executable specs for `Ctrl+Shift+T` reopening the most
-//! recently closed tab.
+//! Accepted real-X11 behavior for `Ctrl+Shift+T` reopening the most recently
+//! closed tab.
 //!
 //! Pinned contract:
 //!
@@ -9,11 +9,6 @@
 //! - Pressing the chord with no closed-tab history is a visible no-op:
 //!   the active tab and caret remain unchanged.
 //!
-//! Specs run under the `x11-tdd` profile. Promote to
-//! `real_x11_recently_closed.rs` once green.
-//!
-//!     cargo nextest run --profile x11-tdd -p lst-gpui --test real_x11_recently_closed_tdd --run-ignored only
-
 mod support;
 
 use support::{secs, EditorTestExt, TestResult};

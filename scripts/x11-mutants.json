@@ -39,9 +39,9 @@
     "name": "replace_all_noop",
     "patch": "scripts/mutants/replace-all-noop.patch",
     "tests": [
-      ["real_x11_replace_scope_tdd", "replace_all_in_selection_only_mutates_inside_selection", "fail"],
-      ["real_x11_replace_scope_tdd", "replace_all_with_document_scope_mutates_every_match", "fail"],
-      ["real_x11_replace_scope_tdd", "replace_all_in_selection_preserves_outside_text_byte_for_byte", "fail"],
+      ["real_x11_replace_scope", "replace_all_in_selection_only_mutates_inside_selection", "fail"],
+      ["real_x11_replace_scope", "replace_all_with_document_scope_mutates_every_match", "fail"],
+      ["real_x11_replace_scope", "replace_all_in_selection_preserves_outside_text_byte_for_byte", "fail"],
       ["real_x11_daily_driver", "app_menu_does_not_dim_the_editor", "pass"]
     ]
   },

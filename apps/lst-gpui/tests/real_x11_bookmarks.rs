@@ -1,4 +1,4 @@
-//! Under-review executable specs for line bookmarks.
+//! Accepted real-X11 behavior for line bookmarks.
 //!
 //! Pinned chords (matching the VS Code Bookmarks extension):
 //!
@@ -14,11 +14,6 @@
 //! state is observed indirectly through the navigation outcome, so no new
 //! state-trace fields are required.
 //!
-//! Specs run under the `x11-tdd` profile. Promote to
-//! `real_x11_bookmarks.rs` once green.
-//!
-//!     cargo nextest run --profile x11-tdd -p lst-gpui --test real_x11_bookmarks_tdd --run-ignored only
-
 mod support;
 
 use support::{EditorTestExt, TestResult};

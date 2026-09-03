@@ -1,4 +1,4 @@
-//! Under-review executable specs for `Ctrl+T` transpose.
+//! Accepted real-X11 behavior for `Ctrl+T` transpose.
 //!
 //! Pinned semantics (Emacs `C-t` flavor):
 //!
@@ -12,11 +12,6 @@
 //!   matching the Emacs convention that `C-t` at EOL transposes the last
 //!   two chars rather than crossing the line break.
 //!
-//! Specs run under the `x11-tdd` profile. Promote to `real_x11_transpose.rs`
-//! once green.
-//!
-//!     cargo nextest run --profile x11-tdd -p lst-gpui --test real_x11_transpose_tdd --run-ignored only
-
 mod support;
 
 use support::{EditorTestExt, TestResult};

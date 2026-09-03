@@ -1,7 +1,6 @@
-//! Real-display tests for the multi-cursor surface. These assertions follow
-//! `docs/editor-behaviors-checklist.md` as the behavior spec; some are
-//! intentionally ahead of the current implementation. The spec target is
-//! VS Code's default Linux behavior.
+//! Accepted real-display behavior for the standard-mode multi-cursor surface.
+//! Linux shortcuts follow VS Code conventions where `lst` implements the same
+//! workflow.
 //!
 //! Run with
 //!
