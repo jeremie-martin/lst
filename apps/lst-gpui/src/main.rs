@@ -496,7 +496,7 @@ pub(crate) struct FileConflictButtonBounds {
 
 impl LstGpuiApp {
     fn new(cx: &mut Context<Self>, launch: LaunchArgs, settings: SettingsStore) -> Self {
-        typography::set_primary_font_family(&settings.settings.editor.font_family);
+        diagnostics::record_startup_mark("app_new");
         metrics::set_code_font_size(f32::from(settings.settings.editor.font_size));
         let initial_theme = theme_for_preference(settings.settings.appearance.theme, cx.window_appearance());
         cx.set_global(initial_theme);
@@ -512,6 +512,7 @@ impl LstGpuiApp {
         let settings_search_input =
             cx.new(|cx| InputField::new(cx, "Search settings and keybindings").with_key_context("Settings"));
         let settings_value_input = cx.new(|cx| InputField::new(cx, "Enter a value").with_key_context("SettingsValue"));
+        diagnostics::record_startup_mark("inputs_ready");
         let recent_focus_handle = recent_query_input.read(cx).focus_handle();
         let command_palette_focus_handle = command_palette_input.read(cx).focus_handle();
         let settings_search_focus_handle = settings_search_input.read(cx).focus_handle();
@@ -525,6 +526,7 @@ impl LstGpuiApp {
             .clone()
             .or_else(|| settings.settings.files.scratchpad_directory.clone());
         let mut model = initial_model_from_launch(launch.clone(), scratchpad_dir.as_deref());
+        diagnostics::record_startup_mark("model_loaded");
         let configured_mode = match settings.settings.editor.input_mode {
             InputModeSetting::Standard => InputMode::Standard,
             InputModeSetting::Vim => InputMode::Vim,
@@ -538,6 +540,7 @@ impl LstGpuiApp {
         });
         model.set_multi_cursor_limit(settings.settings.editor.multi_cursor_limit);
         let mut recent = RecentView::load(recent_files_path);
+        diagnostics::record_startup_mark("recent_loaded");
         for tab in model.tabs() {
             if !tab.is_scratchpad() {
                 if let Some(path) = tab.path() {
@@ -643,6 +646,7 @@ impl LstGpuiApp {
         // construction, which is itself a valid occurrence trigger.
         app.refresh_passive_occurrence_query();
         app.refresh_selection_match_query();
+        diagnostics::record_startup_mark("views_ready");
 
         app._shell_subscriptions
             .push(cx.subscribe(&find_query_input, |this, _, event: &InputFieldEvent, cx| {
@@ -1319,6 +1323,33 @@ fn theme_for_preference(preference: ThemePreference, appearance: WindowAppearanc
     }
 }
 
+/// Builds, on a background thread, what the first frame would otherwise
+/// build on the main thread while GPUI is still creating the window:
+/// tree-sitter query compilation for the launch files' languages and the
+/// editor font lookup. A scratchpad session opens a Markdown note.
+fn warm_first_frame_caches(launch: &LaunchArgs, cx: &App) {
+    let mut languages: Vec<SyntaxLanguage> = launch
+        .files
+        .iter()
+        .filter_map(|path| lst_editor::language::detect(Some(path), None))
+        .filter_map(SyntaxLanguage::from_language)
+        .collect();
+    if launch.files.is_empty() {
+        languages.push(SyntaxLanguage::Markdown);
+    }
+    languages.dedup();
+    let text_system = cx.text_system().clone();
+    let fonts = [typography::primary_font(), typography::ui_font()];
+    std::thread::spawn(move || {
+        for language in languages {
+            syntax::warm_grammar(language);
+        }
+        for font in &fonts {
+            let _ = text_system.resolve_font(font);
+        }
+    });
+}
+
 fn initial_model_from_launch(launch: LaunchArgs, scratchpad_dir: Option<&std::path::Path>) -> EditorModel {
     let mut tabs = Vec::new();
     let mut next_tab_id = 1u64;
@@ -1571,6 +1602,9 @@ fn main() {
             eprintln!("failed to load bundled Lucide icons: {error}");
         }
         let settings = SettingsStore::load();
+        diagnostics::record_startup_mark("settings_loaded");
+        typography::set_primary_font_family(&settings.settings.editor.font_family);
+        warm_first_frame_caches(&launch, cx);
         cx.bind_keys(editor_keybindings(&settings.settings.keybindings));
         cx.bind_keys(input_keybindings());
         cx.on_window_closed(|cx| {

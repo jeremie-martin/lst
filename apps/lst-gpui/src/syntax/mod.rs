@@ -91,6 +91,16 @@ pub(crate) struct CachedSyntaxHighlights {
     pub(crate) valid_lines: Vec<bool>,
 }
 
+/// Compiles the tree-sitter queries `language` highlights with, so the first
+/// frame does not pay for them. Safe from any thread; later callers share
+/// the compiled queries.
+pub(crate) fn warm_grammar(language: SyntaxLanguage) {
+    let _ = catalog::grammar(catalog::root_grammar(language));
+    if language == SyntaxLanguage::Markdown {
+        let _ = catalog::grammar(catalog::GrammarId::MarkdownInline);
+    }
+}
+
 pub(crate) fn syntax_mode_for_language(language: Option<Language>) -> SyntaxMode {
     language
         .and_then(SyntaxLanguage::from_language)

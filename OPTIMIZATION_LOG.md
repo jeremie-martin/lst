@@ -72,3 +72,15 @@ Where the time goes (perf, physical display):
    for every scenario except the 3,400-character horizontally scrolled line,
    where glyphs previously drifted sub-pixel from the caret's column grid
    through accumulated float advances; they now sit exactly on it.
+
+3. **First-frame warmup** (`main.rs`, `syntax/mod.rs`): the first frame spent
+   13 ms compiling the tree-sitter highlight query (`Query::new` runs pattern
+   analysis) and 6 ms resolving the editor font through GPUI's font database.
+   Both are now done on a background thread started right after settings load,
+   overlapping GPUI's ~57 ms window and Vulkan setup on the main thread.
+   Startup phase marks (`startup_settings_loaded_ms`, `startup_app_new_ms`,
+   `startup_inputs_ready_ms`, `startup_model_loaded_ms`,
+   `startup_recent_loaded_ms`, `startup_views_ready_ms`) attribute the rest.
+   First frame 25 -> 7 ms; `open-small` open_to_first_frame_ms 313 -> ~275.
+   What remains is GPUI: ~200 ms loading the system font database and ~57 ms
+   creating the window.
