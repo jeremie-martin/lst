@@ -4,6 +4,7 @@ use gpui::{
 };
 
 mod build_info;
+mod code_line;
 mod command_ui;
 mod diagnostics;
 mod editor_view;

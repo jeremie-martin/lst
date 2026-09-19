@@ -55,3 +55,20 @@ Where the time goes (perf, physical display):
    applied during `render` against the previous frame's geometry instead of a
    next-frame callback plus notify. Frames per key 4.05 -> 1.13 (the remainder
    is caret blink); *nested* key_to_paint p50 34 -> 9.8 ms.
+
+2. **Cell-painted code lines** (`code_line.rs`): plain monospace ASCII
+   segments are painted from a per-token glyph cache at column positions
+   instead of being shaped by cosmic-text (one rustybuzz shape plan per word).
+   Tokens are shaped once through `layout_line`, so ligatures inside
+   punctuation runs are kept; a token whose advances are not uniform cells
+   (proportional font, missing glyph) makes the segment fall back to GPUI
+   shaping, as do tabs and non-ASCII text. Each line paints inside its own
+   layer, matching GPUI's line painting, so primitives take one draw order
+   instead of one bounds-tree insertion per glyph.
+   Physical display: `latency-navigation` p50 9.3 -> 7.2 ms (p95 12.3 -> 10.1),
+   mean frame 3.7 -> 2.4 ms; `scroll-plain` prepare max 10.1 -> 3.8 ms;
+   `typing-medium` 1.32 -> 1.24 ms/char. The visual lane (baselines
+   regenerated with the previous binary on this display) is pixel-identical
+   for every scenario except the 3,400-character horizontally scrolled line,
+   where glyphs previously drifted sub-pixel from the caret's column grid
+   through accumulated float advances; they now sit exactly on it.

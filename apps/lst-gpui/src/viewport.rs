@@ -1,4 +1,5 @@
 use crate::{
+    code_line::{build_cell_line, is_cell_text, CodeLine, GlyphTokenCache},
     diagnostics,
     settings::{GuideMode, MatchBracketsSetting, RenderWhitespaceSetting},
     ui::theme::{metrics, typography, Theme},
@@ -40,6 +41,14 @@ struct CachedShapedLine {
     style_key: u64,
     font_size: Pixels,
     shaped: ShapedLine,
+}
+
+#[derive(Clone)]
+struct CachedCodeLine {
+    text: SharedString,
+    style_key: u64,
+    font_size: Pixels,
+    line: CodeLine,
 }
 
 struct CachedDisplayLine {
@@ -84,7 +93,8 @@ impl CachedDisplayLine {
 
 #[derive(Default)]
 pub(crate) struct ViewportCache {
-    code_lines: HashMap<(usize, usize, usize), CachedShapedLine>,
+    code_lines: HashMap<(usize, usize, usize), CachedCodeLine>,
+    glyph_tokens: GlyphTokenCache,
     display_lines: HashMap<usize, CachedDisplayLine>,
     wrapped_lines: HashMap<(usize, Option<usize>), Rc<[WrappedSegment]>>,
     gutter_lines: HashMap<usize, CachedShapedLine>,
@@ -137,6 +147,7 @@ impl ViewportCache {
 
     pub(crate) fn clear_shaped_lines(&mut self) {
         self.code_lines.clear();
+        self.glyph_tokens = GlyphTokenCache::default();
         self.gutter_lines.clear();
         self.marker_lines.clear();
     }
@@ -303,7 +314,7 @@ pub(crate) struct PaintedRow {
     pub(crate) display_end_char: usize,
     pub(crate) logical_end_char: usize,
     pub(crate) cursor_end_inclusive: bool,
-    pub(crate) code_line: Option<ShapedLine>,
+    pub(crate) code_line: Option<CodeLine>,
     pub(crate) gutter_line: Option<ShapedLine>,
     pub(crate) gutter_text: Option<String>,
 }
@@ -903,7 +914,7 @@ pub(crate) fn x_for_display_char(
     let Some(shaped) = shape_display_line(line_text, scale, theme, window) else {
         return px(0.0);
     };
-    let byte = char_to_byte(line_text, char_offset);
+    let byte = char_to_byte_index(line_text, char_offset);
     shaped.x_for_index(byte)
 }
 
@@ -1125,51 +1136,70 @@ fn shape_cached_line(
     Some(shaped)
 }
 
-fn shape_cached_segment(
-    cache: &mut HashMap<(usize, usize, usize), CachedShapedLine>,
+/// Builds the painted form of one segment: cells for plain monospace ASCII,
+/// otherwise a GPUI shaped line. `runs` carry the syntax colors.
+#[allow(clippy::too_many_arguments)]
+fn build_cached_segment(
+    cache: &mut HashMap<(usize, usize, usize), CachedCodeLine>,
+    glyph_tokens: &mut GlyphTokenCache,
     key: (usize, usize, usize),
     text: &str,
     runs: &[TextRun],
     style_key: u64,
     font_size: Pixels,
+    char_width: Pixels,
     window: &mut Window,
-) -> Option<ShapedLine> {
+) -> Option<CodeLine> {
     if text.is_empty() {
         return None;
     }
 
     if let Some(cached) = cache.get(&key) {
         if cached.text.as_ref() == text && cached.style_key == style_key && cached.font_size == font_size {
-            return Some(cached.shaped.clone());
+            return Some(cached.line.clone());
         }
     }
 
     let text = SharedString::from(text.to_string());
-    let shaped = window.text_system().shape_line(text.clone(), font_size, runs, None);
+    let font = runs
+        .first()
+        .map_or_else(typography::primary_font, |run| run.font.clone());
+    let cells = is_cell_text(text.as_ref())
+        .then(|| build_cell_line(glyph_tokens, text.clone(), runs, &font, font_size, char_width, window))
+        .flatten();
+    let line = match cells {
+        Some(cells) => CodeLine::Cells(cells),
+        None => CodeLine::Shaped(Rc::new(window.text_system().shape_line(
+            text.clone(),
+            font_size,
+            runs,
+            None,
+        ))),
+    };
 
     cache.insert(
         key,
-        CachedShapedLine {
+        CachedCodeLine {
             text,
             style_key,
             font_size,
-            shaped: shaped.clone(),
+            line: line.clone(),
         },
     );
-    Some(shaped)
+    Some(line)
 }
 
 fn cached_segment(
-    cache: &HashMap<(usize, usize, usize), CachedShapedLine>,
+    cache: &HashMap<(usize, usize, usize), CachedCodeLine>,
     key: (usize, usize, usize),
     text: &str,
     style_key: u64,
     font_size: Pixels,
-) -> Option<ShapedLine> {
+) -> Option<CodeLine> {
     cache
         .get(&key)
         .filter(|cached| cached.text.as_ref() == text && cached.style_key == style_key && cached.font_size == font_size)
-        .map(|cached| cached.shaped.clone())
+        .map(|cached| cached.line.clone())
 }
 
 fn expand_identifier_window(buffer: &Rope, mut window: Range<usize>) -> Range<usize> {
@@ -1218,10 +1248,10 @@ fn painted_character_windows(
         let Some(code_line) = row.code_line.as_ref() else {
             continue;
         };
-        let text = code_line.text.as_ref();
-        let text_len_chars = text.chars().count();
-        let local_start = byte_index_to_char(text, code_line.closest_index_for_x(visible_start_x)).saturating_sub(1);
-        let local_end = byte_index_to_char(text, code_line.closest_index_for_x(visible_end_x))
+        let text_len_chars = code_line.text().chars().count();
+        let local_start = code_line.closest_char_for_x(visible_start_x).saturating_sub(1);
+        let local_end = code_line
+            .closest_char_for_x(visible_end_x)
             .saturating_add(1)
             .min(text_len_chars);
         push_merged_window(
@@ -1706,13 +1736,16 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
                     &code_run,
                     theme,
                 );
-                shape_cached_segment(
+                let cache = &mut *cache;
+                build_cached_segment(
                     &mut cache.code_lines,
+                    &mut cache.glyph_tokens,
                     segment_cache_key,
                     &segment.text,
                     &code_runs,
                     code_style_key,
                     font_size,
+                    char_width,
                     window,
                 )
             });
@@ -2178,6 +2211,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
     let row_height = metrics::px_for_scale(metrics::row_height(), scale);
     let gutter = layout_metrics.gutter();
     let code_origin_x = layout_metrics.code_origin_x(bounds.left(), horizontal_scroll);
+    // Glyphs left of the gutter or right of the viewport are never visible.
+    let visible_code_x =
+        (bounds.left() + layout_metrics.gutter_width() - code_origin_x)..(bounds.right() - code_origin_x);
     let selections = selection_set.as_slice();
     let cursors = paint_cursors(&selection_set);
 
@@ -2317,7 +2353,13 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         }
 
         if let Some(code_line) = row.code_line.as_ref() {
-            let _ = code_line.paint(point(code_origin_x, row.row_top), line_height, window, cx);
+            code_line.paint(
+                point(code_origin_x, row.row_top),
+                line_height,
+                visible_code_x.clone(),
+                window,
+                cx,
+            );
         }
 
         let marker_first = structure
@@ -2427,17 +2469,7 @@ pub(crate) fn row_contains_cursor(row: &PaintedRow, cursor_char: usize) -> bool 
 
 pub(crate) fn x_for_global_char(row: &PaintedRow, global_char: usize) -> Option<Pixels> {
     let local_char = global_char.saturating_sub(row.line_start_char);
-    let code_line = row.code_line.as_ref()?;
-    Some(code_line.x_for_index(char_to_byte(code_line.text.as_ref(), local_char)))
-}
-fn char_to_byte(text: &str, char_offset: usize) -> usize {
-    text.char_indices()
-        .nth(char_offset)
-        .map(|(i, _)| i)
-        .unwrap_or(text.len())
-}
-pub(crate) fn byte_index_to_char(text: &str, byte_index: usize) -> usize {
-    text[..byte_index.min(text.len())].chars().count()
+    Some(row.code_line.as_ref()?.x_for_char(local_char))
 }
 
 #[cfg(test)]

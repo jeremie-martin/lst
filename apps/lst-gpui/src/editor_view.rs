@@ -14,9 +14,9 @@ use crate::{
         theme::metrics,
     },
     viewport::{
-        byte_index_to_char, code_char_width, ensure_wrap_layout, line_display_text, max_scroll_left, max_scroll_top,
-        scroll_left_for, scroll_to_left, scroll_to_top, scroll_top_for, visual_row_for_char, x_for_display_char,
-        ViewportLayoutMetrics, WrapLayoutInput,
+        code_char_width, ensure_wrap_layout, line_display_text, max_scroll_left, max_scroll_top, scroll_left_for,
+        scroll_to_left, scroll_to_top, scroll_top_for, visual_row_for_char, x_for_display_char, ViewportLayoutMetrics,
+        WrapLayoutInput,
     },
     EditorScrollbarDrag, EditorTabView, FocusTarget, LstGpuiApp, SmoothScroll,
 };
@@ -617,8 +617,7 @@ impl LstGpuiApp {
 
         if let Some(code_line) = row.code_line.as_ref() {
             let hit_x = (x - geometry.painted_char_width * 0.5).max(px(0.0));
-            let byte_index = code_line.closest_index_for_x(hit_x);
-            let line_char = byte_index_to_char(code_line.text.as_ref(), byte_index);
+            let line_char = code_line.closest_char_for_x(hit_x);
             (row.line_start_char + line_char).min(row.display_end_char)
         } else {
             row.line_start_char
