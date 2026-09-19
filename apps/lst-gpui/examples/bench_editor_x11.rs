@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use x11rb::connection::Connection as _;
@@ -32,6 +32,10 @@ const CLIPBOARD_TIMEOUT_MS: u64 = 20_000;
 const SCROLL_WHEEL_COUNT: usize = 240;
 const SCROLL_HALF_MS: u64 = 1_500;
 const TYPING_CHARS: usize = 320;
+const IDLE_SAMPLE_MS: u64 = 2_000;
+const LATENCY_SAMPLES: usize = 60;
+const LATENCY_SETTLE_MS: u64 = 40;
+const SMALL_RUST_MODULES: usize = 4;
 const SEARCH_QUERY: &str = "fn ";
 const MEDIUM_RUST_MODULES: usize = 64;
 const LARGE_RUST_MODULES: usize = 256;
@@ -46,6 +50,7 @@ const BUTTON_WHEEL_UP: u8 = 4;
 const BUTTON_WHEEL_DOWN: u8 = 5;
 const KEYSYM_ALT_L: u32 = 0xffe9;
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
+const KEYSYM_DOWN: u32 = 0xff54;
 const KEYSYM_ENTER: u32 = 0xff0d;
 const KEYSYM_LEFT: u32 = 0xff51;
 const KEYSYM_RIGHT: u32 = 0xff53;
@@ -65,6 +70,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         std::process::exit(2);
     });
 
+    if args.keep_temp {
+        env::set_var("LST_BENCH_KEEP_TEMP", "1");
+    }
     let session_env = resolve_session_env()?;
     apply_session_env(&session_env);
 
@@ -101,10 +109,10 @@ fn print_usage() {
 
 Options:
   --scenario <name>     all, large-paste, mixed-paste, typing-medium, typing-large, typing-plain,
-                        scroll-highlighted, scroll-plain, open-large, search-large,
-                        multi-cursor-1k
+                        scroll-highlighted, scroll-plain, open-small, open-large, search-large,
+                        multi-cursor-1k, idle, latency-typing, latency-navigation
                         (default: all)
-  --corpus <name>       override the scenario corpus: medium-rust, large-rust,
+  --corpus <name>       override the scenario corpus: small-rust, medium-rust, large-rust,
                         huge-rust-50k, large-plain, huge-plain-500k, mixed-concat,
                         huge-mixed-concat-500k
   --corpus-file <path>  use exact UTF-8 file contents for the mixed-paste scenario
@@ -112,11 +120,12 @@ Options:
                         (default: plain)
   --repetitions <n>     measured repetitions after priming (default: 7)
   --priming <n>         unreported warm-up runs (default: 1)
-  --position <name>     place typing, search, and scrolling at top, middle, or end
+  --position <name>     place typing, latency, search, and scrolling at top, middle, or end
                         (default: top)
   --typing-no-wrap      toggle word wrap off before typing scenarios
   --keep-temp-on-failure
-                        leave benchmark temp files in /tmp when a scenario fails"
+                        leave benchmark temp files in /tmp when a scenario fails
+  --keep-temp           leave benchmark temp files and traces in /tmp for inspection"
     );
 }
 
@@ -130,9 +139,13 @@ enum Scenario {
     TypingPlain,
     ScrollHighlighted,
     ScrollPlain,
+    OpenSmall,
     OpenLarge,
     SearchLarge,
     MultiCursor1k,
+    Idle,
+    LatencyTyping,
+    LatencyNavigation,
 }
 
 impl Scenario {
@@ -146,9 +159,13 @@ impl Scenario {
             "typing-plain" => Ok(Self::TypingPlain),
             "scroll-highlighted" => Ok(Self::ScrollHighlighted),
             "scroll-plain" => Ok(Self::ScrollPlain),
+            "open-small" => Ok(Self::OpenSmall),
             "open-large" => Ok(Self::OpenLarge),
             "search-large" => Ok(Self::SearchLarge),
             "multi-cursor-1k" => Ok(Self::MultiCursor1k),
+            "idle" => Ok(Self::Idle),
+            "latency-typing" => Ok(Self::LatencyTyping),
+            "latency-navigation" => Ok(Self::LatencyNavigation),
             _ => Err(format!("unknown scenario: {value}")),
         }
     }
@@ -163,9 +180,13 @@ impl Scenario {
                 Self::TypingPlain,
                 Self::ScrollHighlighted,
                 Self::ScrollPlain,
+                Self::OpenSmall,
                 Self::OpenLarge,
                 Self::SearchLarge,
                 Self::MultiCursor1k,
+                Self::Idle,
+                Self::LatencyTyping,
+                Self::LatencyNavigation,
             ],
             scenario => vec![scenario],
         }
@@ -181,9 +202,13 @@ impl Scenario {
             Self::TypingPlain => "typing-plain",
             Self::ScrollHighlighted => "scroll-highlighted",
             Self::ScrollPlain => "scroll-plain",
+            Self::OpenSmall => "open-small",
             Self::OpenLarge => "open-large",
             Self::SearchLarge => "search-large",
             Self::MultiCursor1k => "multi-cursor-1k",
+            Self::Idle => "idle",
+            Self::LatencyTyping => "latency-typing",
+            Self::LatencyNavigation => "latency-navigation",
         }
     }
 
@@ -194,15 +219,19 @@ impl Scenario {
             Self::MixedPaste => "paste_input_to_paint_ms",
             Self::TypingMedium | Self::TypingLarge | Self::TypingPlain => "typing_ms_per_char",
             Self::ScrollHighlighted | Self::ScrollPlain => "scroll_overrun_ms",
+            Self::OpenSmall => "open_to_first_frame_ms",
             Self::OpenLarge => "open_to_quiet_ms",
             Self::SearchLarge => "search_reindex_ms",
             Self::MultiCursor1k => "viewport_paint_ms",
+            Self::Idle => "idle_cpu_ms",
+            Self::LatencyTyping | Self::LatencyNavigation => "key_to_paint_ms_p50",
         }
     }
 
     fn corpus_kind(self) -> CorpusKind {
         match self {
-            Self::TypingMedium => CorpusKind::MediumRust,
+            Self::OpenSmall => CorpusKind::SmallRust,
+            Self::TypingMedium | Self::Idle => CorpusKind::MediumRust,
             Self::MixedPaste => CorpusKind::MixedConcat,
             Self::TypingPlain => CorpusKind::LargePlain,
             Self::ScrollPlain => CorpusKind::LargePlain,
@@ -212,13 +241,16 @@ impl Scenario {
             | Self::TypingLarge
             | Self::ScrollHighlighted
             | Self::OpenLarge
-            | Self::SearchLarge => CorpusKind::LargeRust,
+            | Self::SearchLarge
+            | Self::LatencyTyping
+            | Self::LatencyNavigation => CorpusKind::LargeRust,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CorpusKind {
+    SmallRust,
     MediumRust,
     LargeRust,
     HugeRust,
@@ -232,6 +264,7 @@ enum CorpusKind {
 impl CorpusKind {
     fn parse(value: &str) -> Result<Self, String> {
         match value {
+            "small-rust" => Ok(Self::SmallRust),
             "medium-rust" => Ok(Self::MediumRust),
             "large-rust" => Ok(Self::LargeRust),
             "huge-rust-50k" => Ok(Self::HugeRust),
@@ -245,7 +278,7 @@ impl CorpusKind {
 
     fn extension(self) -> &'static str {
         match self {
-            Self::MediumRust | Self::LargeRust | Self::HugeRust => "rs",
+            Self::SmallRust | Self::MediumRust | Self::LargeRust | Self::HugeRust => "rs",
             Self::LargePlain | Self::HugePlain | Self::MixedConcat | Self::HugeMixedConcat => "txt",
             Self::MultiCursor1k => "txt",
         }
@@ -253,7 +286,7 @@ impl CorpusKind {
 
     fn highlight_label(self) -> &'static str {
         match self {
-            Self::MediumRust | Self::LargeRust | Self::HugeRust => "rust-tree-sitter",
+            Self::SmallRust | Self::MediumRust | Self::LargeRust | Self::HugeRust => "rust-tree-sitter",
             Self::LargePlain | Self::HugePlain | Self::MixedConcat | Self::HugeMixedConcat => "plain",
             Self::MultiCursor1k => "plain",
         }
@@ -261,6 +294,7 @@ impl CorpusKind {
 
     fn label(self) -> &'static str {
         match self {
+            Self::SmallRust => "generated-small-rust",
             Self::MediumRust => "generated-medium-rust",
             Self::LargeRust => "generated-large-rust",
             Self::HugeRust => "generated-huge-rust-50k-lines",
@@ -355,6 +389,7 @@ struct Args {
     paste_target: PasteTarget,
     typing_no_wrap: bool,
     keep_temp_on_failure: bool,
+    keep_temp: bool,
 }
 
 fn parse_args_from<I, S>(raw_args: I) -> Result<Args, String>
@@ -372,6 +407,7 @@ where
         paste_target: PasteTarget::Plain,
         typing_no_wrap: false,
         keep_temp_on_failure: false,
+        keep_temp: false,
     };
     let mut raw_args = raw_args.into_iter().map(Into::into);
 
@@ -421,6 +457,7 @@ where
             }
             "--typing-no-wrap" => args.typing_no_wrap = true,
             "--keep-temp-on-failure" => args.keep_temp_on_failure = true,
+            "--keep-temp" => args.keep_temp = true,
             unknown => return Err(format!("unknown argument: {unknown}")),
         }
     }
@@ -527,7 +564,13 @@ impl Bench {
                 Scenario::ScrollHighlighted | Scenario::ScrollPlain => {
                     self.run_scroll(scenario, &corpus, run_index, args.position, args.keep_temp_on_failure)?
                 }
-                Scenario::OpenLarge => self.run_open_large(scenario, &corpus, run_index, args.keep_temp_on_failure)?,
+                Scenario::OpenSmall | Scenario::OpenLarge => {
+                    self.run_open(scenario, &corpus, run_index, args.keep_temp_on_failure)?
+                }
+                Scenario::Idle => self.run_idle(scenario, &corpus, run_index, args.keep_temp_on_failure)?,
+                Scenario::LatencyTyping | Scenario::LatencyNavigation => {
+                    self.run_key_latency(scenario, &corpus, run_index, args.position, args.keep_temp_on_failure)?
+                }
                 Scenario::SearchLarge => {
                     self.run_search(scenario, &corpus, run_index, args.position, args.keep_temp_on_failure)?
                 }
@@ -1318,7 +1361,7 @@ impl Bench {
         result
     }
 
-    fn run_open_large(
+    fn run_open(
         &self,
         scenario: Scenario,
         corpus: &Corpus,
@@ -1326,17 +1369,17 @@ impl Bench {
         keep_temp_on_failure: bool,
     ) -> Result<RunMetrics, Box<dyn Error>> {
         let file_path = temp_path(scenario, run_index, "file", corpus.extension);
+        let trace_path = temp_path(scenario, run_index, "trace", "log");
         fs::write(&file_path, &corpus.text)?;
 
         let title = bench_title(scenario, run_index);
         let files = [file_path.as_path()];
+        let spawn_epoch_us = epoch_micros(SystemTime::now())?;
         let open_started = Instant::now();
-        let mut child = self.spawn_editor(&files, &title, None)?;
+        let mut child = self.spawn_editor(&files, &title, Some(&trace_path))?;
         let pid = child.id();
-        let before = proc_sample(pid);
 
         let result = (|| {
-            let before = before?;
             let window = find_window(
                 &self.conn,
                 self.root,
@@ -1358,18 +1401,256 @@ impl Bench {
             )?;
             let open_to_quiet_ms = elapsed_ms(open_started);
             let after = proc_sample(pid)?;
+            let trace = read_editor_trace(&trace_path)?;
+            // The app stamps its first completed frame with the wall clock so
+            // the runner can measure from `spawn` without a window race.
+            let first_frame_epoch_us = trace
+                .last("startup_first_frame_epoch_us")
+                .ok_or_else(|| io::Error::other("missing startup_first_frame_epoch_us trace"))?;
 
             let mut metrics = RunMetrics::new(window.width, window.height);
+            metrics.set(
+                "open_to_first_frame_ms",
+                ((first_frame_epoch_us - spawn_epoch_us) / 1000.0).max(0.0),
+            );
+            add_trace_last(&mut metrics, &trace, "startup_first_frame_ms", "main_to_first_frame_ms");
             metrics.set("open_to_quiet_ms", open_to_quiet_ms);
             metrics.set("startup_ms", open_to_quiet_ms);
             metrics.set("trace_wall_ms", open_to_quiet_ms);
             metrics.set("damage_events", damage_events as f64);
-            add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
+            add_process_metrics(&mut metrics, &ProcSample::default(), &after, self.ticks_per_second);
             Ok(metrics)
         })();
 
         let terminate_result = terminate_child(&mut child);
-        cleanup_paths_if([file_path], result.is_ok() || !keep_temp_on_failure);
+        cleanup_paths_if([file_path, trace_path], result.is_ok() || !keep_temp_on_failure);
+        terminate_result?;
+        result
+    }
+
+    fn run_idle(
+        &self,
+        scenario: Scenario,
+        corpus: &Corpus,
+        run_index: usize,
+        keep_temp_on_failure: bool,
+    ) -> Result<RunMetrics, Box<dyn Error>> {
+        let file_path = temp_path(scenario, run_index, "file", corpus.extension);
+        let trace_path = temp_path(scenario, run_index, "trace", "log");
+        fs::write(&file_path, &corpus.text)?;
+
+        let title = bench_title(scenario, run_index);
+        let files = [file_path.as_path()];
+        let mut child = self.spawn_editor(&files, &title, Some(&trace_path))?;
+        let pid = child.id();
+
+        let result = (|| {
+            let startup_started = Instant::now();
+            let window = find_window(
+                &self.conn,
+                self.root,
+                &self.atoms,
+                pid,
+                &title,
+                &mut child,
+                Duration::from_millis(WINDOW_DISCOVERY_TIMEOUT_MS),
+            )?;
+            let damage = damage::DamageWrapper::create(&self.conn, window.id, damage::ReportLevel::NON_EMPTY)?;
+            self.conn.flush()?;
+            let _ = wait_for_damage_quiet(
+                &self.conn,
+                damage.damage(),
+                window.id,
+                &mut child,
+                Duration::from_millis(QUIET_MS),
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let startup_ms = elapsed_ms(startup_started);
+
+            // A focused editor with a visible caret is the realistic idle
+            // state: any blink, poll, or redraw loop shows up here.
+            focus_window_for_keyboard(&self.conn, &window)?;
+            let _ = wait_for_damage_quiet(
+                &self.conn,
+                damage.damage(),
+                window.id,
+                &mut child,
+                Duration::from_millis(QUIET_MS),
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let paint_count_before = read_editor_trace(&trace_path)?.count("viewport_paint_ms").unwrap_or(0);
+            let before = proc_sample(pid)?;
+            let idle_started = Instant::now();
+            let damage_events = count_damage_events(
+                &self.conn,
+                damage.damage(),
+                window.id,
+                &mut child,
+                Duration::from_millis(IDLE_SAMPLE_MS),
+            )?;
+            let idle_wall_ms = elapsed_ms(idle_started);
+            let after = proc_sample(pid)?;
+            let paint_count_after = read_editor_trace(&trace_path)?.count("viewport_paint_ms").unwrap_or(0);
+
+            let mut metrics = RunMetrics::new(window.width, window.height);
+            metrics.set("startup_ms", startup_ms);
+            metrics.set("idle_wall_ms", idle_wall_ms);
+            metrics.set("idle_damage_events", damage_events as f64);
+            metrics.set(
+                "idle_paint_count",
+                paint_count_after.saturating_sub(paint_count_before) as f64,
+            );
+            add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
+            metrics.set("idle_cpu_ms", metrics.get("cpu_ms")?);
+            metrics.set("rss_mb", after.vmrss_kb as f64 / 1024.0);
+            Ok(metrics)
+        })();
+
+        let terminate_result = terminate_child(&mut child);
+        cleanup_paths_if([file_path, trace_path], result.is_ok() || !keep_temp_on_failure);
+        terminate_result?;
+        result
+    }
+
+    /// Measures one keystroke at a time: inject a key, then block until the
+    /// X server reports the first damaged frame. This is the latency a user
+    /// perceives, unlike the burst throughput of the typing scenarios.
+    fn run_key_latency(
+        &self,
+        scenario: Scenario,
+        corpus: &Corpus,
+        run_index: usize,
+        position: DocumentPosition,
+        keep_temp_on_failure: bool,
+    ) -> Result<RunMetrics, Box<dyn Error>> {
+        let file_path = temp_path(scenario, run_index, "file", corpus.extension);
+        let trace_path = temp_path(scenario, run_index, "trace", "log");
+        fs::write(&file_path, &corpus.text)?;
+
+        let title = bench_title(scenario, run_index);
+        let files = [file_path.as_path()];
+        let mut child = self.spawn_editor(&files, &title, Some(&trace_path))?;
+        let pid = child.id();
+
+        let result = (|| {
+            let startup_started = Instant::now();
+            let window = find_window(
+                &self.conn,
+                self.root,
+                &self.atoms,
+                pid,
+                &title,
+                &mut child,
+                Duration::from_millis(WINDOW_DISCOVERY_TIMEOUT_MS),
+            )?;
+            let damage = damage::DamageWrapper::create(&self.conn, window.id, damage::ReportLevel::NON_EMPTY)?;
+            self.conn.flush()?;
+            let _ = wait_for_damage_quiet(
+                &self.conn,
+                damage.damage(),
+                window.id,
+                &mut child,
+                Duration::from_millis(QUIET_MS),
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
+            let startup_ms = elapsed_ms(startup_started);
+
+            focus_window_for_keyboard(&self.conn, &window)?;
+            self.position_editor(
+                position.operation_line(corpus.lines),
+                &trace_path,
+                damage.damage(),
+                window.id,
+                &mut child,
+            )?;
+            reset_editor_trace(&trace_path)?;
+            let keycode = match scenario {
+                Scenario::LatencyNavigation => self.keycodes.down,
+                _ => self.keycodes.text_keycode('x').expect("benchmark resolves lowercase x"),
+            };
+
+            let before = proc_sample(pid)?;
+            let mut samples = Vec::with_capacity(LATENCY_SAMPLES);
+            let cycle_started = Instant::now();
+            for _ in 0..LATENCY_SAMPLES {
+                // Settle on the app's own paint trace: some drivers report
+                // XDamage for a frame only once the following frame presents,
+                // which would stretch a damage-based quiet wait to the next
+                // caret blink.
+                wait_for_trace_quiet(
+                    &trace_path,
+                    "viewport_paint_ms",
+                    Duration::from_millis(LATENCY_SETTLE_MS),
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
+                drain_damage_events(&self.conn, damage.damage())?;
+                let started = Instant::now();
+                inject_key_press(&self.conn, self.root, keycode)?;
+                inject_key_release(&self.conn, self.root, keycode)?;
+                self.conn.flush()?;
+                wait_for_first_damage(
+                    &self.conn,
+                    damage.damage(),
+                    window.id,
+                    &mut child,
+                    Duration::from_millis(TRACE_TIMEOUT_MS),
+                )?;
+                samples.push(elapsed_ms(started));
+                if debug_enabled() {
+                    eprintln!("key latency sample: {:.3} ms", samples[samples.len() - 1]);
+                }
+            }
+            let key_cycle_ms = elapsed_ms(cycle_started) / LATENCY_SAMPLES as f64;
+            let after = proc_sample(pid)?;
+            let trace = read_editor_trace(&trace_path)?;
+            samples.sort_by(f64::total_cmp);
+
+            let mut metrics = RunMetrics::new(window.width, window.height);
+            metrics.set("startup_ms", startup_ms);
+            metrics.set("key_to_paint_ms_p50", percentile(&samples, 0.50));
+            metrics.set("key_to_paint_ms_p95", percentile(&samples, 0.95));
+            metrics.set("key_to_paint_ms_max", samples[samples.len() - 1]);
+            metrics.set(
+                "key_to_paint_ms_mean",
+                samples.iter().sum::<f64>() / samples.len() as f64,
+            );
+            metrics.set("key_sample_count", samples.len() as f64);
+            metrics.set("key_cycle_ms", key_cycle_ms);
+            let paint_count = trace.count("viewport_paint_ms").unwrap_or(0);
+            metrics.set("frames_per_key", paint_count as f64 / samples.len() as f64);
+            add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
+            if scenario == Scenario::LatencyTyping {
+                add_trace_aggregate(
+                    &mut metrics,
+                    &trace,
+                    "text_input_apply_ms",
+                    "text_input_apply_ms_sum",
+                    "text_input_apply_ms_max",
+                    "text_input_apply_ms_count",
+                );
+            }
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "viewport_prepare_ms",
+                "viewport_prepare_ms_sum",
+                "viewport_prepare_ms_max",
+                "viewport_prepare_ms_count",
+            );
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "viewport_paint_ms",
+                "viewport_paint_ms_sum",
+                "viewport_paint_ms_max",
+                "viewport_paint_ms_count",
+            );
+            add_frame_aggregates(&mut metrics, &trace);
+            Ok(metrics)
+        })();
+
+        let terminate_result = terminate_child(&mut child);
+        cleanup_paths_if([file_path, trace_path], result.is_ok() || !keep_temp_on_failure);
         terminate_result?;
         result
     }
@@ -1656,6 +1937,7 @@ struct Corpus {
 impl Corpus {
     fn load(kind: CorpusKind) -> Self {
         let text = match kind {
+            CorpusKind::SmallRust => generated_rust_corpus(SMALL_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
             CorpusKind::MediumRust => generated_rust_corpus(MEDIUM_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
             CorpusKind::LargeRust => generated_rust_corpus(LARGE_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
             CorpusKind::HugeRust => generated_rust_corpus(HUGE_RUST_MODULES, RUST_FUNCTIONS_PER_MODULE),
@@ -2009,13 +2291,59 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "cpu_ms",
             "peak_rss_mb",
         ],
-        Scenario::OpenLarge => &[
+        Scenario::OpenSmall => &[
+            "open_to_first_frame_ms",
+            "main_to_first_frame_ms",
             "open_to_quiet_ms",
             "damage_events",
             "user_cpu_ms",
             "sys_cpu_ms",
             "cpu_ms",
             "peak_rss_mb",
+        ],
+        Scenario::OpenLarge => &[
+            "open_to_quiet_ms",
+            "open_to_first_frame_ms",
+            "main_to_first_frame_ms",
+            "damage_events",
+            "user_cpu_ms",
+            "sys_cpu_ms",
+            "cpu_ms",
+            "peak_rss_mb",
+        ],
+        Scenario::Idle => &[
+            "idle_cpu_ms",
+            "idle_wall_ms",
+            "idle_damage_events",
+            "idle_paint_count",
+            "rss_mb",
+            "peak_rss_mb",
+            "startup_ms",
+        ],
+        Scenario::LatencyTyping | Scenario::LatencyNavigation => &[
+            "key_to_paint_ms_p50",
+            "key_to_paint_ms_p95",
+            "key_to_paint_ms_max",
+            "key_to_paint_ms_mean",
+            "key_sample_count",
+            "key_cycle_ms",
+            "frames_per_key",
+            "frame_wall_ms_mean",
+            "frame_wall_ms_max",
+            "frame_cpu_ms_sum",
+            "frame_count",
+            "text_input_apply_ms_max",
+            "text_input_apply_ms_sum",
+            "viewport_prepare_ms_max",
+            "viewport_prepare_ms_sum",
+            "viewport_paint_ms_max",
+            "viewport_paint_ms_sum",
+            "viewport_paint_ms_count",
+            "user_cpu_ms",
+            "sys_cpu_ms",
+            "cpu_ms",
+            "peak_rss_mb",
+            "startup_ms",
         ],
         Scenario::SearchLarge => &[
             "search_reindex_ms",
@@ -2045,8 +2373,16 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
 }
 
 fn print_metric(runs: &[RunMetrics], metric: &'static str) -> Result<(), Box<dyn Error>> {
-    println!("{}_runs={}", metric, join_metric_runs(runs, metric)?);
-    let median = median_metric(runs, metric)?;
+    // Secondary diagnostics may legitimately be absent from a run (for
+    // example, a paste that takes the background syntax path emits no
+    // synchronous parse timing). Report what was observed instead of
+    // failing the whole scenario.
+    let present: Vec<f64> = runs.iter().filter_map(|run| run.values.get(metric).copied()).collect();
+    if present.is_empty() {
+        return Ok(());
+    }
+    println!("{}_runs={}", metric, join_metric_runs(runs, metric));
+    let median = median_f64(&present)?;
     if is_integer_metric(metric) {
         println!("{metric}={:.0}", median);
     } else {
@@ -2055,17 +2391,15 @@ fn print_metric(runs: &[RunMetrics], metric: &'static str) -> Result<(), Box<dyn
     Ok(())
 }
 
-fn join_metric_runs(runs: &[RunMetrics], metric: &str) -> Result<String, Box<dyn Error>> {
-    let mut values = Vec::with_capacity(runs.len());
-    for run in runs {
-        let value = run.get(metric)?;
-        if is_integer_metric(metric) {
-            values.push(format!("{value:.0}"));
-        } else {
-            values.push(format!("{value:.3}"));
-        }
-    }
-    Ok(values.join(","))
+fn join_metric_runs(runs: &[RunMetrics], metric: &str) -> String {
+    runs.iter()
+        .map(|run| match run.values.get(metric) {
+            Some(value) if is_integer_metric(metric) => format!("{value:.0}"),
+            Some(value) => format!("{value:.3}"),
+            None => "n/a".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn median_metric(runs: &[RunMetrics], metric: &str) -> Result<f64, Box<dyn Error>> {
@@ -2088,6 +2422,32 @@ fn add_process_metrics(metrics: &mut RunMetrics, before: &ProcSample, after: &Pr
     metrics.set("sys_cpu_ms", sys_cpu_ms);
     metrics.set("cpu_ms", user_cpu_ms + sys_cpu_ms);
     metrics.set("peak_rss_mb", after.vmhwm_kb as f64 / 1024.0);
+}
+
+/// Per-frame wall and thread-CPU cost recorded by the app around
+/// render, prepare, and paint.
+fn add_frame_aggregates(metrics: &mut RunMetrics, trace: &EditorTrace) {
+    add_trace_aggregate(
+        metrics,
+        trace,
+        "frame_wall_ms",
+        "frame_wall_ms_sum",
+        "frame_wall_ms_max",
+        "frame_count",
+    );
+    add_trace_aggregate(
+        metrics,
+        trace,
+        "frame_cpu_ms",
+        "frame_cpu_ms_sum",
+        "frame_cpu_ms_max",
+        "frame_cpu_count",
+    );
+    if let (Some(sum), Some(count)) = (trace.sum("frame_wall_ms"), trace.count("frame_wall_ms")) {
+        if count > 0 {
+            metrics.set("frame_wall_ms_mean", sum / count as f64);
+        }
+    }
 }
 
 fn add_trace_last(metrics: &mut RunMetrics, trace: &EditorTrace, from: &str, to: &'static str) {
@@ -2259,6 +2619,40 @@ fn wait_for_trace_count(
         }
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// Waits until the trace count for `label` has been stable for `quiet`.
+fn wait_for_trace_quiet(path: &Path, label: &str, quiet: Duration, timeout: Duration) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + timeout;
+    let mut last_count = read_editor_trace(path)?.count(label).unwrap_or(0);
+    let mut last_change = Instant::now();
+    loop {
+        let count = read_editor_trace(path)?.count(label).unwrap_or(0);
+        if count != last_count {
+            last_count = count;
+            last_change = Instant::now();
+        }
+        if last_change.elapsed() >= quiet {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(format!("timed out waiting for trace {label} to go quiet")).into());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Discards queued damage reports so the next wait sees only new frames.
+fn drain_damage_events(conn: &RustConnection, damage_id: damage::Damage) -> Result<(), Box<dyn Error>> {
+    while let Some(event) = conn.poll_for_event()? {
+        if let Event::DamageNotify(notify) = event {
+            if notify.damage == damage_id {
+                conn.damage_subtract(damage_id, NONE, NONE)?;
+            }
+        }
+    }
+    conn.flush()?;
+    Ok(())
 }
 
 fn trace_line_count(path: &Path, line: &str) -> usize {
@@ -2610,6 +3004,66 @@ fn inject_key_release(
     Ok(())
 }
 
+/// Blocks until the first damage report for `window`, polling tightly so the
+/// measured latency carries at most a fraction of a millisecond of slack.
+fn wait_for_first_damage(
+    conn: &RustConnection,
+    damage_id: damage::Damage,
+    window: xproto::Window,
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        while let Some(event) = conn.poll_for_event()? {
+            if let Event::DamageNotify(notify) = event {
+                if notify.damage == damage_id && notify.drawable == window {
+                    conn.damage_subtract(damage_id, NONE, NONE)?;
+                    conn.flush()?;
+                    return Ok(());
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            if let Some(status) = child.try_wait()? {
+                return Err(io::Error::other(format!("editor exited while waiting for a frame: {status}")).into());
+            }
+            return Err(io::Error::other("timed out waiting for the first damaged frame").into());
+        }
+        thread::sleep(Duration::from_micros(200));
+    }
+}
+
+/// Counts damage reports for `window` over a fixed wall-clock window.
+fn count_damage_events(
+    conn: &RustConnection,
+    damage_id: damage::Damage,
+    window: xproto::Window,
+    child: &mut Child,
+    duration: Duration,
+) -> Result<u64, Box<dyn Error>> {
+    let deadline = Instant::now() + duration;
+    let mut damage_events = 0u64;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Err(io::Error::other(format!("editor exited while idling: {status}")).into());
+        }
+        while let Some(event) = conn.poll_for_event()? {
+            if let Event::DamageNotify(notify) = event {
+                if notify.damage == damage_id && notify.drawable == window {
+                    damage_events += 1;
+                    conn.damage_subtract(damage_id, NONE, NONE)?;
+                }
+            }
+        }
+        conn.flush()?;
+        if Instant::now() >= deadline {
+            return Ok(damage_events);
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn wait_for_damage_quiet(
     conn: &RustConnection,
     damage_id: damage::Damage,
@@ -2784,18 +3238,21 @@ fn proc_sample(pid: u32) -> Result<ProcSample, Box<dyn Error>> {
     }
 
     let status = fs::read_to_string(format!("/proc/{pid}/status"))?;
-    let vmhwm_kb = status
-        .lines()
-        .find_map(|line| {
-            let value = line.strip_prefix("VmHWM:")?;
-            value.split_whitespace().next()?.parse::<u64>().ok()
-        })
-        .unwrap_or(0);
+    let status_kb = |key: &str| {
+        status
+            .lines()
+            .find_map(|line| {
+                let value = line.strip_prefix(key)?;
+                value.split_whitespace().next()?.parse::<u64>().ok()
+            })
+            .unwrap_or(0)
+    };
 
     Ok(ProcSample {
         utime_ticks: fields[11].parse()?,
         stime_ticks: fields[12].parse()?,
-        vmhwm_kb,
+        vmhwm_kb: status_kb("VmHWM:"),
+        vmrss_kb: status_kb("VmRSS:"),
     })
 }
 
@@ -2921,6 +3378,16 @@ fn median_f64(values: &[f64]) -> Result<f64, Box<dyn Error>> {
     Ok(sorted[sorted.len() / 2])
 }
 
+/// Nearest-rank percentile of an ascending sample.
+fn percentile(sorted: &[f64], fraction: f64) -> f64 {
+    let rank = ((sorted.len() as f64 * fraction).ceil() as usize).clamp(1, sorted.len());
+    sorted[rank - 1]
+}
+
+fn epoch_micros(time: SystemTime) -> Result<f64, Box<dyn Error>> {
+    Ok(time.duration_since(UNIX_EPOCH)?.as_micros() as f64)
+}
+
 fn damage_hz_proxy(damage_events: u64, trace_wall_ms: f64) -> f64 {
     if trace_wall_ms <= 0.0 {
         0.0
@@ -2964,7 +3431,7 @@ fn bench_title(scenario: Scenario, run_index: usize) -> String {
 }
 
 fn cleanup_paths_if(paths: impl IntoIterator<Item = PathBuf>, should_cleanup: bool) {
-    if !should_cleanup {
+    if !should_cleanup || env::var_os("LST_BENCH_KEEP_TEMP").is_some() {
         return;
     }
 
@@ -2992,10 +3459,12 @@ struct SessionEnv {
     dbus_session_bus_address: Option<String>,
 }
 
+#[derive(Default)]
 struct ProcSample {
     utime_ticks: u64,
     stime_ticks: u64,
     vmhwm_kb: u64,
+    vmrss_kb: u64,
 }
 
 struct FileStats {
@@ -3032,6 +3501,7 @@ impl Atoms {
 struct Keycodes {
     alt_l: xproto::Keycode,
     control_l: xproto::Keycode,
+    down: xproto::Keycode,
     enter: xproto::Keycode,
     left: xproto::Keycode,
     right: xproto::Keycode,
@@ -3075,6 +3545,7 @@ impl Keycodes {
         Ok(Self {
             alt_l: find_keycode(&reply, setup.min_keycode, KEYSYM_ALT_L, active_group)?,
             control_l: find_keycode(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
+            down: find_keycode(&reply, setup.min_keycode, KEYSYM_DOWN, active_group)?,
             enter: find_keycode(&reply, setup.min_keycode, KEYSYM_ENTER, active_group)?,
             left: find_keycode(&reply, setup.min_keycode, KEYSYM_LEFT, active_group)?,
             right: find_keycode(&reply, setup.min_keycode, KEYSYM_RIGHT, active_group)?,

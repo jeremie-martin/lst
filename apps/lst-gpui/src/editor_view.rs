@@ -358,6 +358,7 @@ impl LstGpuiApp {
             self.smooth_scroll = Some(anim);
         }
         self.sync_viewport_state();
+        diagnostics::record_notify("smooth_scroll");
         cx.notify();
         self.schedule_smooth_scroll(window, cx);
     }
@@ -392,6 +393,7 @@ impl LstGpuiApp {
             this.reveal_scheduled = false;
             this.flush_pending_reveal(window, cx);
         });
+        diagnostics::record_notify("reveal_scheduled");
         cx.notify();
     }
 
@@ -401,6 +403,7 @@ impl LstGpuiApp {
         };
 
         if self.try_reveal_active_cursor(intent, window, cx) {
+            diagnostics::record_notify("reveal_applied");
             cx.notify();
         } else {
             self.pending_reveal = Some(intent);

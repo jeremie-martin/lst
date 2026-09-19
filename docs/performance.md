@@ -37,9 +37,11 @@ Choose the scenario whose primary metric matches the problem:
 | `mixed-paste` | `paste_input_to_paint_ms` | shell-style mixed-language paste and first paint |
 | `typing-medium`, `typing-large`, `typing-plain` | `typing_ms_per_char` | sustained editing with or without highlighting |
 | `scroll-highlighted`, `scroll-plain` | `scroll_overrun_ms` | scheduled scroll input through redraw quiet |
-| `open-large` | `open_to_quiet_ms` | process start through redraw quiet |
+| `open-small`, `open-large` | `open_to_first_frame_ms`, `open_to_quiet_ms` | process spawn through the first completed frame, and through redraw quiet |
 | `search-large` | `search_reindex_ms` | find query reindexing |
 | `multi-cursor-1k` | `viewport_paint_ms` | preparation and paint with 1,000 carets |
+| `idle` | `idle_cpu_ms` | CPU, repaints, and RSS over two focused idle seconds |
+| `latency-typing`, `latency-navigation` | `key_to_paint_ms_p50` | one key at a time: key press to first damaged frame, frames per key, per-frame cost |
 
 Examples:
 
@@ -55,7 +57,14 @@ DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
 ```
 
 `--position top|middle|end` helps distinguish local work from document-size
-work. The opt-in `huge-rust-50k`, `huge-plain-500k`, and
+work. `--keep-temp` preserves the per-run trace files, whose `notify=<reason>`
+and `startup_*_ms` lines attribute frames and startup phases.
+
+The app records per-frame `frame_wall_ms` and `frame_cpu_ms` around render,
+prepare, and paint. GPUI keeps presenting the last scene at the display rate
+for one second after input, and some drivers report XDamage for a frame only
+when the next one presents, so prefer app-side frame metrics and
+`open_to_first_frame_ms` over `*_to_quiet` metrics when judging editor work. The opt-in `huge-rust-50k`, `huge-plain-500k`, and
 `huge-mixed-concat-500k` corpora exercise the large-file envelope without
 slowing the default `all` run. `mixed-paste` can replay an exact UTF-8 payload:
 

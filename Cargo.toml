@@ -22,3 +22,9 @@ unicode-ident = "1.0"
 opt-level = 3
 lto = true
 strip = true
+
+# Release code with symbols for `perf`; never used for shipping builds.
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = false

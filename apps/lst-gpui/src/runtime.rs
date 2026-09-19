@@ -404,6 +404,7 @@ impl LstGpuiApp {
                         };
                         view.cursor_visible = next_cursor_visible;
                         if cursor_was_visible != next_cursor_visible {
+                            crate::diagnostics::record_notify("cursor_blink");
                             cx.notify();
                         }
                     })

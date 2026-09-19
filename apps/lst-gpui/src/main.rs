@@ -409,6 +409,8 @@ struct LstGpuiApp {
     theme_button_bounds_px: Option<Bounds<Pixels>>,
     theme_name_rendered: String,
     status_details_rendered: String,
+    /// Frame accounting started by `render`; `None` unless tracing.
+    frame_clock: Option<diagnostics::FrameClock>,
     /// Stack of recently closed path-backed tabs, most-recent-last. `Ctrl+Shift+T`
     /// pops the top entry and reopens it with the cursor restored. Bounded
     /// so a long-lived editor session does not grow this unboundedly.
@@ -628,6 +630,7 @@ impl LstGpuiApp {
             theme_button_bounds_px: None,
             theme_name_rendered: initial_theme.theme().name.to_string(),
             status_details_rendered: String::new(),
+            frame_clock: None,
             closed_tabs_history: Vec::new(),
             input_mode_cli_override: launch.input_mode.is_some(),
             settings,
@@ -788,6 +791,7 @@ impl LstGpuiApp {
         }
 
         if self.force_editor_focus {
+            diagnostics::record_notify("focus_forced");
             window.focus(&self.focus_handle);
             self.focus_last_applied = FocusTarget::Editor;
             self.force_editor_focus = false;
@@ -803,6 +807,7 @@ impl LstGpuiApp {
         let handle = self.handle_for(target, cx);
         let needs_focus = just_changed || !handle.is_focused(window);
         if needs_focus {
+            diagnostics::record_notify("focus_apply");
             window.focus(&handle);
             let label = if just_changed {
                 "focus_applied"
@@ -959,6 +964,7 @@ impl LstGpuiApp {
         self.select_query_after_panel_open(old_find_state, cx);
         self.handle_model_effects(effects, cx);
         if notify_after_update {
+            diagnostics::record_notify("model_update");
             cx.notify();
         }
     }
@@ -1121,6 +1127,7 @@ impl LstGpuiApp {
                     false,
                 );
                 view.syntax_state = Some(Rc::new(RefCell::new(state)));
+                diagnostics::record_notify("syntax_build");
                 cx.notify();
             });
         })
@@ -1543,6 +1550,7 @@ pub(crate) fn elapsed_ms(started: Instant) -> f64 {
 }
 
 fn main() {
+    diagnostics::mark_process_start();
     diagnostics::install();
 
     let launch = parse_launch_args();
@@ -1554,6 +1562,7 @@ fn main() {
     }
 
     Application::new().run(move |cx: &mut App| {
+        diagnostics::record_startup_mark("app_init");
         if let Err(error) = cx
             .text_system()
             .add_fonts(vec![Cow::Borrowed(lucide_icons::LUCIDE_FONT_BYTES)])
@@ -1585,10 +1594,15 @@ fn main() {
             },
             move |_, cx| {
                 let launch = launch.clone();
-                cx.new(move |cx| LstGpuiApp::new(cx, launch, settings))
+                let app = cx.new(move |cx| LstGpuiApp::new(cx, launch, settings));
+                diagnostics::record_startup_mark("model_ready");
+                app
             },
         ) {
-            Ok(window) => window,
+            Ok(window) => {
+                diagnostics::record_startup_mark("window_open");
+                window
+            }
             Err(err) => {
                 eprintln!(
                     "lst failed to open a GPUI window: {err}. On this host, Xvfb is not sufficient because GPUI \

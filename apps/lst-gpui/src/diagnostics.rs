@@ -5,7 +5,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::panic;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, Once, OnceLock};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use time::OffsetDateTime;
 
@@ -29,6 +30,80 @@ pub(crate) fn record_operation(label: &str, bytes: usize, lines: usize, clipboar
     if let Err(err) = append_operation(file, label, bytes, lines, clipboard_read_ms, apply_ms) {
         eprintln!("lst_gpui failed to write benchmark trace: {err}");
     }
+}
+
+static PROCESS_START: OnceLock<Instant> = OnceLock::new();
+
+/// Records when `main` started so the first-frame trace can measure from it.
+pub(crate) fn mark_process_start() {
+    let _ = PROCESS_START.set(Instant::now());
+}
+
+/// Records how long after `main` started a startup phase completed.
+pub(crate) fn record_startup_mark(label: &str) {
+    if let Some(started) = PROCESS_START.get() {
+        record_ms(&format!("startup_{label}_ms"), started.elapsed().as_secs_f64() * 1000.0);
+    }
+}
+
+/// Wall and thread-CPU clocks captured at the start of a frame so its cost
+/// can be recorded once painting completes.
+#[derive(Clone, Copy)]
+pub(crate) struct FrameClock {
+    wall: Instant,
+    cpu_ns: u64,
+}
+
+fn thread_cpu_ns() -> u64 {
+    let mut spec = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: `spec` is a valid, writable timespec for the duration of the call.
+    if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut spec) } != 0 {
+        return 0;
+    }
+    spec.tv_sec as u64 * 1_000_000_000 + spec.tv_nsec as u64
+}
+
+/// Starts frame accounting; returns `None` when tracing is disabled so the
+/// render path pays nothing.
+pub(crate) fn frame_clock() -> Option<FrameClock> {
+    trace_enabled().then(|| FrameClock {
+        wall: Instant::now(),
+        cpu_ns: thread_cpu_ns(),
+    })
+}
+
+/// Records the wall and CPU cost of the frame that `clock` started.
+pub(crate) fn record_frame(clock: FrameClock) {
+    record_ms("frame_wall_ms", clock.wall.elapsed().as_secs_f64() * 1000.0);
+    record_ms(
+        "frame_cpu_ms",
+        thread_cpu_ns().saturating_sub(clock.cpu_ns) as f64 / 1_000_000.0,
+    );
+}
+
+/// Records the reason a redraw was requested, for frame-count diagnostics.
+pub(crate) fn record_notify(reason: &str) {
+    record_label("notify", reason);
+}
+
+/// Records the first completed editor frame, once per process. The wall-clock
+/// stamp lets an external runner measure from process spawn.
+pub(crate) fn record_first_frame() {
+    static RECORDED: Once = Once::new();
+    RECORDED.call_once(|| {
+        if !trace_enabled() {
+            return;
+        }
+        if let Some(started) = PROCESS_START.get() {
+            record_ms("startup_first_frame_ms", started.elapsed().as_secs_f64() * 1000.0);
+        }
+        if let Ok(since_epoch) = SystemTime::now().duration_since(UNIX_EPOCH) {
+            record_line(
+                "startup_first_frame_epoch_us",
+                format_args!("{}", since_epoch.as_micros()),
+            );
+        }
+    });
 }
 
 pub(crate) fn trace_enabled() -> bool {

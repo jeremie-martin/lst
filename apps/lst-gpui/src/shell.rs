@@ -1849,6 +1849,24 @@ fn modal_key_is_unmodified(event: &KeyDownEvent) -> bool {
 
 impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.frame_clock = diagnostics::frame_clock();
+        if diagnostics::trace_enabled() {
+            static FIRST_RENDER: std::sync::Once = std::sync::Once::new();
+            FIRST_RENDER.call_once(|| diagnostics::record_startup_mark("first_render"));
+            diagnostics::record_startup_mark("frame");
+            let bounds = window.bounds();
+            diagnostics::record_label(
+                "frame_ctx",
+                &format!(
+                    "{}x{}@{:.2};active={};hovered={}",
+                    f32::from(bounds.size.width),
+                    f32::from(bounds.size.height),
+                    window.scale_factor(),
+                    window.is_window_active(),
+                    window.is_window_hovered()
+                ),
+            );
+        }
         if let Some(command) = self.pending_workspace_command.take() {
             self.dispatch_workspace_command(command, window, cx);
         }
@@ -2160,12 +2178,16 @@ impl Render for LstGpuiApp {
                                                                             .borrow()
                                                                             .painted_wrap_columns
                                                                     {
+                                                                        diagnostics::record_notify("wrap_columns");
                                                                         cx.notify(prepare_entity.entity_id());
                                                                     }
                                                                     prepare_entity.update(cx, |this, cx| {
                                                                         if this.status_details()
                                                                             != this.status_details_rendered
                                                                         {
+                                                                            diagnostics::record_notify(
+                                                                                "status_details",
+                                                                            );
                                                                             cx.notify();
                                                                         }
                                                                         this.emit_state_trace(window);
@@ -2214,6 +2236,12 @@ impl Render for LstGpuiApp {
                                                                         started.elapsed().as_secs_f64() * 1000.0,
                                                                     );
                                                                 }
+                                                                diagnostics::record_first_frame();
+                                                                entity.update(cx, |this, _| {
+                                                                    if let Some(clock) = this.frame_clock.take() {
+                                                                        diagnostics::record_frame(clock);
+                                                                    }
+                                                                });
                                                             },
                                                         )
                                                         .size_full()
