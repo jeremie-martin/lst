@@ -383,6 +383,18 @@ impl LstGpuiApp {
         self.pending_reveal = Some(intent);
     }
 
+    /// Applies a queued reveal immediately when painted geometry exists.
+    /// Called from `render` so the reveal costs no extra frame.
+    pub(crate) fn reveal_pending_cursor_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(intent) = self.pending_reveal else {
+            return;
+        };
+        if self.try_reveal_active_cursor(intent, window, cx) {
+            self.pending_reveal = None;
+            diagnostics::record_notify("reveal_inline");
+        }
+    }
+
     pub(crate) fn schedule_pending_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pending_reveal.is_none() || self.reveal_scheduled {
             return;

@@ -2001,6 +2001,10 @@ impl Render for LstGpuiApp {
             );
             buffer_content_height(layout.total_rows, scale) + viewport_height * 0.4
         };
+        // Reveal the caret against the previous frame's viewport geometry so
+        // the scroll offset is final before this frame paints. Only the very
+        // first frame lacks geometry and falls back to a next-frame reveal.
+        self.reveal_pending_cursor_now(window, cx);
         let total_content_width = (!show_wrap).then(|| {
             let mut cache = active_cache.borrow_mut();
             let width = max_unwrapped_line_width(&mut cache, &buffer, revision, char_width, scale, theme, window);
