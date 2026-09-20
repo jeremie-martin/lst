@@ -14,9 +14,9 @@ use gpui::{
 };
 use std::{collections::HashMap, ops::Range, rc::Rc};
 
-/// Tokens longer than this are shaped as a whole line instead of cached;
-/// a pathological run of punctuation should not fill the cache.
-const MAX_TOKEN_LEN: usize = 64;
+/// Cells a ligature glyph may extend past the cell it starts in; glyphs
+/// starting this far left of the visible range are still painted.
+const LIGATURE_CELL_MARGIN: usize = 8;
 /// Bound on cached tokens per viewport; the cache is cleared when reached.
 const MAX_CACHED_TOKENS: usize = 16 * 1024;
 /// Tolerance when checking that a token's shaped width is a whole number of
@@ -107,9 +107,7 @@ impl CellLine {
     fn paint(&self, origin: gpui::Point<Pixels>, line_height: Pixels, visible: Range<Pixels>, window: &mut Window) {
         let padding_top = (line_height - self.ascent - self.descent) / 2.0;
         let baseline_y = origin.y + padding_top + self.ascent;
-        // Ligatures span a few cells; keep a small margin so a glyph that
-        // starts left of the visible range still paints its visible part.
-        let left = visible.start - self.char_width * f32::from(MAX_TOKEN_LEN as u16);
+        let left = visible.start - self.char_width * LIGATURE_CELL_MARGIN as f32;
         let line_bounds = Bounds::new(origin, size(self.char_width * self.text.len() as f32, line_height));
         // One layer per line, as GPUI's own line painting does: primitives
         // inside a layer share its draw order instead of each taking a
@@ -224,8 +222,8 @@ impl GlyphTokenCache {
     }
 }
 
-/// Whether `text` can be painted from cells: ASCII without tabs or control
-/// characters other than what the display text already carries.
+/// Whether `text` can be painted from cells: ASCII without tabs, whose
+/// advance depends on the shaper.
 pub(crate) fn is_cell_text(text: &str) -> bool {
     text.bytes().all(|byte| byte.is_ascii() && byte != b'\t')
 }
@@ -252,7 +250,7 @@ pub(crate) fn build_cell_line(
     while start < bytes.len() {
         let class = token_class(bytes[start]);
         let mut end = start + 1;
-        while end < bytes.len() && token_class(bytes[end]) == class && end - start < MAX_TOKEN_LEN {
+        while end < bytes.len() && token_class(bytes[end]) == class {
             end += 1;
         }
         if class != TokenClass::Space {
