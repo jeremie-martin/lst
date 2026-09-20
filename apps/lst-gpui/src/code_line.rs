@@ -9,9 +9,7 @@
 //! keeps GPUI's shaped line for anything else (non-ASCII text, tabs, fonts
 //! whose advances are not uniform).
 
-use gpui::{
-    point, px, size, App, Bounds, Font, FontId, GlyphId, Hsla, Pixels, ShapedLine, SharedString, TextRun, Window,
-};
+use gpui::{point, px, App, Font, FontId, GlyphId, Hsla, Pixels, ShapedLine, SharedString, TextRun, Window};
 use std::{collections::HashMap, ops::Range, rc::Rc};
 
 /// Cells a ligature glyph may extend past the cell it starts in; glyphs
@@ -71,7 +69,9 @@ impl CodeLine {
     }
 
     /// Paints the segment with its top-left corner at `origin`. `visible` is
-    /// the x range, relative to `origin`, that can appear on screen.
+    /// the x range, relative to `origin`, that can appear on screen. The
+    /// caller paints inside a layer it opened for every line it paints, so
+    /// the glyphs share that layer's draw order.
     pub(crate) fn paint(
         &self,
         origin: gpui::Point<Pixels>,
@@ -116,32 +116,26 @@ impl CellLine {
         let padding_top = (line_height - self.ascent - self.descent) / 2.0;
         let baseline_y = origin.y + padding_top + self.ascent;
         let left = visible.start - self.char_width * LIGATURE_CELL_MARGIN as f32;
-        let line_bounds = Bounds::new(origin, size(self.char_width * self.text.len() as f32, line_height));
-        // One layer per line, as GPUI's own line painting does: primitives
-        // inside a layer share its draw order instead of each taking a
-        // bounds-tree insertion, and the caret painted afterwards stays on top.
-        window.paint_layer(line_bounds, |window| {
-            let mut colors = self.colors.iter().peekable();
-            for glyph in &self.glyphs {
-                if glyph.x >= visible.end {
-                    break;
-                }
-                while colors.peek().is_some_and(|(end, _)| glyph.index >= *end) {
-                    colors.next();
-                }
-                if glyph.x < left {
-                    continue;
-                }
-                let color = colors.peek().map_or(gpui::black(), |(_, color)| *color);
-                let _ = window.paint_glyph(
-                    point(origin.x + glyph.x, baseline_y),
-                    glyph.font_id,
-                    glyph.id,
-                    self.font_size,
-                    color,
-                );
+        let mut colors = self.colors.iter().peekable();
+        for glyph in &self.glyphs {
+            if glyph.x >= visible.end {
+                break;
             }
-        });
+            while colors.peek().is_some_and(|(end, _)| glyph.index >= *end) {
+                colors.next();
+            }
+            if glyph.x < left {
+                continue;
+            }
+            let color = colors.peek().map_or(gpui::black(), |(_, color)| *color);
+            let _ = window.paint_glyph(
+                point(origin.x + glyph.x, baseline_y),
+                glyph.font_id,
+                glyph.id,
+                self.font_size,
+                color,
+            );
+        }
     }
 }
 

@@ -2427,10 +2427,16 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         }
     }
 
+    // Rows never overlap, so painting is done in passes rather than row by
+    // row: every relation that matters (backgrounds under text, text under
+    // carets, the gutter over scrolled text) holds within a row either way,
+    // and the passes let all text share one layer and the gutter one quad
+    // instead of one bounds-tree insertion per row.
+    let selection_head_in_row = |row: &PaintedRow| !cursors_in_row(&cursors, row).is_empty();
+
+    // Backgrounds and highlights.
     for row in rows.iter() {
-        let row_cursors = cursors_in_row(&cursors, row);
-        let selection_head_in_row = !row_cursors.is_empty();
-        if selection_head_in_row {
+        if selection_head_in_row(row) {
             let highlight_left = bounds.left() + layout_metrics.gutter_width();
             window.paint_quad(fill(
                 Bounds::new(
@@ -2520,27 +2526,37 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 window,
             );
         }
+    }
 
-        if let Some(code_line) = row.code_line.as_ref() {
-            code_line.paint(
-                point(code_origin_x, row.row_top),
-                line_height,
-                visible_code_x.clone(),
-                window,
-                cx,
-            );
+    // Text and markers, in one layer: primitives inside a layer share its
+    // draw order instead of each taking a bounds-tree insertion, and the
+    // carets painted afterwards stay on top.
+    window.paint_layer(bounds, |window| {
+        for row in rows.iter() {
+            if let Some(code_line) = row.code_line.as_ref() {
+                code_line.paint(
+                    point(code_origin_x, row.row_top),
+                    line_height,
+                    visible_code_x.clone(),
+                    window,
+                    cx,
+                );
+            }
+
+            let marker_first = structure
+                .markers
+                .partition_point(|marker| marker.at < row.line_start_char);
+            let marker_last = marker_first
+                + structure.markers[marker_first..].partition_point(|marker| row_contains_cursor(row, marker.at));
+            for marker in &structure.markers[marker_first..marker_last] {
+                let x = code_origin_x + x_for_global_char(row, marker.at).unwrap_or_else(|| px(0.0));
+                let _ = marker.shaped.paint(point(x, row.row_top), line_height, window, cx);
+            }
         }
+    });
 
-        let marker_first = structure
-            .markers
-            .partition_point(|marker| marker.at < row.line_start_char);
-        let marker_last = marker_first
-            + structure.markers[marker_first..].partition_point(|marker| row_contains_cursor(row, marker.at));
-        for marker in &structure.markers[marker_first..marker_last] {
-            let x = code_origin_x + x_for_global_char(row, marker.at).unwrap_or_else(|| px(0.0));
-            let _ = marker.shaped.paint(point(x, row.row_top), line_height, window, cx);
-        }
-
+    // Outlines and carets.
+    for row in rows.iter() {
         for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), row, Clone::clone) {
             if let Some(bounds) = range_bounds(row, bracket, code_origin_x, row_height, scale) {
                 paint_outline(
@@ -2553,7 +2569,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         }
 
         if focused && cursor_visible {
-            for cursor in row_cursors {
+            for cursor in cursors_in_row(&cursors, row) {
                 let cursor_char = cursor.char;
                 let block_cursor = vim_mode == vim::Mode::Normal && cursor.collapsed;
                 let cursor_x = code_origin_x
@@ -2598,21 +2614,27 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 rgb(theme.role.accent),
             ));
         }
+    }
 
-        if let Some(gutter) = gutter {
-            // The gutter shares the editor color, but it still owns a fixed
-            // occlusion layer. Without this fill, horizontally scrolled text
-            // and decorations can paint underneath the line numbers.
-            window.paint_quad(fill(
-                Bounds::new(point(bounds.left(), row.row_top), size(gutter.width, row_height)),
-                rgb(theme.role.editor_bg),
-            ));
-            if let Some(gutter_line) = row.gutter_line.as_ref() {
-                let width = gutter_line.width();
-                let gutter_x = bounds.left() + gutter.text_right - width;
-                gutter_line.paint(point(gutter_x, row.row_top), line_height, px(0.0)..width, window, cx);
+    // The gutter shares the editor color, but it still owns a fixed
+    // occlusion layer. Without this fill, horizontally scrolled text and
+    // decorations can paint underneath the line numbers. Rows are
+    // contiguous, so one quad covers what one per row did.
+    if let (Some(gutter), Some(first), Some(last)) = (gutter, rows.first(), rows.last()) {
+        let gutter_bounds = Bounds::from_corners(
+            point(bounds.left(), first.row_top),
+            point(bounds.left() + gutter.width, last.row_top + row_height),
+        );
+        window.paint_quad(fill(gutter_bounds, rgb(theme.role.editor_bg)));
+        window.paint_layer(gutter_bounds, |window| {
+            for row in rows.iter() {
+                if let Some(gutter_line) = row.gutter_line.as_ref() {
+                    let width = gutter_line.width();
+                    let gutter_x = bounds.left() + gutter.text_right - width;
+                    gutter_line.paint(point(gutter_x, row.row_top), line_height, px(0.0)..width, window, cx);
+                }
             }
-        }
+        });
     }
 }
 
