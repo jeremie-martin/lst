@@ -320,6 +320,9 @@ struct CachedCodeCharWidth {
 #[derive(Clone)]
 pub(crate) struct PaintedRow {
     pub(crate) row_top: Pixels,
+    /// Logical line this row shows a segment of, and where it starts.
+    pub(crate) line_ix: usize,
+    pub(crate) logical_line_start_char: usize,
     pub(crate) line_start_char: usize,
     pub(crate) display_end_char: usize,
     pub(crate) logical_end_char: usize,
@@ -1318,17 +1321,25 @@ fn push_merged_window(windows: &mut Vec<Range<usize>>, window: Range<usize>) {
     windows.push(window);
 }
 
+/// Characters of one logical line that painted rows can show on screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PaintedWindow {
+    chars: Range<usize>,
+    line_ix: usize,
+    line_start_char: usize,
+}
+
 fn painted_character_windows(
     rows: &[PaintedRow],
     bounds: Bounds<Pixels>,
     layout_metrics: ViewportLayoutMetrics,
     horizontal_scroll: Pixels,
-) -> Vec<Range<usize>> {
+) -> Vec<PaintedWindow> {
     let code_origin_x = layout_metrics.code_origin_x(bounds.left(), horizontal_scroll);
     let code_clip_left = bounds.left() + layout_metrics.gutter_width();
     let visible_start_x = (code_clip_left - code_origin_x).max(px(0.0));
     let visible_end_x = (bounds.right() - code_origin_x).max(visible_start_x);
-    let mut windows: Vec<Range<usize>> = Vec::new();
+    let mut windows: Vec<PaintedWindow> = Vec::new();
 
     for row in rows {
         let Some(code_line) = row.code_line.as_ref() else {
@@ -1340,10 +1351,23 @@ fn painted_character_windows(
             .closest_char_for_x(visible_end_x)
             .saturating_add(1)
             .min(text_len_chars);
-        push_merged_window(
-            &mut windows,
-            row.line_start_char + local_start..row.line_start_char + local_end,
-        );
+        let chars = row.line_start_char + local_start..row.line_start_char + local_end;
+        if chars.is_empty() {
+            continue;
+        }
+        // Wrapped rows of one line describe adjacent pieces; keep one window
+        // per line so identifier and marker scans walk each line once.
+        if let Some(previous) = windows.last_mut() {
+            if previous.line_ix == row.line_ix && chars.start <= previous.chars.end {
+                previous.chars.end = previous.chars.end.max(chars.end);
+                continue;
+            }
+        }
+        windows.push(PaintedWindow {
+            chars,
+            line_ix: row.line_ix,
+            line_start_char: row.logical_line_start_char,
+        });
     }
 
     windows
@@ -1589,10 +1613,52 @@ fn selection_set_contains(selection_set: &SelectionSet, at: usize) -> bool {
         .is_some_and(|selection| selection.range().contains(&at))
 }
 
+struct MarkerScan<'a> {
+    render_whitespace: RenderWhitespaceSetting,
+    selection_set: &'a SelectionSet,
+    render_control_characters: bool,
+    whitespace_bounds: Option<WhitespaceBounds>,
+    candidates: Vec<(usize, char, bool)>,
+}
+
+impl MarkerScan<'_> {
+    /// Classifies the character `ch` at buffer offset `at` (column `local`
+    /// of its line) given its neighbours.
+    fn visit(&mut self, at: usize, local: usize, ch: char, previous: Option<char>, next: Option<char>) {
+        if matches!(ch, ' ' | '\t') && self.render_whitespace != RenderWhitespaceSetting::None {
+            let in_run = ch == ' ' && (previous == Some(' ') || next == Some(' '));
+            let leading = self
+                .whitespace_bounds
+                .as_ref()
+                .is_none_or(|bounds| bounds.first_non_whitespace.is_none_or(|first| local < first));
+            let trailing = self
+                .whitespace_bounds
+                .as_ref()
+                .is_none_or(|bounds| bounds.last_non_whitespace.is_none_or(|last| local > last));
+            let visible = match self.render_whitespace {
+                RenderWhitespaceSetting::None => false,
+                RenderWhitespaceSetting::Selection => selection_set_contains(self.selection_set, at),
+                RenderWhitespaceSetting::Trailing => trailing,
+                RenderWhitespaceSetting::Boundary => ch == '\t' || leading || trailing || in_run,
+                RenderWhitespaceSetting::All => true,
+            };
+            if visible {
+                self.candidates
+                    .push((at, if ch == '\t' { '\u{2192}' } else { '\u{00b7}' }, true));
+            }
+        }
+        if self.render_control_characters {
+            if let Some(glyph) = control_picture(ch) {
+                self.candidates.push((at, glyph, false));
+            }
+        }
+    }
+}
+
 fn visible_marker_candidates(
     cache: &mut ViewportCache,
     buffer: &Rope,
-    visible_windows: &[Range<usize>],
+    visible_windows: &[PaintedWindow],
     render_whitespace: RenderWhitespaceSetting,
     selection_set: &SelectionSet,
     render_control_characters: bool,
@@ -1613,70 +1679,59 @@ fn visible_marker_candidates(
         Vec::new()
     };
     let selection_scan_only = render_whitespace == RenderWhitespaceSetting::Selection && !render_control_characters;
+    let classify_whitespace = matches!(
+        render_whitespace,
+        RenderWhitespaceSetting::Trailing | RenderWhitespaceSetting::Boundary
+    );
 
-    let mut candidates = Vec::new();
+    let mut scan = MarkerScan {
+        render_whitespace,
+        selection_set,
+        render_control_characters,
+        whitespace_bounds: None,
+        candidates: Vec::new(),
+    };
     for window in visible_windows {
-        let start = window.start.min(buffer.len_chars());
-        if start >= window.end || start == buffer.len_chars() {
-            continue;
-        }
-        if selection_scan_only && !overlaps_any_sorted(&(start..window.end), &selected_ranges) {
-            continue;
-        }
-        let line_ix = buffer.char_to_line(start);
-        let line_start = buffer.line_to_char(line_ix);
-        let end = window.end.min(buffer.len_chars());
+        let start = window.chars.start.min(buffer.len_chars());
+        let end = window.chars.end.min(buffer.len_chars());
         if start >= end {
             continue;
         }
-        debug_assert_eq!(
-            buffer.char_to_line(end - 1),
-            line_ix,
-            "painted windows stay within one logical line"
-        );
-        let whitespace_bounds = matches!(
-            render_whitespace,
-            RenderWhitespaceSetting::Trailing | RenderWhitespaceSetting::Boundary
-        )
-        .then(|| cached_line_whitespace_bounds(cache, buffer, line_ix));
-
-        // Neighbouring characters come from the same slice walk; only the
-        // two window edges need a rope lookup.
-        let mut previous = start.checked_sub(1).and_then(|before| buffer.get_char(before));
-        let mut chars = buffer.slice(start..end).chars().peekable();
-        let mut at = start;
-        while let Some(ch) = chars.next() {
-            let next = chars.peek().copied().or_else(|| buffer.get_char(end));
-            if matches!(ch, ' ' | '\t') && render_whitespace != RenderWhitespaceSetting::None {
-                let local = at - line_start;
-                let in_run = ch == ' ' && (previous == Some(' ') || next == Some(' '));
-                let leading = whitespace_bounds
-                    .as_ref()
-                    .is_none_or(|bounds| bounds.first_non_whitespace.is_none_or(|first| local < first));
-                let trailing = whitespace_bounds
-                    .as_ref()
-                    .is_none_or(|bounds| bounds.last_non_whitespace.is_none_or(|last| local > last));
-                let visible = match render_whitespace {
-                    RenderWhitespaceSetting::None => false,
-                    RenderWhitespaceSetting::Selection => selection_set_contains(selection_set, at),
-                    RenderWhitespaceSetting::Trailing => trailing,
-                    RenderWhitespaceSetting::Boundary => ch == '\t' || leading || trailing || in_run,
-                    RenderWhitespaceSetting::All => true,
-                };
-                if visible {
-                    candidates.push((at, if ch == '\t' { '\u{2192}' } else { '\u{00b7}' }, true));
-                }
+        if selection_scan_only && !overlaps_any_sorted(&(start..end), &selected_ranges) {
+            continue;
+        }
+        let line_start = window.line_start_char;
+        scan.whitespace_bounds =
+            classify_whitespace.then(|| cached_line_whitespace_bounds(cache, buffer, window.line_ix));
+        let line = cached_display_line(cache, buffer, window.line_ix);
+        let local_start = start - line_start;
+        let local_end = (end - line_start).min(line.char_count);
+        if line.text.len() == line.char_count {
+            // ASCII line: bytes are characters, so the window is a slice of
+            // the cached display text and its neighbours are adjacent bytes.
+            let bytes = line.text.as_bytes();
+            let mut previous = local_start.checked_sub(1).map(|index| bytes[index] as char);
+            for local in local_start..local_end.min(bytes.len()) {
+                let ch = bytes[local] as char;
+                let next = bytes.get(local + 1).map(|byte| *byte as char);
+                scan.visit(line_start + local, local, ch, previous, next);
+                previous = Some(ch);
             }
-            if render_control_characters {
-                if let Some(glyph) = control_picture(ch) {
-                    candidates.push((at, glyph, false));
-                }
+        } else {
+            // Neighbouring characters come from the same slice walk; only
+            // the two window edges need a rope lookup.
+            let mut previous = start.checked_sub(1).and_then(|before| buffer.get_char(before));
+            let mut chars = buffer.slice(start..end).chars().peekable();
+            let mut at = start;
+            while let Some(ch) = chars.next() {
+                let next = chars.peek().copied().or_else(|| buffer.get_char(end));
+                scan.visit(at, at - line_start, ch, previous, next);
+                previous = Some(ch);
+                at += 1;
             }
-            previous = Some(ch);
-            at += 1;
         }
     }
-    candidates
+    scan.candidates
 }
 
 pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, window: &mut Window) -> ViewportPaintState {
@@ -1896,6 +1951,8 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
 
             rows.push(PaintedRow {
                 row_top,
+                line_ix,
+                logical_line_start_char: line_start_char,
                 line_start_char: segment_start_char,
                 display_end_char: segment_end_char,
                 logical_end_char: if segment_ix + 1 == segment_count {
@@ -1914,7 +1971,8 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     if let Some(started) = rows_started {
         diagnostics::record_ms("viewport_rows_ms", started.elapsed().as_secs_f64() * 1000.0);
     }
-    let visible_windows = painted_character_windows(&rows, bounds, layout_metrics, scroll_left);
+    let painted_windows = painted_character_windows(&rows, bounds, layout_metrics, scroll_left);
+    let visible_windows: Vec<Range<usize>> = painted_windows.iter().map(|window| window.chars.clone()).collect();
 
     let structure_started = diagnostics::trace_enabled().then(Instant::now);
     let structure_current = structure.revision == revision;
@@ -2081,7 +2139,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     let marker_candidates = visible_marker_candidates(
         &mut cache,
         buffer,
-        &visible_windows,
+        &painted_windows,
         render_whitespace,
         selection_set,
         render_control_characters,
@@ -2674,7 +2732,11 @@ mod tests {
     #[test]
     fn whitespace_and_control_markers_scan_only_painted_character_windows() {
         let buffer = Rope::from_str(&" ".repeat(200_000));
-        let visible = 100_000..100_008;
+        let visible = PaintedWindow {
+            chars: 100_000..100_008,
+            line_ix: 0,
+            line_start_char: 0,
+        };
         let selection_set = SelectionSet::single(Selection::from_range(100_002..100_005, false));
         let mut cache = ViewportCache::default();
 
@@ -2692,8 +2754,11 @@ mod tests {
             (100_002..100_005).collect::<Vec<_>>()
         );
         assert!(
-            cache.display_lines.is_empty(),
-            "selection markers must not materialize or classify the whole logical line"
+            cache
+                .display_lines
+                .values()
+                .all(|line| line.whitespace_bounds.is_none()),
+            "selection markers must not classify the whole logical line"
         );
 
         let collapsed = SelectionSet::single(Selection::from_range(100_003..100_003, false));
@@ -2708,6 +2773,7 @@ mod tests {
         assert!(candidates.is_empty(), "no selected text means no selection markers");
 
         let controls = Rope::from_str(&"\u{1}".repeat(200_000));
+        let mut cache = ViewportCache::default();
         let candidates = visible_marker_candidates(
             &mut cache,
             &controls,
@@ -2716,8 +2782,48 @@ mod tests {
             &selection_set,
             true,
         );
-        assert_eq!(candidates.len(), visible.len());
-        assert!(cache.display_lines.is_empty());
+        assert_eq!(candidates.len(), visible.chars.len());
+    }
+
+    #[test]
+    fn marker_scan_agrees_between_ascii_and_multibyte_lines() {
+        // Same layout of spaces, tabs, and a control character; one line
+        // takes the byte walk and the other the rope walk.
+        let ascii = "a  b\tc \u{1}d  ";
+        let multibyte = "\u{e9}  b\tc \u{1}d  ";
+        let candidates = |text: &str| {
+            let buffer = Rope::from_str(text);
+            let window = PaintedWindow {
+                chars: 0..buffer.len_chars(),
+                line_ix: 0,
+                line_start_char: 0,
+            };
+            let selection_set = SelectionSet::single(Selection::from_range(0..0, false));
+            let mut cache = ViewportCache::default();
+            visible_marker_candidates(
+                &mut cache,
+                &buffer,
+                std::slice::from_ref(&window),
+                RenderWhitespaceSetting::Boundary,
+                &selection_set,
+                true,
+            )
+        };
+        assert_eq!(candidates(ascii), candidates(multibyte));
+        assert_eq!(
+            candidates(ascii)
+                .iter()
+                .map(|(at, glyph, _)| (*at, *glyph))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, '\u{00b7}'),
+                (2, '\u{00b7}'),
+                (4, '\u{2192}'),
+                (7, '\u{2401}'),
+                (9, '\u{00b7}'),
+                (10, '\u{00b7}'),
+            ]
+        );
     }
 
     #[test]
