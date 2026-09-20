@@ -185,7 +185,6 @@ pub struct EditorModel {
     effects: Vec<EditorEffect>,
     owned_clipboard: Option<OwnedClipboard>,
     overtype: bool,
-    wrap_layout_cache: Option<ModelWrapLayoutCache>,
     smart_selection_history: Option<SmartSelectionHistory>,
     multi_cursor_limit: usize,
     column_selection: Option<ColumnSelectionState>,
@@ -215,12 +214,6 @@ struct OwnedClipboard {
     text: String,
     kind: ClipboardKind,
 }
-struct ModelWrapLayoutCache {
-    tab_id: TabId,
-    revision: u64,
-    wrap_columns: usize,
-    layout: wrap::WrapLayout,
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FindSubmit {
     Panel,
@@ -244,7 +237,6 @@ impl EditorModel {
             effects: Vec::new(),
             owned_clipboard: None,
             overtype: false,
-            wrap_layout_cache: None,
             smart_selection_history: None,
             multi_cursor_limit: 10_000,
             column_selection: None,
@@ -270,21 +262,6 @@ impl EditorModel {
     /// callers that only have a handle on the model.
     pub fn take_active_buffer_delta(&mut self) -> BufferDelta {
         self.active_tab_mut().take_buffer_delta()
-    }
-    fn ensure_active_wrap_layout(&mut self, wrap_columns: usize) {
-        let tab_id = self.active_tab_id();
-        let revision = self.active_tab().revision();
-        if self.wrap_layout_cache.as_ref().is_some_and(|cache| {
-            cache.tab_id == tab_id && cache.revision == revision && cache.wrap_columns == wrap_columns
-        }) {
-            return;
-        }
-        self.wrap_layout_cache = Some(ModelWrapLayoutCache {
-            tab_id,
-            revision,
-            wrap_columns,
-            layout: wrap::build_wrap_layout_for_rope(self.active_tab().buffer(), wrap_columns, true),
-        });
     }
     pub fn tabs(&self) -> &[EditorTab] {
         &self.tabs
@@ -315,7 +292,6 @@ impl EditorModel {
     }
     pub fn set_show_wrap(&mut self, show_wrap: bool) {
         self.show_wrap = show_wrap;
-        self.wrap_layout_cache = None;
     }
     pub fn gutter_mode(&self) -> GutterMode {
         self.gutter_mode
@@ -735,15 +711,7 @@ impl EditorModel {
             return self.apply_selection_state(motion::vertical(self.active_tab(), delta, select, snap));
         }
 
-        self.ensure_active_wrap_layout(wrap_columns);
-        let state = {
-            let layout = &self
-                .wrap_layout_cache
-                .as_ref()
-                .expect("wrap layout cache was just populated")
-                .layout;
-            motion::display_rows_with_layout(self.active_tab(), layout, delta, select, snap)
-        };
+        let state = motion::display_rows(self.active_tab(), wrap_columns, delta, select, snap);
         self.apply_selection_state(state)
     }
     pub fn move_visual_line_boundary(&mut self, to_end: bool, select: bool, wrap_columns: usize) {

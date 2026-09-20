@@ -151,135 +151,104 @@ pub fn line_for_visual_row(layout: &WrapLayout, visual_row: usize) -> usize {
         .min(layout.line_row_starts.len().saturating_sub(2))
 }
 
-pub fn visual_row_for_position<T: AsRef<str>>(
-    lines: &[T],
-    line: usize,
-    column: usize,
-    layout: &WrapLayout,
-) -> Option<usize> {
-    let line_start_row = layout.line_row_starts.get(line).copied()?;
-    let display_text = trim_display_line(lines.get(line)?.as_ref());
-    let display_column = column.min(display_text.chars().count());
-    let row_in_line = if layout.show_wrap {
-        cursor_visual_row_in_line(display_text, display_column, layout.wrap_columns)
-    } else {
-        0
-    };
-    Some(line_start_row + row_in_line)
-}
-
-pub fn visual_row_for_position_in_rope(
-    buffer: &Rope,
-    line: usize,
-    column: usize,
-    layout: &WrapLayout,
-) -> Option<usize> {
-    let line_start_row = layout.line_row_starts.get(line).copied()?;
-    let display_text = crate::selection::line_display_text(buffer, line);
-    let display_column = column.min(display_text.chars().count());
-    let row_in_line = if layout.show_wrap {
-        cursor_visual_row_in_line(&display_text, display_column, layout.wrap_columns)
-    } else {
-        0
-    };
-    Some(line_start_row + row_in_line)
-}
-
-pub fn display_row_target<T: AsRef<str>>(
-    lines: &[T],
-    line: usize,
-    column: usize,
-    preferred_column: Option<usize>,
-    delta: isize,
-    layout: &WrapLayout,
-) -> Option<DisplayRowTarget> {
-    if lines.is_empty() || !layout.show_wrap {
-        return None;
-    }
-
-    let display_text = trim_display_line(lines.get(line)?.as_ref());
-    let column = column.min(display_text.chars().count());
-    let segment_row = cursor_visual_row_in_line(display_text, column, layout.wrap_columns);
-    let visual_row = layout.line_row_starts.get(line).copied()? + segment_row;
-    let target_visual_row = if delta.is_negative() {
-        visual_row.saturating_sub(delta.unsigned_abs())
-    } else {
-        (visual_row + delta as usize).min(layout.total_rows.saturating_sub(1))
-    };
-
-    if target_visual_row == visual_row {
-        return None;
-    }
-
-    let segments = wrap_segments(display_text, layout.wrap_columns);
-    let current_segment = segments
-        .get(segment_row)
-        .or_else(|| segments.last())
-        .expect("wrap_segments always returns at least one segment");
-    let preferred_column = preferred_column.unwrap_or_else(|| column.saturating_sub(current_segment.start_col));
-    let target_line = line_for_visual_row(layout, target_visual_row);
-    let target_text = trim_display_line(lines.get(target_line)?.as_ref());
-    let target_segments = wrap_segments(target_text, layout.wrap_columns);
-    let target_row_in_line = target_visual_row - layout.line_row_starts[target_line];
-    let target_segment = target_segments
-        .get(target_row_in_line)
-        .or_else(|| target_segments.last())
-        .expect("wrap_segments always returns at least one segment");
-    let target_column = target_segment.start_col + preferred_column.min(target_segment.text.chars().count());
-
-    Some(DisplayRowTarget {
-        line: target_line,
-        column: target_column,
-        preferred_column,
-    })
-}
-
+/// Finds the line and column `delta` display rows away from `(line, column)`
+/// by walking neighbouring lines, so the cost is proportional to the rows
+/// moved rather than the document size. Rows past either end clamp to the
+/// first row of the document or the last row of its last line. Returns
+/// `None` when the caret would not move.
 pub fn display_row_target_in_rope(
     buffer: &Rope,
     line: usize,
     column: usize,
     preferred_column: Option<usize>,
     delta: isize,
-    layout: &WrapLayout,
+    wrap_columns: usize,
 ) -> Option<DisplayRowTarget> {
-    if buffer.len_lines() == 0 || !layout.show_wrap {
+    if buffer.len_lines() == 0 {
         return None;
     }
-
+    let line = line.min(buffer.len_lines() - 1);
     let display_text = crate::selection::line_display_text(buffer, line);
     let column = column.min(display_text.chars().count());
-    let segment_row = cursor_visual_row_in_line(&display_text, column, layout.wrap_columns);
-    let visual_row = layout.line_row_starts.get(line).copied()? + segment_row;
-    let target_visual_row = if delta.is_negative() {
-        visual_row.saturating_sub(delta.unsigned_abs())
+    let segments = wrap_segments(&display_text, wrap_columns);
+    let segment_row = cursor_visual_row_in_line(&display_text, column, wrap_columns).min(segments.len() - 1);
+    let preferred_column = preferred_column.unwrap_or_else(|| column.saturating_sub(segments[segment_row].start_col));
+
+    let (target_line, target_row_in_line) = if delta >= 0 {
+        walk_rows_down(buffer, line, segments.len(), segment_row, delta as usize, wrap_columns)
     } else {
-        (visual_row + delta as usize).min(layout.total_rows.saturating_sub(1))
+        walk_rows_up(buffer, line, segment_row, delta.unsigned_abs(), wrap_columns)
     };
-    if target_visual_row == visual_row {
+    if target_line == line && target_row_in_line == segment_row {
         return None;
     }
 
-    let segments = wrap_segments(&display_text, layout.wrap_columns);
-    let current_segment = segments
-        .get(segment_row)
-        .or_else(|| segments.last())
-        .expect("wrap_segments always returns at least one segment");
-    let preferred_column = preferred_column.unwrap_or_else(|| column.saturating_sub(current_segment.start_col));
-    let target_line = line_for_visual_row(layout, target_visual_row);
-    let target_text = crate::selection::line_display_text(buffer, target_line);
-    let target_segments = wrap_segments(&target_text, layout.wrap_columns);
-    let target_row_in_line = target_visual_row - layout.line_row_starts[target_line];
+    let target_segments = if target_line == line {
+        segments
+    } else {
+        wrap_segments(&crate::selection::line_display_text(buffer, target_line), wrap_columns)
+    };
     let target_segment = target_segments
         .get(target_row_in_line)
         .or_else(|| target_segments.last())
         .expect("wrap_segments always returns at least one segment");
     let target_column = target_segment.start_col + preferred_column.min(target_segment.text.chars().count());
-
     Some(DisplayRowTarget {
         line: target_line,
         column: target_column,
         preferred_column,
     })
+}
+
+/// Walks `remaining` rows down from `row_in_line` of `line`, whose row count
+/// is `line_rows`; clamps to the last row of the last line.
+fn walk_rows_down(
+    buffer: &Rope,
+    line: usize,
+    line_rows: usize,
+    row_in_line: usize,
+    remaining: usize,
+    wrap_columns: usize,
+) -> (usize, usize) {
+    if row_in_line + remaining < line_rows {
+        return (line, row_in_line + remaining);
+    }
+    let mut remaining = remaining - (line_rows - row_in_line);
+    let mut current = line;
+    let mut current_rows = line_rows;
+    for next in line + 1..buffer.len_lines() {
+        let rows = visual_line_count_for_rope_line(buffer.line(next), wrap_columns);
+        if remaining < rows {
+            return (next, remaining);
+        }
+        remaining -= rows;
+        current = next;
+        current_rows = rows;
+    }
+    (current, current_rows - 1)
+}
+
+/// Walks `remaining` rows up from `row_in_line` of `line`; clamps to the
+/// first row of the document.
+fn walk_rows_up(
+    buffer: &Rope,
+    line: usize,
+    row_in_line: usize,
+    remaining: usize,
+    wrap_columns: usize,
+) -> (usize, usize) {
+    if remaining <= row_in_line {
+        return (line, row_in_line - remaining);
+    }
+    let mut remaining = remaining - row_in_line - 1;
+    for previous in (0..line).rev() {
+        let rows = visual_line_count_for_rope_line(buffer.line(previous), wrap_columns);
+        if remaining < rows {
+            return (previous, rows - 1 - remaining);
+        }
+        remaining -= rows;
+    }
+    (0, 0)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -446,4 +415,71 @@ fn cell_width(repr: char, col: usize) -> usize {
 
 fn trim_display_line(line: &str) -> &str {
     line.strip_suffix('\r').unwrap_or(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The previous implementation: resolve rows through a full-document
+    /// layout. Kept as the oracle for the local walk.
+    fn display_row_target_via_layout(
+        buffer: &Rope,
+        line: usize,
+        column: usize,
+        delta: isize,
+        wrap_columns: usize,
+    ) -> Option<(usize, usize)> {
+        let layout = build_wrap_layout_for_rope(buffer, wrap_columns, true);
+        let display_text = crate::selection::line_display_text(buffer, line);
+        let column = column.min(display_text.chars().count());
+        let segment_row = cursor_visual_row_in_line(&display_text, column, wrap_columns);
+        let visual_row = layout.line_row_starts[line] + segment_row;
+        let target_visual_row = if delta.is_negative() {
+            visual_row.saturating_sub(delta.unsigned_abs())
+        } else {
+            (visual_row + delta as usize).min(layout.total_rows.saturating_sub(1))
+        };
+        if target_visual_row == visual_row {
+            return None;
+        }
+        let segments = wrap_segments(&display_text, wrap_columns);
+        let current = segments.get(segment_row).or_else(|| segments.last()).unwrap();
+        let preferred = column.saturating_sub(current.start_col);
+        let target_line = line_for_visual_row(&layout, target_visual_row);
+        let target_text = crate::selection::line_display_text(buffer, target_line);
+        let target_segments = wrap_segments(&target_text, wrap_columns);
+        let row_in_line = target_visual_row - layout.line_row_starts[target_line];
+        let segment = target_segments
+            .get(row_in_line)
+            .or_else(|| target_segments.last())
+            .unwrap();
+        Some((
+            target_line,
+            segment.start_col + preferred.min(segment.text.chars().count()),
+        ))
+    }
+
+    #[test]
+    fn local_row_walk_matches_the_full_layout_for_every_position_and_delta() {
+        let text = "short\n\nthe quick brown fox jumps over the lazy dog again and again\r\n\
+                    x\n\tindented tab line with several words inside\nend";
+        let buffer = Rope::from_str(text);
+        for wrap_columns in [1, 4, 9, 17, 80] {
+            for line in 0..buffer.len_lines() {
+                let len = crate::selection::line_display_text(&buffer, line).chars().count();
+                for column in 0..=len {
+                    for delta in -12isize..=12 {
+                        let expected = display_row_target_via_layout(&buffer, line, column, delta, wrap_columns);
+                        let actual = display_row_target_in_rope(&buffer, line, column, None, delta, wrap_columns)
+                            .map(|target| (target.line, target.column));
+                        assert_eq!(
+                            actual, expected,
+                            "line {line} column {column} delta {delta} cols {wrap_columns}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

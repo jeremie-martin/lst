@@ -60,27 +60,24 @@ pub(crate) fn vertical(tab: &EditorTab, delta: isize, select: bool, snap: bool) 
         transform_with_goal(tab, selection, target, select, goal)
     })
 }
-pub(crate) fn display_rows_with_layout(
+pub(crate) fn display_rows(
     tab: &EditorTab,
-    layout: &wrap::WrapLayout,
+    wrap_columns: usize,
     delta: isize,
     select: bool,
     snap: bool,
 ) -> Option<SelectionState> {
-    if !layout.show_wrap {
-        return vertical(tab, delta, select, snap);
-    }
     map(tab, |index, selection| {
         let position = char_to_position(tab.buffer(), selection.cursor());
         let goal = goal_for(tab, index, selection);
-        let preferred = display_preferred(tab, layout, position, goal);
+        let preferred = display_preferred(tab, wrap_columns, position, goal);
         let row_target = wrap::display_row_target_in_rope(
             tab.buffer(),
             position.line,
             position.column,
             Some(preferred),
             delta,
-            layout,
+            wrap_columns,
         );
         let target = row_target
             .map(|target| position_to_char(tab.buffer(), Position::new(target.line, target.column)))
@@ -245,21 +242,20 @@ fn transform_with_goal(
     });
     SelectionTransform::with_columns(selection, goal, visible_column)
 }
-fn display_preferred(tab: &EditorTab, layout: &wrap::WrapLayout, position: Position, goal: CursorGoal) -> usize {
+fn display_preferred(tab: &EditorTab, wrap_columns: usize, position: Position, goal: CursorGoal) -> usize {
     if !tab.selection_set().has_multiple() && tab.preferred_column().is_none() {
-        return current_visual_column(tab.buffer(), layout, position);
+        return current_visual_column(tab.buffer(), wrap_columns, position);
     }
     match goal {
         CursorGoal::Column(column) => column,
         CursorGoal::LineEnd => display_line_char_len(tab, position.line),
     }
 }
-fn current_visual_column(buffer: &ropey::Rope, layout: &wrap::WrapLayout, position: Position) -> usize {
-    let current_visual_row = wrap::visual_row_for_position_in_rope(buffer, position.line, position.column, layout)
-        .unwrap_or(layout.line_row_starts[position.line]);
-    let row_in_line = current_visual_row.saturating_sub(layout.line_row_starts[position.line]);
+fn current_visual_column(buffer: &ropey::Rope, wrap_columns: usize, position: Position) -> usize {
     let current_line = crate::selection::line_display_text(buffer, position.line);
-    let segments = wrap::wrap_segments(&current_line, layout.wrap_columns);
+    let column = position.column.min(current_line.chars().count());
+    let row_in_line = wrap::cursor_visual_row_in_line(&current_line, column, wrap_columns);
+    let segments = wrap::wrap_segments(&current_line, wrap_columns);
     let current_segment = segments
         .get(row_in_line)
         .or_else(|| segments.last())
