@@ -1,6 +1,6 @@
 diff -ru gpui-0.2.2/src/platform/linux/text_system.rs gpui-0.2.2/src/platform/linux/text_system.rs
 --- gpui-0.2.2/src/platform/linux/text_system.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/platform/linux/text_system.rs	2026-09-20 22:33:28.963872850 +0200
++++ gpui-0.2.2/src/platform/linux/text_system.rs	2026-09-21 00:13:12.619776301 +0200
 @@ -53,7 +53,13 @@
  impl CosmicTextSystem {
      pub(crate) fn new() -> Self {
@@ -161,8 +161,28 @@ diff -ru gpui-0.2.2/src/platform/linux/text_system.rs gpui-0.2.2/src/platform/li
          self.0.write().add_fonts(fonts)
 diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/linux/x11/client.rs
 --- gpui-0.2.2/src/platform/linux/x11/client.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/platform/linux/x11/client.rs	2026-09-20 22:42:22.737180487 +0200
-@@ -302,6 +302,14 @@
++++ gpui-0.2.2/src/platform/linux/x11/client.rs	2026-09-21 00:42:32.605340920 +0200
+@@ -67,6 +67,9 @@
+ };
+ 
+ /// Value for DeviceId parameters which selects all devices.
++/// lst patch: refresh-timer period while no X11 events have arrived for a while.
++const IDLE_REFRESH_PERIOD: Duration = Duration::from_micros(1_000_000 / 60);
++
+ pub(crate) const XINPUT_ALL_DEVICES: xinput::DeviceId = 0;
+ 
+ /// Value for DeviceId parameters which selects all device groups. Events that
+@@ -171,6 +174,9 @@
+ pub struct X11ClientState {
+     pub(crate) loop_handle: LoopHandle<'static, X11Client>,
+     pub(crate) event_loop: Option<calloop::EventLoop<'static, X11Client>>,
++    /// lst patch: last time any X11 event batch arrived; the refresh timer
++    /// ticks at the monitor rate for a second after it and at 60 Hz otherwise.
++    pub(crate) last_event_batch: Instant,
+ 
+     pub(crate) last_click: Instant,
+     pub(crate) last_mouse_button: Option<MouseButton>,
+@@ -302,6 +308,14 @@
  
  impl X11Client {
      pub(crate) fn new() -> anyhow::Result<Self> {
@@ -177,7 +197,7 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
          let event_loop = EventLoop::try_new()?;
  
          let (common, main_receiver) = LinuxCommon::new(event_loop.get_signal());
-@@ -411,7 +419,10 @@
+@@ -411,7 +425,10 @@
              .to_string();
          let keyboard_layout = LinuxKeyboardLayout::new(layout_name.into());
  
@@ -189,15 +209,24 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
  
          let resource_database = x11rb::resource_manager::new_from_default(&xcb_connection)
              .context("Failed to create resource database")?;
-@@ -608,6 +619,7 @@
+@@ -471,6 +488,7 @@
+         xcb_flush(&xcb_connection);
+ 
+         Ok(X11Client(Rc::new(RefCell::new(X11ClientState {
++            last_event_batch: Instant::now(),
+             modifiers: Modifiers::default(),
+             capslock: Capslock::default(),
+             last_modifiers_changed_event: Modifiers::default(),
+@@ -608,6 +626,8 @@
              if events.is_empty() && windows_to_refresh.is_empty() {
                  break;
              }
 +            let input_received = !events.is_empty();
++            self.0.borrow_mut().last_event_batch = Instant::now();
  
              for window in windows_to_refresh.into_iter() {
                  let mut state = self.0.borrow_mut();
-@@ -665,6 +677,25 @@
+@@ -665,6 +685,25 @@
                      }
                  }
              }
@@ -223,7 +252,7 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
          }
          Ok(())
      }
-@@ -1740,21 +1771,29 @@
+@@ -1740,21 +1779,29 @@
                  // Ideally this would be re-queried when the window changes screens, but there
                  // doesn't seem to be an efficient / straightforward way to do this. Should also be
                  // updated when screen configurations change.
@@ -268,7 +297,7 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
                      None => {
                          log::error!(
                              "Failed to get screen mode info from xrandr, \
-@@ -1796,6 +1835,7 @@
+@@ -1796,16 +1843,30 @@
                              window.refresh(RequestFrameOptions {
                                  require_presentation: expose_event_received,
                                  force_render: false,
@@ -276,6 +305,30 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
                              });
                          }
                          xcb_connection
+                     };
+                     client.process_x11_events(&xcb_connection).log_err();
+ 
++                    // lst patch: input draws immediately, so the monitor-rate
++                    // tick only matters while animations and GPUI's one-second
++                    // re-presentation after input can be running. Otherwise
++                    // tick at 60 Hz, the cadence the unpatched client used
++                    // on this host, so an idle window costs no extra wakeups.
++                    let recently_active = client.0.borrow().last_event_batch.elapsed()
++                        < Duration::from_millis(1_200);
++                    let period = if recently_active {
++                        refresh_rate
++                    } else {
++                        refresh_rate.max(IDLE_REFRESH_PERIOD)
++                    };
++
+                     // Take into account that some frames have been skipped
+                     let now = Instant::now();
+                     while instant < now {
+-                        instant += refresh_rate;
++                        instant += period;
+                     }
+                     calloop::timer::TimeoutAction::ToInstant(instant)
+                 }
 diff -ru gpui-0.2.2/src/platform/windows/events.rs gpui-0.2.2/src/platform/windows/events.rs
 --- gpui-0.2.2/src/platform/windows/events.rs	2006-07-24 03:21:28.000000000 +0200
 +++ gpui-0.2.2/src/platform/windows/events.rs	2026-09-20 21:56:54.673870699 +0200
@@ -303,17 +356,47 @@ diff -ru gpui-0.2.2/src/platform.rs gpui-0.2.2/src/platform.rs
  pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
 diff -ru gpui-0.2.2/src/window.rs gpui-0.2.2/src/window.rs
 --- gpui-0.2.2/src/window.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/window.rs	2026-09-20 21:56:54.665080350 +0200
-@@ -1023,6 +1023,9 @@
++++ gpui-0.2.2/src/window.rs	2026-09-21 00:38:23.650028527 +0200
+@@ -1023,6 +1023,25 @@
              let next_frame_callbacks = next_frame_callbacks.clone();
              let last_input_timestamp = last_input_timestamp.clone();
              move |request_frame_options| {
 +                if request_frame_options.only_if_dirty && !invalidator.is_dirty() {
 +                    return;
 +                }
++                // Keep presenting the current scene for 1 extra second since the
++                // last input to prevent the display from underclocking the refresh rate.
++                let needs_present = request_frame_options.require_presentation
++                    || needs_present.get()
++                    || (active.get()
++                        && last_input_timestamp.get().elapsed() < Duration::from_secs(1));
++                // lst patch: an idle tick with nothing to run, draw, or present
++                // returns before entering an app update, so the periodic timer
++                // costs a wakeup rather than a frame's bookkeeping.
++                if !invalidator.is_dirty()
++                    && !request_frame_options.force_render
++                    && !needs_present
++                    && next_frame_callbacks.borrow().is_empty()
++                {
++                    return;
++                }
                  let next_frame_callbacks = next_frame_callbacks.take();
                  if !next_frame_callbacks.is_empty() {
                      handle
+@@ -1034,13 +1053,6 @@
+                         .log_err();
+                 }
+ 
+-                // Keep presenting the current scene for 1 extra second since the
+-                // last input to prevent the display from underclocking the refresh rate.
+-                let needs_present = request_frame_options.require_presentation
+-                    || needs_present.get()
+-                    || (active.get()
+-                        && last_input_timestamp.get().elapsed() < Duration::from_secs(1));
+-
+                 if invalidator.is_dirty() || request_frame_options.force_render {
+                     measure("frame duration", || {
+                         handle
 --- gpui-0.2.2/Cargo.toml	1970-01-01 01:00:01.000000000 +0100
 +++ gpui-0.2.2/Cargo.toml	2026-09-20 22:51:45.805506100 +0200
 @@ -104,130 +104,6 @@

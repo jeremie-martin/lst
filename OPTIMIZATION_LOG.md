@@ -311,3 +311,52 @@ taffy passes) made no measurable difference and was not kept. Reducing the
 chrome to fewer, shallower elements is the remaining app-side lever for
 frame cost; every option changes element structure and therefore needs the
 pixel lane, so it is left for a dedicated change.
+
+### Idle wakeups and the final numbers
+
+The 144 Hz timer raised `idle` from 30 to 40-50 ms per 2 s: the extra
+wakeups are kernel time (timerfd, epoll, socket poll), not app work. The
+timer now runs at the monitor rate only for 1.2 s after an X11 event batch
+(animations start from input, and GPUI re-presents for one second after it)
+and at the previous 60 Hz cadence otherwise; an idle tick with nothing to
+draw, run, or present returns before entering an app update. `idle` is back
+to 20-30 ms per 2 s while scrolling still renders at 144 fps.
+
+Environment note: after a monitor power cycle in the middle of the session
+(both outputs are 4K afterwards), Vulkan device creation got slower for
+every binary, so app_init measured ~185 ms for a build that measured
+~135 ms before. The final table therefore compares the unpatched production
+binary and the final build back to back in the same environment.
+
+| Scenario | Metric | Unpatched (119a528, production build) | Final |
+| --- | --- | --- | --- |
+| `open-small` | open_to_first_frame_ms | 334 | 244 |
+| `latency-typing` | key_to_paint_ms p50 / p95 | 11.2 / 17.9 | 8.1 / 11.4 |
+| `latency-navigation` | key_to_paint_ms p50 / p95 | 10.6 / 17.8 | 5.5 / 8.7 |
+| `latency-edit-navigation` | key_to_paint_ms p50 / p95 | 8.4 / 17.4 | 6.0 / 8.4 |
+| `idle` | idle_cpu_ms per 2 s | 30 | 20-30 |
+| `typing-medium` / `-large` / `-plain` | typing_ms_per_char | 1.17 / 1.35 / 0.79 | 1.16 / 1.31 / 0.62 |
+| `scroll-plain` | frames rendered in the 3 s scroll | 205 (60 fps) | 469 (144 fps), prepare 0.24 ms/frame |
+| `multi-cursor-1k` | viewport_paint_ms | 5.7 | 5.8 |
+| `search-large` | search_reindex_ms | 0.27 | 0.31 |
+| `open-large` | open_to_quiet_ms | 1452 | 1369 |
+
+Verification: `cargo test`, `cargo clippy --all-targets --all-features`,
+the full nested X11 lane (265 tests; one off-screen-cursor test timed out
+while the monitors were powered off and passes on rerun), and the physical
+visual lane with baselines regenerated per scenario from the unpatched
+binary: all ten scenarios are pixel-identical.
+
+## Not done, and why (updated)
+
+- GPUI's per-frame element work for the ~35 chrome elements (~0.95 ms) and
+  its per-glyph paint path (~0.5 ms for a full 4K viewport) are the
+  remaining frame cost; both need element restructuring or deeper GPUI
+  changes and the pixel lane.
+- Vulkan instance and device creation (~120 ms, NVIDIA driver, no layers)
+  and surface/swapchain creation (~45 ms) bound startup; the former is
+  overlapped with the font scan, the latter needs the window.
+- tree-sitter's incremental reparse stays synchronous: 0.36 ms per
+  keystroke mid-file, up to ~1 ms with error recovery at the top of a
+  660 KB file.
+- Memory is driver-dominated (~200 MB of the ~300 MB RSS on an empty file).

@@ -15,11 +15,16 @@ Every change is marked `lst patch` in the source.
    After handling a batch of X11 input events, every window that the input
    left dirty is now drawn and presented immediately; clean windows and
    next-frame callbacks are left to the timer as before.
-2. **Fastest monitor refresh rate** (`src/platform/linux/x11/client.rs`).
-   The refresh timer took the mode of the first CRTC, which on a
-   multi-monitor host can be a slower secondary display (60 Hz here while
-   the editor sits on a 144 Hz monitor). It now uses the fastest active
-   CRTC. Animations such as smooth scrolling tick at that rate.
+2. **Fastest monitor refresh rate, only while active**
+   (`src/platform/linux/x11/client.rs`, `src/window.rs`). The refresh timer
+   took the mode of the first CRTC, which on a multi-monitor host can be a
+   slower secondary display (60 Hz here while the editor sat on a 144 Hz
+   monitor). It now uses the fastest active CRTC for 1.2 s after any X11
+   event batch, which covers animations such as smooth scrolling and GPUI's
+   own one-second re-presentation after input, and falls back to a 60 Hz
+   tick otherwise so an idle window costs no more wakeups than before. A
+   tick with nothing to run, draw, or present also returns before entering
+   an app update.
 3. **Parallel system font scan** (`src/platform/linux/text_system.rs`,
    `Cargo.toml`). `FontSystem::new()` walks every fontconfig directory and
    parses every font file on the main thread before anything else can

@@ -1026,6 +1026,22 @@ impl Window {
                 if request_frame_options.only_if_dirty && !invalidator.is_dirty() {
                     return;
                 }
+                // Keep presenting the current scene for 1 extra second since the
+                // last input to prevent the display from underclocking the refresh rate.
+                let needs_present = request_frame_options.require_presentation
+                    || needs_present.get()
+                    || (active.get()
+                        && last_input_timestamp.get().elapsed() < Duration::from_secs(1));
+                // lst patch: an idle tick with nothing to run, draw, or present
+                // returns before entering an app update, so the periodic timer
+                // costs a wakeup rather than a frame's bookkeeping.
+                if !invalidator.is_dirty()
+                    && !request_frame_options.force_render
+                    && !needs_present
+                    && next_frame_callbacks.borrow().is_empty()
+                {
+                    return;
+                }
                 let next_frame_callbacks = next_frame_callbacks.take();
                 if !next_frame_callbacks.is_empty() {
                     handle
@@ -1036,13 +1052,6 @@ impl Window {
                         })
                         .log_err();
                 }
-
-                // Keep presenting the current scene for 1 extra second since the
-                // last input to prevent the display from underclocking the refresh rate.
-                let needs_present = request_frame_options.require_presentation
-                    || needs_present.get()
-                    || (active.get()
-                        && last_input_timestamp.get().elapsed() < Duration::from_secs(1));
 
                 if invalidator.is_dirty() || request_frame_options.force_render {
                     measure("frame duration", || {

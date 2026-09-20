@@ -67,6 +67,9 @@ use crate::{
 };
 
 /// Value for DeviceId parameters which selects all devices.
+/// lst patch: refresh-timer period while no X11 events have arrived for a while.
+const IDLE_REFRESH_PERIOD: Duration = Duration::from_micros(1_000_000 / 60);
+
 pub(crate) const XINPUT_ALL_DEVICES: xinput::DeviceId = 0;
 
 /// Value for DeviceId parameters which selects all device groups. Events that
@@ -171,6 +174,9 @@ struct ScrollAxisState {
 pub struct X11ClientState {
     pub(crate) loop_handle: LoopHandle<'static, X11Client>,
     pub(crate) event_loop: Option<calloop::EventLoop<'static, X11Client>>,
+    /// lst patch: last time any X11 event batch arrived; the refresh timer
+    /// ticks at the monitor rate for a second after it and at 60 Hz otherwise.
+    pub(crate) last_event_batch: Instant,
 
     pub(crate) last_click: Instant,
     pub(crate) last_mouse_button: Option<MouseButton>,
@@ -482,6 +488,7 @@ impl X11Client {
         xcb_flush(&xcb_connection);
 
         Ok(X11Client(Rc::new(RefCell::new(X11ClientState {
+            last_event_batch: Instant::now(),
             modifiers: Modifiers::default(),
             capslock: Capslock::default(),
             last_modifiers_changed_event: Modifiers::default(),
@@ -620,6 +627,7 @@ impl X11Client {
                 break;
             }
             let input_received = !events.is_empty();
+            self.0.borrow_mut().last_event_batch = Instant::now();
 
             for window in windows_to_refresh.into_iter() {
                 let mut state = self.0.borrow_mut();
@@ -1842,10 +1850,23 @@ impl X11ClientState {
                     };
                     client.process_x11_events(&xcb_connection).log_err();
 
+                    // lst patch: input draws immediately, so the monitor-rate
+                    // tick only matters while animations and GPUI's one-second
+                    // re-presentation after input can be running. Otherwise
+                    // tick at 60 Hz, the cadence the unpatched client used
+                    // on this host, so an idle window costs no extra wakeups.
+                    let recently_active = client.0.borrow().last_event_batch.elapsed()
+                        < Duration::from_millis(1_200);
+                    let period = if recently_active {
+                        refresh_rate
+                    } else {
+                        refresh_rate.max(IDLE_REFRESH_PERIOD)
+                    };
+
                     // Take into account that some frames have been skipped
                     let now = Instant::now();
                     while instant < now {
-                        instant += refresh_rate;
+                        instant += period;
                     }
                     calloop::timer::TimeoutAction::ToInstant(instant)
                 }
