@@ -1986,20 +1986,28 @@ impl Render for LstGpuiApp {
             .map_or(4, |language| language.config().indent.width());
         let layout_metrics = ViewportLayoutMetrics::new(show_gutter, buffer.len_lines(), char_width, scale);
         let total_content_height = {
-            let mut cache = active_cache.borrow_mut();
-            let layout = ensure_wrap_layout(
-                &mut cache,
-                WrapLayoutInput {
-                    buffer: &buffer,
-                    revision,
-                    viewport_width,
-                    char_width,
-                    layout_metrics,
-                    show_wrap,
-                    scale,
-                },
-            );
-            buffer_content_height(layout.total_rows, scale) + viewport_height * 0.4
+            // Until the viewport has painted once its width is a guess, and a
+            // wrap layout built for it would be discarded by the first paint.
+            // Size the scroll extent by logical lines for that one frame.
+            let total_rows = if active_geometry.borrow().bounds.is_none() {
+                buffer.len_lines()
+            } else {
+                let mut cache = active_cache.borrow_mut();
+                ensure_wrap_layout(
+                    &mut cache,
+                    WrapLayoutInput {
+                        buffer: &buffer,
+                        revision,
+                        viewport_width,
+                        char_width,
+                        layout_metrics,
+                        show_wrap,
+                        scale,
+                    },
+                )
+                .total_rows
+            };
+            buffer_content_height(total_rows, scale) + viewport_height * 0.4
         };
         // Reveal the caret against the previous frame's viewport geometry so
         // the scroll offset is final before this frame paints. Only the very
