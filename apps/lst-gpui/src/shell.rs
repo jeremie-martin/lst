@@ -122,103 +122,64 @@ impl LstGpuiApp {
                 });
             }))
             .end_slot(close_button.map(IntoElement::into_any_element))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .min_w_0()
-                    .when(backing_file_missing, |label| {
-                        label.child(div().flex_none().text_color(rgb(theme.role.error_text)).child("!"))
-                    })
-                    .when(saving && !backing_file_missing, |label| {
-                        label.child(div().flex_none().text_color(rgb(theme.role.accent)).child("↻"))
-                    })
-                    .when(modified && !saving && !backing_file_missing, |label| {
-                        label.child(div().flex_none().text_color(rgb(theme.role.accent)).child("●"))
-                    })
-                    .child(div().min_w_0().truncate().child(tab_name)),
-            )
+            .when(backing_file_missing, |tab| {
+                tab.child(div().flex_none().text_color(rgb(theme.role.error_text)).child("!"))
+            })
+            .when(saving && !backing_file_missing, |tab| {
+                tab.child(div().flex_none().text_color(rgb(theme.role.accent)).child("↻"))
+            })
+            .when(modified && !saving && !backing_file_missing, |tab| {
+                tab.child(div().flex_none().text_color(rgb(theme.role.accent)).child("●"))
+            })
+            .child(div().min_w_0().truncate().child(tab_name))
     }
 
     fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme(cx);
         let entity = cx.entity();
-        let recent_button = {
-            let entity = entity.clone();
-            div()
-                .flex_none()
-                .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
-                    let captured = bounds.first().copied();
-                    entity.update(cx, |this, _| {
-                        this.recent_button_bounds_px = captured;
-                    });
-                })
-                .child(
-                    IconButton::new("recent-files-button", IconKind::Recent, theme)
-                        .emphasized(self.recent.is_open())
-                        .tooltip("Open recent (Ctrl+R)")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_recent_files_panel(window, cx);
-                            cx.stop_propagation();
-                        })),
-                )
-        };
+        // Button bounds are captured once per group from the group's
+        // children, so no button needs a wrapper element of its own; the
+        // former wrappers' side padding is the buttons' margin.
+        let recent_button = IconButton::new("recent-files-button", IconKind::Recent, theme)
+            .emphasized(self.recent.is_open())
+            .tooltip("Open recent (Ctrl+R)")
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.toggle_recent_files_panel(window, cx);
+                cx.stop_propagation();
+            }));
         let items = (0..self.model.tab_count())
             .map(|ix| self.render_tab(ix, cx).into_any_element())
             .collect::<Vec<_>>();
-        let all_tabs_button = div()
-            .flex()
-            .flex_none()
-            .h_full()
-            .px_1()
-            .items_center()
-            .on_children_prepainted({
-                let entity = entity.clone();
-                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
-                    let captured = bounds.first().copied();
-                    entity.update(cx, |this, _| {
-                        this.all_tabs_button_bounds_px = captured;
-                    });
-                }
-            })
-            .child(
-                IconButton::new("all-tabs-button", IconKind::ChevronDown, theme)
-                    .emphasized(self.workspace_surface == crate::WorkspaceSurface::TabList)
-                    .tooltip("Show all open tabs")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_tab_list(cx);
-                        cx.stop_propagation();
-                    })),
-            );
-        let new_tab_button = div()
-            .flex()
-            .flex_none()
-            .h_full()
-            .px_2()
-            .items_center()
-            .on_children_prepainted({
-                let entity = entity.clone();
-                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
-                    let captured = bounds.first().copied();
-                    entity.update(cx, |this, _| {
-                        this.new_tab_button_bounds_px = captured;
-                    });
-                }
-            })
-            .child(
-                IconButton::new("new-tab-button", IconKind::Plus, theme)
-                    .tooltip("New scratchpad (Ctrl+N)")
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.request_new_tab(cx);
-                        cx.stop_propagation();
-                    })),
-            )
-            .into_any_element();
+        let all_tabs_button = IconButton::new("all-tabs-button", IconKind::ChevronDown, theme)
+            .mx_1()
+            .emphasized(self.workspace_surface == crate::WorkspaceSurface::TabList)
+            .tooltip("Show all open tabs")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.toggle_tab_list(cx);
+                cx.stop_propagation();
+            }));
+        let new_tab_button = IconButton::new("new-tab-button", IconKind::Plus, theme)
+            .mx_2()
+            .tooltip("New scratchpad (Ctrl+N)")
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.request_new_tab(cx);
+                cx.stop_propagation();
+            }));
         let end_controls = div()
             .flex()
             .h_full()
             .items_center()
+            .on_children_prepainted({
+                let entity = entity.clone();
+                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                    let all_tabs = bounds.first().copied();
+                    let new_tab = bounds.get(1).copied();
+                    entity.update(cx, |this, _| {
+                        this.all_tabs_button_bounds_px = all_tabs;
+                        this.new_tab_button_bounds_px = new_tab;
+                    });
+                }
+            })
             .child(all_tabs_button)
             .child(new_tab_button);
 
@@ -227,27 +188,25 @@ impl LstGpuiApp {
             .items_center()
             .gap_1()
             .px_1()
+            .on_children_prepainted({
+                let entity = entity.clone();
+                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
+                    let app_menu = bounds.first().copied();
+                    let recent = bounds.get(1).copied();
+                    entity.update(cx, |this, _| {
+                        this.app_menu_button_bounds_px = app_menu;
+                        this.recent_button_bounds_px = recent;
+                    });
+                }
+            })
             .child(
-                div()
-                    .flex_none()
-                    .on_children_prepainted({
-                        let entity = entity.clone();
-                        move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
-                            let captured = bounds.first().copied();
-                            entity.update(cx, |this, _| {
-                                this.app_menu_button_bounds_px = captured;
-                            });
-                        }
-                    })
-                    .child(
-                        IconButton::new("app-menu-button", IconKind::Menu, theme)
-                            .emphasized(self.workspace_surface == crate::WorkspaceSurface::AppMenu)
-                            .tooltip("Application menu")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.toggle_app_menu(cx);
-                                cx.stop_propagation();
-                            })),
-                    ),
+                IconButton::new("app-menu-button", IconKind::Menu, theme)
+                    .emphasized(self.workspace_surface == crate::WorkspaceSurface::AppMenu)
+                    .tooltip("Application menu")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_app_menu(cx);
+                        cx.stop_propagation();
+                    })),
             )
             .child(recent_button);
 

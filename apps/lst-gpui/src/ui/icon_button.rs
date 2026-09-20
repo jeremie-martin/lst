@@ -75,6 +75,12 @@ impl IconButton {
     }
 }
 
+impl gpui::Styled for IconButton {
+    fn style(&mut self) -> &mut gpui::StyleRefinement {
+        self.div.style()
+    }
+}
+
 impl InteractiveElement for IconButton {
     fn interactivity(&mut self) -> &mut gpui::Interactivity {
         self.div.interactivity()

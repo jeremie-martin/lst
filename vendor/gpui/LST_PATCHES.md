@@ -42,5 +42,13 @@ Every change is marked `lst patch` in the source.
    context is first needed, so it overlaps the font scan and the X11 setup.
    First frame on the reference host ~300 -> ~240 ms.
 
+5. **Sprites sorted by texture, not tile** (`src/scene.rs`). `Scene::finish`
+   sorted every glyph sprite by (order, tile id) each frame; draw batches
+   are only cut when the texture changes, so the key is now (order, texture
+   index). Glyphs painted in text order from one atlas texture are already
+   sorted and the stable sort degenerates to a scan (0.18 -> 0.10 ms for
+   ~860 sprites). Same-order sprites keep their paint order; the pixel lane
+   is identical.
+
 The `Cargo.toml` here also drops the crate's example and test targets whose
 sources are not vendored.

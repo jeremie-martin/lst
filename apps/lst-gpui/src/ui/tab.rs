@@ -101,6 +101,7 @@ impl RenderOnce for Tab {
                     .overflow_hidden()
                     .h_full()
                     .items_center()
+                    .gap_1()
                     .text_size(metrics::px_for_rem(metrics::TAB_TEXT_SIZE, rem_size))
                     .line_height(metrics::px_for_rem(metrics::TAB_TEXT_LINE_HEIGHT, rem_size))
                     .text_color(text)

@@ -360,3 +360,26 @@ binary: all ten scenarios are pixel-identical.
   keystroke mid-file, up to ~1 ms with error recovery at the top of a
   660 KB file.
 - Memory is driver-dominated (~200 MB of the ~300 MB RSS on an empty file).
+
+### Painting in passes (73f479f) and the sprite sort
+
+17. **Pass-based viewport paint** (`viewport.rs`, `code_line.rs`): rows never
+    overlap, so backgrounds, text, carets, and the gutter are painted as
+    passes. All code lines share one GPUI layer instead of opening one each,
+    and the gutter occlusion is one quad instead of one per row; ~200
+    bounds-tree insertions per frame are gone. Paint 0.50 -> 0.34 ms per
+    frame, scroll CPU -12%, `latency-navigation` key_to_frame_end p50
+    1.93 -> 1.78 ms. Pixel-identical on the four scenarios that exercise
+    gutter, carets, and highlights.
+18. **Sprite sort by texture** (vendored gpui, patch 5): GPUI sorted every
+    glyph sprite by (order, tile) each frame; grouping by texture is what
+    batching needs, and it leaves text-order sprites already sorted
+    (finish 0.18 -> 0.10 ms at ~860 sprites; more at 4K). Pixel-identical.
+19. **Fewer chrome elements** (`shell.rs`, `ui/tab.rs`, `ui/icon_button.rs`):
+    the four tab-strip buttons no longer each sit in a wrapper element whose
+    only job was capturing bounds (the two button groups capture their
+    children's bounds instead, which are the same rectangles), and a tab's
+    indicator and label are direct children of its content row. 42 -> 37
+    layout nodes per frame, frame CPU -3-6%. Pixel-identical on clean,
+    dirty-tab, recent-files, and find-panel scenarios; chrome, tabs,
+    recent-files, and state-trace behaviour tests pass.
