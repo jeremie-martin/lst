@@ -1473,66 +1473,131 @@ pub(crate) fn plain_structural_snapshot(
     revision: u64,
     structural_pairs: &[(char, char)],
 ) -> StructuralSnapshot {
-    let mut stack: Vec<(usize, char)> = Vec::new();
-    let mut tokens = Vec::new();
-    for (at, ch) in buffer.chars().enumerate() {
-        if structural_pairs.iter().any(|(open, _)| *open == ch) {
-            let token_index = tokens.len();
-            tokens.push(StructuralToken {
-                at,
-                depth: 0,
-                matched: false,
-                pair: None,
-            });
-            stack.push((token_index, ch));
-            continue;
+    let mut matcher = PlainBracketMatcher::new(structural_pairs);
+    if structural_pairs
+        .iter()
+        .all(|(open, close)| open.is_ascii() && close.is_ascii())
+    {
+        // Brackets are ASCII, so a byte scan finds them all; every other
+        // byte only advances the character index, and UTF-8 continuation
+        // bytes do not even do that.
+        let mut classes = [BracketClass::None; 256];
+        for (open, close) in structural_pairs {
+            classes[*open as usize] = BracketClass::Open;
+            classes[*close as usize] = BracketClass::Close;
         }
-        if !structural_pairs.iter().any(|(_, close)| *close == ch) {
-            continue;
+        let mut at = 0usize;
+        for chunk in buffer.chunks() {
+            for &byte in chunk.as_bytes() {
+                if byte & 0xC0 == 0x80 {
+                    continue;
+                }
+                match classes[usize::from(byte)] {
+                    BracketClass::Open => matcher.open(at, char::from(byte)),
+                    BracketClass::Close => matcher.close(at, char::from(byte)),
+                    BracketClass::None => {}
+                }
+                at += 1;
+            }
         }
-        let close_index = tokens.len();
-        tokens.push(StructuralToken {
+    } else {
+        for (at, ch) in buffer.chars().enumerate() {
+            matcher.visit(at, ch);
+        }
+    }
+    matcher.finish(revision)
+}
+
+#[derive(Clone, Copy)]
+enum BracketClass {
+    None,
+    Open,
+    Close,
+}
+
+/// Stack-based matcher for plain-text bracket structure.
+struct PlainBracketMatcher<'a> {
+    structural_pairs: &'a [(char, char)],
+    stack: Vec<(usize, char)>,
+    tokens: Vec<StructuralToken>,
+}
+
+impl<'a> PlainBracketMatcher<'a> {
+    fn new(structural_pairs: &'a [(char, char)]) -> Self {
+        Self {
+            structural_pairs,
+            stack: Vec::new(),
+            tokens: Vec::new(),
+        }
+    }
+
+    fn visit(&mut self, at: usize, ch: char) {
+        if self.structural_pairs.iter().any(|(open, _)| *open == ch) {
+            self.open(at, ch);
+        } else if self.structural_pairs.iter().any(|(_, close)| *close == ch) {
+            self.close(at, ch);
+        }
+    }
+
+    fn open(&mut self, at: usize, ch: char) {
+        let token_index = self.tokens.len();
+        self.tokens.push(StructuralToken {
             at,
             depth: 0,
             matched: false,
             pair: None,
         });
-        let Some((open_index, _)) = stack
-            .last()
-            .copied()
-            .filter(|(_, open)| structural_pairs.iter().any(|pair| pair.0 == *open && pair.1 == ch))
-        else {
-            continue;
-        };
-        stack.pop();
-        tokens[open_index].matched = true;
-        tokens[open_index].pair = Some(close_index);
-        tokens[close_index].matched = true;
-        tokens[close_index].pair = Some(open_index);
+        self.stack.push((token_index, ch));
     }
 
-    let mut pairs = Vec::with_capacity(tokens.len() / 2);
-    for open_index in 0..tokens.len() {
-        let Some(close_index) = tokens[open_index].pair.filter(|close_index| *close_index > open_index) else {
-            continue;
-        };
-        let pair_index = pairs.len();
-        pairs.push(StructuralPair {
-            open: tokens[open_index].at,
-            close: tokens[close_index].at,
+    fn close(&mut self, at: usize, ch: char) {
+        let close_index = self.tokens.len();
+        self.tokens.push(StructuralToken {
+            at,
             depth: 0,
-            parent: None,
+            matched: false,
+            pair: None,
         });
-        tokens[open_index].pair = Some(pair_index);
-        tokens[close_index].pair = Some(pair_index);
+        let Some((open_index, _)) = self
+            .stack
+            .last()
+            .copied()
+            .filter(|(_, open)| self.structural_pairs.iter().any(|pair| pair.0 == *open && pair.1 == ch))
+        else {
+            return;
+        };
+        self.stack.pop();
+        self.tokens[open_index].matched = true;
+        self.tokens[open_index].pair = Some(close_index);
+        self.tokens[close_index].matched = true;
+        self.tokens[close_index].pair = Some(open_index);
     }
-    assign_pair_parents(&mut pairs);
-    for token in &mut tokens {
-        if let Some(pair) = token.pair.filter(|_| token.matched) {
-            token.depth = pairs[pair].depth;
+
+    fn finish(self, revision: u64) -> StructuralSnapshot {
+        let mut tokens = self.tokens;
+        let mut pairs = Vec::with_capacity(tokens.len() / 2);
+        for open_index in 0..tokens.len() {
+            let Some(close_index) = tokens[open_index].pair.filter(|close_index| *close_index > open_index) else {
+                continue;
+            };
+            let pair_index = pairs.len();
+            pairs.push(StructuralPair {
+                open: tokens[open_index].at,
+                close: tokens[close_index].at,
+                depth: 0,
+                parent: None,
+            });
+            tokens[open_index].pair = Some(pair_index);
+            tokens[close_index].pair = Some(pair_index);
         }
+        assign_pair_parents(&mut pairs);
+        for token in &mut tokens {
+            if let Some(pair) = token.pair.filter(|_| token.matched) {
+                token.depth = pairs[pair].depth;
+            }
+        }
+        StructuralSnapshot::new(revision, pairs, tokens)
     }
-    StructuralSnapshot::new(revision, pairs, tokens)
 }
 
 pub(crate) fn update_plain_structural_snapshot(

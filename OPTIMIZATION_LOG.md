@@ -105,3 +105,18 @@ input, and that timer runs at 60 Hz here: `gpui::platform::linux::x11::client`
 takes the first CRTC's mode (the secondary 1080p60 monitor) rather than the
 monitor the window is on (3840x2160@144). Smooth scrolling is capped at 60 fps
 for the same reason. Both are framework behaviour outside the app.
+
+5. **No guessed-width wrap layout before the first paint** (`shell.rs`): the
+   first render built a full wrap layout for an assumed viewport width, and
+   the first paint immediately rebuilt it for the real width. The scroll
+   extent now uses the logical line count for that one frame. 50k-line Rust
+   first frame 18 -> 11.5 ms; 500k-line plain first frame 150 -> 77 ms.
+
+6. **Byte scan for plain bracket structure** (`syntax/highlight.rs`): the
+   plain structural snapshot (bracket pairs for files without a tree-sitter
+   grammar, and the interim structure while a large file parses in the
+   background) iterated every character through closures over the pair
+   list. Pairs are ASCII, so a byte scan with a 256-entry class table finds
+   them while continuation bytes are skipped; non-ASCII pair sets keep the
+   character path, and a test checks both agree on multibyte text.
+   500k-line plain open: view setup 74 -> 10 ms.

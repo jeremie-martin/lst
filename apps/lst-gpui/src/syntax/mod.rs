@@ -111,6 +111,30 @@ pub(crate) fn syntax_mode_for_language(language: Option<Language>) -> SyntaxMode
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_snapshot_byte_scan_matches_the_char_scan_on_multibyte_text() {
+        // A non-ASCII pair forces the character-iterator path; the ASCII
+        // pairs take the byte scan. Both must place tokens at the same
+        // character offsets in text mixing multibyte characters and CRLF.
+        let text = "caf\u{e9} (\u{1F600}[x]) {\r\n \u{2014} }\n\u{ab}nested\u{bb} ((a)\n";
+        let buffer = ropey::Rope::from_str(text);
+        let ascii = plain_structural_snapshot(&buffer, 7, &[('(', ')'), ('[', ']'), ('{', '}')]);
+        let via_chars =
+            plain_structural_snapshot(&buffer, 7, &[('(', ')'), ('[', ']'), ('{', '}'), ('\u{ab}', '\u{bb}')]);
+        let ascii_only: Vec<_> = via_chars
+            .tokens
+            .iter()
+            .filter(|token| !matches!(buffer.char(token.at), '\u{ab}' | '\u{bb}'))
+            .map(|token| token.at)
+            .collect();
+        assert_eq!(
+            ascii.tokens.iter().map(|token| token.at).collect::<Vec<_>>(),
+            ascii_only
+        );
+        assert_eq!(ascii.pairs.len(), 4);
+        assert_eq!(ascii.unmatched_count(), 1);
+    }
     use std::path::PathBuf;
 
     #[test]
