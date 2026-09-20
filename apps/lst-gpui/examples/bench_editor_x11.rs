@@ -35,6 +35,11 @@ const TYPING_CHARS: usize = 320;
 const IDLE_SAMPLE_MS: u64 = 2_000;
 const LATENCY_SAMPLES: usize = 60;
 const LATENCY_SETTLE_MS: u64 = 40;
+/// Span over which key injection is spread after the settle wait. GPUI's X11
+/// backend draws on a periodic refresh timer, so injecting a fixed delay
+/// after the previous paint would lock every sample to the same timer phase
+/// and hide up to one period of latency. Three 60 Hz periods.
+const LATENCY_PHASE_SPAN_MS: f64 = 50.0;
 const SMALL_RUST_MODULES: usize = 4;
 const SEARCH_QUERY: &str = "fn ";
 const MEDIUM_RUST_MODULES: usize = 64;
@@ -1611,34 +1616,27 @@ impl Bench {
                     Duration::from_millis(LATENCY_SETTLE_MS),
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
+                thread::sleep(latency_phase_offset(samples.len()));
                 drain_damage_events(&self.conn, damage.damage())?;
                 let inject_epoch_us = epoch_micros(SystemTime::now())?;
-                let started = Instant::now();
                 inject_key_press(&self.conn, self.root, keycode)?;
                 inject_key_release(&self.conn, self.root, keycode)?;
                 self.conn.flush()?;
-                wait_for_first_damage(
+                let presented = wait_for_key_frame_presented(
                     &self.conn,
                     damage.damage(),
                     window.id,
                     &mut child,
+                    &trace_path,
+                    inject_epoch_us,
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
-                let latency_ms = elapsed_ms(started);
-                let damage_epoch_us = inject_epoch_us + latency_ms * 1000.0;
-                samples.push(latency_ms);
+                samples.push((presented.damage_epoch_us - inject_epoch_us) / 1000.0);
                 // Split the latency with the app's own wall-clock stamps:
                 // X server delivery, app work through paint, then present.
-                let trace = read_editor_trace(&trace_path)?;
-                if let (Some(key_down), Some(frame_end)) =
-                    (trace.last("input_epoch_us"), trace.last("frame_end_epoch_us"))
-                {
-                    if key_down >= inject_epoch_us && frame_end >= key_down {
-                        delivery.push((key_down - inject_epoch_us) / 1000.0);
-                        to_frame_end.push((frame_end - key_down) / 1000.0);
-                        to_damage.push(((damage_epoch_us - frame_end) / 1000.0).max(0.0));
-                    }
-                }
+                delivery.push((presented.key_down_epoch_us - inject_epoch_us) / 1000.0);
+                to_frame_end.push((presented.frame_end_epoch_us - presented.key_down_epoch_us) / 1000.0);
+                to_damage.push((presented.damage_epoch_us - presented.frame_end_epoch_us) / 1000.0);
                 if debug_enabled() {
                     eprintln!("key latency sample: {:.3} ms", samples[samples.len() - 1]);
                 }
@@ -2698,6 +2696,79 @@ fn wait_for_trace_quiet(path: &Path, label: &str, quiet: Duration, timeout: Dura
     }
 }
 
+/// Wall-clock stamps of one keystroke's path to the screen.
+struct PresentedKeyFrame {
+    /// App-side stamp when the model update for the key started.
+    key_down_epoch_us: f64,
+    /// App-side stamp when the frame showing the key finished painting.
+    frame_end_epoch_us: f64,
+    /// Runner-side receipt of the first damage report after that paint.
+    damage_epoch_us: f64,
+}
+
+/// Waits until the app has painted a frame for a key injected at
+/// `inject_epoch_us`, then for the first damage report after that paint.
+/// Damage alone is not enough: GPUI re-presents the unchanged scene at the
+/// refresh rate for a second after any input, and every present raises a
+/// damage report, so the report has to be paired with the app's frame stamp.
+fn wait_for_key_frame_presented(
+    conn: &RustConnection,
+    damage_id: damage::Damage,
+    window: xproto::Window,
+    child: &mut Child,
+    trace_path: &Path,
+    inject_epoch_us: f64,
+    timeout: Duration,
+) -> Result<PresentedKeyFrame, Box<dyn Error>> {
+    let deadline = Instant::now() + timeout;
+    let mut damage_epochs = Vec::new();
+    let mut painted: Option<(f64, f64)> = None;
+    loop {
+        while let Some(event) = conn.poll_for_event()? {
+            if let Event::DamageNotify(notify) = event {
+                if notify.damage == damage_id && notify.drawable == window {
+                    damage_epochs.push(epoch_micros(SystemTime::now())?);
+                    conn.damage_subtract(damage_id, NONE, NONE)?;
+                    conn.flush()?;
+                }
+            }
+        }
+        if painted.is_none() {
+            let trace = read_editor_trace(trace_path)?;
+            if let (Some(key_down), Some(frame_end)) = (trace.last("input_epoch_us"), trace.last("frame_end_epoch_us"))
+            {
+                if key_down >= inject_epoch_us && frame_end >= key_down {
+                    painted = Some((key_down, frame_end));
+                }
+            }
+        }
+        if let Some((key_down, frame_end)) = painted {
+            if let Some(damage) = damage_epochs.iter().copied().find(|epoch| *epoch >= frame_end) {
+                return Ok(PresentedKeyFrame {
+                    key_down_epoch_us: key_down,
+                    frame_end_epoch_us: frame_end,
+                    damage_epoch_us: damage,
+                });
+            }
+        }
+        if Instant::now() >= deadline {
+            if let Some(status) = child.try_wait()? {
+                return Err(io::Error::other(format!("editor exited while waiting for a key frame: {status}")).into());
+            }
+            return Err(io::Error::other("timed out waiting for the key's frame to be presented").into());
+        }
+        thread::sleep(Duration::from_micros(200));
+    }
+}
+
+/// Evenly spread injection delays (a golden-ratio sequence) so the samples
+/// cover every phase of the app's refresh timer.
+fn latency_phase_offset(sample: usize) -> Duration {
+    const GOLDEN_RATIO_FRACTION: f64 = 0.618_033_988_749_895;
+    let phase = (sample as f64 * GOLDEN_RATIO_FRACTION).fract();
+    Duration::from_secs_f64(phase * LATENCY_PHASE_SPAN_MS / 1000.0)
+}
+
 /// Discards queued damage reports so the next wait sees only new frames.
 fn drain_damage_events(conn: &RustConnection, damage_id: damage::Damage) -> Result<(), Box<dyn Error>> {
     while let Some(event) = conn.poll_for_event()? {
@@ -3058,36 +3129,6 @@ fn inject_key_release(
 ) -> Result<(), Box<dyn Error>> {
     conn.xtest_fake_input(xproto::KEY_RELEASE_EVENT, keycode, 0, root, 0, 0, 0)?;
     Ok(())
-}
-
-/// Blocks until the first damage report for `window`, polling tightly so the
-/// measured latency carries at most a fraction of a millisecond of slack.
-fn wait_for_first_damage(
-    conn: &RustConnection,
-    damage_id: damage::Damage,
-    window: xproto::Window,
-    child: &mut Child,
-    timeout: Duration,
-) -> Result<(), Box<dyn Error>> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        while let Some(event) = conn.poll_for_event()? {
-            if let Event::DamageNotify(notify) = event {
-                if notify.damage == damage_id && notify.drawable == window {
-                    conn.damage_subtract(damage_id, NONE, NONE)?;
-                    conn.flush()?;
-                    return Ok(());
-                }
-            }
-        }
-        if Instant::now() >= deadline {
-            if let Some(status) = child.try_wait()? {
-                return Err(io::Error::other(format!("editor exited while waiting for a frame: {status}")).into());
-            }
-            return Err(io::Error::other("timed out waiting for the first damaged frame").into());
-        }
-        thread::sleep(Duration::from_micros(200));
-    }
 }
 
 /// Counts damage reports for `window` over a fixed wall-clock window.

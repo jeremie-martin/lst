@@ -160,3 +160,74 @@ edit) inside GPUI and the driver.
   synchronous: coalescing needs composed edit batches and moving it off the
   input path would paint one frame with stale highlights.
 - Caret blink re-renders the whole window twice a second (~15 ms CPU/s).
+
+## Session 2: measurement corrections and framework patches
+
+The first session's numbers above were taken with two measurement faults,
+found by profiling the production binary:
+
+- **The benchmarked binary was not the production build.** Building the app
+  and the runner in one `cargo build` unified the runner's
+  `gpui` dev-dependency features (`test-support`, `leak-detection`) into the
+  app. With `test-support`, GPUI draws inside `flush_effects`, i.e. right
+  after input, whereas the production build only draws when the X11 refresh
+  timer fires (`gpui::platform::linux::x11::client::start_refresh_loop`,
+  60 Hz here). The dev-dependency is removed; nothing used it.
+- **Key injection was phase-locked to that timer.** The runner injected each
+  key a fixed delay after the previous paint, so every sample landed at the
+  same timer phase and up to one period of latency was invisible. Keys are
+  now injected at evenly spread delays. Damage reports also had to be paired
+  with the app's frame stamp: GPUI presents the unchanged scene at the
+  refresh rate for one second after any input, and every present raises
+  XDamage (145 reports per keystroke measured with a probe), so "first damage
+  after the key" often preceded the key's frame.
+
+Corrected baseline, production binary at 119a528, physical display, medians
+of 3 runs:
+
+| Scenario | Metric | Corrected baseline |
+| --- | --- | --- |
+| `latency-navigation` | key_to_paint_ms p50 / p95 / max | 9.9 / 16.6 / 17.6 |
+| `latency-typing` | key_to_paint_ms p50 / p95 / max | 10.4 / 17.3 / 17.8 |
+| `open-small` | open_to_first_frame_ms | 297 |
+
+Where the time goes (production binary): app work through paint ~2.5 ms
+(navigation) / ~4.9 ms (typing); then a uniform 0-16.7 ms wait for the
+60 Hz timer tick that draws; then ~1.5 ms to the present. Startup: font
+database ~70-90 ms, Vulkan instance and device ~120 ms (NVIDIA), both
+serialised before the window; window creation ~55 ms (surface and swapchain
+~45, pipelines ~10); app setup and first frame ~35 ms. Memory: of ~300 MB
+RSS on an empty file, ~200 MB is the NVIDIA driver (file-backed libraries
+and `/dev/nvidiactl` mappings) and ~70 MB heap, mostly driver allocations.
+
+### GPUI patches (`vendor/gpui`, see `vendor/gpui/LST_PATCHES.md`)
+
+gpui 0.2.2 is the newest release and upstream `main` still has both
+behaviours, so the fixes are carried as a vendored copy selected through
+`[patch.crates-io]`; the exact diff is `vendor/gpui/lst.patch`.
+
+8. **Draw right after X11 input.** Windows left dirty by an input batch are
+   drawn and presented immediately instead of at the next refresh tick.
+9. **Fastest monitor's refresh rate.** The refresh timer used the first
+   CRTC's mode (the 60 Hz secondary display); it now uses the fastest active
+   CRTC (144 Hz), which is also the smooth-scroll animation rate.
+10. **Parallel system font scan.** The fontconfig directory walk parses font
+    files on up to eight threads and avoids two `stat` calls per entry
+    (~70 -> ~32 ms in isolation; mmap contention limits scaling past two
+    threads).
+11. **Vulkan context on a startup thread.** Instance and device creation
+    (~120 ms) overlaps the font scan and X11 setup.
+
+| Scenario | Metric | Corrected baseline | With patches |
+| --- | --- | --- | --- |
+| `latency-navigation` | key_to_paint_ms p50 / p95 / max | 9.9 / 16.6 / 17.6 | 6.1 / 8.4 / 12.2 |
+| `latency-typing` | key_to_paint_ms p50 / p95 / max | 10.4 / 17.3 / 17.8 | 7.6 / 10.2 / 13.9 |
+| `open-small` | open_to_first_frame_ms | 297 | ~240 (app_init 190 -> 135) |
+
+Per key the remaining time is the app's own work (2.5 ms navigation, 4.9 ms
+typing, of which tree-sitter's reparse is the largest piece) plus ~1.5-2.6 ms
+from paint end to the damage report.
+
+12. **Whitespace markers walk the slice** (`viewport.rs`): the marker scan
+    did two rope character lookups per space to find runs; it now tracks
+    neighbours while iterating the painted slice.

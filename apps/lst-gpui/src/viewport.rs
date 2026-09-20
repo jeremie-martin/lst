@@ -1537,13 +1537,16 @@ fn visible_marker_candidates(
         )
         .then(|| cached_line_whitespace_bounds(cache, buffer, line_ix));
 
-        for (offset, ch) in buffer.slice(start..end).chars().enumerate() {
-            let at = start + offset;
+        // Neighbouring characters come from the same slice walk; only the
+        // two window edges need a rope lookup.
+        let mut previous = start.checked_sub(1).and_then(|before| buffer.get_char(before));
+        let mut chars = buffer.slice(start..end).chars().peekable();
+        let mut at = start;
+        while let Some(ch) = chars.next() {
+            let next = chars.peek().copied().or_else(|| buffer.get_char(end));
             if matches!(ch, ' ' | '\t') && render_whitespace != RenderWhitespaceSetting::None {
                 let local = at - line_start;
-                let in_run = ch == ' '
-                    && (at.checked_sub(1).and_then(|before| buffer.get_char(before)) == Some(' ')
-                        || buffer.get_char(at + 1) == Some(' '));
+                let in_run = ch == ' ' && (previous == Some(' ') || next == Some(' '));
                 let leading = whitespace_bounds
                     .as_ref()
                     .is_none_or(|bounds| bounds.first_non_whitespace.is_none_or(|first| local < first));
@@ -1566,6 +1569,8 @@ fn visible_marker_candidates(
                     candidates.push((at, glyph, false));
                 }
             }
+            previous = Some(ch);
+            at += 1;
         }
     }
     candidates

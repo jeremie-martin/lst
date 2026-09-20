@@ -66,10 +66,22 @@ update starts, `frame_end_epoch_us` when a frame's paint ends) that the latency
 scenarios use to report `key_delivery_ms_p50`, `key_to_frame_end_ms_p50`, and
 `frame_end_to_damage_ms_p50`. `latency-edit-navigation` types a character
 before each timed arrow key, the common case where revision-keyed caches have
-just been invalidated. GPUI keeps presenting the last scene at the display rate
-for one second after input, and some drivers report XDamage for a frame only
-when the next one presents, so prefer app-side frame metrics and
-`open_to_first_frame_ms` over `*_to_quiet` metrics when judging editor work. The opt-in `huge-rust-50k`, `huge-plain-500k`, and
+just been invalidated.
+
+`key_to_paint_ms` is the time from key injection to the first XDamage report
+after the app's own `frame_end_epoch_us` for that key. Damage alone is not a
+paint signal: GPUI re-presents the unchanged scene at the refresh rate for one
+second after any input, and every present raises a damage report. Keys are
+injected at evenly spread delays after the previous frame so the samples cover
+every phase of GPUI's refresh timer rather than locking to one. Prefer
+app-side frame metrics and `open_to_first_frame_ms` over `*_to_quiet` metrics
+when judging editor work; the quiet metrics include that one-second
+re-presentation.
+
+The measured `lst` must be the production build. The runner has no GPUI
+dev-dependency, so building it alongside the app does not change the app's
+feature set (Cargo unifies dev-dependency features across targets built in one
+invocation). The opt-in `huge-rust-50k`, `huge-plain-500k`, and
 `huge-mixed-concat-500k` corpora exercise the large-file envelope without
 slowing the default `all` run. `mixed-paste` can replay an exact UTF-8 payload:
 
@@ -91,6 +103,14 @@ or pull request that uses them.
 `OPTIMIZATION_LOG.md` at the repository root records the measured changes,
 the baselines they were compared against, and the framework and driver
 behaviour that bounds what the app can improve.
+
+## Patched GPUI
+
+The workspace builds against `vendor/gpui`, the gpui 0.2.2 release with the
+X11 and font-loading patches listed in `vendor/gpui/LST_PATCHES.md`. Each
+patch records the measurement that motivated it; re-measure with the
+`[patch.crates-io]` section of the root `Cargo.toml` removed to compare
+against the unpatched release.
 
 ## Framework-neutral benchmarks
 

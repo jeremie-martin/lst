@@ -28,3 +28,10 @@ strip = true
 inherits = "release"
 debug = 1
 strip = false
+
+# gpui 0.2.2 with two X11 patches (see vendor/gpui/LST_PATCHES.md):
+# draw right after input instead of at the next refresh-timer tick, and tick
+# at the fastest active monitor's rate. Remove this section to use the
+# unpatched crates.io release.
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }
