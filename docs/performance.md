@@ -41,7 +41,7 @@ Choose the scenario whose primary metric matches the problem:
 | `search-large` | `search_reindex_ms` | find query reindexing |
 | `multi-cursor-1k` | `viewport_paint_ms` | preparation and paint with 1,000 carets |
 | `idle` | `idle_cpu_ms` | CPU, repaints, and RSS over two focused idle seconds |
-| `latency-typing`, `latency-navigation` | `key_to_paint_ms_p50` | one key at a time: key press to first damaged frame, frames per key, per-frame cost |
+| `latency-typing`, `latency-navigation`, `latency-edit-navigation` | `key_to_paint_ms_p50` | one key at a time: key press to first damaged frame, split into X delivery, app work through paint, and presentation; frames per key; per-frame cost |
 
 Examples:
 
@@ -61,7 +61,12 @@ work. `--keep-temp` preserves the per-run trace files, whose `notify=<reason>`
 and `startup_*_ms` lines attribute frames and startup phases.
 
 The app records per-frame `frame_wall_ms` and `frame_cpu_ms` around render,
-prepare, and paint. GPUI keeps presenting the last scene at the display rate
+prepare, and paint, and wall-clock stamps (`input_epoch_us` when a model
+update starts, `frame_end_epoch_us` when a frame's paint ends) that the latency
+scenarios use to report `key_delivery_ms_p50`, `key_to_frame_end_ms_p50`, and
+`frame_end_to_damage_ms_p50`. `latency-edit-navigation` types a character
+before each timed arrow key, the common case where revision-keyed caches have
+just been invalidated. GPUI keeps presenting the last scene at the display rate
 for one second after input, and some drivers report XDamage for a frame only
 when the next one presents, so prefer app-side frame metrics and
 `open_to_first_frame_ms` over `*_to_quiet` metrics when judging editor work. The opt-in `huge-rust-50k`, `huge-plain-500k`, and

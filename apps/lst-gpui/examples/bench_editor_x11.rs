@@ -110,7 +110,8 @@ fn print_usage() {
 Options:
   --scenario <name>     all, large-paste, mixed-paste, typing-medium, typing-large, typing-plain,
                         scroll-highlighted, scroll-plain, open-small, open-large, search-large,
-                        multi-cursor-1k, idle, latency-typing, latency-navigation
+                        multi-cursor-1k, idle, latency-typing, latency-navigation,
+                        latency-edit-navigation
                         (default: all)
   --corpus <name>       override the scenario corpus: small-rust, medium-rust, large-rust,
                         huge-rust-50k, large-plain, huge-plain-500k, mixed-concat,
@@ -146,6 +147,7 @@ enum Scenario {
     Idle,
     LatencyTyping,
     LatencyNavigation,
+    LatencyEditNavigation,
 }
 
 impl Scenario {
@@ -166,6 +168,7 @@ impl Scenario {
             "idle" => Ok(Self::Idle),
             "latency-typing" => Ok(Self::LatencyTyping),
             "latency-navigation" => Ok(Self::LatencyNavigation),
+            "latency-edit-navigation" => Ok(Self::LatencyEditNavigation),
             _ => Err(format!("unknown scenario: {value}")),
         }
     }
@@ -187,6 +190,7 @@ impl Scenario {
                 Self::Idle,
                 Self::LatencyTyping,
                 Self::LatencyNavigation,
+                Self::LatencyEditNavigation,
             ],
             scenario => vec![scenario],
         }
@@ -209,6 +213,7 @@ impl Scenario {
             Self::Idle => "idle",
             Self::LatencyTyping => "latency-typing",
             Self::LatencyNavigation => "latency-navigation",
+            Self::LatencyEditNavigation => "latency-edit-navigation",
         }
     }
 
@@ -224,7 +229,7 @@ impl Scenario {
             Self::SearchLarge => "search_reindex_ms",
             Self::MultiCursor1k => "viewport_paint_ms",
             Self::Idle => "idle_cpu_ms",
-            Self::LatencyTyping | Self::LatencyNavigation => "key_to_paint_ms_p50",
+            Self::LatencyTyping | Self::LatencyNavigation | Self::LatencyEditNavigation => "key_to_paint_ms_p50",
         }
     }
 
@@ -243,7 +248,8 @@ impl Scenario {
             | Self::OpenLarge
             | Self::SearchLarge
             | Self::LatencyTyping
-            | Self::LatencyNavigation => CorpusKind::LargeRust,
+            | Self::LatencyNavigation
+            | Self::LatencyEditNavigation => CorpusKind::LargeRust,
         }
     }
 }
@@ -568,7 +574,7 @@ impl Bench {
                     self.run_open(scenario, &corpus, run_index, args.keep_temp_on_failure)?
                 }
                 Scenario::Idle => self.run_idle(scenario, &corpus, run_index, args.keep_temp_on_failure)?,
-                Scenario::LatencyTyping | Scenario::LatencyNavigation => {
+                Scenario::LatencyTyping | Scenario::LatencyNavigation | Scenario::LatencyEditNavigation => {
                     self.run_key_latency(scenario, &corpus, run_index, args.position, args.keep_temp_on_failure)?
                 }
                 Scenario::SearchLarge => {
@@ -581,13 +587,14 @@ impl Bench {
 
             if let Some((width, height)) = expected_window {
                 if metrics.window_size != (width, height) {
-                    return Err(io::Error::other(format!(
-                        "{} window size changed: expected {width}x{height}, got {}x{}",
+                    // Multi-monitor window managers may place runs on
+                    // different screens; the summary reports the first size.
+                    eprintln!(
+                        "warning: {} window size changed: expected {width}x{height}, got {}x{}",
                         scenario.as_str(),
                         metrics.window_size.0,
                         metrics.window_size.1
-                    ))
-                    .into());
+                    );
                 }
             } else {
                 expected_window = Some(metrics.window_size);
@@ -1564,15 +1571,36 @@ impl Bench {
                 &mut child,
             )?;
             reset_editor_trace(&trace_path)?;
+            let text_keycode = self.keycodes.text_keycode('x').expect("benchmark resolves lowercase x");
             let keycode = match scenario {
-                Scenario::LatencyNavigation => self.keycodes.down,
-                _ => self.keycodes.text_keycode('x').expect("benchmark resolves lowercase x"),
+                Scenario::LatencyNavigation | Scenario::LatencyEditNavigation => self.keycodes.down,
+                _ => text_keycode,
             };
 
             let before = proc_sample(pid)?;
             let mut samples = Vec::with_capacity(LATENCY_SAMPLES);
+            let mut delivery = Vec::with_capacity(LATENCY_SAMPLES);
+            let mut to_frame_end = Vec::with_capacity(LATENCY_SAMPLES);
+            let mut to_damage = Vec::with_capacity(LATENCY_SAMPLES);
             let cycle_started = Instant::now();
             for _ in 0..LATENCY_SAMPLES {
+                if scenario == Scenario::LatencyEditNavigation {
+                    // Navigation right after an edit is the common case and
+                    // the one where revision-keyed caches have just been
+                    // invalidated; the typed character itself is not timed.
+                    let input_count = read_editor_trace(&trace_path)?
+                        .count("text_input_apply_ms")
+                        .unwrap_or(0);
+                    inject_key_press(&self.conn, self.root, text_keycode)?;
+                    inject_key_release(&self.conn, self.root, text_keycode)?;
+                    self.conn.flush()?;
+                    wait_for_trace_count(
+                        &trace_path,
+                        "text_input_apply_ms",
+                        input_count + 1,
+                        Duration::from_millis(TRACE_TIMEOUT_MS),
+                    )?;
+                }
                 // Settle on the app's own paint trace: some drivers report
                 // XDamage for a frame only once the following frame presents,
                 // which would stretch a damage-based quiet wait to the next
@@ -1584,6 +1612,7 @@ impl Bench {
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
                 drain_damage_events(&self.conn, damage.damage())?;
+                let inject_epoch_us = epoch_micros(SystemTime::now())?;
                 let started = Instant::now();
                 inject_key_press(&self.conn, self.root, keycode)?;
                 inject_key_release(&self.conn, self.root, keycode)?;
@@ -1595,7 +1624,21 @@ impl Bench {
                     &mut child,
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
-                samples.push(elapsed_ms(started));
+                let latency_ms = elapsed_ms(started);
+                let damage_epoch_us = inject_epoch_us + latency_ms * 1000.0;
+                samples.push(latency_ms);
+                // Split the latency with the app's own wall-clock stamps:
+                // X server delivery, app work through paint, then present.
+                let trace = read_editor_trace(&trace_path)?;
+                if let (Some(key_down), Some(frame_end)) =
+                    (trace.last("input_epoch_us"), trace.last("frame_end_epoch_us"))
+                {
+                    if key_down >= inject_epoch_us && frame_end >= key_down {
+                        delivery.push((key_down - inject_epoch_us) / 1000.0);
+                        to_frame_end.push((frame_end - key_down) / 1000.0);
+                        to_damage.push(((damage_epoch_us - frame_end) / 1000.0).max(0.0));
+                    }
+                }
                 if debug_enabled() {
                     eprintln!("key latency sample: {:.3} ms", samples[samples.len() - 1]);
                 }
@@ -1616,6 +1659,16 @@ impl Bench {
             );
             metrics.set("key_sample_count", samples.len() as f64);
             metrics.set("key_cycle_ms", key_cycle_ms);
+            for (name, mut values) in [
+                ("key_delivery_ms_p50", delivery),
+                ("key_to_frame_end_ms_p50", to_frame_end),
+                ("frame_end_to_damage_ms_p50", to_damage),
+            ] {
+                if !values.is_empty() {
+                    values.sort_by(f64::total_cmp);
+                    metrics.set(name, percentile(&values, 0.50));
+                }
+            }
             let paint_count = trace.count("viewport_paint_ms").unwrap_or(0);
             metrics.set("frames_per_key", paint_count as f64 / samples.len() as f64);
             add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
@@ -2320,13 +2373,16 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "peak_rss_mb",
             "startup_ms",
         ],
-        Scenario::LatencyTyping | Scenario::LatencyNavigation => &[
+        Scenario::LatencyTyping | Scenario::LatencyNavigation | Scenario::LatencyEditNavigation => &[
             "key_to_paint_ms_p50",
             "key_to_paint_ms_p95",
             "key_to_paint_ms_max",
             "key_to_paint_ms_mean",
             "key_sample_count",
             "key_cycle_ms",
+            "key_delivery_ms_p50",
+            "key_to_frame_end_ms_p50",
+            "frame_end_to_damage_ms_p50",
             "frames_per_key",
             "frame_wall_ms_mean",
             "frame_wall_ms_max",

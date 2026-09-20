@@ -81,6 +81,17 @@ pub(crate) fn record_frame(clock: FrameClock) {
     );
 }
 
+/// Records the wall-clock time of an event as microseconds since the Unix
+/// epoch, so an external runner can align it with its own clock.
+pub(crate) fn record_epoch(label: &str) {
+    if !trace_enabled() {
+        return;
+    }
+    if let Ok(since_epoch) = SystemTime::now().duration_since(UNIX_EPOCH) {
+        record_line(label, format_args!("{}", since_epoch.as_micros()));
+    }
+}
+
 /// Records the reason a redraw was requested, for frame-count diagnostics.
 pub(crate) fn record_notify(reason: &str) {
     record_label("notify", reason);

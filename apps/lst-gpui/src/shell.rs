@@ -2241,6 +2241,7 @@ impl Render for LstGpuiApp {
                                                                     );
                                                                 }
                                                                 diagnostics::record_first_frame();
+                                                                diagnostics::record_epoch("frame_end_epoch_us");
                                                                 entity.update(cx, |this, _| {
                                                                     if let Some(clock) = this.frame_clock.take() {
                                                                         diagnostics::record_frame(clock);

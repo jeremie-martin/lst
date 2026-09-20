@@ -921,6 +921,10 @@ impl LstGpuiApp {
         notify_after_update: bool,
         update: impl FnOnce(&mut EditorModel),
     ) {
+        // Every input-driven model mutation funnels through here, so this
+        // stamp lets the benchmark split key latency into delivery, work,
+        // and presentation.
+        diagnostics::record_epoch("input_epoch_us");
         self.cursor_visible = true;
         if !self.cleanup_in_flight {
             self.cleanup_message = None;

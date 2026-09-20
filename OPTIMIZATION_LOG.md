@@ -84,3 +84,24 @@ Where the time goes (perf, physical display):
    First frame 25 -> 7 ms; `open-small` open_to_first_frame_ms 313 -> ~275.
    What remains is GPUI: ~200 ms loading the system font database and ~57 ms
    creating the window.
+
+4. **Local row walk for vertical motion** (`lst-editor` `wrap.rs`, `motion.rs`,
+   `lib.rs`): the model cached a full-document wrap layout keyed by revision,
+   so the first arrow key after every edit rebuilt it (O(lines)), a second
+   owner of the layout the app already patches incrementally. Display-row
+   targets are now found by walking neighbouring lines, O(rows moved), and
+   the model-side cache is gone. New `latency-edit-navigation` scenario
+   (type, then time the arrow key), physical display, p50:
+   17k-line Rust 15.1 -> 10.2 ms; 500k-line plain 87 -> 11.3 ms (max 102 -> 17).
+
+## Latency anatomy
+
+`latency-*` now split key-to-paint with app wall-clock stamps. Physical
+display, `latency-navigation` middle of the 17k-line Rust corpus: X delivery
+0.3 ms, app work through paint 2.6 ms, presentation 3.5 ms (7.2 ms p50).
+Presentation grows to ~8.6 ms right after an edit because GPUI keeps
+presenting the previous scene at the refresh timer for one second after
+input, and that timer runs at 60 Hz here: `gpui::platform::linux::x11::client`
+takes the first CRTC's mode (the secondary 1080p60 monitor) rather than the
+monitor the window is on (3840x2160@144). Smooth scrolling is capped at 60 fps
+for the same reason. Both are framework behaviour outside the app.
