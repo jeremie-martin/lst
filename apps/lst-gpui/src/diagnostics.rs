@@ -81,6 +81,13 @@ pub(crate) fn record_frame(clock: FrameClock) {
     );
 }
 
+/// Records when a frame's render started, in milliseconds since `main`.
+pub(crate) fn record_frame_start() {
+    if let Some(started) = PROCESS_START.get() {
+        record_ms("frame_start_ms", started.elapsed().as_secs_f64() * 1000.0);
+    }
+}
+
 /// Records the wall-clock time of an event as microseconds since the Unix
 /// epoch, so an external runner can align it with its own clock.
 pub(crate) fn record_epoch(label: &str) {

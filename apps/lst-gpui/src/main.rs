@@ -317,6 +317,8 @@ struct LstGpuiApp {
     settings_search_focus_handle: FocusHandle,
     settings_value_focus_handle: FocusHandle,
     window_title_override: Option<String>,
+    /// Title last sent to the window, so unchanged frames skip the X requests.
+    window_title_rendered: String,
     model: EditorModel,
     tab_views: HashMap<TabId, EditorTabView>,
     tab_bar_scroll: ScrollHandle,
@@ -560,6 +562,7 @@ impl LstGpuiApp {
             settings_search_focus_handle,
             settings_value_focus_handle,
             window_title_override: launch.window_title.clone(),
+            window_title_rendered: String::new(),
             model,
             tab_views: HashMap::new(),
             tab_bar_scroll: ScrollHandle::new(),

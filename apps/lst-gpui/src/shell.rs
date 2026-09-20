@@ -1853,7 +1853,7 @@ impl Render for LstGpuiApp {
         if diagnostics::trace_enabled() {
             static FIRST_RENDER: std::sync::Once = std::sync::Once::new();
             FIRST_RENDER.call_once(|| diagnostics::record_startup_mark("first_render"));
-            diagnostics::record_startup_mark("frame");
+            diagnostics::record_frame_start();
             let bounds = window.bounds();
             diagnostics::record_label(
                 "frame_ctx",
@@ -1878,7 +1878,13 @@ impl Render for LstGpuiApp {
             } else {
                 ""
             };
-            window.set_window_title(&format!("{dirty}{} — lst", active_tab.display_name()));
+            let title = format!("{dirty}{} — lst", active_tab.display_name());
+            // Setting the title is two X property changes with round trips;
+            // only do it when the title actually changed.
+            if title != self.window_title_rendered {
+                window.set_window_title(&title);
+                self.window_title_rendered = title;
+            }
         }
 
         let show_gutter = self.model.show_gutter();
