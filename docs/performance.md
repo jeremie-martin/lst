@@ -88,6 +88,10 @@ Do not commit machine-specific baseline numbers. Record the commit, host/CPU,
 display, full command, primary values, and relevant diagnostics in the change
 or pull request that uses them.
 
+`OPTIMIZATION_LOG.md` at the repository root records the measured changes,
+the baselines they were compared against, and the framework and driver
+behaviour that bounds what the app can improve.
+
 ## Framework-neutral benchmarks
 
 Criterion benchmarks isolate editor-model cost from GPUI, display, desktop

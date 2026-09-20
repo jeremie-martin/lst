@@ -120,3 +120,43 @@ for the same reason. Both are framework behaviour outside the app.
    them while continuation bytes are skipped; non-ASCII pair sets keep the
    character path, and a test checks both agree on multibyte text.
    500k-line plain open: view setup 74 -> 10 ms.
+
+7. **Window title only when it changes** (`shell.rs`): every render set the
+   window title, which GPUI implements as two X property changes with
+   round trips. The title is now sent only when it differs from the last
+   one sent.
+
+## Results (physical display, 3 measured runs, medians)
+
+| Scenario | Metric | Before | After |
+| --- | --- | --- | --- |
+| `open-small` | open_to_first_frame_ms | 313 | 288 (GPUI init ~255 of it) |
+| `open-large` 50k-line Rust | open_to_first_frame_ms | 334 | 297 |
+| `latency-typing` | key_to_paint_ms p50 / p95 | 11.9 / 15.3 | 7.7 / 15.8 |
+| `latency-navigation` | key_to_paint_ms p50 / p95 | 9.3 / 12.3 | 6.9 / 9.7 |
+| `latency-edit-navigation` 17k lines | key_to_paint_ms p50 | 15.1 | 9.8 |
+| `latency-edit-navigation` 500k lines | key_to_paint_ms p50 / max | 87 / 102 | 11.3 / 17 |
+| frames per keystroke | count | 4.05 | 1.1 (rest is caret blink) |
+| `scroll-plain` | viewport_prepare_ms max | 10.1 | 3.2 |
+| `typing-medium` | typing_ms_per_char | 1.32 | 1.27 (tree-sitter reparse bound) |
+| `idle` | idle_cpu_ms per 2 s | 20 | 30 (caret blink; unchanged) |
+| first frame, 500k-line plain file | frame_wall_ms | 150 | 77 |
+
+Per-key app work is now ~2.5 ms of a ~7 ms key-to-paint; the remainder is
+X delivery (~0.3 ms) and presentation (~3.5 ms, up to ~8 ms right after an
+edit) inside GPUI and the driver.
+
+## Not done, and why
+
+- GPUI loads the system font database (~200 ms here) and creates the
+  window (~57 ms) before any app code runs; GPUI carries a
+  `todo(linux) make font loading non-blocking`.
+- GPUI's X11 refresh timer uses the first CRTC's mode (60 Hz on this host)
+  rather than the window's monitor (144 Hz), capping smooth scrolling at
+  60 fps; it also re-presents the last scene for one second after input.
+  Both belong in GPUI (`platform/linux/x11/client.rs`).
+- tree-sitter's incremental reparse per keystroke (0.16 ms mid-file, up to
+  2.5 ms with error recovery at the top of a 660 KB file) is left
+  synchronous: coalescing needs composed edit batches and moving it off the
+  input path would paint one frame with stale highlights.
+- Caret blink re-renders the whole window twice a second (~15 ms CPU/s).
