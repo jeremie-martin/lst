@@ -40,6 +40,14 @@ impl CodeLine {
         }
     }
 
+    /// Painted width of the whole segment.
+    pub(crate) fn width(&self) -> Pixels {
+        match self {
+            Self::Shaped(line) => line.width,
+            Self::Cells(line) => line.char_width * line.text.len() as f32,
+        }
+    }
+
     /// X offset of the boundary before `local_char`, relative to the line origin.
     pub(crate) fn x_for_char(&self, local_char: usize) -> Pixels {
         match self {
@@ -228,9 +236,21 @@ pub(crate) fn is_cell_text(text: &str) -> bool {
     text.bytes().all(|byte| byte.is_ascii() && byte != b'\t')
 }
 
+/// How `build_cell_line` splits text into shaped tokens.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CellTokens {
+    /// Maximal runs of identifier characters or of punctuation, as
+    /// cosmic-text's word boundaries, so ligatures survive.
+    Words,
+    /// One token per character: for text with no ligatures, such as gutter
+    /// line numbers, every distinct string then shares a handful of glyphs.
+    Chars,
+}
+
 /// Builds a cell line for plain monospace ASCII `text` colored by `runs`.
 /// Returns `None` when a token does not shape to uniform cells, so the caller
 /// falls back to GPUI shaping.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_cell_line(
     cache: &mut GlyphTokenCache,
     text: SharedString,
@@ -238,6 +258,7 @@ pub(crate) fn build_cell_line(
     font: &Font,
     font_size: Pixels,
     char_width: Pixels,
+    tokens: CellTokens,
     window: &Window,
 ) -> Option<Rc<CellLine>> {
     debug_assert!(is_cell_text(text.as_ref()));
@@ -250,7 +271,7 @@ pub(crate) fn build_cell_line(
     while start < bytes.len() {
         let class = token_class(bytes[start]);
         let mut end = start + 1;
-        while end < bytes.len() && token_class(bytes[end]) == class {
+        while tokens == CellTokens::Words && end < bytes.len() && token_class(bytes[end]) == class {
             end += 1;
         }
         if class != TokenClass::Space {

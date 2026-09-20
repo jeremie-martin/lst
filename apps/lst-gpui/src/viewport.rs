@@ -1,5 +1,5 @@
 use crate::{
-    code_line::{build_cell_line, is_cell_text, CodeLine, GlyphTokenCache},
+    code_line::{build_cell_line, is_cell_text, CellTokens, CodeLine, GlyphTokenCache},
     diagnostics,
     settings::{GuideMode, MatchBracketsSetting, RenderWhitespaceSetting},
     ui::theme::{metrics, typography, Theme},
@@ -53,6 +53,10 @@ struct CachedCodeLine {
 
 struct CachedDisplayLine {
     text: SharedString,
+    /// Characters in the display text (no line ending).
+    char_count: usize,
+    /// Characters in the rope line, including its line ending.
+    len_chars: usize,
     whitespace_bounds: Option<WhitespaceBounds>,
 }
 
@@ -63,8 +67,12 @@ struct WhitespaceBounds {
 }
 
 impl CachedDisplayLine {
-    fn new(text: SharedString) -> Self {
+    fn new(buffer: &Rope, line_ix: usize) -> Self {
+        let line = buffer.line(line_ix);
+        let text = display_text_of(line);
         Self {
+            char_count: text.chars().count(),
+            len_chars: line.len_chars(),
             text,
             whitespace_bounds: None,
         }
@@ -97,7 +105,7 @@ pub(crate) struct ViewportCache {
     glyph_tokens: GlyphTokenCache,
     display_lines: HashMap<usize, CachedDisplayLine>,
     wrapped_lines: HashMap<(usize, Option<usize>), Rc<[WrappedSegment]>>,
-    gutter_lines: HashMap<usize, CachedShapedLine>,
+    gutter_lines: HashMap<usize, CachedCodeLine>,
     pub(crate) syntax_highlights: Option<CachedSyntaxHighlights>,
     pub(crate) wrap_layout: Option<CachedWrapLayout>,
     max_unwrapped_line_width: Option<CachedUnwrappedLineWidth>,
@@ -106,6 +114,8 @@ pub(crate) struct ViewportCache {
     occurrence_highlights: Option<CachedOccurrenceHighlights>,
     selection_match_highlights: Option<CachedSelectionMatchHighlights>,
     marker_lines: HashMap<usize, CachedShapedLine>,
+    /// Line window the per-line caches were last trimmed to.
+    retained_lines: Option<Range<usize>>,
 }
 
 #[derive(Clone)]
@@ -315,7 +325,7 @@ pub(crate) struct PaintedRow {
     pub(crate) logical_end_char: usize,
     pub(crate) cursor_end_inclusive: bool,
     pub(crate) code_line: Option<CodeLine>,
-    pub(crate) gutter_line: Option<ShapedLine>,
+    pub(crate) gutter_line: Option<CodeLine>,
     pub(crate) gutter_text: Option<String>,
 }
 
@@ -562,7 +572,11 @@ fn trim_display_line(line: &str) -> &str {
 }
 
 pub(crate) fn line_display_text(buffer: &Rope, line_ix: usize) -> SharedString {
-    let mut line = buffer.line(line_ix).to_string();
+    display_text_of(buffer.line(line_ix))
+}
+
+fn display_text_of(line: ropey::RopeSlice<'_>) -> SharedString {
+    let mut line = line.to_string();
     while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
         line.pop();
     }
@@ -570,20 +584,18 @@ pub(crate) fn line_display_text(buffer: &Rope, line_ix: usize) -> SharedString {
 }
 
 fn cached_line_display_text(cache: &mut ViewportCache, buffer: &Rope, line_ix: usize) -> SharedString {
+    cached_display_line(cache, buffer, line_ix).text.clone()
+}
+
+fn cached_display_line<'a>(cache: &'a mut ViewportCache, buffer: &Rope, line_ix: usize) -> &'a mut CachedDisplayLine {
     cache
         .display_lines
         .entry(line_ix)
-        .or_insert_with(|| CachedDisplayLine::new(line_display_text(buffer, line_ix)))
-        .text
-        .clone()
+        .or_insert_with(|| CachedDisplayLine::new(buffer, line_ix))
 }
 
 fn cached_line_whitespace_bounds(cache: &mut ViewportCache, buffer: &Rope, line_ix: usize) -> WhitespaceBounds {
-    cache
-        .display_lines
-        .entry(line_ix)
-        .or_insert_with(|| CachedDisplayLine::new(line_display_text(buffer, line_ix)))
-        .whitespace_bounds()
+    cached_display_line(cache, buffer, line_ix).whitespace_bounds()
 }
 
 fn char_to_byte_index(text: &str, char_ix: usize) -> usize {
@@ -1095,10 +1107,72 @@ fn visible_visual_row_range(
     start..end.max(start.saturating_add(1))
 }
 
+/// Gutter label for `line_ix`, painted from per-digit glyph cells when the
+/// font allows it. Every line number then costs a few hash lookups instead
+/// of a cosmic-text shaping pass.
+#[allow(clippy::too_many_arguments)]
+fn cached_gutter_line(
+    cache: &mut ViewportCache,
+    line_ix: usize,
+    text: &str,
+    style_key: u64,
+    run: &TextRun,
+    font_size: Pixels,
+    char_width: Pixels,
+    window: &mut Window,
+) -> Option<CodeLine> {
+    if text.is_empty() {
+        return None;
+    }
+    if let Some(cached) = cache.gutter_lines.get(&line_ix) {
+        if cached.text.as_ref() == text && cached.style_key == style_key && cached.font_size == font_size {
+            return Some(cached.line.clone());
+        }
+    }
+    let text = SharedString::from(text.to_string());
+    let runs = [TextRun {
+        len: text.len(),
+        ..run.clone()
+    }];
+    let cells = is_cell_text(text.as_ref())
+        .then(|| {
+            build_cell_line(
+                &mut cache.glyph_tokens,
+                text.clone(),
+                &runs,
+                &run.font,
+                font_size,
+                char_width,
+                CellTokens::Chars,
+                window,
+            )
+        })
+        .flatten();
+    let line = match cells {
+        Some(cells) => CodeLine::Cells(cells),
+        None => CodeLine::Shaped(Rc::new(window.text_system().shape_line(
+            text.clone(),
+            font_size,
+            &runs,
+            None,
+        ))),
+    };
+    cache.gutter_lines.insert(
+        line_ix,
+        CachedCodeLine {
+            text,
+            style_key,
+            font_size,
+            line: line.clone(),
+        },
+    );
+    Some(line)
+}
+
 fn shape_cached_line(
     cache: &mut HashMap<usize, CachedShapedLine>,
     line_ix: usize,
-    text: SharedString,
+    text: &str,
     style_key: u64,
     base_run: &TextRun,
     font_size: Pixels,
@@ -1109,11 +1183,12 @@ fn shape_cached_line(
     }
 
     if let Some(cached) = cache.get(&line_ix) {
-        if cached.text == text && cached.style_key == style_key && cached.font_size == font_size {
+        if cached.text.as_ref() == text && cached.style_key == style_key && cached.font_size == font_size {
             return Some(cached.shaped.clone());
         }
     }
 
+    let text = SharedString::from(text.to_string());
     let shaped = window.text_system().shape_line(
         text.clone(),
         font_size,
@@ -1165,7 +1240,18 @@ fn build_cached_segment(
         .first()
         .map_or_else(typography::primary_font, |run| run.font.clone());
     let cells = is_cell_text(text.as_ref())
-        .then(|| build_cell_line(glyph_tokens, text.clone(), runs, &font, font_size, char_width, window))
+        .then(|| {
+            build_cell_line(
+                glyph_tokens,
+                text.clone(),
+                runs,
+                &font,
+                font_size,
+                char_width,
+                CellTokens::Words,
+                window,
+            )
+        })
         .flatten();
     let line = match cells {
         Some(cells) => CodeLine::Cells(cells),
@@ -1299,11 +1385,12 @@ fn visible_occurrence_highlights(
     buffer: &Rope,
     revision: u64,
     query: Option<&str>,
-    scan_windows: Vec<Range<usize>>,
+    visible_windows: &[Range<usize>],
 ) -> Rc<[Range<usize>]> {
     let Some(query) = query else {
         return Rc::from([]);
     };
+    let scan_windows = occurrence_scan_windows(buffer, visible_windows);
     if let Some(cached) = cache.occurrence_highlights.as_ref() {
         if cached.revision == revision && cached.query == query && cached.scan_windows == scan_windows {
             return cached.ranges.clone();
@@ -1513,11 +1600,27 @@ fn visible_marker_candidates(
     if render_whitespace == RenderWhitespaceSetting::None && !render_control_characters {
         return Vec::new();
     }
+    // Selection-mode markers exist only inside selected text, so without
+    // control characters only windows a selection overlaps need scanning.
+    let selected_ranges: Vec<Range<usize>> = if render_whitespace == RenderWhitespaceSetting::Selection {
+        selection_set
+            .as_slice()
+            .iter()
+            .map(Selection::range)
+            .filter(|range| !range.is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let selection_scan_only = render_whitespace == RenderWhitespaceSetting::Selection && !render_control_characters;
 
     let mut candidates = Vec::new();
     for window in visible_windows {
         let start = window.start.min(buffer.len_chars());
         if start >= window.end || start == buffer.len_chars() {
+            continue;
+        }
+        if selection_scan_only && !overlaps_any_sorted(&(start..window.end), &selected_ranges) {
             continue;
         }
         let line_ix = buffer.char_to_line(start);
@@ -1665,30 +1768,37 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     }
     let cached_first_line = first_line.saturating_sub(SHAPED_LINE_CACHE_MARGIN);
     let cached_last_line = last_visible_line.saturating_add(SHAPED_LINE_CACHE_MARGIN);
-    cache
-        .code_lines
-        .retain(|(line_ix, _, _), _| *line_ix >= cached_first_line && *line_ix <= cached_last_line);
-    cache
-        .wrapped_lines
-        .retain(|(line_ix, _), _| *line_ix >= cached_first_line && *line_ix <= cached_last_line);
-    cache
-        .display_lines
-        .retain(|line_ix, _| *line_ix >= cached_first_line && *line_ix <= cached_last_line);
-    cache
-        .gutter_lines
-        .retain(|line_ix, _| show_gutter && *line_ix >= cached_first_line && *line_ix <= cached_last_line);
+    let retained_lines = cached_first_line..cached_last_line.saturating_add(1);
+    if cache.retained_lines.as_ref() != Some(&retained_lines) || (!show_gutter && !cache.gutter_lines.is_empty()) {
+        cache
+            .code_lines
+            .retain(|(line_ix, _, _), _| retained_lines.contains(line_ix));
+        cache
+            .wrapped_lines
+            .retain(|(line_ix, _), _| retained_lines.contains(line_ix));
+        cache
+            .display_lines
+            .retain(|line_ix, _| retained_lines.contains(line_ix));
+        cache
+            .gutter_lines
+            .retain(|line_ix, _| show_gutter && retained_lines.contains(line_ix));
+        cache.retained_lines = Some(retained_lines);
+    }
 
     let mut rows = Vec::new();
+    // Line starts accumulate from the first visible line; the rope is asked
+    // once per frame rather than twice per row.
+    let mut line_start_char = buffer.line_to_char(first_line);
     for line_ix in first_line..last_visible_line.saturating_add(1).min(buffer.len_lines()) {
-        let line = cached_line_display_text(&mut cache, buffer, line_ix);
-        let display_source = line.as_ref();
-        let line_start_char = buffer.line_to_char(line_ix);
-        let display_len = display_source.chars().count();
-        let logical_end_char = if line_ix + 1 < buffer.len_lines() {
-            buffer.line_to_char(line_ix + 1)
-        } else {
-            buffer.len_chars()
+        let (line, display_len, logical_end_char) = {
+            let cached = cached_display_line(&mut cache, buffer, line_ix);
+            (
+                cached.text.clone(),
+                cached.char_count,
+                line_start_char + cached.len_chars,
+            )
         };
+        let display_source = line.as_ref();
         let segment_key = (line_ix, show_wrap.then_some(layout.wrap_columns));
         let segments = cache
             .wrapped_lines
@@ -1770,13 +1880,14 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
                     .into(),
                     ..gutter_muted_run.clone()
                 };
-                shape_cached_line(
-                    &mut cache.gutter_lines,
+                cached_gutter_line(
+                    &mut cache,
                     line_ix,
-                    SharedString::from(gutter_text.clone()),
+                    gutter_text,
                     theme.style_key() * 2 + u64::from(cursor_line_number),
                     &gutter_run,
                     font_size,
+                    char_width,
                     window,
                 )
             } else {
@@ -1798,6 +1909,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
                 gutter_text,
             });
         }
+        line_start_char = logical_end_char;
     }
     if let Some(started) = rows_started {
         diagnostics::record_ms("viewport_rows_ms", started.elapsed().as_secs_f64() * 1000.0);
@@ -1975,11 +2087,10 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         render_control_characters,
     );
     for (at, glyph, whitespace) in marker_candidates {
-        let text = SharedString::from(glyph.to_string());
         if let Some(shaped) = shape_cached_line(
             &mut cache.marker_lines,
             glyph as usize,
-            text,
+            glyph.encode_utf8(&mut [0; 4]),
             theme.style_key(),
             &marker_run,
             font_size,
@@ -2005,13 +2116,8 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     }
 
     let highlights_started = diagnostics::trace_enabled().then(Instant::now);
-    let occurrence_highlights = visible_occurrence_highlights(
-        &mut cache,
-        buffer,
-        revision,
-        occurrence_query,
-        occurrence_scan_windows(buffer, &visible_windows),
-    );
+    let occurrence_highlights =
+        visible_occurrence_highlights(&mut cache, buffer, revision, occurrence_query, &visible_windows);
     let selection_match_highlights = visible_selection_match_highlights(
         &mut cache,
         buffer,
@@ -2444,8 +2550,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 rgb(theme.role.editor_bg),
             ));
             if let Some(gutter_line) = row.gutter_line.as_ref() {
-                let gutter_x = bounds.left() + gutter.text_right - gutter_line.width;
-                let _ = gutter_line.paint(point(gutter_x, row.row_top), line_height, window, cx);
+                let width = gutter_line.width();
+                let gutter_x = bounds.left() + gutter.text_right - width;
+                gutter_line.paint(point(gutter_x, row.row_top), line_height, px(0.0)..width, window, cx);
             }
         }
     }
@@ -2589,6 +2696,17 @@ mod tests {
             "selection markers must not materialize or classify the whole logical line"
         );
 
+        let collapsed = SelectionSet::single(Selection::from_range(100_003..100_003, false));
+        let candidates = visible_marker_candidates(
+            &mut cache,
+            &buffer,
+            std::slice::from_ref(&visible),
+            RenderWhitespaceSetting::Selection,
+            &collapsed,
+            false,
+        );
+        assert!(candidates.is_empty(), "no selected text means no selection markers");
+
         let controls = Rope::from_str(&"\u{1}".repeat(200_000));
         let candidates = visible_marker_candidates(
             &mut cache,
@@ -2730,7 +2848,7 @@ mod tests {
         let mut cache = cache_with_highlights(vec![3], vec![Vec::new()]);
         cache
             .display_lines
-            .insert(0, CachedDisplayLine::new(SharedString::from("old")));
+            .insert(0, CachedDisplayLine::new(&Rope::from_str("old"), 0));
         cache
             .wrapped_lines
             .insert((0, Some(80)), Rc::from(Vec::<WrappedSegment>::new()));

@@ -231,3 +231,30 @@ from paint end to the damage report.
 12. **Whitespace markers walk the slice** (`viewport.rs`): the marker scan
     did two rope character lookups per space to find runs; it now tracks
     neighbours while iterating the painted slice.
+
+### Full suite with the patches (0e90458, physical display, 3 runs, medians)
+
+The "previous" column is the first session's final table, which was measured
+on the `test-support` binary with phase-locked injection, so the latency rows
+are not comparable; the corrected production baseline is in the table above.
+
+| Scenario | Metric | Previous | Now |
+| --- | --- | --- | --- |
+| `open-small` | open_to_first_frame_ms | 310 | 227 |
+| `open-large` 17k-line Rust | open_to_quiet_ms | 1452 | 1332 |
+| `latency-typing` | key_to_paint_ms p50 | (10.4 corrected) | 7.9 |
+| `latency-navigation` | key_to_paint_ms p50 | (9.9 corrected) | 6.4 |
+| `latency-edit-navigation` | key_to_paint_ms p50 | 9.5 (biased) | 5.9 |
+| `typing-medium` / `-large` / `-plain` | typing_ms_per_char | 1.17 / 1.35 / 0.79 | 1.17 / 1.40 / 0.72 |
+| `idle` | idle_cpu_ms per 2 s | 30 | 20 |
+| `multi-cursor-1k` | viewport_paint_ms | 5.8 | 5.8 |
+| `search-large` | search_reindex_ms | 0.27 | 0.28 |
+| `large-paste` | paste_complete_ms | 10.2 | 11.0 |
+| `mixed-paste` | paste_input_to_paint_ms | 30 | 30-61 (see below) |
+| `scroll-plain` / `-highlighted` | scroll_overrun_ms | 1111 / 1118 | 1070 / 1077 |
+
+`mixed-paste` times one paste per run and swings between 30 and 61 ms for
+either binary across runs (clipboard hand-off with `xclip`, and a
+full-document plain bracket scan on paste); it needs more repetitions before
+it can rank a change. The scroll overrun metrics remain bounded by GPUI's
+one-second re-presentation after input.
