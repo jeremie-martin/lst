@@ -258,3 +258,56 @@ either binary across runs (clipboard hand-off with `xclip`, and a
 full-document plain bracket scan on paste); it needs more repetitions before
 it can rank a change. The scroll overrun metrics remain bounded by GPUI's
 one-second re-presentation after input.
+
+### Per-frame preparation (6a4bfa6, and the marker scan commit after it)
+
+A perf profile of smooth scrolling (468 frames in 3 s at 144 Hz) put the
+app's prepare step at 0.62 ms per frame: rope line-to-char lookups per row,
+identifier-window expansion for occurrence highlights even without a query,
+cosmic-text shaping of every newly visible gutter number, a full-window
+whitespace/control-character scan through rope slices (control characters
+render by default), and cache trimming over four maps every frame.
+
+13. Gutter numbers are painted from per-digit glyph cells (ten shaped
+    glyphs shared by every line number) instead of shaping each label.
+14. Line starts accumulate across the visible rows; display-line lengths are
+    cached; per-line caches are trimmed only when the retained window moves.
+15. Occurrence scan windows are built only when a query exists.
+16. Painted windows carry their logical line, and the marker scan walks the
+    cached display text (bytes on ASCII lines) instead of rope slices.
+
+| Metric (scroll-plain, per frame) | Before | After |
+| --- | --- | --- |
+| viewport_prepare_ms | 0.62 | 0.24 |
+| structure_decorations_ms | 0.21 | 0.05 |
+| viewport_visible_highlights_ms | 0.04 | 0.00 |
+| CPU per 3 s scroll run | 1710 ms | 1540 ms |
+
+`latency-navigation` key_to_frame_end p50 2.37 -> 2.02 ms. Paint stays at
+~0.68 ms per frame, all of it GPUI's per-glyph work (raster-bounds and atlas
+hash lookups, primitive insertion); the element tree, layout, and scene
+finish add ~1.2 ms per frame outside the viewport.
+
+### Frame anatomy after the preparation work
+
+Timing GPUI's draw phases directly (temporary instrumentation in the
+vendored crate, steady-state caret-blink frames, 1,360x860 logical window
+at scale 2):
+
+| Phase | ms | Notes |
+| --- | --- | --- |
+| request_layout | 0.32 | app `render` plus GPUI element construction, 42 taffy nodes |
+| taffy compute | 0.46 | 13 measured leaves, 83 measure calls per frame |
+| prepaint | 0.27 | 0.23 of it the viewport prepare step |
+| paint | 0.61 | 0.53 of it the viewport: ~2,000 `paint_glyph` calls |
+| scene finish | 0.18 | GPUI sorts every glyph sprite by (order, tile) each frame |
+
+Rendering without the tab strip and status bar (an experiment, not a
+change) cut frame CPU from 1.98 to 1.04 ms and key-to-frame-end p50 from
+2.0 to 1.1 ms: the ~35 chrome elements cost ~27 us each across GPUI's
+layout, prepaint, paint, and hit-testing work. Marking the never-wrapping
+chrome text `whitespace_nowrap` (so GPUI reuses its measured size across
+taffy passes) made no measurable difference and was not kept. Reducing the
+chrome to fewer, shallower elements is the remaining app-side lever for
+frame cost; every option changes element structure and therefore needs the
+pixel lane, so it is left for a dedicated change.
