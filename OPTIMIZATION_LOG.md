@@ -328,22 +328,25 @@ every binary, so app_init measured ~185 ms for a build that measured
 ~135 ms before. The final table therefore compares the unpatched production
 binary and the final build back to back in the same environment.
 
-| Scenario | Metric | Unpatched (119a528, production build) | Final |
+| Scenario | Metric | Unpatched (119a528, production build) | Final (1a61688) |
 | --- | --- | --- | --- |
-| `open-small` | open_to_first_frame_ms | 334 | 244 |
-| `latency-typing` | key_to_paint_ms p50 / p95 | 11.2 / 17.9 | 8.1 / 11.4 |
-| `latency-navigation` | key_to_paint_ms p50 / p95 | 10.6 / 17.8 | 5.5 / 8.7 |
-| `latency-edit-navigation` | key_to_paint_ms p50 / p95 | 8.4 / 17.4 | 6.0 / 8.4 |
-| `idle` | idle_cpu_ms per 2 s | 30 | 20-30 |
-| `typing-medium` / `-large` / `-plain` | typing_ms_per_char | 1.17 / 1.35 / 0.79 | 1.16 / 1.31 / 0.62 |
-| `scroll-plain` | frames rendered in the 3 s scroll | 205 (60 fps) | 469 (144 fps), prepare 0.24 ms/frame |
-| `multi-cursor-1k` | viewport_paint_ms | 5.7 | 5.8 |
-| `search-large` | search_reindex_ms | 0.27 | 0.31 |
-| `open-large` | open_to_quiet_ms | 1452 | 1369 |
+| `open-small` | open_to_first_frame_ms | 334 | 254 |
+| `latency-typing` | key_to_paint_ms p50 / p95 | 11.2 / 17.9 | 7.7 / 11.0 |
+| `latency-navigation` | key_to_paint_ms p50 / p95 | 10.6 / 17.8 | 5.3 / 8.3 |
+| `latency-edit-navigation` | key_to_paint_ms p50 / p95 | 8.4 / 17.4 | 5.4 / 8.5 |
+| `idle` | idle_cpu_ms per 2 s | 30 | 30 |
+| `typing-medium` / `-large` / `-plain` | typing_ms_per_char | 1.17 / 1.35 / 0.79 | 1.08 / 1.24 / 0.52 |
+| `scroll-plain` | frames rendered in the 3 s scroll | 205 (60 fps) | 469 (144 fps), prepare 0.24 + paint 0.5 ms/frame |
+| `multi-cursor-1k` | viewport_paint_ms | 5.7 | 3.9 |
+| `search-large` | search_reindex_ms | 0.27 | 0.32 |
+| `open-large` | open_to_quiet_ms | 1452 | 1381 |
+| `large-paste` | paste_complete_ms | 10.2 | 11.3 |
 
-Verification: `cargo test`, `cargo clippy --all-targets --all-features`,
-the full nested X11 lane (265 tests; one off-screen-cursor test timed out
-while the monitors were powered off and passes on rerun), and the physical
+The unpatched column was measured after the monitor power cycle; the final
+column is the complete suite on the final commit in the same environment.
+
+Verification on the final commit: `cargo test`, `cargo clippy --all-targets
+--all-features`, the full nested X11 lane (265 passed), and the physical
 visual lane with baselines regenerated per scenario from the unpatched
 binary: all ten scenarios are pixel-identical.
 
