@@ -342,7 +342,8 @@ binary and the final build back to back in the same environment.
 | key to frame end (app work) | navigation / typing p50 | 2.5 / 4.9 | 1.6 / 3.8 |
 | `idle` | idle_cpu_ms per 2 s | 30-40 | 20-30 |
 | `typing-medium` / `-large` / `-plain` | typing_ms_per_char | 1.17 / 1.35 / 0.79 | 1.02 / 1.27 / 0.53 |
-| `scroll-plain` | frames in the 3 s scroll, CPU | 205 (60 fps), 920 ms | 469 (144 fps), 1130 ms |
+| `scroll-plain` / `-highlighted` | scroll_frame_wall_ms_mean (worst) | 2.98 (6.4) / 2.81 (5.9) | 1.52 (3.1) / 1.61 (3.4) |
+| `scroll-plain` | frames per second, CPU per 3 s scroll | 66 fps, 900 ms | 156 fps, 1110 ms |
 | `multi-cursor-1k` | viewport_paint_ms | 5.7 | 3.7 |
 | `search-large` | search_reindex_ms | 0.27 | 0.28 |
 | `open-large` | open_to_quiet_ms | 1452 | 1350 |
