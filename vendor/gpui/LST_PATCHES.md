@@ -55,7 +55,16 @@ Every change is marked `lst patch` in the source.
    the first frame the server is still mapping the window, so the wait
    stalled render by 15-30 ms (the first frame's wall time was 2-3x its
    CPU time); every later title change cost a round trip. Both writes are
-   now sent and flushed without waiting.
+   now sent and flushed without waiting, as is the cursor-style attribute
+   change in `src/platform/linux/x11/client.rs`, which runs during painting
+   whenever the pointer crosses into a region with another cursor.
+
+7. **Per-window glyph tile cache** (`src/window.rs`). `paint_glyph` looked
+   up every glyph's raster bounds behind the text system's lock and its
+   atlas tile behind the atlas lock, twice per glyph per frame. Glyph tiles
+   are never removed from the atlas, so the window keeps one map from glyph
+   parameters to (raster bounds, tile) and consults it first. Viewport
+   paint 0.34 -> 0.22 ms per frame; scrolling CPU -18%. Pixel-identical.
 
 The `Cargo.toml` here also drops the crate's example and test targets whose
 sources are not vendored.

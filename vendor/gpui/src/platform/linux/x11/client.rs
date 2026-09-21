@@ -1554,16 +1554,19 @@ impl LinuxClient for X11Client {
         };
 
         state.cursor_styles.insert(focused_window, style);
-        check_reply(
-            || "Failed to set cursor style",
-            state.xcb_connection.change_window_attributes(
+        // lst patch: the cursor changes during painting; do not wait for the
+        // server to acknowledge the attribute write (see `set_title`).
+        state
+            .xcb_connection
+            .change_window_attributes(
                 focused_window,
                 &ChangeWindowAttributesAux {
                     cursor: Some(cursor),
                     ..Default::default()
                 },
-            ),
-        )
+            )
+            .map(|cookie| cookie.ignore_error())
+            .map_err(|error| anyhow!("Failed to set cursor style: {error:?}"))
         .log_err();
         state.xcb_connection.flush().log_err();
     }

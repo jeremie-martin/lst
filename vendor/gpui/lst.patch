@@ -161,7 +161,7 @@ diff -ru gpui-0.2.2/src/platform/linux/text_system.rs gpui-0.2.2/src/platform/li
          self.0.write().add_fonts(fonts)
 diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/linux/x11/client.rs
 --- gpui-0.2.2/src/platform/linux/x11/client.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/platform/linux/x11/client.rs	2026-09-21 00:42:32.605340920 +0200
++++ gpui-0.2.2/src/platform/linux/x11/client.rs	2026-09-21 02:20:38.462807909 +0200
 @@ -67,6 +67,9 @@
  };
  
@@ -252,7 +252,32 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
          }
          Ok(())
      }
-@@ -1740,21 +1779,29 @@
+@@ -1515,16 +1554,19 @@
+         };
+ 
+         state.cursor_styles.insert(focused_window, style);
+-        check_reply(
+-            || "Failed to set cursor style",
+-            state.xcb_connection.change_window_attributes(
++        // lst patch: the cursor changes during painting; do not wait for the
++        // server to acknowledge the attribute write (see `set_title`).
++        state
++            .xcb_connection
++            .change_window_attributes(
+                 focused_window,
+                 &ChangeWindowAttributesAux {
+                     cursor: Some(cursor),
+                     ..Default::default()
+                 },
+-            ),
+-        )
++            )
++            .map(|cookie| cookie.ignore_error())
++            .map_err(|error| anyhow!("Failed to set cursor style: {error:?}"))
+         .log_err();
+         state.xcb_connection.flush().log_err();
+     }
+@@ -1740,21 +1782,29 @@
                  // Ideally this would be re-queried when the window changes screens, but there
                  // doesn't seem to be an efficient / straightforward way to do this. Should also be
                  // updated when screen configurations change.
@@ -297,7 +322,7 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
                      None => {
                          log::error!(
                              "Failed to get screen mode info from xrandr, \
-@@ -1796,16 +1843,30 @@
+@@ -1796,16 +1846,30 @@
                              window.refresh(RequestFrameOptions {
                                  require_presentation: expose_event_received,
                                  force_render: false,
@@ -425,8 +450,20 @@ diff -ru gpui-0.2.2/src/scene.rs gpui-0.2.2/src/scene.rs
  
 diff -ru gpui-0.2.2/src/window.rs gpui-0.2.2/src/window.rs
 --- gpui-0.2.2/src/window.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/window.rs	2026-09-21 02:07:40.019030903 +0200
-@@ -1023,6 +1023,25 @@
++++ gpui-0.2.2/src/window.rs	2026-09-21 02:23:31.635660496 +0200
+@@ -823,6 +823,11 @@
+     pub(crate) platform_window: Box<dyn PlatformWindow>,
+     display_id: Option<DisplayId>,
+     sprite_atlas: Arc<dyn PlatformAtlas>,
++    /// lst patch: raster bounds and atlas tile per glyph variant painted in
++    /// this window. Glyph tiles are never removed from the atlas, so one
++    /// lookup here replaces a locked lookup in the text system and another
++    /// in the atlas for every glyph of every frame.
++    glyph_tiles: FxHashMap<RenderGlyphParams, Option<(Bounds<DevicePixels>, crate::AtlasTile)>>,
+     text_system: Arc<WindowTextSystem>,
+     rem_size: Pixels,
+     /// The stack of override values for the window's rem size.
+@@ -1023,6 +1028,25 @@
              let next_frame_callbacks = next_frame_callbacks.clone();
              let last_input_timestamp = last_input_timestamp.clone();
              move |request_frame_options| {
@@ -452,7 +489,7 @@ diff -ru gpui-0.2.2/src/window.rs gpui-0.2.2/src/window.rs
                  let next_frame_callbacks = next_frame_callbacks.take();
                  if !next_frame_callbacks.is_empty() {
                      handle
-@@ -1034,13 +1053,6 @@
+@@ -1034,13 +1058,6 @@
                          .log_err();
                  }
  
@@ -466,6 +503,51 @@ diff -ru gpui-0.2.2/src/window.rs gpui-0.2.2/src/window.rs
                  if invalidator.is_dirty() || request_frame_options.force_render {
                      measure("frame duration", || {
                          handle
+@@ -1211,6 +1228,7 @@
+             platform_window,
+             display_id,
+             sprite_atlas,
++            glyph_tiles: FxHashMap::default(),
+             text_system,
+             rem_size: px(16.),
+             rem_size_override_stack: SmallVec::new(),
+@@ -2972,15 +2990,27 @@
+             is_emoji: false,
+         };
+ 
+-        let raster_bounds = self.text_system().raster_bounds(&params)?;
+-        if !raster_bounds.is_zero() {
+-            let tile = self
+-                .sprite_atlas
+-                .get_or_insert_with(&params.clone().into(), &mut || {
+-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
+-                    Ok(Some((size, Cow::Owned(bytes))))
+-                })?
+-                .expect("Callback above only errors or returns Some");
++        let cached = match self.glyph_tiles.get(&params) {
++            Some(cached) => cached.clone(),
++            None => {
++                let raster_bounds = self.text_system().raster_bounds(&params)?;
++                let cached = if raster_bounds.is_zero() {
++                    None
++                } else {
++                    let tile = self
++                        .sprite_atlas
++                        .get_or_insert_with(&params.clone().into(), &mut || {
++                            let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
++                            Ok(Some((size, Cow::Owned(bytes))))
++                        })?
++                        .expect("Callback above only errors or returns Some");
++                    Some((raster_bounds, tile))
++                };
++                self.glyph_tiles.insert(params, cached.clone());
++                cached
++            }
++        };
++        if let Some((raster_bounds, tile)) = cached {
+             let bounds = Bounds {
+                 origin: glyph_origin.map(|px| px.floor()) + raster_bounds.origin.map(Into::into),
+                 size: tile.bounds.size.map(Into::into),
 --- gpui-0.2.2/Cargo.toml	1970-01-01 01:00:01.000000000 +0100
 +++ gpui-0.2.2/Cargo.toml	2026-09-20 22:51:45.805506100 +0200
 @@ -104,130 +104,6 @@

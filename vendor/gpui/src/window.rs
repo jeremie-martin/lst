@@ -823,6 +823,11 @@ pub struct Window {
     pub(crate) platform_window: Box<dyn PlatformWindow>,
     display_id: Option<DisplayId>,
     sprite_atlas: Arc<dyn PlatformAtlas>,
+    /// lst patch: raster bounds and atlas tile per glyph variant painted in
+    /// this window. Glyph tiles are never removed from the atlas, so one
+    /// lookup here replaces a locked lookup in the text system and another
+    /// in the atlas for every glyph of every frame.
+    glyph_tiles: FxHashMap<RenderGlyphParams, Option<(Bounds<DevicePixels>, crate::AtlasTile)>>,
     text_system: Arc<WindowTextSystem>,
     rem_size: Pixels,
     /// The stack of override values for the window's rem size.
@@ -1223,6 +1228,7 @@ impl Window {
             platform_window,
             display_id,
             sprite_atlas,
+            glyph_tiles: FxHashMap::default(),
             text_system,
             rem_size: px(16.),
             rem_size_override_stack: SmallVec::new(),
@@ -2984,15 +2990,27 @@ impl Window {
             is_emoji: false,
         };
 
-        let raster_bounds = self.text_system().raster_bounds(&params)?;
-        if !raster_bounds.is_zero() {
-            let tile = self
-                .sprite_atlas
-                .get_or_insert_with(&params.clone().into(), &mut || {
-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })?
-                .expect("Callback above only errors or returns Some");
+        let cached = match self.glyph_tiles.get(&params) {
+            Some(cached) => cached.clone(),
+            None => {
+                let raster_bounds = self.text_system().raster_bounds(&params)?;
+                let cached = if raster_bounds.is_zero() {
+                    None
+                } else {
+                    let tile = self
+                        .sprite_atlas
+                        .get_or_insert_with(&params.clone().into(), &mut || {
+                            let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
+                            Ok(Some((size, Cow::Owned(bytes))))
+                        })?
+                        .expect("Callback above only errors or returns Some");
+                    Some((raster_bounds, tile))
+                };
+                self.glyph_tiles.insert(params, cached.clone());
+                cached
+            }
+        };
+        if let Some((raster_bounds, tile)) = cached {
             let bounds = Bounds {
                 origin: glyph_origin.map(|px| px.floor()) + raster_bounds.origin.map(Into::into),
                 size: tile.bounds.size.map(Into::into),

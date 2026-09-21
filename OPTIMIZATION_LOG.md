@@ -400,3 +400,13 @@ render. The vendored X11 `set_title` now sends both writes and flushes
 without waiting, and the app no longer re-sets the creation-time title
 after opening the window. First frame wall 28-42 -> 13-16 ms (equal to its
 CPU time); `open-small` 334 -> ~260 ms in the current environment.
+
+### Glyph tile cache (vendored gpui patch 7)
+
+20. GPUI's `paint_glyph` did two locked hash lookups per glyph per frame
+    (raster bounds in the text system, tile in the atlas). Glyph tiles are
+    never removed from the atlas, so the window now caches (raster bounds,
+    tile) per glyph variant and consults that first. Viewport paint
+    0.34 -> 0.22 ms per frame (`latency-navigation`), scroll paint
+    233 -> 126 ms per 3 s run and scroll CPU 1370 -> 1130 ms. Pixel-identical.
+    The X11 cursor-style attribute change also no longer waits for a reply.
