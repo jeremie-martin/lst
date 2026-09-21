@@ -106,6 +106,22 @@ Commands: see `docs/performance.md`.
   motion and text-input tests passed; add a real-app CRLF/subword regression
   to the final acceptance gate.
 
+### Batch-edit cursor mapping
+
+- A CPU profile of deleting 10,000 selected occurrences attributes ~96% of
+  samples to repeatedly scanning changes/counting replacement characters for
+  each cursor. The old mapping is quadratic in selections and edits.
+- Build a temporary prefix index from the immutable `TextChangeSet`, then
+  binary-search each position. No persistent cache or invalidation protocol.
+  Use it for multi-selection deletion, linewise paste, and mapped line edits;
+  the latter no longer constructs and edits a throwaway rope just to map
+  offsets. Keep the original linear algorithm only as the test oracle.
+- Exhaustive small-coordinate equivalence includes touching replacements,
+  repeated insertions, Unicode growth, deletions, and out-of-order queries.
+  Add 1k/10k deletion cases to the existing model benchmark and a real-app
+  1k-selection deletion/undo regression. Isolated before/after timings and
+  affected X11 suites remain to be run after the full checkpoint.
+
 ## Measurement additions
 
 - `open-small`: process spawn to first completed frame (`open_to_first_frame_ms`),

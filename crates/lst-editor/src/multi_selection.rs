@@ -214,9 +214,10 @@ where
         .unwrap_or(0);
 
     let changes = TextChangeSet::new(changes, primary_change);
+    let offset_map = changes.offset_map();
     let selections_after: Vec<Selection> = caret_offsets
         .into_iter()
-        .map(|offset| Selection::collapsed(changes.map_offset_to_inserted_end(offset)))
+        .map(|offset| Selection::collapsed(offset_map.map_offset(offset)))
         .collect();
     let selection_after = SelectionSet::from_selections_coalescing_cursors(selections_after, primary)
         .expect("multi-selection delete preserves a valid selection set");

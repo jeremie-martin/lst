@@ -24,6 +24,28 @@ fn selection_widths(record: &lst_x11_harness::StateTraceRecord) -> Vec<usize> {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn deleting_thousand_occurrences_keeps_cursors_and_undo_restores_text() -> TestResult {
+    support::run_x11_test("multi-cursor-delete-thousand", |session| {
+        let original = "selected rest\n".repeat(1_000);
+        let path = session.seed_file("delete-thousand.txt", &original)?;
+        let mut editor = session.open_file("delete-thousand", &path)?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-S-l><backspace>")?;
+        let record = editor.read_state()?;
+        assert_eq!(record.cursors.len(), 1_000);
+        for (line, cursor) in record.cursors.iter().enumerate() {
+            assert_eq!(cursor.anchor_pos(), (line, 0));
+            assert_eq!(cursor.head_pos(), (line, 0));
+        }
+        editor.save_then_expect_file(&path, &" rest\n".repeat(1_000))?;
+        editor.keys("<C-z>")?;
+        editor.save_then_expect_file(&path, &original)?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn end_moves_each_cursor_to_own_line_end() -> TestResult {
     support::run_x11_test("multi-cursor-editing-end-line-end", |session| {
         let path = session.seed_file("end-line-end.txt", "a\nabcd\nabcdef")?;

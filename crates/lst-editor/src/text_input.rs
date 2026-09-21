@@ -241,9 +241,10 @@ pub(crate) fn linewise_paste_request(tab: &EditorTab, mut text: String) -> EditR
             .collect(),
         primary_change,
     );
+    let offset_map = changes.offset_map();
     let selections = line_starts
         .into_iter()
-        .map(|start| Selection::collapsed(changes.map_offset_to_inserted_end(start)))
+        .map(|start| Selection::collapsed(offset_map.map_offset(start)))
         .collect();
     let selection_after =
         SelectionSet::from_selections_coalescing_cursors(selections, tab.selection_set().primary_index())

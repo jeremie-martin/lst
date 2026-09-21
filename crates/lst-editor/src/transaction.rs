@@ -54,6 +54,24 @@ pub(crate) struct TextChangeSet {
     primary: usize,
 }
 
+/// A temporary index for mapping many positions through one immutable edit.
+/// Prefix lengths are computed once; queries may arrive in any order.
+pub(crate) struct TextChangeOffsetMap<'a> {
+    changes: &'a [TextChange],
+    inserted_ends: Vec<usize>,
+}
+
+impl TextChangeOffsetMap<'_> {
+    pub(crate) fn map_offset(&self, offset: usize) -> usize {
+        let after = self.changes.partition_point(|change| change.range.start <= offset);
+        let Some(index) = after.checked_sub(1) else {
+            return offset;
+        };
+        // At a shared boundary, the last change wins, including insertions.
+        self.inserted_ends[index] + offset.saturating_sub(self.changes[index].range.end)
+    }
+}
+
 impl TextChangeSet {
     pub(crate) fn single(change: TextChange) -> Self {
         Self {
@@ -78,8 +96,22 @@ impl TextChangeSet {
         &self.changes
     }
 
-    pub(crate) fn map_offset_to_inserted_end(&self, offset: usize) -> usize {
-        map_offset_to_inserted_end(&self.changes, offset)
+    pub(crate) fn offset_map(&self) -> TextChangeOffsetMap<'_> {
+        let mut delta = 0isize;
+        let inserted_ends = self
+            .changes
+            .iter()
+            .map(|change| {
+                let inserted_len = change.replacement.chars().count();
+                let end = offset_with_delta(change.range.start, delta) + inserted_len;
+                delta += inserted_len as isize - (change.range.end - change.range.start) as isize;
+                end
+            })
+            .collect();
+        TextChangeOffsetMap {
+            changes: &self.changes,
+            inserted_ends,
+        }
     }
 
     pub(crate) fn normalized_for_len(mut self, len: usize) -> Self {
@@ -198,6 +230,7 @@ pub(crate) fn offset_with_delta(offset: usize, delta: isize) -> usize {
     }
 }
 
+#[cfg(test)]
 fn map_offset_to_inserted_end(changes: &[TextChange], offset: usize) -> usize {
     let mut delta = 0isize;
     let mut mapped = None;
@@ -246,5 +279,44 @@ pub(crate) fn ordered_range(start: usize, end: usize) -> Range<usize> {
         start..end
     } else {
         end..start
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indexed_offsets_match_linear_mapping_at_every_boundary() {
+        // Include touching replacements, repeated zero-length insertions,
+        // Unicode growth, deletions, and positions before/after all changes.
+        for a in 0..=4 {
+            for b in a..=4 {
+                for c in b..=5 {
+                    for d in c..=5 {
+                        for first in ["", "x", "é🦀"] {
+                            for second in ["", "ab", "e\u{301}"] {
+                                let changes = TextChangeSet::new(
+                                    vec![
+                                        TextChange::replace(a..b, first),
+                                        TextChange::replace(c..d, second),
+                                        TextChange::insert(d, "末"),
+                                    ],
+                                    1,
+                                );
+                                let map = changes.offset_map();
+                                for offset in (0..=8).rev().chain(0..=8) {
+                                    assert_eq!(
+                                        map.map_offset(offset),
+                                        map_offset_to_inserted_end(changes.as_slice(), offset),
+                                        "changes={changes:?}, offset={offset}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

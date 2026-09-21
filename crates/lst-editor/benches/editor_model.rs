@@ -398,6 +398,27 @@ fn bench_editor_multi_cursor(c: &mut Criterion) {
         );
     }
 
+    // Cursor mapping must not scan every edit again for every selection.
+    for count in [1_000, 10_000] {
+        let text = "selected rest\n".repeat(count);
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(BenchmarkId::new("delete_occurrences", count), &text, |b, text| {
+            b.iter_batched(
+                || {
+                    let mut driver = ModelDriver::new("selections.txt", text);
+                    driver.execute(EditorCommand::SelectAllOccurrences);
+                    assert_eq!(driver.selection_count(), count);
+                    driver
+                },
+                |mut driver| {
+                    driver.execute(EditorCommand::Backspace);
+                    black_box((driver.selection_count(), driver.text_len()));
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
+
     group.finish();
 }
 

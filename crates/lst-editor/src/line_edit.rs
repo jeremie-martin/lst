@@ -462,9 +462,22 @@ fn line_clusters(lines: &[usize]) -> Vec<Range<usize>> {
     clusters
 }
 fn request_with_mapped_selection(tab: &EditorTab, changes: Vec<TextChange>) -> Option<EditRequest> {
-    request_with_selection_map(tab, changes, |changes, _after_buffer, offset| {
-        changes.map_offset_to_inserted_end(offset)
-    })
+    let changes = TextChangeSet::try_new(changes, 0)?;
+    let offset_map = changes.offset_map();
+    let selections_after = tab
+        .selection_set()
+        .as_slice()
+        .iter()
+        .map(|selection| {
+            Selection::new(
+                offset_map.map_offset(selection.anchor()),
+                offset_map.map_offset(selection.head()),
+            )
+        })
+        .collect();
+    let selection_after =
+        SelectionSet::from_selections_coalescing_cursors(selections_after, tab.selection_set().primary_index()).ok()?;
+    Some(EditRequest::other_break(changes).with_selection_after(SelectionAfter::Exact(selection_after)))
 }
 fn request_with_line_move_selection(
     tab: &EditorTab,
@@ -498,17 +511,6 @@ fn request_with_duplicate_line_selection(
     lines: &[usize],
     below: bool,
 ) -> Option<EditRequest> {
-    request_with_selection_map(tab, changes, |_changes, after_buffer, offset| {
-        map_duplicate_line_endpoint(tab, after_buffer, offset, lines, below)
-    })
-}
-fn request_with_selection_map<F>(tab: &EditorTab, changes: Vec<TextChange>, mut map_endpoint: F) -> Option<EditRequest>
-where
-    F: FnMut(&TextChangeSet, &ropey::Rope, usize) -> usize,
-{
-    if changes.is_empty() {
-        return None;
-    }
     let changes = TextChangeSet::try_new(changes, 0)?;
     let after_buffer = buffer_after_changes(tab, &changes);
     let selections_after = tab
@@ -516,8 +518,8 @@ where
         .as_slice()
         .iter()
         .map(|selection| {
-            let anchor = map_endpoint(&changes, &after_buffer, selection.anchor());
-            let head = map_endpoint(&changes, &after_buffer, selection.head());
+            let anchor = map_duplicate_line_endpoint(tab, &after_buffer, selection.anchor(), lines, below);
+            let head = map_duplicate_line_endpoint(tab, &after_buffer, selection.head(), lines, below);
             Selection::new(anchor, head)
         })
         .collect::<Vec<_>>();
