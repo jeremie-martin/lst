@@ -74,8 +74,19 @@ Commands: see `docs/performance.md`.
 - The sweep also exposed ~60 paints per two idle seconds. X11 event capture
   confirms a stream of identical synthetic ConfigureNotify messages from the
   WM. GPUI's unconditional resize/move callbacks turn these into full redraws.
-  A candidate fix compares actual drawable size and window origin while
-  retaining drawable queries and XSync acknowledgements; measure separately.
+  Compare actual drawable size and window origin while retaining drawable
+  queries and XSync acknowledgements. A separate three-run physical-display
+  comparison gives idle CPU 160 -> 40 ms per two seconds (10 ms sampling
+  resolution), and paints 80 -> four. This fixes redundant redraws rather than
+  suppressing legitimate resize, movement, or caret-blink work.
+- Retire the parallel font-scan patch and its three direct dependencies.
+  Eleven launches each (five-run batches followed by six alternating pairs)
+  give first-frame medians 173.605 ms custom versus 177.894 ms upstream,
+  with 143–208 ms within-variant spread. Isolated font loading benefits from
+  parallel scanning, but overlaps GPU initialization and competes with it.
+  The small uncertain whole-launch difference does not earn ~170 patch lines
+  of custom fontconfig parsing and threading. Restore upstream byte-for-byte;
+  keep the independently useful GPU startup thread.
 
 ### Local word and subword boundaries
 

@@ -1,0 +1,27 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -94,6 +94,9 @@
+ pub struct ContextDesc {
+     /// Ability to present contents to a window.
+     pub presentation: bool,
++    /// lst patch: upstream c7edf7b6, opt in to Vulkan acceleration structures
++    /// and ray queries instead of enabling them for raster-only applications.
++    pub ray_tracing: bool,
+     /// Enable validation of the GAPI, shaders,
+     /// and insert crash markers into command buffers.
+     pub validation: bool,
+--- a/src/vulkan/init.rs
++++ b/src/vulkan/init.rs
+@@ -215,7 +215,11 @@
+         true
+     };
+
+-    let ray_tracing = if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
++    // lst patch: backport the upstream ContextDesc ray-tracing opt-in.
++    let ray_tracing = if !desc.ray_tracing {
++        log::info!("Ray tracing disabled by configuration");
++        None
++    } else if !supported_extensions.contains(&vk::KHR_ACCELERATION_STRUCTURE_NAME)
+         || !supported_extensions.contains(&vk::KHR_RAY_QUERY_NAME)
+     {
+         log::info!("No ray tracing extensions are supported");

@@ -107,7 +107,9 @@ behaviour that bounds what the app can improve.
 ## Patched GPUI
 
 The workspace builds against `vendor/gpui`, the gpui 0.2.2 release with the
-X11 and font-loading patches listed in `vendor/gpui/LST_PATCHES.md`. Each
+platform and rendering patches listed in `vendor/gpui/LST_PATCHES.md`. The
+workspace also backports Blade's explicit Vulkan ray-tracing opt-in; GPUI
+uses raster rendering only (see `vendor/blade-graphics/LST_PATCHES.md`). Each
 patch records the measurement that motivated it; re-measure with the
 `[patch.crates-io]` section of the root `Cargo.toml` removed to compare
 against the unpatched release.

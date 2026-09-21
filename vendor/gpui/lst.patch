@@ -1,176 +1,14 @@
-diff -ru gpui-0.2.2/src/platform/linux/text_system.rs gpui-0.2.2/src/platform/linux/text_system.rs
---- gpui-0.2.2/src/platform/linux/text_system.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/platform/linux/text_system.rs	2026-09-21 00:13:12.619776301 +0200
-@@ -53,7 +53,13 @@
- impl CosmicTextSystem {
-     pub(crate) fn new() -> Self {
-         // todo(linux) make font loading non-blocking
--        let mut font_system = FontSystem::new();
-+        // lst patch: scan the system fonts on several threads (see
-+        // `system_font_database`) instead of `FontSystem::new()`.
-+        let locale = sys_locale::get_locale().unwrap_or_else(|| {
-+            log::warn!("failed to get system locale, falling back to en-US");
-+            String::from("en-US")
-+        });
-+        let mut font_system = FontSystem::new_with_locale_and_db(locale, system_font_database());
- 
-         Self(RwLock::new(CosmicTextSystemState {
-             font_system,
-@@ -71,6 +77,142 @@
-     }
- }
- 
-+/// lst patch: builds the system font database the way `FontSystem::new()`
-+/// does through `fontdb::Database::load_system_fonts` (fontconfig
-+/// directories and aliases, then cosmic-text's default families), but parses
-+/// the font files on several threads. Scanning thousands of font files is
-+/// dominated by per-file syscalls, which serialised took ~200 ms of a
-+/// ~300 ms startup on a host with 12k font files.
-+fn system_font_database() -> fontdb::Database {
-+    use std::path::{Path, PathBuf};
-+
-+    let mut db = fontdb::Database::new();
-+    let mut fontconfig = fontconfig_parser::FontConfig::default();
-+    // `anyhow::Ok` is imported above, so `Result::Ok` patterns are avoided.
-+    let home = std::env::var("HOME").ok();
-+
-+    if let Some(config_file) = std::env::var("FONTCONFIG_FILE").ok() {
-+        let _ = fontconfig.merge_config(Path::new(&config_file));
-+    } else {
-+        let xdg_config_home = if let Some(val) = std::env::var("XDG_CONFIG_HOME").ok() {
-+            Some(PathBuf::from(val))
-+        } else {
-+            home.as_ref().map(|home| Path::new(home).join(".config"))
-+        };
-+        let read_global = match xdg_config_home {
-+            Some(p) => fontconfig
-+                .merge_config(&p.join("fontconfig/fonts.conf"))
-+                .is_err(),
-+            None => true,
-+        };
-+        if read_global {
-+            let _ = fontconfig.merge_config(Path::new("/etc/fonts/local.conf"));
-+        }
-+        let _ = fontconfig.merge_config(Path::new("/etc/fonts/fonts.conf"));
-+    }
-+
-+    for fontconfig_parser::Alias {
-+        alias,
-+        default,
-+        prefer,
-+        accept,
-+    } in fontconfig.aliases
-+    {
-+        let name = prefer
-+            .first()
-+            .or_else(|| accept.first())
-+            .or_else(|| default.first());
-+        if let Some(name) = name {
-+            match alias.to_lowercase().as_str() {
-+                "serif" => db.set_serif_family(name),
-+                "sans-serif" | "sans serif" => db.set_sans_serif_family(name),
-+                "monospace" => db.set_monospace_family(name),
-+                "cursive" => db.set_cursive_family(name),
-+                "fantasy" => db.set_fantasy_family(name),
-+                _ => {}
-+            }
-+        }
-+    }
-+
-+    let mut files = Vec::new();
-+    for dir in fontconfig.dirs {
-+        let path = if dir.path.starts_with("~") {
-+            let Some(home) = home.as_ref() else { continue };
-+            Path::new(home).join(dir.path.strip_prefix("~").unwrap_or(&dir.path))
-+        } else {
-+            dir.path
-+        };
-+        collect_font_files(&path, &mut files);
-+    }
-+
-+    let threads = std::thread::available_parallelism()
-+        .map_or(1, |count| count.get())
-+        .clamp(1, 8);
-+    let chunk_len = files.len().div_ceil(threads).max(1);
-+    let faces: Vec<Vec<fontdb::FaceInfo>> = std::thread::scope(|scope| {
-+        let handles: Vec<_> = files
-+            .chunks(chunk_len)
-+            .map(|chunk| {
-+                scope.spawn(move || {
-+                    let mut shard = fontdb::Database::new();
-+                    for path in chunk {
-+                        if let Err(error) = shard.load_font_file(path) {
-+                            log::warn!("Failed to load '{}' cause {}.", path.display(), error);
-+                        }
-+                    }
-+                    shard.faces().cloned().collect::<Vec<_>>()
-+                })
-+            })
-+            .collect();
-+        handles
-+            .into_iter()
-+            .map(|handle| handle.join().unwrap_or_default())
-+            .collect()
-+    });
-+    for face in faces.into_iter().flatten() {
-+        db.push_face_info(face);
-+    }
-+
-+    // cosmic-text's defaults, applied after the system aliases as
-+    // `FontSystem::new_with_fonts` does.
-+    db.set_monospace_family("Noto Sans Mono");
-+    db.set_sans_serif_family("Open Sans");
-+    db.set_serif_family("DejaVu Serif");
-+    db
-+}
-+
-+/// Recursive directory scan with fontdb's extension filter, using the
-+/// directory entry type instead of two `stat` calls per entry.
-+fn collect_font_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
-+    let Some(entries) = std::fs::read_dir(dir).ok() else {
-+        return;
-+    };
-+    for entry in entries.flatten() {
-+        let path = entry.path();
-+        let Some(file_type) = entry.file_type().ok() else {
-+            continue;
-+        };
-+        let file_type = if file_type.is_symlink() {
-+            let Some(metadata) = std::fs::metadata(&path).ok() else {
-+                continue;
-+            };
-+            metadata.file_type()
-+        } else {
-+            file_type
-+        };
-+        if file_type.is_dir() {
-+            collect_font_files(&path, files);
-+        } else if file_type.is_file()
-+            && matches!(
-+                path.extension().and_then(|extension| extension.to_str()),
-+                Some("ttf" | "ttc" | "TTF" | "TTC" | "otf" | "otc" | "OTF" | "OTC")
-+            )
-+        {
-+            files.push(path);
-+        }
-+    }
-+}
-+
- impl PlatformTextSystem for CosmicTextSystem {
-     fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
-         self.0.write().add_fonts(fonts)
-diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/linux/x11/client.rs
---- gpui-0.2.2/src/platform/linux/x11/client.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/platform/linux/x11/client.rs	2026-09-21 02:20:38.462807909 +0200
+--- a/src/platform/linux/x11/client.rs
++++ b/src/platform/linux/x11/client.rs
 @@ -67,6 +67,9 @@
  };
- 
+
  /// Value for DeviceId parameters which selects all devices.
 +/// lst patch: refresh-timer period while no X11 events have arrived for a while.
 +const IDLE_REFRESH_PERIOD: Duration = Duration::from_micros(1_000_000 / 60);
 +
  pub(crate) const XINPUT_ALL_DEVICES: xinput::DeviceId = 0;
- 
+
  /// Value for DeviceId parameters which selects all device groups. Events that
 @@ -171,6 +174,9 @@
  pub struct X11ClientState {
@@ -179,11 +17,11 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
 +    /// lst patch: last time any X11 event batch arrived; the refresh timer
 +    /// ticks at the monitor rate for a second after it and at 60 Hz otherwise.
 +    pub(crate) last_event_batch: Instant,
- 
+
      pub(crate) last_click: Instant,
      pub(crate) last_mouse_button: Option<MouseButton>,
 @@ -302,6 +308,14 @@
- 
+
  impl X11Client {
      pub(crate) fn new() -> anyhow::Result<Self> {
 +        // lst patch: creating the Vulkan instance and device takes ~120 ms
@@ -195,23 +33,23 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
 +            .spawn(BladeContext::new)
 +            .context("Unable to start the GPU context thread")?;
          let event_loop = EventLoop::try_new()?;
- 
+
          let (common, main_receiver) = LinuxCommon::new(event_loop.get_signal());
 @@ -411,7 +425,10 @@
              .to_string();
          let keyboard_layout = LinuxKeyboardLayout::new(layout_name.into());
- 
+
 -        let gpu_context = BladeContext::new().context("Unable to init GPU context")?;
 +        let gpu_context = gpu_context
 +            .join()
 +            .map_err(|_| anyhow!("GPU context thread panicked"))?
 +            .context("Unable to init GPU context")?;
- 
+
          let resource_database = x11rb::resource_manager::new_from_default(&xcb_connection)
              .context("Failed to create resource database")?;
 @@ -471,6 +488,7 @@
          xcb_flush(&xcb_connection);
- 
+
          Ok(X11Client(Rc::new(RefCell::new(X11ClientState {
 +            last_event_batch: Instant::now(),
              modifiers: Modifiers::default(),
@@ -223,7 +61,7 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
              }
 +            let input_received = !events.is_empty();
 +            self.0.borrow_mut().last_event_batch = Instant::now();
- 
+
              for window in windows_to_refresh.into_iter() {
                  let mut state = self.0.borrow_mut();
 @@ -665,6 +685,25 @@
@@ -254,7 +92,7 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
      }
 @@ -1515,16 +1554,19 @@
          };
- 
+
          state.cursor_styles.insert(focused_window, style);
 -        check_reply(
 -            || "Failed to set cursor style",
@@ -332,7 +170,7 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
                          xcb_connection
                      };
                      client.process_x11_events(&xcb_connection).log_err();
- 
+
 +                    // lst patch: input draws immediately, so the monitor-rate
 +                    // tick only matters while animations and GPUI's one-second
 +                    // re-presentation after input can be running. Otherwise
@@ -354,12 +192,51 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
                      }
                      calloop::timer::TimeoutAction::ToInstant(instant)
                  }
-diff -ru gpui-0.2.2/src/platform/linux/x11/window.rs gpui-0.2.2/src/platform/linux/x11/window.rs
---- gpui-0.2.2/src/platform/linux/x11/window.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/platform/linux/x11/window.rs	2026-09-21 02:12:52.818617072 +0200
-@@ -1324,29 +1324,33 @@
+--- a/src/platform/linux/x11/window.rs
++++ b/src/platform/linux/x11/window.rs
+@@ -1074,13 +1074,15 @@
+
+     pub fn set_bounds(&self, bounds: Bounds<i32>) -> anyhow::Result<()> {
+         let mut resize_args = None;
+-        let is_resize;
++        let is_move;
+         {
+             let mut state = self.state.borrow_mut();
+             let bounds = bounds.map(|f| px(f as f32 / state.scale_factor));
+
+-            is_resize = bounds.size.width != state.bounds.size.width
+-                || bounds.size.height != state.bounds.size.height;
++            let is_resize = bounds.size != state.bounds.size;
++            // lst patch: WMs can repeat ConfigureNotify without changing the
++            // window. Do not turn these notifications into full app redraws.
++            is_move = !is_resize && bounds.origin != state.bounds.origin;
+
+             // If it's a resize event (only width/height changed), we ignore `bounds.origin`
+             // because it contains wrong values.
+@@ -1091,7 +1093,10 @@
+             }
+
+             let gpu_size = query_render_extent(&self.xcb, self.x_window)?;
+-            if true {
++            // Keep querying the actual drawable extent: queued configure
++            // events may describe an intermediate size. A logical resize or
++            // a changed drawable still needs the resize callback.
++            if is_resize || gpu_size != state.renderer.viewport_size() {
+                 state.renderer.update_drawable_size(size(
+                     DevicePixels(gpu_size.width as i32),
+                     DevicePixels(gpu_size.height as i32),
+@@ -1113,7 +1118,7 @@
+             fun(content_size, scale_factor)
+         }
+
+-        if !is_resize && let Some(ref mut fun) = callbacks.moved {
++        if is_move && let Some(ref mut fun) = callbacks.moved {
+             fun();
+         }
+
+@@ -1324,29 +1329,33 @@
      }
- 
+
      fn set_title(&mut self, title: &str) {
 -        check_reply(
 -            || "X11 ChangeProperty8 on WM_NAME failed.",
@@ -382,7 +259,7 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/window.rs gpui-0.2.2/src/platform/lin
 +            )
 +            .map(|cookie| cookie.ignore_error())
 +            .log_err();
- 
+
 -        check_reply(
 -            || "X11 ChangeProperty8 on _NET_WM_NAME failed.",
 -            self.0.xcb.change_property8(
@@ -402,10 +279,9 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/window.rs gpui-0.2.2/src/platform/lin
 +            .log_err();
          xcb_flush(&self.0.xcb);
      }
- 
-diff -ru gpui-0.2.2/src/platform/windows/events.rs gpui-0.2.2/src/platform/windows/events.rs
---- gpui-0.2.2/src/platform/windows/events.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/platform/windows/events.rs	2026-09-20 21:56:54.673870699 +0200
+
+--- a/src/platform/windows/events.rs
++++ b/src/platform/windows/events.rs
 @@ -1196,6 +1196,7 @@
      fn draw_window(&self, handle: HWND, force_render: bool) -> Option<isize> {
          let mut request_frame = self.state.borrow_mut().callbacks.request_frame.take()?;
@@ -414,9 +290,8 @@ diff -ru gpui-0.2.2/src/platform/windows/events.rs gpui-0.2.2/src/platform/windo
              require_presentation: false,
              force_render,
          });
-diff -ru gpui-0.2.2/src/platform.rs gpui-0.2.2/src/platform.rs
---- gpui-0.2.2/src/platform.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/platform.rs	2026-09-20 21:56:54.664709890 +0200
+--- a/src/platform.rs
++++ b/src/platform.rs
 @@ -455,6 +455,10 @@
      pub(crate) require_presentation: bool,
      /// Force refresh of all rendering states when true
@@ -426,11 +301,10 @@ diff -ru gpui-0.2.2/src/platform.rs gpui-0.2.2/src/platform.rs
 +    /// refresh. Used to draw right after input instead of at the next tick.
 +    pub(crate) only_if_dirty: bool,
  }
- 
+
  pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
-diff -ru gpui-0.2.2/src/scene.rs gpui-0.2.2/src/scene.rs
---- gpui-0.2.2/src/scene.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/scene.rs	2026-09-21 01:07:13.282003326 +0200
+--- a/src/scene.rs
++++ b/src/scene.rs
 @@ -129,10 +129,14 @@
          self.quads.sort_by_key(|quad| quad.order);
          self.paths.sort_by_key(|path| path.order);
@@ -447,10 +321,9 @@ diff -ru gpui-0.2.2/src/scene.rs gpui-0.2.2/src/scene.rs
 +            .sort_by_key(|sprite| (sprite.order, sprite.tile.texture_id.index));
          self.surfaces.sort_by_key(|surface| surface.order);
      }
- 
-diff -ru gpui-0.2.2/src/window.rs gpui-0.2.2/src/window.rs
---- gpui-0.2.2/src/window.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/window.rs	2026-09-21 02:23:31.635660496 +0200
+
+--- a/src/window.rs
++++ b/src/window.rs
 @@ -823,6 +823,11 @@
      pub(crate) platform_window: Box<dyn PlatformWindow>,
      display_id: Option<DisplayId>,
@@ -492,7 +365,7 @@ diff -ru gpui-0.2.2/src/window.rs gpui-0.2.2/src/window.rs
 @@ -1034,13 +1058,6 @@
                          .log_err();
                  }
- 
+
 -                // Keep presenting the current scene for 1 extra second since the
 -                // last input to prevent the display from underclocking the refresh rate.
 -                let needs_present = request_frame_options.require_presentation
@@ -514,7 +387,7 @@ diff -ru gpui-0.2.2/src/window.rs gpui-0.2.2/src/window.rs
 @@ -2972,15 +2990,27 @@
              is_emoji: false,
          };
- 
+
 -        let raster_bounds = self.text_system().raster_bounds(&params)?;
 -        if !raster_bounds.is_zero() {
 -            let tile = self
@@ -548,12 +421,23 @@ diff -ru gpui-0.2.2/src/window.rs gpui-0.2.2/src/window.rs
              let bounds = Bounds {
                  origin: glyph_origin.map(|px| px.floor()) + raster_bounds.origin.map(Into::into),
                  size: tile.bounds.size.map(Into::into),
---- gpui-0.2.2/Cargo.toml	1970-01-01 01:00:01.000000000 +0100
-+++ gpui-0.2.2/Cargo.toml	2026-09-20 22:51:45.805506100 +0200
+--- a/src/platform/blade/blade_context.rs
++++ b/src/platform/blade/blade_context.rs
+@@ -25,6 +25,8 @@
+             unsafe {
+                 gpu::Context::init(gpu::ContextDesc {
+                     presentation: true,
++                    // lst patch: GPUI uses rasterization, not ray queries.
++                    ray_tracing: false,
+                     validation: false,
+                     device_id: device_id_forced.unwrap_or(0),
+                     ..Default::default()
+--- a/Cargo.toml
++++ b/Cargo.toml
 @@ -104,130 +104,6 @@
  path = "src/gpui.rs"
  doctest = false
- 
+
 -[[example]]
 -name = "animation"
 -path = "examples/animation.rs"
@@ -680,25 +564,8 @@ diff -ru gpui-0.2.2/src/window.rs gpui-0.2.2/src/window.rs
 -
  [dependencies.anyhow]
  version = "1.0.86"
- 
-@@ -290,6 +166,16 @@
- [dependencies.libc]
- version = "0.2"
- 
-+# lst patch: parallel system font scan in platform/linux/text_system.rs
-+[dependencies.fontconfig-parser]
-+version = "0.5"
-+
-+[dependencies.fontdb]
-+version = "0.16"
-+
-+[dependencies.sys-locale]
-+version = "0.3"
-+
- [dependencies.log]
- version = "0.4.16"
- features = [
-@@ -747,3 +633,9 @@
+
+@@ -747,3 +623,9 @@
  [lints.rust.unexpected_cfgs]
  level = "allow"
  priority = 0

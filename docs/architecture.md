@@ -15,6 +15,11 @@ The root `Cargo.toml` is a workspace manifest. It has three members:
 The app and editor are `default-members`. The X11 harness is compiled only when
 selected directly or used by the app's integration tests.
 
+`vendor/gpui` carries documented platform/rendering changes. A narrow upstream
+backport in `vendor/blade-graphics` lets GPUI decline unused Vulkan ray-tracing
+capabilities. Each vendor directory records its exact diff, rationale, and
+removal criteria in `lst.patch` and `LST_PATCHES.md`.
+
 ## Runtime data flow
 
 ```text
@@ -75,6 +80,8 @@ than scattering fallback checks through the core.
 `apps/lst-gpui` owns all framework and operating-system work:
 
 - `main.rs` assembles application state and per-tab view state.
+- `startup.rs` prepares explicit launch files alongside platform initialization;
+  creating a scratchpad remains conditional on successfully opening a window.
 - `workspace_action.rs` defines command IDs, default keybindings, and command
   palette metadata; `input.rs` adapts text, IME, and pointer input.
 - `runtime.rs` and `runtime/` execute file, autosave, clipboard, close, and quit

@@ -25,15 +25,15 @@ Every change is marked `lst patch` in the source.
    tick otherwise so an idle window costs no more wakeups than before. A
    tick with nothing to run, draw, or present also returns before entering
    an app update.
-3. **Parallel system font scan** (`src/platform/linux/text_system.rs`,
-   `Cargo.toml`). `FontSystem::new()` walks every fontconfig directory and
-   parses every font file on the main thread before anything else can
-   happen; with 12k font files that is ~200 ms of a ~300 ms startup, nearly
-   all of it per-file syscalls. The scan now follows the same fontconfig
-   configuration, aliases, and cosmic-text default families, but parses the
-   files on up to eight threads and reads directory entry types instead of
-   calling `stat` twice per entry. The resulting database is identical in
-   content; only its construction differs.
+3. **Parallel system font scan — retired.** Restored upstream
+   `FontSystem::new()` and removed the custom fontconfig/directory parser and
+   its three direct dependencies. On the current host, font loading fits
+   within GPU initialization. Eleven whole-app launches per variant gave
+   medians ~174 ms parallel versus ~178 ms upstream, with much larger
+   within-variant spread; isolated font timing exaggerated the benefit.
+   Prefer upstream behavior and portability to maintaining ~170 extra lines
+   for that small uncertain end-to-end difference. Reconsider only if a
+   whole-launch profile puts font loading on the critical path.
 
 4. **GPU context on a startup thread** (`src/platform/linux/x11/client.rs`).
    Creating the Vulkan instance and device took ~120 ms with the NVIDIA
@@ -65,6 +65,21 @@ Every change is marked `lst patch` in the source.
    are never removed from the atlas, so the window keeps one map from glyph
    parameters to (raster bounds, tile) and consults it first. Viewport
    paint 0.34 -> 0.22 ms per frame; scrolling CPU -18%. Pixel-identical.
+
+8. **Raster-only GPU context** (`src/platform/blade/blade_context.rs`). GPUI
+   does not use ray tracing. Explicitly disable it using the narrow upstream
+   Blade backport documented in `../blade-graphics/LST_PATCHES.md`, avoiding
+   unnecessary driver initialization. Keep this flag when upgrading Blade;
+   the backport itself can then be removed.
+
+9. **Ignore unchanged X11 geometry** (`src/platform/linux/x11/window.rs`).
+   Some WMs repeatedly send identical synthetic ConfigureNotify messages.
+   GPUI unconditionally invoked resize and move callbacks, triggering full
+   renders even when the drawable and bounds were unchanged. Only invoke
+   callbacks for a logical resize, actual drawable resize, or actual move.
+   Continue querying drawable geometry (events can describe intermediate
+   sizes), and always process pending XSync counters. Reference-host idle
+   CPU per two seconds fell from 160 to 40 ms and paints from 80 to four.
 
 The `Cargo.toml` here also drops the crate's example and test targets whose
 sources are not vendored.

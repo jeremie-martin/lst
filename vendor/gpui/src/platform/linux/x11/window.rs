@@ -1074,13 +1074,15 @@ impl X11WindowStatePtr {
 
     pub fn set_bounds(&self, bounds: Bounds<i32>) -> anyhow::Result<()> {
         let mut resize_args = None;
-        let is_resize;
+        let is_move;
         {
             let mut state = self.state.borrow_mut();
             let bounds = bounds.map(|f| px(f as f32 / state.scale_factor));
 
-            is_resize = bounds.size.width != state.bounds.size.width
-                || bounds.size.height != state.bounds.size.height;
+            let is_resize = bounds.size != state.bounds.size;
+            // lst patch: WMs can repeat ConfigureNotify without changing the
+            // window. Do not turn these notifications into full app redraws.
+            is_move = !is_resize && bounds.origin != state.bounds.origin;
 
             // If it's a resize event (only width/height changed), we ignore `bounds.origin`
             // because it contains wrong values.
@@ -1091,7 +1093,10 @@ impl X11WindowStatePtr {
             }
 
             let gpu_size = query_render_extent(&self.xcb, self.x_window)?;
-            if true {
+            // Keep querying the actual drawable extent: queued configure
+            // events may describe an intermediate size. A logical resize or
+            // a changed drawable still needs the resize callback.
+            if is_resize || gpu_size != state.renderer.viewport_size() {
                 state.renderer.update_drawable_size(size(
                     DevicePixels(gpu_size.width as i32),
                     DevicePixels(gpu_size.height as i32),
@@ -1113,7 +1118,7 @@ impl X11WindowStatePtr {
             fun(content_size, scale_factor)
         }
 
-        if !is_resize && let Some(ref mut fun) = callbacks.moved {
+        if is_move && let Some(ref mut fun) = callbacks.moved {
             fun();
         }
 

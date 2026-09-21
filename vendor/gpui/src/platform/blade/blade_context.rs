@@ -25,6 +25,8 @@ impl BladeContext {
             unsafe {
                 gpu::Context::init(gpu::ContextDesc {
                     presentation: true,
+                    // lst patch: GPUI uses rasterization, not ray queries.
+                    ray_tracing: false,
                     validation: false,
                     device_id: device_id_forced.unwrap_or(0),
                     ..Default::default()
