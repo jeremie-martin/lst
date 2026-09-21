@@ -364,8 +364,12 @@ binary: all ten scenarios are pixel-identical.
   and surface/swapchain creation (~45 ms) bound startup; the former is
   overlapped with the font scan, the latter needs the window.
 - tree-sitter's incremental reparse stays synchronous: 0.36 ms per
-  keystroke mid-file, up to ~1 ms with error recovery at the top of a
-  660 KB file.
+  keystroke mid-file. `latency-typing` types at the top of a 660 KB Rust
+  file, where each keystroke costs ~2.4 ms in `TabSyntaxState::update`: a
+  profile puts 37% in tree-sitter's `ts_subtree_last_external_token`
+  (external-scanner state checks while re-using nodes under the growing
+  ERROR node) and 23% in `ts_tree_get_changed_ranges`; the app's own share
+  of that update is under 5%.
 - Memory is driver-dominated (~200 MB of the ~300 MB RSS on an empty file).
 
 ### Painting in passes (73f479f) and the sprite sort
