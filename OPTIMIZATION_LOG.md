@@ -139,12 +139,58 @@ Commands: see `docs/performance.md`.
 - Committed visual references use a different window width (1901 versus
   3816 pixels). Add an alternate reference-directory option so the preserved
   baseline can supply same-environment screenshots without overwriting the
-  committed images. Compare the final binary against those references.
+  committed images. All ten final scenarios are pixel-identical to those
+  references across three fresh launches each; inspected all reference images.
+  Grouped runs exceeded the fixed 120-second budget at this desktop size,
+  so validation ran one scenario per invocation with assertions unchanged.
+- Final all-feature tests, Clippy, formatting, 11 benchmark self-tests, and
+  both vendor reverse-patch checks pass. The new 1k/10k model benchmark cases
+  also execute successfully in Criterion's test mode. Blade's seven upstream
+  lifetime-syntax warnings remain documented rather than patched incidentally.
 - The 1k-cursor paint benchmark previously selected the last quiet frame,
   sometimes measuring hidden blinking carets. Select the first completed
   frame after the command instead, and test exclusion of later blink frames
   and incomplete traces. Compare both binaries with the corrected runner;
   do not attribute the earlier apparent paint improvement to production code.
+- Corrected 1k-cursor first-frame paint (three runs): 0.494 -> 0.449 ms;
+  preparation 0.621 -> 0.649 ms. No claimed step-change in paint itself.
+  Highlighted scrolling: mean frame 1.526 -> 1.590 ms, but CPU per run
+  1250 -> 1110 ms and app frames/s 188 -> 156. Removing redundant frames
+  changes the mixture of cheap unchanged frames and newly scrolled frames;
+  app frames above the 144 Hz refresh rate are not extra visible refreshes.
+- Plain scrolling likewise stays ~1.54–1.56 ms/frame while CPU falls
+  1250 -> 1100 ms. Repeated search reindexing is ~0.3 ms (baseline median
+  0.323, final 0.273, with substantial baseline spread); no claimed algorithmic
+  search improvement. Both production binaries completed all 15 default
+  scenarios with one priming and one measured run. That broad cross-check
+  gives large paste 12.360 -> 11.812 ms, mixed paste 44.254 -> 41.916 ms,
+  and medium/large/plain typing 1.236/1.325/0.640 -> 1.078/1.229/0.429
+  ms/character. Use the repeated targeted results for stronger conclusions.
+
+### Remaining costs
+
+- Single-frame navigation remains ~1.6 ms. Most work is GPUI chrome element
+  construction/layout plus glyph painting; reusing whole chrome views would
+  require a coherent component/invalidation design, not another loosely
+  coordinated display-state cache. Existing texture-order and glyph-tile
+  patches still have sound ordering/lifetime assumptions and earn their keep.
+- Large-Rust typing still spends ~200 ms per 320-character burst in
+  tree-sitter's synchronous incremental parser, particularly error recovery
+  near the file start. Moving it after the measured interval would delay
+  highlighting/structure availability and is not an equivalent optimization.
+- Startup still includes real Vulkan device/surface work and system font
+  loading. Lazy font discovery needs upstream-quality fallback semantics;
+  dropping fonts or hiding first-frame work would not preserve behavior.
+  Startup comparisons are primed launches, not cold-boot disk-cache claims.
+- Final symbolized startup profiles (`perf record -F 997 --call-graph dwarf`,
+  three one-second launches of the same small-Rust fixture) confirm NVIDIA,
+  font discovery, query compilation, shader translation and initial glyph
+  rasterization as the CPU work. Existing grammar/font warmup finishes at
+  ~99–114 ms, before model construction at ~130–153 ms: it already overlaps
+  window creation and is not an additional serial startup phase. Profiled
+  phase stamps are explanatory, not extra production benchmark samples.
+- Word motion is bounded by visited lines rather than document size, but a
+  single enormous logical line still requires line-sized grapheme work.
 
 ## Measurement additions
 
@@ -501,7 +547,7 @@ the lst-editor internal-invariants tests, `cargo clippy --all-targets
 visual lane with baselines regenerated per scenario from the unpatched
 binary: all ten scenarios are pixel-identical.
 
-## Not done, and why (updated)
+## Session 2 remaining work (historical)
 
 - GPUI's per-frame element work for the ~35 chrome elements (~0.95 ms) and
   its per-glyph paint path (~0.5 ms for a full 4K viewport) are the

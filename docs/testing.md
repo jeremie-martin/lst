@@ -171,6 +171,10 @@ the preserved **old** binary into a temporary directory, then compare the new
 binary against that directory. Keep the display configuration fixed and do not
 update references from the new binary to hide a mismatch.
 
+At large desktop sizes, run visual scenarios individually with
+`LST_VISUAL_SCENARIO` if the grouped fresh-launch checks exceed the test
+timeout. Keep the same repeatability and exact-pixel assertions.
+
 Inspect every updated baseline image. A repeatable capture of another window is
 not a valid result.
 

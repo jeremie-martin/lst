@@ -78,6 +78,11 @@ app-side frame metrics and `open_to_first_frame_ms` over `*_to_quiet` metrics
 when judging editor work; the quiet metrics include that one-second
 re-presentation.
 
+`scroll_frames_per_second` counts app-rendered frames, not distinct refreshes
+shown by the monitor. Redundant window notifications can increase this count
+without improving presentation, and can skew mean frame cost toward cheap
+unchanged frames. Inspect total CPU and frame counts alongside per-frame cost.
+
 The measured `lst` must be the production build. The runner has no GPUI
 dev-dependency, so building it alongside the app does not change the app's
 feature set (Cargo unifies dev-dependency features across targets built in one
