@@ -410,3 +410,9 @@ CPU time); `open-small` 334 -> ~260 ms in the current environment.
     0.34 -> 0.22 ms per frame (`latency-navigation`), scroll paint
     233 -> 126 ms per 3 s run and scroll CPU 1370 -> 1130 ms. Pixel-identical.
     The X11 cursor-style attribute change also no longer waits for a reply.
+21. **Two fewer layout levels** (`shell.rs`): the tab strip, editor, and
+    status bar are direct children of the root column, and the editor's
+    focus and key handlers sit on the viewport element itself. Same
+    geometry (pixel-identical on clean, find-panel, recent-files, and
+    multi-cursor scenarios; 76 focus/key/surface behaviour tests pass);
+    frame CPU within noise (-3%), kept as the simpler tree.

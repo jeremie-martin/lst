@@ -2026,251 +2026,216 @@ impl Render for LstGpuiApp {
             .bg(rgb(theme.role.app_bg))
             .font(typography::ui_font())
             .text_color(rgb(theme.role.text))
+            // The tab strip, editor, and status bar are direct children of the
+            // root column, and the editor's focus/key handlers sit on the
+            // viewport element itself: two fewer layout levels per frame with
+            // the same geometry.
+            .child(self.render_tab_strip(cx))
+            .when(file_conflict_open, |root| {
+                root.child(self.render_file_conflict_banner(cx))
+            })
             .child(
                 div()
+                    .id("buffer-viewport")
                     .flex_grow()
-                    .flex()
-                    .flex_col()
-                    .child(self.render_tab_strip(cx))
-                    .when(file_conflict_open, |column| {
-                        column.child(self.render_file_conflict_banner(cx))
+                    .relative()
+                    .overflow_hidden()
+                    .bg(rgb(theme.role.editor_bg))
+                    .track_focus(&self.focus_handle)
+                    .key_context("Editor")
+                    .on_key_down(cx.listener(Self::on_key_down))
+                    .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
+                    .when(recent_cards_open, |viewport| {
+                        viewport.child(self.render_recent_cards_view(cx))
                     })
-                    .child(
-                        div()
-                            .flex_grow()
-                            .track_focus(&self.focus_handle)
-                            .key_context("Editor")
-                            .on_key_down(cx.listener(Self::on_key_down))
-                            .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
+                    .when(!recent_cards_open, |viewport| {
+                        viewport
                             .child(
                                 div()
-                                    .id("buffer-viewport")
-                                    .relative()
-                                    .h_full()
-                                    .w_full()
-                                    .overflow_hidden()
-                                    .bg(rgb(theme.role.editor_bg))
-                                    .when(recent_cards_open, |viewport| {
-                                        viewport.child(self.render_recent_cards_view(cx))
-                                    })
-                                    .when(!recent_cards_open, |viewport| {
-                                        viewport
-                                            .child(
-                                                div()
-                                                    .id("buffer-scroll")
-                                                    .absolute()
-                                                    .left_0()
-                                                    .top_0()
-                                                    .size_full()
-                                                    .overflow_x_scroll()
-                                                    .overflow_y_scroll()
-                                                    .track_scroll(&viewport_scroll)
-                                                    .child(match total_content_width {
-                                                        Some(width) => div().h(total_content_height).w(width),
-                                                        None => div().h(total_content_height).w_full(),
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("buffer-overlay")
-                                                    .absolute()
-                                                    .left_0()
-                                                    .top_0()
-                                                    .size_full()
-                                                    .cursor(CursorStyle::IBeam)
-                                                    .block_mouse_except_scroll()
-                                                    // Painted after #buffer-scroll, so in the bubble
-                                                    // phase this listener runs first and can stop the
-                                                    // container's instant per-detent jump in favor of
-                                                    // the smooth-scroll animation.
-                                                    .on_scroll_wheel(cx.listener(Self::on_editor_scroll_wheel))
-                                                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-                                                    .on_mouse_down(
-                                                        MouseButton::Right,
-                                                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                                                            this.on_right_mouse_down(event, cx);
-                                                            cx.stop_propagation();
-                                                        }),
-                                                    )
-                                                    .on_mouse_down(
-                                                        MouseButton::Middle,
-                                                        cx.listener(Self::on_middle_mouse_down),
-                                                    )
-                                                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                                                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                                                    .on_mouse_move(cx.listener(Self::on_mouse_move))
-                                                    .child(
-                                                        canvas(
-                                                            {
-                                                                let viewport_scroll = viewport_scroll.clone();
-                                                                move |bounds, window, cx| {
-                                                                    let prepare_started =
-                                                                        diagnostics::trace_enabled().then(Instant::now);
-                                                                    let previous_wrap_columns =
-                                                                        viewport_geometry.borrow().painted_wrap_columns;
-                                                                    let active_structure = active_structure.borrow();
-                                                                    let active_syntax_state = active_syntax_state
-                                                                        .as_ref()
-                                                                        .map(|state| state.borrow());
-                                                                    let paint_state = prepare_viewport_paint_state(
-                                                                        ViewportPreparation {
-                                                                            buffer: &buffer,
-                                                                            revision,
-                                                                            syntax_mode,
-                                                                            syntax_state: active_syntax_state
-                                                                                .as_deref(),
-                                                                            layout_metrics,
-                                                                            gutter_mode,
-                                                                            cursor_line,
-                                                                            cursor_lines: &cursor_lines,
-                                                                            occurrence_query: occurrence_query
-                                                                                .as_deref(),
-                                                                            selection_match_query:
-                                                                                selection_match_query
-                                                                                    .as_ref()
-                                                                                    .map(|query| query.0.as_str()),
-                                                                            selected_match_ranges:
-                                                                                selection_match_query
-                                                                                    .as_ref()
-                                                                                    .map_or(&[], |query| {
-                                                                                        query.1.as_slice()
-                                                                                    }),
-                                                                            show_wrap,
-                                                                            viewport_scroll: &viewport_scroll,
-                                                                            viewport_cache: &viewport_cache,
-                                                                            viewport_geometry: &viewport_geometry,
-                                                                            bounds,
-                                                                            char_width,
-                                                                            scale: ui_scale,
-                                                                            theme,
-                                                                            selection_set: &prepare_selection_set,
-                                                                            structure: &active_structure,
-                                                                            match_brackets,
-                                                                            bracket_pair_colorization,
-                                                                            bracket_pair_guides,
-                                                                            bracket_pair_horizontal_guides,
-                                                                            indent_guides,
-                                                                            highlight_active_indent_guide,
-                                                                            indent_width,
-                                                                            render_whitespace,
-                                                                            render_control_characters,
-                                                                        },
-                                                                        window,
-                                                                    );
-                                                                    if let Some(started) = prepare_started {
-                                                                        diagnostics::record_ms(
-                                                                            "viewport_prepare_ms",
-                                                                            started.elapsed().as_secs_f64() * 1000.0,
-                                                                        );
-                                                                    }
-                                                                    if previous_wrap_columns
-                                                                        != viewport_geometry
-                                                                            .borrow()
-                                                                            .painted_wrap_columns
-                                                                    {
-                                                                        diagnostics::record_notify("wrap_columns");
-                                                                        cx.notify(prepare_entity.entity_id());
-                                                                    }
-                                                                    prepare_entity.update(cx, |this, cx| {
-                                                                        if this.status_details()
-                                                                            != this.status_details_rendered
-                                                                        {
-                                                                            diagnostics::record_notify(
-                                                                                "status_details",
-                                                                            );
-                                                                            cx.notify();
-                                                                        }
-                                                                        this.emit_state_trace(window);
-                                                                    });
-                                                                    paint_state
-                                                                }
-                                                            },
-                                                            move |bounds, paint_state, window, cx| {
-                                                                let paint_started =
-                                                                    diagnostics::trace_enabled().then(Instant::now);
-                                                                window.handle_input(
-                                                                    &focus_handle,
-                                                                    ElementInputHandler::new(bounds, entity.clone()),
-                                                                    cx,
-                                                                );
-                                                                let horizontal_scroll = if show_wrap {
-                                                                    px(0.0)
-                                                                } else {
-                                                                    scroll_left_for(&viewport_scroll)
-                                                                };
-                                                                paint_viewport(
-                                                                    ViewportPaintInput {
-                                                                        bounds,
-                                                                        layout_metrics,
-                                                                        selection_set: selection_set.clone(),
-                                                                        search_matches: &search_matches,
-                                                                        active_search_match: active_search_match
-                                                                            .as_ref(),
-                                                                        vim_mode,
-                                                                        focused: focus_handle.is_focused(window),
-                                                                        cursor_visible,
-                                                                        drop_cursor,
-                                                                        paint_state,
-                                                                        scale: ui_scale,
-                                                                        horizontal_scroll,
-                                                                        theme,
-                                                                        rulers: paint_rulers.as_ref(),
-                                                                        char_width,
-                                                                    },
-                                                                    window,
-                                                                    cx,
-                                                                );
-                                                                if let Some(started) = paint_started {
-                                                                    diagnostics::record_ms(
-                                                                        "viewport_paint_ms",
-                                                                        started.elapsed().as_secs_f64() * 1000.0,
-                                                                    );
-                                                                }
-                                                                diagnostics::record_first_frame();
-                                                                diagnostics::record_epoch("frame_end_epoch_us");
-                                                                entity.update(cx, |this, _| {
-                                                                    if let Some(clock) = this.frame_clock.take() {
-                                                                        diagnostics::record_frame(clock);
-                                                                    }
-                                                                });
-                                                            },
-                                                        )
-                                                        .size_full()
-                                                        .font(typography::primary_font())
-                                                        .text_size(metrics::px_for_scale(
-                                                            metrics::code_font_size(),
-                                                            self.ui_scale(),
-                                                        ))
-                                                        .line_height(metrics::px_for_scale(
-                                                            metrics::row_height(),
-                                                            self.ui_scale(),
-                                                        )),
-                                                    ),
-                                            )
-                                            .child(self.render_editor_scrollbar(
-                                                ScrollbarAxis::Vertical,
-                                                scrollbar_scroll,
-                                                cx,
-                                            ))
-                                            .when(!show_wrap, |viewport| {
-                                                viewport.child(self.render_editor_scrollbar(
-                                                    ScrollbarAxis::Horizontal,
-                                                    h_scrollbar_scroll,
-                                                    cx,
-                                                ))
-                                            })
-                                            .when(
-                                                self.model.find().visible || self.model.goto_line().is_some(),
-                                                |viewport| viewport.child(self.render_editor_overlays(cx)),
-                                            )
-                                    })
-                                    .when(recent_quick_open, |viewport| {
-                                        viewport.child(self.render_recent_quick_picker(cx))
+                                    .id("buffer-scroll")
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .size_full()
+                                    .overflow_x_scroll()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&viewport_scroll)
+                                    .child(match total_content_width {
+                                        Some(width) => div().h(total_content_height).w(width),
+                                        None => div().h(total_content_height).w_full(),
                                     }),
-                            ),
-                    )
-                    .child(self.render_status_bar(cx)),
-            );
+                            )
+                            .child(
+                                div()
+                                    .id("buffer-overlay")
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .size_full()
+                                    .cursor(CursorStyle::IBeam)
+                                    .block_mouse_except_scroll()
+                                    // Painted after #buffer-scroll, so in the bubble
+                                    // phase this listener runs first and can stop the
+                                    // container's instant per-detent jump in favor of
+                                    // the smooth-scroll animation.
+                                    .on_scroll_wheel(cx.listener(Self::on_editor_scroll_wheel))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                            this.on_right_mouse_down(event, cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    )
+                                    .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_mouse_down))
+                                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                                    .on_mouse_move(cx.listener(Self::on_mouse_move))
+                                    .child(
+                                        canvas(
+                                            {
+                                                let viewport_scroll = viewport_scroll.clone();
+                                                move |bounds, window, cx| {
+                                                    let prepare_started =
+                                                        diagnostics::trace_enabled().then(Instant::now);
+                                                    let previous_wrap_columns =
+                                                        viewport_geometry.borrow().painted_wrap_columns;
+                                                    let active_structure = active_structure.borrow();
+                                                    let active_syntax_state =
+                                                        active_syntax_state.as_ref().map(|state| state.borrow());
+                                                    let paint_state = prepare_viewport_paint_state(
+                                                        ViewportPreparation {
+                                                            buffer: &buffer,
+                                                            revision,
+                                                            syntax_mode,
+                                                            syntax_state: active_syntax_state.as_deref(),
+                                                            layout_metrics,
+                                                            gutter_mode,
+                                                            cursor_line,
+                                                            cursor_lines: &cursor_lines,
+                                                            occurrence_query: occurrence_query.as_deref(),
+                                                            selection_match_query: selection_match_query
+                                                                .as_ref()
+                                                                .map(|query| query.0.as_str()),
+                                                            selected_match_ranges: selection_match_query
+                                                                .as_ref()
+                                                                .map_or(&[], |query| query.1.as_slice()),
+                                                            show_wrap,
+                                                            viewport_scroll: &viewport_scroll,
+                                                            viewport_cache: &viewport_cache,
+                                                            viewport_geometry: &viewport_geometry,
+                                                            bounds,
+                                                            char_width,
+                                                            scale: ui_scale,
+                                                            theme,
+                                                            selection_set: &prepare_selection_set,
+                                                            structure: &active_structure,
+                                                            match_brackets,
+                                                            bracket_pair_colorization,
+                                                            bracket_pair_guides,
+                                                            bracket_pair_horizontal_guides,
+                                                            indent_guides,
+                                                            highlight_active_indent_guide,
+                                                            indent_width,
+                                                            render_whitespace,
+                                                            render_control_characters,
+                                                        },
+                                                        window,
+                                                    );
+                                                    if let Some(started) = prepare_started {
+                                                        diagnostics::record_ms(
+                                                            "viewport_prepare_ms",
+                                                            started.elapsed().as_secs_f64() * 1000.0,
+                                                        );
+                                                    }
+                                                    if previous_wrap_columns
+                                                        != viewport_geometry.borrow().painted_wrap_columns
+                                                    {
+                                                        diagnostics::record_notify("wrap_columns");
+                                                        cx.notify(prepare_entity.entity_id());
+                                                    }
+                                                    prepare_entity.update(cx, |this, cx| {
+                                                        if this.status_details() != this.status_details_rendered {
+                                                            diagnostics::record_notify("status_details");
+                                                            cx.notify();
+                                                        }
+                                                        this.emit_state_trace(window);
+                                                    });
+                                                    paint_state
+                                                }
+                                            },
+                                            move |bounds, paint_state, window, cx| {
+                                                let paint_started = diagnostics::trace_enabled().then(Instant::now);
+                                                window.handle_input(
+                                                    &focus_handle,
+                                                    ElementInputHandler::new(bounds, entity.clone()),
+                                                    cx,
+                                                );
+                                                let horizontal_scroll = if show_wrap {
+                                                    px(0.0)
+                                                } else {
+                                                    scroll_left_for(&viewport_scroll)
+                                                };
+                                                paint_viewport(
+                                                    ViewportPaintInput {
+                                                        bounds,
+                                                        layout_metrics,
+                                                        selection_set: selection_set.clone(),
+                                                        search_matches: &search_matches,
+                                                        active_search_match: active_search_match.as_ref(),
+                                                        vim_mode,
+                                                        focused: focus_handle.is_focused(window),
+                                                        cursor_visible,
+                                                        drop_cursor,
+                                                        paint_state,
+                                                        scale: ui_scale,
+                                                        horizontal_scroll,
+                                                        theme,
+                                                        rulers: paint_rulers.as_ref(),
+                                                        char_width,
+                                                    },
+                                                    window,
+                                                    cx,
+                                                );
+                                                if let Some(started) = paint_started {
+                                                    diagnostics::record_ms(
+                                                        "viewport_paint_ms",
+                                                        started.elapsed().as_secs_f64() * 1000.0,
+                                                    );
+                                                }
+                                                diagnostics::record_first_frame();
+                                                diagnostics::record_epoch("frame_end_epoch_us");
+                                                entity.update(cx, |this, _| {
+                                                    if let Some(clock) = this.frame_clock.take() {
+                                                        diagnostics::record_frame(clock);
+                                                    }
+                                                });
+                                            },
+                                        )
+                                        .size_full()
+                                        .font(typography::primary_font())
+                                        .text_size(metrics::px_for_scale(metrics::code_font_size(), self.ui_scale()))
+                                        .line_height(metrics::px_for_scale(metrics::row_height(), self.ui_scale())),
+                                    ),
+                            )
+                            .child(self.render_editor_scrollbar(ScrollbarAxis::Vertical, scrollbar_scroll, cx))
+                            .when(!show_wrap, |viewport| {
+                                viewport.child(self.render_editor_scrollbar(
+                                    ScrollbarAxis::Horizontal,
+                                    h_scrollbar_scroll,
+                                    cx,
+                                ))
+                            })
+                            .when(
+                                self.model.find().visible || self.model.goto_line().is_some(),
+                                |viewport| viewport.child(self.render_editor_overlays(cx)),
+                            )
+                    })
+                    .when(recent_quick_open, |viewport| {
+                        viewport.child(self.render_recent_quick_picker(cx))
+                    }),
+            )
+            .child(self.render_status_bar(cx));
         let root = root
             .when(
                 self.workspace_surface == crate::WorkspaceSurface::CommandPalette,
