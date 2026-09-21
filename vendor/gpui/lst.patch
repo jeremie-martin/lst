@@ -329,6 +329,55 @@ diff -ru gpui-0.2.2/src/platform/linux/x11/client.rs gpui-0.2.2/src/platform/lin
                      }
                      calloop::timer::TimeoutAction::ToInstant(instant)
                  }
+diff -ru gpui-0.2.2/src/platform/linux/x11/window.rs gpui-0.2.2/src/platform/linux/x11/window.rs
+--- gpui-0.2.2/src/platform/linux/x11/window.rs	2006-07-24 03:21:28.000000000 +0200
++++ gpui-0.2.2/src/platform/linux/x11/window.rs	2026-09-21 02:12:52.818617072 +0200
+@@ -1324,29 +1324,33 @@
+     }
+ 
+     fn set_title(&mut self, title: &str) {
+-        check_reply(
+-            || "X11 ChangeProperty8 on WM_NAME failed.",
+-            self.0.xcb.change_property8(
++        // lst patch: a title change is two property writes; waiting for each
++        // reply stalled the first frame by 15-30 ms while the server was
++        // still mapping the window, and every later title change by a round
++        // trip. Send both and flush; a failed write only affects the title.
++        self.0
++            .xcb
++            .change_property8(
+                 xproto::PropMode::REPLACE,
+                 self.0.x_window,
+                 xproto::AtomEnum::WM_NAME,
+                 xproto::AtomEnum::STRING,
+                 title.as_bytes(),
+-            ),
+-        )
+-        .log_err();
++            )
++            .map(|cookie| cookie.ignore_error())
++            .log_err();
+ 
+-        check_reply(
+-            || "X11 ChangeProperty8 on _NET_WM_NAME failed.",
+-            self.0.xcb.change_property8(
++        self.0
++            .xcb
++            .change_property8(
+                 xproto::PropMode::REPLACE,
+                 self.0.x_window,
+                 self.0.state.borrow().atoms._NET_WM_NAME,
+                 self.0.state.borrow().atoms.UTF8_STRING,
+                 title.as_bytes(),
+-            ),
+-        )
+-        .log_err();
++            )
++            .map(|cookie| cookie.ignore_error())
++            .log_err();
+         xcb_flush(&self.0.xcb);
+     }
+ 
 diff -ru gpui-0.2.2/src/platform/windows/events.rs gpui-0.2.2/src/platform/windows/events.rs
 --- gpui-0.2.2/src/platform/windows/events.rs	2006-07-24 03:21:28.000000000 +0200
 +++ gpui-0.2.2/src/platform/windows/events.rs	2026-09-20 21:56:54.673870699 +0200
@@ -376,7 +425,7 @@ diff -ru gpui-0.2.2/src/scene.rs gpui-0.2.2/src/scene.rs
  
 diff -ru gpui-0.2.2/src/window.rs gpui-0.2.2/src/window.rs
 --- gpui-0.2.2/src/window.rs	2006-07-24 03:21:28.000000000 +0200
-+++ gpui-0.2.2/src/window.rs	2026-09-21 00:55:09.965594732 +0200
++++ gpui-0.2.2/src/window.rs	2026-09-21 02:07:40.019030903 +0200
 @@ -1023,6 +1023,25 @@
              let next_frame_callbacks = next_frame_callbacks.clone();
              let last_input_timestamp = last_input_timestamp.clone();

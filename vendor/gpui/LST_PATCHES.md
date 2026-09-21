@@ -50,5 +50,12 @@ Every change is marked `lst patch` in the source.
    ~860 sprites). Same-order sprites keep their paint order; the pixel lane
    is identical.
 
+6. **Non-blocking window title** (`src/platform/linux/x11/window.rs`).
+   `set_title` waited for the reply of each of its two property writes. On
+   the first frame the server is still mapping the window, so the wait
+   stalled render by 15-30 ms (the first frame's wall time was 2-3x its
+   CPU time); every later title change cost a round trip. Both writes are
+   now sent and flushed without waiting.
+
 The `Cargo.toml` here also drops the crate's example and test targets whose
 sources are not vendored.

@@ -386,3 +386,17 @@ binary: all ten scenarios are pixel-identical.
     layout nodes per frame, frame CPU -3-6%. Pixel-identical on clean,
     dirty-tab, recent-files, and find-panel scenarios; chrome, tabs,
     recent-files, and state-trace behaviour tests pass.
+
+### First-frame stall (vendored gpui patch 6)
+
+Splitting the first render with trace marks (`render_syntax_ms`,
+`window_title_ms`, `render_char_width_ms`, kept as diagnostics) showed the
+first frame's wall time at 2-3x its CPU time because `set_window_title`
+waited for the X server to acknowledge two property writes while it was
+still mapping the window: 14-28 ms per run. The warm-up thread (grammar
+queries and font resolution, now also traced as `warm_grammars_ms` and
+`warm_fonts_ms`) was not the blocker; it finishes 35-45 ms before the first
+render. The vendored X11 `set_title` now sends both writes and flushes
+without waiting, and the app no longer re-sets the creation-time title
+after opening the window. First frame wall 28-42 -> 13-16 ms (equal to its
+CPU time); `open-small` 334 -> ~260 ms in the current environment.

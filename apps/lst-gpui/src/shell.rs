@@ -1829,7 +1829,11 @@ impl Render for LstGpuiApp {
         if let Some(command) = self.pending_workspace_command.take() {
             self.dispatch_workspace_command(command, window, cx);
         }
+        let syntax_started = diagnostics::trace_enabled().then(Instant::now);
         self.ensure_active_syntax_state(cx);
+        if let Some(started) = syntax_started {
+            diagnostics::record_ms("render_syntax_ms", started.elapsed().as_secs_f64() * 1000.0);
+        }
         if self.window_title_override.is_none() {
             let active_tab = self.model.active_tab();
             let dirty = if active_tab.modified() || active_tab.backing_file_missing() {
@@ -1841,7 +1845,11 @@ impl Render for LstGpuiApp {
             // Setting the title is two X property changes with round trips;
             // only do it when the title actually changed.
             if title != self.window_title_rendered {
+                let started = diagnostics::trace_enabled().then(Instant::now);
                 window.set_window_title(&title);
+                if let Some(started) = started {
+                    diagnostics::record_ms("window_title_ms", started.elapsed().as_secs_f64() * 1000.0);
+                }
                 self.window_title_rendered = title;
             }
         }
@@ -1872,8 +1880,13 @@ impl Render for LstGpuiApp {
             .map(|bounds| bounds.size.height)
             .unwrap_or_else(|| metrics::px_for_scale(metrics::WINDOW_HEIGHT - 120.0, scale));
         let char_width = {
+            let started = diagnostics::trace_enabled().then(Instant::now);
             let mut cache = active_cache.borrow_mut();
-            code_char_width(&mut cache, window, scale, theme)
+            let width = code_char_width(&mut cache, window, scale, theme);
+            if let Some(started) = started {
+                diagnostics::record_ms("render_char_width_ms", started.elapsed().as_secs_f64() * 1000.0);
+            }
+            width
         };
         let show_search_decorations = self.model.find().visible;
         let (

@@ -1348,12 +1348,17 @@ fn warm_first_frame_caches(launch: &LaunchArgs, cx: &App) {
     let text_system = cx.text_system().clone();
     let fonts = [typography::primary_font(), typography::ui_font()];
     std::thread::spawn(move || {
+        let started = Instant::now();
         for language in languages {
             syntax::warm_grammar(language);
         }
+        diagnostics::record_ms("warm_grammars_ms", elapsed_ms(started));
+        let started = Instant::now();
         for font in &fonts {
             let _ = text_system.resolve_font(font);
         }
+        diagnostics::record_ms("warm_fonts_ms", elapsed_ms(started));
+        diagnostics::record_startup_mark("warm_done");
     });
 }
 
@@ -1656,7 +1661,6 @@ fn main() {
 
         window
             .update(cx, |view, window, cx| {
-                window.set_window_title(&window_title);
                 window.set_rem_size(view.ui_px(metrics::BASE_REM_SIZE));
                 let entity = cx.entity();
                 window.on_window_should_close(cx, move |_window, cx| {

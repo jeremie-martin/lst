@@ -1324,29 +1324,33 @@ impl PlatformWindow for X11Window {
     }
 
     fn set_title(&mut self, title: &str) {
-        check_reply(
-            || "X11 ChangeProperty8 on WM_NAME failed.",
-            self.0.xcb.change_property8(
+        // lst patch: a title change is two property writes; waiting for each
+        // reply stalled the first frame by 15-30 ms while the server was
+        // still mapping the window, and every later title change by a round
+        // trip. Send both and flush; a failed write only affects the title.
+        self.0
+            .xcb
+            .change_property8(
                 xproto::PropMode::REPLACE,
                 self.0.x_window,
                 xproto::AtomEnum::WM_NAME,
                 xproto::AtomEnum::STRING,
                 title.as_bytes(),
-            ),
-        )
-        .log_err();
+            )
+            .map(|cookie| cookie.ignore_error())
+            .log_err();
 
-        check_reply(
-            || "X11 ChangeProperty8 on _NET_WM_NAME failed.",
-            self.0.xcb.change_property8(
+        self.0
+            .xcb
+            .change_property8(
                 xproto::PropMode::REPLACE,
                 self.0.x_window,
                 self.0.state.borrow().atoms._NET_WM_NAME,
                 self.0.state.borrow().atoms.UTF8_STRING,
                 title.as_bytes(),
-            ),
-        )
-        .log_err();
+            )
+            .map(|cookie| cookie.ignore_error())
+            .log_err();
         xcb_flush(&self.0.xcb);
     }
 
