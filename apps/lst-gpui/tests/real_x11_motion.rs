@@ -159,6 +159,29 @@ fn ctrl_right_crosses_decomposed_grapheme_word_without_splitting_it() -> TestRes
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn word_and_subword_motion_cross_blank_crlf_lines_and_keep_graphemes_intact() -> TestResult {
+    support::run_x11_test("motion-words-across-crlf", |session| {
+        let path = session.seed_file("words.txt", "alpha\r\n \t\r\ncafe\u{301}HTTP42_beta\r\nomega")?;
+        let mut editor = session.open_file("motion-words-across-crlf", &path)?;
+
+        editor.keys("<C-home><C-right>")?;
+        editor.expect_cursor_heads(&[(0, 5)])?;
+        editor.keys("<C-right>")?;
+        editor.expect_cursor_heads(&[(2, 16)])?;
+        for column in [12, 9, 5, 0] {
+            editor.keys("<A-left>")?;
+            editor.expect_cursor_heads(&[(2, column)])?;
+        }
+        editor.keys("<C-left>")?;
+        editor.expect_cursor_heads(&[(0, 0)])?;
+        editor.keys("<C-right><A-right>")?;
+        editor.expect_cursor_heads(&[(2, 5)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn alt_right_subword_motion_lands_inside_camel_and_snake_runs() -> TestResult {
     // "fooBar_baz" should produce subword stops at the case transition
     // (Bar) and the snake separator (_). Don't pin exact stops; assert

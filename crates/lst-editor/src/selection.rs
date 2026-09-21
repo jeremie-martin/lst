@@ -546,9 +546,6 @@ pub(crate) fn cells_of_str(text: &str) -> Vec<GraphemeCell> {
     }
     cells
 }
-fn cells_of_rope(buffer: &Rope) -> Vec<GraphemeCell> {
-    cells_of_str(&buffer.to_string())
-}
 fn cells_of_rope_line(buffer: &Rope, line: usize) -> (usize, Vec<GraphemeCell>) {
     let line_ix = line.min(buffer.len_lines().saturating_sub(1));
     let line_start_char = buffer.line_to_char(line_ix);
@@ -745,24 +742,60 @@ fn next_subword_boundary_cells(cells: &[GraphemeCell], cell_index: usize) -> usi
         .map_or(run_end, |chunk| run_start + chunk.end)
 }
 pub fn previous_word_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let cells = cells_of_rope(buffer);
-    let target = previous_word_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
-    char_index_at_cell(&cells, target, buffer.len_chars())
+    boundary_in_rope(buffer, char_index, true, previous_word_boundary_cells)
 }
 pub fn previous_subword_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let cells = cells_of_rope(buffer);
-    let target = previous_subword_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
-    char_index_at_cell(&cells, target, buffer.len_chars())
+    boundary_in_rope(buffer, char_index, true, previous_subword_boundary_cells)
 }
 pub fn next_word_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let cells = cells_of_rope(buffer);
-    let target = next_word_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
-    char_index_at_cell(&cells, target, buffer.len_chars())
+    boundary_in_rope(buffer, char_index, false, next_word_boundary_cells)
 }
 pub fn next_subword_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let cells = cells_of_rope(buffer);
-    let target = next_subword_boundary_cells(&cells, cell_partition_by_char(&cells, char_index));
-    char_index_at_cell(&cells, target, buffer.len_chars())
+    boundary_in_rope(buffer, char_index, false, next_subword_boundary_cells)
+}
+
+/// Word runs cannot cross line breaks; only skipped whitespace can. Reuse the
+/// same grapheme transitions as text fields, walking adjacent lines only when
+/// the cursor has no non-whitespace cluster left in its direction. Keep line
+/// endings intact so CRLF remains one grapheme, including mid-cluster inputs.
+fn boundary_in_rope(
+    buffer: &Rope,
+    char_index: usize,
+    backward: bool,
+    boundary: fn(&[GraphemeCell], usize) -> usize,
+) -> usize {
+    let mut char_index = char_index.min(buffer.len_chars());
+    let mut line = buffer.char_to_line(char_index);
+    let mut line_start = buffer.line_to_char(line);
+    loop {
+        let slice = buffer.line(line);
+        let text = std::borrow::Cow::from(slice);
+        let cells = cells_of_str(&text);
+        let cell_index = cell_partition_by_char(&cells, char_index - line_start);
+        let remaining = if backward {
+            &cells[..cell_index]
+        } else {
+            &cells[cell_index..]
+        };
+        if remaining.iter().any(|cell| !cell.repr.is_whitespace()) {
+            return line_start + char_index_at_cell(&cells, boundary(&cells, cell_index), slice.len_chars());
+        }
+        if backward {
+            if line == 0 {
+                return 0;
+            }
+            char_index = line_start;
+            line -= 1;
+            line_start = buffer.line_to_char(line);
+        } else {
+            line += 1;
+            if line == buffer.len_lines() {
+                return buffer.len_chars();
+            }
+            line_start += slice.len_chars();
+            char_index = line_start;
+        }
+    }
 }
 pub fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     let clamped = char_index.min(buffer.len_chars());
@@ -1133,6 +1166,45 @@ pub(crate) fn char_at_line_column(buffer: &Rope, line_ix: usize, column: usize) 
 #[cfg(test)]
 mod identifier_tests {
     use super::*;
+
+    #[test]
+    fn local_word_boundaries_match_whole_document_graphemes() {
+        let cases = [
+            "",
+            "\r\n\r\n\t  ",
+            "one\r\n\n\t twoThree_HTTP42 __next ++.. end\r\n",
+            "cafe\u{301} 👩‍💻🇫🇷 中文\n\u{301}tail\r\nfinish",
+            "a\u{b}b\u{c}c\u{85}d\u{2028}e\u{2029}f\rfinal",
+            "___\n___\n_ ___Camel___ __\t\nnext",
+        ];
+        let cases = cases.into_iter().map(str::to_owned).chain([format!(
+            "{}cafe\u{301}_HTTP42\r\n{}end",
+            "words and_symbols\r\n".repeat(100),
+            "\t\r\n".repeat(100)
+        )]);
+        for text in cases {
+            let buffer = Rope::from_str(&text);
+            let cells = cells_of_str(&text);
+            for at in 0..=buffer.len_chars() + 1 {
+                for (backward, boundary) in [
+                    (
+                        true,
+                        previous_word_boundary_cells as fn(&[GraphemeCell], usize) -> usize,
+                    ),
+                    (false, next_word_boundary_cells),
+                    (true, previous_subword_boundary_cells),
+                    (false, next_subword_boundary_cells),
+                ] {
+                    let target = boundary(&cells, cell_partition_by_char(&cells, at));
+                    assert_eq!(
+                        boundary_in_rope(&buffer, at, backward, boundary),
+                        char_index_at_cell(&cells, target, buffer.len_chars()),
+                        "text {text:?}, at {at}, backward {backward}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn identifier_range_includes_both_edges_but_not_separator_interiors() {

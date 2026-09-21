@@ -77,6 +77,24 @@ Commands: see `docs/performance.md`.
   A candidate fix compares actual drawable size and window origin while
   retaining drawable queries and XSync acknowledgements; measure separately.
 
+### Local word and subword boundaries
+
+- Ordinary Ctrl/Alt word motion and word deletion built grapheme cells for
+  the entire rope on every call. The existing grapheme transitions now run
+  on the current line and walk neighbouring lines only across skipped
+  whitespace. No document cache, alternate tokenization, or changed word rules.
+- Isolated release probe, same corpus and cursor positions, 20 calls per
+  operation on 660 KB Rust: ~6.7–7.7 ms -> ~1.5–2.1 microseconds. Two calls
+  each on 500k-line plain text: ~351–357 ms -> ~1.4–3.9 microseconds. All four
+  result checksums match. These are boundary-operation costs, not claims of
+  equivalent speedups in display latency or ordinary single-character motion.
+- Exhaustive comparison against whole-document graphemes covers every
+  character offset (including mid-cluster inputs and EOF), Unicode line
+  breaks, CRLF, combining marks, emoji, underscores, and blank lines across
+  rope chunks. Model internal-invariant suites and 17 focused X11 chrome,
+  motion and text-input tests passed; add a real-app CRLF/subword regression
+  to the final acceptance gate.
+
 ## Measurement additions
 
 - `open-small`: process spawn to first completed frame (`open_to_first_frame_ms`),
