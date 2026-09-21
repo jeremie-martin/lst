@@ -19,6 +19,11 @@ Commands: see `docs/performance.md`.
   counts can be attributed without guessing.
 - The summary no longer aborts when a secondary trace metric is absent from a
   run (for example a paste that takes the background syntax path).
+- `scroll-*`: the primary metric is now `scroll_frame_wall_ms_mean`, the
+  mean app-side frame time during the scheduled wheel input, with
+  `scroll_frames_per_second` and `frame_wall_ms_max`; `scroll_overrun_ms`
+  stays as a secondary because GPUI's one-second re-presentation after
+  input bounds it regardless of editor work.
 
 ## Baseline (before any change)
 

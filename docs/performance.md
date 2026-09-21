@@ -36,7 +36,7 @@ Choose the scenario whose primary metric matches the problem:
 | `large-paste` | `paste_complete_ms` | select/copy/tab-switch/paste/save workflow |
 | `mixed-paste` | `paste_input_to_paint_ms` | shell-style mixed-language paste and first paint |
 | `typing-medium`, `typing-large`, `typing-plain` | `typing_ms_per_char` | sustained editing with or without highlighting |
-| `scroll-highlighted`, `scroll-plain` | `scroll_overrun_ms` | scheduled scroll input through redraw quiet |
+| `scroll-highlighted`, `scroll-plain` | `scroll_frame_wall_ms_mean` | mean app-side frame time during a scheduled wheel scroll, with frames per second, the worst frame, and `scroll_overrun_ms` (input end through redraw quiet) as secondaries |
 | `open-small`, `open-large` | `open_to_first_frame_ms`, `open_to_quiet_ms` | process spawn through the first completed frame, and through redraw quiet |
 | `search-large` | `search_reindex_ms` | find query reindexing |
 | `multi-cursor-1k` | `viewport_paint_ms` | preparation and paint with 1,000 carets |

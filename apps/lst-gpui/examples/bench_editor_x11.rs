@@ -228,7 +228,7 @@ impl Scenario {
             Self::LargePaste => "paste_complete_ms",
             Self::MixedPaste => "paste_input_to_paint_ms",
             Self::TypingMedium | Self::TypingLarge | Self::TypingPlain => "typing_ms_per_char",
-            Self::ScrollHighlighted | Self::ScrollPlain => "scroll_overrun_ms",
+            Self::ScrollHighlighted | Self::ScrollPlain => "scroll_frame_wall_ms_mean",
             Self::OpenSmall => "open_to_first_frame_ms",
             Self::OpenLarge => "open_to_quiet_ms",
             Self::SearchLarge => "search_reindex_ms",
@@ -1346,6 +1346,27 @@ impl Bench {
             metrics.set("scroll_overrun_ms", (trace_wall_ms - scheduled_ms).max(0.0));
             metrics.set("damage_events", damage_events as f64);
             metrics.set("damage_hz_proxy", damage_hz_proxy(damage_events, trace_wall_ms));
+            // App-side frames rendered during the scheduled input: their mean
+            // wall time is the cost of one scrolled frame, independent of the
+            // presentation policy that bounds `scroll_overrun_ms`.
+            let frames = trace.count("frame_wall_ms").unwrap_or(0) as f64;
+            metrics.set("scroll_frames_per_second", frames / (scheduled_ms / 1000.0));
+            metrics.set(
+                "scroll_frame_wall_ms_mean",
+                if frames > 0.0 {
+                    trace.sum("frame_wall_ms").unwrap_or(0.0) / frames
+                } else {
+                    0.0
+                },
+            );
+            add_trace_aggregate(
+                &mut metrics,
+                &trace,
+                "frame_wall_ms",
+                "frame_wall_ms_sum",
+                "frame_wall_ms_max",
+                "frame_wall_ms_count",
+            );
             add_process_metrics(&mut metrics, &before, &after, self.ticks_per_second);
             add_trace_aggregate(
                 &mut metrics,
@@ -2320,6 +2341,10 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "final_file_lines",
         ],
         Scenario::ScrollHighlighted | Scenario::ScrollPlain => &[
+            "scroll_frame_wall_ms_mean",
+            "scroll_frames_per_second",
+            "frame_wall_ms_max",
+            "frame_wall_ms_count",
             "scroll_overrun_ms",
             "scroll_scheduled_ms",
             "trace_wall_ms",
@@ -3817,9 +3842,14 @@ mod tests {
                 Scenario::TypingPlain,
                 Scenario::ScrollHighlighted,
                 Scenario::ScrollPlain,
+                Scenario::OpenSmall,
                 Scenario::OpenLarge,
                 Scenario::SearchLarge,
                 Scenario::MultiCursor1k,
+                Scenario::Idle,
+                Scenario::LatencyTyping,
+                Scenario::LatencyNavigation,
+                Scenario::LatencyEditNavigation,
             ]
         );
     }
@@ -3836,8 +3866,8 @@ mod tests {
         assert_eq!(primary_metrics["typing-medium"], "typing_ms_per_char");
         assert_eq!(primary_metrics["typing-large"], "typing_ms_per_char");
         assert_eq!(primary_metrics["typing-plain"], "typing_ms_per_char");
-        assert_eq!(primary_metrics["scroll-highlighted"], "scroll_overrun_ms");
-        assert_eq!(primary_metrics["scroll-plain"], "scroll_overrun_ms");
+        assert_eq!(primary_metrics["scroll-highlighted"], "scroll_frame_wall_ms_mean");
+        assert_eq!(primary_metrics["scroll-plain"], "scroll_frame_wall_ms_mean");
         assert_eq!(primary_metrics["open-large"], "open_to_quiet_ms");
         assert_eq!(primary_metrics["search-large"], "search_reindex_ms");
         assert_eq!(primary_metrics["multi-cursor-1k"], "viewport_paint_ms");
