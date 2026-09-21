@@ -9,16 +9,16 @@ Commands: see `docs/performance.md`.
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off
-  during the broad comparison. Discard that sweep and re-run both preserved
-  production binaries after restoration, including the targeted comparisons;
-  earlier timings below remain provisional until reproduced. Correctness
-  test results are unaffected.
+  during the broad comparison. Discarded that sweep and re-ran both preserved
+  production binaries after restoration, including targeted comparisons.
+  Results below use those reruns. Correctness tests were unaffected.
 - Baseline: `7748109`, production release, physical `:0`, same reference
-  CPU/GPU, now NVIDIA 615.71.09 and two 4K displays. Keep comparisons within
-  this session; the older startup timings are not comparable. Commands use
-  `--repetitions 3 --priming 1` unless specified otherwise.
-- `open-small`: first completed frame median 216 ms. `typing-plain --corpus
-  huge-plain-500k`: 0.819 ms/character; 104 ms of 109 ms applying 320
+  CPU/GPU, NVIDIA 615.71.09, restored desktop with a 3816x2100 client window
+  at scale 2. Keep comparisons within this session; older startup timings
+  are not comparable. Commands use `--repetitions 3 --priming 1` unless
+  specified otherwise; final production code is `212650d`.
+- `typing-plain --corpus huge-plain-500k`: 0.887 ms/character;
+  112 ms of 118 ms applying 320
   characters is wrap-layout maintenance. The incremental update traverses
   all later line offsets even when their row delta is zero.
 - The initial one-run `all` sweep failed at mixed paste: pointer input used
@@ -27,9 +27,9 @@ Commands: see `docs/performance.md`.
 - `open-large --corpus huge-plain-500k` exposed a separate benchmark race:
   a mapped window can remain undamaged for the quiet interval before its
   first frame exists. Wait for the existing first-frame stamp before quiet;
-  the spawn-to-frame measurement itself is unchanged. With this correction,
-  baseline wrap construction takes 72–75 ms per layout (the WM resize causes
-  a second layout). No app or GPUI changes in this measurement correction.
+  the spawn-to-frame measurement itself is unchanged. The WM resize can
+  cause a second wrap layout. No app or GPUI changes in this measurement
+  correction.
 
 ### Incremental wrap maintenance and borrowed row counting
 
@@ -37,19 +37,19 @@ Commands: see `docs/performance.md`.
   in borrowed contiguous rope text, allocating only for a line crossing rope
   chunks; this replaces repeated character lookups and rope subslicing and
   also avoids copying contiguous complex lines. No new cache or vendor patch.
-- Same production commands as above, three measured runs after one priming
-  run: huge plain typing 0.819 -> 0.460 ms/character; input application total
-  109.470 -> 7.049 ms; wrap patch total 104.244 -> 2.269 ms for 320 characters.
-  Huge plain first frame 305.772 -> 265.689 ms; wrap construction ~73 ->
-  ~28 ms. The quiet metric changed with window activation/re-presentation and
-  is not evidence for or against this improvement.
+- Final restored-display comparison, three measured runs after one priming
+  run: huge plain typing 0.887 -> 0.461 ms/character; input application total
+  118.155 -> 7.062 ms; wrap patch total 112.331 -> 2.256 ms for 320 characters.
+  With the startup changes below, huge plain first frame is 312.465 ->
+  210.341 ms. The quiet metric changes with window activation/re-presentation
+  and is not evidence for or against this improvement.
 - Verification: grapheme row-count equivalence across rope chunks, Unicode,
   tabs and line endings; incremental layout equivalence for positive, zero
   and negative row changes with wrapping on/off; 14 nested X11 viewport and
   motion acceptance tests passed. Benchmark self-tests passed and the fixed
   mixed-paste scenario completed with verified saved output.
 
-### Startup preparation and optional GPU capabilities (in validation)
+### Startup preparation and optional GPU capabilities
 
 - File reads and rope construction now overlap GPUI initialization in a
   dedicated app-owned startup loader. It hands stamped tabs to the existing
@@ -62,11 +62,11 @@ Commands: see `docs/performance.md`.
   upgrading to an incompatible renderer API or disabling driver features via
   environment variables. The patch adds one descriptor field and gates the
   existing coherent capability path; GPUI explicitly selects raster-only.
-- Restored-display broad sweep (`all --repetitions 1 --priming 1`, both
-  preserved production binaries): small-file first frame 223.435 -> 193.730
-  ms, peak RSS 297.492 -> 201.715 MiB. This is RSS, including driver/library
-  mappings, not a claim of 96 MiB less editor-owned heap. Repeat targeted
-  startup measurements before finalizing the gain.
+- Final restored-display `open-small --repetitions 5 --priming 1`:
+  first frame 220.998 -> 171.540 ms, peak RSS 298.871 -> 200.590 MiB.
+  This is RSS, including driver/library mappings, not a claim of 98 MiB
+  less editor-owned heap. File preparation remains inside spawn-to-first-frame
+  timing even though it overlaps platform initialization.
 - All-feature tests and Clippy pass (the newly vendored upstream Blade emits
   seven pre-existing lifetime-syntax warnings). All 23 nested startup,
   clipboard and file workflow tests passed. Both vendor patch files pass
@@ -87,6 +87,11 @@ Commands: see `docs/performance.md`.
   The small uncertain whole-launch difference does not earn ~170 patch lines
   of custom fontconfig parsing and threading. Restore upstream byte-for-byte;
   keep the independently useful GPU startup thread.
+- Final three-run comparisons: idle CPU 170 -> 40 ms per two seconds,
+  paints 71 -> four. Typing key-to-damage p50 9.528 -> 7.173 ms, p95
+  14.131 -> 9.842 ms; frames/key 4.300 -> 1.150. Navigation p50 7.815 ->
+  5.596 ms; edit-then-navigation p50 5.703 -> 5.295 ms. Navigation app work
+  per frame remains ~1.6 ms; fewer redundant frames are the improvement.
 
 ### Local word and subword boundaries
 
@@ -103,8 +108,8 @@ Commands: see `docs/performance.md`.
   character offset (including mid-cluster inputs and EOF), Unicode line
   breaks, CRLF, combining marks, emoji, underscores, and blank lines across
   rope chunks. Model internal-invariant suites and 17 focused X11 chrome,
-  motion and text-input tests passed; add a real-app CRLF/subword regression
-  to the final acceptance gate.
+  motion and text-input tests passed. The real-app CRLF/subword regression
+  also passed in the 266-test full nested checkpoint.
 
 ### Batch-edit cursor mapping
 
@@ -113,14 +118,33 @@ Commands: see `docs/performance.md`.
   each cursor. The old mapping is quadratic in selections and edits.
 - Build a temporary prefix index from the immutable `TextChangeSet`, then
   binary-search each position. No persistent cache or invalidation protocol.
-  Use it for multi-selection deletion, linewise paste, and mapped line edits;
-  the latter no longer constructs and edits a throwaway rope just to map
-  offsets. Keep the original linear algorithm only as the test oracle.
+  Use it for multi-selection deletion, linewise paste, and multi-cursor line
+  deletion; the latter no longer constructs and edits a throwaway rope just
+  to map offsets. Keep the original linear algorithm only as the test oracle.
 - Exhaustive small-coordinate equivalence includes touching replacements,
   repeated insertions, Unicode growth, deletions, and out-of-order queries.
-  Add 1k/10k deletion cases to the existing model benchmark and a real-app
-  1k-selection deletion/undo regression. Isolated before/after timings and
-  affected X11 suites remain to be run after the full checkpoint.
+  Added 1k/10k deletion cases to the existing model benchmark and a real-app
+  1k-selection deletion/undo regression; the latter passed with 35 other
+  affected X11 tests.
+- Isolated optimized model probe after all behavior tests, three alternating
+  before/after batches of 30 deletions each, verifying every resulting text:
+  median batch means 0.526 -> 0.106 ms at 1k selections and 36.668 ->
+  1.223 ms at 10k. These are model edit costs, not total display latency.
+
+### Validation and measurement boundaries
+
+- Full nested X11 checkpoint: 266/266 passed. After the cursor-mapping change,
+  all-feature tests, internal-invariant model tests, Clippy, and 36 affected
+  X11 tests passed, including the new 1k-selection deletion/undo regression.
+- Committed visual references use a different window width (1901 versus
+  3816 pixels). Add an alternate reference-directory option so the preserved
+  baseline can supply same-environment screenshots without overwriting the
+  committed images. Compare the final binary against those references.
+- The 1k-cursor paint benchmark previously selected the last quiet frame,
+  sometimes measuring hidden blinking carets. Select the first completed
+  frame after the command instead, and test exclusion of later blink frames
+  and incomplete traces. Compare both binaries with the corrected runner;
+  do not attribute the earlier apparent paint improvement to production code.
 
 ## Measurement additions
 

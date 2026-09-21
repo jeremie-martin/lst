@@ -151,10 +151,10 @@ fn run_visual_scenarios(label: &str, scenarios: &[VisualScenario]) -> TestResult
 }
 
 fn baseline_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("visual_baselines")
-        .join(format!("{name}.ppm"))
+    let directory = std::env::var_os("LST_VISUAL_BASELINE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/visual_baselines"));
+    directory.join(format!("{name}.ppm"))
 }
 
 fn capture_clean_editor(session: &mut ScratchpadSession, run: usize) -> SupportResult<Screenshot> {

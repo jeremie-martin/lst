@@ -1936,6 +1936,15 @@ impl Bench {
             let multi_cursor_ready_ms = elapsed_ms(started);
             let after = proc_sample(pid)?;
             let trace = read_editor_trace(&trace_path)?;
+            // Measure the first frame showing the new selections. The last
+            // frame after redraw quiet may have blinking carets hidden.
+            let painted_frame = EditorTrace::first_frame_after(
+                &fs::read_to_string(&trace_path)?,
+                "command_complete=select_all_occurrences",
+            );
+            if painted_frame.count("viewport_paint_ms") != Some(1) {
+                return Err(io::Error::other("multi-cursor benchmark produced no completed selection frame").into());
+            }
             let cursor_count = trace
                 .last("cursor_count")
                 .ok_or_else(|| io::Error::other("multi-cursor benchmark produced no cursor count"))?;
@@ -1951,11 +1960,16 @@ impl Bench {
             metrics.set("multi_cursor_ready_ms", multi_cursor_ready_ms);
             metrics.set("cursor_count", cursor_count);
             metrics.set("damage_events", damage_events as f64);
-            add_trace_last(&mut metrics, &trace, "viewport_prepare_ms", "viewport_prepare_ms");
-            add_trace_last(&mut metrics, &trace, "viewport_paint_ms", "viewport_paint_ms");
             add_trace_last(
                 &mut metrics,
-                &trace,
+                &painted_frame,
+                "viewport_prepare_ms",
+                "viewport_prepare_ms",
+            );
+            add_trace_last(&mut metrics, &painted_frame, "viewport_paint_ms", "viewport_paint_ms");
+            add_trace_last(
+                &mut metrics,
+                &painted_frame,
                 "structure_decorations_ms",
                 "structure_decorations_ms",
             );
@@ -2616,6 +2630,16 @@ struct EditorTrace {
 }
 
 impl EditorTrace {
+    fn first_frame_after(contents: &str, marker: &str) -> Self {
+        let Some((_, after)) = contents.split_once(&format!("{marker}\n")) else {
+            return Self::default();
+        };
+        let Some((frame, _)) = after.split_once("\nframe_end_epoch_us=") else {
+            return Self::default();
+        };
+        Self::parse(frame)
+    }
+
     fn parse(contents: &str) -> Self {
         let mut trace = Self::default();
         for line in contents.lines() {
@@ -3938,6 +3962,29 @@ mod tests {
     fn median_uses_upper_middle_for_existing_benchmark_style() {
         assert_eq!(median_f64(&[4.0, 1.0, 2.0]).unwrap(), 2.0);
         assert_eq!(median_f64(&[4.0, 1.0, 2.0, 3.0]).unwrap(), 3.0);
+    }
+
+    #[test]
+    fn selection_paint_uses_first_completed_frame_not_later_blink() {
+        let marker = "command_complete=select_all_occurrences";
+        let text = "viewport_paint_ms=9\nframe_end_epoch_us=1\n\
+                    command_complete=select_all_occurrences\ncursor_count=1000\n\
+                    viewport_prepare_ms=2\nviewport_paint_ms=3\nframe_end_epoch_us=2\n\
+                    viewport_paint_ms=0.1\nframe_end_epoch_us=3\n";
+        let trace = EditorTrace::first_frame_after(text, marker);
+        assert_eq!(trace.last("cursor_count"), Some(1000.0));
+        assert_eq!(trace.last("viewport_prepare_ms"), Some(2.0));
+        assert_eq!(trace.last("viewport_paint_ms"), Some(3.0));
+        assert_eq!(trace.count("viewport_paint_ms"), Some(1));
+        assert_eq!(
+            EditorTrace::first_frame_after(text, "absent").count("viewport_paint_ms"),
+            None
+        );
+        let unfinished = format!("{marker}\nviewport_paint_ms=3\n");
+        assert_eq!(
+            EditorTrace::first_frame_after(&unfinished, marker).count("viewport_paint_ms"),
+            None
+        );
     }
 
     #[test]

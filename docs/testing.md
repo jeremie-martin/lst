@@ -161,7 +161,15 @@ Environment controls:
 - `LST_X11_HARNESS_LAYOUT`, `LST_X11_HARNESS_VARIANT`,
   `LST_X11_HARNESS_OPTIONS`: override the pinned XKB layout
 - `LST_VISUAL_SCENARIO=<name>`: run one visual scenario
+- `LST_VISUAL_BASELINE_DIR=/path/to/reference-images`: use an alternate image
+  directory for same-environment comparisons of preserved binaries; defaults
+  to the committed `tests/visual_baselines` directory
 - `LST_UPDATE_VISUAL_BASELINES=1`: replace the selected expected image
+
+If display geometry differs from the committed images, capture references from
+the preserved **old** binary into a temporary directory, then compare the new
+binary against that directory. Keep the display configuration fixed and do not
+update references from the new binary to hide a mismatch.
 
 Inspect every updated baseline image. A repeatable capture of another window is
 not a valid result.

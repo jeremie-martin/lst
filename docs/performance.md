@@ -39,7 +39,7 @@ Choose the scenario whose primary metric matches the problem:
 | `scroll-highlighted`, `scroll-plain` | `scroll_frame_wall_ms_mean` | mean app-side frame time during a scheduled wheel scroll, with frames per second, the worst frame, and `scroll_overrun_ms` (input end through redraw quiet) as secondaries |
 | `open-small`, `open-large` | `open_to_first_frame_ms`, `open_to_quiet_ms` | process spawn through the first completed frame, and through redraw quiet |
 | `search-large` | `search_reindex_ms` | find query reindexing |
-| `multi-cursor-1k` | `viewport_paint_ms` | preparation and paint with 1,000 carets |
+| `multi-cursor-1k` | `viewport_paint_ms` | first completed selection frame with 1,000 carets; not a later blink-hidden frame |
 | `idle` | `idle_cpu_ms` | CPU, repaints, and RSS over two focused idle seconds |
 | `latency-typing`, `latency-navigation`, `latency-edit-navigation` | `key_to_paint_ms_p50` | one key at a time: key press to first damaged frame, split into X delivery, app work through paint, and presentation; frames per key; per-frame cost |
 
