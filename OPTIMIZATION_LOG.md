@@ -8,6 +8,11 @@ Commands: see `docs/performance.md`.
 
 ## Session 3: baseline and measurement reliability
 
+- Display interruption: the user reported an accidental monitor power-off
+  during the broad comparison. Discard that sweep and re-run both preserved
+  production binaries after restoration, including the targeted comparisons;
+  earlier timings below remain provisional until reproduced. Correctness
+  test results are unaffected.
 - Baseline: `7748109`, production release, physical `:0`, same reference
   CPU/GPU, now NVIDIA 615.71.09 and two 4K displays. Keep comparisons within
   this session; the older startup timings are not comparable. Commands use
@@ -43,6 +48,34 @@ Commands: see `docs/performance.md`.
   and negative row changes with wrapping on/off; 14 nested X11 viewport and
   motion acceptance tests passed. Benchmark self-tests passed and the fixed
   mixed-paste scenario completed with verified saved output.
+
+### Startup preparation and optional GPU capabilities (in validation)
+
+- File reads and rope construction now overlap GPUI initialization in a
+  dedicated app-owned startup loader. It hands stamped tabs to the existing
+  model boundary; scratchpad creation remains after the window opens. Thread
+  creation failure falls back to synchronous loading, and file errors retain
+  the existing status/fallback behavior.
+- A symbolized startup profile showed NVIDIA ray-tracing library work.
+  Blade 0.7.1 automatically enables Vulkan ray queries even though GPUI does
+  not use them. Backport upstream `c7edf7b6`'s explicit opt-in instead of
+  upgrading to an incompatible renderer API or disabling driver features via
+  environment variables. The patch adds one descriptor field and gates the
+  existing coherent capability path; GPUI explicitly selects raster-only.
+- Restored-display broad sweep (`all --repetitions 1 --priming 1`, both
+  preserved production binaries): small-file first frame 223.435 -> 193.730
+  ms, peak RSS 297.492 -> 201.715 MiB. This is RSS, including driver/library
+  mappings, not a claim of 96 MiB less editor-owned heap. Repeat targeted
+  startup measurements before finalizing the gain.
+- All-feature tests and Clippy pass (the newly vendored upstream Blade emits
+  seven pre-existing lifetime-syntax warnings). All 23 nested startup,
+  clipboard and file workflow tests passed. Both vendor patch files pass
+  reverse-apply checks against their source trees.
+- The sweep also exposed ~60 paints per two idle seconds. X11 event capture
+  confirms a stream of identical synthetic ConfigureNotify messages from the
+  WM. GPUI's unconditional resize/move callbacks turn these into full redraws.
+  A candidate fix compares actual drawable size and window origin while
+  retaining drawable queries and XSync acknowledgements; measure separately.
 
 ## Measurement additions
 

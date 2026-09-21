@@ -16,6 +16,7 @@ mod runtime;
 mod settings;
 mod settings_ui;
 mod shell;
+mod startup;
 mod state_trace;
 mod syntax;
 mod ui;
@@ -31,9 +32,9 @@ use input::ActiveDragSelection;
 use launch::{parse_launch_args, LaunchArgs};
 use lst_editor::{
     selection::identifier_range_at_char, EditorCommand as Command, EditorModel, EditorTab as ModelEditorTab, FileStamp,
-    FocusTarget, InputMode, Language, Position, RevealIntent, Selection, TabId, UNTITLED_PREFIX,
+    FocusTarget, InputMode, Language, Position, RevealIntent, Selection, TabId,
 };
-use recent::{default_recent_files_path, normalize_recent_path, RecentOrigin, RecentView};
+use recent::{default_recent_files_path, RecentOrigin, RecentView};
 use ropey::Rope;
 use settings::{InputModeSetting, SettingsStore, ThemePreference};
 use state_trace::StateTraceEmitter;
@@ -497,7 +498,7 @@ pub(crate) struct FileConflictButtonBounds {
 }
 
 impl LstGpuiApp {
-    fn new(cx: &mut Context<Self>, launch: LaunchArgs, settings: SettingsStore) -> Self {
+    fn new(cx: &mut Context<Self>, launch: LaunchArgs, settings: SettingsStore, files: startup::LaunchFiles) -> Self {
         diagnostics::record_startup_mark("app_new");
         metrics::set_code_font_size(f32::from(settings.settings.editor.font_size));
         let initial_theme = theme_for_preference(settings.settings.appearance.theme, cx.window_appearance());
@@ -527,7 +528,7 @@ impl LstGpuiApp {
             .scratchpad_dir
             .clone()
             .or_else(|| settings.settings.files.scratchpad_directory.clone());
-        let mut model = initial_model_from_launch(launch.clone(), scratchpad_dir.as_deref());
+        let mut model = files.into_model(scratchpad_dir.as_deref());
         diagnostics::record_startup_mark("model_loaded");
         let configured_mode = match settings.settings.editor.input_mode {
             InputModeSetting::Standard => InputMode::Standard,
@@ -1362,70 +1363,6 @@ fn warm_first_frame_caches(launch: &LaunchArgs, cx: &App) {
     });
 }
 
-fn initial_model_from_launch(launch: LaunchArgs, scratchpad_dir: Option<&std::path::Path>) -> EditorModel {
-    let mut tabs = Vec::new();
-    let mut next_tab_id = 1u64;
-    let mut status = "Ready.".to_string();
-
-    if launch.files.is_empty() {
-        tabs.push(scratchpad_or_empty_tab(
-            TabId::from_raw(next_tab_id),
-            scratchpad_dir,
-            &mut status,
-        ));
-    } else {
-        let mut opened_paths = HashSet::new();
-        for path in launch.files {
-            if !opened_paths.insert(normalize_recent_path(&path)) {
-                continue;
-            }
-            match runtime::read_file_with_stamp(&path) {
-                Ok((text, file_stamp)) => {
-                    tabs.push(ModelEditorTab::from_path_with_stamp(
-                        TabId::from_raw(next_tab_id),
-                        path,
-                        &text,
-                        Some(file_stamp),
-                    ));
-                    next_tab_id += 1;
-                }
-                Err(err) => {
-                    status = format!("Failed to open {}: {err}", path.display());
-                }
-            }
-        }
-
-        if tabs.is_empty() {
-            tabs.push(scratchpad_or_empty_tab(
-                TabId::from_raw(next_tab_id),
-                scratchpad_dir,
-                &mut status,
-            ));
-        }
-    }
-
-    let first = tabs.remove(0);
-    EditorModel::from_tabs(first, tabs, status)
-}
-
-fn scratchpad_or_empty_tab(
-    tab_id: TabId,
-    scratchpad_dir: Option<&std::path::Path>,
-    status: &mut String,
-) -> ModelEditorTab {
-    match runtime::create_scratchpad_note(scratchpad_dir) {
-        Ok((path, file_stamp)) => ModelEditorTab::scratchpad_with_stamp(tab_id, path, file_stamp),
-        Err(err) => {
-            *status = if status == "Ready." {
-                format!("Failed to create scratchpad: {err}")
-            } else {
-                format!("{status}; failed to create scratchpad: {err}")
-            };
-            ModelEditorTab::empty(tab_id, format!("{UNTITLED_PREFIX}-1"))
-        }
-    }
-}
-
 impl Focusable for LstGpuiApp {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1605,6 +1542,21 @@ fn main() {
         process::exit(1);
     }
 
+    let launch_files = if launch.files.is_empty() {
+        None
+    } else {
+        let paths = launch.files.clone();
+        std::thread::Builder::new()
+            .name("launch-files".into())
+            .spawn(move || {
+                let files = startup::LaunchFiles::load(&paths);
+                diagnostics::record_startup_mark("files_loaded");
+                files
+            })
+            .map_err(|error| eprintln!("failed to start file-loading thread: {error}; loading at window creation"))
+            .ok()
+    };
+
     Application::new().run(move |cx: &mut App| {
         diagnostics::record_startup_mark("app_init");
         if let Err(error) = cx
@@ -1641,7 +1593,11 @@ fn main() {
             },
             move |_, cx| {
                 let launch = launch.clone();
-                let app = cx.new(move |cx| LstGpuiApp::new(cx, launch, settings));
+                let files = match launch_files {
+                    Some(worker) => worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                    None => startup::LaunchFiles::load(&launch.files),
+                };
+                let app = cx.new(move |cx| LstGpuiApp::new(cx, launch, settings, files));
                 diagnostics::record_startup_mark("model_ready");
                 app
             },
