@@ -895,16 +895,22 @@ fn merge_modifiers(lhs: Modifiers, rhs: Modifiers) -> Modifiers {
 
 #[cfg(target_os = "linux")]
 fn x11_current_modifiers() -> Modifiers {
+    use std::sync::OnceLock;
     use x11rb::connection::Connection as _;
     use x11rb::protocol::xproto::{ConnectionExt as _, KeyButMask};
+    use x11rb::rust_connection::RustConnection;
 
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+    // One connection for the process: this runs on every key press, and
+    // connecting each time cost connection setup plus a round trip per key.
+    static CONNECTION: OnceLock<Option<(RustConnection, u32)>> = OnceLock::new();
+    let Some((conn, root)) = CONNECTION.get_or_init(|| {
+        let (conn, screen_num) = x11rb::connect(None).ok()?;
+        let root = conn.setup().roots.get(screen_num)?.root;
+        Some((conn, root))
+    }) else {
         return Modifiers::default();
     };
-    let Some(screen) = conn.setup().roots.get(screen_num) else {
-        return Modifiers::default();
-    };
-    let Ok(cookie) = conn.query_pointer(screen.root) else {
+    let Ok(cookie) = conn.query_pointer(*root) else {
         return Modifiers::default();
     };
     let Ok(reply) = cookie.reply() else {

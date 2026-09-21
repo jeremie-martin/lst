@@ -344,7 +344,7 @@ binary and the final build back to back in the same environment.
 | `typing-medium` / `-large` / `-plain` | typing_ms_per_char | 1.17 / 1.35 / 0.79 | 1.02 / 1.27 / 0.53 |
 | `scroll-plain` / `-highlighted` | scroll_frame_wall_ms_mean (worst) | 2.98 (6.4) / 2.81 (5.9) | 1.52 (3.1) / 1.61 (3.4) |
 | `scroll-plain` | frames per second, CPU per 3 s scroll | 66 fps, 900 ms | 156 fps, 1110 ms |
-| `multi-cursor-1k` | viewport_paint_ms | 5.7 | 3.7 |
+| `multi-cursor-1k` | viewport_paint_ms | 5.7 | 0.34 |
 | `search-large` | search_reindex_ms | 0.27 | 0.28 |
 | `open-large` | open_to_quiet_ms | 1452 | 1350 |
 | `large-paste` | paste_complete_ms | 10.2 | 11.2 |
@@ -430,3 +430,17 @@ CPU time); `open-small` 334 -> ~260 ms in the current environment.
     geometry (pixel-identical on clean, find-panel, recent-files, and
     multi-cursor scenarios; 76 focus/key/surface behaviour tests pass);
     frame CPU within noise (-3%), kept as the simpler tree.
+22. **Backgrounds and carets in layers** (`viewport.rs`): a quad painted
+    outside a layer costs a bounds-tree insertion whose overlap walk grows
+    with every quad already painted, so a thousand carets (one highlight
+    and one caret quad per visible row) made the paint quadratic. The
+    background pass and the outline/caret pass each paint inside one layer
+    now, with the same draw-order relations. `multi-cursor-1k` viewport
+    paint 3.7 -> 0.34 ms; pixel-identical on multi-cursor, identifier,
+    inactive-selection, and find-panel scenarios.
+23. **One X11 connection for the modifier query** (`input.rs`): every key
+    press queried the pointer's modifier mask through a freshly opened X11
+    connection (connection setup plus a round trip, mostly waiting on the
+    server). The query keeps its semantics on one process-wide connection.
+    `latency-typing` key_delivery p50 0.60 -> 0.45 ms; 113 input,
+    modifier, chord, multi-cursor, vim, and find behaviour tests pass.

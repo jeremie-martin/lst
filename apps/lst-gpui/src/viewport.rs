@@ -2434,99 +2434,103 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
     // instead of one bounds-tree insertion per row.
     let selection_head_in_row = |row: &PaintedRow| !cursors_in_row(&cursors, row).is_empty();
 
-    // Backgrounds and highlights.
-    for row in rows.iter() {
-        if selection_head_in_row(row) {
-            let highlight_left = bounds.left() + layout_metrics.gutter_width();
-            window.paint_quad(fill(
-                Bounds::new(
-                    point(highlight_left, row.row_top),
-                    size((bounds.right() - highlight_left).max(px(0.0)), row_height),
-                ),
-                rgb(if focused {
-                    theme.role.current_line_bg
-                } else {
-                    theme.role.current_line_inactive_bg
-                }),
-            ));
-        }
+    // Backgrounds and highlights, in one layer: a quad outside a layer costs
+    // a bounds-tree insertion whose overlap walk grows with every quad
+    // already painted, which a thousand carets turn into most of the frame.
+    window.paint_layer(bounds, |window| {
+        for row in rows.iter() {
+            if selection_head_in_row(row) {
+                let highlight_left = bounds.left() + layout_metrics.gutter_width();
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(highlight_left, row.row_top),
+                        size((bounds.right() - highlight_left).max(px(0.0)), row_height),
+                    ),
+                    rgb(if focused {
+                        theme.role.current_line_bg
+                    } else {
+                        theme.role.current_line_inactive_bg
+                    }),
+                ));
+            }
 
-        for occurrence in items_overlapping_row(occurrence_highlights.as_ref(), row, Clone::clone) {
-            paint_range_background(
-                row,
-                occurrence,
-                code_origin_x,
-                row_height,
-                scale,
-                theme.role.occurrence_match_bg,
-                window,
-            );
-        }
+            for occurrence in items_overlapping_row(occurrence_highlights.as_ref(), row, Clone::clone) {
+                paint_range_background(
+                    row,
+                    occurrence,
+                    code_origin_x,
+                    row_height,
+                    scale,
+                    theme.role.occurrence_match_bg,
+                    window,
+                );
+            }
 
-        for selection_match in items_overlapping_row(selection_match_highlights.as_ref(), row, Clone::clone) {
-            paint_range_background(
-                row,
-                selection_match,
-                code_origin_x,
-                row_height,
-                scale,
-                theme.role.selection_match_bg,
-                window,
-            );
-        }
+            for selection_match in items_overlapping_row(selection_match_highlights.as_ref(), row, Clone::clone) {
+                paint_range_background(
+                    row,
+                    selection_match,
+                    code_origin_x,
+                    row_height,
+                    scale,
+                    theme.role.selection_match_bg,
+                    window,
+                );
+            }
 
-        for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), row, Clone::clone) {
-            paint_range_background(
-                row,
-                bracket,
-                code_origin_x,
-                row_height,
-                scale,
-                theme.role.bracket_match_bg,
-                window,
-            );
-        }
+            for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), row, Clone::clone) {
+                paint_range_background(
+                    row,
+                    bracket,
+                    code_origin_x,
+                    row_height,
+                    scale,
+                    theme.role.bracket_match_bg,
+                    window,
+                );
+            }
 
-        for search_match in items_overlapping_row(search_matches, row, Clone::clone) {
-            paint_range_background(
-                row,
-                search_match,
-                code_origin_x,
-                row_height,
-                scale,
-                theme.role.search_match_bg,
-                window,
-            );
-        }
+            for search_match in items_overlapping_row(search_matches, row, Clone::clone) {
+                paint_range_background(
+                    row,
+                    search_match,
+                    code_origin_x,
+                    row_height,
+                    scale,
+                    theme.role.search_match_bg,
+                    window,
+                );
+            }
 
-        if let Some(active_search_match) = active_search_match {
-            paint_range_background(
-                row,
-                active_search_match,
-                code_origin_x,
-                row_height,
-                scale,
-                theme.role.search_active_match_bg,
-                window,
-            );
-        }
+            if let Some(active_search_match) = active_search_match {
+                paint_range_background(
+                    row,
+                    active_search_match,
+                    code_origin_x,
+                    row_height,
+                    scale,
+                    theme.role.search_active_match_bg,
+                    window,
+                );
+            }
 
-        for selection in items_overlapping_row(selections, row, Selection::range) {
-            paint_range_background(
-                row,
-                &selection.range(),
-                code_origin_x,
-                row_height,
-                scale,
-                if focused {
-                    theme.role.selection_bg
-                } else {
-                    theme.role.selection_inactive_bg
-                },
-                window,
-            );
+            for selection in items_overlapping_row(selections, row, Selection::range) {
+                paint_range_background(
+                    row,
+                    &selection.range(),
+                    code_origin_x,
+                    row_height,
+                    scale,
+                    if focused {
+                        theme.role.selection_bg
+                    } else {
+                        theme.role.selection_inactive_bg
+                    },
+                    window,
+                );
+            }
         }
-    }
+    });
 
     // Text and markers, in one layer: primitives inside a layer share its
     // draw order instead of each taking a bounds-tree insertion, and the
@@ -2555,66 +2559,68 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         }
     });
 
-    // Outlines and carets.
-    for row in rows.iter() {
-        for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), row, Clone::clone) {
-            if let Some(bounds) = range_bounds(row, bracket, code_origin_x, row_height, scale) {
-                paint_outline(
-                    bounds,
-                    metrics::px_for_scale(1.0, scale),
-                    theme.role.bracket_match_outline,
-                    window,
-                );
+    // Outlines and carets, in one layer above the text.
+    window.paint_layer(bounds, |window| {
+        for row in rows.iter() {
+            for bracket in items_overlapping_row(structure.bracket_matches.as_ref(), row, Clone::clone) {
+                if let Some(bounds) = range_bounds(row, bracket, code_origin_x, row_height, scale) {
+                    paint_outline(
+                        bounds,
+                        metrics::px_for_scale(1.0, scale),
+                        theme.role.bracket_match_outline,
+                        window,
+                    );
+                }
             }
-        }
 
-        if focused && cursor_visible {
-            for cursor in cursors_in_row(&cursors, row) {
-                let cursor_char = cursor.char;
-                let block_cursor = vim_mode == vim::Mode::Normal && cursor.collapsed;
-                let cursor_x = code_origin_x
-                    + x_for_global_char(row, cursor_char.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
-                let cursor_width = if block_cursor {
-                    let next_x = code_origin_x
-                        + x_for_global_char(row, (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)))
-                            .unwrap_or_else(|| {
-                                cursor_x + metrics::px_for_scale(metrics::code_font_size() * 0.55, scale)
-                            });
-                    (next_x - cursor_x).max(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale))
-                } else {
-                    metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)
-                };
-                window.paint_quad(fill(
-                    Bounds::new(point(cursor_x, row.row_top), size(cursor_width, row_height)),
-                    if block_cursor {
-                        rgb(if cursor.primary {
-                            theme.role.selection_bg
-                        } else {
-                            theme.role.selection_inactive_bg
-                        })
+            if focused && cursor_visible {
+                for cursor in cursors_in_row(&cursors, row) {
+                    let cursor_char = cursor.char;
+                    let block_cursor = vim_mode == vim::Mode::Normal && cursor.collapsed;
+                    let cursor_x = code_origin_x
+                        + x_for_global_char(row, cursor_char.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
+                    let cursor_width = if block_cursor {
+                        let next_x = code_origin_x
+                            + x_for_global_char(row, (cursor_char + 1).min(row.display_end_char.max(cursor_char + 1)))
+                                .unwrap_or_else(|| {
+                                    cursor_x + metrics::px_for_scale(metrics::code_font_size() * 0.55, scale)
+                                });
+                        (next_x - cursor_x).max(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale))
                     } else {
-                        rgb(if cursor.primary {
-                            theme.role.caret
+                        metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)
+                    };
+                    window.paint_quad(fill(
+                        Bounds::new(point(cursor_x, row.row_top), size(cursor_width, row_height)),
+                        if block_cursor {
+                            rgb(if cursor.primary {
+                                theme.role.selection_bg
+                            } else {
+                                theme.role.selection_inactive_bg
+                            })
                         } else {
-                            theme.role.caret_secondary
-                        })
-                    },
+                            rgb(if cursor.primary {
+                                theme.role.caret
+                            } else {
+                                theme.role.caret_secondary
+                            })
+                        },
+                    ));
+                }
+            }
+
+            if let Some(drop_cursor) = drop_cursor.filter(|drop| row_contains_cursor(row, *drop)) {
+                let cursor_x = code_origin_x
+                    + x_for_global_char(row, drop_cursor.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(cursor_x, row.row_top),
+                        size(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale), row_height),
+                    ),
+                    rgb(theme.role.accent),
                 ));
             }
         }
-
-        if let Some(drop_cursor) = drop_cursor.filter(|drop| row_contains_cursor(row, *drop)) {
-            let cursor_x = code_origin_x
-                + x_for_global_char(row, drop_cursor.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
-            window.paint_quad(fill(
-                Bounds::new(
-                    point(cursor_x, row.row_top),
-                    size(metrics::px_for_scale(metrics::CURSOR_WIDTH * 2.0, scale), row_height),
-                ),
-                rgb(theme.role.accent),
-            ));
-        }
-    }
+    });
 
     // The gutter shares the editor color, but it still owns a fixed
     // occlusion layer. Without this fill, horizontally scrolled text and
