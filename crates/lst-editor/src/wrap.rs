@@ -123,24 +123,13 @@ pub fn build_wrap_layout_for_rope(buffer: &Rope, wrap_columns: usize, show_wrap:
 /// same grapheme-aware implementation used everywhere else.
 pub fn visual_line_count_for_rope_line(line: RopeSlice<'_>, max_cols: usize) -> usize {
     let max_cols = max_cols.max(1);
-    let display = trim_rope_display_line(line);
-    if display.len_chars() <= max_cols
-        && display
-            .chunks()
-            .all(|chunk| chunk.bytes().all(|byte| byte.is_ascii() && byte != b'\t'))
-    {
+    let text = std::borrow::Cow::from(line);
+    let display = text.trim_end_matches(['\n', '\r']);
+    if display.len() <= max_cols && display.is_ascii() && !display.as_bytes().contains(&b'\t') {
         1
     } else {
-        visual_line_count(&display.to_string(), max_cols)
+        visual_line_count(display, max_cols)
     }
-}
-
-fn trim_rope_display_line(line: RopeSlice<'_>) -> RopeSlice<'_> {
-    let mut end = line.len_chars();
-    while end > 0 && matches!(line.char(end - 1), '\n' | '\r') {
-        end -= 1;
-    }
-    line.slice(..end)
 }
 
 pub fn line_for_visual_row(layout: &WrapLayout, visual_row: usize) -> usize {
@@ -420,6 +409,30 @@ fn trim_display_line(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rope_row_counts_match_grapheme_layout_across_chunks_and_line_endings() {
+        let text = [
+            "ordinary short text\n".repeat(100),
+            "\tindented\r\nempty next\n\n".into(),
+            "e\u{301} 👩‍💻 日本語 words\r".repeat(100),
+            "long unbroken text".repeat(1000),
+            "\r\nlast line".into(),
+        ]
+        .concat();
+        let rope = Rope::from_str(&text);
+        for columns in [0, 1, 4, 8, 17, 80, 1024] {
+            for line in rope.lines() {
+                let owned = line.to_string();
+                let display = owned.trim_end_matches(['\n', '\r']);
+                assert_eq!(
+                    visual_line_count_for_rope_line(line, columns),
+                    visual_line_count(display, columns.max(1)),
+                    "columns {columns}, line {display:?}"
+                );
+            }
+        }
+    }
 
     /// The previous implementation: resolve rows through a full-document
     /// layout. Kept as the oracle for the local walk.

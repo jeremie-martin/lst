@@ -26,6 +26,24 @@ Commands: see `docs/performance.md`.
   baseline wrap construction takes 72–75 ms per layout (the WM resize causes
   a second layout). No app or GPUI changes in this measurement correction.
 
+### Incremental wrap maintenance and borrowed row counting
+
+- Skip suffix offset updates when the row delta is zero. Count rows directly
+  in borrowed contiguous rope text, allocating only for a line crossing rope
+  chunks; this replaces repeated character lookups and rope subslicing and
+  also avoids copying contiguous complex lines. No new cache or vendor patch.
+- Same production commands as above, three measured runs after one priming
+  run: huge plain typing 0.819 -> 0.460 ms/character; input application total
+  109.470 -> 7.049 ms; wrap patch total 104.244 -> 2.269 ms for 320 characters.
+  Huge plain first frame 305.772 -> 265.689 ms; wrap construction ~73 ->
+  ~28 ms. The quiet metric changed with window activation/re-presentation and
+  is not evidence for or against this improvement.
+- Verification: grapheme row-count equivalence across rope chunks, Unicode,
+  tabs and line endings; incremental layout equivalence for positive, zero
+  and negative row changes with wrapping on/off; 14 nested X11 viewport and
+  motion acceptance tests passed. Benchmark self-tests passed and the fixed
+  mixed-paste scenario completed with verified saved output.
+
 ## Measurement additions
 
 - `open-small`: process spawn to first completed frame (`open_to_first_frame_ms`),

@@ -286,8 +286,10 @@ impl ViewportCache {
         }
         layout.line_row_starts[lines.end] = next_start;
         let row_delta = next_start as isize - old_end as isize;
-        for row_start in &mut layout.line_row_starts[lines.end.saturating_add(1)..] {
-            *row_start = row_start.saturating_add_signed(row_delta);
+        if row_delta != 0 {
+            for row_start in &mut layout.line_row_starts[lines.end.saturating_add(1)..] {
+                *row_start = row_start.saturating_add_signed(row_delta);
+            }
         }
         layout.total_rows = layout.total_rows.saturating_add_signed(row_delta).max(1);
         cached.revision = revision;
@@ -2921,22 +2923,28 @@ mod tests {
             .map(|line| format!("line {line} has enough words to wrap across rows"))
             .collect::<Vec<_>>()
             .join("\n");
-        let after = before.replacen("line 100", "line 100 with substantially more content", 1);
         let before_buffer = Rope::from_str(&before);
-        let after_buffer = Rope::from_str(&after);
-        let mut cache = ViewportCache {
-            wrap_layout: Some(CachedWrapLayout {
-                revision: 0,
-                layout: Rc::new(build_wrap_layout_for_rope(&before_buffer, 12, true)),
-            }),
-            ..Default::default()
-        };
+        for replacement in ["line 100 with substantially more content", "line 200", ""] {
+            let after_buffer = Rope::from_str(&before.replacen("line 100", replacement, 1));
+            for show_wrap in [false, true] {
+                let mut cache = ViewportCache {
+                    wrap_layout: Some(CachedWrapLayout {
+                        revision: 0,
+                        layout: Rc::new(build_wrap_layout_for_rope(&before_buffer, 12, show_wrap)),
+                    }),
+                    ..Default::default()
+                };
 
-        cache.patch_wrap_layout(&after_buffer, 1, &SyntaxInvalidation::Lines(99..102));
+                cache.patch_wrap_layout(&after_buffer, 1, &SyntaxInvalidation::Lines(99..102));
 
-        let patched = cache.wrap_layout.expect("patch should retain layout");
-        assert_eq!(patched.revision, 1);
-        assert_eq!(*patched.layout, build_wrap_layout_for_rope(&after_buffer, 12, true));
+                let patched = cache.wrap_layout.expect("patch should retain layout");
+                assert_eq!(patched.revision, 1);
+                assert_eq!(
+                    *patched.layout,
+                    build_wrap_layout_for_rope(&after_buffer, 12, show_wrap)
+                );
+            }
+        }
     }
 
     #[test]
