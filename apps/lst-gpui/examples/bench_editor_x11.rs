@@ -1424,6 +1424,14 @@ impl Bench {
             )?;
             let damage = damage::DamageWrapper::create(&self.conn, window.id, damage::ReportLevel::NON_EMPTY)?;
             self.conn.flush()?;
+            // A mapped window can be quiet while its first frame is still
+            // being prepared. Wait for completion before measuring redraw quiet.
+            wait_for_trace_count(
+                &trace_path,
+                "startup_first_frame_epoch_us",
+                1,
+                Duration::from_millis(TRACE_TIMEOUT_MS),
+            )?;
             let damage_events = wait_for_damage_quiet(
                 &self.conn,
                 damage.damage(),
@@ -2853,7 +2861,7 @@ fn find_window(
             return Err(io::Error::other(format!("editor exited before its window appeared: {status}")).into());
         }
 
-        if let Some(info) = find_window_recursive(conn, root, root, atoms, pid, title)? {
+        if let Some(info) = find_window_recursive(conn, root, atoms, pid, title)? {
             return Ok(info);
         }
 
@@ -2867,7 +2875,6 @@ fn find_window(
 
 fn find_window_recursive(
     conn: &RustConnection,
-    root: xproto::Window,
     window: xproto::Window,
     atoms: &Atoms,
     pid: u32,
@@ -2885,15 +2892,8 @@ fn find_window_recursive(
                 Err(error) if is_stale_window_error(&error) => return Ok(None),
                 Err(error) => return Err(error.into()),
             };
-            let translated = match conn.translate_coordinates(window, root, 0, 0)?.reply() {
-                Ok(translated) => translated,
-                Err(error) if is_stale_window_error(&error) => return Ok(None),
-                Err(error) => return Err(error.into()),
-            };
             return Ok(Some(WindowInfo {
                 id: window,
-                root_x: translated.dst_x,
-                root_y: translated.dst_y,
                 width: geometry.width,
                 height: geometry.height,
             }));
@@ -2906,7 +2906,7 @@ fn find_window_recursive(
         Err(error) => return Err(error.into()),
     };
     for child in tree.children {
-        if let Some(info) = find_window_recursive(conn, root, child, atoms, pid, title)? {
+        if let Some(info) = find_window_recursive(conn, child, atoms, pid, title)? {
             return Ok(Some(info));
         }
     }
@@ -3000,12 +3000,13 @@ fn move_pointer_to_window_center(
     root: xproto::Window,
     window: &WindowInfo,
 ) -> Result<(), Box<dyn Error>> {
+    let geometry = conn.get_geometry(window.id)?.reply()?;
     move_pointer_to_window_point(
         conn,
         root,
         window,
-        i32::from(window.width) / 2,
-        i32::from(window.height) / 2,
+        i32::from(geometry.width) / 2,
+        i32::from(geometry.height) / 2,
     )
 }
 
@@ -3016,8 +3017,11 @@ fn move_pointer_to_window_point(
     local_x: i32,
     local_y: i32,
 ) -> Result<(), Box<dyn Error>> {
-    let x = clamp_i16(i32::from(window.root_x) + local_x);
-    let y = clamp_i16(i32::from(window.root_y) + local_y);
+    // The window manager can move the window after discovery (especially
+    // when tiling). Resolve its current origin before injecting pointer input.
+    let origin = conn.translate_coordinates(window.id, root, 0, 0)?.reply()?;
+    let x = clamp_i16(i32::from(origin.dst_x) + local_x);
+    let y = clamp_i16(i32::from(origin.dst_y) + local_y);
     conn.xtest_fake_input(xproto::MOTION_NOTIFY_EVENT, 0, 0, root, x, y, 0)?;
     conn.flush()?;
     Ok(())
@@ -3596,8 +3600,6 @@ struct FileStats {
 
 struct WindowInfo {
     id: xproto::Window,
-    root_x: i16,
-    root_y: i16,
     width: u16,
     height: u16,
 }

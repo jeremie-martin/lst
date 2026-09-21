@@ -6,6 +6,26 @@ physical display `:0`, scale factor 2.0) unless marked *nested* (off-screen
 Xephyr, software presentation, only useful for relative app-side costs).
 Commands: see `docs/performance.md`.
 
+## Session 3: baseline and measurement reliability
+
+- Baseline: `7748109`, production release, physical `:0`, same reference
+  CPU/GPU, now NVIDIA 615.71.09 and two 4K displays. Keep comparisons within
+  this session; the older startup timings are not comparable. Commands use
+  `--repetitions 3 --priming 1` unless specified otherwise.
+- `open-small`: first completed frame median 216 ms. `typing-plain --corpus
+  huge-plain-500k`: 0.819 ms/character; 104 ms of 109 ms applying 320
+  characters is wrap-layout maintenance. The incremental update traverses
+  all later line offsets even when their row delta is zero.
+- The initial one-run `all` sweep failed at mixed paste: pointer input used
+  discovery-time coordinates after the tiling WM moved the window. Resolve
+  the live origin and size before pointing, as the acceptance harness does.
+- `open-large --corpus huge-plain-500k` exposed a separate benchmark race:
+  a mapped window can remain undamaged for the quiet interval before its
+  first frame exists. Wait for the existing first-frame stamp before quiet;
+  the spawn-to-frame measurement itself is unchanged. With this correction,
+  baseline wrap construction takes 72–75 ms per layout (the WM resize causes
+  a second layout). No app or GPUI changes in this measurement correction.
+
 ## Measurement additions
 
 - `open-small`: process spawn to first completed frame (`open_to_first_frame_ms`),
