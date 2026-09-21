@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Cut key-to-paint latency roughly in half on X11 (navigation p50 10.6 -> 5.3 ms, typing 11.2 -> 6.8 ms) by drawing right after input instead of at the next refresh tick, and animate scrolling at the monitor's refresh rate
+- Cut startup by ~70 ms (parallel font scan, Vulkan context on a startup thread, non-blocking window title) and per-frame viewport work by ~60% (pass-based painting, gutter digit cells, cached glyph tiles, cheaper marker and highlight scans)
+- Fixed the benchmark runner: it measured a `test-support` build of the app and phase-locked its key injection to GPUI's refresh timer; it now measures the production build with damage reports paired to the app's frame stamps
+- Build against a vendored gpui 0.2.2 (`vendor/gpui`, patches listed in `vendor/gpui/LST_PATCHES.md`)
 - Added tree-sitter syntax highlighting for Rust, Python, JavaScript/JSX, TypeScript/TSX, JSON, TOML, YAML, Markdown, HTML, and CSS, with incremental reparsing and language injection
 - Added command-palette and status-bar AI text cleanup that rewrites the buffer or selection through DeepSeek to remove transcription artifacts
 - Added per-buffer line bookmarks with toggle and next/previous navigation (`Ctrl-Alt-K` / `Ctrl-Alt-L` / `Ctrl-Alt-J`)
