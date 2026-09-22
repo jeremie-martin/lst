@@ -59,4 +59,5 @@ Verified build:
   $installed_identity
 
 Make sure $prefix/bin is on your PATH.
+If lst is already open, quit and reopen it to use this build.
 EOF

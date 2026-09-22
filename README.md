@@ -54,6 +54,7 @@ set and its current shortcuts.
 The installer requires Cargo, Git, fontconfig, and the `TX-02` font. It builds
 from the locked dependency set, installs `lst`, and verifies that the installed
 build identity matches the checkout.
+Quit and reopen any running editor after installing to use the new build.
 
 ```sh
 ./install.sh

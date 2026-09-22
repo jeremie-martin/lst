@@ -46,13 +46,13 @@ fn emit_repository_inputs(manifest_dir: &Path) {
         return;
     };
 
-    if let Some(paths) = git_output(manifest_dir, &["ls-files"]) {
+    if let Some(paths) = git_output(&repository_root, &["ls-files"]) {
         for path in paths.lines().filter(|path| !path.is_empty()) {
             println!("cargo:rerun-if-changed={}", repository_root.join(path).display());
         }
     }
 
-    let Some(git_dir) = git_output(manifest_dir, &["rev-parse", "--git-dir"]).map(PathBuf::from) else {
+    let Some(git_dir) = git_output(&repository_root, &["rev-parse", "--git-dir"]).map(PathBuf::from) else {
         return;
     };
     let git_dir = if git_dir.is_absolute() {
