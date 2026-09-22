@@ -193,9 +193,9 @@ impl SettingsCategory {
     fn description(self) -> &'static str {
         match self {
             Self::Editor => "Writing, navigation, and selection.",
-            Self::Appearance => "Typography and the look of your workspace.",
-            Self::Guides => "Show the details that help you read your text.",
-            Self::Files => "Choose how your work is saved.",
+            Self::Appearance => "Fonts, theme, and interface size.",
+            Self::Guides => "Brackets, indentation, and whitespace.",
+            Self::Files => "Saving and scratchpad storage.",
             Self::Shortcuts => "Your current keyboard bindings. Customize them in the settings file.",
             Self::Configuration => "Settings location, build information, and defaults.",
         }
@@ -2087,7 +2087,7 @@ fn setting_description(label: &str) -> Option<&'static str> {
         "Word wrap" => "Keep long lines within the window.",
         "Line numbers" => "Choose how positions appear in the gutter.",
         "Cursor blink" => "Blink the caret when it is idle.",
-        "Smooth cursor" => "Let the caret glide between positions.",
+        "Smooth cursor" => "Animate cursor movement.",
         "Font family" => "The typeface used for your text.",
         "Font size" => "Base text size, before interface zoom.",
         "Theme" => "Follow your system or choose a light or dark workspace.",

@@ -2,15 +2,18 @@
 
 ## Unreleased
 
+- Add Dictate and `--dictate` for native voice notes with pause, resume, retry, and automatic saving.
+- Use consistent action names and plain wording in controls, dialogs, and status messages.
+
 - Support holding perpendicular arrow keys together in standard editing mode.
 
 - Add an optional Smooth cursor setting with brief, bounded caret motion.
 
-- Review polished prompts in the editor before applying, with compact adaptive word diffs, a clean Result view, and Apply/Discard controls
+- Review improved prompts in the editor before applying, with compact adaptive word diffs, a clean Result view, and Apply/Discard controls
 
-- Add a bottom-bar Polish Prompt button
+- Add a bottom-bar Improve Prompt button
 
-- Replace AI text cleanup with Polish Agent Prompt, using the installed `prompt-add` filter and its editorial behavior and history
+- Replace AI text cleanup with Improve Prompt, using the installed `prompt-add` filter and its editorial behavior and history
 
 - Cut key-to-paint latency roughly in half on X11 (navigation p50 10.6 -> 5.3 ms, typing 11.2 -> 6.8 ms) by drawing right after input instead of at the next refresh tick, and animate scrolling at the monitor's refresh rate
 - Cut startup by ~70 ms (parallel font scan, Vulkan context on a startup thread, non-blocking window title) and per-frame viewport work by ~60% (pass-based painting, gutter digit cells, cached glyph tiles, cheaper marker and highlight scans)

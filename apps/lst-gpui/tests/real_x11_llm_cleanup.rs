@@ -173,14 +173,14 @@ fn quitting_waits_for_inflight_cleanup_and_keeps_its_result_visible() -> TestRes
 
         editor.keys(original)?;
         editor.save_then_expect_file(&path, original)?;
-        editor.keys("<C-a><C-S-p>polish agent prompt<enter>")?;
+        editor.keys("<C-a><C-S-p>improve prompt<enter>")?;
         let before = editor.wait_state("cleanup started", secs(3), |record| {
-            record.status_message.contains("Polishing")
+            record.status_message.contains("Improving prompt")
         })?;
 
         editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char('q')))?;
         let blocked = editor.wait_state("quit waits for cleanup", secs(3), |record| {
-            record.status_message == "Wait for prompt polishing to finish before quitting."
+            record.status_message == "Wait for prompt improvement to finish before quitting."
         })?;
         assert_eq!(blocked.revision, before.revision, "{blocked:?}");
         assert!(blocked.close_prompt_file.is_none(), "{blocked:?}");
@@ -205,7 +205,7 @@ fn failed_prompt_filter_preserves_text_and_shows_diagnostic() -> TestResult {
             (OsStr::new("LST_TEST_PROMPT_FAIL"), OsStr::new("1")),
         ];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
-        editor.keys("keep my request<C-a><C-S-p>polish agent prompt<enter>")?;
+        editor.keys("keep my request<C-a><C-S-p>improve prompt<enter>")?;
         editor.wait_state("filter failure", secs(5), |record| {
             record.status_message.contains("provider unavailable")
         })?;
@@ -225,9 +225,9 @@ fn editing_during_prompt_polishing_preserves_new_text() -> TestResult {
             (OsStr::new("LST_TEST_PROMPT_DELAY"), OsStr::new("1")),
         ];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
-        editor.keys("original<C-a><C-S-p>polish agent prompt<enter>")?;
+        editor.keys("original<C-a><C-S-p>improve prompt<enter>")?;
         editor.wait_state("filter running", secs(3), |record| {
-            record.status_message.contains("Polishing")
+            record.status_message.contains("Improving prompt")
         })?;
         editor.keys("new request")?;
         editor.wait_state("stale result refused", secs(5), |record| {
@@ -248,7 +248,7 @@ fn empty_prompt_output_preserves_original_text() -> TestResult {
             (OsStr::new(FAKE_ENV), OsStr::new(" \n")),
         ];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
-        editor.keys("original<C-a><C-S-p>polish agent prompt<enter>")?;
+        editor.keys("original<C-a><C-S-p>improve prompt<enter>")?;
         editor.wait_state("empty result refused", secs(5), |record| {
             record.status_message.contains("empty message")
         })?;
@@ -268,7 +268,7 @@ fn history_warning_does_not_hide_successful_prompt_rewrite() -> TestResult {
             (OsStr::new("LST_TEST_PROMPT_WARNING"), OsStr::new("1")),
         ];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
-        editor.keys("original<C-a><C-S-p>polish agent prompt<enter>")?;
+        editor.keys("original<C-a><C-S-p>improve prompt<enter>")?;
         editor.wait_state("review ready with history warning", secs(5), |record| {
             record.prompt_review_view.is_some()
         })?;
@@ -413,7 +413,9 @@ fn completed_prompt_review_dismisses_competing_surfaces_before_accepting_input()
             let mut editor = session.open_file_with_env("prompt", &path, &env)?;
             editor.keys("<C-a>")?;
             editor.click_cleanup_button()?;
-            let before = editor.wait_state("filter running", secs(3), |r| r.status_message.contains("Polishing"))?;
+            let before = editor.wait_state("filter running", secs(3), |r| {
+                r.status_message.contains("Improving prompt")
+            })?;
             match surface {
                 "settings" => {
                     editor.keys("<C-,>")?;
@@ -465,7 +467,9 @@ fn prompt_timeout_preserves_text_allows_retry_and_unblocks_quitting() -> TestRes
         let mut editor = session.open_file_with_env("prompt", &path, &env)?;
         editor.keys("<C-a>")?;
         editor.click_cleanup_button()?;
-        let before = editor.wait_state("filter running", secs(3), |r| r.status_message.contains("Polishing"))?;
+        let before = editor.wait_state("filter running", secs(3), |r| {
+            r.status_message.contains("Improving prompt")
+        })?;
         let failed = editor.wait_state("production timeout reported", secs(65), |r| {
             r.status_message.contains("timed out after 60 seconds")
         })?;

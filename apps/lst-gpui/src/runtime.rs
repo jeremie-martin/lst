@@ -1151,7 +1151,7 @@ impl LstGpuiApp {
             return;
         }
         if self.cleanup_in_flight {
-            self.cleanup_message = Some("Wait for prompt polishing to finish before quitting.".to_string());
+            self.cleanup_message = Some("Wait for prompt improvement to finish before quitting.".to_string());
             self.force_editor_focus = true;
             cx.notify();
             return;
@@ -2441,14 +2441,14 @@ impl LstGpuiApp {
             match tab.selected_text() {
                 Some(text) if !text.is_empty() => self.begin_cleanup(tab_id, revision, range, text, cx),
                 _ => {
-                    self.cleanup_message = Some("Nothing to polish.".to_string());
+                    self.cleanup_message = Some("No text to improve.".to_string());
                     cx.notify();
                 }
             }
             return;
         }
         if tab.buffer().len_chars() == 0 {
-            self.cleanup_message = Some("Nothing to polish.".to_string());
+            self.cleanup_message = Some("No text to improve.".to_string());
             cx.notify();
             return;
         }
@@ -2466,7 +2466,7 @@ impl LstGpuiApp {
             return;
         };
         if self.model.active_tab_id() != confirmation.tab_id || tab.revision() != confirmation.revision {
-            self.cleanup_message = Some("Document changed; prompt polishing was cancelled.".to_string());
+            self.cleanup_message = Some("Document changed; prompt improvement was cancelled.".to_string());
             cx.notify();
             return;
         }
@@ -2491,7 +2491,7 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         self.cleanup_in_flight = true;
-        self.cleanup_message = Some("\u{27F3} Polishing\u{2026}".to_string());
+        self.cleanup_message = Some("Improving prompt\u{2026}".to_string());
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -2530,7 +2530,7 @@ impl LstGpuiApp {
             None => true,
         };
         if stale {
-            self.cleanup_message = Some("Buffer changed during prompt polishing; result discarded.".to_string());
+            self.cleanup_message = Some("Document changed during prompt improvement; result discarded.".to_string());
             cx.notify();
             return;
         }
@@ -2550,14 +2550,14 @@ impl LstGpuiApp {
         self.prompt_review = Some(crate::prompt_review::PromptReview::new(
             tab_id, revision, range, selection, prepared,
         ));
-        self.cleanup_message = Some("Review the polished prompt before applying.".to_string());
+        self.cleanup_message = Some("Review the improved prompt before applying.".to_string());
         cx.notify();
     }
 
     pub(crate) fn discard_prompt_review(&mut self, cx: &mut Context<Self>) {
         if self.prompt_review.take().is_some() {
             self.force_editor_focus = true;
-            self.cleanup_message = Some("Polished prompt discarded; original text kept.".to_string());
+            self.cleanup_message = Some("Prompt changes discarded; original text kept.".to_string());
             cx.notify();
         }
     }
@@ -2572,7 +2572,7 @@ impl LstGpuiApp {
                 .tab_by_id(review.tab_id)
                 .is_none_or(|tab| tab.revision() != review.revision)
         {
-            self.cleanup_message = Some("Document changed; the polished prompt cannot be applied.".to_string());
+            self.cleanup_message = Some("Document changed; the improved prompt cannot be applied.".to_string());
             cx.notify();
             return;
         }
@@ -2584,15 +2584,15 @@ impl LstGpuiApp {
             });
         }
         self.cleanup_message = Some(if review.prepared.warning.is_empty() {
-            "Prompt polished.".to_string()
+            "Prompt improved.".to_string()
         } else {
-            format!("Prompt polished. {}", review.prepared.warning)
+            format!("Prompt improved. {}", review.prepared.warning)
         });
         cx.notify();
     }
 
     fn finish_cleanup_with_error(&mut self, err: String, cx: &mut Context<Self>) {
-        self.cleanup_message = Some(format!("Prompt polishing failed: {err}"));
+        self.cleanup_message = Some(format!("Prompt improvement failed: {err}"));
         cx.notify();
     }
 }

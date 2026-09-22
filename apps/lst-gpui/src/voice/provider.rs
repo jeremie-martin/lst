@@ -14,7 +14,7 @@ impl Provider {
         let key = std::env::var("ELEVENLABS_API_KEY")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .ok_or("Set ELEVENLABS_API_KEY before starting a voice note.")?;
+            .ok_or("Set ELEVENLABS_API_KEY before starting dictation.")?;
         let language = language.trim();
         if language != "auto" && !(matches!(language.len(), 2 | 3) && language.bytes().all(|b| b.is_ascii_lowercase()))
         {

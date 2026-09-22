@@ -87,7 +87,7 @@ existing behavior.
 
 ## Voice notes
 
-Click **Voice Note**, choose **New Voice Note** in the command palette, or launch
+Click **Dictate**, choose **Dictate** in the command palette, or launch
 `lst --dictate` to open a fresh note and start the default microphone. Export
 `ELEVENLABS_API_KEY` in LST's launch environment first.
 
@@ -95,8 +95,8 @@ Click **Voice Note**, choose **New Voice Note** in the command palette, or launc
 another segment while earlier ones can finish transcribing. Completed text
 appends to the owning note, preserving your edits and other tabs; each segment
 is one undo step. **Finish** stops recording and waits for pending results,
-leaving the note open for review or prompt polishing. **Retry** resubmits a
-failed segment without repeating successful ones. **Cancel pending** discards
+leaving the note open for review or prompt improvement. **Retry** resubmits a
+failed segment without repeating successful ones. **Cancel Pending** discards
 unfinished dictation and keeps text already inserted.
 
 Voice notes are timestamped Markdown scratchpads under `~/audio-notes`, saved
@@ -110,10 +110,10 @@ documents are not implemented.
 See [voice configuration](docs/configuration.md#voice-notes) for language,
 storage, shortcuts, and retry behavior.
 
-## Agent prompt polishing
+## Prompt improvement
 
-Click **Polish Prompt** in the bottom bar.
-The **Polish Agent Prompt** command is also available in the command palette.
+Click **Improve Prompt** in the bottom bar.
+The **Improve Prompt** command is also available in the command palette.
 It runs the installed `prompt-add` executable on the active selection. Without a
 selection, it asks before submitting the whole document.
 The result opens in a read-only review inside the editor area, using your editor

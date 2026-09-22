@@ -1186,7 +1186,11 @@ impl LstGpuiApp {
                                 cx.stop_propagation();
                             }))
                     })
-                    .child(if polishing { "Polishing…" } else { "Polish Prompt" }),
+                    .child(if polishing {
+                        "Improving prompt…"
+                    } else {
+                        "Improve Prompt"
+                    }),
             );
         div()
             .flex_none()
@@ -1231,7 +1235,7 @@ impl LstGpuiApp {
                         );
                         cx.stop_propagation();
                     }))
-                    .child("Voice Note"),
+                    .child("Dictate"),
             )
             .child(polish_button)
             .child(
@@ -1683,7 +1687,7 @@ impl LstGpuiApp {
                         div()
                             .text_size(metrics::px_for_scale(metrics::UI_TEXT_HEADING, scale))
                             .text_color(rgb(theme.role.text))
-                            .child("Polish the entire document as an agent prompt?"),
+                            .child("Improve the entire document as a prompt?"),
                     )
                     .child(
                         div()
@@ -1710,7 +1714,7 @@ impl LstGpuiApp {
                             .child(
                                 file_conflict_button(
                                     "cleanup-confirm-submit",
-                                    "Polish Entire Document (Enter)",
+                                    "Improve Entire Document (Enter)",
                                     true,
                                     theme,
                                     scale,

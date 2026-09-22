@@ -107,8 +107,8 @@ impl LstGpuiApp {
             let notice = session.notice.clone();
             self.voice.session = None;
             self.voice.message = Some(notice.map_or_else(
-                || "Voice note finished.".into(),
-                |notice| format!("Voice note finished. {notice}"),
+                || "Dictation finished.".into(),
+                |notice| format!("Dictation finished. {notice}"),
             ));
         }
         if done || changed || recording {
@@ -157,7 +157,7 @@ impl LstGpuiApp {
         let theme = self.theme(cx);
         let mut buttons = Vec::new();
         if let Some(session) = &self.voice.session {
-            buttons.push(("voice-show", "Voice note", VoiceAction::ShowNote));
+            buttons.push(("voice-show", "Show Note", VoiceAction::ShowNote));
             if session.can_toggle() {
                 buttons.push((
                     "voice-toggle",
@@ -169,7 +169,7 @@ impl LstGpuiApp {
             if session.failed() {
                 buttons.push(("voice-retry", "Retry", VoiceAction::Retry));
             }
-            buttons.push(("voice-cancel", "Cancel pending", VoiceAction::Cancel));
+            buttons.push(("voice-cancel", "Cancel Pending", VoiceAction::Cancel));
         }
         let level = self.voice.session.as_ref().map_or(0, |s| s.level());
         div()

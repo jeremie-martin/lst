@@ -92,10 +92,10 @@ edit the TOML file to change them.
 
 ## Other runtime configuration
 
-Prompt polishing runs `prompt-add` from `PATH`, inheriting the editor's
+Prompt improvement runs `prompt-add` from `PATH`, inheriting the editor's
 `DEEPSEEK_API_KEY`. Install and configure that tool separately; it owns model
 selection and local rewrite history. `DEEPSEEK_MODEL` is no longer used by lst.
-The command is named **Polish Agent Prompt** and retains `tools.cleanup_text`
+The command is named **Improve Prompt** and retains `tools.cleanup_text`
 for existing keybindings. It has no default keyboard shortcut.
 
 ## Voice notes

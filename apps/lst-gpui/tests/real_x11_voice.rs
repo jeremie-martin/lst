@@ -218,7 +218,7 @@ fn voice_segments_preserve_edits_and_follow_the_note_across_tabs() -> TestResult
         editor.expect_file(&note, "Edited First. Second.")?;
         editor.save_then_expect_file(&original, "Other tab")?;
         editor.keys("<C-A-3>")?;
-        voice(&mut editor, "Voice note finished")?;
+        voice(&mut editor, "Dictation finished")?;
         editor.keys("<C-tab><C-z>")?;
         editor.save_then_expect_file(&note, "Edited First.")?;
         server.assert_uploads(2);
@@ -258,7 +258,7 @@ fn launch_dictation_retries_retained_audio_and_blocks_premature_close() -> TestR
         voice(&mut editor, "Audio retained")?;
         assert_eq!(std::fs::read_to_string(&note)?, "");
         editor.keys("<C-A-5>")?;
-        voice(&mut editor, "Voice note finished")?;
+        voice(&mut editor, "Dictation finished")?;
         editor.expect_file(&note, "Recovered. Then more.")?;
         editor.keys("<C-z>")?;
         editor.save_then_expect_file(&note, "Recovered.")?;
@@ -301,7 +301,7 @@ fn cancelled_response_cannot_enter_a_new_recording_session() -> TestResult {
         assert_ne!(first, second);
         std::fs::remove_file(gate)?;
         editor.keys("<C-A-3>")?;
-        voice(&mut editor, "Voice note finished")?;
+        voice(&mut editor, "Dictation finished")?;
         editor.expect_file(&second, "Kept.")?;
         assert_eq!(std::fs::read_to_string(first)?, "");
         server.assert_uploads(2);
@@ -325,7 +325,7 @@ fn microphone_failure_can_resume_without_losing_the_note() -> TestResult {
         editor.keys("<C-A-2>")?;
         voice(&mut editor, "Recording")?;
         editor.keys("<C-A-3>")?;
-        voice(&mut editor, "Voice note finished")?;
+        voice(&mut editor, "Dictation finished")?;
         editor.expect_file(&note, "Microphone recovered.")?;
         server.assert_uploads(1);
         Ok(())

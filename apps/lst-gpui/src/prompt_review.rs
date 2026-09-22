@@ -312,13 +312,13 @@ impl LstGpuiApp {
             || self.model.active_tab_id() != review.tab_id;
         let unchanged = prepared.source == prepared.result;
         let footer = if stale {
-            "The document changed. Discard this review and polish again.".to_string()
+            "The document changed. Discard this review and run Improve Prompt again.".to_string()
         } else if !prepared.warning.is_empty() {
             prepared.warning.clone()
         } else if unchanged {
-            "No changes. Your original text is already up to date.".to_string()
+            "No changes suggested.".to_string()
         } else {
-            "Your original stays untouched until you apply. You can undo after applying.".to_string()
+            "Apply to replace the original text. This can be undone.".to_string()
         };
         let newline_note = if prepared.source.ends_with('\n') != prepared.result.ends_with('\n') {
             if prepared.result.ends_with('\n') {
