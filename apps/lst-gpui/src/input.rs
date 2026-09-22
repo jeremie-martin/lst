@@ -867,6 +867,7 @@ impl LstGpuiApp {
             && self.close_prompt.is_none()
             && self.quit_review.is_none()
             && self.cleanup_confirmation.is_none()
+            && self.prompt_review.is_none()
             && self.focus_last_applied == crate::FocusTarget::Editor
     }
 }

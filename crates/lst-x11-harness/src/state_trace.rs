@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-pub const STATE_TRACE_SCHEMA_VERSION: u32 = 9;
+pub const STATE_TRACE_SCHEMA_VERSION: u32 = 10;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StateTraceRecord {
@@ -80,6 +80,7 @@ pub struct StateTraceRecord {
     pub file_conflict_button_bounds_px: TraceFileConflictButtonBounds,
     #[serde(default)]
     pub cleanup_confirmation_open: bool,
+    pub prompt_review_view: Option<String>,
     #[serde(default)]
     pub status_message: String,
     pub status_bar: String,

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Review polished prompts in the editor before applying, with compact adaptive word diffs, a clean Result view, and Apply/Discard controls
+
 - Add a bottom-bar Polish Prompt button
 
 - Replace AI text cleanup with Polish Agent Prompt, using the installed `prompt-add` filter and its editorial behavior and history

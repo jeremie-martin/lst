@@ -11,6 +11,7 @@ mod editor_view;
 mod input;
 mod launch;
 mod prompt_add;
+mod prompt_review;
 mod recent;
 mod runtime;
 mod settings;
@@ -382,6 +383,7 @@ struct LstGpuiApp {
     state_trace: StateTraceEmitter,
     cleanup_in_flight: bool,
     cleanup_confirmation: Option<CleanupConfirmation>,
+    prompt_review: Option<prompt_review::PromptReview>,
     cleanup_message: Option<String>,
     clipboard_quit_bypass: Option<ScratchpadClipboardPayload>,
     /// A passive word highlight exists only after focus or a cursor-only
@@ -623,6 +625,7 @@ impl LstGpuiApp {
             state_trace: StateTraceEmitter::from_env(),
             cleanup_in_flight: false,
             cleanup_confirmation: None,
+            prompt_review: None,
             cleanup_message: None,
             clipboard_quit_bypass: None,
             passive_occurrence_query: None,
@@ -753,7 +756,11 @@ impl LstGpuiApp {
     }
 
     fn apply_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.close_prompt.is_some() || self.quit_review.is_some() || self.cleanup_confirmation.is_some() {
+        if self.close_prompt.is_some()
+            || self.quit_review.is_some()
+            || self.cleanup_confirmation.is_some()
+            || self.prompt_review.is_some()
+        {
             if !self.surface_focus_handle.is_focused(window) {
                 window.focus(&self.surface_focus_handle);
             }

@@ -1075,7 +1075,11 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn request_close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.close_prompt.is_some() || self.quit_review.is_some() || self.pending_exit_save.is_some() {
+        if self.close_prompt.is_some()
+            || self.quit_review.is_some()
+            || self.pending_exit_save.is_some()
+            || self.prompt_review.is_some()
+        {
             return;
         }
         self.hovered_tab = None;
@@ -1124,7 +1128,11 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
-        if self.close_prompt.is_some() || self.quit_review.is_some() || self.pending_exit_save.is_some() {
+        if self.close_prompt.is_some()
+            || self.quit_review.is_some()
+            || self.pending_exit_save.is_some()
+            || self.prompt_review.is_some()
+        {
             return;
         }
         if self.cleanup_in_flight {
@@ -2417,7 +2425,7 @@ fn save_conflict_stamp(path: &Path, expectation: SaveExpectation) -> std::io::Re
 
 impl LstGpuiApp {
     pub(crate) fn start_cleanup(&mut self, cx: &mut Context<Self>) {
-        if self.cleanup_in_flight || self.cleanup_confirmation.is_some() {
+        if self.cleanup_in_flight || self.cleanup_confirmation.is_some() || self.prompt_review.is_some() {
             return;
         }
         let tab = self.active_tab();
@@ -2484,7 +2492,14 @@ impl LstGpuiApp {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { crate::prompt_add::rewrite(&source_text) })
+                .spawn(async move {
+                    let result = crate::prompt_add::rewrite(&source_text)?;
+                    Ok(crate::prompt_review::PreparedReview::new(
+                        source_text,
+                        result.text,
+                        result.warning,
+                    ))
+                })
                 .await;
             let _ = this.update(cx, |app, cx| {
                 app.cleanup_in_flight = false;
@@ -2502,7 +2517,7 @@ impl LstGpuiApp {
         tab_id: TabId,
         revision: u64,
         range: Range<usize>,
-        cleaned: crate::prompt_add::Rewrite,
+        cleaned: crate::prompt_review::PreparedReview,
         cx: &mut Context<Self>,
     ) {
         let stale = match self.model.tab_by_id(tab_id) {
@@ -2515,13 +2530,57 @@ impl LstGpuiApp {
             return;
         }
 
-        self.update_model(cx, false, |model| {
-            model.replace_text(Some(range), cleaned.text, UndoBoundary::Break);
-        });
-        self.cleanup_message = Some(if cleaned.warning.is_empty() {
+        let tab = self.model.tab_by_id(tab_id).expect("validated review tab");
+        let selection = range.start != 0 || range.end != tab.buffer().len_chars();
+        let before = tab
+            .buffer()
+            .slice(range.start.saturating_sub(120)..range.start)
+            .to_string();
+        let after = tab
+            .buffer()
+            .slice(range.end..(range.end + 120).min(tab.buffer().len_chars()))
+            .to_string();
+        let prepared = cleaned.with_context(&before, &after);
+        self.prompt_review = Some(crate::prompt_review::PromptReview::new(
+            tab_id, revision, range, selection, prepared,
+        ));
+        self.cleanup_message = Some("Review the polished prompt before applying.".to_string());
+        cx.notify();
+    }
+
+    pub(crate) fn discard_prompt_review(&mut self, cx: &mut Context<Self>) {
+        if self.prompt_review.take().is_some() {
+            self.force_editor_focus = true;
+            self.cleanup_message = Some("Polished prompt discarded; original text kept.".to_string());
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn apply_prompt_review(&mut self, cx: &mut Context<Self>) {
+        let Some(review) = self.prompt_review.as_ref() else {
+            return;
+        };
+        if self.model.active_tab_id() != review.tab_id
+            || self
+                .model
+                .tab_by_id(review.tab_id)
+                .is_none_or(|tab| tab.revision() != review.revision)
+        {
+            self.cleanup_message = Some("Document changed; the polished prompt cannot be applied.".to_string());
+            cx.notify();
+            return;
+        }
+        let review = self.prompt_review.take().expect("validated review");
+        self.force_editor_focus = true;
+        if review.prepared.source != review.prepared.result {
+            self.update_model(cx, false, |model| {
+                model.replace_text(Some(review.range), review.prepared.result.clone(), UndoBoundary::Break);
+            });
+        }
+        self.cleanup_message = Some(if review.prepared.warning.is_empty() {
             "Prompt polished.".to_string()
         } else {
-            format!("Prompt polished. {}", cleaned.warning)
+            format!("Prompt polished. {}", review.prepared.warning)
         });
         cx.notify();
     }

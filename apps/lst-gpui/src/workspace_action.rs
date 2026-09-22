@@ -623,7 +623,7 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.quit_review.is_some() || self.cleanup_confirmation.is_some() {
+        if self.quit_review.is_some() || self.cleanup_confirmation.is_some() || self.prompt_review.is_some() {
             return;
         }
         if self.close_prompt.is_some() {

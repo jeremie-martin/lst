@@ -95,7 +95,12 @@ than scattering fallback checks through the core.
 - `viewport.rs`, `editor_view.rs`, `shell.rs`, and `ui/` own layout, painting,
   hit testing, and widgets.
 - `prompt_add.rs` runs the installed prompt-add filter through stdin/stdout. The runtime confirms whole-document sharing
-  and applies a response only if the tab and revision still match the request.
+  and prepares a response only if the tab and revision still match the request.
+- `prompt_review.rs` owns read-only comparison presentation: immutable original
+  and proposed text, cached adaptive word highlights, and virtualized review rows
+  inside the existing editor area. It uses editor typography and line spacing.
+  Apply rechecks the tab and revision before the existing model replacement;
+  Discard never mutates the document.
 
 External failures remain explicit at this boundary. A clean file changed on
 disk reloads in place. A dirty file changed on disk stays open with a per-tab

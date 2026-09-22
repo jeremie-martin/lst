@@ -69,6 +69,12 @@ fn polish_button_replaces_whole_buffer_inline_with_atomic_undo() -> TestResult {
         assert_eq!(blocked.active_tab_id, confirmation.active_tab_id, "{blocked:?}");
         editor.screenshot()?.write_ppm(&screenshot)?;
         editor.keys("<enter>")?;
+        let review = editor.wait_state("prompt review ready", secs(5), |record| {
+            record.prompt_review_view.as_deref() == Some("changes") && record.focused_input == "prompt_review"
+        })?;
+        assert_eq!(review.revision, before.revision, "Review must preserve the original");
+        editor.expect_file(&path, original)?;
+        editor.keys("<enter>")?;
         editor.wait_state("cleanup applied", secs(5), |record| record.revision > before.revision)?;
         editor.save_then_expect_file(&path, canned)?;
 
@@ -133,6 +139,12 @@ fn polish_button_replaces_only_the_selection_with_atomic_undo() -> TestResult {
 
         let before = editor.read_state()?;
         editor.click_cleanup_button()?;
+        let review = editor.wait_state("prompt review ready", secs(5), |record| {
+            record.prompt_review_view.as_deref() == Some("changes") && record.focused_input == "prompt_review"
+        })?;
+        assert_eq!(review.revision, before.revision, "Review must preserve the original");
+        editor.expect_file(&path, original)?;
+        editor.keys("<enter>")?;
         editor.wait_state("cleanup applied", secs(5), |record| record.revision > before.revision)?;
         editor.save_then_expect_file(&path, cleaned)?;
 
@@ -172,8 +184,9 @@ fn quitting_waits_for_inflight_cleanup_and_keeps_its_result_visible() -> TestRes
         assert!(!blocked.quit_review_open, "{blocked:?}");
 
         editor.wait_state("cleanup result remains visible", secs(5), |record| {
-            record.revision > before.revision
+            record.prompt_review_view.is_some()
         })?;
+        editor.keys("<enter>")?;
         editor.save_then_expect_file(&path, canned)?;
         Ok(())
     })
@@ -253,10 +266,130 @@ fn history_warning_does_not_hide_successful_prompt_rewrite() -> TestResult {
         ];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
         editor.keys("original<C-a><C-S-p>polish agent prompt<enter>")?;
+        editor.wait_state("review ready with history warning", secs(5), |record| {
+            record.prompt_review_view.is_some()
+        })?;
+        editor.keys("<enter>")?;
         editor.wait_state("history warning visible", secs(5), |record| {
             record.status_message.contains("history could not be saved")
         })?;
         editor.save_then_expect_file(&path, "Polished request.")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn prompt_review_switches_views_and_discard_keeps_original() -> TestResult {
+    support::run_x11_test("prompt-review", |session| {
+        let artifacts = session.artifacts().to_path_buf();
+        let filter_path = install_filter(session)?;
+        let original = "Please, um, review the search panel and keep its current keyboard shortcuts.\n\nKeep the current keyboard shortcuts and don't change how selection works. I want a small fix, not a redesign.\n\nFirst understand why it is slow, then fix that and check that it works.";
+        let result = "Please review the search panel and keep its current keyboard shortcuts.\n\nKeep the current keyboard shortcuts and selection behavior. Make a small, focused fix rather than redesigning the panel.\n\nUnderstand the cause before changing the code, then verify the fix and the nearby behavior.";
+        let env: [(&OsStr, &OsStr); 2] = [
+            (OsStr::new("PATH"), &filter_path),
+            (OsStr::new(FAKE_ENV), OsStr::new(result)),
+        ];
+        let path = session.seed_file("prompt.txt", original)?;
+        let mut editor = session.open_file_with_env("prompt", &path, &env)?;
+        editor.keys("<C-a>")?;
+        editor.click_cleanup_button()?;
+        let review = editor.wait_state("changes view", secs(5), |r| {
+            r.prompt_review_view.as_deref() == Some("changes")
+        })?;
+        editor.wait_quiet(std::time::Duration::from_millis(150), secs(3))?;
+        editor
+            .screenshot()?
+            .write_ppm(artifacts.join("prompt-review-changes.ppm"))?;
+        editor.send_keys_settle("typing must not edit<C-z><C-n>")?;
+        let blocked = editor.read_state()?;
+        assert_eq!(blocked.revision, review.revision);
+        assert_eq!(blocked.active_tab_id, review.active_tab_id);
+        editor.keys("<tab>")?;
+        editor.wait_state("clean result view", secs(3), |r| {
+            r.prompt_review_view.as_deref() == Some("result")
+        })?;
+        editor.wait_quiet(std::time::Duration::from_millis(150), secs(3))?;
+        editor
+            .screenshot()?
+            .write_ppm(artifacts.join("prompt-review-result.ppm"))?;
+        editor.keys("<tab>")?;
+        editor.wait_state("changes view restored", secs(3), |r| {
+            r.prompt_review_view.as_deref() == Some("changes")
+        })?;
+        editor.keys("<escape>")?;
+        editor.wait_state("review discarded", secs(3), |r| {
+            r.prompt_review_view.is_none() && r.focused_input == "editor"
+        })?;
+        editor.save_then_expect_file(&path, original)?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn document_changed_on_disk_cannot_be_overwritten_by_review() -> TestResult {
+    support::run_x11_test("prompt-review-stale", |session| {
+        let filter_path = install_filter(session)?;
+        let path = session.seed_file("prompt.txt", "original")?;
+        let env: [(&OsStr, &OsStr); 2] = [
+            (OsStr::new("PATH"), &filter_path),
+            (OsStr::new(FAKE_ENV), OsStr::new("old suggestion")),
+        ];
+        let mut editor = session.open_file_with_env("prompt", &path, &env)?;
+        editor.keys("<C-a>")?;
+        editor.click_cleanup_button()?;
+        let review = editor.wait_state("review ready", secs(5), |r| r.prompt_review_view.is_some())?;
+        std::fs::write(&path, "changed externally")?;
+        editor.wait_state("external change reloaded", secs(5), |r| r.revision != review.revision)?;
+        editor.send_keys_settle("<enter>")?;
+        editor.wait_state("stale apply refused", secs(3), |r| {
+            r.prompt_review_view.is_some() && r.status_message.contains("cannot be applied")
+        })?;
+        editor.keys("<escape>")?;
+        editor.save_then_expect_file(&path, "changed externally")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn long_prompt_review_scrolls_and_applies_the_complete_result() -> TestResult {
+    support::run_x11_test("prompt-review-long", |session| {
+        session.seed_settings("version = 1\n[appearance]\ntheme = \"dark\"\n")?;
+        let artifacts = session.artifacts().to_path_buf();
+        let filter_path = install_filter(session)?;
+        let original: String = (0..200)
+            .map(|i| format!("Request {i}: please, um, review this part carefully.\n\n"))
+            .collect();
+        let result = original.replace("please, um, review", "review");
+        let path = session.seed_file("prompt.txt", &original)?;
+        let env: [(&OsStr, &OsStr); 2] = [
+            (OsStr::new("PATH"), &filter_path),
+            (OsStr::new(FAKE_ENV), OsStr::new(&result)),
+        ];
+        let mut editor = session.open_file_with_env("prompt", &path, &env)?;
+        editor.resize(1000, 760)?;
+        editor.keys("<C-a>")?;
+        editor.click_cleanup_button()?;
+        editor.wait_state("long review ready", secs(5), |r| r.prompt_review_view.is_some())?;
+        editor.wait_quiet(std::time::Duration::from_millis(150), secs(3))?;
+        let top = editor.screenshot()?;
+        top.write_ppm(artifacts.join("prompt-review-dark.ppm"))?;
+        editor.send_keys_settle("<end>")?;
+        editor.wait_quiet(std::time::Duration::from_millis(150), secs(3))?;
+        let bottom = editor.screenshot()?;
+        assert!(!top.diff(&bottom)?.is_exact(), "End must scroll the review");
+        bottom.write_ppm(artifacts.join("prompt-review-end.ppm"))?;
+        editor.keys("<tab>")?;
+        editor.wait_state("result selected", secs(3), |r| {
+            r.prompt_review_view.as_deref() == Some("result")
+        })?;
+        editor.send_keys_settle("<pagedown><home>")?;
+        editor.keys("<enter>")?;
+        editor.save_then_expect_file(&path, &result)?;
+        editor.keys("<C-z>")?;
+        editor.save_then_expect_file(&path, &original)?;
         Ok(())
     })
 }

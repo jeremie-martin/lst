@@ -1150,7 +1150,7 @@ impl LstGpuiApp {
         self.cleanup_button_bounds_px = None;
         self.theme_button_bounds_px = None;
         let polishing = self.cleanup_in_flight;
-        let polish_enabled = !polishing && self.active_tab().buffer().len_chars() > 0;
+        let polish_enabled = !polishing && self.prompt_review.is_none() && self.active_tab().buffer().len_chars() > 0;
         let entity = cx.entity();
         let polish_button = div()
             .flex_none()
@@ -1706,6 +1706,10 @@ impl LstGpuiApp {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.prompt_review.is_some() {
+            cx.stop_propagation();
+            return;
+        }
         if self.quit_review.is_some() {
             if modal_key_is_unmodified(event) {
                 match event.keystroke.key.as_str() {
@@ -1807,6 +1811,18 @@ impl LstGpuiApp {
                     "escape" => self.cancel_close_prompt(cx),
                     "enter" => self.confirm_close_prompt_save(cx),
                     "d" => self.confirm_close_prompt_discard(cx),
+                    _ => {}
+                }
+            }
+        } else if self.prompt_review.is_some() {
+            if modal_key_is_unmodified(event) {
+                match event.keystroke.key.as_str() {
+                    "escape" => self.discard_prompt_review(cx),
+                    "enter" => self.apply_prompt_review(cx),
+                    "tab" => self.toggle_prompt_review_view(cx),
+                    "up" | "down" | "pageup" | "pagedown" | "home" | "end" => {
+                        self.scroll_prompt_review(&event.keystroke.key, cx)
+                    }
                     _ => {}
                 }
             }
@@ -2070,7 +2086,16 @@ impl Render for LstGpuiApp {
             // root column, and the editor's focus/key handlers sit on the
             // viewport element itself: two fewer layout levels per frame with
             // the same geometry.
-            .child(self.render_tab_strip(cx))
+            .child(if self.prompt_review.is_some() {
+                div()
+                    .flex_none()
+                    .capture_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .capture_any_mouse_up(|_, _, cx| cx.stop_propagation())
+                    .child(self.render_tab_strip(cx))
+                    .into_any_element()
+            } else {
+                self.render_tab_strip(cx).into_any_element()
+            })
             .when(file_conflict_open, |root| {
                 root.child(self.render_file_conflict_banner(cx))
             })
@@ -2088,7 +2113,10 @@ impl Render for LstGpuiApp {
                     .when(recent_cards_open, |viewport| {
                         viewport.child(self.render_recent_cards_view(cx))
                     })
-                    .when(!recent_cards_open, |viewport| {
+                    .when(self.prompt_review.is_some(), |viewport| {
+                        viewport.child(self.render_prompt_review(cx))
+                    })
+                    .when(!recent_cards_open && self.prompt_review.is_none(), |viewport| {
                         viewport
                             .child(
                                 div()
@@ -2275,7 +2303,16 @@ impl Render for LstGpuiApp {
                         viewport.child(self.render_recent_quick_picker(cx))
                     }),
             )
-            .child(self.render_status_bar(cx));
+            .child(if self.prompt_review.is_some() {
+                div()
+                    .flex_none()
+                    .capture_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .capture_any_mouse_up(|_, _, cx| cx.stop_propagation())
+                    .child(self.render_status_bar(cx))
+                    .into_any_element()
+            } else {
+                self.render_status_bar(cx).into_any_element()
+            });
         let root = root
             .when(
                 self.workspace_surface == crate::WorkspaceSurface::CommandPalette,
@@ -2312,6 +2349,7 @@ impl Render for LstGpuiApp {
             || self.close_prompt.is_some()
             || self.quit_review.is_some()
             || self.cleanup_confirmation.is_some()
+            || self.prompt_review.is_some()
         {
             self.emit_state_trace(window);
         }

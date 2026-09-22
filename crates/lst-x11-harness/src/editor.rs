@@ -1583,6 +1583,7 @@ fn state_key_context_changed_after(before: &StateTraceRecord, after: &StateTrace
             || after.close_prompt_file != before.close_prompt_file
             || after.close_prompt_status != before.close_prompt_status
             || after.close_prompt_error != before.close_prompt_error
+            || after.prompt_review_view != before.prompt_review_view
             || after.quit_review_open != before.quit_review_open
             || after.quit_review_items != before.quit_review_items
             || after.quit_review_selected_index != before.quit_review_selected_index

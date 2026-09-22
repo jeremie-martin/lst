@@ -24,7 +24,7 @@ use crate::{
     WorkspaceSurface,
 };
 
-pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 9;
+pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 10;
 
 /// Holds the state-trace path and emitter state. Constructed once at app
 /// init from the env var; subsequent calls to `try_emit` are no-ops when
@@ -141,6 +141,7 @@ pub(crate) struct StateTraceRecord {
     pub file_conflict_path: Option<String>,
     pub file_conflict_button_bounds_px: TraceFileConflictButtonBounds,
     pub cleanup_confirmation_open: bool,
+    pub prompt_review_view: Option<String>,
     pub status_message: String,
     pub status_bar: String,
     pub app_menu_button_bounds_px: Option<(f32, f32, f32, f32)>,
@@ -476,6 +477,10 @@ impl LstGpuiApp {
                 dismiss: trace_bounds(self.file_conflict_button_bounds_px.dismiss),
             },
             cleanup_confirmation_open: self.cleanup_confirmation.is_some(),
+            prompt_review_view: self
+                .prompt_review
+                .as_ref()
+                .map(|r| if r.show_result { "result" } else { "changes" }.to_string()),
             status_message,
             status_bar,
             app_menu_button_bounds_px,
@@ -524,6 +529,8 @@ impl LstGpuiApp {
             "quit_review"
         } else if self.close_prompt.is_some() && self.surface_focus_handle.is_focused(window) {
             "close_prompt"
+        } else if self.prompt_review.is_some() && self.surface_focus_handle.is_focused(window) {
+            "prompt_review"
         } else if self.cleanup_confirmation.is_some() && self.surface_focus_handle.is_focused(window) {
             "cleanup_confirmation"
         } else if self.focus_handle.is_focused(window) {

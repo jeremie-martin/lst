@@ -79,9 +79,18 @@ and precedence rules.
 
 Click **Polish Prompt** in the bottom bar.
 The **Polish Agent Prompt** command is also available in the command palette.
-It runs the installed `prompt-add` executable on the active selection. Without a selection, it asks before submitting the whole document.
-The result replaces the text as one undo step; failed requests or results for a
-changed buffer leave the document untouched.
+It runs the installed `prompt-add` executable on the active selection. Without a
+selection, it asks before submitting the whole document.
+The result opens in a read-only review inside the editor area, using your editor
+font and spacing. **Changes** shows small edits inline, with removed words struck
+through and additions highlighted. Heavier rewrites use compact Before/After
+lines. **Result** shows the finished text. Choose **Apply** to replace the
+original as one undo step, or **Discard** to keep it. Selected
+passages include nearby unchanged context. Failed requests and stale results
+never overwrite newer edits.
+
+Within the review, **Tab** switches views, **Enter** applies, and **Esc** discards.
+Scroll with the mouse wheel, arrow keys, Page Up/Down, or Home/End.
 
 Install `prompt-add` separately and make it available on `PATH`. It inherits
 `DEEPSEEK_API_KEY` from the editor's environment and owns the model and editorial
