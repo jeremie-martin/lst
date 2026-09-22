@@ -34,6 +34,7 @@ pub enum EditorCommand {
     SmartHome(bool),
     MoveLineBoundary(bool, bool),
     MoveDisplayRows(isize, bool, usize),
+    MoveDisplayDiagonal(bool, isize, usize),
     Page(bool, bool, usize),
     Backspace,
     DeleteForward,
@@ -145,6 +146,10 @@ impl EditorModel {
                 self.move_with_reveal(super::motion::line_boundary(self.active_tab(), to_end, select))
             }
             MoveDisplayRows(delta, select, wrap_columns) => self.move_paged(delta, select, wrap_columns, true),
+            MoveDisplayDiagonal(backward, rows, wrap_columns) => {
+                let columns = if self.show_wrap { wrap_columns } else { usize::MAX };
+                self.move_with_reveal(super::motion::diagonal(self.active_tab(), backward, rows, columns));
+            }
             Page(down, select, wrap_columns) => {
                 let delta = self.viewport.page() as isize;
                 self.move_paged(if down { delta } else { -delta }, select, wrap_columns, true);

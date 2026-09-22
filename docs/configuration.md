@@ -1,6 +1,8 @@
 # Configuration
 
-Open Settings with `Ctrl+,`. Changes are applied immediately and written to:
+Open Settings with `Ctrl+,`. Use the category sidebar to browse, or search across
+all settings and keyboard shortcuts. `Tab` selects a result, arrow keys adjust it,
+and `Esc` returns to the editor. Changes are applied immediately and written to:
 
 - `$XDG_CONFIG_HOME/lst/config.toml` when `XDG_CONFIG_HOME` is set
 - `~/.config/lst/config.toml` otherwise
@@ -22,6 +24,7 @@ input_mode = "standard"                   # standard | vim
 word_wrap = true
 line_numbers = "absolute"                 # absolute | relative | hybrid
 cursor_blink = true
+smooth_cursor = false                     # smooth slide, no stretching
 font_family = "TX-02"
 font_size = 13                             # clamped to 8..40
 match_brackets = "always"                 # never | near | always

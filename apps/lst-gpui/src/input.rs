@@ -62,7 +62,98 @@ impl ActiveDragSelection {
     }
 }
 
+/// Physical arrow state only; navigation still uses the existing editor commands.
+#[derive(Default)]
+pub(crate) struct HeldArrows(u8);
+
+impl HeldArrows {
+    fn bit(key: &str) -> u8 {
+        match key {
+            "left" => 1,
+            "right" => 2,
+            "up" => 4,
+            "down" => 8,
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0 = 0;
+    }
+
+    pub(crate) fn release(&mut self, key: &str) {
+        self.0 &= !Self::bit(key);
+    }
+
+    fn press(&mut self, key: &str) -> Option<(bool, isize)> {
+        let bit = Self::bit(key);
+        if bit == 0 {
+            self.clear();
+            return None;
+        }
+        let repeated = self.0 & bit != 0;
+        self.0 |= bit;
+        if !repeated {
+            return None;
+        }
+        let left = match self.0 & 3 {
+            1 => true,
+            2 => false,
+            _ => return None,
+        };
+        let vertical = match self.0 & 12 {
+            4 => -1,
+            8 => 1,
+            _ => return None,
+        };
+        Some((left, vertical))
+    }
+}
+
 impl LstGpuiApp {
+    pub(crate) fn capture_arrow_hold(
+        &mut self,
+        event: &gpui::KeystrokeEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::workspace_action::{command_id, WorkspaceCommand};
+        let commands = [
+            WorkspaceCommand::MoveVertical(-1, false),
+            WorkspaceCommand::MoveVertical(1, false),
+            WorkspaceCommand::Model(EditorCommand::MoveHorizontalCollapsed(true)),
+            WorkspaceCommand::Model(EditorCommand::MoveHorizontalCollapsed(false)),
+        ];
+        let overrides = &self.settings.settings.keybindings;
+        let custom_arrows = commands
+            .iter()
+            .any(|command| overrides.contains_key(command_id(*command)))
+            || overrides.values().flatten().any(|key| HeldArrows::bit(key) != 0);
+        if !self.focus_handle.is_focused(window)
+            || !window.is_window_active()
+            || !self.editor_input_is_focused()
+            || self.model.input_mode() != InputMode::Standard
+            || modifiers_active(event.keystroke.modifiers)
+            || custom_arrows
+            || self.prompt_review.is_some()
+            || self.quit_review.is_some()
+            || self.close_prompt.is_some()
+            || self.cleanup_confirmation.is_some()
+            || self.recent.is_open()
+            || self.workspace_surface != crate::WorkspaceSurface::None
+        {
+            self.held_arrows.clear();
+            return;
+        }
+        if let Some((left, vertical)) = self.held_arrows.press(&event.keystroke.key) {
+            // Use the native repeat cadence. Each repeated event contributes one
+            // step on each axis, independent of which key the OS is repeating.
+            let wrap_columns = self.active_wrap_columns(window, cx);
+            self.execute_model_command(cx, EditorCommand::MoveDisplayDiagonal(left, vertical, wrap_columns));
+            cx.stop_propagation();
+        }
+    }
+
     pub(crate) fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle);

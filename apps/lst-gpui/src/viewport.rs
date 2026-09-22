@@ -532,6 +532,10 @@ pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) vim_mode: vim::Mode,
     pub(crate) focused: bool,
     pub(crate) cursor_visible: bool,
+    pub(crate) cursor_motion: &'a mut crate::cursor_motion::CursorMotion,
+    pub(crate) smooth_cursor: bool,
+    pub(crate) cursor_tab: lst_editor::TabId,
+    pub(crate) scroll_offset: gpui::Point<Pixels>,
     pub(crate) drop_cursor: Option<usize>,
     pub(crate) paint_state: ViewportPaintState,
     pub(crate) scale: f32,
@@ -2364,6 +2368,10 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         vim_mode,
         focused,
         cursor_visible,
+        cursor_motion,
+        smooth_cursor,
+        cursor_tab,
+        scroll_offset,
         drop_cursor,
         paint_state,
         scale,
@@ -2561,6 +2569,9 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         }
     });
 
+    cursor_motion.prepare(cursor_tab, bounds, scroll_offset, scale, row_height);
+    let animate_cursor = smooth_cursor && focused && selections.len() == 1 && !selections[0].has_selection();
+    let mut painted_primary = false;
     // Outlines and carets, in one layer above the text.
     window.paint_layer(bounds, |window| {
         for row in rows.iter() {
@@ -2575,7 +2586,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 }
             }
 
-            if focused && cursor_visible {
+            if focused {
                 for cursor in cursors_in_row(&cursors, row) {
                     let cursor_char = cursor.char;
                     let block_cursor = vim_mode == vim::Mode::Normal && cursor.collapsed;
@@ -2591,22 +2602,26 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                     } else {
                         metrics::px_for_scale(metrics::CURSOR_WIDTH, scale)
                     };
-                    window.paint_quad(fill(
-                        Bounds::new(point(cursor_x, row.row_top), size(cursor_width, row_height)),
-                        if block_cursor {
-                            rgb(if cursor.primary {
-                                theme.role.selection_bg
-                            } else {
-                                theme.role.selection_inactive_bg
-                            })
+                    let cursor_bounds = Bounds::new(point(cursor_x, row.row_top), size(cursor_width, row_height));
+                    let color = if block_cursor {
+                        rgb(if cursor.primary {
+                            theme.role.selection_bg
                         } else {
-                            rgb(if cursor.primary {
-                                theme.role.caret
-                            } else {
-                                theme.role.caret_secondary
-                            })
-                        },
-                    ));
+                            theme.role.selection_inactive_bg
+                        })
+                    } else {
+                        rgb(if cursor.primary {
+                            theme.role.caret
+                        } else {
+                            theme.role.caret_secondary
+                        })
+                    };
+                    if cursor.primary {
+                        painted_primary = true;
+                        cursor_motion.paint(cursor_bounds, color, animate_cursor, cursor_visible, window);
+                    } else if cursor_visible {
+                        window.paint_quad(fill(cursor_bounds, color));
+                    }
                 }
             }
 
@@ -2623,6 +2638,10 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             }
         }
     });
+
+    if !painted_primary {
+        cursor_motion.reset();
+    }
 
     // The gutter shares the editor color, but it still owns a fixed
     // occlusion layer. Without this fill, horizontally scrolled text and

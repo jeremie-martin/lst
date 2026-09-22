@@ -390,6 +390,15 @@ impl LstGpuiApp {
             return;
         }
         self.autosave_started = true;
+        let view = cx.weak_entity();
+        self._shell_subscriptions
+            .push(cx.intercept_keystrokes(move |event, window, cx| {
+                let _ = view.update(cx, |this, cx| this.capture_arrow_hold(event, window, cx));
+            }));
+        self._shell_subscriptions
+            .push(cx.on_blur(&self.focus_handle, window, |this, _, _| this.held_arrows.clear()));
+        self._shell_subscriptions
+            .push(cx.observe_window_activation(window, |this, _, _| this.held_arrows.clear()));
         let view = cx.entity();
         window
             .spawn(cx, async move |cx| loop {

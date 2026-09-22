@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Support holding perpendicular arrow keys together in standard editing mode.
+
+- Add an optional Smooth cursor setting with brief, bounded caret motion.
+
 - Review polished prompts in the editor before applying, with compact adaptive word diffs, a clean Result view, and Apply/Discard controls
 
 - Add a bottom-bar Polish Prompt button

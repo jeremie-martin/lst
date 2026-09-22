@@ -413,6 +413,7 @@ pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
             MoveLineBoundary(false, true) => "cursor.line_start_select",
             MoveLineBoundary(true, true) => "cursor.line_end_select",
             MoveDisplayRows(_, _, _) | Page(_, _, _) => "cursor.viewport_motion",
+            MoveDisplayDiagonal(_, _, _) => "cursor.diagonal",
             Backspace => "edit.backspace",
             DeleteForward => "edit.delete_forward",
             DeleteWord(true) => "edit.delete_word_left",

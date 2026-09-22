@@ -91,6 +91,42 @@ pub(crate) fn display_rows(
         transform_with_goal(tab, selection, target, select, goal)
     })
 }
+/// Move both axes together, retaining the desired column across short rows.
+/// Horizontal movement must not cross a row boundary and cancel the vertical step.
+pub(crate) fn diagonal(tab: &EditorTab, backward: bool, rows: isize, wrap_columns: usize) -> Option<SelectionState> {
+    map(tab, |index, selection| {
+        let position = char_to_position(tab.buffer(), selection.cursor());
+        let preferred = display_preferred(tab, wrap_columns, position, goal_for(tab, index, selection));
+        let preferred = if backward {
+            preferred.saturating_sub(1)
+        } else {
+            preferred.saturating_add(1)
+        };
+        let row_target = wrap::display_row_target_in_rope(
+            tab.buffer(),
+            position.line,
+            position.column,
+            Some(preferred),
+            rows,
+            wrap_columns,
+        );
+        let (line, probe_column) = row_target.map_or((position.line, position.column), |target| {
+            // A positive column clamped to a wrapped row's end belongs to that
+            // row, even though the shared boundary normally names the next row.
+            (target.line, target.column.saturating_sub(usize::from(preferred > 0)))
+        });
+        let text = crate::selection::line_display_text(tab.buffer(), line);
+        let segments = wrap::wrap_segments(&text, wrap_columns);
+        let row = wrap::cursor_visual_row_in_line(&text, probe_column, wrap_columns).min(segments.len() - 1);
+        let segment = &segments[row];
+        let last_column = segment.end_col.saturating_sub(usize::from(row + 1 < segments.len()));
+        let column = segment.start_col.saturating_add(preferred).min(last_column);
+        let target = position_to_char(tab.buffer(), Position::new(line, column));
+        let target = crate::selection::floor_grapheme_boundary(tab.buffer(), target);
+        transform_with_goal(tab, selection, target, false, CursorGoal::Column(preferred))
+    })
+}
+
 pub(crate) fn line_boundary(tab: &EditorTab, to_end: bool, select: bool) -> Option<SelectionState> {
     map(tab, |_, selection| {
         let line = tab.buffer().char_to_line(selection.cursor().min(tab.len_chars()));
@@ -274,4 +310,64 @@ fn first_non_blank_column(tab: &EditorTab, line_ix: usize) -> usize {
         .take_while(|ch| *ch != '\n' && *ch != '\r')
         .position(|ch| !ch.is_whitespace())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod diagonal_tests {
+    use super::*;
+    use crate::tab::TabId;
+
+    fn tab(text: &str, cursor: usize) -> EditorTab {
+        let mut tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), "diagonal.txt".into(), text, None);
+        tab.move_to(cursor);
+        tab
+    }
+
+    fn step(tab: &mut EditorTab, left: bool, rows: isize, columns: usize) {
+        if let Some(state) = diagonal(tab, left, rows, columns) {
+            tab.set_selection_state(state);
+        }
+    }
+
+    #[test]
+    fn column_goal_survives_empty_and_short_rows_in_every_direction() {
+        let text = "abcdefghij\n\nx\n\nabcdefghij";
+        for rows in [-1, 1] {
+            for left in [false, true] {
+                let mut tab = tab(text, if rows < 0 { 20 } else { 5 });
+                for _ in 0..4 {
+                    step(&mut tab, left, rows, usize::MAX);
+                }
+                assert_eq!(
+                    tab.cursor_position(),
+                    Position::new(if rows < 0 { 0 } else { 4 }, if left { 1 } else { 9 })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wrapped_rows_clamp_horizontal_movement_without_cancelling_vertical_movement() {
+        let mut tab = tab("abcdefghijklmnopqrstuvwxyz", 14);
+        step(&mut tab, false, -1, 5);
+        assert_eq!(tab.cursor_char(), 9);
+        step(&mut tab, false, -1, 5);
+        assert_eq!(tab.cursor_char(), 4);
+        // At the top, the horizontal axis can still move independently.
+        step(&mut tab, true, -1, 5);
+        step(&mut tab, true, -1, 5);
+        step(&mut tab, true, -1, 5);
+        assert_eq!(tab.cursor_char(), 3);
+    }
+
+    #[test]
+    fn horizontal_movement_at_document_edges_stays_on_the_row_and_respects_graphemes() {
+        let mut tab = tab("e\u{301}x", 0);
+        step(&mut tab, false, -1, usize::MAX);
+        assert_eq!(tab.cursor_char(), 0);
+        step(&mut tab, false, -1, usize::MAX);
+        assert_eq!(tab.cursor_char(), 2);
+        step(&mut tab, false, 1, usize::MAX);
+        assert_eq!(tab.cursor_char(), 3);
+    }
 }

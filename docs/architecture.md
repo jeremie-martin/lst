@@ -93,7 +93,11 @@ than scattering fallback checks through the core.
   snapshots. Parser-derived ranges cross into `lst-editor` only as validated
   character-coordinate types.
 - `viewport.rs`, `editor_view.rs`, `shell.rs`, and `ui/` own layout, painting,
-  hit testing, and widgets.
+  hit testing, and widgets. `cursor_motion.rs` optionally animates the painted
+  caret position; document positions, hit testing, reveal, and IME geometry always
+  use the actual selection. One critically damped spring moves the caret
+  without changing its shape. Scrolling translates motion with the document;
+  tab and layout changes reset it. Blinking preserves the last caret position.
 - `prompt_add.rs` runs the installed prompt-add filter through stdin/stdout. The runtime confirms whole-document sharing
   and prepares a response only if the tab and revision still match the request.
 - `prompt_review.rs` owns read-only comparison presentation: immutable original

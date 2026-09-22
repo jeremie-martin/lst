@@ -296,3 +296,79 @@ fn closing_a_dirty_file_requires_an_explicit_decision() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn settings_categories_keep_search_global_and_changes_persistent() -> TestResult {
+    support::run_x11_test("settings-categories", |session| {
+        let settings_path =
+            session.seed_settings("version = 1\n[editor]\ncursor_blink = false\n[appearance]\ntheme = 'light'\n")?;
+        let path = session.seed_file("settings.txt", "Keep this document unchanged.\n")?;
+        let mut editor = session.open_file("settings-categories", &path)?;
+        editor.resize(1140, 820)?;
+        editor.keys("<C-,>")?;
+        editor.wait_state("settings opens", secs(2), |state| state.workspace_surface == "settings")?;
+        if let Some(directory) = std::env::var_os("LST_SETTINGS_CAPTURE_DIR") {
+            std::fs::create_dir_all(&directory)?;
+            editor.wait_quiet(std::time::Duration::from_millis(150), secs(3))?;
+            editor
+                .screenshot()?
+                .write_ppm(std::path::Path::new(&directory).join("editor.ppm"))?;
+            editor.resize(720, 600)?;
+            editor.send_keys_settle("zoom")?;
+            editor.keys("<tab><right><right>")?;
+            editor.click_at(50, 90)?;
+            editor.wait_quiet(std::time::Duration::from_millis(150), secs(3))?;
+            editor
+                .screenshot()?
+                .write_ppm(std::path::Path::new(&directory).join("narrow-editor-zoomed.ppm"))?;
+            editor.send_keys_settle("zoom")?;
+            editor.keys("<tab><left><left>")?;
+            editor.click_at(50, 75)?;
+            editor.resize(1140, 820)?;
+        }
+        // The category rail is separate from the scrolling settings content.
+        editor.click_at(140, 110)?;
+        editor.keys("<tab>")?;
+        editor.wait_state("appearance category starts at typography", secs(2), |state| {
+            state.settings_selected_item.as_deref() == Some("font_family")
+        })?;
+        if let Some(directory) = std::env::var_os("LST_SETTINGS_CAPTURE_DIR") {
+            editor.wait_quiet(std::time::Duration::from_millis(150), secs(3))?;
+            editor
+                .screenshot()?
+                .write_ppm(std::path::Path::new(&directory).join("appearance.ppm"))?;
+        }
+        editor.keys("/")?;
+        editor.send_keys_settle("smooth cursor")?;
+        editor.keys("<tab><space>")?;
+        editor.wait_state("search reaches a different category", secs(2), |state| {
+            state.settings_selected_item.as_deref() == Some("smooth_cursor")
+        })?;
+        assert!(std::fs::read_to_string(&settings_path)?.contains("smooth_cursor = true"));
+        editor.keys("/")?;
+        editor.send_keys_settle("<C-a>theme")?;
+        editor.keys("<tab><left>")?;
+        if let Some(directory) = std::env::var_os("LST_SETTINGS_CAPTURE_DIR") {
+            editor.wait_quiet(std::time::Duration::from_millis(150), secs(3))?;
+            editor
+                .screenshot()?
+                .write_ppm(std::path::Path::new(&directory).join("dark.ppm"))?;
+        }
+        editor.click_at(140, 144)?;
+        editor.keys("<tab>")?;
+        editor.wait_state("guides category is reachable", secs(2), |state| {
+            state.settings_selected_item.as_deref() == Some("match_brackets")
+        })?;
+        editor.resize(720, 600)?;
+        if let Some(directory) = std::env::var_os("LST_SETTINGS_CAPTURE_DIR") {
+            editor.wait_quiet(std::time::Duration::from_millis(150), secs(3))?;
+            editor
+                .screenshot()?
+                .write_ppm(std::path::Path::new(&directory).join("narrow.ppm"))?;
+        }
+        editor.keys("<esc>")?;
+        assert_eq!(std::fs::read_to_string(path)?, "Keep this document unchanged.\n");
+        Ok(())
+    })
+}

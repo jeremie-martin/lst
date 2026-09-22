@@ -76,6 +76,14 @@ Settings are available in the application and persist to
 See [Configuration](docs/configuration.md) for the schema, keybinding format,
 and precedence rules.
 
+Enable **Settings → Editor → Smooth cursor** for a smoothly sliding caret.
+It defaults to off and can also be set with `editor.smooth_cursor = true` in
+the settings TOML. Cursor blink remains an independent setting.
+In standard mode, hold a horizontal and vertical arrow together to move diagonally
+at the system key-repeat rate. Short and empty rows preserve the intended column;
+horizontal movement stays within the destination row. Modified or remapped arrow shortcuts keep their
+existing behavior.
+
 ## Agent prompt polishing
 
 Click **Polish Prompt** in the bottom bar.

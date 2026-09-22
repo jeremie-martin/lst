@@ -119,6 +119,7 @@ pub(crate) struct EditorSettings {
     pub(crate) word_wrap: bool,
     pub(crate) line_numbers: LineNumbersSetting,
     pub(crate) cursor_blink: bool,
+    pub(crate) smooth_cursor: bool,
     pub(crate) font_family: String,
     pub(crate) font_size: u16,
     pub(crate) match_brackets: MatchBracketsSetting,
@@ -142,6 +143,7 @@ impl Default for EditorSettings {
             word_wrap: true,
             line_numbers: LineNumbersSetting::Absolute,
             cursor_blink: true,
+            smooth_cursor: false,
             font_family: "TX-02".to_string(),
             font_size: 13,
             match_brackets: MatchBracketsSetting::Always,
@@ -382,6 +384,7 @@ fn write_settings_to_document(document: &mut DocumentMut, settings: &AppSettings
         LineNumbersSetting::Hybrid => "hybrid",
     });
     document["editor"]["cursor_blink"] = value(settings.editor.cursor_blink);
+    document["editor"]["smooth_cursor"] = value(settings.editor.smooth_cursor);
     document["editor"]["font_family"] = value(&settings.editor.font_family);
     document["editor"]["font_size"] = value(i64::from(settings.editor.font_size));
     document["editor"]["match_brackets"] = value(match settings.editor.match_brackets {

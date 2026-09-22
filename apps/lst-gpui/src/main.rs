@@ -6,6 +6,7 @@ use gpui::{
 mod build_info;
 mod code_line;
 mod command_ui;
+mod cursor_motion;
 mod diagnostics;
 mod editor_view;
 mod input;
@@ -397,6 +398,8 @@ struct LstGpuiApp {
     /// decoration's representation, not a paint-time convention.
     selection_match_query: Option<SelectionMatchQuery>,
     cursor_visible: bool,
+    held_arrows: input::HeldArrows,
+    cursor_motion: Rc<RefCell<cursor_motion::CursorMotion>>,
     /// Surfaced through the state trace so real-X11 tests can click the
     /// find chips without relying on fixed shell geometry.
     find_chip_bounds_px: FindChipBounds,
@@ -514,8 +517,7 @@ impl LstGpuiApp {
                 .with_key_context("CommandPalette")
                 .with_vertical_navigation()
         });
-        let settings_search_input =
-            cx.new(|cx| InputField::new(cx, "Search settings and keybindings").with_key_context("Settings"));
+        let settings_search_input = cx.new(|cx| InputField::new(cx, "Search settings…").with_key_context("Settings"));
         let settings_value_input = cx.new(|cx| InputField::new(cx, "Enter a value").with_key_context("SettingsValue"));
         diagnostics::record_startup_mark("inputs_ready");
         let recent_focus_handle = recent_query_input.read(cx).focus_handle();
@@ -631,6 +633,8 @@ impl LstGpuiApp {
             passive_occurrence_query: None,
             selection_match_query: None,
             cursor_visible: true,
+            held_arrows: Default::default(),
+            cursor_motion: Default::default(),
             find_chip_bounds_px: FindChipBounds::default(),
             app_menu_button_bounds_px: None,
             all_tabs_button_bounds_px: None,

@@ -269,3 +269,183 @@ fn vertical_motion_per_cursor_preferred_column() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn smooth_cursor_can_be_toggled_without_changing_editing() -> TestResult {
+    support::run_x11_test("smooth-cursor", |session| {
+        let settings = session.seed_settings("version = 1\n[editor]\ncursor_blink = false\nsmooth_cursor = true\n")?;
+        let path = session.seed_file("smooth.txt", "alpha beta\nsecond line\n")?;
+        let mut editor = session.open_file("smooth-cursor", &path)?;
+        editor.keys("<C-home><right><right>X<down><home>Y")?;
+        editor.save_then_expect_file(&path, "alXpha beta\nYsecond line\n")?;
+        // A settled animation must stop requesting frames.
+        editor.wait_quiet(Duration::from_millis(200), secs(5))?;
+        editor.keys("<C-,>")?;
+        editor.send_keys_settle("smooth cursor")?;
+        editor.keys("<tab>")?;
+        editor.wait_state("smooth cursor setting selected", secs(2), |record| {
+            record.settings_selected_item.as_deref() == Some("smooth_cursor")
+        })?;
+        editor.send_keys_settle("<space>")?;
+        let config = std::fs::read_to_string(&settings)?;
+        assert!(config.contains("smooth_cursor = false"), "{config}");
+        editor.keys("<esc><C-home><right>Z")?;
+        editor.save_then_expect_file(&path, "aZlXpha beta\nYsecond line\n")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn smooth_cursor_diagonal_navigation_lands_and_stops_repainting() -> TestResult {
+    support::run_x11_test("smooth-cursor-diagonal", |session| {
+        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\nsmooth_cursor = true\n")?;
+        let text = "A deliberately longer first line to exercise diagonal cursor movement.\nshort\n";
+        let path = session.seed_file("diagonal.txt", text)?;
+        let mut editor = session.open_file("smooth-cursor-diagonal", &path)?;
+        editor.keys("<C-home><end>")?;
+        editor.wait_quiet(Duration::from_millis(200), secs(5))?;
+        editor.press(lst_x11_harness::KeyChord::Key(lst_x11_harness::Key::Down))?;
+        if let Some(directory) = std::env::var_os("LST_CURSOR_CAPTURE_DIR") {
+            // Optional visual sampling at successive animation times, not input
+            // synchronization. Normal acceptance runs use the state/quiet waits.
+            for frame in 0..12 {
+                editor
+                    .screenshot()?
+                    .write_ppm(std::path::Path::new(&directory).join(format!("diagonal-{frame:02}.ppm")))?;
+                std::thread::sleep(Duration::from_millis(16));
+            }
+        }
+        editor.wait_state("diagonal reaches shorter next line", secs(2), |state| {
+            state.cursors[0].head_char == text.find("short").unwrap() + 5
+        })?;
+        editor.wait_quiet(Duration::from_millis(200), secs(5))?;
+        editor.keys("X")?;
+        editor.save_then_expect_file(&path, &text.replace("short", "shortX"))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn held_perpendicular_arrows_repeat_on_both_axes_and_release_cleanly() -> TestResult {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::{xproto::ConnectionExt as _, xtest::ConnectionExt as _};
+    support::run_x11_test("held-diagonal-arrows", |session| {
+        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\nsmooth_cursor = true\n")?;
+        let text = format!("{}\n", "x".repeat(100)).repeat(80);
+        let path = session.seed_file("held-arrows.txt", &text)?;
+        let mut editor = session.open_file("held-arrows", &path)?;
+        let (conn, screen) = x11rb::connect(None)?;
+        let setup = conn.setup();
+        let mapping = conn
+            .get_keyboard_mapping(setup.min_keycode, setup.max_keycode - setup.min_keycode + 1)?
+            .reply()?;
+        let code = |keysym| {
+            mapping
+                .keysyms
+                .chunks(usize::from(mapping.keysyms_per_keycode))
+                .position(|symbols| symbols.contains(&keysym))
+                .map(|index| setup.min_keycode + index as u8)
+                .expect("arrow key")
+        };
+        for (horizontal, dx) in [(0xff51, -1isize), (0xff53, 1)] {
+            for (vertical, dy) in [(0xff52, -1isize), (0xff54, 1)] {
+                for horizontal_first in [true, false] {
+                    editor.keys(&format!("<C-home>{}{}", "<down>".repeat(15), "<right>".repeat(15)))?;
+                    let initial = editor.read_state()?;
+                    let pair = if horizontal_first {
+                        [code(horizontal), code(vertical)]
+                    } else {
+                        [code(vertical), code(horizontal)]
+                    };
+                    conn.xtest_fake_input(2, pair[0], 0, setup.roots[screen].root, 0, 0, 0)?;
+                    conn.flush()?;
+                    // Add the second key while the first is already repeating,
+                    // exercising both press orders rather than one synthetic chord.
+                    let first_repeated = editor.wait_state("first held arrow repeats", secs(3), |state| {
+                        let before = &initial.cursors[0];
+                        let after = &state.cursors[0];
+                        if horizontal_first {
+                            (after.head_col as isize - before.head_col as isize) * dx >= 2
+                        } else {
+                            (after.head_line as isize - before.head_line as isize) * dy >= 2
+                        }
+                    });
+                    let moved = match first_repeated {
+                        Ok(before) => {
+                            conn.xtest_fake_input(2, pair[1], 0, setup.roots[screen].root, 0, 0, 0)?;
+                            conn.flush()?;
+                            editor.wait_state("both held axes repeat", secs(3), |state| {
+                                let after = &state.cursors[0];
+                                let before = &before.cursors[0];
+                                (after.head_line as isize - before.head_line as isize) * dy >= 3
+                                    && (after.head_col as isize - before.head_col as isize) * dx >= 3
+                            })
+                        }
+                        Err(error) => Err(error),
+                    };
+                    // Release even when an assertion fails, avoiding stuck keys.
+                    for key in pair {
+                        conn.xtest_fake_input(3, key, 0, setup.roots[screen].root, 0, 0, 0)?;
+                    }
+                    conn.get_input_focus()?.reply()?;
+                    moved?;
+                    editor.wait_quiet(Duration::from_millis(200), secs(5))?;
+                    let released = editor.read_state()?;
+                    editor.keys("<right>")?;
+                    let after = editor.read_state()?;
+                    assert_eq!(after.cursors[0].head_line, released.cursors[0].head_line);
+                    assert_eq!(after.cursors[0].head_col, released.cursors[0].head_col + 1);
+                }
+            }
+        }
+        assert_eq!(std::fs::read_to_string(path)?, text);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn held_diagonal_arrows_cross_blank_lines_without_cancelling_vertical_motion() -> TestResult {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::{xproto::ConnectionExt as _, xtest::ConnectionExt as _};
+    support::run_x11_test("held-arrows-blank-lines", |session| {
+        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\nsmooth_cursor = true\n")?;
+        let text = format!("{}\n\n", "x".repeat(100)).repeat(20);
+        let path = session.seed_file("paragraphs.txt", &text)?;
+        let mut editor = session.open_file("held-arrows-blank-lines", &path)?;
+        editor.keys(&format!("<C-home>{}{}", "<down>".repeat(12), "<right>".repeat(15)))?;
+        let (conn, screen) = x11rb::connect(None)?;
+        let setup = conn.setup();
+        let mapping = conn
+            .get_keyboard_mapping(setup.min_keycode, setup.max_keycode - setup.min_keycode + 1)?
+            .reply()?;
+        let code = |keysym| {
+            mapping
+                .keysyms
+                .chunks(usize::from(mapping.keysyms_per_keycode))
+                .position(|symbols| symbols.contains(&keysym))
+                .map(|index| setup.min_keycode + index as u8)
+                .expect("arrow key")
+        };
+        let pair = [code(0xff53), code(0xff52)];
+        for key in pair {
+            conn.xtest_fake_input(2, key, 0, setup.roots[screen].root, 0, 0, 0)?;
+        }
+        conn.flush()?;
+        let crossed = editor.wait_state("diagonal crosses multiple blank lines", secs(3), |state| {
+            state.cursors[0].head_line <= 8 && state.cursors[0].head_col >= 18
+        });
+        for key in pair {
+            conn.xtest_fake_input(3, key, 0, setup.roots[screen].root, 0, 0, 0)?;
+        }
+        // Ensure releases are processed before this XTEST client disconnects;
+        // the server may discard synthetic events still pending at disconnect.
+        conn.get_input_focus()?.reply()?;
+        crossed?;
+        assert_eq!(std::fs::read_to_string(path)?, text);
+        Ok(())
+    })
+}

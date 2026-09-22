@@ -2062,6 +2062,9 @@ impl Render for LstGpuiApp {
         let prepare_entity = entity.clone();
         let vim_mode = self.model.vim_mode();
         let cursor_visible = self.cursor_visible;
+        let cursor_motion = self.cursor_motion.clone();
+        let smooth_cursor = self.settings.settings.editor.smooth_cursor;
+        let cursor_tab = self.model.active_tab_id();
         let ui_scale = self.ui_scale();
         let recent_presentation = self.recent.presentation();
         let recent_cards_open = self.recent.is_open() && recent_presentation == RecentPresentation::Cards;
@@ -2078,6 +2081,9 @@ impl Render for LstGpuiApp {
         let root = attach_workspace_actions(div().flex().flex_col().key_context("Workspace"), cx)
             .size_full()
             .track_focus(&surface_focus_handle)
+            .capture_key_up(
+                cx.listener(|this, event: &gpui::KeyUpEvent, _, _| this.held_arrows.release(&event.keystroke.key)),
+            )
             .on_key_down(cx.listener(Self::on_surface_key_down))
             .bg(rgb(theme.role.app_bg))
             .font(typography::ui_font())
@@ -2254,6 +2260,10 @@ impl Render for LstGpuiApp {
                                                         vim_mode,
                                                         focused: focus_handle.is_focused(window),
                                                         cursor_visible,
+                                                        cursor_motion: &mut cursor_motion.borrow_mut(),
+                                                        smooth_cursor,
+                                                        cursor_tab,
+                                                        scroll_offset: viewport_scroll.offset(),
                                                         drop_cursor,
                                                         paint_state,
                                                         scale: ui_scale,

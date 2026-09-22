@@ -27,6 +27,7 @@ pub(crate) enum SettingsItem {
     WordWrap,
     LineNumbers,
     CursorBlink,
+    SmoothCursor,
     FontFamily,
     FontSize,
     MatchBrackets,
@@ -51,11 +52,12 @@ pub(crate) enum SettingsItem {
 }
 
 impl SettingsItem {
-    const ALL: [Self; 25] = [
+    const ALL: [Self; 26] = [
         Self::InputMode,
         Self::WordWrap,
         Self::LineNumbers,
         Self::CursorBlink,
+        Self::SmoothCursor,
         Self::FontFamily,
         Self::FontSize,
         Self::MatchBrackets,
@@ -85,6 +87,7 @@ impl SettingsItem {
             Self::WordWrap => "word_wrap",
             Self::LineNumbers => "line_numbers",
             Self::CursorBlink => "cursor_blink",
+            Self::SmoothCursor => "smooth_cursor",
             Self::FontFamily => "font_family",
             Self::FontSize => "font_size",
             Self::MatchBrackets => "match_brackets",
@@ -115,6 +118,7 @@ impl SettingsItem {
             Self::WordWrap => &["Editor", "Word wrap", "line wrapping"],
             Self::LineNumbers => &["Editor", "Line numbers", "Absolute", "Relative", "Hybrid", "gutter"],
             Self::CursorBlink => &["Editor", "Cursor blink", "caret animation"],
+            Self::SmoothCursor => &["Editor", "Smooth cursor", "caret animation motion"],
             Self::FontFamily => &[
                 "Editor",
                 "Font family",
@@ -148,12 +152,81 @@ impl SettingsItem {
             Self::ScratchpadDirectory => &["Files", "Scratchpad directory", "folder", "location"],
             Self::Reset => &["Configuration", "Reset settings", "defaults", "restore"],
         };
-        settings_query_matches(query, fields)
+        let mut fields = fields.to_vec();
+        fields.push(self.category().label());
+        settings_query_matches(query, &fields)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SettingsCategory {
+    #[default]
+    Editor,
+    Appearance,
+    Guides,
+    Files,
+    Shortcuts,
+    Configuration,
+}
+
+impl SettingsCategory {
+    const ALL: [Self; 6] = [
+        Self::Editor,
+        Self::Appearance,
+        Self::Guides,
+        Self::Files,
+        Self::Shortcuts,
+        Self::Configuration,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Editor => "Editor",
+            Self::Appearance => "Appearance",
+            Self::Guides => "Guides & whitespace",
+            Self::Files => "Files & saving",
+            Self::Shortcuts => "Keyboard shortcuts",
+            Self::Configuration => "Configuration",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Editor => "Writing, navigation, and selection.",
+            Self::Appearance => "Typography and the look of your workspace.",
+            Self::Guides => "Show the details that help you read your text.",
+            Self::Files => "Choose how your work is saved.",
+            Self::Shortcuts => "Your current keyboard bindings. Customize them in the settings file.",
+            Self::Configuration => "Settings location, build information, and defaults.",
+        }
+    }
+}
+
+impl SettingsItem {
+    fn category(self) -> SettingsCategory {
+        match self {
+            Self::Theme | Self::Zoom | Self::FontFamily | Self::FontSize => SettingsCategory::Appearance,
+            Self::MatchBrackets
+            | Self::BracketColorization
+            | Self::BracketGuides
+            | Self::HorizontalBracketGuides
+            | Self::IndentGuides
+            | Self::ActiveIndentGuide
+            | Self::RenderWhitespace
+            | Self::ControlCharacters
+            | Self::Rulers => SettingsCategory::Guides,
+            Self::Autosave | Self::TrimWhitespace | Self::FinalNewline | Self::ScratchpadDirectory => {
+                SettingsCategory::Files
+            }
+            Self::Reset => SettingsCategory::Configuration,
+            _ => SettingsCategory::Editor,
+        }
     }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct SettingsSelection {
+    category: SettingsCategory,
     selected: Option<SettingsItem>,
     reveal_selected: bool,
 }
@@ -380,6 +453,11 @@ impl LstGpuiApp {
         self.persist_settings(cx);
     }
 
+    fn toggle_smooth_cursor_setting(&mut self, cx: &mut Context<Self>) {
+        self.settings.settings.editor.smooth_cursor = !self.settings.settings.editor.smooth_cursor;
+        self.persist_settings(cx);
+    }
+
     fn set_polish_setting(&mut self, item: SettingsItem, forward: bool, cx: &mut Context<Self>) {
         let editor = &mut self.settings.settings.editor;
         match item {
@@ -587,8 +665,22 @@ impl LstGpuiApp {
         let query = self.settings_search_input.read(cx).text().trim().to_string();
         SettingsItem::ALL
             .into_iter()
-            .filter(|item| item.visible(&query, &self.settings.settings))
+            .filter(|item| {
+                item.visible(&query, &self.settings.settings)
+                    && (!query.is_empty() || item.category() == self.settings_selection.category)
+            })
             .collect()
+    }
+
+    fn select_settings_category(&mut self, category: SettingsCategory, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_selection.category = category;
+        self.settings_selection.clear();
+        self.settings_overlay = SettingsOverlay::None;
+        self.settings_search_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.settings_scroll.set_offset(point(px(0.0), px(0.0)));
+        self.focus_settings_search(window, cx);
+        cx.notify();
     }
 
     fn select_settings_edge(&mut self, backward: bool, cx: &mut Context<Self>) {
@@ -732,6 +824,11 @@ impl LstGpuiApp {
                     self.toggle_cursor_blink_setting(cx);
                 }
             }
+            SettingsItem::SmoothCursor => {
+                if self.settings.settings.editor.smooth_cursor != forward {
+                    self.toggle_smooth_cursor_setting(cx);
+                }
+            }
             SettingsItem::FontFamily => {
                 let current = FontFamilyChoice::from_name(&self.settings.settings.editor.font_family);
                 let choice = if forward { current.next() } else { current.previous() };
@@ -802,6 +899,7 @@ impl LstGpuiApp {
             }
             SettingsItem::WordWrap => self.toggle_word_wrap_setting(cx),
             SettingsItem::CursorBlink => self.toggle_cursor_blink_setting(cx),
+            SettingsItem::SmoothCursor => self.toggle_smooth_cursor_setting(cx),
             SettingsItem::FontFamily => self.toggle_font_menu(window, cx),
             SettingsItem::Autosave => {
                 let forward = self.settings.settings.files.autosave == AutosaveMode::Scratchpads;
@@ -920,15 +1018,15 @@ impl LstGpuiApp {
         let scale = self.ui_scale();
         let settings = self.settings.settings.clone();
         let search_query = self.settings_search_input.read(cx).text().trim().to_string();
-        let visible_items = SettingsItem::ALL
-            .into_iter()
-            .filter(|item| item.visible(&search_query, &settings))
-            .collect::<Vec<_>>();
+        let category = self.settings_selection.category;
+        let searching = !search_query.is_empty();
+        let visible_items = self.visible_settings_items(cx);
         let selected_item = self.settings_selection.selected();
         let show_input_mode = visible_items.contains(&SettingsItem::InputMode);
         let show_word_wrap = visible_items.contains(&SettingsItem::WordWrap);
         let show_line_numbers = visible_items.contains(&SettingsItem::LineNumbers);
         let show_cursor_blink = visible_items.contains(&SettingsItem::CursorBlink);
+        let show_smooth_cursor = visible_items.contains(&SettingsItem::SmoothCursor);
         let show_font_family = visible_items.contains(&SettingsItem::FontFamily);
         let show_font_size = visible_items.contains(&SettingsItem::FontSize);
         let polish_items = [
@@ -952,6 +1050,7 @@ impl LstGpuiApp {
             || show_word_wrap
             || show_line_numbers
             || show_cursor_blink
+            || show_smooth_cursor
             || show_font_family
             || show_font_size
             || !polish_items.is_empty();
@@ -963,9 +1062,10 @@ impl LstGpuiApp {
         let show_final_newline = visible_items.contains(&SettingsItem::FinalNewline);
         let show_scratchpad_directory = visible_items.contains(&SettingsItem::ScratchpadDirectory);
         let show_files = show_autosave || show_trim || show_final_newline || show_scratchpad_directory;
-        let show_settings_file =
-            settings_query_matches(&search_query, &["Configuration", "Settings file", "config", "path"]);
-        let show_build = settings_query_matches(&search_query, &["Configuration", "Build", "version", "commit"]);
+        let show_settings_file = (searching || category == SettingsCategory::Configuration)
+            && settings_query_matches(&search_query, &["Configuration", "Settings file", "config", "path"]);
+        let show_build = (searching || category == SettingsCategory::Configuration)
+            && settings_query_matches(&search_query, &["Configuration", "Build", "version", "commit"]);
         let show_reset = visible_items.contains(&SettingsItem::Reset);
         let show_configuration = show_settings_file || show_build || show_reset;
         let config_path = self
@@ -1008,6 +1108,8 @@ impl LstGpuiApp {
             .on_click(cx.listener(|this, _, _, cx| this.toggle_word_wrap_setting(cx)));
         let cursor_blink = toggle_button("settings-cursor-blink", settings.editor.cursor_blink, theme, scale)
             .on_click(cx.listener(|this, _, _, cx| this.toggle_cursor_blink_setting(cx)));
+        let smooth_cursor = toggle_button("settings-smooth-cursor", settings.editor.smooth_cursor, theme, scale)
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_smooth_cursor_setting(cx)));
         let line_numbers = segmented_control(
             [
                 ("settings-lines-absolute", "Absolute", LineNumbersSetting::Absolute),
@@ -1200,13 +1302,39 @@ impl LstGpuiApp {
                 })
             })
             .collect::<Vec<_>>();
-        let show_keybindings = !binding_rows.is_empty();
+        let show_keybindings = (searching || category == SettingsCategory::Shortcuts) && !binding_rows.is_empty();
         let has_results = show_editor || show_appearance || show_files || show_keybindings || show_configuration;
 
-        let mut content = Vec::<AnyElement>::new();
+        let mut content = vec![settings_content_item(
+            div()
+                .pb_3()
+                .pt_1()
+                .child(
+                    div()
+                        .text_size(metrics::px_for_scale(metrics::UI_TEXT_TITLE, scale))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme.role.text))
+                        .child(if searching { "Search results" } else { category.label() }),
+                )
+                .child(
+                    div()
+                        .mt_2()
+                        .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
+                        .text_color(rgb(theme.role.text_muted))
+                        .child(if searching {
+                            "Matching settings from every category."
+                        } else {
+                            category.description()
+                        }),
+                ),
+            scale,
+        )];
         let mut item_scroll_indices = HashMap::<SettingsItem, usize>::new();
-        if show_editor {
-            content.push(settings_content_item(settings_section("Editor", theme, scale), scale));
+        if show_editor && searching {
+            content.push(settings_content_item(
+                settings_section("Preferences", theme, scale),
+                scale,
+            ));
         }
         if show_input_mode {
             item_scroll_indices.insert(SettingsItem::InputMode, content.len());
@@ -1260,6 +1388,19 @@ impl LstGpuiApp {
                 scale,
             ));
         }
+        if show_smooth_cursor {
+            item_scroll_indices.insert(SettingsItem::SmoothCursor, content.len());
+            content.push(settings_content_item(
+                setting_row(
+                    "Smooth cursor",
+                    smooth_cursor.into_any_element(),
+                    selected_item == Some(SettingsItem::SmoothCursor),
+                    theme,
+                    scale,
+                ),
+                scale,
+            ));
+        }
         if show_font_family {
             item_scroll_indices.insert(SettingsItem::FontFamily, content.len());
             content.push(settings_content_item(
@@ -1292,18 +1433,30 @@ impl LstGpuiApp {
             let selected = selected_item == Some(item);
             let active = polish_bool_value(&settings, item)
                 || matches!(self.settings_overlay, SettingsOverlay::ValueEditor { item: active } if active == item);
-            let control = setting_choice(item.id(), value, active, theme, scale).on_click(cx.listener(
-                move |this, _, window, cx| {
-                    this.settings_selection.select(item);
-                    this.activate_settings_item(window, cx);
-                },
-            ));
+            let boolean = matches!(
+                item,
+                SettingsItem::BracketColorization
+                    | SettingsItem::IndentGuides
+                    | SettingsItem::ActiveIndentGuide
+                    | SettingsItem::ControlCharacters
+                    | SettingsItem::SmartSelectSubwords
+                    | SettingsItem::SmartSelectWhitespace
+            );
+            let control = if boolean {
+                toggle_button(item.id(), active, theme, scale)
+            } else {
+                setting_choice(item.id(), value, active, theme, scale)
+            };
+            let control = control.on_click(cx.listener(move |this, _, window, cx| {
+                this.settings_selection.select(item);
+                this.activate_settings_item(window, cx);
+            }));
             content.push(settings_content_item(
                 setting_row(polish_label(item), control.into_any_element(), selected, theme, scale),
                 scale,
             ));
         }
-        if show_appearance {
+        if show_appearance && searching {
             content.push(settings_content_item(
                 settings_section("Appearance", theme, scale),
                 scale,
@@ -1335,7 +1488,7 @@ impl LstGpuiApp {
                 scale,
             ));
         }
-        if show_files {
+        if show_files && searching {
             content.push(settings_content_item(settings_section("Files", theme, scale), scale));
         }
         if show_autosave {
@@ -1391,13 +1544,15 @@ impl LstGpuiApp {
             ));
         }
         if show_keybindings {
-            content.push(settings_content_item(
-                settings_section("Keybindings", theme, scale),
-                scale,
-            ));
+            if searching {
+                content.push(settings_content_item(
+                    settings_section("Keybindings", theme, scale),
+                    scale,
+                ));
+            }
             content.extend(binding_rows.into_iter().map(|row| settings_content_item(row, scale)));
         }
-        if show_configuration {
+        if show_configuration && searching {
             content.push(settings_content_item(
                 settings_section("Configuration", theme, scale),
                 scale,
@@ -1478,48 +1633,112 @@ impl LstGpuiApp {
             .inset_0()
             .flex()
             .flex_col()
-            .bg(rgb(theme.role.app_bg))
+            .bg(rgb(theme.role.editor_bg))
             .occlude()
             .child(
                 div()
                     .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .h(metrics::px_for_scale(46.0, scale))
-                    .px_4()
                     .border_b_1()
                     .border_color(rgb(theme.role.border))
                     .child(
                         div()
-                            .flex_none()
-                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_TITLE, scale))
-                            .text_color(rgb(theme.role.text))
-                            .child("Settings"),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .max_w(metrics::px_for_scale(420.0, scale))
-                            .mx_4()
-                            .child(self.settings_search_input.clone()),
-                    )
-                    .child(
-                        IconButton::new("settings-close", IconKind::Close, theme)
-                            .tooltip("Close settings (Esc)")
-                            .on_click(cx.listener(|this, _, _, cx| this.close_workspace_surface(cx))),
+                            .w_full()
+                            .max_w(metrics::px_for_scale(960.0, scale))
+                            .mx_auto()
+                            .h(metrics::px_for_scale(50.0, scale))
+                            .px_5()
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .child(
+                                div()
+                                    .w(metrics::px_for_scale(164.0, scale))
+                                    .flex_none()
+                                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_TITLE, scale))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Settings"),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .max_w(metrics::px_for_scale(420.0, scale))
+                                    .child(self.settings_search_input.clone()),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                IconButton::new("settings-close", IconKind::Close, theme)
+                                    .tooltip("Close settings (Esc)")
+                                    .on_click(cx.listener(|this, _, _, cx| this.close_workspace_surface(cx))),
+                            ),
                     ),
             )
             .child(
                 div()
-                    .id("settings-scroll")
+                    .w_full()
+                    .max_w(metrics::px_for_scale(960.0, scale))
+                    .mx_auto()
                     .flex_1()
                     .min_h_0()
-                    .py_4()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.settings_scroll)
-                    .children(content),
+                    .flex()
+                    .px_4()
+                    .py_3()
+                    .gap_3()
+                    .child(
+                        div()
+                            .w(metrics::px_for_scale(164.0, scale))
+                            .flex_none()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .children(SettingsCategory::ALL.into_iter().enumerate().map(|(index, entry)| {
+                                let active = !searching && category == entry;
+                                div()
+                                    .id(("settings-category", index))
+                                    .px_2()
+                                    .h(metrics::px_for_scale(30.0, scale))
+                                    .flex()
+                                    .items_center()
+                                    .rounded_sm()
+                                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
+                                    .font_weight(if active {
+                                        gpui::FontWeight::MEDIUM
+                                    } else {
+                                        gpui::FontWeight::NORMAL
+                                    })
+                                    .text_color(rgb(if active {
+                                        theme.role.accent
+                                    } else {
+                                        theme.role.text_subtle
+                                    }))
+                                    .when(active, |row| row.bg(rgb(theme.role.control_bg)))
+                                    .cursor(CursorStyle::PointingHand)
+                                    .hover(move |row| row.bg(rgb(theme.role.control_bg_hover)))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.select_settings_category(entry, window, cx)
+                                    }))
+                                    .child(entry.label())
+                            }))
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .px_3()
+                                    .pb_2()
+                                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
+                                    .text_color(rgb(theme.role.text_muted))
+                                    .child("Saved automatically"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("settings-scroll")
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.settings_scroll)
+                            .children(content),
+                    ),
             )
             .when(
                 matches!(self.settings_overlay, SettingsOverlay::ResetConfirmation { .. }),
@@ -1810,7 +2029,7 @@ fn settings_content_item(element: impl IntoElement, scale: f32) -> AnyElement {
         .w_full()
         .max_w(metrics::px_for_scale(860.0, scale))
         .mx_auto()
-        .px_5()
+        .px_2()
         .child(element)
         .into_any_element()
 }
@@ -1822,41 +2041,88 @@ fn setting_row(
     theme: Theme,
     scale: f32,
 ) -> impl IntoElement {
+    let label = label.into();
+    let description = setting_description(&label);
     div()
         .flex()
         .flex_wrap()
         .items_center()
         .justify_between()
-        .gap_4()
-        .min_h(metrics::px_for_scale(42.0, scale))
+        .gap_x_4()
+        .gap_y_2()
+        .min_h(metrics::px_for_scale(44.0, scale))
         .py_1()
-        .when(!selected, |row| row.border_b_1().border_color(rgb(theme.role.border)))
-        .when(selected, |row| {
-            row.rounded_sm()
-                .border_1()
-                .border_color(rgb(theme.role.focus_outline))
-                .bg(rgb(theme.role.selection_bg))
-        })
+        .px_2()
+        .border_b_1()
+        .border_color(rgb(theme.role.border))
+        .when(selected, |row| row.bg(rgb(theme.role.control_bg)).rounded_md())
         .child(
             div()
                 .flex_1()
-                .min_w_0()
-                .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
-                .text_color(rgb(theme.role.text_subtle))
-                .child(label.into()),
+                .min_w(metrics::px_for_scale(170.0, scale))
+                .child(
+                    div()
+                        .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
+                        .line_height(metrics::px_for_scale(metrics::TAB_TEXT_LINE_HEIGHT, scale))
+                        .text_color(rgb(theme.role.text))
+                        .child(label),
+                )
+                .when_some(description, |column, description| {
+                    column.child(
+                        div()
+                            .mt(metrics::px_for_scale(2.0, scale))
+                            .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
+                            .line_height(metrics::px_for_scale(metrics::UI_TEXT_SM_LINE_HEIGHT, scale))
+                            .text_color(rgb(theme.role.text_muted))
+                            .child(description),
+                    )
+                }),
         )
-        .child(control)
+        .child(div().flex().flex_none().max_w_full().child(control))
+}
+
+fn setting_description(label: &str) -> Option<&'static str> {
+    Some(match label {
+        "Input mode" => "Use familiar shortcuts or Vim commands.",
+        "Word wrap" => "Keep long lines within the window.",
+        "Line numbers" => "Choose how positions appear in the gutter.",
+        "Cursor blink" => "Blink the caret when it is idle.",
+        "Smooth cursor" => "Let the caret glide between positions.",
+        "Font family" => "The typeface used for your text.",
+        "Font size" => "Base text size, before interface zoom.",
+        "Theme" => "Follow your system or choose a light or dark workspace.",
+        "Zoom" => "Scale the entire interface, including the editor.",
+        "Autosave" => "Save scratchpads automatically, or every open file.",
+        "Trim trailing whitespace" => "Remove spaces at the end of lines when saving.",
+        "Ensure final newline" => "End saved files with a line break.",
+        "Scratchpad directory" => "Where new scratchpads are stored.",
+        "Match brackets" => "Highlight matching opening and closing brackets.",
+        "Bracket pair colorization" => "Distinguish nested pairs with color.",
+        "Bracket pair guides" => "Connect matching brackets with vertical guides.",
+        "Horizontal bracket guides" => "Extend bracket guides to the matching delimiter.",
+        "Indent guides" => "Show the structure of indented text.",
+        "Highlight active indent guide" => "Emphasize the indentation around the caret.",
+        "Render whitespace" => "Choose when spaces and tabs are visible.",
+        "Render control characters" => "Reveal otherwise invisible control characters.",
+        "Rulers" => "Vertical guides at your preferred column numbers.",
+        "Smart select subwords" => "Include individual parts of camelCase names.",
+        "Smart select include whitespace" => "Include surrounding whitespace when expanding a selection.",
+        "Multi-cursor limit" => "Maximum number of simultaneous carets.",
+        _ => return None,
+    })
 }
 
 fn segmented_control(children: Vec<AnyElement>, theme: Theme) -> impl IntoElement {
     div()
         .flex()
+        .flex_none()
         .items_center()
-        .overflow_hidden()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(theme.role.control_border))
-        .children(children)
+        .whitespace_nowrap()
+        .gap_1()
+        .p_1()
+        .rounded_md()
+        .bg(rgb(theme.role.control_bg))
+        .children(children.into_iter().map(|choice| div().flex_none().child(choice)))
 }
 
 fn setting_choice(
@@ -1867,7 +2133,7 @@ fn setting_choice(
     scale: f32,
 ) -> Stateful<gpui::Div> {
     let hover_bg = if active {
-        theme.role.accent
+        theme.role.selection_bg
     } else {
         theme.role.control_bg_hover
     };
@@ -1877,19 +2143,16 @@ fn setting_choice(
         .flex()
         .items_center()
         .justify_center()
-        .h(metrics::px_for_scale(28.0, scale))
+        .min_h(metrics::px_for_scale(28.0, scale))
+        .max_w_full()
         .px_3()
-        .rounded_sm()
+        .rounded_md()
         .bg(rgb(if active {
-            theme.role.accent
+            theme.role.selection_bg
         } else {
             theme.role.control_bg
         }))
-        .text_color(rgb(if active {
-            theme.role.accent_text
-        } else {
-            theme.role.text
-        }))
+        .text_color(rgb(if active { theme.role.accent } else { theme.role.text }))
         .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.bg(rgb(hover_bg)))
@@ -1958,7 +2221,29 @@ fn danger_choice(
 }
 
 fn toggle_button(id: &'static str, enabled: bool, theme: Theme, scale: f32) -> Stateful<gpui::Div> {
-    setting_choice(id, if enabled { "On" } else { "Off" }, enabled, theme, scale)
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .w(metrics::px_for_scale(30.0, scale))
+        .h(metrics::px_for_scale(18.0, scale))
+        .p(metrics::px_for_scale(3.0, scale))
+        .rounded_full()
+        .bg(rgb(if enabled {
+            theme.role.accent
+        } else {
+            theme.role.scrollbar_thumb
+        }))
+        .when(enabled, |toggle| toggle.justify_end())
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.opacity(0.85))
+        .child(
+            div()
+                .size(metrics::px_for_scale(12.0, scale))
+                .rounded_full()
+                .bg(rgb(0xffffff)),
+        )
 }
 
 fn setting_value(value: impl Into<String>, theme: Theme, scale: f32) -> impl IntoElement {
