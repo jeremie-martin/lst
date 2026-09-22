@@ -20,6 +20,9 @@ assert source
 expected = os.environ.get('LST_TEST_PROMPT_SOURCE')
 if expected is not None:
     assert source == expected
+gate = os.environ.get('LST_TEST_PROMPT_GATE')
+while gate and os.path.exists(gate):
+    time.sleep(0.01)
 if os.environ.get('LST_TEST_PROMPT_DELAY'):
     time.sleep(1.5)
 if os.environ.get('LST_TEST_PROMPT_FAIL'):
@@ -390,6 +393,91 @@ fn long_prompt_review_scrolls_and_applies_the_complete_result() -> TestResult {
         editor.save_then_expect_file(&path, &result)?;
         editor.keys("<C-z>")?;
         editor.save_then_expect_file(&path, &original)?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn completed_prompt_review_dismisses_competing_surfaces_before_accepting_input() -> TestResult {
+    for surface in ["settings", "command_palette", "recent"] {
+        support::run_x11_test(&format!("prompt-review-{surface}"), |session| {
+            let filter_path = install_filter(session)?;
+            let gate = session.seed_file("gate", "wait")?;
+            let path = session.seed_file("prompt.txt", "original")?;
+            let env: [(&OsStr, &OsStr); 3] = [
+                (OsStr::new("PATH"), &filter_path),
+                (OsStr::new(FAKE_ENV), OsStr::new("polished")),
+                (OsStr::new("LST_TEST_PROMPT_GATE"), gate.as_os_str()),
+            ];
+            let mut editor = session.open_file_with_env("prompt", &path, &env)?;
+            editor.keys("<C-a>")?;
+            editor.click_cleanup_button()?;
+            let before = editor.wait_state("filter running", secs(3), |r| r.status_message.contains("Polishing"))?;
+            match surface {
+                "settings" => {
+                    editor.keys("<C-,>")?;
+                    editor.send_keys_settle("rulers")?;
+                    editor.keys("<tab><enter>")?;
+                    editor.wait_state("settings value editor open", secs(3), |r| {
+                        r.settings_value_editor_item.is_some()
+                    })?;
+                }
+                "command_palette" => {
+                    editor.keys("<C-S-p>")?;
+                    editor.wait_state("palette open", secs(3), |r| r.workspace_surface == "command_palette")?;
+                }
+                _ => {
+                    editor.keys("<C-p>")?;
+                    editor.wait_state("recent open", secs(3), |r| r.recent_panel_open)?;
+                }
+            }
+            std::fs::remove_file(&gate)?;
+            let review = editor.wait_state("review owns visible surface and focus", secs(5), |r| {
+                r.prompt_review_view.is_some()
+                    && r.focused_input == "prompt_review"
+                    && r.workspace_surface == "none"
+                    && !r.recent_panel_open
+                    && r.settings_value_editor_item.is_none()
+            })?;
+            assert_eq!(review.revision, before.revision);
+            editor.expect_file(&path, "original")?;
+            editor.keys("<enter>")?;
+            editor.save_then_expect_file(&path, "polished")?;
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn prompt_timeout_preserves_text_allows_retry_and_unblocks_quitting() -> TestResult {
+    support::run_x11_test("prompt-timeout", |session| {
+        let filter_path = install_filter(session)?;
+        let gate = session.seed_file("gate", "wait")?;
+        let path = session.seed_file("prompt.txt", "original")?;
+        let env: [(&OsStr, &OsStr); 3] = [
+            (OsStr::new("PATH"), &filter_path),
+            (OsStr::new(FAKE_ENV), OsStr::new("polished")),
+            (OsStr::new("LST_TEST_PROMPT_GATE"), gate.as_os_str()),
+        ];
+        let mut editor = session.open_file_with_env("prompt", &path, &env)?;
+        editor.keys("<C-a>")?;
+        editor.click_cleanup_button()?;
+        let before = editor.wait_state("filter running", secs(3), |r| r.status_message.contains("Polishing"))?;
+        let failed = editor.wait_state("production timeout reported", secs(65), |r| {
+            r.status_message.contains("timed out after 60 seconds")
+        })?;
+        assert_eq!(before.revision, failed.revision);
+        assert!(failed.prompt_review_view.is_none());
+        editor.expect_file(&path, "original")?;
+        std::fs::remove_file(gate)?;
+        editor.click_cleanup_button()?;
+        editor.wait_state("retry produces review", secs(5), |r| r.prompt_review_view.is_some())?;
+        editor.keys("<escape>")?;
+        assert!(editor.quit(secs(5))?.success());
+        assert_eq!(std::fs::read_to_string(path)?, "original");
         Ok(())
     })
 }

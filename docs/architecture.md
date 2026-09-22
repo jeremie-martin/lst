@@ -98,13 +98,18 @@ than scattering fallback checks through the core.
   use the actual selection. One critically damped spring moves the caret
   without changing its shape. Scrolling translates motion with the document;
   tab and layout changes reset it. Blinking preserves the last caret position.
-- `prompt_add.rs` runs the installed prompt-add filter through stdin/stdout. The runtime confirms whole-document sharing
-  and prepares a response only if the tab and revision still match the request.
+- `prompt_add.rs` runs the installed prompt-add filter with a 60-second deadline
+  covering input, output, and exit. Nonblocking pipes keep every phase bounded;
+  failure terminates its private process group and reaps the child. The runtime
+  confirms whole-document sharing and prepares a response only if the tab and
+  revision still match the request.
 - `prompt_review.rs` owns read-only comparison presentation: immutable original
   and proposed text, cached adaptive word highlights, and virtualized review rows
   inside the existing editor area. It uses editor typography and line spacing.
   Apply rechecks the tab and revision before the existing model replacement;
-  Discard never mutates the document.
+  Discard never mutates the document. Presenting a review first dismisses competing
+  focus surfaces, including Settings and its value editor, so the review that
+  receives keyboard input is also visible.
 
 External failures remain explicit at this boundary. A clean file changed on
 disk reloads in place. A dirty file changed on disk stays open with a per-tab

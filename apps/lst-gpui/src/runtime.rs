@@ -2550,6 +2550,7 @@ impl LstGpuiApp {
             .slice(range.end..(range.end + 120).min(tab.buffer().len_chars()))
             .to_string();
         let prepared = cleaned.with_context(&before, &after);
+        self.dismiss_focus_surfaces(cx);
         self.prompt_review = Some(crate::prompt_review::PromptReview::new(
             tab_id, revision, range, selection, prepared,
         ));

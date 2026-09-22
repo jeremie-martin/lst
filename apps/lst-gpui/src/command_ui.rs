@@ -255,7 +255,7 @@ impl LstGpuiApp {
         }
     }
 
-    fn dismiss_focus_surfaces(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dismiss_focus_surfaces(&mut self, cx: &mut Context<Self>) {
         if self.workspace_surface == WorkspaceSurface::Settings {
             self.settings_overlay = crate::settings_ui::SettingsOverlay::None;
             self.settings_selection.clear();
