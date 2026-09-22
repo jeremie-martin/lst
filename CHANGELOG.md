@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a bottom-bar Polish Prompt button
+
 - Replace AI text cleanup with Polish Agent Prompt, using the installed `prompt-add` filter and its editorial behavior and history
 
 - Cut key-to-paint latency roughly in half on X11 (navigation p50 10.6 -> 5.3 ms, typing 11.2 -> 6.8 ms) by drawing right after input instead of at the next refresh tick, and animate scrolling at the monitor's refresh rate

@@ -39,9 +39,10 @@ if os.environ.get('LST_TEST_PROMPT_WARNING'):
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn cleanup_replaces_whole_buffer_inline_with_atomic_undo() -> TestResult {
+fn polish_button_replaces_whole_buffer_inline_with_atomic_undo() -> TestResult {
     support::run_x11_test("llm-cleanup-whole", |session| {
         let screenshot = session.artifacts().join("prompt-confirmation.ppm");
+        let button_screenshot = session.artifacts().join("prompt-button.ppm");
         let original = "um, hello, world";
         let canned = "Hello, world.\n";
         let filter_path = install_filter(session)?;
@@ -55,7 +56,8 @@ fn cleanup_replaces_whole_buffer_inline_with_atomic_undo() -> TestResult {
         editor.save_then_expect_file(&path, original)?;
 
         let before = editor.read_state()?;
-        editor.keys("<C-S-p>polish agent prompt<enter>")?;
+        editor.screenshot()?.write_ppm(&button_screenshot)?;
+        editor.click_cleanup_button()?;
         let confirmation = editor.wait_state("whole-document cleanup confirmation", secs(3), |record| {
             record.cleanup_confirmation_open && record.focused_input == "cleanup_confirmation"
         })?;
@@ -93,7 +95,7 @@ fn whole_document_cleanup_confirmation_can_be_cancelled_without_editing() -> Tes
         editor.save_then_expect_file(&path, original)?;
 
         let before = editor.read_state()?;
-        editor.keys("<C-S-p>polish agent prompt<enter>")?;
+        editor.click_cleanup_button()?;
         editor.wait_state("whole-document cleanup confirmation", secs(3), |record| {
             record.cleanup_confirmation_open && record.focused_input == "cleanup_confirmation"
         })?;
@@ -102,13 +104,15 @@ fn whole_document_cleanup_confirmation_can_be_cancelled_without_editing() -> Tes
             !record.cleanup_confirmation_open && record.revision == before.revision
         })?;
         editor.expect_file(&path, original)?;
+        editor.keys("!")?;
+        editor.save_then_expect_file(&path, "um, hello, world!")?;
         Ok(())
     })
 }
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn cleanup_replaces_only_the_selection_with_atomic_undo() -> TestResult {
+fn polish_button_replaces_only_the_selection_with_atomic_undo() -> TestResult {
     support::run_x11_test("llm-cleanup-selection", |session| {
         let original = "before\num middle\nafter";
         let cleaned = "before\nmiddle\nafter";
@@ -128,7 +132,7 @@ fn cleanup_replaces_only_the_selection_with_atomic_undo() -> TestResult {
         editor.keys("<C-home><down><S-end>")?;
 
         let before = editor.read_state()?;
-        editor.keys("<C-S-p>polish agent prompt<enter>")?;
+        editor.click_cleanup_button()?;
         editor.wait_state("cleanup applied", secs(5), |record| record.revision > before.revision)?;
         editor.save_then_expect_file(&path, cleaned)?;
 

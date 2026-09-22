@@ -77,8 +77,9 @@ and precedence rules.
 
 ## Agent prompt polishing
 
-**Polish Agent Prompt** runs the installed `prompt-add` executable on the active
-selection. Without a selection, it asks before submitting the whole document.
+Click **Polish Prompt** in the bottom bar.
+The **Polish Agent Prompt** command is also available in the command palette.
+It runs the installed `prompt-add` executable on the active selection. Without a selection, it asks before submitting the whole document.
 The result replaces the text as one undo step; failed requests or results for a
 changed buffer leave the document untouched.
 

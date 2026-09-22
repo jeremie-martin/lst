@@ -2447,6 +2447,7 @@ impl LstGpuiApp {
         let Some(confirmation) = self.cleanup_confirmation.take() else {
             return;
         };
+        self.force_editor_focus = true;
         let Some(tab) = self.model.tab_by_id(confirmation.tab_id) else {
             cx.notify();
             return;
@@ -2463,6 +2464,7 @@ impl LstGpuiApp {
 
     pub(crate) fn cancel_cleanup_confirmation(&mut self, cx: &mut Context<Self>) {
         if self.cleanup_confirmation.take().is_some() {
+            self.force_editor_focus = true;
             cx.notify();
         }
     }

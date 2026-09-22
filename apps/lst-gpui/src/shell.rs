@@ -1149,6 +1149,45 @@ impl LstGpuiApp {
         self.status_details_rendered = status_details.clone();
         self.cleanup_button_bounds_px = None;
         self.theme_button_bounds_px = None;
+        let polishing = self.cleanup_in_flight;
+        let polish_enabled = !polishing && self.active_tab().buffer().len_chars() > 0;
+        let entity = cx.entity();
+        let polish_button = div()
+            .flex_none()
+            .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, window, cx| {
+                entity.update(cx, |this, _| {
+                    this.cleanup_button_bounds_px = bounds.first().copied();
+                    this.emit_state_trace(window);
+                });
+            })
+            .child(
+                div()
+                    .id("polish-prompt-button")
+                    .flex_none()
+                    .px_2()
+                    .rounded_sm()
+                    .bg(rgb(theme.role.control_bg))
+                    .text_color(rgb(if polish_enabled {
+                        theme.role.text
+                    } else {
+                        theme.role.text_muted
+                    }))
+                    .when(polish_enabled, |button| {
+                        button
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.force_editor_focus = true;
+                                this.dispatch_workspace_command(
+                                    crate::workspace_action::WorkspaceCommand::CleanupText,
+                                    window,
+                                    cx,
+                                );
+                                cx.stop_propagation();
+                            }))
+                    })
+                    .child(if polishing { "Polishing…" } else { "Polish Prompt" }),
+            );
         div()
             .flex_none()
             .flex()
@@ -1174,6 +1213,7 @@ impl LstGpuiApp {
                             .unwrap_or_else(|| self.model.status().to_string()),
                     ),
             )
+            .child(polish_button)
             .child(
                 div()
                     .flex()
