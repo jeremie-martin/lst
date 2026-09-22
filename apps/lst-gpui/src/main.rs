@@ -10,7 +10,7 @@ mod diagnostics;
 mod editor_view;
 mod input;
 mod launch;
-mod llm;
+mod prompt_add;
 mod recent;
 mod runtime;
 mod settings;

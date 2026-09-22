@@ -85,6 +85,8 @@ edit the TOML file to change them.
 
 ## Other runtime configuration
 
-AI cleanup uses `DEEPSEEK_API_KEY`. `DEEPSEEK_MODEL` optionally replaces the
-built-in model name. These values are read when a cleanup request starts and
-are not stored in the settings file.
+Prompt polishing runs `prompt-add` from `PATH`, inheriting the editor's
+`DEEPSEEK_API_KEY`. Install and configure that tool separately; it owns model
+selection and local rewrite history. `DEEPSEEK_MODEL` is no longer used by lst.
+The command is named **Polish Agent Prompt** and retains `tools.cleanup_text`
+for existing keybindings.

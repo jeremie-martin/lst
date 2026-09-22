@@ -1623,7 +1623,7 @@ impl LstGpuiApp {
                         div()
                             .text_size(metrics::px_for_scale(metrics::UI_TEXT_HEADING, scale))
                             .text_color(rgb(theme.role.text))
-                            .child("Clean up the entire document?"),
+                            .child("Polish the entire document as an agent prompt?"),
                     )
                     .child(
                         div()
@@ -1631,7 +1631,7 @@ impl LstGpuiApp {
                             .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
                             .text_color(rgb(theme.role.text_subtle))
                             .child(format!(
-                                "No text is selected in {identity}. The complete document will be sent to the configured AI service."
+                                "No text is selected in {identity}. prompt-add will send the complete document to DeepSeek and save its rewrite history locally."
                             )),
                     )
                     .child(
@@ -1650,7 +1650,7 @@ impl LstGpuiApp {
                             .child(
                                 file_conflict_button(
                                     "cleanup-confirm-submit",
-                                    "Clean Entire Document (Enter)",
+                                    "Polish Entire Document (Enter)",
                                     true,
                                     theme,
                                     scale,

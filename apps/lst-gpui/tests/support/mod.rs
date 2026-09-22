@@ -103,8 +103,8 @@ impl ScratchpadSession {
     }
 
     /// Same as [`open`], but exports `extra_env` to the spawned editor.
-    /// Threads through to `SpawnOpts::extra_env` so test seams (like the
-    /// `LST_LLM_FAKE_RESPONSE` fake LLM client) can be activated per-test
+    /// Threads through to `SpawnOpts::extra_env` so boundary fixtures (like a
+    /// `prompt-add` executable on PATH) can be selected per-test
     /// without leaking into the parent process or other tests.
     pub fn open_with_env(
         &mut self,

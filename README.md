@@ -75,17 +75,19 @@ Settings are available in the application and persist to
 See [Configuration](docs/configuration.md) for the schema, keybinding format,
 and precedence rules.
 
-## AI text cleanup
+## Agent prompt polishing
 
-The **Clean Up Text with AI** command sends the active selection to DeepSeek.
-Without a selection, the application asks for confirmation before sending the
-whole document. The replacement is one undo step.
+**Polish Agent Prompt** runs the installed `prompt-add` executable on the active
+selection. Without a selection, it asks before submitting the whole document.
+The result replaces the text as one undo step; failed requests or results for a
+changed buffer leave the document untouched.
 
-```sh
-export DEEPSEEK_API_KEY=...
-# Optional; the built-in default is shown in apps/lst-gpui/src/llm.rs.
-export DEEPSEEK_MODEL=...
-```
+Install `prompt-add` separately and make it available on `PATH`. It inherits
+`DEEPSEEK_API_KEY` from the editor's environment and owns the model and editorial
+instructions. It sends the submitted text to DeepSeek and keeps its normal local
+history, labeled `lst`. The integration does not access the clipboard.
+
+The command retains the `tools.cleanup_text` ID for existing custom shortcuts.
 
 ## Development
 

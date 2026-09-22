@@ -94,7 +94,7 @@ than scattering fallback checks through the core.
   character-coordinate types.
 - `viewport.rs`, `editor_view.rs`, `shell.rs`, and `ui/` own layout, painting,
   hit testing, and widgets.
-- `llm.rs` is the DeepSeek client. The runtime confirms whole-document sharing
+- `prompt_add.rs` runs the installed prompt-add filter through stdin/stdout. The runtime confirms whole-document sharing
   and applies a response only if the tab and revision still match the request.
 
 External failures remain explicit at this boundary. A clean file changed on

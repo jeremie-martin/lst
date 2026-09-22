@@ -1128,7 +1128,7 @@ impl LstGpuiApp {
             return;
         }
         if self.cleanup_in_flight {
-            self.cleanup_message = Some("Wait for text cleanup to finish before quitting.".to_string());
+            self.cleanup_message = Some("Wait for prompt polishing to finish before quitting.".to_string());
             self.force_editor_focus = true;
             cx.notify();
             return;
@@ -2428,14 +2428,14 @@ impl LstGpuiApp {
             match tab.selected_text() {
                 Some(text) if !text.is_empty() => self.begin_cleanup(tab_id, revision, range, text, cx),
                 _ => {
-                    self.cleanup_message = Some("Nothing to clean up.".to_string());
+                    self.cleanup_message = Some("Nothing to polish.".to_string());
                     cx.notify();
                 }
             }
             return;
         }
         if tab.buffer().len_chars() == 0 {
-            self.cleanup_message = Some("Nothing to clean up.".to_string());
+            self.cleanup_message = Some("Nothing to polish.".to_string());
             cx.notify();
             return;
         }
@@ -2452,7 +2452,7 @@ impl LstGpuiApp {
             return;
         };
         if self.model.active_tab_id() != confirmation.tab_id || tab.revision() != confirmation.revision {
-            self.cleanup_message = Some("Document changed; cleanup was cancelled.".to_string());
+            self.cleanup_message = Some("Document changed; prompt polishing was cancelled.".to_string());
             cx.notify();
             return;
         }
@@ -2475,23 +2475,14 @@ impl LstGpuiApp {
         source_text: String,
         cx: &mut Context<Self>,
     ) {
-        let client = match build_llm_client() {
-            Ok(client) => client,
-            Err(message) => {
-                self.cleanup_message = Some(message);
-                cx.notify();
-                return;
-            }
-        };
-
         self.cleanup_in_flight = true;
-        self.cleanup_message = Some("\u{27F3} Cleaning\u{2026}".to_string());
+        self.cleanup_message = Some("\u{27F3} Polishing\u{2026}".to_string());
         cx.notify();
 
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { client.cleanup(&source_text) })
+                .spawn(async move { crate::prompt_add::rewrite(&source_text) })
                 .await;
             let _ = this.update(cx, |app, cx| {
                 app.cleanup_in_flight = false;
@@ -2509,7 +2500,7 @@ impl LstGpuiApp {
         tab_id: TabId,
         revision: u64,
         range: Range<usize>,
-        cleaned: String,
+        cleaned: crate::prompt_add::Rewrite,
         cx: &mut Context<Self>,
     ) {
         let stale = match self.model.tab_by_id(tab_id) {
@@ -2517,43 +2508,26 @@ impl LstGpuiApp {
             None => true,
         };
         if stale {
-            self.cleanup_message = Some("Buffer changed during cleanup; result discarded.".to_string());
+            self.cleanup_message = Some("Buffer changed during prompt polishing; result discarded.".to_string());
             cx.notify();
             return;
         }
 
-        self.update_model(cx, true, |model| {
-            model.replace_text(Some(range), cleaned, UndoBoundary::Break);
+        self.update_model(cx, false, |model| {
+            model.replace_text(Some(range), cleaned.text, UndoBoundary::Break);
         });
-    }
-
-    fn finish_cleanup_with_error(&mut self, err: crate::llm::LlmError, cx: &mut Context<Self>) {
-        self.cleanup_message = Some(format!("Cleanup failed: {err}"));
+        self.cleanup_message = Some(if cleaned.warning.is_empty() {
+            "Prompt polished.".to_string()
+        } else {
+            format!("Prompt polished. {}", cleaned.warning)
+        });
         cx.notify();
     }
-}
 
-fn build_llm_client() -> Result<Box<dyn crate::llm::LlmClient>, String> {
-    if let Some(canned) = std::env::var("LST_LLM_FAKE_RESPONSE").ok().filter(|s| !s.is_empty()) {
-        let delay_ms = std::env::var("LST_LLM_FAKE_DELAY_MS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        return Ok(Box::new(crate::llm::FakeLlmClient::new(
-            canned,
-            Duration::from_millis(delay_ms),
-        )));
+    fn finish_cleanup_with_error(&mut self, err: String, cx: &mut Context<Self>) {
+        self.cleanup_message = Some(format!("Prompt polishing failed: {err}"));
+        cx.notify();
     }
-
-    let api_key = match std::env::var("DEEPSEEK_API_KEY") {
-        Ok(value) if !value.is_empty() => value,
-        _ => return Err("DEEPSEEK_API_KEY not set".to_string()),
-    };
-    let model_name = std::env::var("DEEPSEEK_MODEL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| crate::llm::DEFAULT_DEEPSEEK_MODEL.to_string());
-    Ok(Box::new(crate::llm::DeepSeekClient::new(api_key, model_name)))
 }
 
 #[cfg(test)]

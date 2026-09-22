@@ -570,7 +570,7 @@ fn command_title(id: &str) -> String {
         "navigation.goto_line" => Some("Go to Line or Column"),
         "view.toggle_word_wrap" => Some("Toggle Word Wrap"),
         "view.cycle_line_numbers" => Some("Cycle Line Number Mode"),
-        "tools.cleanup_text" => Some("Clean Up Text with AI"),
+        "tools.cleanup_text" => Some("Polish Agent Prompt"),
         "selection.add_next_occurrence" => Some("Add Selection to Next Match"),
         "selection.select_all_occurrences" => Some("Select All Occurrences"),
         "selection.add_cursors_line_ends" => Some("Add Cursors to Line Ends"),
