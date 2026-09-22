@@ -581,3 +581,33 @@ fn selection_drag_tokens_reject_stale_document_revisions() {
     assert!(!harness.model.drag_selection_token_to(&token, 6, false));
     assert_eq!(harness.text(), "abcdef!");
 }
+
+#[test]
+fn external_append_waits_for_ime_and_rejects_missing_targets() {
+    let mut harness = ModelHarness::new("prefix ");
+    let id = harness.model.active_tab_id();
+    harness.model.move_to_char(7, false, None);
+    harness.model.replace_and_mark_text(None, "draft".into(), None);
+    let revision = harness.model.active_tab().revision();
+    let marked = harness.model.active_tab().marked_range().cloned();
+    assert!(marked.is_some());
+    assert!(!harness.model.append_text_to_tab(id, "spoken"));
+    assert_eq!(harness.model.active_tab().revision(), revision);
+    assert_eq!(harness.model.active_tab().marked_range(), marked.as_ref());
+    harness.model.clear_marked_text();
+    assert!(harness.model.append_text_to_tab(id, "spoken"));
+    assert_eq!(harness.model.active_tab().buffer().to_string(), "prefix draft spoken");
+    assert!(!harness.model.append_text_to_tab(TabId::from_raw(999), "lost"));
+    assert_eq!(harness.model.active_tab().buffer().to_string(), "prefix draft spoken");
+}
+
+#[test]
+fn external_append_preserves_a_normal_mode_caret_in_an_empty_document() {
+    let mut harness = ModelHarness::new("");
+    harness.model.set_input_mode(InputMode::Vim);
+    harness.model.handle_vim_escape();
+    let id = harness.model.active_tab_id();
+    assert!(harness.model.append_text_to_tab(id, "spoken"));
+    assert_eq!(harness.model.vim_mode(), lst_editor::vim::Mode::Normal);
+    assert_eq!(harness.model.selection(), Selection::collapsed(0));
+}

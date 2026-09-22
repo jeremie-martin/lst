@@ -24,7 +24,7 @@ use crate::{
     WorkspaceSurface,
 };
 
-pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 10;
+pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 11;
 
 /// Holds the state-trace path and emitter state. Constructed once at app
 /// init from the env var; subsequent calls to `try_emit` are no-ops when
@@ -140,6 +140,7 @@ pub(crate) struct StateTraceRecord {
     pub quit_review_message: Option<String>,
     pub file_conflict_path: Option<String>,
     pub file_conflict_button_bounds_px: TraceFileConflictButtonBounds,
+    pub voice_status: Option<String>,
     pub cleanup_confirmation_open: bool,
     pub prompt_review_view: Option<String>,
     pub status_message: String,
@@ -322,6 +323,7 @@ impl LstGpuiApp {
         let theme_button_bounds_px = trace_bounds(self.theme_button_bounds_px);
         StateTraceRecord {
             schema_version: STATE_TRACE_SCHEMA_VERSION,
+            voice_status: self.voice.status(),
             seq,
             revision: tab.revision(),
             active_tab_index: self.model.active_index(),

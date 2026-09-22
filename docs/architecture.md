@@ -98,6 +98,15 @@ than scattering fallback checks through the core.
   use the actual selection. One critically damped spring moves the caret
   without changing its shape. Scrolling translates motion with the document;
   tab and layout changes reset it. Blinking preserves the last caret position.
+- `voice/` owns native microphone capture, temporary WAV files, the ordered
+  batch transcription queue, and the recording toolbar. A session owns one
+  target tab; unfinished sessions prevent that tab from closing. Successful
+  segments are appended once through `EditorModel::append_text_to_tab`, with
+  one history boundary per segment and no replacement of earlier text. Failed
+  segments block later uploads until explicitly retried or cancelled. Only
+  finalized text crosses into the editor domain. Recording and HTTP work run
+  off the UI thread; the UI polls only while a session exists. Dropping a
+  session stops capture and detaches late results.
 - `prompt_add.rs` runs the installed prompt-add filter with a 60-second deadline
   covering input, output, and exit. Nonblocking pipes keep every phase bounded;
   failure terminates its private process group and reaps the child. The runtime

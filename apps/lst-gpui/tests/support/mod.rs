@@ -95,11 +95,11 @@ impl ScratchpadSession {
     /// will write to plus the focused [`Editor`] handle. The autosave path
     /// already exists at return time.
     pub fn open(&mut self, name: &str) -> SupportResult<(Editor<'_>, PathBuf)> {
-        self.open_scratchpad(name, &[], false)
+        self.open_scratchpad(name, &[], false, false)
     }
 
     pub fn open_vim(&mut self, name: &str) -> SupportResult<(Editor<'_>, PathBuf)> {
-        self.open_scratchpad(name, &[], true)
+        self.open_scratchpad(name, &[], true, false)
     }
 
     /// Same as [`open`], but exports `extra_env` to the spawned editor.
@@ -111,7 +111,15 @@ impl ScratchpadSession {
         name: &str,
         extra_env: &[(&OsStr, &OsStr)],
     ) -> SupportResult<(Editor<'_>, PathBuf)> {
-        self.open_scratchpad(name, extra_env, false)
+        self.open_scratchpad(name, extra_env, false, false)
+    }
+
+    pub fn open_dictation_with_env(
+        &mut self,
+        name: &str,
+        extra_env: &[(&OsStr, &OsStr)],
+    ) -> SupportResult<(Editor<'_>, PathBuf)> {
+        self.open_scratchpad(name, extra_env, false, true)
     }
 
     fn open_scratchpad(
@@ -119,6 +127,7 @@ impl ScratchpadSession {
         name: &str,
         extra_env: &[(&OsStr, &OsStr)],
         vim: bool,
+        dictate: bool,
     ) -> SupportResult<(Editor<'_>, PathBuf)> {
         let dir = self.root.join(name);
         fs::create_dir_all(&dir)?;
@@ -127,8 +136,12 @@ impl ScratchpadSession {
         if vim {
             args.push(OsStr::new("--vim"));
         }
-        args.push(OsStr::new("--scratchpad-dir"));
-        args.push(dir.as_os_str());
+        if dictate {
+            args.push(OsStr::new("--dictate"));
+        } else {
+            args.push(OsStr::new("--scratchpad-dir"));
+            args.push(dir.as_os_str());
+        }
         let stderr_log_path = self.stderr_log_path(name);
         let state_trace_path = self.state_trace_path(name);
         let (stdout, stderr) = self.log_stdio(name)?;
@@ -143,7 +156,18 @@ impl ScratchpadSession {
             stderr_log_path: Some(&stderr_log_path),
             state_trace_path: Some(&state_trace_path),
         })?;
-        let path = wait_for_single_file(&dir, SCRATCHPAD_DISCOVERY)?;
+        let path = if dictate {
+            PathBuf::from(
+                editor
+                    .wait_state("dictation note", SCRATCHPAD_DISCOVERY, |s| {
+                        s.voice_status.as_deref().is_some_and(|s| s.starts_with("Recording"))
+                    })?
+                    .active_tab_path
+                    .ok_or("missing voice note path")?,
+            )
+        } else {
+            wait_for_single_file(&dir, SCRATCHPAD_DISCOVERY)?
+        };
         editor.click_center()?;
         editor.wait_quiet(FOCUS_QUIET, FOCUS_TIMEOUT)?;
         editor.wait_text_viewport(FOCUS_TIMEOUT)?;

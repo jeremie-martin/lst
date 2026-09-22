@@ -50,6 +50,10 @@ trim_trailing_whitespace = false
 ensure_final_newline = false
 # scratchpad_directory = "/home/me/notes"
 
+[voice]
+language = "en"                           # auto or language code
+# directory = "/home/me/audio-notes"        # defaults to ~/audio-notes
+
 [keybindings]
 ```
 
@@ -93,3 +97,33 @@ Prompt polishing runs `prompt-add` from `PATH`, inheriting the editor's
 selection and local rewrite history. `DEEPSEEK_MODEL` is no longer used by lst.
 The command is named **Polish Agent Prompt** and retains `tools.cleanup_text`
 for existing keybindings. It has no default keyboard shortcut.
+
+## Voice notes
+
+Voice notes use the default microphone and ElevenLabs Scribe v2 batch
+transcription. Set `ELEVENLABS_API_KEY` in the environment that launches LST;
+LST does not load another project's `.env` file or store the key in settings.
+`[voice].language` accepts `auto` or a lowercase two/three-letter language code
+(default `en`). `[voice].directory` overrides `~/audio-notes`. These two options
+are edited in TOML and apply to the next recording session.
+
+Voice commands have no default shortcuts. For example:
+
+```toml
+[keybindings]
+"voice.new_note" = ["ctrl-shift-r"]
+"voice.pause_resume" = ["f7"]
+"voice.finish" = ["f8"]
+"voice.cancel" = ["shift-f8"]
+"voice.retry" = ["f9"]
+```
+
+**Cancel Pending Dictation** stops the microphone and discards uninserted audio
+and results. Text already inserted stays in the document and remains undoable.
+An upload already in progress may finish at the service, but its result cannot
+enter this or a later session. Failed uploads keep their temporary WAV files
+until retry succeeds or the session is cancelled. Retention lasts for the
+running session, not across application crashes. Each recording segment is
+limited to 15 minutes; resume to record another. At most 16 segments can wait
+for transcription. Requests have a two-minute timeout and are retried only on
+request, because another request can incur another service charge.

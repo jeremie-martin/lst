@@ -1,3 +1,4 @@
+use crate::voice::VoiceAction;
 use gpui::{Context, Div, InteractiveElement, KeyBinding, Keystroke, Modifiers, Window};
 use lst_editor::EditorCommand as Command;
 
@@ -24,6 +25,11 @@ pub(crate) enum WorkspaceCommand {
     OpenQuickRecent,
     ToggleRecentFiles,
     CleanupText,
+    NewVoiceNote,
+    ToggleVoice,
+    FinishVoice,
+    CancelVoice,
+    RetryVoice,
     MoveVertical(isize, bool),
     ScrollLines(isize),
     Page(bool, bool),
@@ -273,6 +279,11 @@ const BINDINGS: &[WorkspaceBinding] = &[
 ];
 
 const UNBOUND_BINDINGS: &[WorkspaceBinding] = &[
+    b("", WS, WorkspaceCommand::NewVoiceNote),
+    b("", WS, WorkspaceCommand::ToggleVoice),
+    b("", WS, WorkspaceCommand::FinishVoice),
+    b("", WS, WorkspaceCommand::CancelVoice),
+    b("", WS, WorkspaceCommand::RetryVoice),
     b("", EDITOR, model(Command::ColumnSelectLeft)),
     b("", EDITOR, model(Command::ColumnSelectRight)),
     b("", EDITOR, model(Command::ColumnSelectUp)),
@@ -340,6 +351,11 @@ pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
         WorkspaceCommand::OpenQuickRecent => "file.quick_open",
         WorkspaceCommand::ToggleRecentFiles => "file.open_recent",
         WorkspaceCommand::CleanupText => "tools.cleanup_text",
+        WorkspaceCommand::NewVoiceNote => "voice.new_note",
+        WorkspaceCommand::ToggleVoice => "voice.pause_resume",
+        WorkspaceCommand::FinishVoice => "voice.finish",
+        WorkspaceCommand::CancelVoice => "voice.cancel",
+        WorkspaceCommand::RetryVoice => "voice.retry",
         WorkspaceCommand::MoveVertical(-1, false) => "cursor.up",
         WorkspaceCommand::MoveVertical(1, false) => "cursor.down",
         WorkspaceCommand::MoveVertical(-1, true) => "cursor.up_select",
@@ -549,6 +565,7 @@ fn command_category(id: &str) -> &'static str {
         "find" | "navigation" => "Navigate",
         "view" => "View",
         "tools" => "Tools",
+        "voice" => "Voice",
         "workbench" => "Preferences",
         _ => "Other",
     }
@@ -572,6 +589,11 @@ fn command_title(id: &str) -> String {
         "view.toggle_word_wrap" => Some("Toggle Word Wrap"),
         "view.cycle_line_numbers" => Some("Cycle Line Number Mode"),
         "tools.cleanup_text" => Some("Polish Agent Prompt"),
+        "voice.new_note" => Some("New Voice Note"),
+        "voice.pause_resume" => Some("Pause / Resume Dictation"),
+        "voice.finish" => Some("Finish Dictation"),
+        "voice.cancel" => Some("Cancel Pending Dictation"),
+        "voice.retry" => Some("Retry Transcription"),
         "selection.add_next_occurrence" => Some("Add Selection to Next Match"),
         "selection.select_all_occurrences" => Some("Select All Occurrences"),
         "selection.add_cursors_line_ends" => Some("Add Cursors to Line Ends"),
@@ -683,6 +705,11 @@ impl LstGpuiApp {
             WorkspaceCommand::Model(command) => {
                 self.execute_model_command(cx, command);
             }
+            WorkspaceCommand::NewVoiceNote => self.start_voice_note(cx),
+            WorkspaceCommand::ToggleVoice => self.voice_action(VoiceAction::Toggle, cx),
+            WorkspaceCommand::FinishVoice => self.voice_action(VoiceAction::Finish, cx),
+            WorkspaceCommand::CancelVoice => self.voice_action(VoiceAction::Cancel, cx),
+            WorkspaceCommand::RetryVoice => self.voice_action(VoiceAction::Retry, cx),
             WorkspaceCommand::NewTab => {
                 self.request_new_tab(cx);
             }

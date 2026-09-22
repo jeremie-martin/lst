@@ -12,7 +12,8 @@ handling.
 
 ## Run from source
 
-A Rust toolchain and a graphical session are required.
+A Rust toolchain, a graphical session, and ALSA development headers
+(`libasound2-dev` on Debian/Ubuntu) are required.
 
 ```sh
 cargo build --release -p lst-gpui
@@ -83,6 +84,31 @@ In standard mode, hold a horizontal and vertical arrow together to move diagonal
 at the system key-repeat rate. Short and empty rows preserve the intended column;
 horizontal movement stays within the destination row. Modified or remapped arrow shortcuts keep their
 existing behavior.
+
+## Voice notes
+
+Click **Voice Note**, choose **New Voice Note** in the command palette, or launch
+`lst --dictate` to open a fresh note and start the default microphone. Export
+`ELEVENLABS_API_KEY` in LST's launch environment first.
+
+**Pause** sends the recorded segment to ElevenLabs Scribe v2. **Resume** records
+another segment while earlier ones can finish transcribing. Completed text
+appends to the owning note, preserving your edits and other tabs; each segment
+is one undo step. **Finish** stops recording and waits for pending results,
+leaving the note open for review or prompt polishing. **Retry** resubmits a
+failed segment without repeating successful ones. **Cancel pending** discards
+unfinished dictation and keeps text already inserted.
+
+Voice notes are timestamped Markdown scratchpads under `~/audio-notes`, saved
+through the editor's normal save and conflict handling. This is the editable
+note; no separate immutable transcript archive is created. Microphone activity,
+elapsed time, and transcription errors appear above the status bar. Finish or
+cancel before closing a recording note or quitting. Batch mode has no partial
+transcripts; live streaming, local inference, and insertion into existing
+documents are not implemented.
+
+See [voice configuration](docs/configuration.md#voice-notes) for language,
+storage, shortcuts, and retry behavior.
 
 ## Agent prompt polishing
 

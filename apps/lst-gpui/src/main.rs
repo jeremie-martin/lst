@@ -23,6 +23,7 @@ mod state_trace;
 mod syntax;
 mod ui;
 mod viewport;
+mod voice;
 mod workspace_action;
 
 use crate::ui::{
@@ -307,6 +308,7 @@ impl EditorTabView {
 }
 
 struct LstGpuiApp {
+    voice: voice::Voice,
     focus_handle: FocusHandle,
     /// Real focus target for non-input workspace surfaces. This is separate
     /// from the editor input handle so IME/text events cannot mutate the
@@ -628,6 +630,7 @@ impl LstGpuiApp {
             cleanup_in_flight: false,
             cleanup_confirmation: None,
             prompt_review: None,
+            voice: voice::Voice::default(),
             cleanup_message: None,
             clipboard_quit_bypass: None,
             passive_occurrence_query: None,
@@ -693,6 +696,13 @@ impl LstGpuiApp {
             }),
         );
 
+        if launch.dictate {
+            let initial = app.model.active_tab_id();
+            app.start_voice_note(cx);
+            if launch.files.is_empty() && app.model.active_tab_id() != initial {
+                app.request_close_tab_at(0, cx);
+            }
+        }
         app
     }
 

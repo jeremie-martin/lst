@@ -191,11 +191,28 @@ impl Default for FileSettings {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
+pub(crate) struct VoiceSettings {
+    pub(crate) language: String,
+    pub(crate) directory: Option<PathBuf>,
+}
+
+impl Default for VoiceSettings {
+    fn default() -> Self {
+        Self {
+            language: "en".into(),
+            directory: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
 pub(crate) struct AppSettings {
     pub(crate) version: u32,
     pub(crate) editor: EditorSettings,
     pub(crate) appearance: AppearanceSettings,
     pub(crate) files: FileSettings,
+    pub(crate) voice: VoiceSettings,
     pub(crate) keybindings: BTreeMap<String, Vec<String>>,
 }
 
@@ -206,6 +223,7 @@ impl Default for AppSettings {
             editor: EditorSettings::default(),
             appearance: AppearanceSettings::default(),
             files: FileSettings::default(),
+            voice: VoiceSettings::default(),
             keybindings: BTreeMap::new(),
         }
     }
@@ -445,6 +463,14 @@ fn write_settings_to_document(document: &mut DocumentMut, settings: &AppSettings
         files.remove("scratchpad_directory");
     }
 
+    ensure_table(document, "voice");
+    document["voice"]["language"] = value(&settings.voice.language);
+    if let Some(path) = &settings.voice.directory {
+        document["voice"]["directory"] = value(path.to_string_lossy().as_ref());
+    } else if let Some(table) = document["voice"].as_table_mut() {
+        table.remove("directory");
+    }
+
     ensure_table(document, "keybindings");
     let table = document["keybindings"].as_table_mut().expect("keybindings is a table");
     table.clear();
@@ -522,6 +548,18 @@ mod tests {
 
         assert!(toml_edit::de::from_str::<AppSettings>("version = 1\n[editor]\nrulers = [0]\n").is_err());
         assert!(toml_edit::de::from_str::<AppSettings>("version = 1\n[editor]\nrulers = [1001]\n").is_err());
+    }
+
+    #[test]
+    fn voice_settings_survive_unrelated_settings_updates() {
+        let source = "version = 1\n[voice]\nlanguage = 'auto'\ndirectory = '/tmp/voice-notes'\n";
+        let mut settings: AppSettings = toml_edit::de::from_str(source).unwrap();
+        let mut document: DocumentMut = source.parse().unwrap();
+        settings.editor.font_size = 17;
+        write_settings_to_document(&mut document, &settings);
+        let restored: AppSettings = toml_edit::de::from_str(&document.to_string()).unwrap();
+        assert_eq!(restored.voice, settings.voice);
+        assert_eq!(restored.editor.font_size, 17);
     }
 
     #[test]

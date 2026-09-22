@@ -5,6 +5,7 @@ use std::{fmt, path::PathBuf, process};
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LaunchArgs {
     pub(crate) files: Vec<PathBuf>,
+    pub(crate) dictate: bool,
     pub(crate) window_title: Option<String>,
     pub(crate) scratchpad_dir: Option<PathBuf>,
     pub(crate) input_mode: Option<InputMode>,
@@ -32,6 +33,7 @@ fn usage() -> &'static str {
   lst [OPTIONS] [FILES...]
 
 Options:
+  --dictate                 Open a new voice note and start recording
   --title TITLE             Set the window title
   --scratchpad-dir PATH     Store newly created scratchpads in PATH
   --vim                     Start in Vim input mode
@@ -74,6 +76,7 @@ where
             "--version" | "-V" => {
                 return Err(LaunchArgError::Version);
             }
+            "--dictate" => args.dictate = true,
             "--vim" => args.input_mode = Some(InputMode::Vim),
             "--no-vim" => args.input_mode = Some(InputMode::Standard),
             _ if arg.starts_with("--title=") => {
@@ -109,6 +112,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dictation_launch_preserves_explicit_files_and_input_mode() {
+        let args = parse_launch_args_from(["--dictate", "--vim", "notes.md"]).unwrap();
+        assert!(args.dictate);
+        assert_eq!(args.input_mode, Some(InputMode::Vim));
+        assert_eq!(args.files, [PathBuf::from("notes.md")]);
+    }
 
     #[test]
     fn version_flags_request_the_reproducible_build_identity() {

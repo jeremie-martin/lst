@@ -1213,6 +1213,26 @@ impl LstGpuiApp {
                             .unwrap_or_else(|| self.model.status().to_string()),
                     ),
             )
+            .child(
+                div()
+                    .id("new-voice-note")
+                    .flex_none()
+                    .px_2()
+                    .rounded_sm()
+                    .bg(rgb(theme.role.control_bg))
+                    .text_color(rgb(theme.role.text))
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dispatch_workspace_command(
+                            crate::workspace_action::WorkspaceCommand::NewVoiceNote,
+                            window,
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }))
+                    .child("Voice Note"),
+            )
             .child(polish_button)
             .child(
                 div()
@@ -2313,6 +2333,9 @@ impl Render for LstGpuiApp {
                         viewport.child(self.render_recent_quick_picker(cx))
                     }),
             )
+            .when(self.voice.status().is_some(), |root| {
+                root.child(self.render_voice_bar(cx))
+            })
             .child(if self.prompt_review.is_some() {
                 div()
                     .flex_none()

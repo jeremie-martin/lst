@@ -629,6 +629,49 @@ impl EditorModel {
         let request = text_input::replace_request(self.active_tab(), range, text, boundary);
         self.apply_active_edit_request(request, Some(RevealIntent::NearestEdge));
     }
+    /// Append a completed external segment to its owning document without
+    /// replacing earlier edits or moving a selection elsewhere in the note.
+    /// Each segment owns one undo boundary. Missing tabs are never substituted.
+    pub fn append_text_to_tab(&mut self, tab_id: TabId, text: &str) -> bool {
+        let follow_caret = self.input_mode == InputMode::Standard || self.vim.mode == vim::Mode::Insert;
+        let text = text.trim();
+        let Some(tab) = self.tab_mut_by_id(tab_id) else {
+            return false;
+        };
+        if text.is_empty() {
+            return true;
+        }
+        if tab.marked_range().is_some() {
+            return false;
+        }
+        let end = tab.buffer().len_chars();
+        let separator = if end > 0 && !tab.buffer().char(end - 1).is_whitespace() {
+            " "
+        } else {
+            ""
+        };
+        let mut request = EditRequest::other_break(TextChangeSet::single(TextChange::insert(
+            end,
+            format!("{separator}{text}"),
+        )));
+        let selection = tab.selection_set();
+        let follow_end = follow_caret
+            && selection.is_single()
+            && selection.primary().head() == end
+            && !selection.primary().has_selection();
+        if !follow_end {
+            request = request.with_selection_after(SelectionAfter::Exact(selection.clone()));
+        }
+        tab.apply_edit_request(request);
+        if self.active_tab_id() == tab_id {
+            self.sync_find_after_edit();
+            if follow_end {
+                self.queue_reveal(RevealIntent::NearestEdge);
+            }
+        }
+        true
+    }
+
     pub fn replace_and_mark_text(
         &mut self,
         range: Option<Range<usize>>,

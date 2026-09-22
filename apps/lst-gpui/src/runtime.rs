@@ -1084,6 +1084,9 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn request_close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.voice_blocks_close(self.model.tab_id_at(index), cx) {
+            return;
+        }
         if self.close_prompt.is_some()
             || self.quit_review.is_some()
             || self.pending_exit_save.is_some()
@@ -1137,6 +1140,9 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn request_quit(&mut self, cx: &mut Context<Self>) {
+        if self.voice_blocks_close(None, cx) {
+            return;
+        }
         if self.close_prompt.is_some()
             || self.quit_review.is_some()
             || self.pending_exit_save.is_some()
@@ -1777,7 +1783,7 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn request_new_tab(&mut self, cx: &mut Context<Self>) {
-        let directory = self.scratchpad_dir_override().map(Path::to_path_buf);
+        let directory = self.scratchpad_dir.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -1798,16 +1804,6 @@ impl LstGpuiApp {
             });
         })
         .detach();
-    }
-
-    fn scratchpad_dir_override(&self) -> Option<&Path> {
-        self.scratchpad_dir.as_deref().or_else(|| {
-            self.model
-                .tabs()
-                .iter()
-                .find_map(ModelEditorTab::scratchpad_path)
-                .and_then(|path| path.parent())
-        })
     }
 
     fn tab_is_empty_scratchpad(&self, index: usize) -> bool {
