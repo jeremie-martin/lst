@@ -35,6 +35,28 @@ Commands: see `docs/performance.md`.
   current window implementation removes images. No evidence yet to retire the
   glyph cache. Temporary startup phase instrumentation is not a product change.
 
+### Rejected experiment: defer parsing until render
+
+- Composed pending edit batches in original coordinates (borrowed text pieces,
+  no repeated copies of large insertions), deferred syntax synchronization to
+  render, and synchronized explicitly before structure/layout queries. Model
+  invariants, exhaustive small Unicode composition, and randomized disjoint
+  edit sequences passed. Preserved the prototype outside the worktree.
+- Corrected-runner comparisons, three measured runs after priming on both
+  binaries: large typing 1.204 -> 1.205 ms/character; medium 1.048 -> 1.080;
+  plain 0.515 -> 0.510. Both large-file variants still parse **320 times**
+  (~215 ms) for 320 characters. No demonstrated gain; removed the experiment.
+- Root cause: GPUI `Window::dispatch_key_event` draws a dirty window before
+  dispatching the next key event to rebuild its dispatch tree. These are real
+  CPU renders even when the scene is not presented. Deferring parsing to
+  render merely moves it into those draws. Simply skipping them risks stale
+  focus, key contexts and handlers; a batching change needs an explicit,
+  sound input-routing/invalidation design at the framework boundary.
+- Temporary startup instrumentation (removed) puts GPU context creation at
+  ~90–104 ms overlapping ~81–99 ms font discovery, surface creation at
+  ~41–83 ms, pipelines ~7 ms. Checked X11 request round trips were individually
+  below 1 ms; no evidence for another blanket non-blocking setup patch.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off
