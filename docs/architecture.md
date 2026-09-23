@@ -92,8 +92,10 @@ than scattering fallback checks through the core.
 - `syntax/` owns tree-sitter parsers, highlighting, injections, and structural
   snapshots. Parser-derived ranges cross into `lst-editor` only as validated
   character-coordinate types.
-- `tab_strip.rs` owns tab chrome as a cached GPUI child view. Its complete
-  render inputs determine reuse; callbacks operate on current application state.
+- `tab_strip.rs` and `status_bar.rs` own chrome as cached GPUI child views.
+  Complete render inputs determine reuse; callbacks operate on current
+  application state. Test state traces publish after root prepaint so sibling
+  geometry belongs to the same completed layout.
 - `viewport.rs`, `editor_view.rs`, `shell.rs`, and `ui/` own layout, painting,
   hit testing, and widgets. `cursor_motion.rs` optionally animates the painted
   caret position; document positions, hit testing, reveal, and IME geometry always

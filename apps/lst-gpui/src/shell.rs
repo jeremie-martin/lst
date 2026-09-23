@@ -817,11 +817,10 @@ impl LstGpuiApp {
             .flex_none()
             .on_children_prepainted({
                 let entity = entity.clone();
-                move |bounds: Vec<Bounds<Pixels>>, window, cx| {
+                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
                     let captured = bounds.first().copied();
                     entity.update(cx, |this, _| {
                         this.file_conflict_button_bounds_px.reload = captured;
-                        this.emit_state_trace(window);
                     });
                 }
             })
@@ -839,11 +838,10 @@ impl LstGpuiApp {
             .flex_none()
             .on_children_prepainted({
                 let entity = entity.clone();
-                move |bounds: Vec<Bounds<Pixels>>, window, cx| {
+                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
                     let captured = bounds.first().copied();
                     entity.update(cx, |this, _| {
                         this.file_conflict_button_bounds_px.keep_mine = captured;
-                        this.emit_state_trace(window);
                     });
                 }
             })
@@ -861,11 +859,10 @@ impl LstGpuiApp {
             .flex_none()
             .on_children_prepainted({
                 let entity = entity.clone();
-                move |bounds: Vec<Bounds<Pixels>>, window, cx| {
+                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
                     let captured = bounds.first().copied();
                     entity.update(cx, |this, _| {
                         this.file_conflict_button_bounds_px.save_as = captured;
-                        this.emit_state_trace(window);
                     });
                 }
             })
@@ -881,11 +878,10 @@ impl LstGpuiApp {
             );
         let dismiss = div()
             .flex_none()
-            .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, window, cx| {
+            .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
                 let captured = bounds.first().copied();
                 entity.update(cx, |this, _| {
                     this.file_conflict_button_bounds_px.dismiss = captured;
-                    this.emit_state_trace(window);
                 });
             })
             .child(
@@ -945,151 +941,6 @@ impl LstGpuiApp {
                     .child(save_as)
                     .child(dismiss)
                     .child(keep_mine),
-            )
-    }
-
-    fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let scale = self.ui_scale();
-        let theme = self.theme(cx);
-        self.theme_name_rendered = theme.name.to_string();
-        let status_segments = self.status_detail_segments();
-        let status_details = status_segments.join("  ");
-        self.status_details_rendered = status_details.clone();
-        self.cleanup_button_bounds_px = None;
-        self.theme_button_bounds_px = None;
-        let polishing = self.cleanup_in_flight;
-        let polish_enabled = !polishing && self.prompt_review.is_none() && self.active_tab().buffer().len_chars() > 0;
-        let entity = cx.entity();
-        let polish_button = div()
-            .flex_none()
-            .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, window, cx| {
-                entity.update(cx, |this, _| {
-                    this.cleanup_button_bounds_px = bounds.first().copied();
-                    this.emit_state_trace(window);
-                });
-            })
-            .child(
-                div()
-                    .id("polish-prompt-button")
-                    .flex_none()
-                    .px_2()
-                    .rounded_sm()
-                    .bg(rgb(theme.role.control_bg))
-                    .text_color(rgb(if polish_enabled {
-                        theme.role.text
-                    } else {
-                        theme.role.text_muted
-                    }))
-                    .when(polish_enabled, |button| {
-                        button
-                            .cursor(CursorStyle::PointingHand)
-                            .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.force_editor_focus = true;
-                                this.dispatch_workspace_command(
-                                    crate::workspace_action::WorkspaceCommand::CleanupText,
-                                    window,
-                                    cx,
-                                );
-                                cx.stop_propagation();
-                            }))
-                    })
-                    .child(if polishing {
-                        "Improving prompt…"
-                    } else {
-                        "Improve Prompt"
-                    }),
-            );
-        div()
-            .flex_none()
-            .flex()
-            .justify_between()
-            .items_center()
-            .gap_3()
-            .px_3()
-            .py(metrics::px_for_scale(metrics::STATUS_VERTICAL_PAD, scale))
-            .bg(rgb(theme.role.panel_bg))
-            .border_t_1()
-            .border_color(rgb(theme.role.border))
-            .text_size(metrics::px_for_scale(metrics::STATUS_TEXT_SIZE, scale))
-            .line_height(metrics::px_for_scale(metrics::STATUS_TEXT_LINE_HEIGHT, scale))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(theme.role.text_subtle))
-                    .child(
-                        self.cleanup_message
-                            .clone()
-                            .unwrap_or_else(|| self.model.status().to_string()),
-                    ),
-            )
-            .child(
-                div()
-                    .id("new-voice-note")
-                    .flex_none()
-                    .px_2()
-                    .rounded_sm()
-                    .bg(rgb(theme.role.control_bg))
-                    .text_color(rgb(theme.role.text))
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.dispatch_workspace_command(
-                            crate::workspace_action::WorkspaceCommand::NewVoiceNote,
-                            window,
-                            cx,
-                        );
-                        cx.stop_propagation();
-                    }))
-                    .child("Dictate"),
-            )
-            .child(polish_button)
-            .child(
-                div()
-                    .flex()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .id("language-mode-button")
-                            .flex()
-                            .items_center()
-                            .h(metrics::px_for_scale(22.0, scale))
-                            .px_2()
-                            .rounded_sm()
-                            .text_color(rgb(theme.role.text_subtle))
-                            .cursor(CursorStyle::PointingHand)
-                            .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.toggle_language_menu(cx);
-                                cx.stop_propagation();
-                            }))
-                            .child(
-                                self.model
-                                    .active_tab()
-                                    .language()
-                                    .map(|language| format!("{language:?}"))
-                                    .unwrap_or_else(|| "Plain Text".to_string()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .items_center()
-                            .gap_2()
-                            .text_color(rgb(theme.role.text_subtle))
-                            .children(
-                                status_segments
-                                    .into_iter()
-                                    .map(|segment| div().flex_none().child(segment).into_any_element()),
-                            ),
-                    ),
             )
     }
 
@@ -2065,7 +1916,6 @@ impl Render for LstGpuiApp {
                                                             diagnostics::record_notify("status_details");
                                                             cx.notify();
                                                         }
-                                                        this.emit_state_trace(window);
                                                     });
                                                     paint_state
                                                 }
@@ -2190,15 +2040,13 @@ impl Render for LstGpuiApp {
             });
         self.schedule_pending_reveal(window, cx);
         self.apply_focus(window, cx);
-        if self.recent.is_open()
-            || self.close_prompt.is_some()
-            || self.quit_review.is_some()
-            || self.cleanup_confirmation.is_some()
-            || self.prompt_review.is_some()
-        {
-            self.emit_state_trace(window);
-        }
-        root
+        root.when(self.state_trace.is_enabled(), |root| {
+            let entity = cx.entity().downgrade();
+            // Publish sibling geometry together, after every surface has prepainted.
+            root.on_children_prepainted(move |_, window, cx| {
+                let _ = entity.update(cx, |this, _| this.emit_state_trace(window));
+            })
+        })
     }
 }
 
@@ -2293,24 +2141,21 @@ where
     let label_id: SharedString = spec.id.into();
     let entity = cx.entity();
     div()
-        .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, window, cx| {
+        .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
             let captured = bounds.first().copied();
-            entity.update(cx, |this, _| {
-                match spec.kind {
-                    FindChipKind::CaseSensitive => {
-                        this.find_chip_bounds_px.case_sensitive = captured;
-                    }
-                    FindChipKind::WholeWord => {
-                        this.find_chip_bounds_px.whole_word = captured;
-                    }
-                    FindChipKind::Regex => {
-                        this.find_chip_bounds_px.regex = captured;
-                    }
-                    FindChipKind::Scope => {
-                        this.find_chip_bounds_px.scope = captured;
-                    }
+            entity.update(cx, |this, _| match spec.kind {
+                FindChipKind::CaseSensitive => {
+                    this.find_chip_bounds_px.case_sensitive = captured;
                 }
-                this.emit_state_trace(window);
+                FindChipKind::WholeWord => {
+                    this.find_chip_bounds_px.whole_word = captured;
+                }
+                FindChipKind::Regex => {
+                    this.find_chip_bounds_px.regex = captured;
+                }
+                FindChipKind::Scope => {
+                    this.find_chip_bounds_px.scope = captured;
+                }
             });
         })
         .id(label_id)

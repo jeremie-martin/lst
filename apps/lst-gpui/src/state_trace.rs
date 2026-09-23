@@ -66,6 +66,10 @@ impl StateTraceEmitter {
         }
     }
 
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.path.is_some()
+    }
+
     /// Build and append one record. The closure is called only when the
     /// emitter is active and we are not already emitting (re-entrancy
     /// guard). Invariant on the caller: build the record from settled

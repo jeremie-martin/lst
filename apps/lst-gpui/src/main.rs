@@ -20,6 +20,7 @@ mod settings_ui;
 mod shell;
 mod startup;
 mod state_trace;
+mod status_bar;
 mod syntax;
 mod tab_strip;
 mod ui;
@@ -329,6 +330,7 @@ struct LstGpuiApp {
     tab_views: HashMap<TabId, EditorTabView>,
     tab_bar_scroll: ScrollHandle,
     tab_strip_view: Option<Entity<tab_strip::TabStrip>>,
+    status_bar_view: Option<Entity<status_bar::StatusBar>>,
     command_palette_scroll: ScrollHandle,
     workspace_surface_scroll: ScrollHandle,
     recent_scroll: ScrollHandle,
@@ -576,6 +578,7 @@ impl LstGpuiApp {
             tab_views: HashMap::new(),
             tab_bar_scroll: ScrollHandle::new(),
             tab_strip_view: None,
+            status_bar_view: None,
             command_palette_scroll: ScrollHandle::new(),
             workspace_surface_scroll: ScrollHandle::new(),
             recent_scroll: ScrollHandle::new(),

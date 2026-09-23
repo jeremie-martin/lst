@@ -114,6 +114,28 @@ Commands: see `docs/performance.md`.
   geometry publication in the separate status-cache candidate, being fixed.
   Vendor patch and patch ledger updated; full checkpoint gates follow.
 
+
+### Cache unchanged status chrome and publish complete geometry
+
+- The status bar now uses the same GPUI child-view cache as the tab strip,
+  keyed by its complete render inputs. Keep its original full-width geometry
+  and intrinsic height; changed inputs render immediately.
+- Against the tab-strip-only build, paired three-run medians: navigation
+  frame wall **0.777 -> 0.568 ms**, scrolling **1.257 -> 0.920 ms/frame**;
+  respective total CPU **2610 -> 2230 ms** and **1110 -> 900 ms**. Navigation
+  key-to-paint 6.319 -> 6.636 ms does not demonstrate a presentation gain.
+- Caching exposed premature test trace records with new selection state and
+  old button bounds. Publish once after root prepaint, when all sibling
+  geometry is available; install that hook only when tracing is enabled.
+- Verification: all 53 focused nested chrome, prompt, trace, voice and workflow
+  tests pass, including the initially failing prompt-button cases. Full
+  all-features source tests, all-targets/all-features Clippy and 12 benchmark
+  self-tests pass. Three physical visual scenarios match the original baseline
+  exactly; the full ten-scenario checkpoint is in progress.
+- Exclude early status-cache measurements from a version whose inner bar
+  lacked full width. Also exclude physical captures made while the nested
+  server occupied a tiling slot: client width differed from the reference.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off
