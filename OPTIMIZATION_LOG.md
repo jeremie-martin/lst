@@ -270,6 +270,10 @@ Commands: see `docs/performance.md`.
   eager 197.913 versus lazy 187.823 ms, reversing the earlier ordering.
   Treat startup as unchanged within variance; retain the proven GPU-memory gain.
 
+- Checkpoint `295b3fb`: the complete nested X11 lane passes **288/288**
+  tests (27m48s), including the new long-grapheme regression. This covers
+  chunk traversal, ASCII cells and sequential incremental wrap maintenance.
+
 ### Preserve GPU context thread affinity
 
 - The GLES experiment exposed a defect in the existing GPUI startup-thread
