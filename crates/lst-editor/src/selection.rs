@@ -523,7 +523,7 @@ fn subword_class(ch: char) -> Option<SubwordClass> {
 pub(crate) struct GraphemeCell {
     pub(crate) byte_start: usize,
     pub(crate) char_start: usize,
-    pub(crate) char_len: u8,
+    pub(crate) char_len: usize,
     pub(crate) repr: char,
 }
 pub(crate) fn cells_of_str(text: &str) -> Vec<GraphemeCell> {
@@ -555,11 +555,10 @@ pub(crate) fn cells_of_str(text: &str) -> Vec<GraphemeCell> {
             continue;
         };
         let char_len = 1 + chars.count();
-        debug_assert!(char_len <= u8::MAX as usize);
         cells.push(GraphemeCell {
             byte_start,
             char_start,
-            char_len: char_len as u8,
+            char_len,
             repr,
         });
         char_start += char_len;
@@ -834,7 +833,7 @@ pub fn word_range_at_char(buffer: &Rope, char_index: usize) -> Range<usize> {
     while end < cells.len() && token_class(cells[end].repr) == class {
         end += 1;
     }
-    let line_chars: usize = cells.iter().map(|c| c.char_len as usize).sum();
+    let line_chars: usize = cells.iter().map(|c| c.char_len).sum();
     let start_char = cells[start].char_start;
     let end_char = char_index_at_cell(&cells, end, line_chars);
     (line_start + start_char)..(line_start + end_char)
@@ -1192,7 +1191,7 @@ mod identifier_tests {
         fn check(text: &str) {
             let actual: Vec<_> = cells_of_str(text)
                 .into_iter()
-                .map(|cell| (cell.byte_start, cell.char_start, usize::from(cell.char_len), cell.repr))
+                .map(|cell| (cell.byte_start, cell.char_start, cell.char_len, cell.repr))
                 .collect();
             let expected: Vec<_> = text
                 .grapheme_indices(true)
@@ -1207,6 +1206,19 @@ mod identifier_tests {
             }
         }
         check(&"text\t \r\n\r\r\n\n\0".repeat(1000));
+    }
+
+    #[test]
+    fn grapheme_cell_lengths_cover_arbitrarily_long_combining_clusters() {
+        for marks in [254, 255, 256, 1024] {
+            let text = format!("a{}z", "\u{301}".repeat(marks));
+            let cells = cells_of_str(&text);
+            assert_eq!(cells.len(), 2);
+            assert_eq!(cells[0].char_len, marks + 1);
+            assert_eq!(cells[1].char_start, marks + 1);
+            assert_eq!(cells[1].byte_start, marks * 2 + 1);
+            assert_eq!(cells[1].char_len, 1);
+        }
     }
 
     #[test]

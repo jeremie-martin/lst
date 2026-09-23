@@ -154,7 +154,7 @@ impl FindState {
                     continue;
                 }
                 let cells = cells.get_or_insert_with(|| cells_of_str(line));
-                let line_char_len = cells.last().map(|c| c.char_start + c.char_len as usize).unwrap_or(0);
+                let line_char_len = cells.last().map(|c| c.char_start + c.char_len).unwrap_or(0);
                 let start_idx = cell_partition_by_byte(cells, abs_byte);
                 let end_idx = cell_partition_by_byte(cells, end_byte);
                 let start_aligned = cells

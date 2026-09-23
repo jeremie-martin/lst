@@ -235,6 +235,21 @@ Commands: see `docs/performance.md`.
   and is not a comparative latency result. No demonstrated benefit justifies
   the backend/thread-affinity/visual-selection maintenance cost.
 
+### Remove the grapheme-length truncation
+
+- Review exposed an existing `u8` length for grapheme clusters. Opening a
+  valid cluster with 300 combining marks crashed the preserved `65796dc`
+  production binary before its window appeared (wrapped cursor-row indexing
+  used the truncated length). Store the length as `usize`, matching document
+  offsets, and remove the narrowing conversion and downstream casts.
+- The new X11 regression fails on the preserved baseline and passes with the
+  fix: open, select the whole cluster, copy its exact text, replace, save,
+  undo and save. Seven viewport/resize/wrap tests also pass. Core tests cover
+  the old boundary and a 1,025-character cluster; all-features tests, model/Vim
+  suites, internal invariants and Clippy pass.
+- The preceding chunk/ASCII changes separately passed all 42 focused X11
+  wrapping, word-motion, multi-cursor-editing and viewport cases.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

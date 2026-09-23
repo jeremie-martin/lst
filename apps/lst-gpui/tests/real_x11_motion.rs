@@ -10,6 +10,7 @@ mod support;
 
 use std::time::Duration;
 
+use lst_x11_harness::{clipboard::wait_clipboard_text, Selection};
 use support::{secs, EditorTestExt, TestResult};
 
 #[test]
@@ -153,6 +154,26 @@ fn ctrl_right_crosses_decomposed_grapheme_word_without_splitting_it() -> TestRes
         editor.keys("<C-home><C-right>")?;
         let record = editor.expect_cursor_heads(&[(0, 6)])?;
         assert_eq!(record.cursors[0].head_col, 6, "{record:?}");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn selecting_and_replacing_a_long_grapheme_keeps_the_following_text() -> TestResult {
+    support::run_x11_test("motion-long-grapheme", |session| {
+        let cluster = format!("a{}", "\u{301}".repeat(300));
+        let path = session.seed_file("long-grapheme.txt", &format!("{cluster} tail"))?;
+        let mut editor = session.open_file("long-grapheme", &path)?;
+
+        editor.keys("<C-home><S-right>")?;
+        editor.expect_cursor_heads(&[(0, 301)])?;
+        editor.keys("<C-c>")?;
+        wait_clipboard_text(Selection::Clipboard, &cluster, secs(5))?;
+        editor.keys("b")?;
+        editor.save_then_expect_file(&path, "b tail")?;
+        editor.keys("<C-z>")?;
+        editor.save_then_expect_file(&path, &format!("{cluster} tail"))?;
         Ok(())
     })
 }

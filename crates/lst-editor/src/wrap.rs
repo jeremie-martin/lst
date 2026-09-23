@@ -344,7 +344,7 @@ fn line_layout(line: &str, max_cols: usize) -> LineLayout {
 }
 
 fn line_layout_from_cells(cells: &[GraphemeCell], max_cols: usize) -> LineLayout {
-    let char_count: usize = cells.iter().map(|cell| cell.char_len as usize).sum();
+    let char_count: usize = cells.iter().map(|cell| cell.char_len).sum();
     if char_count == 0 || max_cols == 0 {
         return LineLayout {
             cursor_rows: vec![0; char_count + 1],
@@ -384,7 +384,7 @@ fn line_layout_from_cells(cells: &[GraphemeCell], max_cols: usize) -> LineLayout
             }
 
             idx += 1;
-            cursor_rows[cell.char_start + cell.char_len as usize] = row;
+            cursor_rows[cell.char_start + cell.char_len] = row;
         }
     }
 
@@ -392,7 +392,7 @@ fn line_layout_from_cells(cells: &[GraphemeCell], max_cols: usize) -> LineLayout
 }
 
 fn mark_cluster_rows(cursor_rows: &mut [usize], cell: &GraphemeCell, row: usize) {
-    for offset in 0..cell.char_len as usize {
+    for offset in 0..cell.char_len {
         cursor_rows[cell.char_start + offset] = row;
     }
 }
