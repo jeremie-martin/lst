@@ -135,6 +135,36 @@ mod tests {
         assert_eq!(ascii.pairs.len(), 4);
         assert_eq!(ascii.unmatched_count(), 1);
     }
+
+    #[test]
+    fn plain_delimiter_search_matches_character_scan_across_fragmented_chunks() {
+        let mut buffer = ropey::Rope::from_str(&"café (👩‍💻[e\u{301}]) {\r\ntext} <a> unmatched ] ((\n".repeat(150));
+        for index in 0..300 {
+            let at = (index * 137) % (buffer.len_chars() + 1);
+            buffer.insert(at, if index % 2 == 0 { "λ\t[" } else { ")中" });
+        }
+        buffer.insert(
+            buffer.len_chars() / 2,
+            &"unmarked café 👩‍💻 e\u{301} text\r\n".repeat(300),
+        );
+        assert!(buffer.chunks().count() > 1);
+        for pairs in [
+            &[][..],
+            &[('(', ')')][..],
+            &[('(', ')'), ('[', ']')][..],
+            &[('(', ')'), ('[', ']'), ('{', '}')][..],
+            &[('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')][..],
+        ] {
+            let mut unicode_pairs = pairs.to_vec();
+            // This absent pair selects the original character iterator.
+            unicode_pairs.push(('«', '»'));
+            assert_eq!(
+                plain_structural_snapshot(&buffer, 9, pairs),
+                plain_structural_snapshot(&buffer, 9, &unicode_pairs),
+                "pairs {pairs:?}",
+            );
+        }
+    }
     use std::path::PathBuf;
 
     #[test]
@@ -553,6 +583,34 @@ mod tests {
         );
         assert!(!was_remapped);
         assert_eq!(structure, plain_structural_snapshot(&removed, 2, pairs));
+    }
+
+    #[test]
+    fn plain_structure_insertions_match_fresh_snapshots_with_unicode_delimiters() {
+        use lst_editor::{BufferDelta, BufferEdit};
+
+        let before = ropey::Rope::from_str("café { base } tail");
+        for pairs in [
+            &[('(', ')'), ('[', ']'), ('{', '}')][..],
+            &[('(', ')'), ('[', ']'), ('{', '}'), ('«', '»')][..],
+        ] {
+            for replacement in ["ordinary é", "([中])", "«λ»"] {
+                let mut after = before.clone();
+                after.insert(6, replacement);
+                let mut structure = plain_structural_snapshot(&before, 0, pairs);
+                update_plain_structural_snapshot(
+                    &mut structure,
+                    &after,
+                    1,
+                    pairs,
+                    &BufferDelta::Edits(vec![BufferEdit {
+                        range: 6..6,
+                        replacement: replacement.to_string(),
+                    }]),
+                );
+                assert_eq!(structure, plain_structural_snapshot(&after, 1, pairs));
+            }
+        }
     }
 
     #[test]

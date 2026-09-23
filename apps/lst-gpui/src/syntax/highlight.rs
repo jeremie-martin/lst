@@ -1474,20 +1474,26 @@ pub(crate) fn plain_structural_snapshot(
     structural_pairs: &[(char, char)],
 ) -> StructuralSnapshot {
     let mut matcher = PlainBracketMatcher::new(structural_pairs);
+    if structural_pairs.is_empty() {
+        return matcher.finish(revision);
+    }
     if structural_pairs
         .iter()
         .all(|(open, close)| open.is_ascii() && close.is_ascii())
     {
-        // Brackets are ASCII, so a byte scan finds them all; every other
-        // byte only advances the character index, and UTF-8 continuation
-        // bytes do not even do that.
         let mut classes = [BracketClass::None; 256];
         for (open, close) in structural_pairs {
             classes[*open as usize] = BracketClass::Open;
             classes[*close as usize] = BracketClass::Close;
         }
+        // Skip delimiter-free chunks with SIMD searches and count their UTF-8
+        // characters in bulk. Scan candidate chunks once in token order.
         let mut at = 0usize;
         for chunk in buffer.chunks() {
+            if !contains_structural_delimiter(chunk, structural_pairs) {
+                at += chunk.chars().count();
+                continue;
+            }
             for &byte in chunk.as_bytes() {
                 if byte & 0xC0 == 0x80 {
                     continue;
@@ -1506,6 +1512,16 @@ pub(crate) fn plain_structural_snapshot(
         }
     }
     matcher.finish(revision)
+}
+
+fn contains_structural_delimiter(text: &str, structural_pairs: &[(char, char)]) -> bool {
+    structural_pairs.iter().any(|&(open, close)| {
+        if open.is_ascii() && close.is_ascii() {
+            memchr::memchr2(open as u8, close as u8, text.as_bytes()).is_some()
+        } else {
+            text.chars().any(|ch| ch == open || ch == close)
+        }
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -1613,10 +1629,7 @@ pub(crate) fn update_plain_structural_snapshot(
     };
     let can_remap = edits.iter().all(|edit| {
         let first_token = structure.token_index_at_or_after(edit.range.start);
-        !edit
-            .replacement
-            .chars()
-            .any(|ch| structural_pairs.iter().any(|(open, close)| *open == ch || *close == ch))
+        !contains_structural_delimiter(&edit.replacement, structural_pairs)
             && structure
                 .tokens
                 .get(first_token)

@@ -290,6 +290,25 @@ Commands: see `docs/performance.md`.
   only the swapchain extension changes little. Instance creation is ~19–28 ms.
   This independently reproduces much of the measured driver-side startup cost.
 
+### Skip delimiter-free text in plain structural scans
+
+- Reuse one `memchr2`-based delimiter test for full rope chunks and inserted
+  text. Delimiter-free chunks use bulk UTF-8 character counting; candidate
+  chunks retain the original ordered byte scan. Unicode delimiter handling
+  remains character-based. No new dependency or cache.
+- Rejected a merged SIMD-token iterator: dense 2.98 MB mixed text regressed
+  2.2 -> 3.5 ms. The simpler chunk prefilter measures ~2.3 ms there, while
+  29.5 MB plain text improves **9.5 -> 3.2 ms** in the isolated scan.
+- Paired production 29.5 MB paste, three runs after priming: application
+  **55.431 -> 26.123 ms**, input through paint **222.326 -> 183.513 ms**;
+  clipboard read 137.136 -> 130.789 ms. Exact saved text is verified.
+  Large-plain startup view construction falls ~10.1 -> 4.2 ms, but whole
+  first-frame timing 205.870 -> 205.008 ms shows no established startup gain.
+- Fragmented Unicode/full-scan and incremental equivalence tests pass, as do
+  all-features tests and Clippy. Combined candidate validation: 42 focused
+  X11 find, replace, language, decoration and viewport tests; all ten physical
+  visual scenarios match the original baseline across three launches each.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off
