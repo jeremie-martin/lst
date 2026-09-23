@@ -81,5 +81,17 @@ Every change is marked `lst patch` in the source.
    sizes), and always process pending XSync counters. Reference-host idle
    CPU per two seconds fell from 160 to 40 ms and paints from 80 to four.
 
+
+10. **Wait for clipboard socket readiness**
+    (`src/platform/linux/x11/clipboard.rs`). The synchronous selection reader
+    polled events and slept for 1 ms whenever the next event was not ready.
+    An INCR transfer with many small chunks paid that delay repeatedly
+    (833 ms retrieving 2.98 MB from xsel on the reference host). After draining
+    queued events, poll the reader's private socket until readiness or the
+    existing deadline. Preserve both initial and per-chunk timeouts, retry
+    interrupted waits, and propagate other I/O errors. This belongs in the
+    transport, independent of editor text handling. Remove when upstream
+    provides an equivalent bounded readiness wait.
+
 The `Cargo.toml` here also drops the crate's example and test targets whose
 sources are not vendored.

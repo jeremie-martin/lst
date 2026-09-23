@@ -97,6 +97,23 @@ Commands: see `docs/performance.md`.
   group exceeded the harness timeout. All-targets/all-features Clippy passed
   (existing upstream Blade lifetime warnings). Full checkpoint gates follow.
 
+
+### Wait for external clipboard data without per-chunk sleeps
+
+- GPUI's private clipboard reader now waits for socket readiness with the
+  existing deadline instead of sleeping one millisecond whenever its event
+  queue is empty. Preserve timeout, INCR, conversion, and error semantics.
+- Paired corrected-runner measurements, three runs after priming: 2.98 MB
+  mixed paste **737.461 -> 92.082 ms** through completed paint; clipboard
+  retrieval **709.711 -> 60.234 ms**. Exact pasted and subsequently typed
+  contents verified. This comparison includes the status-bar cache candidate;
+  the measured clipboard-read reduction is directly inside the transport.
+- All 17 workflow tests passed, including a new controlled INCR owner that
+  stalls: after the existing timeout, queued typing and saving still work.
+  The broader 53-test run passed 51; two prompt-button failures exposed stale
+  geometry publication in the separate status-cache candidate, being fixed.
+  Vendor patch and patch ledger updated; full checkpoint gates follow.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

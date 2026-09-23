@@ -5,6 +5,8 @@
 //!
 //!     cargo nextest run --profile x11 -p lst-gpui --test real_x11_workflows --run-ignored only
 
+#[path = "support/stalled_clipboard.rs"]
+mod stalled_clipboard;
 mod support;
 
 use lst_x11_harness::{clipboard::write_clipboard_text, Key, KeyChord, Selection};
@@ -44,6 +46,24 @@ fn ctrl_v_pastes_system_clipboard_into_editor() -> TestResult {
         write_clipboard_text(Selection::Clipboard, "clipboard paste\nsecond line")?;
         editor.keys("<C-v>")?;
         editor.save_then_expect_file(&path, "clipboard paste\nsecond line")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn stalled_external_clipboard_transfer_returns_control_to_the_editor() -> TestResult {
+    support::run_x11_test("workflow-stalled-clipboard", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+        let mut owner = stalled_clipboard::StalledClipboard::new()?;
+        editor.press(KeyChord::Ctrl(Key::Char('v')))?;
+        owner.wait_started()?;
+        // Queue real input while the clipboard owner remains alive but silent.
+        // The bounded selection wait must end so typing and saving can resume.
+        editor.press(KeyChord::Key(Key::Char('X')))?;
+        editor.press(KeyChord::Ctrl(Key::Char('s')))?;
+        editor.expect_file(&path, "X")?;
+        owner.finish()?;
         Ok(())
     })
 }

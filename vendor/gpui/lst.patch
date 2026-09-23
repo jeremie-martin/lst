@@ -575,3 +575,43 @@
 +[lints.rust]
 +dead_code = "allow"
 +unreachable_code = "allow"
+--- a/src/platform/linux/x11/clipboard.rs
++++ b/src/platform/linux/x11/clipboard.rs
+@@ -22,6 +22,8 @@
+     borrow::Cow,
+     cell::RefCell,
+     collections::{HashMap, hash_map::Entry},
++    // lst patch: wait for selection data without a per-chunk sleep.
++    os::fd::AsRawFd,
+     sync::{
+         Arc,
+         atomic::{AtomicBool, Ordering},
+@@ -406,7 +408,27 @@
+             let event = match event {
+                 Some(e) => e,
+                 None => {
+-                    std::thread::sleep(Duration::from_millis(1));
++                    // lst patch: this reader owns its connection exclusively.
++                    // After draining queued events, wait for socket readiness
++                    // rather than adding a 1 ms sleep to each INCR chunk.
++                    // Keep the existing selection deadline, including stalls.
++                    let remaining = timeout_end.saturating_duration_since(Instant::now());
++                    let timeout_ms = remaining
++                        .as_millis()
++                        .saturating_add(1)
++                        .min(i32::MAX as u128) as i32;
++                    let mut fd = libc::pollfd {
++                        fd: reader.conn.stream().as_raw_fd(),
++                        events: libc::POLLIN,
++                        revents: 0,
++                    };
++                    // SAFETY: fd is valid for this call and points to one pollfd.
++                    if unsafe { libc::poll(&mut fd, 1, timeout_ms) } < 0 {
++                        let error = std::io::Error::last_os_error();
++                        if error.kind() != std::io::ErrorKind::Interrupted {
++                            return Err(into_unknown(error));
++                        }
++                    }
+                     continue;
+                 }
+             };
