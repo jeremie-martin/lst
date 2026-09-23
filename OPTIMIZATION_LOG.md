@@ -250,6 +250,26 @@ Commands: see `docs/performance.md`.
 - The preceding chunk/ASCII changes separately passed all 42 focused X11
   wrapping, word-motion, multi-cursor-editing and viewport cases.
 
+### Traverse changed wrap lines sequentially
+
+- Replacing a document without changing its line count used `Rope::line`
+  separately for every invalidated line. Repeated-paste profiling put ~38%
+  of process CPU in those rope lookups. Use one `lines_at` iterator across
+  the changed range; an unwrapped layout needs no row updates when line
+  topology is unchanged. Delay mutable access until a row update is needed.
+- Physical-display replay: three runs of 100 actual 2.98 MB replacements
+  per variant, using the app's own clipboard and verifying exact saved text.
+  Median wrap-patch time **14.191 -> 3.941 ms**; total paste application
+  **19.735 -> 12.964 ms**. These are app-operation timings, not external
+  clipboard or presentation latency. With the grapheme-length fix included,
+  application time is 12.647 ms; no additional regression is established.
+- Broadened incremental/full-layout equivalence covers whole-document ranges,
+  Unicode, tabs and wrapped/unwrapped modes. All-features tests, Clippy and
+  seven real-X11 viewport/resize/wrap tests pass on the combined candidate.
+- Reverse-order seven-run startup check for lazy GPU path targets gives
+  eager 197.913 versus lazy 187.823 ms, reversing the earlier ordering.
+  Treat startup as unchanged within variance; retain the proven GPU-memory gain.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

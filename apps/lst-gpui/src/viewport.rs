@@ -261,27 +261,23 @@ impl ViewportCache {
         let Some(mut cached) = self.wrap_layout.take() else {
             return;
         };
-        let layout = Rc::make_mut(&mut cached.layout);
         let line_count = buffer.len_lines();
-        if layout.line_row_starts.len() != line_count.saturating_add(1) {
+        if cached.layout.line_row_starts.len() != line_count.saturating_add(1) {
             return;
         }
         let lines = invalidation.line_range(line_count);
-        if lines.is_empty() {
+        if lines.is_empty() || !cached.layout.show_wrap {
             cached.revision = revision;
             self.wrap_layout = Some(cached);
             return;
         }
 
+        let layout = Rc::make_mut(&mut cached.layout);
         let old_end = layout.line_row_starts[lines.end];
         let mut next_start = layout.line_row_starts[lines.start];
-        for line_ix in lines.clone() {
+        for (line_ix, line) in lines.clone().zip(buffer.lines_at(lines.start)) {
             layout.line_row_starts[line_ix] = next_start;
-            let row_count = if layout.show_wrap {
-                visual_line_count_for_rope_line(buffer.line(line_ix), layout.wrap_columns)
-            } else {
-                1
-            };
+            let row_count = visual_line_count_for_rope_line(line, layout.wrap_columns);
             next_start = next_start.saturating_add(row_count);
         }
         layout.line_row_starts[lines.end] = next_start;
@@ -2943,25 +2939,32 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let before_buffer = Rope::from_str(&before);
-        for replacement in ["line 100 with substantially more content", "line 200", ""] {
+        for replacement in [
+            "line 100 with substantially more content",
+            "line 200",
+            "é\t e\u{301} 👩‍💻",
+            "",
+        ] {
             let after_buffer = Rope::from_str(&before.replacen("line 100", replacement, 1));
             for show_wrap in [false, true] {
-                let mut cache = ViewportCache {
-                    wrap_layout: Some(CachedWrapLayout {
-                        revision: 0,
-                        layout: Rc::new(build_wrap_layout_for_rope(&before_buffer, 12, show_wrap)),
-                    }),
-                    ..Default::default()
-                };
+                for invalidated_lines in [99..102, 0..after_buffer.len_lines()] {
+                    let mut cache = ViewportCache {
+                        wrap_layout: Some(CachedWrapLayout {
+                            revision: 0,
+                            layout: Rc::new(build_wrap_layout_for_rope(&before_buffer, 12, show_wrap)),
+                        }),
+                        ..Default::default()
+                    };
 
-                cache.patch_wrap_layout(&after_buffer, 1, &SyntaxInvalidation::Lines(99..102));
+                    cache.patch_wrap_layout(&after_buffer, 1, &SyntaxInvalidation::Lines(invalidated_lines));
 
-                let patched = cache.wrap_layout.expect("patch should retain layout");
-                assert_eq!(patched.revision, 1);
-                assert_eq!(
-                    *patched.layout,
-                    build_wrap_layout_for_rope(&after_buffer, 12, show_wrap)
-                );
+                    let patched = cache.wrap_layout.expect("patch should retain layout");
+                    assert_eq!(patched.revision, 1);
+                    assert_eq!(
+                        *patched.layout,
+                        build_wrap_layout_for_rope(&after_buffer, 12, show_wrap)
+                    );
+                }
             }
         }
     }
