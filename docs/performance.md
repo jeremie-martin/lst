@@ -59,6 +59,8 @@ DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
 Typing throughput ends at the first completed frame after the final text-input
 operation. An earlier frame during the burst does not count: parsing and layout
 required to show the final text remain inside the measured interval.
+Paste-to-paint and the first post-paste key use the same ordering rule: the
+completed frame must follow the corresponding edit, not precede it.
 
 `--position top|middle|end` helps distinguish local work from document-size
 work. `--keep-temp` preserves the per-run trace files, whose `notify=<reason>`

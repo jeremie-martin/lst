@@ -737,7 +737,6 @@ impl Bench {
             let paste_apply_count = read_editor_trace(&trace_path)?
                 .count("paste_clipboard_apply_ms")
                 .unwrap_or(0);
-            let paste_paint_count = read_editor_trace(&trace_path)?.count("viewport_paint_ms").unwrap_or(0);
             inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.v)?;
             wait_for_trace_count(
                 &trace_path,
@@ -747,10 +746,10 @@ impl Bench {
             )?;
             let paste_damage_events = 0u64;
             let paste_complete_ms = elapsed_ms(paste_started);
-            wait_for_trace_count(
+            wait_for_frame_after_trace_count(
                 &trace_path,
-                "viewport_paint_ms",
-                paste_paint_count + 1,
+                "paste_clipboard_apply_ms",
+                paste_apply_count + 1,
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
             let paste_input_to_paint_ms = elapsed_ms(paste_started);
@@ -771,15 +770,9 @@ impl Bench {
                 let remaining = payload_chars.collect::<String>();
                 let first_key_started = Instant::now();
                 inject_text(&self.conn, self.root, &self.keycodes, &first_char)?;
-                wait_for_trace_count(
+                wait_for_frame_after_trace_count(
                     &trace_path,
                     "text_input_apply_ms",
-                    1,
-                    Duration::from_millis(TRACE_TIMEOUT_MS),
-                )?;
-                wait_for_trace_count(
-                    &trace_path,
-                    "viewport_paint_ms",
                     1,
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
