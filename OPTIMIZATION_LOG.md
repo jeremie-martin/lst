@@ -185,6 +185,26 @@ Commands: see `docs/performance.md`.
   complete-root timing changes. Use its preserved production binary as the
   baseline for the next wrapping experiments.
 
+### Build wrapped-row counts from rope chunks
+
+- Profiling the 84,002-line paste corpus found repeated character, UTF-16 and
+  line metadata construction in `Rope::lines()`. Traverse borrowed chunks
+  using Ropey's own line-boundary rules; one reusable string assembles only
+  lines crossing chunks. Preserve the existing grapheme-aware row counter.
+- Warm core probe: **3.3 -> 1.8 ms** at 100/220 columns. At 80 columns,
+  actual word wrapping dominates: 13.6 -> 11.8 ms. These isolate row-index
+  construction, not input-to-screen latency.
+- Paired production `open-large --corpus huge-plain-500k`, three runs after
+  priming: first wrap construction **28.2 -> 17.0 ms**; spawn to first frame
+  213.734 -> 201.752 ms and process CPU 390 -> 350 ms. The WM resize causes
+  a second construction. Whole-launch timing remains noisier than this phase.
+- Mixed-paste totals show no gain in this pass: 61.462 -> 92.775 ms while
+  clipboard read varies 40.502 -> 64.786 ms. Do not attribute transport
+  variance to row counting. Navigation and scrolling are effectively unchanged.
+- Existing wrap tests plus fragmented-Unicode equivalence against logical
+  rope lines pass, including long lines, CRLF and Unicode separators. The
+  all-features source suite and Clippy pass; focused X11 validation follows.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

@@ -106,10 +106,39 @@ pub fn build_wrap_layout_for_rope(buffer: &Rope, wrap_columns: usize, show_wrap:
     let mut line_row_starts = Vec::with_capacity(line_count.saturating_add(1));
     let mut total_rows = 0usize;
     line_row_starts.push(0);
-    for line in buffer.lines() {
-        total_rows = total_rows.saturating_add(visual_line_count_for_rope_line(line, wrap_columns));
+    let mut push_line = |line: &str| {
+        total_rows = total_rows.saturating_add(visual_line_count_for_str_line(line, wrap_columns));
         line_row_starts.push(total_rows);
+    };
+    // Row counts need text, not the character/UTF-16 metadata produced for
+    // every RopeSlice by Rope::lines(). Borrow lines within each chunk and
+    // assemble only the ones crossing chunk boundaries. Ropey guarantees
+    // that chunks end at character boundaries and never split CRLF pairs.
+    let mut partial_line = String::new();
+    for chunk in buffer.chunks() {
+        let ends_with_break = chunk.char_indices().next_back().is_some_and(|(start, _)| {
+            let tail = &chunk[start..];
+            ropey::str_utils::byte_to_line_idx(tail, tail.len()) != 0
+        });
+        let mut remaining = chunk;
+        while !remaining.is_empty() {
+            let end = ropey::str_utils::line_to_byte_idx(remaining, 1);
+            let complete = end < remaining.len() || ends_with_break;
+            let (line, rest) = remaining.split_at(end);
+            if complete && partial_line.is_empty() {
+                push_line(line);
+            } else {
+                partial_line.push_str(line);
+                if complete {
+                    push_line(&partial_line);
+                    partial_line.clear();
+                }
+            }
+            remaining = rest;
+        }
     }
+    // A trailing line break still leaves one final empty logical line.
+    push_line(&partial_line);
     WrapLayout {
         show_wrap,
         wrap_columns,
@@ -122,9 +151,11 @@ pub fn build_wrap_layout_for_rope(buffer: &Rope, wrap_columns: usize, show_wrap:
 /// short ASCII lines. Complex and potentially wrapping text falls back to the
 /// same grapheme-aware implementation used everywhere else.
 pub fn visual_line_count_for_rope_line(line: RopeSlice<'_>, max_cols: usize) -> usize {
-    let max_cols = max_cols.max(1);
-    let text = std::borrow::Cow::from(line);
-    let display = text.trim_end_matches(['\n', '\r']);
+    visual_line_count_for_str_line(&std::borrow::Cow::from(line), max_cols.max(1))
+}
+
+fn visual_line_count_for_str_line(line: &str, max_cols: usize) -> usize {
+    let display = line.trim_end_matches(['\n', '\r']);
     if display.len() <= max_cols && display.is_ascii() && !display.as_bytes().contains(&b'\t') {
         1
     } else {
@@ -409,6 +440,56 @@ fn trim_display_line(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunked_wrap_layout_matches_logical_lines_after_fragmented_unicode_edits() {
+        fn check(buffer: &Rope) {
+            for columns in [0, 1, 3, 8, 31, 80, 2048] {
+                let mut starts = vec![0];
+                for line in buffer.lines() {
+                    let text = line.to_string();
+                    let count = visual_line_count(text.trim_end_matches(['\n', '\r']), columns.max(1));
+                    starts.push(starts.last().unwrap() + count);
+                }
+                let actual = build_wrap_layout_for_rope(buffer, columns, true);
+                assert_eq!(actual.line_row_starts, starts, "columns {columns}");
+                assert_eq!(actual.total_rows, *starts.last().unwrap());
+            }
+        }
+        for text in ["", "a", "\n", "\r", "\r\n", "\u{85}", "\u{2028}", "\u{2029}"] {
+            check(&Rope::from_str(text));
+        }
+        let atoms = [
+            "word ",
+            "\t",
+            "é",
+            "e\u{301}",
+            "👩‍💻",
+            "\r",
+            "\n",
+            "\r\n",
+            "\u{b}",
+            "\u{c}",
+            "\u{85}",
+            "\u{2028}",
+            "\u{2029}",
+        ];
+        let mut buffer = Rope::from_str(&"long unbroken text".repeat(300));
+        let mut random = 17u64;
+        for step in 0..1024 {
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let at = random as usize % (buffer.len_chars() + 1);
+            buffer.insert(at, atoms[step % atoms.len()]);
+            if step % 5 == 0 && at < buffer.len_chars() {
+                buffer.remove(at..(at + 3).min(buffer.len_chars()));
+            }
+            if step % 128 == 0 {
+                check(&buffer);
+            }
+        }
+        assert!(buffer.chunks().count() > 1);
+        check(&buffer);
+    }
 
     #[test]
     fn rope_row_counts_match_grapheme_layout_across_chunks_and_line_endings() {
