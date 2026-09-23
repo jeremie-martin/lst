@@ -27,6 +27,10 @@ Commands: see `docs/performance.md`.
   trace shows focus loss. Exclude these attempts and reproduce before assigning
   an application cause. Startup discovery sometimes observes pre-tiling window
   sizes; frame traces, not that early geometry, determine comparable dimensions.
+- Correct the throughput completion gate: require a completed frame after the
+  final input operation, rather than accepting any paint since the burst began.
+  The old gate can exclude final rendering work. Twelve benchmark self-tests
+  pass; subsequent typing comparisons must use this runner on both binaries.
 - Vendor review: glyph tiles remain resident; the atlas removal call in the
   current window implementation removes images. No evidence yet to retire the
   glyph cache. Temporary startup phase instrumentation is not a product change.

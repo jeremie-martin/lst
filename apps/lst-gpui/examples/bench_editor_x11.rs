@@ -784,18 +784,11 @@ impl Bench {
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
                 let first_key_ms = elapsed_ms(first_key_started);
-                let first_paint_count = read_editor_trace(&trace_path)?.count("viewport_paint_ms").unwrap_or(0);
                 inject_text(&self.conn, self.root, &self.keycodes, &remaining)?;
-                wait_for_trace_count(
+                wait_for_frame_after_trace_count(
                     &trace_path,
                     "text_input_apply_ms",
                     payload.chars().count(),
-                    Duration::from_millis(TRACE_TIMEOUT_MS),
-                )?;
-                wait_for_trace_count(
-                    &trace_path,
-                    "viewport_paint_ms",
-                    first_paint_count + 1,
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
                 (Some(first_key_ms), Some(elapsed_ms(typing_started)))
@@ -1081,20 +1074,13 @@ impl Bench {
             let input_count = read_editor_trace(&trace_path)?
                 .count("text_input_apply_ms")
                 .unwrap_or(0);
-            let paint_count = read_editor_trace(&trace_path)?.count("viewport_paint_ms").unwrap_or(0);
             let typing_send_started = Instant::now();
             inject_text(&self.conn, self.root, &self.keycodes, &payload)?;
             let typing_send_ms = elapsed_ms(typing_send_started);
-            wait_for_trace_count(
+            wait_for_frame_after_trace_count(
                 &trace_path,
                 "text_input_apply_ms",
                 input_count + payload.chars().count(),
-                Duration::from_millis(TRACE_TIMEOUT_MS),
-            )?;
-            wait_for_trace_count(
-                &trace_path,
-                "viewport_paint_ms",
-                paint_count + 1,
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
             let damage_events = 0u64;
@@ -2732,6 +2718,46 @@ fn wait_for_trace_count(
     }
 }
 
+/// A burst is visible only once a frame has completed after its final input.
+/// Counting frames since the beginning of the burst can accept an earlier one.
+fn has_frame_after_trace_count(contents: &str, label: &str, minimum_count: usize) -> bool {
+    let mut count = 0;
+    for line in contents.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key == label {
+            count += 1;
+        }
+        if key == "frame_end_epoch_us" && count >= minimum_count && value.parse::<u64>().is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+fn wait_for_frame_after_trace_count(
+    path: &Path,
+    label: &str,
+    minimum_count: usize,
+    timeout: Duration,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let contents = fs::read_to_string(path)?;
+        if has_frame_after_trace_count(&contents, label, minimum_count) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(format!(
+                "timed out waiting for a completed frame after {minimum_count} {label} events"
+            ))
+            .into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Waits until the trace count for `label` has been stable for `quiet`.
 fn wait_for_trace_quiet(path: &Path, label: &str, quiet: Duration, timeout: Duration) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
@@ -3962,6 +3988,21 @@ mod tests {
     fn median_uses_upper_middle_for_existing_benchmark_style() {
         assert_eq!(median_f64(&[4.0, 1.0, 2.0]).unwrap(), 2.0);
         assert_eq!(median_f64(&[4.0, 1.0, 2.0, 3.0]).unwrap(), 3.0);
+    }
+
+    #[test]
+    fn typing_completion_requires_a_frame_after_the_final_input() {
+        let label = "text_input_apply_ms";
+        let earlier_frame = "text_input_apply_ms=1\nframe_end_epoch_us=100\ntext_input_apply_ms=2\n";
+        assert!(!has_frame_after_trace_count(earlier_frame, label, 2));
+        assert!(!has_frame_after_trace_count(
+            &format!("{earlier_frame}viewport_paint_ms=1\nframe_end_epoch_us="),
+            label,
+            2
+        ));
+        let completed = format!("{earlier_frame}viewport_paint_ms=1\nframe_end_epoch_us=200\n");
+        assert!(has_frame_after_trace_count(&completed, label, 2));
+        assert!(!has_frame_after_trace_count(&completed, label, 3));
     }
 
     #[test]

@@ -56,6 +56,10 @@ DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
   --scenario mixed-paste --paste-target markdown --position end
 ```
 
+Typing throughput ends at the first completed frame after the final text-input
+operation. An earlier frame during the burst does not count: parsing and layout
+required to show the final text remain inside the measured interval.
+
 `--position top|middle|end` helps distinguish local work from document-size
 work. `--keep-temp` preserves the per-run trace files, whose `notify=<reason>`
 and `startup_*_ms` lines attribute frames and startup phases.
