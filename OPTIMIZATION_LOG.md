@@ -205,6 +205,36 @@ Commands: see `docs/performance.md`.
   rope lines pass, including long lines, CRLF and Unicode separators. The
   all-features source suite and Clippy pass; focused X11 validation follows.
 
+### Avoid Unicode property lookup for ASCII grapheme cells
+
+- At 80 columns, about 85% of wrapping CPU was in grapheme-cell construction
+  and counting. ASCII has one scalar per cluster except CRLF; construct that
+  same metadata directly in the shared editor helper, retaining Unicode
+  segmentation for other text. Reserve the known ASCII capacity once.
+- With chunk traversal already present, the 84,002-line core probe improves
+  **11.4 -> 4.1 ms** at 80 columns. At 100/220 columns, short lines already
+  bypass segmentation and remain ~1.8 ms.
+- Production plain typing, three paired runs: 0.413 -> 0.382 ms/character,
+  CPU 110 -> 90 ms. Five reverse-order runs: 0.478 -> 0.413, CPU 130 ->
+  110 ms. Compared with the earlier complete-root baseline, the reverse run
+  has equal 0.413 ms/character; whole-burst timing is variable. Large-Rust
+  typing remains parser-bound, and navigation shows no latency improvement.
+- Every adjacent ASCII byte pair (16,384 cases), long CRLF/control sequences,
+  model/Vim suites, internal-invariant tests, all-features tests and Clippy
+  pass. Additional X11 validation follows with the wrapping changes.
+
+### Rejected experiment: native OpenGL backend
+
+- Isolated copies of GPUI/Blade exercised the existing GLES backend. Native
+  EGL requires main-thread context ownership and matching X11/EGL visuals;
+  this host needed a 24-bit visual rather than GPUI's usual 32-bit visual.
+  These experimental changes remain outside the repository.
+- Quiet physical-display `open-small`, three runs after priming: GLES
+  **217.621 ms**, Vulkan **188.801 ms**; RSS 265.188 versus 201.855 MB.
+  An earlier unprimed smoke was slower still, but ran beside the nested lane
+  and is not a comparative latency result. No demonstrated benefit justifies
+  the backend/thread-affinity/visual-selection maintenance cost.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

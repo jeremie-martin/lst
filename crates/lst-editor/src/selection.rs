@@ -527,6 +527,26 @@ pub(crate) struct GraphemeCell {
     pub(crate) repr: char,
 }
 pub(crate) fn cells_of_str(text: &str) -> Vec<GraphemeCell> {
+    if text.is_ascii() {
+        // CRLF is the only multi-scalar grapheme in ASCII. Byte and character
+        // offsets otherwise coincide, so no Unicode property lookup is needed.
+        let mut cells = Vec::with_capacity(text.len());
+        let mut bytes = text.bytes().enumerate().peekable();
+        while let Some((at, byte)) = bytes.next() {
+            let char_len = if byte == b'\r' && bytes.next_if(|(_, next)| *next == b'\n').is_some() {
+                2
+            } else {
+                1
+            };
+            cells.push(GraphemeCell {
+                byte_start: at,
+                char_start: at,
+                char_len,
+                repr: char::from(byte),
+            });
+        }
+        return cells;
+    }
     let mut cells = Vec::new();
     let mut char_start = 0usize;
     for (byte_start, cluster) in text.grapheme_indices(true) {
@@ -1166,6 +1186,28 @@ pub(crate) fn char_at_line_column(buffer: &Rope, line_ix: usize, column: usize) 
 #[cfg(test)]
 mod identifier_tests {
     use super::*;
+
+    #[test]
+    fn ascii_cells_match_unicode_segmentation_for_every_adjacent_byte_pair() {
+        fn check(text: &str) {
+            let actual: Vec<_> = cells_of_str(text)
+                .into_iter()
+                .map(|cell| (cell.byte_start, cell.char_start, usize::from(cell.char_len), cell.repr))
+                .collect();
+            let expected: Vec<_> = text
+                .grapheme_indices(true)
+                .map(|(at, cluster)| (at, at, cluster.len(), cluster.chars().next().unwrap()))
+                .collect();
+            assert_eq!(actual, expected, "{text:?}");
+        }
+        check("");
+        for first in 0..=127 {
+            for second in 0..=127 {
+                check(std::str::from_utf8(&[first, second]).unwrap());
+            }
+        }
+        check(&"text\t \r\n\r\r\n\n\0".repeat(1000));
+    }
 
     #[test]
     fn local_word_boundaries_match_whole_document_graphemes() {
