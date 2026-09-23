@@ -180,6 +180,11 @@ Commands: see `docs/performance.md`.
   passes and verifies exact saved text; its concurrent-build timing is not a
   performance comparison. Full nested checkpoint follows.
 
+- Checkpoint `65796dc`: the complete nested X11 lane passed **287/287**
+  tests (27m21s), covering the committed clipboard, chrome, renderer and
+  complete-root timing changes. Use its preserved production binary as the
+  baseline for the next wrapping experiments.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off
