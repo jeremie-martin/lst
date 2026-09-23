@@ -309,6 +309,24 @@ Commands: see `docs/performance.md`.
   X11 find, replace, language, decoration and viewport tests; all ten physical
   visual scenarios match the original baseline across three launches each.
 
+### Keep valid wrapped-row indexes
+
+- A syntax-only refresh no longer invalidates wrap rows for the same text
+  revision. A wider viewport reuses existing row starts when every logical
+  line already fits one row, while clearing width-dependent visible-line
+  caches. Narrowing, text changes and wrap-mode changes retain their normal
+  validation/rebuild paths. No new cache fields or derived-state owner.
+- Five production large-plain launches after priming consistently need one
+  ~17 ms row-index build instead of two (the second previously cost 17–22 ms
+  after WM resize). Large Rust goes from three ~0.5–0.8 ms builds to one,
+  also avoiding the syntax-completion rebuild. Large-plain process CPU falls
+  370 -> 340 ms against the delimiter-prefilter build. Whole-startup timing
+  remains dominated by GPU/font variance; do not attribute its full change
+  to this small phase reduction.
+- Fresh-layout equivalence covers widening/narrowing, Unicode, tabs, long
+  words and wrap-mode changes. Same-revision syntax-refresh coverage, source
+  suites, Clippy, 42 focused X11 cases and all ten exact visual scenarios pass.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

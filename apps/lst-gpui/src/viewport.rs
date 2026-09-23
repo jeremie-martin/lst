@@ -254,6 +254,15 @@ impl ViewportCache {
     }
 
     fn patch_wrap_layout_inner(&mut self, buffer: &Rope, revision: u64, invalidation: &SyntaxInvalidation) {
+        // Syntax can change without a text edit (for example, a completed
+        // background parse). The row index only depends on text and geometry.
+        if self
+            .wrap_layout
+            .as_ref()
+            .is_some_and(|cached| cached.revision == revision)
+        {
+            return;
+        }
         if invalidation.is_full() {
             self.wrap_layout = None;
             return;
@@ -1074,13 +1083,24 @@ pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInp
         scale,
     } = input;
     let wrap_columns = wrap_columns_for_viewport(viewport_width, char_width, layout_metrics, show_wrap, scale);
-    if let Some(layout) = cache.wrap_layout.as_ref() {
+    let line_count = buffer.len_lines();
+    if let Some(layout) = cache.wrap_layout.as_mut() {
         if layout.revision == revision
-            && layout.layout.wrap_columns == wrap_columns
             && layout.layout.show_wrap == show_wrap
-            && layout.layout.line_row_starts.len() == buffer.len_lines() + 1
+            && layout.layout.line_row_starts.len() == line_count + 1
         {
-            return layout.layout.clone();
+            if layout.layout.wrap_columns == wrap_columns {
+                return layout.layout.clone();
+            }
+            // Every logical line contributes at least one row. If all fit
+            // already, widening cannot change any row start. Only the
+            // width-keyed visible-line caches need to be rebuilt.
+            if wrap_columns > layout.layout.wrap_columns && layout.layout.total_rows == line_count {
+                Rc::make_mut(&mut layout.layout).wrap_columns = wrap_columns;
+                cache.code_lines.clear();
+                cache.wrapped_lines.clear();
+                return layout.layout.clone();
+            }
         }
     }
 
@@ -2963,6 +2983,66 @@ mod tests {
                     assert_eq!(
                         *patched.layout,
                         build_wrap_layout_for_rope(&after_buffer, 12, show_wrap)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn syntax_refresh_preserves_wrap_rows_for_the_current_text_revision() {
+        let buffer = Rope::from_str("words with\ttabs café e\u{301} 👩‍💻\r\nnext line");
+        for show_wrap in [false, true] {
+            let expected = build_wrap_layout_for_rope(&buffer, 8, show_wrap);
+            let mut cache = ViewportCache {
+                wrap_layout: Some(CachedWrapLayout {
+                    revision: 7,
+                    layout: Rc::new(expected.clone()),
+                }),
+                ..Default::default()
+            };
+            cache.patch_wrap_layout(&buffer, 7, &SyntaxInvalidation::Full);
+            let actual = cache.wrap_layout.expect("unchanged text keeps its row index");
+            assert_eq!(actual.revision, 7);
+            assert_eq!(*actual.layout, expected);
+        }
+    }
+
+    #[test]
+    fn resized_wrap_layout_matches_fresh_rows() {
+        let texts = [
+            String::new(),
+            "short\nlines\n".to_string(),
+            "words with\ttabs café e\u{301} 👩‍💻\r\nnext line".to_string(),
+            "longword".repeat(100),
+        ];
+        for text in texts {
+            let buffer = Rope::from_str(&text);
+            let mut cache = ViewportCache::default();
+            let char_width = px(10.0);
+            let layout_metrics = ViewportLayoutMetrics::new(false, buffer.len_lines(), char_width, 1.0);
+            for show_wrap in [true, false, true] {
+                for columns in [120, 180, 8, 32, 64, 256, 512, 128, 1024] {
+                    let viewport_width = char_width * columns as f32
+                        + layout_metrics.code_origin_pad()
+                        + metrics::px_for_scale(metrics::CURSOR_WIDTH, 1.0);
+                    let actual = ensure_wrap_layout(
+                        &mut cache,
+                        WrapLayoutInput {
+                            buffer: &buffer,
+                            revision: 0,
+                            viewport_width,
+                            char_width,
+                            layout_metrics,
+                            show_wrap,
+                            scale: 1.0,
+                        },
+                    );
+                    let expected_columns = if show_wrap { columns } else { usize::MAX };
+                    assert_eq!(actual.wrap_columns, expected_columns);
+                    assert_eq!(
+                        *actual,
+                        build_wrap_layout_for_rope(&buffer, expected_columns, show_wrap)
                     );
                 }
             }
