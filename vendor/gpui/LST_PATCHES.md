@@ -93,5 +93,22 @@ Every change is marked `lst patch` in the source.
     transport, independent of editor text handling. Remove when upstream
     provides an equivalent bounded readiness wait.
 
+
+11. **Allocate path raster targets on demand**
+    (`src/platform/blade/blade_renderer.rs`). Full-window resolved and MSAA
+    textures were allocated at window creation and after every resize, even
+    for scenes containing no paths. One optional owner now holds the resolved
+    texture/view and the optional MSAA texture/view pair; the first path batch
+    creates them. Resize and surface-format changes release the old target
+    after GPU completion, and a later path batch recreates it. Existing
+    descriptors, rasterization, antialiasing, and compositing are unchanged.
+    The grouped resource owner also removes duplicated allocation/destruction
+    and independently optional MSAA handles. Remove when upstream allocates
+    these resources on demand.
+    Reference-host production GPU memory falls from 208 to 29 MiB at
+    3816×2100 (three paired launches); CPU RSS is unchanged. A path-rendering
+    probe is pixel-identical before/after resize and hide/show with 1× and
+    4× sampling. Full path resources appear normally when paths are drawn.
+
 The `Cargo.toml` here also drops the crate's example and test targets whose
 sources are not vendored.

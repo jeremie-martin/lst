@@ -130,11 +130,31 @@ Commands: see `docs/performance.md`.
 - Verification: all 53 focused nested chrome, prompt, trace, voice and workflow
   tests pass, including the initially failing prompt-button cases. Full
   all-features source tests, all-targets/all-features Clippy and 12 benchmark
-  self-tests pass. Three physical visual scenarios match the original baseline
-  exactly; the full ten-scenario checkpoint is in progress.
+  self-tests pass. All ten physical visual scenarios match the preserved
+  original baseline exactly across three fresh launches each.
 - Exclude early status-cache measurements from a version whose inner bar
   lacked full width. Also exclude physical captures made while the nested
   server occupied a tiling slot: client width differed from the reference.
+
+
+### Allocate GPU path targets only for scenes that use them
+
+- Full-window resolved/MSAA path textures were created at window startup
+  and every resize even when the scene had no paths. A single optional owner
+  now groups each texture with its view and allocates on the first path batch.
+  Resize/format changes release after GPU completion. Rasterization and
+  compositing stay unchanged; duplicated cleanup and independent MSAA options
+  disappear. This is a narrow renderer responsibility, documented as patch 11.
+- Production GPU memory **208 -> 29 MiB** at 3816×2100 across three paired
+  launches; CPU RSS remains ~205 MB. A temporary path probe is pixel-identical
+  in 12 comparisons: empty, paths, fullscreen, restored, hidden and reshown at
+  1×/4× sampling. Drawing paths allocates the same resources as before.
+- All ten production screenshot scenarios match the original baseline exactly
+  over three launches each. The 53 focused X11 tests, all-features source
+  suite and Clippy passed with this renderer. Vendor patch reverse-application
+  check passes. The temporary probe is retained outside the repository only.
+- Paired startup/steady-state measurements and the full nested gate follow;
+  the established benefit at this point is GPU memory, not a startup claim.
 
 ## Session 3: baseline and measurement reliability
 

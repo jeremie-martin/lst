@@ -336,10 +336,8 @@ pub struct BladeRenderer {
     atlas_sampler: gpu::Sampler,
     #[cfg(target_os = "macos")]
     core_video_texture_cache: CVMetalTextureCache,
-    path_intermediate_texture: gpu::Texture,
-    path_intermediate_texture_view: gpu::TextureView,
-    path_intermediate_msaa_texture: Option<gpu::Texture>,
-    path_intermediate_msaa_texture_view: Option<gpu::TextureView>,
+    // lst patch: allocate full-window path targets only when paths are drawn.
+    path_target: Option<PathTarget>,
     rendering_parameters: RenderingParameters,
 }
 
@@ -385,23 +383,6 @@ impl BladeRenderer {
             ..Default::default()
         });
 
-        let (path_intermediate_texture, path_intermediate_texture_view) =
-            create_path_intermediate_texture(
-                &context.gpu,
-                surface.info().format,
-                config.size.width,
-                config.size.height,
-            );
-        let (path_intermediate_msaa_texture, path_intermediate_msaa_texture_view) =
-            create_msaa_texture_if_needed(
-                &context.gpu,
-                surface.info().format,
-                config.size.width,
-                config.size.height,
-                rendering_parameters.path_sample_count,
-            )
-            .unzip();
-
         #[cfg(target_os = "macos")]
         let core_video_texture_cache = unsafe {
             CVMetalTextureCache::new(
@@ -422,10 +403,8 @@ impl BladeRenderer {
             atlas_sampler,
             #[cfg(target_os = "macos")]
             core_video_texture_cache,
-            path_intermediate_texture,
-            path_intermediate_texture_view,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_texture_view,
+            // lst patch: most text-only windows never need path raster targets.
+            path_target: None,
             rendering_parameters,
         })
     }
@@ -479,41 +458,16 @@ impl BladeRenderer {
             self.surface_config.size = gpu_size;
             self.gpu
                 .reconfigure_surface(&mut self.surface, self.surface_config);
-            self.gpu.destroy_texture(self.path_intermediate_texture);
-            self.gpu
-                .destroy_texture_view(self.path_intermediate_texture_view);
-            if let Some(msaa_texture) = self.path_intermediate_msaa_texture {
-                self.gpu.destroy_texture(msaa_texture);
-            }
-            if let Some(msaa_view) = self.path_intermediate_msaa_texture_view {
-                self.gpu.destroy_texture_view(msaa_view);
-            }
-            let (path_intermediate_texture, path_intermediate_texture_view) =
-                create_path_intermediate_texture(
-                    &self.gpu,
-                    self.surface.info().format,
-                    gpu_size.width,
-                    gpu_size.height,
-                );
-            self.path_intermediate_texture = path_intermediate_texture;
-            self.path_intermediate_texture_view = path_intermediate_texture_view;
-            let (path_intermediate_msaa_texture, path_intermediate_msaa_texture_view) =
-                create_msaa_texture_if_needed(
-                    &self.gpu,
-                    self.surface.info().format,
-                    gpu_size.width,
-                    gpu_size.height,
-                    self.rendering_parameters.path_sample_count,
-                )
-                .unzip();
-            self.path_intermediate_msaa_texture = path_intermediate_msaa_texture;
-            self.path_intermediate_msaa_texture_view = path_intermediate_msaa_texture_view;
+            // lst patch: the next path draw recreates targets for this extent.
+            self.release_path_target();
         }
     }
 
     pub fn update_transparency(&mut self, transparent: bool) {
         if transparent != self.surface_config.transparent {
             self.wait_for_gpu();
+            // lst patch: a new surface format also needs matching path targets.
+            self.release_path_target();
             self.surface_config.transparent = transparent;
             self.gpu
                 .reconfigure_surface(&mut self.surface, self.surface_config);
@@ -560,28 +514,45 @@ impl BladeRenderer {
         objc2::rc::Retained::as_ptr(&self.surface.metal_layer()) as *mut _
     }
 
+    // lst patch: callers wait for GPU completion before releasing these targets.
+    fn release_path_target(&mut self) {
+        if let Some(target) = self.path_target.take() {
+            target.destroy(&self.gpu);
+        }
+    }
+
     #[profiling::function]
     fn draw_paths_to_intermediate(
         &mut self,
         paths: &[Path<ScaledPixels>],
         width: f32,
         height: f32,
-    ) {
-        self.command_encoder
-            .init_texture(self.path_intermediate_texture);
-        if let Some(msaa_texture) = self.path_intermediate_msaa_texture {
-            self.command_encoder.init_texture(msaa_texture);
+    ) -> gpu::TextureView {
+        // lst patch: keep resolved/MSAA resources together and create them
+        // on the first real path batch, after any surface reconfiguration.
+        let target = self.path_target.get_or_insert_with(|| {
+            PathTarget::new(
+                &self.gpu,
+                self.surface.info().format,
+                self.surface_config.size,
+                self.rendering_parameters.path_sample_count,
+            )
+        });
+        let resolved_view = target.resolved.1;
+        self.command_encoder.init_texture(target.resolved.0);
+        if let Some((texture, _)) = target.multisampled {
+            self.command_encoder.init_texture(texture);
         }
 
-        let target = if let Some(msaa_view) = self.path_intermediate_msaa_texture_view {
+        let target = if let Some((_, view)) = target.multisampled {
             gpu::RenderTarget {
-                view: msaa_view,
+                view,
                 init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
-                finish_op: gpu::FinishOp::ResolveTo(self.path_intermediate_texture_view),
+                finish_op: gpu::FinishOp::ResolveTo(resolved_view),
             }
         } else {
             gpu::RenderTarget {
-                view: self.path_intermediate_texture_view,
+                view: resolved_view,
                 init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
                 finish_op: gpu::FinishOp::Store,
             }
@@ -619,6 +590,8 @@ impl BladeRenderer {
             );
             encoder.draw(0, vertices.len() as u32, 0, 1);
         }
+        // lst patch: return the initialized view directly to the path compositor.
+        resolved_view
     }
 
     pub fn destroy(&mut self) {
@@ -629,15 +602,8 @@ impl BladeRenderer {
         self.gpu.destroy_command_encoder(&mut self.command_encoder);
         self.pipelines.destroy(&self.gpu);
         self.gpu.destroy_surface(&mut self.surface);
-        self.gpu.destroy_texture(self.path_intermediate_texture);
-        self.gpu
-            .destroy_texture_view(self.path_intermediate_texture_view);
-        if let Some(msaa_texture) = self.path_intermediate_msaa_texture {
-            self.gpu.destroy_texture(msaa_texture);
-        }
-        if let Some(msaa_view) = self.path_intermediate_msaa_texture_view {
-            self.gpu.destroy_texture_view(msaa_view);
-        }
+        // lst patch: targets may never have been allocated.
+        self.release_path_target();
     }
 
     pub fn draw(&mut self, scene: &Scene) {
@@ -707,7 +673,8 @@ impl BladeRenderer {
                         continue;
                     };
                     drop(pass);
-                    self.draw_paths_to_intermediate(
+                    // lst patch: the raster pass materializes its target on demand.
+                    let path_texture_view = self.draw_paths_to_intermediate(
                         paths,
                         self.surface_config.size.width as f32,
                         self.surface_config.size.height as f32,
@@ -751,7 +718,7 @@ impl BladeRenderer {
                         0,
                         &ShaderPathsData {
                             globals,
-                            t_sprite: self.path_intermediate_texture_view,
+                            t_sprite: path_texture_view,
                             s_sprite: self.atlas_sampler,
                             b_path_sprites: instance_buf,
                         },
@@ -915,6 +882,38 @@ impl BladeRenderer {
 
         self.wait_for_gpu();
         self.last_sync_point = Some(sync_point);
+    }
+}
+
+// lst patch: one owner for a resolved path target and its optional MSAA pair.
+// Texture/view pairs cannot be allocated or released independently by callers.
+struct PathTarget {
+    resolved: (gpu::Texture, gpu::TextureView),
+    multisampled: Option<(gpu::Texture, gpu::TextureView)>,
+}
+
+impl PathTarget {
+    fn new(
+        gpu: &gpu::Context,
+        format: gpu::TextureFormat,
+        size: gpu::Extent,
+        sample_count: u32,
+    ) -> Self {
+        Self {
+            resolved: create_path_intermediate_texture(gpu, format, size.width, size.height),
+            multisampled: create_msaa_texture_if_needed(
+                gpu, format, size.width, size.height, sample_count,
+            ),
+        }
+    }
+
+    fn destroy(self, gpu: &gpu::Context) {
+        if let Some((texture, view)) = self.multisampled {
+            gpu.destroy_texture_view(view);
+            gpu.destroy_texture(texture);
+        }
+        gpu.destroy_texture_view(self.resolved.1);
+        gpu.destroy_texture(self.resolved.0);
     }
 }
 
