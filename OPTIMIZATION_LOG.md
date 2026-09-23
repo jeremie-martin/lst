@@ -6,6 +6,31 @@ physical display `:0`, scale factor 2.0) unless marked *nested* (off-screen
 Xephyr, software presentation, only useful for relative app-side costs).
 Commands: see `docs/performance.md`.
 
+## Session 4: fresh baseline (23 September evening)
+
+- Start from `8accfc9`, clean worktree, production release built with
+  `cargo build --release -p lst-gpui --bin lst --example bench_editor_x11`.
+  Preserve both binaries for paired comparisons. Same reference host, physical
+  `:0`; run scenarios separately with `--repetitions 3 --priming 1 --keep-temp`
+  unless noted. Raw outputs and traces are retained under `/tmp/lst-perf-sep23`
+  and `/tmp/lst-gpui-bench-*` during the session.
+- Initial medians: small-file spawn to first frame 184.715 ms (five runs),
+  large-Rust typing 1.211 ms/character, plain typing 0.489 ms/character,
+  highlighted/plain scrolling 1.636/1.614 ms per app frame, search reindex
+  0.297 ms, 1k-cursor first-frame paint 0.491 ms, idle 40 ms CPU per two
+  seconds. Large paste 11.425 ms in the initial sweep.
+- Large-Rust typing spends 214.454 ms in 320 parser updates, versus
+  23.473 ms preparing and 13.261 ms painting viewports. Investigate whether
+  edits can be combined before each visible frame while keeping syntax current
+  for every consumer; delaying highlighting past a frame is not acceptable.
+- Two initial scenarios timed out (mixed paste and medium typing); the latter
+  trace shows focus loss. Exclude these attempts and reproduce before assigning
+  an application cause. Startup discovery sometimes observes pre-tiling window
+  sizes; frame traces, not that early geometry, determine comparable dimensions.
+- Vendor review: glyph tiles remain resident; the atlas removal call in the
+  current window implementation removes images. No evidence yet to retire the
+  glyph cache. Temporary startup phase instrumentation is not a product change.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off
