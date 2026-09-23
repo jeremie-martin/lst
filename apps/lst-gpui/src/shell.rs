@@ -1547,7 +1547,7 @@ fn modal_key_is_unmodified(event: &KeyDownEvent) -> bool {
 
 impl Render for LstGpuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.frame_clock = diagnostics::frame_clock();
+        let frame_clock = diagnostics::frame_clock();
         if diagnostics::trace_enabled() {
             static FIRST_RENDER: std::sync::Once = std::sync::Once::new();
             FIRST_RENDER.call_once(|| diagnostics::record_startup_mark("first_render"));
@@ -1963,13 +1963,6 @@ impl Render for LstGpuiApp {
                                                         started.elapsed().as_secs_f64() * 1000.0,
                                                     );
                                                 }
-                                                diagnostics::record_first_frame();
-                                                diagnostics::record_epoch("frame_end_epoch_us");
-                                                entity.update(cx, |this, _| {
-                                                    if let Some(clock) = this.frame_clock.take() {
-                                                        diagnostics::record_frame(clock);
-                                                    }
-                                                });
                                             },
                                         )
                                         .size_full()
@@ -2040,13 +2033,14 @@ impl Render for LstGpuiApp {
             });
         self.schedule_pending_reveal(window, cx);
         self.apply_focus(window, cx);
-        root.when(self.state_trace.is_enabled(), |root| {
+        let root = root.when(self.state_trace.is_enabled(), |root| {
             let entity = cx.entity().downgrade();
             // Publish sibling geometry together, after every surface has prepainted.
             root.on_children_prepainted(move |_, window, cx| {
                 let _ = entity.update(cx, |this, _| this.emit_state_trace(window));
             })
-        })
+        });
+        crate::frame_diagnostics::observe(root, frame_clock)
     }
 }
 

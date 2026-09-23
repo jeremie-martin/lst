@@ -153,8 +153,32 @@ Commands: see `docs/performance.md`.
   over three launches each. The 53 focused X11 tests, all-features source
   suite and Clippy passed with this renderer. Vendor patch reverse-application
   check passes. The temporary probe is retained outside the repository only.
-- Paired startup/steady-state measurements and the full nested gate follow;
-  the established benefit at this point is GPU memory, not a startup claim.
+- Paired production medians: small startup 186.398 -> 190.562 ms (seven runs),
+  large first frame 189.393 -> 199.486 ms (five); no startup gain established.
+  Scroll 1.010 -> 1.006 ms/frame, plain typing 0.476 -> 0.509 ms/character
+  with equal 130 ms process CPU, idle 30 -> 30 ms CPU/two seconds. Keep this
+  change for the memory reduction; startup variance merits reverse-order checks.
+- Temporary finer Vulkan instrumentation (removed) attributes ~53–61 ms to
+  device creation and ~48–51 ms to the first swapchain, versus ~1.5–1.9 ms
+  for a later resize. Adapter inspection itself is only ~25–30 microseconds.
+  Full nested checkpoint follows; investigate driver-bound startup separately.
+
+
+### Measure the complete root paint
+
+- Frame accounting ended inside the viewport canvas, excluding later status
+  chrome and overlays. A trace-only root element now owns the frame clock and
+  ends accounting after delegating the complete root paint. It adds no layout
+  node and is absent when tracing is off; remove the app's shared pending clock.
+- Historical frame-cost values above use the old viewport boundary. Subsequent
+  work uses the complete-root boundary and a fresh comparable baseline; do not
+  interpret the larger measured scope as an application regression. These are
+  still app-side paint timings, not GPU submission or presentation timings.
+- All-features source tests and all-targets/all-features Clippy pass. With
+  tracing enabled, clean-editor and find-panel images match the original
+  baseline exactly across three launches each. The final-input gate smoke
+  passes and verifies exact saved text; its concurrent-build timing is not a
+  performance comparison. Full nested checkpoint follows.
 
 ## Session 3: baseline and measurement reliability
 

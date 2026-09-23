@@ -66,11 +66,11 @@ completed frame must follow the corresponding edit, not precede it.
 work. `--keep-temp` preserves the per-run trace files, whose `notify=<reason>`
 and `startup_*_ms` lines attribute frames and startup phases.
 
-The app records per-frame `frame_wall_ms` and `frame_cpu_ms` around render,
-prepare, and paint, and wall-clock stamps (`input_epoch_us` when a model
-update starts, `frame_end_epoch_us` when a frame's paint ends) that the latency
-scenarios use to report `key_delivery_ms_p50`, `key_to_frame_end_ms_p50`, and
-`frame_end_to_damage_ms_p50`. `latency-edit-navigation` types a character
+The app records per-frame `frame_wall_ms` and `frame_cpu_ms` from root render
+through completion of root painting, including chrome and overlays. Wall-clock
+stamps (`input_epoch_us` when a model update starts, `frame_end_epoch_us` when
+root painting ends) let the latency scenarios report `key_delivery_ms_p50`,
+`key_to_frame_end_ms_p50`, and `frame_end_to_damage_ms_p50`. `latency-edit-navigation` types a character
 before each timed arrow key, the common case where revision-keyed caches have
 just been invalidated.
 

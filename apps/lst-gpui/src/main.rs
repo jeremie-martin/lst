@@ -9,6 +9,7 @@ mod command_ui;
 mod cursor_motion;
 mod diagnostics;
 mod editor_view;
+mod frame_diagnostics;
 mod input;
 mod launch;
 mod prompt_add;
@@ -424,8 +425,6 @@ struct LstGpuiApp {
     theme_button_bounds_px: Option<Bounds<Pixels>>,
     theme_name_rendered: String,
     status_details_rendered: String,
-    /// Frame accounting started by `render`; `None` unless tracing.
-    frame_clock: Option<diagnostics::FrameClock>,
     /// Stack of recently closed path-backed tabs, most-recent-last. `Ctrl+Shift+T`
     /// pops the top entry and reopens it with the cursor restored. Bounded
     /// so a long-lived editor session does not grow this unboundedly.
@@ -654,7 +653,6 @@ impl LstGpuiApp {
             theme_button_bounds_px: None,
             theme_name_rendered: initial_theme.theme().name.to_string(),
             status_details_rendered: String::new(),
-            frame_clock: None,
             closed_tabs_history: Vec::new(),
             input_mode_cli_override: launch.input_mode.is_some(),
             settings,
