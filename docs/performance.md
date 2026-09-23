@@ -102,7 +102,9 @@ DISPLAY=:1 ./target/release/examples/bench_editor_x11 \
   --paste-target markdown --position end
 ```
 
-The benchmark needs a real X11 desktop with XTEST, XDamage, and `xclip`. Use the
+The benchmark needs a real X11 desktop with XTEST, XDamage, `xclip`, and
+`xsel` (the mixed-paste clipboard owner). `xsel` supports concurrent selection
+requests, so another clipboard monitor cannot monopolize a large transfer. Use the
 same display, window size, build profile, corpus, scenario options, priming, and
 repetition count for both sides of a comparison. If variance obscures the
 result, increase repetitions before changing the metric or workload.

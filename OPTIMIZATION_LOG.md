@@ -60,6 +60,22 @@ Commands: see `docs/performance.md`.
   below 1 ms; no evidence for another blanket non-blocking setup patch.
 
 
+
+### Large external clipboard measurement
+
+- Reproduced mixed-paste hangs twice. System-call traces show Anki's idle mpv
+  client requesting the selection first, then leaving its `MPV_CLIPBOARD`
+  property in INCR state. xclip serializes that unfinished transfer and stops
+  responding to lst (and a separate reader). This is not editor parsing work.
+- Use xsel as the benchmark's foreground clipboard owner; it serves concurrent
+  requests. Leave other desktop applications untouched. A 3.9 MB transport
+  probe and four complete mixed-paste runs passed, including exact saved text.
+  xclip remains the reader; benchmark prerequisites now include xsel.
+- With the corrected completion gate, baseline 2.98 MB mixed/plain paste is
+  866.671 ms to paint: clipboard retrieval 833.248 ms, edit application
+  21.308 ms. GPUI's one-millisecond polling sleep per INCR chunk is the next
+  measured bottleneck, rather than the editor's text operation.
+
 ### Cache unchanged tab chrome
 
 - Split the tab strip into a GPUI child view with one complete, comparable

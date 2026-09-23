@@ -3296,15 +3296,17 @@ fn verify_file_text(path: &Path, expected_text: &str) -> Result<FileStats, Box<d
 
 fn seed_clipboard(conn: &RustConnection, clipboard: xproto::Atom, text: &str) -> Result<Child, Box<dyn Error>> {
     let previous_owner = conn.get_selection_owner(clipboard)?.reply()?.owner;
-    let mut child = Command::new("xclip")
-        .args(["-selection", "clipboard", "-in", "-quiet"])
+    // xsel serves concurrent selection requests: an unrelated clipboard
+    // monitor stalled in an INCR transfer must not block the editor reader.
+    let mut child = Command::new("xsel")
+        .args(["--clipboard", "--input", "--nodetach"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
     let Some(mut stdin) = child.stdin.take() else {
         let _ = terminate_child(&mut child);
-        return Err(io::Error::other("xclip stdin was not piped").into());
+        return Err(io::Error::other("xsel stdin was not piped").into());
     };
     let write_result = stdin.write_all(text.as_bytes());
     drop(stdin);
@@ -3316,14 +3318,14 @@ fn seed_clipboard(conn: &RustConnection, clipboard: xproto::Atom, text: &str) ->
     let ready = (|| -> Result<(), Box<dyn Error>> {
         loop {
             if let Some(status) = child.try_wait()? {
-                return Err(io::Error::other(format!("xclip exited with {status} before owning the clipboard")).into());
+                return Err(io::Error::other(format!("xsel exited with {status} before owning the clipboard")).into());
             }
             let owner = conn.get_selection_owner(clipboard)?.reply()?.owner;
             if owner != NONE && owner != previous_owner {
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                return Err(io::Error::other("timed out waiting for xclip to own the clipboard").into());
+                return Err(io::Error::other("timed out waiting for xsel to own the clipboard").into());
             }
             thread::sleep(Duration::from_millis(5));
         }
