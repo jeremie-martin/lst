@@ -9,9 +9,10 @@ crates.io sources, for re-applying to a newer gpui.
 Every change is marked `lst patch` in the source.
 
 1. **Draw right after input** (`src/platform.rs`, `src/window.rs`,
-   `src/platform/linux/x11/client.rs`). The X11 backend only draws when its
-   periodic refresh timer fires, so a keystroke waited up to one refresh
-   period (16.7 ms at 60 Hz) before the frame that shows it was even rendered.
+   `src/platform/linux/x11/client.rs`, `src/platform/windows/events.rs`). The
+   X11 backend only draws when its periodic refresh timer fires, so a keystroke
+   waited up to one refresh period (16.7 ms at 60 Hz) before the frame that
+   shows it was even rendered.
    After handling a batch of X11 input events, every window that the input
    left dirty is now drawn and presented immediately; clean windows and
    next-frame callbacks are left to the timer as before.
@@ -41,6 +42,8 @@ Every change is marked `lst patch` in the source.
    thread as the first step of the X11 client and is joined where the
    context is first needed, so it overlaps the font scan and the X11 setup.
    First frame on the reference host ~300 -> ~240 ms.
+   Restrict the worker to Vulkan: the GLES backend keeps its thread-bound
+   EGL context on the platform thread, preserving that backend's build contract.
 
 5. **Sprites sorted by texture, not tile** (`src/scene.rs`). `Scene::finish`
    sorted every glyph sprite by (order, tile id) each frame; draw batches
@@ -111,4 +114,5 @@ Every change is marked `lst patch` in the source.
     4× sampling. Full path resources appear normally when paths are drawn.
 
 The `Cargo.toml` here also drops the crate's example and test targets whose
-sources are not vendored.
+sources are not vendored. It suppresses upstream dead-code and unreachable-code
+warnings that become visible when a registry dependency is built as a path dependency.

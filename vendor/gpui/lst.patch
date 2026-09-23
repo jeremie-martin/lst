@@ -20,14 +20,15 @@
 
      pub(crate) last_click: Instant,
      pub(crate) last_mouse_button: Option<MouseButton>,
-@@ -302,6 +308,14 @@
+@@ -302,6 +308,15 @@
 
  impl X11Client {
      pub(crate) fn new() -> anyhow::Result<Self> {
 +        // lst patch: creating the Vulkan instance and device takes ~120 ms
 +        // with the NVIDIA driver and needs nothing from the X11 setup, so it
 +        // runs on its own thread while the font database and the X11
-+        // connection are set up.
++        // connection are set up. EGL contexts must stay on the platform thread.
++        #[cfg(not(gles))]
 +        let gpu_context = std::thread::Builder::new()
 +            .name("gpu-context".into())
 +            .spawn(BladeContext::new)
@@ -35,19 +36,21 @@
          let event_loop = EventLoop::try_new()?;
 
          let (common, main_receiver) = LinuxCommon::new(event_loop.get_signal());
-@@ -411,7 +425,10 @@
+@@ -411,6 +426,13 @@
              .to_string();
          let keyboard_layout = LinuxKeyboardLayout::new(layout_name.into());
 
--        let gpu_context = BladeContext::new().context("Unable to init GPU context")?;
++        // lst patch: only Vulkan contexts can move from the startup worker.
++        #[cfg(not(gles))]
 +        let gpu_context = gpu_context
 +            .join()
 +            .map_err(|_| anyhow!("GPU context thread panicked"))?
 +            .context("Unable to init GPU context")?;
++        #[cfg(gles)]
+         let gpu_context = BladeContext::new().context("Unable to init GPU context")?;
 
          let resource_database = x11rb::resource_manager::new_from_default(&xcb_connection)
-             .context("Failed to create resource database")?;
-@@ -471,6 +488,7 @@
+@@ -471,6 +493,7 @@
          xcb_flush(&xcb_connection);
 
          Ok(X11Client(Rc::new(RefCell::new(X11ClientState {
@@ -55,7 +58,7 @@
              modifiers: Modifiers::default(),
              capslock: Capslock::default(),
              last_modifiers_changed_event: Modifiers::default(),
-@@ -608,6 +626,8 @@
+@@ -608,6 +631,8 @@
              if events.is_empty() && windows_to_refresh.is_empty() {
                  break;
              }
@@ -64,7 +67,7 @@
 
              for window in windows_to_refresh.into_iter() {
                  let mut state = self.0.borrow_mut();
-@@ -665,6 +685,25 @@
+@@ -665,6 +690,25 @@
                      }
                  }
              }
@@ -90,7 +93,7 @@
          }
          Ok(())
      }
-@@ -1515,16 +1554,19 @@
+@@ -1515,16 +1559,19 @@
          };
 
          state.cursor_styles.insert(focused_window, style);
@@ -115,7 +118,7 @@
          .log_err();
          state.xcb_connection.flush().log_err();
      }
-@@ -1740,21 +1782,29 @@
+@@ -1740,21 +1787,29 @@
                  // Ideally this would be re-queried when the window changes screens, but there
                  // doesn't seem to be an efficient / straightforward way to do this. Should also be
                  // updated when screen configurations change.
@@ -160,7 +163,7 @@
                      None => {
                          log::error!(
                              "Failed to get screen mode info from xrandr, \
-@@ -1796,16 +1846,30 @@
+@@ -1796,16 +1851,30 @@
                              window.refresh(RequestFrameOptions {
                                  require_presentation: expose_event_received,
                                  force_render: false,
@@ -282,10 +285,11 @@
 
 --- a/src/platform/windows/events.rs
 +++ b/src/platform/windows/events.rs
-@@ -1196,6 +1196,7 @@
+@@ -1196,6 +1196,8 @@
      fn draw_window(&self, handle: HWND, force_render: bool) -> Option<isize> {
          let mut request_frame = self.state.borrow_mut().callbacks.request_frame.take()?;
          request_frame(RequestFrameOptions {
++            // lst patch: keep Windows frame behavior with the X11 dirty-only option.
 +            only_if_dirty: false,
              require_presentation: false,
              force_render,

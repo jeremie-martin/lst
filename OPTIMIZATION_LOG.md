@@ -270,6 +270,22 @@ Commands: see `docs/performance.md`.
   eager 197.913 versus lazy 187.823 ms, reversing the earlier ordering.
   Treat startup as unchanged within variance; retain the proven GPU-memory gain.
 
+### Preserve GPU context thread affinity
+
+- The GLES experiment exposed a defect in the existing GPUI startup-thread
+  patch: an EGL context is not `Send`, so that backend could no longer compile.
+  Restrict the worker to Vulkan and construct EGL on the platform thread.
+  Native Vulkan initialization is unchanged. Mark/document the existing
+  Windows frame-option adaptation as well; regenerate the exact vendor patch.
+- The actual vendored sources compile with `RUSTFLAGS='--cfg gles'` (isolated
+  target directory), and native all-features tests and Clippy pass. Vendor
+  reverse-application check passes. This restores the build contract, not an
+  endorsement of the rejected GLES runtime experiment.
+- A minimal C/Vulkan probe, without GPUI or optional device features, takes
+  ~48–62 ms for its first device and ~43–55 ms for subsequent devices; adding
+  only the swapchain extension changes little. Instance creation is ~19–28 ms.
+  This independently reproduces much of the measured driver-side startup cost.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

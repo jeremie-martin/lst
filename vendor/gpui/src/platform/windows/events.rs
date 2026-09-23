@@ -1196,6 +1196,7 @@ impl WindowsWindowInner {
     fn draw_window(&self, handle: HWND, force_render: bool) -> Option<isize> {
         let mut request_frame = self.state.borrow_mut().callbacks.request_frame.take()?;
         request_frame(RequestFrameOptions {
+            // lst patch: keep Windows frame behavior with the X11 dirty-only option.
             only_if_dirty: false,
             require_presentation: false,
             force_render,

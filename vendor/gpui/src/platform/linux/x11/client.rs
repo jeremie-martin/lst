@@ -311,7 +311,8 @@ impl X11Client {
         // lst patch: creating the Vulkan instance and device takes ~120 ms
         // with the NVIDIA driver and needs nothing from the X11 setup, so it
         // runs on its own thread while the font database and the X11
-        // connection are set up.
+        // connection are set up. EGL contexts must stay on the platform thread.
+        #[cfg(not(gles))]
         let gpu_context = std::thread::Builder::new()
             .name("gpu-context".into())
             .spawn(BladeContext::new)
@@ -425,10 +426,14 @@ impl X11Client {
             .to_string();
         let keyboard_layout = LinuxKeyboardLayout::new(layout_name.into());
 
+        // lst patch: only Vulkan contexts can move from the startup worker.
+        #[cfg(not(gles))]
         let gpu_context = gpu_context
             .join()
             .map_err(|_| anyhow!("GPU context thread panicked"))?
             .context("Unable to init GPU context")?;
+        #[cfg(gles)]
+        let gpu_context = BladeContext::new().context("Unable to init GPU context")?;
 
         let resource_database = x11rb::resource_manager::new_from_default(&xcb_connection)
             .context("Failed to create resource database")?;
