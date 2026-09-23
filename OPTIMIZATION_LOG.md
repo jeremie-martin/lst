@@ -31,6 +31,8 @@ Commands: see `docs/performance.md`.
   final input operation, rather than accepting any paint since the burst began.
   The old gate can exclude final rendering work. Twelve benchmark self-tests
   pass; subsequent typing comparisons must use this runner on both binaries.
+  Apply the same completion ordering to paste and the first post-paste key;
+  rebuild and use that runner for subsequent paste comparisons.
 - Vendor review: glyph tiles remain resident; the atlas removal call in the
   current window implementation removes images. No evidence yet to retire the
   glyph cache. Temporary startup phase instrumentation is not a product change.
@@ -56,6 +58,28 @@ Commands: see `docs/performance.md`.
   ~90–104 ms overlapping ~81–99 ms font discovery, surface creation at
   ~41–83 ms, pipelines ~7 ms. Checked X11 request round trips were individually
   below 1 ms; no evidence for another blanket non-blocking setup patch.
+
+
+### Cache unchanged tab chrome
+
+- Split the tab strip into a GPUI child view with one complete, comparable
+  set of render inputs. Reuse GPUI's existing layout/paint cache when those
+  inputs are unchanged. Changed inputs render immediately; callbacks read
+  current application state through a weak owner handle. No vendor patch.
+- Paired production measurements, three runs after priming: navigation frame
+  wall time **1.054 -> 0.769 ms** and scrolling **1.588 -> 1.239 ms/frame**.
+  Navigation CPU fell 3140 -> 2600 ms; scrolling CPU 1250 -> 1070 ms.
+  Key-to-screen latency 7.181 -> 7.107 ms is effectively unchanged. Large-file
+  typing 1.245 -> 1.284 ms/character shows no gain; parser cost still dominates.
+- Default smooth-caret navigation produces ~25.6 app frames per key on this
+  host, unchanged by the patch. Reusing unchanged chrome reduces their cost
+  without shortening the animation or moving work outside the timing window.
+- Verification: release build and 31 focused nested X11 tests passed (tabs,
+  chrome, state trace, recent files). All ten physical-display visual scenarios
+  match the preserved baseline exactly over three fresh launches each; reviewed
+  the reference captures. Run scenarios separately because the five-scenario
+  group exceeded the harness timeout. All-targets/all-features Clippy passed
+  (existing upstream Blade lifetime warnings). Full checkpoint gates follow.
 
 ## Session 3: baseline and measurement reliability
 

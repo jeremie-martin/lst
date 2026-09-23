@@ -1,14 +1,14 @@
 use crate::ui::{
     scrollbar::ScrollbarAxis,
     theme::{metrics, typography},
-    IconButton, IconKind, Tab as UiTab, TabBar,
+    IconButton, IconKind,
 };
 use gpui::{
     canvas, div, prelude::*, px, rgb, AnyElement, App, Bounds, Context, CursorStyle, ElementInputHandler,
-    InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement,
-    Pixels, Render, SharedString, Stateful, StatefulInteractiveElement, Styled, Window,
+    InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, ParentElement, Pixels,
+    Render, SharedString, Stateful, StatefulInteractiveElement, Styled, Window,
 };
-use lst_editor::{EditorCommand as Command, TabId};
+use lst_editor::EditorCommand as Command;
 
 use crate::recent::{RecentFilter, RecentOrigin, RecentPresentation, RecentPreviewState};
 use crate::syntax::syntax_mode_for_language;
@@ -24,199 +24,7 @@ use crate::{
 };
 use std::{rc::Rc, time::Instant};
 
-#[derive(Clone)]
-struct TabDrag {
-    tab_id: TabId,
-    name: String,
-    theme: crate::ui::theme::Theme,
-}
-
-impl Render for TabDrag {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_3()
-            .py_2()
-            .rounded_sm()
-            .border_1()
-            .border_color(rgb(self.theme.role.border))
-            .bg(rgb(self.theme.role.panel_bg))
-            .text_color(rgb(self.theme.role.text))
-            .child(self.name.clone())
-    }
-}
-
 impl LstGpuiApp {
-    fn render_tab(&mut self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme(cx);
-        let tab = self.model.tab(ix).expect("rendered tab index must exist");
-        let tab_id = tab.id();
-        let tab_name = self.tab_display_label(ix);
-        let modified = tab.modified();
-        let backing_file_missing = tab.backing_file_missing();
-        let saving = tab.path().is_some_and(|path| self.save_inflight.contains_key(path));
-        let active = !self.recent.is_open() && ix == self.model.active_index();
-        let show_close = active || self.hovered_tab == Some(ix);
-        let close_button: Option<IconButton> = show_close.then(|| {
-            IconButton::new(("tab-close", ix), IconKind::Close, theme)
-                .emphasized(active)
-                .tooltip("Close tab (Ctrl+W)")
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.request_close_tab_at(ix, cx);
-                    cx.stop_propagation();
-                }))
-        });
-
-        UiTab::new(("tab", ix), theme)
-            .active(active)
-            .separator_before(ix > 0)
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.hovered_tab = Some(ix);
-                } else if this.hovered_tab == Some(ix) {
-                    this.hovered_tab = None;
-                }
-                cx.notify();
-            }))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.close_recent_files_panel(cx);
-                this.force_editor_focus = true;
-                this.set_focus(FocusTarget::Editor);
-                this.update_model(cx, true, |model| {
-                    if let Some(id) = model.tab_id_at(ix) {
-                        model.set_active_tab(id);
-                    }
-                });
-                window.focus(&this.focus_handle);
-                cx.notify();
-            }))
-            .on_mouse_up(
-                MouseButton::Middle,
-                cx.listener(move |this, _: &MouseUpEvent, window, cx| {
-                    this.set_focus(FocusTarget::Editor);
-                    this.request_close_tab_at(ix, cx);
-                    window.focus(&this.focus_handle);
-                    cx.stop_propagation();
-                }),
-            )
-            .on_drag(
-                TabDrag {
-                    tab_id,
-                    name: tab_name.clone(),
-                    theme,
-                },
-                |drag: &TabDrag, _, _, cx| cx.new(|_| drag.clone()),
-            )
-            .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
-                let source =
-                    (0..this.model.tab_count()).find(|index| this.model.tab_id_at(*index) == Some(drag.tab_id));
-                let Some(source) = source else {
-                    return;
-                };
-                let delta = ix as isize - source as isize;
-                if delta == 0 {
-                    return;
-                }
-                this.update_model(cx, true, |model| {
-                    model.set_active_tab(drag.tab_id);
-                    model.execute(Command::MoveActiveTab(delta));
-                });
-            }))
-            .end_slot(close_button.map(IntoElement::into_any_element))
-            .when(backing_file_missing, |tab| {
-                tab.child(div().flex_none().text_color(rgb(theme.role.error_text)).child("!"))
-            })
-            .when(saving && !backing_file_missing, |tab| {
-                tab.child(div().flex_none().text_color(rgb(theme.role.accent)).child("↻"))
-            })
-            .when(modified && !saving && !backing_file_missing, |tab| {
-                tab.child(div().flex_none().text_color(rgb(theme.role.accent)).child("●"))
-            })
-            .child(div().min_w_0().truncate().child(tab_name))
-    }
-
-    fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme(cx);
-        let entity = cx.entity();
-        // Button bounds are captured once per group from the group's
-        // children, so no button needs a wrapper element of its own; the
-        // former wrappers' side padding is the buttons' margin.
-        let recent_button = IconButton::new("recent-files-button", IconKind::Recent, theme)
-            .emphasized(self.recent.is_open())
-            .tooltip("Open recent (Ctrl+R)")
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.toggle_recent_files_panel(window, cx);
-                cx.stop_propagation();
-            }));
-        let items = (0..self.model.tab_count())
-            .map(|ix| self.render_tab(ix, cx).into_any_element())
-            .collect::<Vec<_>>();
-        let all_tabs_button = IconButton::new("all-tabs-button", IconKind::ChevronDown, theme)
-            .mx_1()
-            .emphasized(self.workspace_surface == crate::WorkspaceSurface::TabList)
-            .tooltip("Show all open tabs")
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.toggle_tab_list(cx);
-                cx.stop_propagation();
-            }));
-        let new_tab_button = IconButton::new("new-tab-button", IconKind::Plus, theme)
-            .mx_2()
-            .tooltip("New scratchpad (Ctrl+N)")
-            .on_click(cx.listener(|this, _, _window, cx| {
-                this.request_new_tab(cx);
-                cx.stop_propagation();
-            }));
-        let end_controls = div()
-            .flex()
-            .h_full()
-            .items_center()
-            .on_children_prepainted({
-                let entity = entity.clone();
-                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
-                    let all_tabs = bounds.first().copied();
-                    let new_tab = bounds.get(1).copied();
-                    entity.update(cx, |this, _| {
-                        this.all_tabs_button_bounds_px = all_tabs;
-                        this.new_tab_button_bounds_px = new_tab;
-                    });
-                }
-            })
-            .child(all_tabs_button)
-            .child(new_tab_button);
-
-        let start_controls = div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .px_1()
-            .on_children_prepainted({
-                let entity = entity.clone();
-                move |bounds: Vec<Bounds<Pixels>>, _window, cx| {
-                    let app_menu = bounds.first().copied();
-                    let recent = bounds.get(1).copied();
-                    entity.update(cx, |this, _| {
-                        this.app_menu_button_bounds_px = app_menu;
-                        this.recent_button_bounds_px = recent;
-                    });
-                }
-            })
-            .child(
-                IconButton::new("app-menu-button", IconKind::Menu, theme)
-                    .emphasized(self.workspace_surface == crate::WorkspaceSurface::AppMenu)
-                    .tooltip("Application menu")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_app_menu(cx);
-                        cx.stop_propagation();
-                    })),
-            )
-            .child(recent_button);
-
-        TabBar::new("editor-tabs", theme)
-            .start_child(start_controls)
-            .end_child(end_controls)
-            .track_scroll(&self.tab_bar_scroll)
-            .children(items)
-    }
-
     fn render_find_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
         let theme = self.theme(cx);

@@ -21,6 +21,7 @@ mod shell;
 mod startup;
 mod state_trace;
 mod syntax;
+mod tab_strip;
 mod ui;
 mod viewport;
 mod voice;
@@ -327,6 +328,7 @@ struct LstGpuiApp {
     model: EditorModel,
     tab_views: HashMap<TabId, EditorTabView>,
     tab_bar_scroll: ScrollHandle,
+    tab_strip_view: Option<Entity<tab_strip::TabStrip>>,
     command_palette_scroll: ScrollHandle,
     workspace_surface_scroll: ScrollHandle,
     recent_scroll: ScrollHandle,
@@ -573,6 +575,7 @@ impl LstGpuiApp {
             model,
             tab_views: HashMap::new(),
             tab_bar_scroll: ScrollHandle::new(),
+            tab_strip_view: None,
             command_palette_scroll: ScrollHandle::new(),
             workspace_surface_scroll: ScrollHandle::new(),
             recent_scroll: ScrollHandle::new(),
