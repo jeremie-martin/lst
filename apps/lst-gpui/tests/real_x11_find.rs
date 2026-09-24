@@ -24,10 +24,10 @@ fn find_navigates_and_replaces_after_every_document_line_separator() -> TestResu
         editor.expect_find_state("needle", separators.len())?;
         for line in 1..=separators.len() {
             editor.expect_cursor_heads(&[(line, 0)])?;
-            if line != separators.len() {
-                editor.keys("<enter>")?;
-            }
+            editor.keys("<enter>")?;
         }
+        // Submitting past the last match wraps to the first.
+        editor.expect_cursor_heads(&[(1, 0)])?;
         editor.keys("<esc><S-end><C-c>")?;
         wait_clipboard_text(Selection::Clipboard, "needle", secs(5))?;
         editor.keys("<C-h><C-a>needle<tab>found<C-A-enter>")?;
@@ -54,12 +54,12 @@ fn lowercase_find_query_uses_smart_case() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn uppercase_find_query_is_case_sensitive() -> TestResult {
     support::run_x11_test("find-smart-case-uppercase", |session| {
-        let path = session.seed_file("smart-case-uppercase.txt", "Foo foo FOO")?;
+        let path = session.seed_file("smart-case-uppercase.txt", "foo Foo FOO")?;
         let mut editor = session.open_file("find-smart-case-uppercase", &path)?;
 
         editor.keys("<C-f>Foo")?;
-        let record = editor.expect_find_state("Foo", 1)?;
-        assert_eq!(record.cursors[0].head_pos(), (0, 0), "{record:?}");
+        editor.expect_find_state("Foo", 1)?;
+        editor.expect_cursor_heads(&[(0, 4)])?;
         Ok(())
     })
 }
@@ -68,22 +68,21 @@ fn uppercase_find_query_is_case_sensitive() -> TestResult {
 #[ignore = "requires a real X11 display plus xclip"]
 fn submitting_find_query_advances_to_next_match() -> TestResult {
     support::run_x11_test("find-submit-next-match", |session| {
-        let path = session.seed_file("find-next.txt", "foo bar\nbaz foo")?;
+        let path = session.seed_file("find-next.txt", "bar foo\nbaz foo")?;
         let mut editor = session.open_file("find-submit-next-match", &path)?;
 
         editor.keys("<C-f>foo")?;
-        let first = editor.expect_find_state("foo", 2)?;
-        assert_eq!(first.cursors[0].head_pos(), (0, 0), "{first:?}");
+        editor.expect_find_state("foo", 2)?;
+        editor.expect_cursor_heads(&[(0, 4)])?;
 
         editor.keys("<enter>")?;
-        let second = editor.wait_state("second find match", secs(5), |record| {
+        editor.wait_state("second find match", secs(5), |record| {
             record.find.visible
                 && record.find.query == "foo"
                 && record.find.match_count == 2
                 && record.find.active_index == Some(1)
                 && matches!(record.cursors.as_slice(), [cursor] if cursor.head_pos() == (1, 4))
         })?;
-        assert_eq!(second.cursors[0].head_pos(), (1, 4), "{second:?}");
         Ok(())
     })
 }
@@ -99,10 +98,19 @@ fn repeated_ctrl_f_refocuses_without_closing_or_collapsing_replace() -> TestResu
         editor.wait_state("replace opens expanded", secs(2), |record| {
             record.find.visible && record.find.show_replace && record.focused_input == "find_query"
         })?;
-        editor.keys("<C-f><C-f>")?;
-        editor.wait_state("find remains expanded and query focused", secs(2), |record| {
-            record.find.visible && record.find.show_replace && record.focused_input == "find_query"
+        editor.click_at_text(0, 0)?;
+        editor.wait_state("editor focused with replace still open", secs(2), |record| {
+            record.find.visible && record.find.show_replace && record.focused_input == "editor"
         })?;
+        // No keys are ignored here: every record until Ctrl+F refocuses the
+        // query must keep the expanded panel, so a close-and-reopen toggle
+        // fails even though it ends in the same state.
+        editor.expect_keys_ignored(
+            "",
+            "<C-f>",
+            |record| record.focused_input == "find_query",
+            |record| record.find.visible && record.find.show_replace,
+        )?;
         Ok(())
     })
 }
@@ -127,7 +135,7 @@ fn workspace_shortcuts_work_while_find_inputs_are_focused() -> TestResult {
                 && record.focused_input == "editor"
         })?;
 
-        editor.keys("<C-f><C-f>")?;
+        editor.keys("<C-f>")?;
         editor.wait_state("find query focus before new tab", secs(2), |record| {
             record.find.visible && record.focused_input == "find_query"
         })?;
@@ -139,7 +147,7 @@ fn workspace_shortcuts_work_while_find_inputs_are_focused() -> TestResult {
                 && record.focused_input == "editor"
         })?;
 
-        editor.keys("<C-f><C-f>")?;
+        editor.keys("<C-f>")?;
         editor.wait_state("find query focus before next tab", secs(2), |record| {
             record.find.visible && record.focused_input == "find_query"
         })?;
@@ -151,7 +159,7 @@ fn workspace_shortcuts_work_while_find_inputs_are_focused() -> TestResult {
                 && record.focused_input == "editor"
         })?;
 
-        editor.keys("<C-f><C-f>")?;
+        editor.keys("<C-f>")?;
         editor.wait_state("find query focus before previous tab", secs(2), |record| {
             record.find.visible && record.focused_input == "find_query"
         })?;
@@ -199,7 +207,7 @@ fn tab_strip_buttons_work_while_find_query_is_focused() -> TestResult {
                 && record.focused_input == "editor"
         })?;
 
-        editor.keys("<C-f><C-f>")?;
+        editor.keys("<C-f>")?;
         editor.wait_state("find query focus before recent click", secs(2), |record| {
             record.find.visible && record.focused_input == "find_query"
         })?;
@@ -228,13 +236,12 @@ fn case_sensitive_chip_disables_smart_case() -> TestResult {
         editor.expect_find_state("foo", 3)?;
 
         editor.click_find_chip(FindChip::CaseSensitive)?;
-        let record = editor.wait_state("case-sensitive find", secs(5), |record| {
+        editor.wait_state("case-sensitive find", secs(5), |record| {
             record.find.visible
                 && record.find.query == "foo"
                 && record.find.case_sensitive
                 && record.find.match_count == 1
         })?;
-        assert!(record.find.case_sensitive, "{record:?}");
         Ok(())
     })
 }
@@ -250,10 +257,9 @@ fn whole_word_chip_restricts_matches_to_word_boundaries() -> TestResult {
         editor.expect_find_state("foo", 5)?;
 
         editor.click_find_chip(FindChip::WholeWord)?;
-        let record = editor.wait_state("whole-word find", secs(5), |record| {
+        editor.wait_state("whole-word find", secs(5), |record| {
             record.find.visible && record.find.query == "foo" && record.find.whole_word && record.find.match_count == 3
         })?;
-        assert!(record.find.whole_word, "{record:?}");
         Ok(())
     })
 }
@@ -269,10 +275,9 @@ fn regex_chip_treats_query_as_pattern() -> TestResult {
         editor.expect_find_state("fo.", 1)?;
 
         editor.click_find_chip(FindChip::Regex)?;
-        let record = editor.wait_state("regex find", secs(5), |record| {
+        editor.wait_state("regex find", secs(5), |record| {
             record.find.visible && record.find.query == "fo." && record.find.use_regex && record.find.match_count == 3
         })?;
-        assert!(record.find.use_regex, "{record:?}");
         Ok(())
     })
 }
@@ -288,7 +293,7 @@ fn invalid_regex_query_reports_error_and_clears_matches() -> TestResult {
         editor.expect_find_state("[", 2)?;
 
         editor.click_find_chip(FindChip::Regex)?;
-        let record = editor.wait_state("invalid regex find", secs(5), |record| {
+        editor.wait_state("invalid regex find", secs(5), |record| {
             record.find.visible
                 && record.find.query == "["
                 && record.find.use_regex
@@ -300,7 +305,6 @@ fn invalid_regex_query_reports_error_and_clears_matches() -> TestResult {
                     .as_deref()
                     .is_some_and(|error| error.starts_with("regex:"))
         })?;
-        assert!(record.find.error.is_some(), "{record:?}");
         Ok(())
     })
 }
@@ -316,8 +320,12 @@ fn find_query_ctrl_a_replaces_existing_query() -> TestResult {
         editor.expect_find_state("alpha", 2)?;
 
         editor.keys("<C-a>beta")?;
-        let record = editor.expect_find_state("beta", 2)?;
-        assert_eq!(record.focused_input, "find_query", "{record:?}");
+        editor.wait_state("query replaced", secs(5), |record| {
+            record.find.visible
+                && record.find.query == "beta"
+                && record.find.match_count == 2
+                && record.focused_input == "find_query"
+        })?;
         Ok(())
     })
 }
@@ -330,13 +338,13 @@ fn find_respects_grapheme_boundaries_for_combining_clusters() -> TestResult {
         let mut editor = session.open_file("find-grapheme-boundaries", &path)?;
 
         editor.keys("<C-f>e")?;
-        let ascii = editor.expect_find_state("e", 1)?;
-        assert_eq!(ascii.cursors[0].head_pos(), (1, 3), "{ascii:?}");
+        editor.expect_find_state("e", 1)?;
+        editor.expect_cursor_heads(&[(1, 3)])?;
 
         write_clipboard_text(Selection::Clipboard, "e\u{0301}")?;
         editor.keys("<C-a><C-v>")?;
-        let decomposed = editor.expect_find_state("e\u{0301}", 1)?;
-        assert_eq!(decomposed.cursors[0].head_pos(), (0, 3), "{decomposed:?}");
+        editor.expect_find_state("e\u{0301}", 1)?;
+        editor.expect_cursor_heads(&[(0, 3)])?;
         Ok(())
     })
 }
@@ -348,8 +356,14 @@ fn replace_current_match_only_rewrites_active_match() -> TestResult {
         let path = session.seed_file("replace-one.txt", "foo foo foo")?;
         let mut editor = session.open_file("find-replace-one-active-match", &path)?;
 
-        editor.keys("<C-h>foo<tab>bar<enter>")?;
-        editor.save_then_expect_file(&path, "bar foo foo")?;
+        editor.keys("<C-h>foo")?;
+        editor.expect_find_state("foo", 3)?;
+        editor.keys("<enter>")?;
+        editor.wait_state("second match active", secs(5), |record| {
+            record.find.active_index == Some(1) && record.focused_input == "find_query"
+        })?;
+        editor.keys("<tab>bar<enter>")?;
+        editor.save_then_expect_file(&path, "foo bar foo")?;
         Ok(())
     })
 }
