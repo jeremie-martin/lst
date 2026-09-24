@@ -160,6 +160,73 @@ fn vim_question_search_repeats_backward() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn vim_slash_search_moves_to_the_next_match_after_the_cursor() -> TestResult {
+    support::run_x11_test("vim-slash-search", |session| {
+        let path = session.seed_file("vim-slash-search.txt", "foo bar foo baz foo")?;
+        let mut editor = session.open_vim_file("vim-slash-search", &path)?;
+
+        editor.keys("<esc>0")?;
+        editor.expect_cursor_heads(&[(0, 0)])?;
+        editor.keys("/")?;
+        editor.wait_state("vim slash find query focus", secs(2), |record| {
+            record.find.visible && record.focused_input == "find_query"
+        })?;
+        editor.keys("foo<enter>")?;
+        editor.wait_state("vim slash search submitted", secs(5), |record| {
+            !record.find.visible && record.focused_input == "editor"
+        })?;
+        editor.expect_cursor_heads(&[(0, 8)])?;
+        editor.keys("n")?;
+        editor.expect_cursor_heads(&[(0, 16)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_slash_search_replaces_the_previous_query() -> TestResult {
+    support::run_x11_test("vim-slash-replaces-query", |session| {
+        let path = session.seed_file("vim-slash-empty.txt", "foo bar foo bar")?;
+        let mut editor = session.open_vim_file("vim-slash-empty", &path)?;
+
+        editor.keys("<esc>0*")?;
+        editor.expect_cursor_heads(&[(0, 8)])?;
+        // The prompt opens with "foo" from * selected, so typing replaces it
+        // instead of searching for "foobar".
+        editor.keys("/bar<enter>")?;
+        editor.expect_cursor_heads(&[(0, 12)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_search_that_finds_nothing_or_is_cancelled_keeps_the_cursor() -> TestResult {
+    support::run_x11_test("vim-search-miss-cancel", |session| {
+        let path = session.seed_file("vim-search-miss.txt", "abc def zebra foo")?;
+        let mut editor = session.open_vim_file("vim-search-miss", &path)?;
+
+        editor.keys("<esc>0w")?;
+        editor.expect_cursor_heads(&[(0, 4)])?;
+        // While typing, "z" alone matches "zebra"; the full query matches
+        // nothing.
+        editor.keys("/zzz<enter>")?;
+        editor.wait_state("vim missed search closes", secs(5), |record| {
+            !record.find.visible && record.focused_input == "editor"
+        })?;
+        editor.expect_cursor_heads(&[(0, 4)])?;
+
+        editor.keys("/foo<esc>")?;
+        editor.wait_state("vim cancelled search closes", secs(5), |record| {
+            !record.find.visible && record.focused_input == "editor"
+        })?;
+        editor.expect_cursor_heads(&[(0, 4)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn vim_change_undo_is_single_step() -> TestResult {
     support::run_x11_test("vim-change-undo", |session| {
         let (mut editor, path) = session.open_vim("scratch")?;

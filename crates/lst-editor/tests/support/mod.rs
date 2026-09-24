@@ -16,7 +16,7 @@ pub struct VimHarness {
     pub model: EditorModel,
     pub focus: FocusTarget,
     effects: Vec<EditorEffect>,
-    deferred_find_query: Option<String>,
+    find_query_selected: bool,
 }
 
 pub struct ModelHarness {
@@ -158,7 +158,7 @@ impl VimHarness {
             model,
             focus: FocusTarget::Editor,
             effects: Vec::new(),
-            deferred_find_query: None,
+            find_query_selected: false,
         };
         harness.sync_effects();
         harness
@@ -182,7 +182,7 @@ impl VimHarness {
             model,
             focus: FocusTarget::Editor,
             effects: Vec::new(),
-            deferred_find_query: None,
+            find_query_selected: false,
         };
         harness.sync_effects();
         harness
@@ -244,38 +244,24 @@ impl VimHarness {
         self.model.handle_vim_key(key, modifiers, WRAP_COLUMNS);
     }
 
+    /// Mirrors the app's find field: opening it selects the previous query
+    /// so the first typed character replaces it, every edit updates the
+    /// query, Enter submits, and Escape cancels.
     fn find_query_key(&mut self, key: Key) {
+        let query = if std::mem::take(&mut self.find_query_selected) {
+            String::new()
+        } else {
+            self.model.find().query.clone()
+        };
         match key {
-            Key::Character(text) if text == "\u{1b}" => {
-                self.deferred_find_query = None;
-                self.model.close_find_panel();
-            }
-            Key::Character(text) => {
-                self.deferred_find_query
-                    .get_or_insert_with(|| self.model.find().query.clone())
-                    .push_str(&text);
-            }
+            Key::Character(text) if text == "\u{1b}" => self.model.cancel_find_query(),
+            Key::Character(text) => self.model.update_find_query_and_activate(format!("{query}{text}")),
             Key::Named(NamedKey::Backspace) => {
-                let mut query = self
-                    .deferred_find_query
-                    .take()
-                    .unwrap_or_else(|| self.model.find().query.clone());
+                let mut query = query;
                 query.pop();
-                self.deferred_find_query = Some(query);
-            }
-            Key::Named(NamedKey::Enter) => {
-                let query = self
-                    .deferred_find_query
-                    .take()
-                    .unwrap_or_else(|| self.model.find().query.clone());
-                let was_visual = matches!(self.model.vim_mode(), vim::Mode::Visual | vim::Mode::VisualLine);
                 self.model.update_find_query_and_activate(query);
-                if was_visual {
-                    self.model.close_find_panel();
-                } else {
-                    self.model.submit_find_query();
-                }
             }
+            Key::Named(NamedKey::Enter) => self.model.submit_find_query(),
             _ => {}
         }
     }
@@ -284,9 +270,7 @@ impl VimHarness {
         for effect in self.model.drain_effects() {
             if let EditorEffect::Focus(target) = effect {
                 self.focus = target;
-                if target == FocusTarget::FindQuery {
-                    self.deferred_find_query = Some(self.model.find().query.clone());
-                }
+                self.find_query_selected = target == FocusTarget::FindQuery;
             }
             self.effects.push(effect);
         }

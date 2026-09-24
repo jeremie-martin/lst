@@ -217,7 +217,11 @@ struct OwnedClipboard {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FindSubmit {
     Panel,
-    Vim { backward: bool },
+    /// A Vim `/` or `?` prompt, which searches from where it was opened.
+    Vim {
+        backward: bool,
+        origin: Position,
+    },
 }
 impl EditorModel {
     pub fn from_tabs(first: EditorTab, rest: Vec<EditorTab>, status: String) -> Self {
@@ -436,6 +440,10 @@ impl EditorModel {
     }
     pub fn update_find_query_and_activate(&mut self, text: String) {
         self.find.query = text;
+        if let FindSubmit::Vim { backward, origin } = self.find_submit {
+            self.preview_vim_search(origin, backward);
+            return;
+        }
         self.reindex_find_matches_to_nearest();
         if self.move_to_current_find_match() {
             self.queue_reveal(RevealIntent::Center);
@@ -446,17 +454,19 @@ impl EditorModel {
             FindSubmit::Panel => {
                 self.execute(EditorCommand::FindNext);
             }
-            FindSubmit::Vim { backward } => {
-                if !matches!(self.vim.mode, vim::Mode::Visual | vim::Mode::VisualLine) {
-                    if backward {
-                        self.execute(EditorCommand::FindPrev);
-                    } else {
-                        self.execute(EditorCommand::FindNext);
-                    }
-                }
+            FindSubmit::Vim { backward, origin } => {
+                self.preview_vim_search(origin, backward);
                 self.close_find_panel();
             }
         }
+    }
+    /// Closes the find prompt without accepting it. A Vim search returns to
+    /// where it started, as Neovim does on Esc.
+    pub fn cancel_find_query(&mut self) {
+        if let FindSubmit::Vim { origin, .. } = self.find_submit {
+            self.move_to_vim_search_target(origin);
+        }
+        self.close_find_panel();
     }
     pub fn update_find_replacement(&mut self, text: String) {
         self.find.replacement = text;

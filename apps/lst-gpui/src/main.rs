@@ -1295,7 +1295,7 @@ impl LstGpuiApp {
                 self.update_model(cx, true, EditorModel::submit_find_query);
             }
             InputFieldEvent::Cancelled => {
-                self.update_model(cx, true, EditorModel::close_find_panel);
+                self.update_model(cx, true, EditorModel::cancel_find_query);
             }
             InputFieldEvent::NextRequested => {
                 if self.model.find().show_replace {

@@ -836,12 +836,30 @@ impl EditorModel {
     }
 
     fn vim_open_search(&mut self, backward: bool) -> bool {
-        self.find_submit = crate::FindSubmit::Vim { backward };
+        self.find_submit = crate::FindSubmit::Vim {
+            backward,
+            origin: self.cursor(),
+        };
         self.vim.search_backward = backward;
         self.find.visible = true;
         self.find.show_replace = false;
         self.queue_focus(FocusTarget::FindQuery);
         true
+    }
+
+    /// Neovim's incremental search: show the match the search would land on
+    /// from where it started, or stay there while nothing matches.
+    pub(crate) fn preview_vim_search(&mut self, origin: Position, backward: bool) {
+        self.reindex_find_matches();
+        let target = if backward {
+            self.find.prev_from(origin)
+        } else {
+            self.find.next_from(origin)
+        };
+        self.move_to_vim_search_target(target.unwrap_or(origin));
+        if target.is_some() {
+            self.queue_reveal(RevealIntent::Center);
+        }
     }
 
     fn vim_search_step(&mut self, same_direction: bool) -> bool {
