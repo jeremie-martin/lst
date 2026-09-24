@@ -427,7 +427,8 @@ mod tests {
         let image = Screenshot {
             width: 4,
             height: 3,
-            rgb_pixels: (0..12).flat_map(|value| [value, value, value]).collect(),
+            // Start at 1 so a masked (zeroed) top-left pixel is observable.
+            rgb_pixels: (1..=12).flat_map(|value| [value, value, value]).collect(),
         };
 
         let masked = image.mask_corner_squares(1).unwrap();
@@ -437,8 +438,8 @@ mod tests {
         assert_eq!(
             masked.rgb_pixels,
             vec![
-                0, 0, 0, 1, 1, 1, 2, 2, 2, 0, 0, 0, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 0, 0, 0, 9, 9, 9, 10, 10, 10,
-                0, 0, 0,
+                0, 0, 0, 2, 2, 2, 3, 3, 3, 0, 0, 0, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 0, 0, 0, 10, 10, 10, 11, 11,
+                11, 0, 0, 0,
             ]
         );
     }
