@@ -201,3 +201,39 @@ pub(crate) const DEFAULT_CONFIG: &LanguageConfig = &CONFIG_DEFAULT;
 pub(crate) fn config_for(lang: Option<Language>) -> &'static LanguageConfig {
     lang.map_or(DEFAULT_CONFIG, Language::config)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_maps_extensions_to_languages() {
+        for (path, language) in [
+            ("example.rs", Some(Language::Rust)),
+            ("example.py", Some(Language::Python)),
+            ("example.pyw", Some(Language::Python)),
+            ("example.js", Some(Language::JavaScript)),
+            ("example.mjs", Some(Language::JavaScript)),
+            ("example.cjs", Some(Language::JavaScript)),
+            ("example.jsx", Some(Language::Jsx)),
+            ("example.ts", Some(Language::TypeScript)),
+            ("example.tsx", Some(Language::Tsx)),
+            ("example.json", Some(Language::Json)),
+            ("example.jsonc", Some(Language::Jsonc)),
+            ("example.toml", Some(Language::Toml)),
+            ("example.yaml", Some(Language::Yaml)),
+            ("example.yml", Some(Language::Yaml)),
+            ("example.md", Some(Language::Markdown)),
+            ("example.markdown", Some(Language::Markdown)),
+            ("example.html", Some(Language::Html)),
+            ("example.htm", Some(Language::Html)),
+            ("example.css", Some(Language::Css)),
+            ("example.scss", Some(Language::Scss)),
+            ("example.sh", Some(Language::Shell)),
+            ("EXAMPLE.RS", Some(Language::Rust)),
+            ("example.txt", None),
+        ] {
+            assert_eq!(detect(Some(Path::new(path)), None), language, "{path}");
+        }
+    }
+}
