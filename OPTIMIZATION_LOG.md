@@ -327,6 +327,26 @@ Commands: see `docs/performance.md`.
   words and wrap-mode changes. Same-revision syntax-refresh coverage, source
   suites, Clippy, 42 focused X11 cases and all ten exact visual scenarios pass.
 
+### Update no-wrap width when the longest line grows
+
+- Typing into the current widest line invalidated the cached maximum and
+  scanned every document line after each character. Remeasure the changed
+  range first: if it still reaches the old maximum, unchanged lines cannot
+  exceed it. Retain the full scan when the maximum may have shrunk. Reuse
+  the existing cache, with no additional retained state.
+- Physical `typing-plain --typing-no-wrap --position end`, candidate then
+  preserved baseline, one priming run: 18,000 lines (five measured runs)
+  **2.954 -> 0.446 ms/character**, CPU **890 -> 120 ms**. At 500,000 lines
+  (three runs), **69.708 -> 0.382 ms/character**, CPU **22,270 -> 130 ms**.
+  Both variants finish the complete 320-character edit and verify exact
+  saved contents. Initial layout and shrinking the widest line still require
+  a full measurement; this gain concerns ordinary line growth.
+- The new real-X11 scrollbar test passes on baseline and candidate: grow a
+  line past another line's width, continue typing, then shrink it below that
+  line and verify the actual horizontal extent and saved text. All eight
+  viewport tests, the all-features source suite and Clippy pass. A broader
+  checkpoint follows with the search changes.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

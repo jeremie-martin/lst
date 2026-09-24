@@ -98,6 +98,51 @@ fn no_wrap_line_growth_updates_horizontal_extent() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn no_wrap_horizontal_extent_tracks_a_growing_and_shrinking_longest_line() -> TestResult {
+    fn scroll_to_right_end(editor: &mut lst_x11_harness::Editor) -> support::SupportResult<f32> {
+        let state = editor.read_state()?;
+        let (x, y) = state.viewport.bounds_origin_px.expect("viewport origin");
+        let (width, height) = state.viewport.bounds_size_px.expect("viewport size");
+        let scale = state.viewport.scale_factor;
+        // Page through the horizontal scrollbar track until its thumb reaches
+        // the right end. Coordinates are derived from the observed viewport.
+        for _ in 0..8 {
+            editor.click_at((x + width - 11.0 * scale) as i32, (y + height - 5.0 * scale) as i32)?;
+        }
+        editor.wait_quiet(Duration::from_millis(75), secs(5))?;
+        Ok(editor.read_state()?.viewport.scroll_left_px)
+    }
+
+    support::run_x11_test("viewport-no-wrap-longest-line", |session| {
+        let second = "b".repeat(600);
+        let path = session.seed_file("widest.txt", &format!("{}\n{second}", "a".repeat(400)))?;
+        let mut editor = session.open_file("viewport-no-wrap-longest-line", &path)?;
+        editor.send_keys_settle("<A-z>")?;
+        let original = scroll_to_right_end(&mut editor)?;
+        assert!(original > 0.0);
+
+        editor.keys("<C-home><end>")?;
+        write_clipboard_text(Selection::Clipboard, &"a".repeat(400))?;
+        editor.keys("<C-v>xxxxxxxxxx")?;
+        editor.expect_cursor_heads(&[(0, 810)])?;
+        let char_width = editor.read_state()?.viewport.char_width_px;
+        let grown = scroll_to_right_end(&mut editor)?;
+        assert!(
+            (grown - original - 210.0 * char_width).abs() < 2.0,
+            "{original} -> {grown}, character width {char_width}"
+        );
+
+        editor.keys("<C-home><S-end>z")?;
+        editor.expect_cursor_heads(&[(0, 1)])?;
+        let shrunk = scroll_to_right_end(&mut editor)?;
+        assert!((shrunk - original).abs() < 2.0, "{original} -> {grown} -> {shrunk}");
+        editor.save_then_expect_file(&path, &format!("z\n{second}"))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn typing_at_wrapped_line_end_keeps_cursor_visible() -> TestResult {
     support::run_x11_test("viewport-wrapped-eof-typing", |session| {
         let path = session.seed_file("long-wrapped.txt", &"a".repeat(30_000))?;

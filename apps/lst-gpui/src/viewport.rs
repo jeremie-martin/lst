@@ -200,9 +200,9 @@ impl ViewportCache {
         self.code_char_width = None;
     }
 
-    /// Preserve the horizontal extent across ordinary edits. If the previous
-    /// widest line was untouched, no-wrap mode can remeasure only this small
-    /// line window instead of rescanning the whole document.
+    /// Preserve the horizontal extent across ordinary edits. No-wrap mode
+    /// remeasures this line window, rescanning the document only if the
+    /// previous widest line may have shrunk.
     pub(crate) fn patch_unwrapped_line_width(
         &mut self,
         revision: u64,
@@ -960,26 +960,34 @@ pub(crate) fn max_unwrapped_line_width(
         }
         if cached.char_width == char_width
             && cached.font_size == font_size
-            && cache.unwrapped_line_width_invalidation.as_ref().is_some_and(|pending| {
-                pending.base_revision == cached.revision
-                    && pending.revision == revision
-                    && !pending.lines.contains(&cached.line_ix)
-            })
+            && cache
+                .unwrapped_line_width_invalidation
+                .as_ref()
+                .is_some_and(|pending| pending.base_revision == cached.revision && pending.revision == revision)
         {
             let pending = cache
                 .unwrapped_line_width_invalidation
                 .take()
                 .expect("checked pending line-width invalidation");
-            let mut updated = CachedUnwrappedLineWidth { revision, ..cached };
-            for line_ix in pending.lines {
-                let line_width = unwrapped_rope_line_width(buffer.line(line_ix), char_width, scale, theme, window);
+            let widest_changed = pending.lines.contains(&cached.line_ix);
+            let mut updated = CachedUnwrappedLineWidth {
+                revision,
+                width: if widest_changed { px(0.0) } else { cached.width },
+                ..cached
+            };
+            for (line_ix, line) in pending.lines.clone().zip(buffer.lines_at(pending.lines.start)) {
+                let line_width = unwrapped_rope_line_width(line, char_width, scale, theme, window);
                 if line_width > updated.width {
                     updated.width = line_width;
                     updated.line_ix = line_ix;
                 }
             }
-            cache.max_unwrapped_line_width = Some(updated);
-            return updated.width;
+            // Unchanged lines cannot exceed the previous maximum. If a
+            // changed line still reaches it, that maximum remains proven.
+            if !widest_changed || updated.width >= cached.width {
+                cache.max_unwrapped_line_width = Some(updated);
+                return updated.width;
+            }
         }
     }
 
