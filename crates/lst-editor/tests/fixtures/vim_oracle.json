@@ -14157,6 +14157,168 @@
       }
     },
     {
+      "name": "join after whitespace-only line adds no space",
+      "area": "normal_edits",
+      "initial_text": "  \nbar",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "J",
+      "expected": {
+        "text": "  bar",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "join after trailing space adds no space",
+      "area": "normal_edits",
+      "initial_text": "a \nb",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "J",
+      "expected": {
+        "text": "a b",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "join keeps trailing whitespace",
+      "area": "normal_edits",
+      "initial_text": "a  \nb",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "J",
+      "expected": {
+        "text": "a  b",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "join after trailing tab adds no space",
+      "area": "normal_edits",
+      "initial_text": "a\t\nb",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "J",
+      "expected": {
+        "text": "a\tb",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "join over blank line puts cursor at last join",
+      "area": "normal_edits",
+      "initial_text": "a\n\nb",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "3J",
+      "expected": {
+        "text": "a b",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "join onto empty line adds no space",
+      "area": "normal_edits",
+      "initial_text": "\nabc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "J",
+      "expected": {
+        "text": "abc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "join before closing paren adds no space",
+      "area": "normal_edits",
+      "initial_text": "call(a\n)",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "J",
+      "expected": {
+        "text": "call(a)",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "join strips tabs from joined line",
+      "area": "normal_edits",
+      "initial_text": "a\n\t\tb",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "J",
+      "expected": {
+        "text": "a b",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "join count past end joins the rest",
+      "area": "normal_edits",
+      "initial_text": "a\nb\nc",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "5J",
+      "expected": {
+        "text": "a\nb c",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
       "name": "join single line is noop",
       "area": "normal_edits",
       "initial_text": "abc",
@@ -14819,6 +14981,116 @@
         "register": {
           "kind": "char",
           "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "delete word on empty line is linewise",
+      "area": "normal_edits",
+      "initial_text": "\nabc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "dw",
+      "expected": {
+        "text": "abc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "yank word on empty line is linewise",
+      "area": "normal_edits",
+      "initial_text": "\nabc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "ywp",
+      "expected": {
+        "text": "\n\nabc",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "yank word on empty line pastes above",
+      "area": "normal_edits",
+      "initial_text": "\nabc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "ywP",
+      "expected": {
+        "text": "\n\nabc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete word in whitespace-only line stops at line end",
+      "area": "normal_edits",
+      "initial_text": "  \nabc",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "dw",
+      "expected": {
+        "text": " \nabc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": " "
+        }
+      }
+    },
+    {
+      "name": "delete counted words onto an empty line",
+      "area": "normal_edits",
+      "initial_text": "a b\n\nc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "3dw",
+      "expected": {
+        "text": "c",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "a b\n"
         }
       }
     },

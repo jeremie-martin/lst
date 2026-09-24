@@ -555,6 +555,15 @@ def build_cases() -> list[dict]:
         ("substitute first char of word", "alpha beta", (0, 0), "sX<esc>"),
         ("change full line preserves indentation", "  abc\nnext", (0, 2), "Snew<esc>"),
         ("join keeps first line indent", "  foo\nbar", (0, 0), "J"),
+        ("join after whitespace-only line adds no space", "  \nbar", (0, 0), "J"),
+        ("join after trailing space adds no space", "a \nb", (0, 0), "J"),
+        ("join keeps trailing whitespace", "a  \nb", (0, 0), "J"),
+        ("join after trailing tab adds no space", "a\t\nb", (0, 0), "J"),
+        ("join over blank line puts cursor at last join", "a\n\nb", (0, 0), "3J"),
+        ("join onto empty line adds no space", "\nabc", (0, 0), "J"),
+        ("join before closing paren adds no space", "call(a\n)", (0, 0), "J"),
+        ("join strips tabs from joined line", "a\n\t\tb", (0, 0), "J"),
+        ("join count past end joins the rest", "a\nb\nc", (1, 0), "5J"),
         ("join single line is noop", "abc", (0, 0), "J"),
         ("replace first char", "abc", (0, 0), "rx"),
         ("replace three chars", "abcd", (0, 0), "3rx"),
@@ -596,6 +605,11 @@ def build_cases() -> list[dict]:
         ("delete to end on empty line keeps newline", "\nabc", (0, 0), "D"),
         ("change to end on empty line keeps newline", "\nabc", (0, 0), "Cx<esc>"),
         ("delete last word keeps newline", "alpha beta\ngamma", (0, 6), "dw"),
+        ("delete word on empty line is linewise", "\nabc", (0, 0), "dw"),
+        ("yank word on empty line is linewise", "\nabc", (0, 0), "ywp"),
+        ("yank word on empty line pastes above", "\nabc", (0, 0), "ywP"),
+        ("delete word in whitespace-only line stops at line end", "  \nabc", (0, 1), "dw"),
+        ("delete counted words onto an empty line", "a b\n\nc", (0, 0), "3dw"),
     ]:
         cases.append(case(name, "normal_edits", text, cursor, keys, assert_register=True))
 

@@ -166,41 +166,6 @@ fn unicode_grapheme_vim_edits_cover_operators_registers_paste_and_case() {
     harness.expect_char_register("éclair");
 }
 
-// Neovim makes `dw` and `yw` on an empty line linewise (register: line ""); lst
-// takes a charwise "\n". The texts below agree, but the register differs and
-// `ywp` leaves Neovim's cursor on line 1, lst's on line 0. Kept out of the
-// oracle until that divergence is decided.
-#[test]
-fn word_operators_on_an_empty_line_take_its_newline() {
-    run_text_cases(&[
-        ("dw on an empty line deletes the newline", "\nabc", (0, 0), "dw", "abc"),
-        (
-            "yw on an empty line yanks the newline",
-            "\nabc",
-            (0, 0),
-            "ywP",
-            "\n\nabc",
-        ),
-    ]);
-}
-
-// Neovim inserts no separator after a whitespace-only first line ("  \nbar" J
-// gives "  bar") and leaves `3J` over a blank line on the separator (column 1).
-// lst gives "   bar" and column 2. Kept out of the oracle until that is decided.
-#[test]
-fn join_keeps_indentation_only_lines_and_adds_no_space_for_blank_lines() {
-    run_text_cases(&[
-        (
-            "join keeps indentation-only first line",
-            "  \nbar",
-            (0, 0),
-            "J",
-            "   bar",
-        ),
-        ("join adds no space for blank lines", "a\n\nb", (0, 0), "3J", "a b"),
-    ]);
-}
-
 #[test]
 fn visual_selection_follows_viewport_motions() {
     let text = (0..12)

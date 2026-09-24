@@ -69,20 +69,6 @@ fn vim_normal_open_join_and_replace_commands_edit_observable_text() -> TestResul
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn vim_join_preserves_indent_only_first_line_in_observable_text() -> TestResult {
-    support::run_x11_test("vim-join-indent-only", |session| {
-        let path = session.seed_file("vim-join-indent-only.txt", "  \nbar")?;
-        let mut editor = session.open_vim_file("join-indent-only", &path)?;
-
-        editor.place_cursor_at_document_start()?;
-        editor.keys("<esc>J")?;
-        editor.save_then_expect_file(&path, "   bar")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
 fn vim_linewise_yank_pastes_after_target_line() -> TestResult {
     support::run_x11_test("vim-linewise-paste", |session| {
         let (mut editor, path) = session.open_vim("scratch")?;

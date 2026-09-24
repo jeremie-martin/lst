@@ -267,7 +267,7 @@ impl EditorModel {
             "0" => self.line_start(self.cursor().line),
             "^" => self.line_first_nonblank(self.cursor().line),
             "$" => self.line_last(self.cursor().line),
-            "w" | "W" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.word_forward(off, cmd == "W")),
+            "w" | "W" => self.word_forward_motion(n, cmd == "W", operator),
             "e" | "E" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.word_end(off, cmd == "E")),
             "b" | "B" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.word_backward(off, cmd == "B")),
             "j" => return Some(self.vertical(n as isize, operator)),
@@ -375,16 +375,18 @@ impl EditorModel {
         }
         let cur = self.cursor_offset();
         let mut at = motion.at;
-        // Vim exclusive-motion rule: an exclusive forward motion that lands in
-        // column 0 is pulled back to the end of the previous line, so e.g. `dw`
-        // on the last word of a line operates on the word, not the line break.
+        // Vim's exclusive-motion rule (:h exclusive-linewise): an exclusive
+        // motion that ends in column 0 of a later line ends at the end of the
+        // previous line instead; if it started at or before the first
+        // non-blank, it becomes linewise, so `dw` on an empty line deletes it.
         if !motion.inclusive && at > cur {
-            let at_pos = char_to_position(self.active_tab().buffer(), at);
-            if at_pos.column == 0 && at_pos.line > 0 {
-                let prev_end = self.line_end(at_pos.line - 1);
-                if prev_end > cur {
-                    at = prev_end;
+            let buffer = self.active_tab().buffer();
+            let (at_pos, cur_pos) = (char_to_position(buffer, at), char_to_position(buffer, cur));
+            if at_pos.column == 0 && at_pos.line > cur_pos.line {
+                if cur_pos.column <= self.indent_of(cur_pos.line).chars().count() {
+                    return self.vim_apply_lines_span(op, cur_pos.line, at_pos.line - 1);
                 }
+                at = self.line_end(at_pos.line - 1);
             }
         }
         let mut range = if at >= cur { cur..at } else { at..cur };
@@ -775,59 +777,38 @@ impl EditorModel {
         true
     }
 
+    /// Vim's `J`: join `count` lines (at least two). Each joined line loses
+    /// its leading blanks and is separated by one space, except after text
+    /// ending in a blank, before an empty line or one starting with `)`, and
+    /// after nothing at all. The cursor lands where the last line was joined.
     fn vim_join(&mut self, count: usize) -> bool {
         let first = self.cursor().line;
-        let mut last = (first + count.max(2) - 1).min(self.active_tab().line_count() - 1);
-        if first >= last {
+        let lines = self.active_tab().line_count();
+        let requested = count.max(2);
+        if first + requested > lines && requested == 2 {
             return true;
         }
-        while last > first
-            && self.line_start(last) == self.active_tab().len_chars()
-            && line_display_text(self.active_tab().buffer(), last).is_empty()
-        {
-            last -= 1;
+        let last = (first + requested - 1).min(lines - 1);
+        if last <= first {
+            return true;
         }
-        // Vim keeps the first line's leading indentation, strips leading
-        // whitespace from each joined line, and inserts a single separating
-        // space (none for empty lines), rather than trimming every line.
-        let mut joined = String::new();
-        let mut first_len = 0usize;
-        for (offset, line) in (first..=last).enumerate() {
-            let text = line_display_text(self.active_tab().buffer(), line);
-            if offset == 0 {
-                let trimmed = text.trim_end();
-                let part = if trimmed.is_empty() && !text.is_empty() {
-                    text.as_str()
-                } else {
-                    trimmed
-                };
-                first_len = part.chars().count();
-                joined.push_str(part);
-                continue;
+
+        let buffer = self.active_tab().buffer();
+        let mut joined = line_display_text(buffer, first);
+        let mut ends_in_blank = joined.ends_with([' ', '\t']);
+        let mut last_join = 0;
+        for line in first + 1..=last {
+            let text = line_display_text(buffer, line);
+            let part = text.trim_start_matches([' ', '\t']);
+            last_join = joined.chars().count();
+            if !part.is_empty() && !part.starts_with(')') && !joined.is_empty() && !ends_in_blank {
+                joined.push(' ');
             }
-            let part = text.trim();
-            if !part.is_empty() {
-                if !joined.is_empty() {
-                    joined.push(' ');
-                }
-                joined.push_str(part);
-            }
+            joined.push_str(part);
+            ends_in_blank = part.ends_with([' ', '\t']);
         }
-        let joined = joined.trim_end().to_string();
-        let end = if last + 1 < self.active_tab().line_count()
-            && self.line_start(last + 1) == self.active_tab().len_chars()
-        {
-            self.active_tab().len_chars()
-        } else {
-            self.line_end(last)
-        };
-        let cursor_col = if count <= 1 {
-            first_len
-        } else {
-            first_len + (last - first)
-        }
-        .min(joined.chars().count().saturating_sub(1));
-        let change = TextChange::replace(self.line_start(first)..end, joined);
+        let cursor_col = last_join.min(joined.chars().count().saturating_sub(1));
+        let change = TextChange::replace(self.line_start(first)..self.line_end(last), joined);
         self.apply_active_edit_request(
             EditRequest::single_other_at_position(change, Position::new(first, cursor_col)),
             Some(RevealIntent::NearestEdge),
@@ -1208,6 +1189,26 @@ impl EditorModel {
         match self.cursor_offset() < line_end {
             true => self.next_grapheme(self.cursor_offset()),
             false => self.cursor_offset(),
+        }
+    }
+
+    /// `count` words forward. Under an operator, Vim ends the last word at the
+    /// end of a non-empty line rather than moving on to the next line
+    /// (:h word, "Another special case").
+    fn word_forward_motion(&self, count: usize, big: bool, operator: bool) -> usize {
+        let start = self.cursor_offset();
+        let before_last = if count > 1 {
+            repeat_offset(self, start, count - 1, |s, off| s.word_forward(off, big))
+        } else {
+            start
+        };
+        let last = self.word_forward(before_last, big);
+        let line = char_to_position(self.active_tab().buffer(), before_last).line;
+        let leaves_line = char_to_position(self.active_tab().buffer(), last).line > line;
+        if operator && leaves_line && self.line_end(line) > self.line_start(line) {
+            self.line_end(line)
+        } else {
+            last
         }
     }
 

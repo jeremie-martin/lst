@@ -16,7 +16,7 @@ The supported core includes:
 - `d`, `c`, and `y` with motions, text objects, and multiplied counts;
   `dd`, `cc`, and `yy`
 - `i a I A`, `o O`, `x X`, `s`, `D C S`, `J`, `r`, `p P`, `u`, and
-  `>> <<`
+  `>> <<`; redo is `Super+R`, because `Ctrl+R` opens the recent-files view
 - Visual delete, change, yank, case conversion, paste, end swapping, and
   indentation
 - inner/around word, big-word, paragraph, parentheses, brackets, braces,
@@ -83,10 +83,9 @@ The oracle owns Normal and Visual parity for ASCII text: add those cases to
 keeps what the oracle cannot express: grapheme and non-ASCII editing (Neovim
 reports byte columns), lst-specific policy such as unsupported-command no-ops,
 pending display, search focus, and `<cmd-r>` redo, viewport-dependent motions,
-`g;` and `gi`, and rows that currently diverge from Neovim, each marked with a
-comment. A command that fails in Neovim, whether with an error such as E35 or
-as a failed motion such as `fz`, discards the rest of that case's keys, so end
-a case at such a command.
+and `g;` and `gi`. A command that fails in Neovim, whether with an error such as
+E35 or as a failed motion such as `fz`, discards the rest of that case's keys,
+so end a case at such a command.
 
 Regenerate the fixture only for an intentional parity change:
 
