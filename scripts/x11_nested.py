@@ -35,6 +35,7 @@ REQUIRED_COMMANDS = (
     "xdpyinfo",
     "xclip",
     "setxkbmap",
+    "dbus-daemon",
 )
 REQUIRED_EXTENSIONS = ("DAMAGE", "XTEST", "XKEYBOARD")
 DISPLAY_ALLOCATION_LOCK = Path(tempfile.gettempdir()) / "lst-x11-nested-display.lock"
@@ -166,6 +167,8 @@ class NestedDisplay:
         self.host_active_before: str | None = None
         self.xephyr: subprocess.Popen[object] | None = None
         self.wm: subprocess.Popen[object] | None = None
+        self.dbus: subprocess.Popen[str] | None = None
+        self.dbus_address: str | None = None
         self.capabilities: dict[str, object] = {}
 
     def __enter__(self) -> "NestedDisplay":
@@ -195,6 +198,7 @@ class NestedDisplay:
             if not self.visible:
                 self._verify_offscreen_container()
             self._start_window_manager()
+            self._start_session_bus()
             self._record_capabilities()
             return self
         except BaseException:
@@ -210,6 +214,9 @@ class NestedDisplay:
         env = os.environ.copy()
         env["DISPLAY"] = self.display
         env.pop("XAUTHORITY", None)
+        env.pop("WAYLAND_DISPLAY", None)
+        if self.dbus_address is not None:
+            env["DBUS_SESSION_BUS_ADDRESS"] = self.dbus_address
         if extra:
             env.update(extra)
         return env
@@ -229,7 +236,25 @@ class NestedDisplay:
             terminate_process(process)
             raise
 
+    def _start_session_bus(self) -> None:
+        # A private session bus keeps the editor under test away from the
+        # host desktop: a file dialog or settings portal must not open on,
+        # or read from, the developer's real session.
+        self.dbus = subprocess.Popen(
+            ["dbus-daemon", "--session", "--nofork", "--print-address=1"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            start_new_session=True,
+        )
+        assert self.dbus.stdout is not None
+        self.dbus_address = self.dbus.stdout.readline().strip()
+        if not self.dbus_address:
+            raise NestedDisplayError("private session bus did not report an address")
+
     def close(self) -> None:
+        terminate_process(self.dbus)
+        self.dbus = None
         terminate_process(self.wm)
         terminate_process(self.xephyr)
         self.wm = None

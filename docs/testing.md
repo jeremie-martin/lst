@@ -99,6 +99,10 @@ difference:
 DISPLAY=:0 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored only
 ```
 
+The nested runner also gives the editor a private D-Bus session bus, so a file
+dialog or settings portal never reaches the host desktop; the physical-display
+profile uses the host session.
+
 Both profiles run serially because tests take keyboard focus and move the X11
 pointer. `x11-nested` excludes `real_x11_visual`; `x11` includes it. All test
 functions are ignored under ordinary Cargo runs and selected with
