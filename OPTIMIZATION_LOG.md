@@ -403,6 +403,25 @@ Commands: see `docs/performance.md`.
   (0.387 -> 0.381 ms). Keep the throughput gain and simpler ownership;
   do not claim a general screen-latency improvement.
 
+### Share borrowed-line traversal with full width measurement
+
+- Extract the wrapping traversal into `for_each_rope_line`, preserving Ropey's
+  exact lines, terminators, and final empty line. Full no-wrap width scans now
+  borrow chunk text instead of constructing metadata-bearing slices for every
+  line. Cross-chunk lines use one reusable buffer; local edits keep their
+  existing slice-based measurement. Reuse one ASCII/monospace predicate.
+- A 500,000-line scan probe falls ~70 -> 17 ms. Alternating-order production
+  runs deleting 320 characters from the widest line of a 29.5 MB document:
+  **23,561 -> 5,720 ms through the final paint**, median of three launches
+  each; app cost **73.622 -> 17.855 ms/backspace**. Exact saved text verified.
+  A 30 MB single-line scan probe is also faster (~9.0 -> 7.6 ms), though
+  cross-chunk materialization requires temporary storage for that line.
+- Line traversal matches Rope::lines after 1,024 fragmented Unicode edits,
+  all supported line separators, empty text and long cross-chunk lines.
+  All-features tests, Clippy and all eight viewport X11 cases pass. Full
+  scans remain necessary when the scalar maximum can no longer prove the
+  extent; retaining measured widths is the next experiment.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

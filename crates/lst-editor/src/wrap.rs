@@ -110,35 +110,7 @@ pub fn build_wrap_layout_for_rope(buffer: &Rope, wrap_columns: usize, show_wrap:
         total_rows = total_rows.saturating_add(visual_line_count_for_str_line(line, wrap_columns));
         line_row_starts.push(total_rows);
     };
-    // Row counts need text, not the character/UTF-16 metadata produced for
-    // every RopeSlice by Rope::lines(). Borrow lines within each chunk and
-    // assemble only the ones crossing chunk boundaries. Ropey guarantees
-    // that chunks end at character boundaries and never split CRLF pairs.
-    let mut partial_line = String::new();
-    for chunk in buffer.chunks() {
-        let ends_with_break = chunk.char_indices().next_back().is_some_and(|(start, _)| {
-            let tail = &chunk[start..];
-            ropey::str_utils::byte_to_line_idx(tail, tail.len()) != 0
-        });
-        let mut remaining = chunk;
-        while !remaining.is_empty() {
-            let end = ropey::str_utils::line_to_byte_idx(remaining, 1);
-            let complete = end < remaining.len() || ends_with_break;
-            let (line, rest) = remaining.split_at(end);
-            if complete && partial_line.is_empty() {
-                push_line(line);
-            } else {
-                partial_line.push_str(line);
-                if complete {
-                    push_line(&partial_line);
-                    partial_line.clear();
-                }
-            }
-            remaining = rest;
-        }
-    }
-    // A trailing line break still leaves one final empty logical line.
-    push_line(&partial_line);
+    crate::for_each_rope_line(buffer, |_, line| push_line(line));
     WrapLayout {
         show_wrap,
         wrap_columns,

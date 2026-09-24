@@ -993,13 +993,13 @@ pub(crate) fn max_unwrapped_line_width(
 
     let mut width = px(0.0);
     let mut widest_line = 0;
-    for (line_ix, line) in buffer.lines().enumerate() {
-        let line_width = unwrapped_rope_line_width(line, char_width, scale, theme, window);
+    lst_editor::for_each_rope_line(buffer, |line_ix, line| {
+        let line_width = unwrapped_text_line_width(line, char_width, scale, theme, window);
         if line_width > width {
             width = line_width;
             widest_line = line_ix;
         }
-    }
+    });
 
     cache.max_unwrapped_line_width = Some(CachedUnwrappedLineWidth {
         revision,
@@ -1024,10 +1024,7 @@ fn unwrapped_rope_line_width(
         end -= 1;
     }
     let display = line.slice(..end);
-    if display
-        .chunks()
-        .all(|chunk| chunk.bytes().all(|byte| byte.is_ascii() && byte != b'\t'))
-    {
+    if display.chunks().all(is_plain_monospace_text) {
         char_width * display.len_chars() as f32
     } else {
         let display = display.to_string();
@@ -1035,8 +1032,17 @@ fn unwrapped_rope_line_width(
     }
 }
 
+fn unwrapped_text_line_width(line: &str, char_width: Pixels, scale: f32, theme: Theme, window: &mut Window) -> Pixels {
+    let display = line.trim_end_matches(['\n', '\r']);
+    if is_plain_monospace_text(display) {
+        char_width * display.len() as f32
+    } else {
+        shape_display_line(display, scale, theme, window).map_or(px(0.0), |line| line.width)
+    }
+}
+
 fn is_plain_monospace_text(text: &str) -> bool {
-    text.bytes().all(|byte| byte.is_ascii() && byte != b'\t')
+    text.is_ascii() && !text.as_bytes().contains(&b'\t')
 }
 
 fn shape_display_line(text: &str, scale: f32, theme: Theme, window: &mut Window) -> Option<ShapedLine> {

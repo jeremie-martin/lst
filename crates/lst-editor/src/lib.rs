@@ -17,7 +17,7 @@ pub mod vim;
 mod vim_engine;
 pub mod wrap;
 pub use command::EditorCommand;
-pub use document::{EditKind, UndoBoundary};
+pub use document::{for_each_rope_line, EditKind, UndoBoundary};
 pub use language::{IndentStyle, Language, LanguageConfig};
 pub use selection::{Position, Selection, SelectionSet, SelectionSetError};
 pub use tab::{BufferDelta, BufferEdit, DisplayLine, EditorTab, FileStamp, LanguageMode, SaveExpectation, TabId};
