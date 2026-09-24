@@ -1371,3 +1371,16 @@ CPU time); `open-small` 334 -> ~260 ms in the current environment.
   output verifies. The one-run check is not used as a new performance comparison.
 - The final **291-test** nested X11 run starts at 03:16 UTC against preserved
   production `e69a78a`. No physical latency or pixel work runs alongside it.
+
+### Prefer an upstream-aligned shaping-plan upgrade
+
+- Upstream [removed the old plan cache](https://github.com/pop-os/cosmic-text/commit/1f4065c1c3399efad58841082212f7c039b58480)
+  because moving it to the long-lived font system caused unbounded allocation.
+  Simply restoring that cache would repeat a known ownership problem.
+- The later [HarfRust migration](https://github.com/pop-os/cosmic-text/commit/2610c869f677f2cf0093877f1fc0511abe0ab6bf)
+  adds a bounded six-plan cache. Current shaping keys check font identity and
+  plan compatibility, including direction, script, language and features.
+  This validates the layer identified by the profile, but the migration also
+  changes the shaping engine and font stack; it is not a drop-in performance
+  switch. Keep glyph, bidi, font fallback and pixel equivalence as upgrade gates.
+- No third vendored dependency or local shaping patch is added in this session.
