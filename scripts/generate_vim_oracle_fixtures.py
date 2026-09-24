@@ -820,6 +820,45 @@ vim.cmd("qa!")
 '''
 
 
+# nvim's JSON encoder does not preserve key order; write keys in this order so regenerated fixtures diff cleanly.
+KEY_ORDER = [
+    "metadata",
+    "cases",
+    "generator",
+    "oracle_profile",
+    "nvim_version",
+    "options",
+    "editor_indent_policy",
+    "name",
+    "area",
+    "initial_text",
+    "kind",
+    "text",
+    "cursor",
+    "keys",
+    "expected",
+    "mode",
+    "register",
+    "search_query",
+    "selection",
+    "visual_state",
+    "anchor",
+    "head",
+    "line",
+    "column",
+]
+KEY_RANK = {key: rank for rank, key in enumerate(KEY_ORDER)}
+
+
+def canonical_order(value: object) -> object:
+    if isinstance(value, dict):
+        ordered = sorted(value, key=lambda key: (KEY_RANK.get(key, len(KEY_RANK)), key))
+        return {key: canonical_order(value[key]) for key in ordered}
+    if isinstance(value, list):
+        return [canonical_order(item) for item in value]
+    return value
+
+
 def generate(output: Path) -> None:
     payload = {
         "generator": "scripts/generate_vim_oracle_fixtures.py",
@@ -856,7 +895,7 @@ def generate(output: Path) -> None:
             print(result.stderr, end="")
             result.check_returncode()
 
-        fixture = json.loads(output_path.read_text(encoding="utf-8"))
+        fixture = canonical_order(json.loads(output_path.read_text(encoding="utf-8")))
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(fixture, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
