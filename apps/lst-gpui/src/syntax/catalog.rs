@@ -415,12 +415,18 @@ mod tests {
     }
 
     #[test]
-    fn injectable_lookup_round_trip() {
-        for entry in INJECTABLE_GRAMMARS {
-            for name in entry.names {
-                assert_eq!(injectable_grammar(name), Some(entry.grammar));
-            }
+    fn injection_names_match_grammars_case_insensitively() {
+        for (name, grammar) in [
+            ("rust", Some(GrammarId::Rust)),
+            ("Rust", Some(GrammarId::Rust)),
+            ("RS", Some(GrammarId::Rust)),
+            ("Python", Some(GrammarId::Python)),
+            ("TSX", Some(GrammarId::Tsx)),
+            ("yml", Some(GrammarId::Yaml)),
+            ("markdown-inline", Some(GrammarId::MarkdownInline)),
+            ("nope", None),
+        ] {
+            assert_eq!(injectable_grammar(name), grammar, "{name}");
         }
-        assert_eq!(injectable_grammar("totally-not-a-language"), None);
     }
 }
