@@ -1,4 +1,7 @@
 //! Exercises the production prompt-add subprocess boundary with a local executable fixture.
+//!
+//! These tests edit scratchpads, whose autosave notice can replace any status
+//! message at any time, so status messages are awaited as transient states.
 
 mod support;
 
@@ -179,12 +182,12 @@ fn quitting_waits_for_inflight_cleanup_and_keeps_its_result_visible() -> TestRes
         editor.keys(original)?;
         editor.save_then_expect_file(&path, original)?;
         editor.keys("<C-a><C-S-p>improve prompt<enter>")?;
-        let before = editor.wait_state("cleanup started", secs(3), |record| {
+        let before = editor.wait_transient_state("cleanup started", secs(3), |record| {
             record.status_message.contains("Improving prompt")
         })?;
 
         editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char('q')))?;
-        let blocked = editor.wait_state("quit waits for cleanup", secs(3), |record| {
+        let blocked = editor.wait_transient_state("quit waits for cleanup", secs(3), |record| {
             record.status_message == "Wait for prompt improvement to finish before quitting."
         })?;
         assert_eq!(blocked.revision, before.revision, "{blocked:?}");
@@ -212,7 +215,7 @@ fn failed_prompt_filter_preserves_text_and_shows_diagnostic() -> TestResult {
         ];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
         editor.keys("keep my request<C-a><C-S-p>improve prompt<enter>")?;
-        editor.wait_state("filter failure", secs(5), |record| {
+        editor.wait_transient_state("filter failure", secs(5), |record| {
             record.status_message.contains("provider unavailable")
         })?;
         // The scratchpad already autosaved the request; the marker proves the
@@ -236,12 +239,11 @@ fn editing_during_prompt_polishing_preserves_new_text() -> TestResult {
         ];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
         editor.keys("original<C-a><C-S-p>improve prompt<enter>")?;
-        editor.wait_state("filter running", secs(3), |record| {
+        editor.wait_transient_state("filter running", secs(3), |record| {
             record.status_message.contains("Improving prompt")
         })?;
         editor.keys("new request")?;
         std::fs::remove_file(&gate)?;
-        // The scratchpad autosave notice soon replaces this one.
         editor.wait_transient_state("stale result refused", secs(5), |record| {
             record.status_message.contains("result discarded")
         })?;
@@ -261,7 +263,7 @@ fn empty_prompt_output_preserves_original_text() -> TestResult {
         ];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
         editor.keys("original<C-a><C-S-p>improve prompt<enter>")?;
-        editor.wait_state("empty result refused", secs(5), |record| {
+        editor.wait_transient_state("empty result refused", secs(5), |record| {
             record.status_message.contains("empty message")
         })?;
         // The scratchpad already autosaved the original; the marker proves
@@ -288,7 +290,7 @@ fn history_warning_does_not_hide_successful_prompt_rewrite() -> TestResult {
             record.prompt_review_view.is_some()
         })?;
         editor.keys("<enter>")?;
-        editor.wait_state("history warning visible", secs(5), |record| {
+        editor.wait_transient_state("history warning visible", secs(5), |record| {
             record.status_message.contains("history could not be saved")
         })?;
         editor.save_then_expect_file(&path, "Polished request.")?;
@@ -355,7 +357,7 @@ fn document_changed_on_disk_cannot_be_overwritten_by_review() -> TestResult {
         std::fs::write(&path, "changed externally")?;
         editor.wait_state("external change reloaded", secs(5), |r| r.revision != review.revision)?;
         editor.send_keys_settle("<enter>")?;
-        editor.wait_state("stale apply refused", secs(3), |r| {
+        editor.wait_transient_state("stale apply refused", secs(3), |r| {
             r.prompt_review_view.is_some() && r.status_message.contains("cannot be applied")
         })?;
         editor.keys("<escape>")?;
@@ -459,7 +461,7 @@ fn expect_review_replaces_surface(
         let mut editor = session.open_file_with_env("prompt", &path, &env)?;
         editor.keys("<C-a>")?;
         editor.click_cleanup_button()?;
-        let before = editor.wait_state("filter running", secs(3), |r| {
+        let before = editor.wait_transient_state("filter running", secs(3), |r| {
             r.status_message.contains("Improving prompt")
         })?;
         open_surface(&mut editor)?;
@@ -493,10 +495,10 @@ fn prompt_timeout_preserves_text_allows_retry_and_unblocks_quitting() -> TestRes
         let mut editor = session.open_file_with_env("prompt", &path, &env)?;
         editor.keys("<C-a>")?;
         editor.click_cleanup_button()?;
-        let before = editor.wait_state("filter running", secs(3), |r| {
+        let before = editor.wait_transient_state("filter running", secs(3), |r| {
             r.status_message.contains("Improving prompt")
         })?;
-        let failed = editor.wait_state("production timeout reported", secs(65), |r| {
+        let failed = editor.wait_transient_state("production timeout reported", secs(65), |r| {
             r.status_message.contains("timed out after 60 seconds")
         })?;
         assert_eq!(before.revision, failed.revision);
