@@ -1,7 +1,8 @@
 //! Real-display tests for the chord-hold notation (`<C-{k d}>`). These
 //! validate that the harness emits the correct XTEST event train when a
 //! modifier is held across multiple keystrokes — important for
-//! chord-prefix bindings like VSCode's `Ctrl+K Ctrl+D` style sequences.
+//! chord-prefix bindings like VSCode's `Ctrl+K Ctrl+D` style sequences, and
+//! that an unrelated shortcut clears a pending `Ctrl+K` prefix.
 //!
 //! Run with
 //!
@@ -66,6 +67,32 @@ fn held_control_shift_repeats_a_shifted_symbol_shortcut() -> TestResult {
 
         editor.keys("<C-S-{\\ \\ \\}>")?;
         editor.expect_cursor_heads(&[(0, 1)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_k_prefix_is_cleared_by_unrelated_selection_shortcut() -> TestResult {
+    support::run_x11_test("regression-ctrl-k-stale-prefix", |session| {
+        let path = session.seed_file("ctrl-k-stale-prefix.txt", "foo foo foo")?;
+        let mut editor = session.open_file("ctrl-k-stale-prefix", &path)?;
+
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<C-k><S-right><C-d>")?;
+        editor.wait_state("Ctrl+D adds the next match of the selection", secs(5), |record| {
+            let ranges = record
+                .cursors
+                .iter()
+                .map(|cursor| {
+                    (
+                        cursor.anchor_char.min(cursor.head_char),
+                        cursor.anchor_char.max(cursor.head_char),
+                    )
+                })
+                .collect::<Vec<_>>();
+            ranges == [(0, 1), (4, 5)]
+        })?;
         Ok(())
     })
 }

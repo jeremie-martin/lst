@@ -10,6 +10,8 @@ mod support;
 
 use std::thread;
 
+use lst_x11_harness::{ChordMods, Key};
+
 use support::{secs, EditorTestExt, TestResult};
 
 #[test]
@@ -340,6 +342,45 @@ fn vim_normal_mode_ctrl_f_b_d_u_page_instead_of_running_editor_shortcuts() -> Te
                     && (line > 0) == forward
             })?;
         }
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_ctrl_d_in_normal_mode_keeps_vim_half_page_motion() -> TestResult {
+    support::run_x11_test("regression-vim-ctrl-d", |session| {
+        let text = (0..80)
+            .map(|line| format!("foo line {line:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let path = session.seed_file("vim-ctrl-d.txt", &text)?;
+        let mut editor = session.open_vim_file("vim-ctrl-d", &path)?;
+
+        editor.click_at_text(0, 0)?;
+        editor.send_keys_settle("<esc>")?;
+        editor.expect_vim_mode("NORMAL")?;
+        editor.key_after_released_modifiers(ChordMods::CTRL, Key::Char('d'))?;
+        editor.wait_state("vim Ctrl-D moved down", secs(5), |record| {
+            record.vim_mode == "NORMAL"
+                && matches!(record.cursors.as_slice(), [cursor] if cursor.is_collapsed() && cursor.head_line > 0)
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ignored_insert_mode_recent_ctrl_does_not_poison_next_vim_key() -> TestResult {
+    support::run_x11_test("regression-ignored-insert-ctrl-clears", |session| {
+        let (mut editor, _path) = session.open_vim("scratch")?;
+
+        editor.keys("abc")?;
+        editor.key_after_released_modifiers(ChordMods::CTRL, Key::Char('d'))?;
+        editor.keys("<esc>d")?;
+        editor.wait_state("plain vim d pending", secs(2), |record| {
+            record.vim_mode == "NORMAL" && record.vim_pending == "d"
+        })?;
         Ok(())
     })
 }

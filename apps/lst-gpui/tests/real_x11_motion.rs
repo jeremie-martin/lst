@@ -1,4 +1,5 @@
-//! Real-display tests for single-cursor motion and keyboard selection. Each
+//! Real-display tests for single-cursor motion, go-to-line, keyboard
+//! selection, and syntax-aware selection expansion. Each
 //! one drives the editor through key sequences and observes the resulting
 //! cursor state through the trace channel.
 //!
@@ -303,4 +304,70 @@ fn held_diagonal_arrows_cross_blank_lines_without_cancelling_vertical_motion() -
         assert!(!record.active_tab_modified, "{record:?}");
         Ok(())
     })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn crlf_line_ending_is_not_split_by_right_motion_and_insert() -> TestResult {
+    support::run_x11_test("regression-crlf-motion-insert", |session| {
+        let path = session.seed_file("crlf.txt", "a\r\nb")?;
+        let mut editor = session.open_file("regression-crlf-motion-insert", &path)?;
+
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<end><right>X")?;
+        editor.save_then_expect_file(&path, "a\r\nXb")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn syntax_selection_expands_in_layers_and_shrinks_the_exact_history() -> TestResult {
+    support::run_x11_test("polish-smart-selection", |session| {
+        let path = session.seed_file("smart.rs", "fn main() { let camelCase = call(1); }\n")?;
+        let mut editor = session.open_file("polish-smart-selection", &path)?;
+        editor.click_at_text(0, 22)?;
+
+        editor.keys("<S-A-right>")?;
+        editor.wait_state("subword selected", secs(2), |record| selection_width(record) == 4)?;
+
+        editor.keys("<S-A-right>")?;
+        editor.wait_state("word selected", secs(2), |record| selection_width(record) == 9)?;
+
+        editor.keys("<S-A-right>")?;
+        editor.wait_state("syntax node selected", secs(2), |record| selection_width(record) > 9)?;
+
+        editor.keys("<S-A-left><S-A-left>")?;
+        editor.wait_state("shrunk back to the subword", secs(2), |record| {
+            selection_width(record) == 4
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn goto_line_column_moves_to_requested_column_and_clamps() -> TestResult {
+    support::run_x11_test("workflow-goto-line-column-clamp", |session| {
+        let path = session.seed_file("goto-column.txt", "alpha\nbeta\ngamma")?;
+        let mut editor = session.open_file("goto-column", &path)?;
+
+        // Submitting returns focus to the editor, so typing lands at the
+        // requested position.
+        editor.keys("<C-g>2:3<enter>X")?;
+        editor.expect_cursor_heads(&[(1, 3)])?;
+
+        editor.keys("<C-g>2:99<enter>")?;
+        editor.expect_cursor_heads(&[(1, 5)])?;
+
+        editor.keys("<C-g>99:2<enter>")?;
+        editor.expect_cursor_heads(&[(2, 1)])?;
+        editor.save_then_expect_file(&path, "alpha\nbeXta\ngamma")?;
+        Ok(())
+    })
+}
+
+fn selection_width(record: &lst_x11_harness::StateTraceRecord) -> usize {
+    let selection = &record.cursors[record.primary_cursor_index];
+    selection.anchor_char.abs_diff(selection.head_char)
 }

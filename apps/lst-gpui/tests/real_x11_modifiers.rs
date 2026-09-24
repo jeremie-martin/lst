@@ -1,11 +1,14 @@
 //! Real-display tests for single-cursor editing chords: select-all, undo and
-//! both redo chords, the redo-branch swap, modified Enter, and moving lines.
+//! both redo chords, the redo-branch swap, modified Enter, moving and
+//! duplicating lines, and modifier state that must not leak between keys.
 //!
 //! Run with
 //!
 //!     cargo nextest run --profile x11 -p lst-gpui --test real_x11_modifiers --run-ignored only
 
 mod support;
+
+use lst_x11_harness::{ChordMods, Key, KeyChord};
 
 use support::{secs, EditorTestExt, TestResult};
 
@@ -105,6 +108,104 @@ fn alt_down_and_alt_up_move_the_cursor_line() -> TestResult {
         editor.keys("<A-up><A-up>")?;
         editor.save_then_expect_file(&path, "one\ntwo\nthree")?;
         editor.expect_cursor_heads(&[(0, 1)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn platform_shift_tab_does_not_run_shift_only_outdent() -> TestResult {
+    support::run_x11_test("regression-platform-shift-tab", |session| {
+        let path = session.seed_file("platform-shift-tab.txt", "    alpha")?;
+        let mut editor = session.open_file("platform-shift-tab", &path)?;
+
+        editor.send_keys_settle("<cmd-S-tab>")?;
+        // The file already holds the indented line; the marker proves the
+        // buffer still does.
+        editor.keys("<end>X")?;
+        editor.save_then_expect_file(&path, "    alphaX")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn consumed_ctrl_action_does_not_leave_recent_ctrl_for_next_text_key() -> TestResult {
+    support::run_x11_test("regression-consumed-action-stale-ctrl", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("foo foo")?;
+        editor.press(KeyChord::Ctrl(Key::Char('s')))?;
+        editor.keys("d")?;
+        editor.save_then_expect_file(&path, "foo food")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn released_ctrl_then_plain_d_in_insert_mode_inserts_d() -> TestResult {
+    support::run_x11_test("regression-released-ctrl-plain-d", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("abc")?;
+        editor.key_after_released_modifiers(ChordMods::CTRL, Key::Char('d'))?;
+        editor.save_then_expect_file(&path, "abcd")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn qwertz_layout_types_literal_z_and_y() -> TestResult {
+    struct EnvGuard {
+        key: &'static str,
+        old: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.old {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    let _layout = EnvGuard::set("LST_X11_HARNESS_LAYOUT", "de");
+    support::run_x11_test("regression-qwertz-literals", |session| {
+        let (mut editor, path) = session.open("scratch")?;
+
+        editor.keys("zy")?;
+        editor.save_then_expect_file(&path, "zy")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn ctrl_alt_shift_arrows_duplicate_the_line_above_and_below() -> TestResult {
+    support::run_x11_test("daily-driver-duplicate-up-down", |session| {
+        let path = session.seed_file("duplicate.txt", "alpha\nbeta")?;
+        let mut editor = session.open_file("duplicate", &path)?;
+
+        // The copies are identical, so the caret tells the directions apart:
+        // it stays on the upper copy for "above" and follows the lower one
+        // for "below".
+        editor.click_at_text(1, 2)?;
+        editor.keys("<C-A-S-up>")?;
+        editor.expect_cursor_heads(&[(1, 2)])?;
+        editor.keys("<C-A-S-down>")?;
+        editor.expect_cursor_heads(&[(2, 2)])?;
+        editor.save_then_expect_file(&path, "alpha\nbeta\nbeta\nbeta")?;
         Ok(())
     })
 }
