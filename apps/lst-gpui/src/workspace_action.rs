@@ -816,6 +816,45 @@ mod tests {
     }
 
     #[test]
+    fn every_configurable_command_has_its_own_id() {
+        // Overrides and palette rows are keyed by ID, so two commands sharing
+        // one would make an override rebind or hide the other.
+        let mut commands = BTreeMap::new();
+        let palette_only = b("", WS, WorkspaceCommand::CleanupText);
+        for binding in BINDINGS.iter().chain(UNBOUND_BINDINGS).chain([&palette_only]) {
+            let id = command_id(binding.command);
+            let first = *commands.entry(id).or_insert(binding.command);
+            assert_eq!(first, binding.command, "{id} names two commands");
+        }
+    }
+
+    #[test]
+    fn keybinding_overrides_replace_defaults_and_skip_invalid_entries() {
+        let overrides = BTreeMap::from([
+            (
+                "edit.undo".to_string(),
+                vec!["alt-u".to_string(), "ctrl-foo-bar".to_string(), String::new()],
+            ),
+            ("no.such_command".to_string(), vec!["alt-n".to_string()]),
+        ]);
+        let bindings = editor_keybindings(&overrides);
+        let bound_to = |keystroke: &str| -> Vec<WorkspaceCommand> {
+            let typed = [Keystroke::parse(keystroke).unwrap()];
+            bindings
+                .iter()
+                .filter(|binding| binding.match_keystrokes(&typed) == Some(false))
+                .filter_map(|binding| binding.action().as_any().downcast_ref::<WorkspaceAction>())
+                .map(|action| action.command)
+                .collect()
+        };
+
+        let undo = WorkspaceCommand::Model(Command::Undo);
+        assert_eq!(bound_to("alt-u"), [undo]);
+        assert!(!bound_to("ctrl-z").contains(&undo));
+        assert!(bound_to("alt-n").is_empty());
+    }
+
+    #[test]
     fn x11_fallback_canonicalizes_shifted_punctuation_keysyms() {
         let modifiers = Modifiers {
             control: true,
