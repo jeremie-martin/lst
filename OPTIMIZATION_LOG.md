@@ -382,6 +382,27 @@ Commands: see `docs/performance.md`.
   viewport cases pass. The find-panel image matches the original baseline
   across three launches. A full combined checkpoint follows.
 
+### Use the framework's modifier state
+
+- Remove the app's process-wide X11 connection and synchronous pointer query
+  on every key. GPUI already owns the raw window modifier state; combine it
+  with the event and existing chord history. This also removes the normal
+  app dependency on x11rb (the benchmark/test dependency remains).
+- Simply deleting the query is incorrect: GPUI normalizes Shift out of
+  symbol keystrokes. A new held Ctrl+Shift+backslash regression passes the
+  baseline, fails that naive deletion, and passes the window-state version.
+  All 77 focused modifier/chord/text/multi-cursor/Vim X11 tests pass, as do
+  all-features tests and Clippy.
+- Physical-display paired production runs, one prime: plain typing seven-run
+  median **0.413 -> 0.319 ms/character**, CPU **110 -> 100 ms**; large Rust
+  typing three-run median **1.144 -> 1.047 ms/character**, CPU 350 -> 340 ms.
+  Saved output and the final input's completed frame are verified.
+- Five-run single-key medians show no established presentation gain:
+  typing 8.173 -> 8.267 ms; navigation 6.881 -> 6.711 ms. Typing delivery
+  falls 0.469 -> 0.391 ms, while navigation delivery is nearly unchanged
+  (0.387 -> 0.381 ms). Keep the throughput gain and simpler ownership;
+  do not claim a general screen-latency improvement.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

@@ -657,9 +657,9 @@ impl LstGpuiApp {
         let vim_enabled = self.model.input_mode() == InputMode::Vim;
         let insert_mode = !vim_enabled || self.model.vim_mode() == vim::Mode::Insert;
         let modifiers = if insert_mode {
-            self.effective_current_modifiers(event.keystroke.modifiers)
+            self.effective_current_modifiers(event.keystroke.modifiers, window)
         } else {
-            self.effective_modifier_chord(event.keystroke.modifiers)
+            self.effective_modifier_chord(event.keystroke.modifiers, window)
         };
         if !modifiers_active(modifiers) {
             if insert_mode {
@@ -728,7 +728,7 @@ impl LstGpuiApp {
             return false;
         }
 
-        let effective_modifiers = self.effective_modifier_chord(event.keystroke.modifiers);
+        let effective_modifiers = self.effective_modifier_chord(event.keystroke.modifiers, window);
         let mods = gpui_modifiers_to_vim(effective_modifiers);
         let key = gpui_key_to_vim(event);
         let plain_vim_key = !effective_modifiers.control && !effective_modifiers.alt && !effective_modifiers.platform;
@@ -933,17 +933,19 @@ impl EntityInputHandler for LstGpuiApp {
 }
 
 impl LstGpuiApp {
-    fn effective_modifier_chord(&self, event_modifiers: Modifiers) -> Modifiers {
-        let mut modifiers = self.effective_current_modifiers(event_modifiers);
+    fn effective_modifier_chord(&self, event_modifiers: Modifiers, window: &Window) -> Modifiers {
+        let mut modifiers = self.effective_current_modifiers(event_modifiers, window);
         if let Some(recent) = self.recent_modifier_chord() {
             modifiers = merge_modifiers(modifiers, recent);
         }
         modifiers
     }
 
-    fn effective_current_modifiers(&self, event_modifiers: Modifiers) -> Modifiers {
+    fn effective_current_modifiers(&self, event_modifiers: Modifiers, window: &Window) -> Modifiers {
+        // GPUI normalizes Shift out of symbol keystrokes. Its window modifier
+        // state retains that information while a chord spans several commands.
         let modifiers = merge_modifiers(event_modifiers, self.modifier_chord_accumulated);
-        merge_modifiers(modifiers, x11_current_modifiers())
+        merge_modifiers(modifiers, window.modifiers())
     }
 
     fn recent_modifier_chord(&self) -> Option<Modifiers> {
@@ -983,44 +985,6 @@ fn merge_modifiers(lhs: Modifiers, rhs: Modifiers) -> Modifiers {
         platform: lhs.platform || rhs.platform,
         function: lhs.function || rhs.function,
     }
-}
-
-#[cfg(target_os = "linux")]
-fn x11_current_modifiers() -> Modifiers {
-    use std::sync::OnceLock;
-    use x11rb::connection::Connection as _;
-    use x11rb::protocol::xproto::{ConnectionExt as _, KeyButMask};
-    use x11rb::rust_connection::RustConnection;
-
-    // One connection for the process: this runs on every key press, and
-    // connecting each time cost connection setup plus a round trip per key.
-    static CONNECTION: OnceLock<Option<(RustConnection, u32)>> = OnceLock::new();
-    let Some((conn, root)) = CONNECTION.get_or_init(|| {
-        let (conn, screen_num) = x11rb::connect(None).ok()?;
-        let root = conn.setup().roots.get(screen_num)?.root;
-        Some((conn, root))
-    }) else {
-        return Modifiers::default();
-    };
-    let Ok(cookie) = conn.query_pointer(*root) else {
-        return Modifiers::default();
-    };
-    let Ok(reply) = cookie.reply() else {
-        return Modifiers::default();
-    };
-
-    Modifiers {
-        control: reply.mask.contains(KeyButMask::CONTROL),
-        alt: reply.mask.contains(KeyButMask::MOD1),
-        shift: reply.mask.contains(KeyButMask::SHIFT),
-        platform: reply.mask.contains(KeyButMask::MOD4),
-        function: false,
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn x11_current_modifiers() -> Modifiers {
-    Modifiers::default()
 }
 
 fn gpui_modifiers_to_vim(modifiers: gpui::Modifiers) -> VimModifiers {

@@ -16,6 +16,21 @@ use support::{EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn held_control_shift_repeats_a_shifted_symbol_shortcut() -> TestResult {
+    support::run_x11_test("modifier-held-shifted-symbol", |session| {
+        let path = session.seed_file("brackets.txt", "x(abc)y")?;
+        let mut editor = session.open_file("modifier-held-shifted-symbol", &path)?;
+        editor.keys("<C-home><right><C-S-\\>")?;
+        editor.expect_cursor_heads(&[(0, 5)])?;
+
+        editor.keys("<C-S-{\\ \\}>")?;
+        editor.expect_cursor_heads(&[(0, 5)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn ctrl_a_select_all_then_type_replaces_buffer() -> TestResult {
     // Open a file with pre-seeded content, select all with Ctrl+A, then
     // type a fresh string. The active selection makes the next literal
