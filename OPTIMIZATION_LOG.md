@@ -347,6 +347,17 @@ Commands: see `docs/performance.md`.
   viewport tests, the all-features source suite and Clippy pass. A broader
   checkpoint follows with the search changes.
 
+### Separate model search timing from application synchronization
+
+- `find_reindex_ms` previously timed the entire application update, including
+  PRIMARY selection publication and view synchronization. Time the model query
+  update/active-result selection directly; expose the containing operation as
+  `search_query_update_ms`. Both remain inside the complete query/frame path.
+- Rebuilt preserved full-index and windowed-render variants with identical
+  instrumentation. Twelve benchmark self-tests, all-features tests and Clippy
+  pass. Runtime records confirm the containing operation includes model time.
+  The broader wrapper was not the cause of the model-phase variance below.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

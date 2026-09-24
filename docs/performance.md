@@ -62,6 +62,11 @@ required to show the final text remain inside the measured interval.
 Paste-to-paint and the first post-paste key use the same ordering rule: the
 completed frame must follow the corresponding edit, not precede it.
 
+`search_reindex_ms` measures the model's query update and active-result
+selection. `search_query_update_ms` includes the surrounding application
+synchronization, including PRIMARY selection publication. Frame traces measure
+the subsequent layout and painting separately.
+
 `--position top|middle|end` helps distinguish local work from document-size
 work. `--keep-temp` preserves the per-run trace files, whose `notify=<reason>`
 and `startup_*_ms` lines attribute frames and startup phases.

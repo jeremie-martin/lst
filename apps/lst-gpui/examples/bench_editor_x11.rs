@@ -1818,6 +1818,7 @@ impl Bench {
             metrics.set("startup_ms", startup_ms);
             metrics.set("search_input_to_quiet_ms", search_input_to_quiet_ms);
             metrics.set("search_reindex_ms", reindex_ms);
+            add_trace_last(&mut metrics, &trace, "find_query_update_ms", "search_query_update_ms");
             metrics.set("trace_wall_ms", trace_wall_ms);
             metrics.set("damage_events", damage_events as f64);
             add_trace_last(&mut metrics, &trace, "find_match_count", "find_match_count");
@@ -2427,6 +2428,7 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
         ],
         Scenario::SearchLarge => &[
             "search_reindex_ms",
+            "search_query_update_ms",
             "search_input_to_quiet_ms",
             "find_match_count",
             "find_query_len",

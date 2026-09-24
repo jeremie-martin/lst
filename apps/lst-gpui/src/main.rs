@@ -1281,11 +1281,15 @@ impl LstGpuiApp {
     fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {
         match event {
             InputFieldEvent::Changed(text) => {
-                let reindex_started = Instant::now();
+                let update_started = Instant::now();
+                let mut reindex_ms = 0.0;
                 self.update_model(cx, true, |model| {
+                    let reindex_started = Instant::now();
                     model.update_find_query_and_activate(text.clone());
+                    reindex_ms = elapsed_ms(reindex_started);
                 });
-                self.record_find_metrics(elapsed_ms(reindex_started));
+                diagnostics::record_ms("find_query_update_ms", elapsed_ms(update_started));
+                self.record_find_metrics(reindex_ms);
             }
             InputFieldEvent::Submitted => {
                 self.update_model(cx, true, EditorModel::submit_find_query);
