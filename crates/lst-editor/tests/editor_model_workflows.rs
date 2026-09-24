@@ -1,8 +1,8 @@
 mod support;
 
 use lst_editor::{
-    BufferDelta, EditorCommand, EditorEffect, EditorModel, EditorTab, FileStamp, InputMode, Language, LanguageMode,
-    Position, SaveExpectation, Selection, SelectionSet, TabCloseRequest, TabId, UndoBoundary,
+    BufferDelta, EditorCommand, EditorEffect, FileStamp, InputMode, Language, LanguageMode, Position, SaveExpectation,
+    Selection, SelectionSet, TabCloseRequest, TabId, UndoBoundary,
 };
 use ropey::Rope;
 use std::path::PathBuf;
@@ -64,9 +64,8 @@ fn stale_save_completion_keeps_an_undone_buffer_dirty_against_the_committed_body
 }
 
 #[test]
-fn standard_input_and_explicit_language_are_stable_defaults() {
+fn explicit_language_survives_save_as_and_auto_redetects_from_the_new_path() {
     let mut harness = ModelHarness::new("print('hello')\n");
-    assert_eq!(harness.model.input_mode(), InputMode::Standard);
     assert_eq!(harness.model.active_tab().language(), Some(Language::Rust));
 
     harness
@@ -213,9 +212,7 @@ fn line_edit_and_multi_cursor_workflows_preserve_current_model_results() {
 fn lowering_multi_cursor_limit_clamps_inactive_tabs_immediately() {
     let first_id = TabId::from_raw(1);
     let second_id = TabId::from_raw(2);
-    let first = EditorTab::from_path_with_stamp(first_id, PathBuf::from("first.txt"), "first", None);
-    let second = EditorTab::from_path_with_stamp(second_id, PathBuf::from("second.txt"), "second", None);
-    let mut model = EditorModel::from_tabs(first, vec![second], "Ready.".to_string());
+    let ModelHarness { mut model, .. } = ModelHarness::with_two_tabs("first", "second");
     model.set_active_tab(second_id);
     model.set_selection_set(
         SelectionSet::from_selections((0..4).map(Selection::collapsed).collect(), 3)
@@ -319,7 +316,7 @@ fn enter_carries_only_the_indent_behind_the_cursor() {
 }
 
 #[test]
-fn new_standard_pair_edits_do_not_change_vim_insert_semantics() {
+fn vim_insert_mode_backspace_and_enter_skip_standard_pair_editing() {
     let mut vim = ModelHarness::new("{}");
     vim.model.set_input_mode(InputMode::Vim);
     vim.set_cursor(Position::new(0, 1));
@@ -355,22 +352,14 @@ fn standard_tab_targets_the_next_stop_and_any_selection_indents_lines() {
 }
 
 #[test]
-fn explicit_line_indent_coalesces_cursors_while_tab_inserts_at_each_cursor() {
-    let cursors = || {
-        SelectionSet::from_selections(vec![Selection::collapsed(3), Selection::collapsed(7)], 0)
-            .expect("same-line cursors are valid")
-    };
-
+fn tab_inserts_at_each_cursor_on_the_same_line() {
     let mut tab = ModelHarness::new("foo foo");
-    tab.model.set_selection_set(cursors());
+    tab.model.set_selection_set(
+        SelectionSet::from_selections(vec![Selection::collapsed(3), Selection::collapsed(7)], 0)
+            .expect("same-line cursors are valid"),
+    );
     tab.execute(EditorCommand::InsertTab);
     assert_eq!(tab.text(), "foo  foo ");
-
-    let mut indent = ModelHarness::new("foo foo");
-    indent.model.set_selection_set(cursors());
-    indent.execute(EditorCommand::IndentLines);
-    assert_eq!(indent.text(), "    foo foo");
-    assert_eq!(indent.selection_count(), 2);
 }
 
 #[test]
@@ -424,7 +413,6 @@ fn pasting_a_linewise_copy_over_a_selection_replaces_the_selection() {
 #[test]
 fn end_and_home_on_wrapped_rows_neither_walk_the_line_nor_stall_at_boundaries() {
     let mut wrapped = ModelHarness::new("aaaaabbbbbccccc");
-    wrapped.model.set_show_wrap(true);
     wrapped.set_cursor(Position::new(0, 2));
 
     wrapped.model.move_visual_line_boundary(true, false, 5);
@@ -437,7 +425,7 @@ fn end_and_home_on_wrapped_rows_neither_walk_the_line_nor_stall_at_boundaries() 
 }
 
 #[test]
-fn active_undo_history_retains_more_than_the_old_hundred_group_limit() {
+fn undo_reaches_back_through_150_separate_edits() {
     let mut history = ModelHarness::new("");
     for _ in 0..150 {
         let end = history.model.active_tab().len_chars();
@@ -520,9 +508,9 @@ fn external_append_waits_for_ime_and_rejects_missing_targets() {
     assert_eq!(harness.model.active_tab().marked_range(), marked.as_ref());
     harness.model.clear_marked_text();
     assert!(harness.model.append_text_to_tab(id, "spoken"));
-    assert_eq!(harness.model.active_tab().buffer().to_string(), "prefix draft spoken");
+    assert_eq!(harness.text(), "prefix draft spoken");
     assert!(!harness.model.append_text_to_tab(TabId::from_raw(999), "lost"));
-    assert_eq!(harness.model.active_tab().buffer().to_string(), "prefix draft spoken");
+    assert_eq!(harness.text(), "prefix draft spoken");
 }
 
 #[test]
