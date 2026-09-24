@@ -8,6 +8,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -99,6 +100,16 @@ def run_logged(
             raise
 
 
+def x11_test_exists(test_binary: str, test_name: str) -> bool:
+    source = REPO_ROOT / "apps" / "lst-gpui" / "tests" / f"{test_binary}.rs"
+    return source.is_file() and bool(
+        re.search(
+            rf"#\[ignore\b[^\]]*\]\s*fn {re.escape(test_name)}\(",
+            source.read_text(encoding="utf-8"),
+        )
+    )
+
+
 def load_mutants(path: Path = MANIFEST) -> list[dict[str, object]]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, list) or not raw:
@@ -128,6 +139,14 @@ def load_mutants(path: Path = MANIFEST) -> list[dict[str, object]]:
                 raise QualificationError(
                     f"{name} has an invalid test declaration: {test!r}"
                 )
+            if not x11_test_exists(test[0], test[1]):
+                raise QualificationError(
+                    f"{name} names a missing X11 test: {test[0]}::{test[1]}"
+                )
+        if {test[2] for test in tests} != {"pass", "fail"}:
+            raise QualificationError(
+                f"{name} needs at least one killing and one control test"
+            )
         mutants.append(entry)
     return mutants
 
@@ -329,19 +348,23 @@ def run_selected_test(
 ) -> str:
     test_env = dict(env)
     test_env["LST_GPUI_BIN"] = str(binary)
-    status = run_logged(
+    NEXTEST_JUNIT.unlink(missing_ok=True)
+    run_logged(
         [
             "cargo",
-            "test",
+            "nextest",
+            "run",
+            "--profile",
+            "x11-nested",
             "-p",
             "lst-gpui",
             "--test",
             test_binary,
-            test_name,
-            "--",
-            "--ignored",
-            "--exact",
-            "--nocapture",
+            "--run-ignored",
+            "only",
+            "--no-tests=fail",
+            "-E",
+            f"test(={test_name})",
         ],
         cwd=REPO_ROOT,
         env=test_env,
@@ -351,7 +374,16 @@ def run_selected_test(
         / mutant_name
         / f"{display_label}-{test_binary}-{test_name}.log",
     )
-    return "pass" if status == 0 else "fail"
+    # Judge the JUnit report, not the exit status: a build or display
+    # failure must not count as the mutant being caught, and a missing test
+    # must not count as a pass.
+    if not NEXTEST_JUNIT.is_file():
+        raise QualificationError(f"{test_binary}::{test_name} produced no JUnit report")
+    results = junit_results(NEXTEST_JUNIT)
+    test_id = f"lst-gpui::{test_binary}::{test_name}"
+    if set(results) != {test_id}:
+        raise QualificationError(f"expected exactly {test_id}, got {sorted(results)}")
+    return results[test_id]
 
 
 def write_report(report: Mapping[str, object], artifact_dir: Path) -> None:

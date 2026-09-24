@@ -1,12 +1,13 @@
 diff --git a/apps/lst-gpui/src/workspace_action.rs b/apps/lst-gpui/src/workspace_action.rs
+index 1c28b13..876d448 100644
 --- a/apps/lst-gpui/src/workspace_action.rs
 +++ b/apps/lst-gpui/src/workspace_action.rs
-@@ -214,7 +214,6 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
-     b("ctrl-f2", EDITOR, model(Command::SelectAllOccurrences)),
-     b("alt-enter", FIND, model(Command::SelectAllFindMatches)),
-     b("shift-alt-i", EDITOR, model(Command::AddCursorsToSelectedLineEnds)),
-     b("alt-shift-i", EDITOR, model(Command::AddCursorsToSelectedLineEnds)),
--    fb("alt-shift-up", EDITOR, model(Command::DuplicateLineAbove)),
-     fb("alt-shift-down", EDITOR, model(Command::DuplicateLine)),
-     b("ctrl-alt-up", EDITOR, model(Command::AddCursorAbove)),
-     b("cmd-alt-up", EDITOR, model(Command::AddCursorAbove)),
+@@ -138,7 +138,7 @@ const BINDINGS: &[WorkspaceBinding] = &[
+     b("cmd-shift-k", EDITOR, model(Command::DeleteLine)),
+     b("ctrl-shift-d", EDITOR, model(Command::DuplicateLine)),
+     b("cmd-shift-d", EDITOR, model(Command::DuplicateLine)),
+-    fb("ctrl-alt-shift-up", EDITOR, model(Command::DuplicateLineAbove)),
++    fb("ctrl-alt-shift-up", EDITOR, model(Command::DuplicateLine)),
+     fb("ctrl-alt-shift-down", EDITOR, model(Command::DuplicateLine)),
+     b("ctrl-/", EDITOR, model(Command::ToggleComment)),
+     b("cmd-/", EDITOR, model(Command::ToggleComment)),

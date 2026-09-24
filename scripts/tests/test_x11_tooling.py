@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -74,29 +76,35 @@ class NestedX11ToolingTests(unittest.TestCase):
             ],
         )
 
-    def test_committed_mutant_manifest_is_valid_and_complete(self) -> None:
-        mutants = qualify_x11_nested.load_mutants()
-        self.assertEqual(
-            [mutant["name"] for mutant in mutants],
-            [
-                "duplicate_line_binding",
-                "backspace_noop",
-                "mouse_below_document",
-                "app_menu_backdrop",
-                "replace_all_noop",
-                "ordinary_autosave",
-            ],
-        )
-        self.assertTrue(
-            all(
-                any(test[2] == "fail" for test in mutant["tests"]) for mutant in mutants
-            )
-        )
-        self.assertTrue(
-            all(
-                any(test[2] == "pass" for test in mutant["tests"]) for mutant in mutants
-            )
-        )
+    def test_committed_mutants_apply_and_name_existing_tests(self) -> None:
+        for mutant in qualify_x11_nested.load_mutants():
+            with self.subTest(mutant=mutant["name"]):
+                check = subprocess.run(
+                    ["git", "apply", "--check", mutant["patch"]],
+                    cwd=qualify_x11_nested.REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_manifest_rejects_a_renamed_x11_test(self) -> None:
+        manifest = [
+            {
+                "name": "stale",
+                "patch": "scripts/mutants/backspace-noop.patch",
+                "tests": [
+                    ["real_x11_text_input", "no_such_test", "fail"],
+                    ["real_x11_mouse", "click_below_last_line_moves_caret_to_document_end", "pass"],
+                ],
+            }
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mutants.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(
+                qualify_x11_nested.QualificationError, "no_such_test"
+            ):
+                qualify_x11_nested.load_mutants(path)
 
 
 if __name__ == "__main__":

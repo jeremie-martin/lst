@@ -52,34 +52,23 @@ def main() -> int:
         )
         commands.append(command)
     elif args.probe:
-        commands.extend(
+        commands.append(
             [
-                [
-                    "cargo",
-                    "test",
-                    "-p",
-                    "lst-gpui",
-                    "--test",
-                    "real_x11_daily_driver",
-                    "standard_duplicate_line_above",
-                    "--",
-                    "--ignored",
-                    "--exact",
-                    "--nocapture",
-                ],
-                [
-                    "cargo",
-                    "test",
-                    "-p",
-                    "lst-gpui",
-                    "--test",
-                    "real_x11_daily_driver",
-                    "app_menu_does_not_dim_the_editor",
-                    "--",
-                    "--ignored",
-                    "--exact",
-                    "--nocapture",
-                ],
+                "cargo",
+                "nextest",
+                "run",
+                "--profile",
+                "x11-nested",
+                "-p",
+                "lst-gpui",
+                "--test",
+                "real_x11_daily_driver",
+                "--run-ignored",
+                "only",
+                "--no-tests=fail",
+                "-E",
+                "test(=ctrl_alt_shift_arrows_duplicate_the_line_above_and_below)"
+                " | test(=app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line)",
             ]
         )
     else:
