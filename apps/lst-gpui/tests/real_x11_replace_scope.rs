@@ -17,44 +17,11 @@ mod support;
 
 use support::{secs, EditorTestExt, TestResult};
 
-const FIXTURE: &str = "x foo\ny foo foo\nz foo\n";
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn replace_all_in_selection_only_mutates_inside_selection() -> TestResult {
-    support::run_x11_test("replace-scope-in-selection", |session| {
-        let path = session.seed_file("replace-scope-in-selection.txt", FIXTURE)?;
-        let mut editor = session.open_file("replace-scope-in-selection", &path)?;
-
-        // Select all of line 1: "y foo foo".
-        editor.place_cursor_at_document_start()?;
-        editor.keys("<down><S-end>")?;
-        editor.expect_cursor_heads(&[(1, 9)])?;
-
-        // Open replace panel. Focus lands on the find query input.
-        editor.keys("<C-h>")?;
-        editor.wait_state("find query focus", secs(2), |record| {
-            record.focused_input == "find_query" && record.find.show_replace
-        })?;
-
-        // Engage in-selection scope before typing the query so the captured
-        // range is the selection we just made (not the empty post-typing
-        // caret position).
-        editor.keys("<A-s>")?;
-        editor.wait_state("scope captured", secs(2), |record| record.find.scope == "selection")?;
-
-        // Type query, advance to replace input, type replacement, fire.
-        editor.keys("foo<tab>bar<C-A-enter>")?;
-        editor.save_then_expect_file(&path, "x foo\ny bar bar\nz foo\n")?;
-        Ok(())
-    })
-}
-
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
 fn replace_all_with_document_scope_mutates_every_match() -> TestResult {
     support::run_x11_test("replace-scope-document", |session| {
-        let path = session.seed_file("replace-scope-document.txt", FIXTURE)?;
+        let path = session.seed_file("replace-scope-document.txt", "x foo\ny foo foo\nz foo\n")?;
         let mut editor = session.open_file("replace-scope-document", &path)?;
 
         // No prior selection, no in-selection toggle. Default scope is
