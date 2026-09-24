@@ -340,6 +340,61 @@ mod tests {
     }
 
     #[test]
+    fn incremental_highlights_match_fresh_parse_across_document_separators() {
+        use lst_editor::{BufferDelta, BufferEdit};
+        for separator in ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+            let source =
+                format!("fn first() {{ let x = 1; }}{separator}fn second() {{ let y = 2; }}\nfn third() {{}}\n");
+            let mut buffer = ropey::Rope::from_str(&source);
+            let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, 0).unwrap();
+            let (mut cached_lines, mut cached_lens) = state.compute_spans();
+            let at_byte = source.find("let y").unwrap();
+            let at = buffer.byte_to_char(at_byte);
+            for (revision, edit) in [
+                BufferEdit {
+                    range: at..at,
+                    replacement: "/*".to_string(),
+                },
+                BufferEdit {
+                    range: at..at + 2,
+                    replacement: String::new(),
+                },
+                BufferEdit {
+                    range: 0..0,
+                    replacement: separator.to_string(),
+                },
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                buffer.remove(edit.range.clone());
+                buffer.insert(edit.range.start, &edit.replacement);
+                let invalidation = state.update(&buffer, BufferDelta::Edits(vec![edit]), revision as u64 + 1);
+                match invalidation {
+                    SyntaxInvalidation::Full => (cached_lines, cached_lens) = state.compute_spans(),
+                    SyntaxInvalidation::Lines(lines) => {
+                        let (new_lines, new_lens) = state.compute_spans_for_lines(lines.clone());
+                        cached_lines.splice(lines.clone(), new_lines);
+                        cached_lens.splice(lines, new_lens);
+                    }
+                }
+                let fresh = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, revision as u64 + 1).unwrap();
+                let (fresh_lines, fresh_lens) = fresh.compute_spans();
+                assert_eq!(
+                    (&cached_lines, &cached_lens),
+                    (&fresh_lines, &fresh_lens),
+                    "{separator:?}, edit {revision}"
+                );
+                assert_eq!(
+                    &*state.structure(),
+                    &*fresh.structure(),
+                    "{separator:?}, edit {revision}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn ordinary_edit_recomputes_only_a_small_line_window() {
         use lst_editor::{BufferDelta, BufferEdit};
 

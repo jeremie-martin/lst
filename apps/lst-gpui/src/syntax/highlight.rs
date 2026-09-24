@@ -409,8 +409,9 @@ impl TabSyntaxState {
                 // Apply edits in reverse order so each edit's pre-batch
                 // coordinates (in `self.parsed_buffer`) stay valid — later
                 // edits don't shift earlier positions.
+                let positions = ParserPositions::new(&self.parsed_buffer, &self.tree);
                 for edit in edits.iter().rev() {
-                    let input_edit = input_edit_for(&self.parsed_buffer, edit);
+                    let input_edit = input_edit_for(&positions, edit);
                     self.tree.edit(&input_edit);
                 }
                 if let Some(tree) = parse_rope(&mut self.parser, new_buffer, Some(&self.tree)) {
@@ -418,7 +419,8 @@ impl TabSyntaxState {
                         changed_byte_ranges.push(range.start_byte..range.end_byte);
                         include_line_range(
                             &mut changed_lines,
-                            range.start_point.row..range.end_point.row.saturating_add(1),
+                            new_buffer.byte_to_line(range.start_byte)
+                                ..new_buffer.byte_to_line(range.end_byte).saturating_add(1),
                         );
                     }
                     self.tree = tree;
@@ -1267,22 +1269,20 @@ fn structural_snapshot(
 ) -> StructuralSnapshot {
     fn collect_markdown_inline_ranges(
         buffer: &Rope,
+        tree: &Tree,
         injections: &[&InjectionMatch],
         streams: &mut Vec<Vec<(usize, char)>>,
         injection_parsers: &mut InjectionParsers,
     ) {
+        let positions = ParserPositions::new(buffer, tree);
         let included_ranges = injections
             .iter()
             .filter(|injection| injection.content_start < injection.content_end)
-            .map(|injection| {
-                let start_char = buffer.byte_to_char(injection.content_start);
-                let end_char = buffer.byte_to_char(injection.content_end);
-                TsRange {
-                    start_byte: injection.content_start,
-                    end_byte: injection.content_end,
-                    start_point: point_at_byte(buffer, start_char, injection.content_start),
-                    end_point: point_at_byte(buffer, end_char, injection.content_end),
-                }
+            .map(|injection| TsRange {
+                start_byte: injection.content_start,
+                end_byte: injection.content_end,
+                start_point: positions.at_byte(injection.content_start),
+                end_point: positions.at_byte(injection.content_end),
             })
             .collect::<Vec<_>>();
         if included_ranges.is_empty() {
@@ -1412,7 +1412,7 @@ fn structural_snapshot(
         .filter(|injection| injection.embedded == GrammarId::MarkdownInline)
         .collect::<Vec<_>>();
     markdown_inline.sort_by_key(|injection| (injection.content_start, injection.content_end));
-    collect_markdown_inline_ranges(buffer, &markdown_inline, &mut streams, injection_parsers);
+    collect_markdown_inline_ranges(buffer, tree, &markdown_inline, &mut streams, injection_parsers);
     let other_injections = root_injections
         .iter()
         .filter(|injection| injection.embedded != GrammarId::MarkdownInline)
@@ -2228,16 +2228,17 @@ fn push_highlight_span(
 /// Build a tree-sitter `InputEdit` for one `BufferEdit` applied to
 /// `old_buffer`. `old_buffer` reflects the buffer state *before* this
 /// edit (and before any later edits in the same batch — see
-/// `apply_edits_and_reparse` which iterates in reverse to preserve that).
-fn input_edit_for(old_buffer: &Rope, edit: &BufferEdit) -> InputEdit {
+/// `update`, which iterates in reverse to preserve that).
+fn input_edit_for(positions: &ParserPositions<'_>, edit: &BufferEdit) -> InputEdit {
+    let old_buffer = positions.buffer;
     let start_char = edit.range.start.min(old_buffer.len_chars());
     let old_end_char = edit.range.end.min(old_buffer.len_chars());
     let start_byte = old_buffer.char_to_byte(start_char);
     let old_end_byte = old_buffer.char_to_byte(old_end_char);
     let new_end_byte = start_byte + edit.replacement.len();
 
-    let start_position = point_at_byte(old_buffer, start_char, start_byte);
-    let old_end_position = point_at_byte(old_buffer, old_end_char, old_end_byte);
+    let start_position = positions.at_byte(start_byte);
+    let old_end_position = positions.at_byte(old_end_byte);
     let new_end_position = position_after_insertion(start_position, &edit.replacement);
 
     InputEdit {
@@ -2250,13 +2251,39 @@ fn input_edit_for(old_buffer: &Rope, edit: &BufferEdit) -> InputEdit {
     }
 }
 
-fn point_at_byte(buffer: &Rope, char_offset: usize, byte_offset: usize) -> Point {
-    let line = buffer.char_to_line(char_offset);
-    let line_start_char = buffer.line_to_char(line);
-    let line_start_byte = buffer.char_to_byte(line_start_char);
-    Point {
-        row: line,
-        column: byte_offset - line_start_byte,
+/// Tree-sitter counts only LF rows; document positions also count other
+/// Unicode separators. The parsed root can prove that both indexes agree.
+/// Otherwise scan LF bytes, without adding a second persistent line index.
+struct ParserPositions<'a> {
+    buffer: &'a Rope,
+    document_lines_match: bool,
+}
+
+impl<'a> ParserPositions<'a> {
+    fn new(buffer: &'a Rope, tree: &Tree) -> Self {
+        let root = tree.root_node();
+        Self {
+            buffer,
+            document_lines_match: root.end_byte() == buffer.len_bytes()
+                && root.end_position().row == buffer.len_lines().saturating_sub(1),
+        }
+    }
+
+    fn at_byte(&self, byte_offset: usize) -> Point {
+        if self.document_lines_match {
+            let row = self.buffer.byte_to_line(byte_offset);
+            return Point {
+                row,
+                column: byte_offset - self.buffer.line_to_byte(row),
+            };
+        }
+        let mut point = Point { row: 0, column: 0 };
+        for chunk in self.buffer.byte_slice(..byte_offset).chunks() {
+            let bytes = chunk.as_bytes();
+            point.row += memchr::memchr_iter(b'\n', bytes).count();
+            point.column = memchr::memrchr(b'\n', bytes).map_or(point.column + bytes.len(), |at| bytes.len() - at - 1);
+        }
+        point
     }
 }
 
@@ -2281,6 +2308,40 @@ fn position_after_insertion(start: Point, replacement: &str) -> Point {
 #[cfg(test)]
 mod injection_budget_tests {
     use super::*;
+
+    #[test]
+    fn parser_points_use_lf_rows_and_utf8_byte_columns() {
+        for source in [
+            "",
+            " \n\n",
+            "fn main() {\n    let x = 1;\r\n}\n",
+            "// α\rβ\u{b}γ\u{c}δ\u{85}ε\u{2028}ζ\u{2029}η\nfn main() {}",
+        ] {
+            let buffer = Rope::from_str(source);
+            let config = catalog::grammar(GrammarId::Rust);
+            let mut parser = Parser::new();
+            parser.set_language(&config.language).unwrap();
+            let tree = parse_rope(&mut parser, &buffer, None).unwrap();
+            let positions = ParserPositions::new(&buffer, &tree);
+            assert_eq!(positions.document_lines_match, !source.contains('\u{b}'));
+            for char_offset in 0..=buffer.len_chars() {
+                let byte_offset = buffer.char_to_byte(char_offset);
+                let prefix = &source.as_bytes()[..byte_offset];
+                let expected = Point {
+                    row: prefix.iter().filter(|byte| **byte == b'\n').count(),
+                    column: prefix
+                        .iter()
+                        .rposition(|byte| *byte == b'\n')
+                        .map_or(byte_offset, |at| byte_offset - at - 1),
+                };
+                assert_eq!(
+                    positions.at_byte(byte_offset),
+                    expected,
+                    "at byte {byte_offset} in {source:?}"
+                );
+            }
+        }
+    }
 
     fn markdown_injections(source: &str) -> Vec<InjectionMatch> {
         let buffer = Rope::from_str(source);

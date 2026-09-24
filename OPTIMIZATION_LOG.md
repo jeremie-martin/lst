@@ -536,3 +536,27 @@ in [the historical log](docs/optimization-history.md).
 - All-features tests and Clippy pass. Equivalence covers long ASCII lines,
   multiple ASCII chunks, mixed Unicode/ASCII chunks, every separator and 1,024
   fragmented edits. Vendor patch reverse-application checks also pass.
+
+### Keep parser positions in the parser's coordinate system
+
+- Tree-sitter points count LF rows and UTF-8 byte columns. The adapter used
+  document rows, which also count lone CR and Unicode separators. A boundary
+  test proves the old adapter reports `(1, 0)` after CR where `(0, 6)` is
+  required. Correct both edit points and Markdown included-range points;
+  translate parser changed ranges back through document byte positions.
+- A short-lived `ParserPositions` adapter uses the parsed root's extent and
+  LF row count to prove when the document index is compatible. Ordinary
+  LF/CRLF documents keep indexed lookups. Otherwise scan LF bytes; this rare
+  case is linear in the prefix length, without a second persistent index.
+- All-features tests and Clippy pass. Coordinate checks cover every separator,
+  UTF-8 columns, empty text and trailing breaks. Incremental highlight and
+  structure caches equal fresh parses after comment insertion/removal and
+  topology changes; that broader example also passes before the fix, so the
+  direct boundary test is the demonstrated regression.
+- Five physical large-Rust typing runs per variant: **0.983 -> 0.998
+  ms/character**, parser phase **209.427 -> 213.322 ms** per 320 characters,
+  CPU **330 -> 320 ms**. No performance gain claimed; preserve correct parser
+  coordinates. The final combined X11 and pixel checkpoints follow.
+- Additional iterator evidence: the preceding LF-chunk change reduces the
+  500,000-line production wrap build **17.984 -> 11.773 ms**, despite no
+  established gain in whole startup on that comparison.
