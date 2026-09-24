@@ -601,6 +601,269 @@ impl EditorTestExt for Editor<'_> {
     }
 }
 
+/// A selection as `(anchor, head)`, each a `(line, col)` position.
+pub type SelectionSpan = ((usize, usize), (usize, usize));
+
+/// Selection-state expectations and the selection gestures the harness
+/// cannot express directly.
+pub trait SelectionTestExt {
+    /// Wait until the newest trace record holds exactly `selections`, in
+    /// document order.
+    fn expect_selections(&mut self, selections: &[SelectionSpan]) -> SupportResult<StateTraceRecord>;
+
+    /// Wait until the newest trace record's selections cover exactly
+    /// `ranges`, each a direction-agnostic `(start, end)` char range, in
+    /// document order.
+    fn expect_selection_ranges(&mut self, ranges: &[(usize, usize)]) -> SupportResult<StateTraceRecord>;
+
+    /// Click the line-number gutter beside `line`, holding Shift when
+    /// `shift` is set, and wait for the selection to change.
+    fn click_gutter(&mut self, line: usize, shift: bool) -> SupportResult<StateTraceRecord>;
+
+    /// Click the empty text area one row below the last painted row.
+    fn click_below_last_row(&mut self) -> SupportResult<()>;
+
+    /// Press the left button `clicks` times at `from`, keep it down on the
+    /// last press while moving to `to`, then release: a word (2) or line
+    /// (3) drag. Waits for the selection to change.
+    fn multi_click_drag_text(
+        &mut self,
+        clicks: usize,
+        from: (usize, usize),
+        to: (usize, usize),
+    ) -> SupportResult<StateTraceRecord>;
+}
+
+impl SelectionTestExt for Editor<'_> {
+    fn expect_selections(&mut self, selections: &[SelectionSpan]) -> SupportResult<StateTraceRecord> {
+        self.wait_state("selections", FOCUS_TIMEOUT, |record| {
+            record
+                .cursors
+                .iter()
+                .map(|cursor| (cursor.anchor_pos(), cursor.head_pos()))
+                .eq(selections.iter().copied())
+        })
+    }
+
+    fn expect_selection_ranges(&mut self, ranges: &[(usize, usize)]) -> SupportResult<StateTraceRecord> {
+        self.wait_state("selection ranges", FOCUS_TIMEOUT, |record| {
+            record
+                .cursors
+                .iter()
+                .map(|cursor| {
+                    (
+                        cursor.anchor_char.min(cursor.head_char),
+                        cursor.anchor_char.max(cursor.head_char),
+                    )
+                })
+                .eq(ranges.iter().copied())
+        })
+    }
+
+    fn click_gutter(&mut self, line: usize, shift: bool) -> SupportResult<StateTraceRecord> {
+        let before = self.wait_state("gutter row geometry", FOCUS_TIMEOUT, |record| {
+            record.viewport.gutter_width_px > 0.0
+                && record.viewport.bounds_origin_px.is_some()
+                && record.viewport.first_row_for_line(line).is_some()
+        })?;
+        let viewport = &before.viewport;
+        let (origin_x, _) = viewport.bounds_origin_px.ok_or("viewport origin missing after wait")?;
+        let top = viewport
+            .first_row_for_line(line)
+            .ok_or("gutter row missing after wait")?
+            .top_px;
+        let mut held = HeldKeys::new()?;
+        if shift {
+            held.press(XK_SHIFT_L)?;
+        }
+        click_trace_bounds_center(
+            self,
+            origin_x,
+            top,
+            viewport.gutter_width_px,
+            viewport.line_height_px,
+            viewport.scale_factor,
+            "gutter-click",
+        )?;
+        let selection = |record: &StateTraceRecord| {
+            record
+                .cursors
+                .iter()
+                .map(|cursor| (cursor.anchor_char, cursor.head_char))
+                .collect::<Vec<_>>()
+        };
+        let changed = self.wait_state("gutter click selection", FOCUS_TIMEOUT, |record| {
+            record.seq > before.seq && selection(record) != selection(&before)
+        })?;
+        held.release_all()?;
+        Ok(changed)
+    }
+
+    fn click_below_last_row(&mut self) -> SupportResult<()> {
+        let record = self.wait_state("painted rows", FOCUS_TIMEOUT, |record| {
+            !record.viewport.rows.is_empty() && record.viewport.bounds_origin_px.is_some()
+        })?;
+        let viewport = &record.viewport;
+        let (origin_x, _) = viewport.bounds_origin_px.ok_or("viewport origin missing after wait")?;
+        let (width, _) = viewport.bounds_size_px.ok_or("viewport size missing")?;
+        let last_top = viewport.rows.last().ok_or("rows missing after wait")?.top_px;
+        click_trace_bounds_center(
+            self,
+            origin_x,
+            last_top + viewport.line_height_px,
+            width,
+            viewport.line_height_px,
+            viewport.scale_factor,
+            "below-last-row-click",
+        )
+    }
+
+    fn multi_click_drag_text(
+        &mut self,
+        clicks: usize,
+        from: (usize, usize),
+        to: (usize, usize),
+    ) -> SupportResult<StateTraceRecord> {
+        use x11rb::connection::Connection as _;
+        use x11rb::protocol::xproto::{self, ConnectionExt as _};
+        use x11rb::protocol::xtest::ConnectionExt as _;
+
+        let before = self.wait_state("multi-click drag geometry", FOCUS_TIMEOUT, |record| {
+            record.viewport.text_to_window_local(from.0, from.1).is_some()
+                && record.viewport.text_to_window_local(to.0, to.1).is_some()
+        })?;
+        let local = |(line, col): (usize, usize)| {
+            before
+                .viewport
+                .text_to_window_local(line, col)
+                .ok_or("drag endpoint left the viewport")
+        };
+        let (from_x, from_y) = local(from)?;
+        let (to_x, to_y) = local(to)?;
+        let (conn, screen) = x11rb::connect(None)?;
+        let root = conn.setup().roots[screen].root;
+        let to_root = |x: i32, y: i32| -> SupportResult<(i16, i16)> {
+            let reply = conn
+                .translate_coordinates(self.window_id(), root, x as i16, y as i16)?
+                .reply()?;
+            Ok((reply.dst_x, reply.dst_y))
+        };
+        let from_root = to_root(from_x, from_y)?;
+        let to_root = to_root(to_x, to_y)?;
+        let button = |kind: u8, (x, y): (i16, i16)| conn.xtest_fake_input(kind, 1, 0, root, x, y, 0).map(|_| ());
+        conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, from_root.0, from_root.1)?;
+        conn.flush()?;
+        std::thread::sleep(POINTER_SETTLE);
+        for click in 0..clicks {
+            button(xproto::BUTTON_PRESS_EVENT, from_root)?;
+            conn.flush()?;
+            std::thread::sleep(Duration::from_millis(5));
+            if click + 1 < clicks {
+                button(xproto::BUTTON_RELEASE_EVENT, from_root)?;
+                conn.flush()?;
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+        conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, to_root.0, to_root.1)?;
+        conn.flush()?;
+        std::thread::sleep(POINTER_SETTLE);
+        button(xproto::BUTTON_RELEASE_EVENT, to_root)?;
+        conn.get_input_focus()?.reply()?;
+        let changed = self.wait_state("multi-click drag selection", FOCUS_TIMEOUT, |record| {
+            record.seq > before.seq
+                && record
+                    .cursors
+                    .iter()
+                    .map(|cursor| (cursor.anchor_char, cursor.head_char))
+                    .ne(before
+                        .cursors
+                        .iter()
+                        .map(|cursor| (cursor.anchor_char, cursor.head_char)))
+        })?;
+        Ok(changed)
+    }
+}
+
+const POINTER_SETTLE: Duration = Duration::from_millis(50);
+pub const XK_SHIFT_L: u32 = 0xffe1;
+pub const XK_LEFT: u32 = 0xff51;
+pub const XK_UP: u32 = 0xff52;
+pub const XK_RIGHT: u32 = 0xff53;
+pub const XK_DOWN: u32 = 0xff54;
+
+/// Keys held down through a separate XTEST connection until released or
+/// dropped, for input the key DSL cannot express: auto-repeat and
+/// modifier-held clicks. Each press is flushed and synchronized with the
+/// server before it returns, so later input from the harness connection
+/// arrives while the key is down.
+pub struct HeldKeys {
+    conn: x11rb::rust_connection::RustConnection,
+    root: u32,
+    keysyms_per_keycode: usize,
+    min_keycode: u8,
+    keysyms: Vec<u32>,
+    pressed: Vec<u8>,
+}
+
+impl HeldKeys {
+    pub fn new() -> SupportResult<Self> {
+        use x11rb::connection::Connection as _;
+        use x11rb::protocol::xproto::ConnectionExt as _;
+
+        let (conn, screen) = x11rb::connect(None)?;
+        let setup = conn.setup();
+        let root = setup.roots[screen].root;
+        let min_keycode = setup.min_keycode;
+        let mapping = conn
+            .get_keyboard_mapping(min_keycode, setup.max_keycode - min_keycode + 1)?
+            .reply()?;
+        Ok(Self {
+            conn,
+            root,
+            keysyms_per_keycode: usize::from(mapping.keysyms_per_keycode),
+            min_keycode,
+            keysyms: mapping.keysyms,
+            pressed: Vec::new(),
+        })
+    }
+
+    pub fn press(&mut self, keysym: u32) -> SupportResult<()> {
+        let index = self
+            .keysyms
+            .chunks(self.keysyms_per_keycode)
+            .position(|symbols| symbols.contains(&keysym))
+            .ok_or_else(|| format!("no keycode for keysym {keysym:#x}"))?;
+        let code = self.min_keycode + u8::try_from(index)?;
+        self.fake_key(x11rb::protocol::xproto::KEY_PRESS_EVENT, code)?;
+        self.pressed.push(code);
+        Ok(())
+    }
+
+    pub fn release_all(&mut self) -> SupportResult<()> {
+        while let Some(code) = self.pressed.pop() {
+            self.fake_key(x11rb::protocol::xproto::KEY_RELEASE_EVENT, code)?;
+        }
+        Ok(())
+    }
+
+    fn fake_key(&self, kind: u8, code: u8) -> SupportResult<()> {
+        use x11rb::protocol::xproto::ConnectionExt as _;
+        use x11rb::protocol::xtest::ConnectionExt as _;
+
+        self.conn.xtest_fake_input(kind, code, 0, self.root, 0, 0, 0)?;
+        // A round trip proves the server processed the event; synthetic
+        // events still pending when a client disconnects may be discarded.
+        self.conn.get_input_focus()?.reply()?;
+        Ok(())
+    }
+}
+
+impl Drop for HeldKeys {
+    fn drop(&mut self) {
+        let _ = self.release_all();
+    }
+}
+
 fn click_trace_bounds_center(
     editor: &mut Editor<'_>,
     ox: f32,
