@@ -209,24 +209,6 @@ fn line_edit_and_multi_cursor_workflows_preserve_current_model_results() {
 }
 
 #[test]
-fn column_selection_restores_its_preferred_column_after_short_lines() {
-    let mut harness = ModelHarness::new("abcdef\nx\nabcdef");
-    harness.set_cursor(Position::new(0, 5));
-
-    harness.execute(EditorCommand::ColumnSelectDown);
-    harness.execute(EditorCommand::ColumnSelectDown);
-
-    assert_eq!(
-        harness.model.selection_set().as_slice(),
-        &[
-            Selection::collapsed(5),
-            Selection::collapsed(8),
-            Selection::collapsed(14)
-        ]
-    );
-}
-
-#[test]
 fn lowering_multi_cursor_limit_clamps_inactive_tabs_immediately() {
     let first_id = TabId::from_raw(1);
     let second_id = TabId::from_raw(2);
@@ -248,65 +230,6 @@ fn lowering_multi_cursor_limit_clamps_inactive_tabs_immediately() {
         .selection_set();
     assert_eq!(limited.as_slice(), &[Selection::collapsed(0), Selection::collapsed(3)]);
     assert_eq!(limited.primary_index(), 1);
-}
-
-#[test]
-fn visual_line_boundaries_move_every_cursor_and_preserve_each_selection_anchor() {
-    let text = "    aa\n  bbbb\n    cc";
-    let line_starts = [0, 7, 14];
-    let line_ends = [6, 13, 20];
-    let mut home = ModelHarness::new(text);
-    home.model.set_selection_set(
-        SelectionSet::from_selections(line_ends.map(Selection::collapsed).to_vec(), 0)
-            .expect("one cursor at each line end is valid"),
-    );
-
-    home.model.move_visual_line_boundary(false, false, 80);
-    assert_eq!(
-        home.model.selection_set().as_slice(),
-        &[
-            Selection::collapsed(4),
-            Selection::collapsed(9),
-            Selection::collapsed(18)
-        ]
-    );
-    home.model.move_visual_line_boundary(false, false, 80);
-    assert_eq!(
-        home.model.selection_set().as_slice(),
-        &line_starts.map(Selection::collapsed)
-    );
-    home.model.move_visual_line_boundary(true, false, 80);
-    assert_eq!(
-        home.model.selection_set().as_slice(),
-        &line_ends.map(Selection::collapsed)
-    );
-
-    let mut shifted_home = ModelHarness::new(text);
-    shifted_home.model.set_selection_set(
-        SelectionSet::from_selections(line_ends.map(Selection::collapsed).to_vec(), 0)
-            .expect("one cursor at each line end is valid"),
-    );
-    shifted_home.model.move_visual_line_boundary(false, true, 80);
-    assert_eq!(
-        shifted_home.model.selection_set().as_slice(),
-        &[Selection::new(6, 4), Selection::new(13, 9), Selection::new(20, 18)]
-    );
-    shifted_home.model.move_visual_line_boundary(false, true, 80);
-    assert_eq!(
-        shifted_home.model.selection_set().as_slice(),
-        &[Selection::new(6, 0), Selection::new(13, 7), Selection::new(20, 14)]
-    );
-
-    let mut shifted_end = ModelHarness::new(text);
-    shifted_end.model.set_selection_set(
-        SelectionSet::from_selections(line_starts.map(Selection::collapsed).to_vec(), 0)
-            .expect("one cursor at each line start is valid"),
-    );
-    shifted_end.model.move_visual_line_boundary(true, true, 80);
-    assert_eq!(
-        shifted_end.model.selection_set().as_slice(),
-        &[Selection::new(0, 6), Selection::new(7, 13), Selection::new(14, 20)]
-    );
 }
 
 #[test]

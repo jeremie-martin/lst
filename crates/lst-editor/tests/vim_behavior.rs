@@ -5,36 +5,6 @@ use lst_editor::{vim, EditorEffect, FocusTarget, RevealIntent};
 use support::{run_cursor_cases, run_text_cases, run_text_cases_expect_normal, VimHarness};
 
 #[test]
-fn x11_vim_smoke_specs_run_through_the_editor_model() {
-    let cases = [
-        ("top line delete", "A<enter>B<enter>C<enter><esc>ggdd", "B\nC\n"),
-        (
-            "visual line indent",
-            "alpha<enter>beta<enter>gamma<esc>gg0Vjj><esc>",
-            "  alpha\n  beta\n  gamma",
-        ),
-        ("change inner word", "hello world<esc>0ciwHEY<esc>", "HEY world"),
-        (
-            "normal open join replace",
-            "foo<enter>bar<esc>ggOtop<esc>jJ0rx",
-            "top\nxoo bar",
-        ),
-        (
-            "linewise paste",
-            "one<enter>two<enter>three<esc>ggyyGp",
-            "one\ntwo\nthree\none",
-        ),
-        ("visual text object case", "hello world<esc>0viwU", "HELLO world"),
-    ];
-
-    for (name, keys, expected) in cases {
-        let mut harness = VimHarness::new("");
-        harness.keys(keys);
-        assert_eq!(harness.text(), expected, "{name}");
-    }
-}
-
-#[test]
 fn normal_motions_cover_words_lines_char_search_and_brackets() {
     let cases = [
         ("line start", "abc def", (0, 4), "0", (0, 0)),

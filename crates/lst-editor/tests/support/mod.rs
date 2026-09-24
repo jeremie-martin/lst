@@ -345,11 +345,6 @@ impl VimHarness {
     }
 
     #[track_caller]
-    pub fn expect_line_register(&self, expected: &str) {
-        assert_eq!(self.model.vim_register(), &vim::Register::Line(expected.to_string()));
-    }
-
-    #[track_caller]
     pub fn expect_visual_state(&self, anchor: (usize, usize), head: (usize, usize)) {
         let state = self.model.vim_visual_state().expect("visual state");
         assert_eq!(

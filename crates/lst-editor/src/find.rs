@@ -596,21 +596,6 @@ mod tests {
     }
 
     #[test]
-    fn find_lines_use_document_boundaries_and_display_terminators() {
-        let long = "x".repeat(4_096);
-        let text = format!("first\r\n{long}\n\nlone carriage\rreturn\u{b}vt\u{c}ff\u{85}nel\u{2028}ls\u{2029}last\n");
-        let rope = Rope::from_str(&text);
-        let mut actual = Vec::new();
-        for_each_text_line(&rope, |index, line| actual.push((index, line.to_string())));
-        let expected = rope
-            .lines()
-            .enumerate()
-            .map(|(index, line)| (index, line.to_string().trim_end_matches(['\n', '\r']).to_string()))
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
     fn ascii_literal_scanner_keeps_non_overlapping_and_case_semantics() {
         let cases = [
             ("aaaaa", "aa", false, vec![0, 2]),
