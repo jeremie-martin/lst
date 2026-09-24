@@ -1,8 +1,12 @@
+//! Vim behavior the Neovim oracle (`vim_oracle.rs`) cannot express: grapheme-aware
+//! editing, lst-specific policy, viewport-dependent motions, and `g;`/`gi`. ASCII
+//! Normal and Visual parity cases belong in `scripts/generate_vim_oracle_fixtures.py`.
+
 mod support;
 
 use lst_editor::{vim, EditorEffect, FocusTarget, RevealIntent};
 
-use support::{run_cursor_cases, run_text_cases, run_text_cases_expect_normal, VimHarness};
+use support::{run_cursor_cases, run_text_cases, VimHarness};
 
 #[test]
 fn modes_state_pending_and_escape_follow_vim_contracts() {
@@ -198,38 +202,7 @@ fn join_keeps_indentation_only_lines_and_adds_no_space_for_blank_lines() {
 }
 
 #[test]
-fn visual_o_swaps_the_selection_ends() {
-    // `o` moves the cursor (head) from the far end back to the anchor end.
-    run_cursor_cases(&[("visual o jumps to the other end", "abcdef", (0, 0), "vlllo", (0, 0))]);
-}
-
-#[test]
-fn visual_mode_covers_charwise_linewise_text_objects_case_and_indentation() {
-    let cases = [(
-        "visual text object selects quotes",
-        "a \"two words\" z",
-        (0, 4),
-        "vi\"U",
-        "a \"TWO WORDS\" z",
-    )];
-
-    run_text_cases_expect_normal(&cases);
-}
-
-#[test]
-fn visual_mode_covers_counts_reverse_selection_search_repeat_and_viewport() {
-    let mut harness = VimHarness::normal_at("alpha beta gamma", 0, 0);
-    harness.keys("v2w");
-    harness.expect_selection("alpha beta g");
-    harness.keys("y$p");
-    harness.expect_text("alpha beta gammaalpha beta g");
-
-    let mut harness = VimHarness::normal_at("abc abc abc", 0, 0);
-    harness.keys("vfc;");
-    harness.expect_selection("abc abc");
-    harness.keys(",");
-    harness.expect_selection("abc");
-
+fn visual_selection_follows_viewport_motions() {
     let text = (0..12)
         .map(|line| format!("line {line}"))
         .collect::<Vec<_>>()
@@ -251,64 +224,23 @@ fn visual_mode_covers_counts_reverse_selection_search_repeat_and_viewport() {
 }
 
 #[test]
-fn search_commands_cover_word_search_find_panel_and_visual_stepping() {
-    let mut harness = VimHarness::normal_at("foo bar foo baz foo", 0, 0);
-    harness.keys("*");
-    harness.expect_cursor(0, 8);
-    harness.keys("n");
-    harness.expect_cursor(0, 16);
-    harness.keys("N");
-    harness.expect_cursor(0, 8);
-    harness.keys("#");
-    harness.expect_cursor(0, 0);
-
+fn search_prompt_hands_focus_back_to_the_editor() {
     let mut harness = VimHarness::normal_at("alpha beta alpha", 0, 0);
     harness.keys("/alpha<enter>n");
-    harness.expect_cursor(0, 0);
     assert_eq!(harness.focus, FocusTarget::Editor);
-
-    let mut harness = VimHarness::normal_at("alpha beta alpha", 0, 0);
-    harness.keys("v/beta<enter>");
-    harness.expect_mode(vim::Mode::Visual);
-    assert_eq!(harness.model.active_tab().selected_text().as_deref(), Some("alpha b"));
-}
-
-#[test]
-fn search_commands_cover_wrap_empty_words_and_find_query_editing() {
-    let mut harness = VimHarness::normal_at("foo bar foo", 0, 8);
-    harness.keys("n");
-    harness.expect_cursor(0, 8);
-    harness.keys("/foo<enter>N");
-    harness.keys("N");
-    harness.expect_cursor(0, 0);
-
-    let mut harness = VimHarness::normal_at("foo bar foo", 0, 4);
-    harness.keys("*");
-    harness.expect_cursor(0, 4);
-    harness.keys("#");
-    harness.expect_cursor(0, 4);
-
-    let mut harness = VimHarness::normal_at("foo bar foo baz foo", 0, 16);
-    harness.keys("?foo<enter>");
-    assert_eq!(harness.model.find().query, "foo");
-    harness.expect_cursor(0, 8);
-    harness.keys("n");
-    harness.expect_cursor(0, 0);
-    harness.keys("N");
-    harness.expect_cursor(0, 8);
-
-    let mut harness = VimHarness::normal_at("foo bar foo baz foo", 0, 16);
-    harness.keys("#");
-    assert_eq!(harness.model.find().query, "foo");
-    assert!(harness.model.find().whole_word);
-    harness.expect_cursor(0, 8);
-    harness.keys("n");
-    harness.expect_cursor(0, 0);
 
     let mut harness = VimHarness::normal_at("foo bar foo", 0, 4);
     harness.keys("/foo<esc>");
     assert_eq!(harness.focus, FocusTarget::Editor);
     harness.expect_cursor(0, 4);
+}
+
+#[test]
+fn hash_search_sets_a_whole_word_find_query() {
+    let mut harness = VimHarness::normal_at("foo bar foo baz foo", 0, 16);
+    harness.keys("#");
+    assert_eq!(harness.model.find().query, "foo");
+    assert!(harness.model.find().whole_word);
 }
 
 #[test]
@@ -325,30 +257,27 @@ fn undo_redo_and_last_edit_jump_track_vim_edits() {
 }
 
 #[test]
-fn undo_redo_groups_vim_edit_families_as_single_steps() {
+fn cmd_r_redoes_each_vim_edit_family_as_one_step() {
+    // The oracle pins each edit and its undo against Neovim; lst binds redo to
+    // <cmd-r> rather than <C-r>, so the redo half stays here.
     let cases = [
-        ("change word", "alpha beta", (0, 0), "cwX<esc>", "X beta"),
-        ("change line", "alpha\nbeta", (0, 0), "ccX<esc>", "X\nbeta"),
-        ("substitute char", "alpha beta", (0, 0), "sX<esc>", "Xlpha beta"),
-        ("visual delete", "alpha beta gamma", (0, 0), "vwd", "eta gamma"),
-        (
-            "visual change",
-            "alpha beta gamma",
-            (0, 0),
-            "viwcX<esc>",
-            "X beta gamma",
-        ),
-        ("visual paste", "one two three", (0, 0), "yiwwviwp", "one one three"),
-        ("paste", "alpha beta", (0, 0), "yiw$p", "alpha betaalpha"),
-        ("join", "alpha\n beta", (0, 0), "J", "alpha beta"),
-        ("indent", "alpha\nbeta", (0, 0), ">>", "  alpha\nbeta"),
-        ("outdent", "  alpha\nbeta", (0, 0), "<<", "alpha\nbeta"),
+        ("change word", "alpha beta", "cwX<esc>"),
+        ("change line", "alpha\nbeta", "ccX<esc>"),
+        ("substitute char", "alpha beta", "sX<esc>"),
+        ("visual delete", "alpha beta gamma", "vwd"),
+        ("visual change", "alpha beta gamma", "viwcX<esc>"),
+        ("visual paste", "one two three", "yiwwviwp"),
+        ("paste", "alpha beta", "yiw$p"),
+        ("join", "alpha\n beta", "J"),
+        ("indent", "alpha\nbeta", ">>"),
+        ("outdent", "  alpha\nbeta", "<<"),
     ];
 
-    for (name, initial, cursor, keys, edited) in cases {
-        let mut harness = VimHarness::normal_at(initial, cursor.0, cursor.1);
+    for (name, initial, keys) in cases {
+        let mut harness = VimHarness::normal_at(initial, 0, 0);
         harness.keys(keys);
-        assert_eq!(harness.text(), edited, "{name} edit");
+        let edited = harness.text();
+        assert_ne!(edited, initial, "{name} edit");
         harness.keys("u");
         assert_eq!(harness.text(), initial, "{name} undo");
         harness.keys("<cmd-r>");

@@ -695,6 +695,13 @@ def build_cases() -> list[dict]:
         ("visual Paste char preserves pasted register", "one two three", (0, 0), "yiwwviwP", True, False),
         ("visual paste line replaces selection and captures overwritten line", "one\ntwo\nthree", (0, 0), "yyjVp", True, False),
         ("visual Paste line preserves pasted register", "one\ntwo\nthree", (0, 0), "yyjVP", True, False),
+        ("visual o swaps to anchor end", "abcdef", (0, 0), "vlllo", False, True),
+        ("visual uppercase inner double quote with spaces", 'a "two words" z', (0, 4), 'vi"U', False, False),
+        ("visual change inner word before words", "alpha beta gamma", (0, 0), "viwcX<esc>", True, False),
+        ("visual yank counted word paste at end", "alpha beta gamma", (0, 0), "v2wy$p", True, False),
+        ("visual char find repeat final selection", "abc abc abc", (0, 0), "vfc;", False, True),
+        ("visual char find reverse repeat final selection", "abc abc abc", (0, 0), "vfc;,", False, True),
+        ("visual search submit final selection", "alpha beta alpha", (0, 0), "v/beta<enter>", False, True),
     ]:
         cases.append(
             case(
@@ -734,6 +741,16 @@ def build_cases() -> list[dict]:
         ("search reverse repeat without query is noop", "foo bar foo", (0, 0), "N", False),
         ("star search punctuation word", "foo_bar foo-bar foo_bar", (0, 0), "*", False),
         ("hash search punctuation word", "foo_bar foo-bar foo_bar", (0, 16), "#", False),
+        ("star search repeat forward", "foo bar foo baz foo", (0, 0), "*n", False),
+        ("star search repeat then reverse", "foo bar foo baz foo", (0, 0), "*nN", False),
+        ("star search then hash search", "foo bar foo baz foo", (0, 0), "*nN#", False),
+        ("hash search repeat backward", "foo bar foo baz foo", (0, 16), "#n", False),
+        ("star search single occurrence stays", "foo bar foo", (0, 4), "*", False),
+        ("hash search single occurrence stays", "foo bar foo", (0, 4), "*#", False),
+        ("search repeat wraps to first match", "alpha beta alpha", (0, 0), "/alpha<enter>n", True),
+        ("search repeat without query mid text is noop", "foo bar foo", (0, 8), "n", False),
+        ("search reverse repeat wraps both ways", "foo bar foo", (0, 8), "/foo<enter>NN", True),
+        ("question search repeat then opposite", "foo bar foo baz foo", (0, 16), "?foo<enter>nN", True),
     ]:
         cases.append(case(name, "search", text, cursor, keys, assert_search=assert_search))
 
@@ -752,6 +769,9 @@ def build_cases() -> list[dict]:
         ("undo join", "alpha\n beta", (0, 0), "Ju", False),
         ("undo indent", "alpha\nbeta", (0, 0), ">>u", False),
         ("undo outdent", "  alpha\nbeta", (0, 0), "<<u", False),
+        ("undo change word before last word", "alpha beta", (0, 0), "cwX<esc>u", True),
+        ("undo change line keeps following line", "alpha\nbeta", (0, 0), "ccX<esc>u", True),
+        ("undo inner word yank paste", "alpha beta", (0, 0), "yiw$pu", True),
     ]:
         cases.append(case(name, "undo", text, cursor, keys, assert_register=assert_register))
 

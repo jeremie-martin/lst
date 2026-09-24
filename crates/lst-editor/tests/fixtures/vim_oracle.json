@@ -17188,6 +17188,185 @@
       }
     },
     {
+      "name": "visual o swaps to anchor end",
+      "area": "visual",
+      "initial_text": "abcdef",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "vlllo",
+      "expected": {
+        "text": "abcdef",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Visual",
+        "selection": "abcd",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 3
+          },
+          "head": {
+            "line": 0,
+            "column": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "visual uppercase inner double quote with spaces",
+      "area": "visual",
+      "initial_text": "a \"two words\" z",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "vi\"U",
+      "expected": {
+        "text": "a \"TWO WORDS\" z",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "visual change inner word before words",
+      "area": "visual",
+      "initial_text": "alpha beta gamma",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "viwcX<esc>",
+      "expected": {
+        "text": "X beta gamma",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha"
+        }
+      }
+    },
+    {
+      "name": "visual yank counted word paste at end",
+      "area": "visual",
+      "initial_text": "alpha beta gamma",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "v2wy$p",
+      "expected": {
+        "text": "alpha beta gammaalpha beta g",
+        "cursor": {
+          "line": 0,
+          "column": 27
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha beta g"
+        }
+      }
+    },
+    {
+      "name": "visual char find repeat final selection",
+      "area": "visual",
+      "initial_text": "abc abc abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "vfc;",
+      "expected": {
+        "text": "abc abc abc",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Visual",
+        "selection": "abc abc",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 0
+          },
+          "head": {
+            "line": 0,
+            "column": 6
+          }
+        }
+      }
+    },
+    {
+      "name": "visual char find reverse repeat final selection",
+      "area": "visual",
+      "initial_text": "abc abc abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "vfc;,",
+      "expected": {
+        "text": "abc abc abc",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Visual",
+        "selection": "abc",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 0
+          },
+          "head": {
+            "line": 0,
+            "column": 2
+          }
+        }
+      }
+    },
+    {
+      "name": "visual search submit final selection",
+      "area": "visual",
+      "initial_text": "alpha beta alpha",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "v/beta<enter>",
+      "expected": {
+        "text": "alpha beta alpha",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Visual",
+        "search_query": "beta",
+        "selection": "alpha b",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 0
+          },
+          "head": {
+            "line": 0,
+            "column": 6
+          }
+        }
+      }
+    },
+    {
       "name": "search forward and repeat",
       "area": "search",
       "initial_text": "foo bar foo baz foo",
@@ -17562,6 +17741,189 @@
       }
     },
     {
+      "name": "star search repeat forward",
+      "area": "search",
+      "initial_text": "foo bar foo baz foo",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "*n",
+      "expected": {
+        "text": "foo bar foo baz foo",
+        "cursor": {
+          "line": 0,
+          "column": 16
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "star search repeat then reverse",
+      "area": "search",
+      "initial_text": "foo bar foo baz foo",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "*nN",
+      "expected": {
+        "text": "foo bar foo baz foo",
+        "cursor": {
+          "line": 0,
+          "column": 8
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "star search then hash search",
+      "area": "search",
+      "initial_text": "foo bar foo baz foo",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "*nN#",
+      "expected": {
+        "text": "foo bar foo baz foo",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "hash search repeat backward",
+      "area": "search",
+      "initial_text": "foo bar foo baz foo",
+      "cursor": {
+        "line": 0,
+        "column": 16
+      },
+      "keys": "#n",
+      "expected": {
+        "text": "foo bar foo baz foo",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "star search single occurrence stays",
+      "area": "search",
+      "initial_text": "foo bar foo",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "*",
+      "expected": {
+        "text": "foo bar foo",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "hash search single occurrence stays",
+      "area": "search",
+      "initial_text": "foo bar foo",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "*#",
+      "expected": {
+        "text": "foo bar foo",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "search repeat wraps to first match",
+      "area": "search",
+      "initial_text": "alpha beta alpha",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "/alpha<enter>n",
+      "expected": {
+        "text": "alpha beta alpha",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "search_query": "alpha"
+      }
+    },
+    {
+      "name": "search repeat without query mid text is noop",
+      "area": "search",
+      "initial_text": "foo bar foo",
+      "cursor": {
+        "line": 0,
+        "column": 8
+      },
+      "keys": "n",
+      "expected": {
+        "text": "foo bar foo",
+        "cursor": {
+          "line": 0,
+          "column": 8
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "search reverse repeat wraps both ways",
+      "area": "search",
+      "initial_text": "foo bar foo",
+      "cursor": {
+        "line": 0,
+        "column": 8
+      },
+      "keys": "/foo<enter>NN",
+      "expected": {
+        "text": "foo bar foo",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "search_query": "foo"
+      }
+    },
+    {
+      "name": "question search repeat then opposite",
+      "area": "search",
+      "initial_text": "foo bar foo baz foo",
+      "cursor": {
+        "line": 0,
+        "column": 16
+      },
+      "keys": "?foo<enter>nN",
+      "expected": {
+        "text": "foo bar foo baz foo",
+        "cursor": {
+          "line": 0,
+          "column": 8
+        },
+        "mode": "Normal",
+        "search_query": "foo"
+      }
+    },
+    {
       "name": "undo insert append",
       "area": "undo",
       "initial_text": "alpha beta",
@@ -17847,6 +18209,72 @@
           "column": 0
         },
         "mode": "Normal"
+      }
+    },
+    {
+      "name": "undo change word before last word",
+      "area": "undo",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "cwX<esc>u",
+      "expected": {
+        "text": "alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha"
+        }
+      }
+    },
+    {
+      "name": "undo change line keeps following line",
+      "area": "undo",
+      "initial_text": "alpha\nbeta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "ccX<esc>u",
+      "expected": {
+        "text": "alpha\nbeta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "alpha"
+        }
+      }
+    },
+    {
+      "name": "undo inner word yank paste",
+      "area": "undo",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "yiw$pu",
+      "expected": {
+        "text": "alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 9
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha"
+        }
       }
     }
   ]
