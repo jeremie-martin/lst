@@ -278,10 +278,6 @@ impl<'a> Editor<'a> {
         screenshot::capture_window(&self.display.conn, self.display.root, self.window.id)
     }
 
-    pub fn is_viewable(&self) -> Result<bool> {
-        window::is_viewable(&self.display.conn, self.window.id)
-    }
-
     /// Raise the editor above overlapping desktop windows and give its client
     /// window keyboard focus. Physical-display visual tests need both: the
     /// compositor overlay observes the pixels users see, while setting X11

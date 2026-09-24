@@ -41,15 +41,6 @@ pub(crate) fn find(
     }
 }
 
-pub(crate) fn is_viewable(conn: &RustConnection, window: Window) -> Result<bool> {
-    let attrs = match conn.get_window_attributes(window)?.reply() {
-        Ok(attrs) => attrs,
-        Err(error) if is_stale_window_error(&error) => return Ok(false),
-        Err(error) => return Err(error.into()),
-    };
-    Ok(attrs.map_state == MapState::VIEWABLE)
-}
-
 fn find_recursive(
     conn: &RustConnection,
     window: Window,

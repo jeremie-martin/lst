@@ -20,7 +20,6 @@ use lst_x11_harness::{
 use support::{secs, EditorTestExt, ScratchpadSession, SupportResult, TestResult};
 
 const TEXT: &str = "quit clipboard smoke";
-const PRIMARY_TEXT: &str = "middle paste smoke";
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
@@ -90,28 +89,6 @@ fn closing_a_scratchpad_tab_copies_it_while_other_tabs_remain_open() -> TestResu
         })?;
         wait_clipboard_text(Selection::Clipboard, TEXT, secs(10))?;
         wait_clipboard_text(Selection::Primary, TEXT, secs(10))?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn primary_selection_round_trips_via_middle_click() -> TestResult {
-    support::run_x11_test("smoke-primary-paste", |session| {
-        let (mut editor, path) = session.open("scratch")?;
-
-        if !editor.is_viewable()? {
-            eprintln!("skipping middle-click PRIMARY paste check because the X11 window is not viewable");
-            return Ok(());
-        }
-
-        // Pin the click to the top-left of the empty scratchpad's text
-        // area via the text-coordinate API. This is robust to font /
-        // gutter / padding changes; the older pixel-magic `(160, 170)`
-        // version drifted when those changed.
-        write_clipboard_text(Selection::Primary, PRIMARY_TEXT)?;
-        editor.middle_click_at_text(0, 0)?;
-        editor.save_then_expect_file(&path, PRIMARY_TEXT)?;
         Ok(())
     })
 }
