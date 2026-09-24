@@ -109,18 +109,20 @@ fn named_and_page_motions_cover_keyboard_boundary_paths() {
     harness.keys("<up>");
     harness.expect_cursor(0, 5);
 
-    let mut harness = VimHarness::normal_at("a\nb\nc\nd\ne\nf\ng\nh", 0, 0);
-    harness.model.set_viewport_rows(4);
+    // Eight rows keep half-page and full-page distances apart.
+    let text = (0..20).map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
+    let mut harness = VimHarness::normal_at(&text, 0, 0);
+    harness.model.set_viewport_rows(8);
     harness.keys("<C-d>");
-    harness.expect_cursor(2, 0);
+    harness.expect_cursor(4, 0);
     harness.keys("<C-u>");
     harness.expect_cursor(0, 0);
     harness.keys("<C-f>");
-    harness.expect_cursor(2, 0);
+    harness.expect_cursor(6, 0);
     harness.keys("<C-b>");
     harness.expect_cursor(0, 0);
     harness.keys("<pagedown>");
-    harness.expect_cursor(2, 0);
+    harness.expect_cursor(6, 0);
     harness.keys("<pageup>");
     harness.expect_cursor(0, 0);
 }
@@ -349,13 +351,19 @@ fn operators_cover_linewise_inclusive_exclusive_and_register_edges() {
         ),
         ("delete char find is inclusive", "abc def", (0, 0), "dfc", " def"),
         (
-            "delete till find is inclusive to previous char",
+            "delete till find stops before the target",
             "abc def",
             (0, 0),
-            "td",
+            "dtd",
+            "def",
+        ),
+        (
+            "delete with a failed find is a noop",
+            "abc def",
+            (0, 0),
+            "dfz",
             "abc def",
         ),
-        ("delete failed find is noop", "abc def", (0, 0), "dz", "abc def"),
         (
             "yank char range pastes charwise",
             "alpha beta",
@@ -371,11 +379,11 @@ fn operators_cover_linewise_inclusive_exclusive_and_register_edges() {
             "one\ntwo\nthree\none\ntwo",
         ),
         (
-            "empty line delete records line register",
+            "empty line delete pastes back as a line",
             "one\n\ntwo",
             (1, 0),
-            "ddP",
-            "one\n\ntwo",
+            "ddp",
+            "one\ntwo\n",
         ),
         (
             "delete from end to start restores as one undo step",
@@ -809,8 +817,8 @@ fn registers_preserve_charwise_and_linewise_paste_placement() {
     harness.expect_text("alphabeta ");
 
     let mut harness = VimHarness::normal_at("one\ntwo\nthree", 1, 0);
-    harness.keys("ddP");
-    harness.expect_text("one\ntwo\nthree");
+    harness.keys("ddp");
+    harness.expect_text("one\nthree\ntwo");
 }
 
 #[test]
@@ -892,13 +900,19 @@ fn undo_redo_groups_vim_edit_families_as_single_steps() {
 
 #[test]
 fn unsupported_vim_commands_are_intentional_noops() {
-    for keys in [".", "q", "@", "\"", ":", "R", "m", "'", "`", "g~", "gu", "gU"] {
+    for keys in ["q", "@", "\"", ":", "R", "m", "'", "`", "g~", "gu", "gU"] {
         let mut harness = VimHarness::normal_at("alpha beta", 0, 0);
         harness.keys(keys);
         harness.expect_text("alpha beta");
         harness.expect_mode(vim::Mode::Normal);
         harness.expect_pending("");
     }
+
+    // Dot-repeat is unsupported, so it must not replay the previous change.
+    let mut harness = VimHarness::normal_at("alpha beta", 0, 0);
+    harness.keys("x.");
+    harness.expect_text("lpha beta");
+    harness.expect_pending("");
 }
 
 #[test]
