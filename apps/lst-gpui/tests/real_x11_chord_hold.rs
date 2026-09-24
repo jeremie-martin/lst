@@ -50,3 +50,22 @@ fn ctrl_k_ctrl_d_skip_via_held_modifier_grows_selection_set() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn held_control_shift_repeats_a_shifted_symbol_shortcut() -> TestResult {
+    // Ctrl+Shift+\ jumps between the brackets of a pair. Three presses under
+    // one held Ctrl+Shift end on the opening bracket; if the held presses
+    // were dropped (or only the first two fired), the caret would stay on
+    // the closing one.
+    support::run_x11_test("chord-hold-shifted-symbol", |session| {
+        let path = session.seed_file("brackets.txt", "x(abc)y")?;
+        let mut editor = session.open_file("chord-hold-shifted-symbol", &path)?;
+        editor.keys("<C-home><right><C-S-\\>")?;
+        editor.expect_cursor_heads(&[(0, 5)])?;
+
+        editor.keys("<C-S-{\\ \\ \\}>")?;
+        editor.expect_cursor_heads(&[(0, 1)])?;
+        Ok(())
+    })
+}
