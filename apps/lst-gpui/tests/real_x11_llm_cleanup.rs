@@ -23,8 +23,6 @@ if expected is not None:
 gate = os.environ.get('LST_TEST_PROMPT_GATE')
 while gate and os.path.exists(gate):
     time.sleep(0.01)
-if os.environ.get('LST_TEST_PROMPT_DELAY'):
-    time.sleep(1.5)
 if os.environ.get('LST_TEST_PROMPT_FAIL'):
     print('provider unavailable', file=sys.stderr)
     print('partial output must not be applied')
@@ -174,10 +172,11 @@ fn quitting_waits_for_inflight_cleanup_and_keeps_its_result_visible() -> TestRes
         let original = "um, keep this result";
         let canned = "Keep this result.";
         let filter_path = install_filter(session)?;
+        let gate = session.seed_file("prompt-gate", "")?;
         let env: [(&OsStr, &OsStr); 3] = [
             (OsStr::new("PATH"), &filter_path),
             (OsStr::new(FAKE_ENV), OsStr::new(canned)),
-            (OsStr::new("LST_TEST_PROMPT_DELAY"), OsStr::new("1500")),
+            (OsStr::new("LST_TEST_PROMPT_GATE"), gate.as_os_str()),
         ];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
 
@@ -196,6 +195,7 @@ fn quitting_waits_for_inflight_cleanup_and_keeps_its_result_visible() -> TestRes
         assert!(blocked.close_prompt_file.is_none(), "{blocked:?}");
         assert!(!blocked.quit_review_open, "{blocked:?}");
 
+        std::fs::remove_file(&gate)?;
         editor.wait_state("cleanup result remains visible", secs(5), |record| {
             record.prompt_review_view.is_some()
         })?;
@@ -229,10 +229,11 @@ fn failed_prompt_filter_preserves_text_and_shows_diagnostic() -> TestResult {
 fn editing_during_prompt_polishing_preserves_new_text() -> TestResult {
     support::run_x11_test("prompt-stale", |session| {
         let filter_path = install_filter(session)?;
+        let gate = session.seed_file("prompt-gate", "")?;
         let env: [(&OsStr, &OsStr); 3] = [
             (OsStr::new("PATH"), &filter_path),
             (OsStr::new(FAKE_ENV), OsStr::new("stale result")),
-            (OsStr::new("LST_TEST_PROMPT_DELAY"), OsStr::new("1")),
+            (OsStr::new("LST_TEST_PROMPT_GATE"), gate.as_os_str()),
         ];
         let (mut editor, path) = session.open_with_env("scratch", &env)?;
         editor.keys("original<C-a><C-S-p>improve prompt<enter>")?;
@@ -240,7 +241,9 @@ fn editing_during_prompt_polishing_preserves_new_text() -> TestResult {
             record.status_message.contains("Improving prompt")
         })?;
         editor.keys("new request")?;
-        editor.wait_state("stale result refused", secs(5), |record| {
+        std::fs::remove_file(&gate)?;
+        // The scratchpad autosave notice soon replaces this one.
+        editor.wait_transient_state("stale result refused", secs(5), |record| {
             record.status_message.contains("result discarded")
         })?;
         editor.save_then_expect_file(&path, "new request")?;
