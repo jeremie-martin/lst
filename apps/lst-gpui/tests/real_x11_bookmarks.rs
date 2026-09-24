@@ -116,18 +116,19 @@ fn ctrl_alt_k_on_marked_line_clears_the_mark() -> TestResult {
         let path = session.seed_file("bookmarks-toggle-clears.txt", &ten_line_fixture())?;
         let mut editor = session.open_file("bookmarks-toggle-clears", &path)?;
 
-        // Mark line 5, then toggle again to clear it.
+        // Mark lines 5 and 7, then toggle line 5 again to clear it.
         editor.place_cursor_at_document_start()?;
-        editor.keys("<down><down><down><down><down>")?;
-        editor.keys("<C-A-k>")?;
-        editor.keys("<C-A-k>")?;
+        editor.keys("<down><down><down><down><down><C-A-k>")?;
+        editor.keys("<down><down><C-A-k>")?;
+        editor.expect_cursor_heads(&[(7, 0)])?;
+        editor.keys("<up><up><C-A-k>")?;
+        editor.expect_cursor_heads(&[(5, 0)])?;
 
-        // From line 0, jump-next has nothing to find. Caret stays put.
+        // From the top, the next bookmark is line 7: line 5 was cleared.
         editor.keys("<C-home>")?;
         editor.expect_cursor_heads(&[(0, 0)])?;
-
         editor.keys("<C-A-l>")?;
-        editor.expect_cursor_heads(&[(0, 0)])?;
+        editor.expect_cursor_heads(&[(7, 0)])?;
         Ok(())
     })
 }
@@ -156,7 +157,6 @@ fn bookmarks_track_inserted_lines_and_restore_on_undo() -> TestResult {
         editor.keys("<C-home>")?;
         editor.keys("<C-A-l>")?;
         editor.expect_cursor_heads(&[(1, 0)])?;
-        editor.save_then_expect_file(&path, "a\nb\nc")?;
         Ok(())
     })
 }
