@@ -1,8 +1,7 @@
 # Optimization log
 
 Current results from 23–24 September 2026, starting at `8accfc9`.
-Production changes include retained text widths across syntax refreshes; detailed
-experiments, rejected candidates,
+Production changes through `e69a78a`; detailed experiments, rejected candidates,
 individual run counts and earlier sessions are in the
 [measurement history](docs/optimization-history.md).
 
@@ -118,15 +117,15 @@ Static viewport caching was not added without a demonstrated worthwhile gain.
 
 ## Verification
 
-- Final source gates pass: `cargo test --all-features`,
+- Source gates pass: `cargo test --all-features`,
   `cargo test -p lst-editor --features internal-invariants`,
-  `cargo clippy --all-targets --all-features`, formatting and diff checks.
-- Earlier combined production checkpoint: **290/290** nested X11 tests pass.
-- Eight focused viewport tests pass, including widest-line growth, shrink,
-  split/join extents, wrapped cursor visibility and responsive geometry.
-- Combined production checkpoint `82b5b24`: **291/291** nested X11 tests
-  pass in 1,797.755 seconds.
-- Final production `e69a78a` completes all 15 physical benchmark scenarios and
-  matches all ten original visual baselines exactly (three captures each).
-- Final production `e69a78a`: **291/291 X11 tests pass** in 1,733.010 seconds,
-  with no skipped tests. Both vendor patch reverse-application checks pass.
+  `cargo clippy --all-targets --all-features`, all 12 benchmark-runner tests,
+  formatting and diff checks.
+- Final production `e69a78a`: **291/291 nested X11 tests pass** in 1,733.010
+  seconds, with no skips. This includes all eight viewport cases, held modifier
+  chords, separator-aware find and long-grapheme editing.
+- All **ten original visual baselines match exactly**, three captures each.
+- All 15 physical benchmark scenarios complete. Direct original-baseline pairs
+  and huge-file edit checks verify exact saved output.
+- Both vendor patch reverse-application checks pass. Earlier checkpoints and
+  complete experiment details remain in the measurement history.
