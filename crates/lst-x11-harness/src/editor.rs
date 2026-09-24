@@ -41,7 +41,7 @@ fn window_discovery_timeout() -> Duration {
         .unwrap_or(WINDOW_DISCOVERY_TIMEOUT_DEFAULT)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
     Char(char),
     Tab,
@@ -1726,13 +1726,13 @@ impl ChordMods {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum KeyToken {
     Single(KeyChordSingle),
     Held(KeyChordHeld),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct KeyChordSingle {
     ctrl: bool,
     alt: bool,
@@ -1741,7 +1741,7 @@ struct KeyChordSingle {
     key: Key,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct KeyChordHeld {
     /// Outer modifier set, held continuously across `inner`. Always
     /// non-empty (parser rejects empty held sets).
@@ -1750,7 +1750,7 @@ struct KeyChordHeld {
     inner: Vec<HeldInnerKey>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HeldInnerKey {
     /// Inner-only shift, on top of any shift in the held outer mods.
     /// Lets `<C-{A b}>` mean "Ctrl held, then Shift+A then b."
@@ -2148,36 +2148,12 @@ mod tests {
     }
 
     fn assert_keys(input: &str, expected: &[KeyToken]) {
-        let parsed = parse_keys(input).unwrap();
-        assert_eq!(parsed.len(), expected.len(), "{input:?} → {parsed:?}");
-        for (got, want) in parsed.iter().zip(expected) {
-            match (got, want) {
-                (KeyToken::Single(a), KeyToken::Single(b)) => {
-                    assert_eq!(a.ctrl, b.ctrl, "{input:?}");
-                    assert_eq!(a.alt, b.alt, "{input:?}");
-                    assert_eq!(a.shift, b.shift, "{input:?}");
-                    assert_eq!(a.platform, b.platform, "{input:?}");
-                    assert!(
-                        matches!((a.key, b.key), (Key::Char(x), Key::Char(y)) if x == y)
-                            || std::mem::discriminant(&a.key) == std::mem::discriminant(&b.key),
-                        "{input:?}: {got:?} vs {want:?}",
-                    );
-                }
-                (KeyToken::Held(a), KeyToken::Held(b)) => {
-                    assert_eq!(a.mods, b.mods, "{input:?}");
-                    assert_eq!(a.inner.len(), b.inner.len(), "{input:?}");
-                    for (ai, bi) in a.inner.iter().zip(b.inner.iter()) {
-                        assert_eq!(ai.shift, bi.shift, "{input:?}");
-                        assert!(
-                            matches!((ai.key, bi.key), (Key::Char(x), Key::Char(y)) if x == y)
-                                || std::mem::discriminant(&ai.key) == std::mem::discriminant(&bi.key),
-                            "{input:?}: inner {ai:?} vs {bi:?}",
-                        );
-                    }
-                }
-                _ => panic!("token kind mismatch: {input:?}: {got:?} vs {want:?}"),
-            }
-        }
+        assert_eq!(parse_keys(input).unwrap(), expected, "{input:?}");
+    }
+
+    fn assert_parse_error(input: &str, reason: &str) {
+        let error = parse_keys(input).expect_err(input).to_string();
+        assert!(error.contains(reason), "{input:?} failed for another reason: {error}");
     }
 
     fn held(mods: ChordMods, inner: Vec<HeldInnerKey>) -> KeyToken {
@@ -2274,12 +2250,12 @@ mod tests {
 
     #[test]
     fn unterminated_escape_is_an_error() {
-        assert!(parse_keys("<enter").is_err());
+        assert_parse_error("<enter", "unterminated key escape");
     }
 
     #[test]
     fn unknown_special_key_is_an_error() {
-        assert!(parse_keys("<bogus>").is_err());
+        assert_parse_error("<bogus>", "unknown key escape");
     }
 
     #[test]
@@ -2375,38 +2351,39 @@ mod tests {
 
     #[test]
     fn chord_hold_requires_outer_modifier() {
-        assert!(parse_keys("<{k d}>").is_err());
+        assert_parse_error("<{k d}>", "requires at least one held modifier");
     }
 
     #[test]
     fn chord_hold_inner_cannot_carry_ctrl() {
-        assert!(parse_keys("<C-{<C-k> d}>").is_err());
+        assert_parse_error("<C-{<C-k> d}>", "cannot carry ctrl/alt");
     }
 
     #[test]
     fn chord_hold_inner_cannot_carry_alt() {
-        assert!(parse_keys("<C-{<A-k> d}>").is_err());
+        assert_parse_error("<C-{<A-k> d}>", "cannot carry ctrl/alt");
     }
 
     #[test]
     fn chord_hold_rejects_nested_braces() {
-        assert!(parse_keys("<C-{<A-{x y}> d}>").is_err());
+        assert_parse_error("<C-{<A-{x}> d}>", "nested chord-hold not supported");
     }
 
     #[test]
     fn chord_hold_empty_body_is_an_error() {
-        assert!(parse_keys("<C-{}>").is_err());
+        assert_parse_error("<C-{}>", "body cannot be empty");
     }
 
     #[test]
     fn chord_hold_unterminated_is_an_error() {
-        assert!(parse_keys("<C-{k d>").is_err());
+        assert_parse_error("<C-{k d>", "unterminated key escape");
+        assert_parse_error("<C-{k d}x>", "must end with '}'");
     }
 
     #[test]
     fn chord_hold_multi_char_piece_is_an_error() {
         // "kd" inside the braces would parse as two tokens; we require one
         // key per whitespace-separated piece for unambiguity.
-        assert!(parse_keys("<C-{kd}>").is_err());
+        assert_parse_error("<C-{kd}>", "must be exactly one key");
     }
 }
