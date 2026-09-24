@@ -257,29 +257,20 @@ pub(crate) fn build_cell_line(
 ) -> Option<Rc<CellLine>> {
     debug_assert!(is_cell_text(text.as_ref()));
     cache.prepare(font, font_size);
-    let bytes = text.as_bytes();
-    let mut glyphs = Vec::with_capacity(bytes.len());
+    let mut glyphs = Vec::with_capacity(text.len());
     let mut ascent = px(0.0);
     let mut descent = px(0.0);
-    let mut start = 0;
-    while start < bytes.len() {
-        let class = token_class(bytes[start]);
-        let mut end = start + 1;
-        while tokens == CellTokens::Words && end < bytes.len() && token_class(bytes[end]) == class {
-            end += 1;
-        }
-        if class != TokenClass::Space {
-            let token = cache.token(&text[start..end], font, font_size, char_width, window)?;
-            let token_x = char_width * start as f32;
-            glyphs.extend(token.glyphs.iter().map(|glyph| CellGlyph {
-                x: token_x + glyph.x,
-                index: start + glyph.index,
-                ..*glyph
-            }));
-            ascent = token.ascent;
-            descent = token.descent;
-        }
-        start = end;
+    for range in cell_tokens(text.as_ref(), tokens) {
+        let start = range.start;
+        let token = cache.token(&text[range], font, font_size, char_width, window)?;
+        let token_x = char_width * start as f32;
+        glyphs.extend(token.glyphs.iter().map(|glyph| CellGlyph {
+            x: token_x + glyph.x,
+            index: start + glyph.index,
+            ..*glyph
+        }));
+        ascent = token.ascent;
+        descent = token.descent;
     }
     let mut colors = Vec::with_capacity(runs.len());
     let mut cursor = 0;
@@ -296,6 +287,25 @@ pub(crate) fn build_cell_line(
         glyphs,
         colors,
     }))
+}
+
+/// Byte ranges of the tokens `build_cell_line` shapes. Spaces separate
+/// tokens and are never shaped.
+fn cell_tokens(text: &str, tokens: CellTokens) -> impl Iterator<Item = Range<usize>> + '_ {
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    std::iter::from_fn(move || loop {
+        let class = token_class(*bytes.get(start)?);
+        let mut end = start + 1;
+        while tokens == CellTokens::Words && end < bytes.len() && token_class(bytes[end]) == class {
+            end += 1;
+        }
+        let range = start..end;
+        start = end;
+        if class != TokenClass::Space {
+            return Some(range);
+        }
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -359,22 +369,14 @@ mod tests {
     }
 
     #[test]
-    fn token_classes_split_words_spaces_and_punctuation() {
-        let text = b"let x = foo(&bar)->baz;";
-        let mut tokens = Vec::new();
-        let mut start = 0;
-        while start < text.len() {
-            let class = token_class(text[start]);
-            let mut end = start + 1;
-            while end < text.len() && token_class(text[end]) == class {
-                end += 1;
-            }
-            if class != TokenClass::Space {
-                tokens.push(std::str::from_utf8(&text[start..end]).unwrap());
-            }
-            start = end;
-        }
-        assert_eq!(tokens, ["let", "x", "=", "foo", "(&", "bar", ")->", "baz", ";"]);
+    fn cell_tokens_group_word_and_punctuation_runs_and_skip_spaces() {
+        let text = "let x = foo(&bar)->baz;  ";
+        let words: Vec<_> = cell_tokens(text, CellTokens::Words).map(|range| &text[range]).collect();
+        assert_eq!(words, ["let", "x", "=", "foo", "(&", "bar", ")->", "baz", ";"]);
+        let chars: Vec<_> = cell_tokens("12 3", CellTokens::Chars)
+            .map(|range| &"12 3"[range])
+            .collect();
+        assert_eq!(chars, ["1", "2", "3"]);
     }
 
     #[test]
