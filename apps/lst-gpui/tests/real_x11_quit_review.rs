@@ -34,31 +34,28 @@ fn multi_dirty_quit_review_owns_focus_and_saves_every_selected_file() -> TestRes
             vec![first_identity.as_str(), second_identity.as_str()]
         );
 
-        let revision = review.revision;
-        editor.send_keys_settle("x")?;
-        editor.press(KeyChord::Ctrl(Key::Char('n')))?;
-        editor.press(KeyChord::Ctrl(Key::Tab))?;
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        let blocked = editor.read_state()?;
-        assert_eq!(
-            blocked.revision, revision,
-            "document changed behind quit review: {blocked:?}"
-        );
-        assert_eq!(blocked.active_tab_id, review.active_tab_id, "{review:?} -> {blocked:?}");
-        assert!(blocked.quit_review_open, "{blocked:?}");
-        assert_eq!(fs::read_to_string(&first)?, "first original");
-        assert_eq!(fs::read_to_string(&second)?, "second original");
-
-        editor.send_keys_settle("<S-d><A-d><C-d><S-enter><A-enter><C-enter>")?;
-        let modified_keys_blocked = editor.read_state()?;
-        assert!(modified_keys_blocked.quit_review_open, "{modified_keys_blocked:?}");
-        assert!(
-            modified_keys_blocked
-                .quit_review_items
-                .iter()
-                .all(|item| item.decision == "save" && item.status == "pending"),
-            "modified discard/save keys changed the quit review: {modified_keys_blocked:?}"
-        );
+        let untouched = |record: &lst_x11_harness::StateTraceRecord| {
+            record.revision == review.revision
+                && record.active_tab_id == review.active_tab_id
+                && record.quit_review_open
+                && record
+                    .quit_review_items
+                    .iter()
+                    .all(|item| item.decision == "save" && item.status == "pending")
+        };
+        editor.expect_keys_ignored(
+            "x<C-n><C-tab>",
+            "<down>",
+            |record| record.quit_review_selected_index == Some(1),
+            untouched,
+        )?;
+        // Only plain d, s, and Enter decide; modified variants must not.
+        editor.expect_keys_ignored(
+            "<S-d><A-d><C-d><S-enter><A-enter><C-enter>",
+            "<up>",
+            |record| record.quit_review_selected_index == Some(0),
+            untouched,
+        )?;
         assert_eq!(fs::read_to_string(&first)?, "first original");
         assert_eq!(fs::read_to_string(&second)?, "second original");
 

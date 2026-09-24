@@ -147,6 +147,14 @@ Every X11 action is asynchronous. `open`, `open_file`, `keys`, `wait_quiet`,
 fixed sleeps between keys: they hide frame races and can break multi-key Vim
 commands. The harness's pointer-settle delay is the intentional exception.
 
+A wait proves an action only if its condition was false before the action:
+expecting a state or file contents that already held passes whether or not the
+action worked. `wait_state` judges the newest trace record, so it describes the
+settled result; use `wait_transient_state` only for a short-lived state such as
+a pending search. To show that a surface ignores keys, use
+`expect_keys_ignored`, which follows them with a key the surface does handle
+instead of sleeping.
+
 ## Diagnostics and artifacts
 
 On failure, `run_x11_test` preserves the scratch directory, editor output, and

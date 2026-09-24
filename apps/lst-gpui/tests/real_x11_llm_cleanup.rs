@@ -64,13 +64,23 @@ fn polish_button_replaces_whole_buffer_inline_with_atomic_undo() -> TestResult {
         let confirmation = editor.wait_state("whole-document cleanup confirmation", secs(3), |record| {
             record.cleanup_confirmation_open && record.focused_input == "cleanup_confirmation"
         })?;
-        editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char('n')))?;
-        editor.send_keys_settle("<S-enter>")?;
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        let blocked = editor.read_state()?;
-        assert!(blocked.cleanup_confirmation_open, "{blocked:?}");
-        assert_eq!(blocked.active_tab_id, confirmation.active_tab_id, "{blocked:?}");
         editor.screenshot()?.write_ppm(&screenshot)?;
+        // Only Enter confirms: Ctrl+N and Shift+Enter must neither start the
+        // cleanup nor leave the confirmation. Escape then cancels it.
+        editor.expect_keys_ignored(
+            "<C-n><S-enter>",
+            "<esc>",
+            |record| !record.cleanup_confirmation_open && record.focused_input == "editor",
+            |record| {
+                record.active_tab_id == confirmation.active_tab_id
+                    && record.revision == confirmation.revision
+                    && record.prompt_review_view.is_none()
+            },
+        )?;
+        editor.click_cleanup_button()?;
+        editor.wait_state("cleanup confirmation reopened", secs(3), |record| {
+            record.cleanup_confirmation_open && record.focused_input == "cleanup_confirmation"
+        })?;
         editor.keys("<enter>")?;
         let review = editor.wait_state("prompt review ready", secs(5), |record| {
             record.prompt_review_view.as_deref() == Some("changes") && record.focused_input == "prompt_review"

@@ -407,6 +407,18 @@ pub trait EditorTestExt {
     /// Assert the find panel is visible with the given query and match count.
     fn expect_find_state(&mut self, query: &str, match_count: usize) -> SupportResult<StateTraceRecord>;
 
+    /// Send `ignored` keys that an open surface must swallow, then `fence`,
+    /// a key the surface does react to. X events are handled in order, so
+    /// once `fenced` holds every ignored key has been processed, and every
+    /// state recorded on the way must satisfy `unchanged`.
+    fn expect_keys_ignored(
+        &mut self,
+        ignored: &str,
+        fence: &str,
+        fenced: impl Fn(&StateTraceRecord) -> bool,
+        unchanged: impl Fn(&StateTraceRecord) -> bool,
+    ) -> SupportResult<StateTraceRecord>;
+
     /// Click one of the visible find-panel option chips.
     fn click_find_chip(&mut self, chip: FindChip) -> SupportResult<()>;
 
@@ -488,6 +500,33 @@ impl EditorTestExt for Editor<'_> {
         self.wait_state("find state", FOCUS_TIMEOUT, |record| {
             record.find.visible && record.find.query == query && record.find.match_count == match_count
         })
+    }
+
+    fn expect_keys_ignored(
+        &mut self,
+        ignored: &str,
+        fence: &str,
+        fenced: impl Fn(&StateTraceRecord) -> bool,
+        unchanged: impl Fn(&StateTraceRecord) -> bool,
+    ) -> SupportResult<StateTraceRecord> {
+        self.drain_state_records()?;
+        self.send_keys_settle(ignored)?;
+        self.send_keys_settle(fence)?;
+        let deadline = Instant::now() + FOCUS_TIMEOUT;
+        loop {
+            for record in self.drain_state_records()? {
+                if !unchanged(&record) {
+                    return Err(format!("{ignored:?} changed state before {fence:?} took effect: {record:#?}").into());
+                }
+                if fenced(&record) {
+                    return Ok(record);
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("fence key {fence:?} never took effect after {ignored:?}").into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn click_find_chip(&mut self, chip: FindChip) -> SupportResult<()> {

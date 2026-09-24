@@ -8,7 +8,6 @@ mod support;
 
 use std::{fs, thread};
 
-use lst_x11_harness::{Key, KeyChord};
 use support::{secs, EditorTestExt, TestResult};
 
 #[test]
@@ -100,31 +99,28 @@ fn workspace_surfaces_own_input_instead_of_editing_behind_them() -> TestResult {
         let before = editor.read_state()?;
 
         editor.click_app_menu_button()?;
-        editor.wait_state("app menu owns focus", secs(2), |record| {
+        let menu = editor.wait_state("app menu owns focus", secs(2), |record| {
             record.workspace_surface == "app_menu" && record.focused_input == "app_menu"
         })?;
-        editor.send_keys_settle("z<down>")?;
-        editor.press(KeyChord::Ctrl(Key::Char('n')))?;
-        editor.press(KeyChord::Ctrl(Key::Tab))?;
-        editor.press(KeyChord::Ctrl(Key::Char('f')))?;
-        thread::sleep(std::time::Duration::from_millis(200));
-        let covered = editor.read_state()?;
-        assert_eq!(covered.revision, before.revision, "{before:?} -> {covered:?}");
-        assert_eq!(covered.active_tab_id, before.active_tab_id, "{before:?} -> {covered:?}");
-        assert!(!covered.find.visible, "{covered:?}");
-        assert_eq!(covered.workspace_surface, "app_menu", "{covered:?}");
-        let cursor_state = |record: &lst_x11_harness::StateTraceRecord| {
+        let cursors = |record: &lst_x11_harness::StateTraceRecord| {
             record
                 .cursors
                 .iter()
                 .map(|cursor| (cursor.anchor_char, cursor.head_char))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(
-            cursor_state(&covered),
-            cursor_state(&before),
-            "{before:?} -> {covered:?}"
-        );
+        editor.expect_keys_ignored(
+            "z<C-n><C-tab><C-f>",
+            "<down>",
+            |record| record.workspace_surface_selected_index != menu.workspace_surface_selected_index,
+            |record| {
+                record.revision == before.revision
+                    && record.active_tab_id == before.active_tab_id
+                    && !record.find.visible
+                    && record.workspace_surface == "app_menu"
+                    && cursors(record) == cursors(&before)
+            },
+        )?;
 
         editor.keys("<esc>")?;
         editor.wait_state("editor focus restored", secs(2), |record| {
