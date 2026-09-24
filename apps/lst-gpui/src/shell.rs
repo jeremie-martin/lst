@@ -1635,7 +1635,6 @@ impl Render for LstGpuiApp {
             selection_set,
             occurrence_query,
             selection_match_query,
-            search_matches,
             active_search_match,
         ) = {
             let active_tab = self.model.active_tab();
@@ -1660,11 +1659,6 @@ impl Render for LstGpuiApp {
                 active_tab.selection_set().clone(),
                 occurrence_query,
                 selection_match_query,
-                if show_search_decorations {
-                    self.model.find_match_ranges()
-                } else {
-                    Vec::new()
-                },
                 show_search_decorations
                     .then(|| self.model.active_find_match_range())
                     .flatten(),
@@ -1917,10 +1911,25 @@ impl Render for LstGpuiApp {
                                                             cx.notify();
                                                         }
                                                     });
-                                                    paint_state
+                                                    let search_matches = if show_search_decorations {
+                                                        let visible_chars = paint_state
+                                                            .rows
+                                                            .first()
+                                                            .zip(paint_state.rows.last())
+                                                            .map_or(0..0, |(first, last)| {
+                                                                first.line_start_char..last.logical_end_char
+                                                            });
+                                                        prepare_entity
+                                                            .read(cx)
+                                                            .model
+                                                            .find_match_ranges_in(visible_chars)
+                                                    } else {
+                                                        Vec::new()
+                                                    };
+                                                    (paint_state, search_matches)
                                                 }
                                             },
-                                            move |bounds, paint_state, window, cx| {
+                                            move |bounds, (paint_state, search_matches), window, cx| {
                                                 let paint_started = diagnostics::trace_enabled().then(Instant::now);
                                                 window.handle_input(
                                                     &focus_handle,

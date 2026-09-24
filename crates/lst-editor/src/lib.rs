@@ -310,14 +310,8 @@ impl EditorModel {
     pub fn find(&self) -> &FindState {
         &self.find
     }
-    pub fn find_match_ranges(&self) -> Vec<Range<usize>> {
-        let buffer = self.active_tab().buffer();
-        self.find
-            .matches
-            .iter()
-            .copied()
-            .map(|m| m.char_range_in(buffer))
-            .collect()
+    pub fn find_match_ranges_in(&self, window: Range<usize>) -> Vec<Range<usize>> {
+        self.find.match_ranges_in(self.active_tab().buffer(), window)
     }
     pub fn active_find_match_range(&self) -> Option<Range<usize>> {
         let active = self.find.active?;

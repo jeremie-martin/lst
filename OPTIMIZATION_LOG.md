@@ -358,6 +358,30 @@ Commands: see `docs/performance.md`.
   pass. Runtime records confirm the containing operation includes model time.
   The broader wrapper was not the cause of the model-phase variance below.
 
+### Convert only visible find matches for painting
+
+- Every render converted the entire find index from line/column coordinates
+  to character ranges. Use binary searches on the existing ordered index and
+  request only matches overlapping the freshly prepared viewport rows. Keep
+  the complete index for counts, navigation and replacement. No new cache.
+- Corrected-instrumentation, reverse-order production comparison on
+  `search-large --corpus huge-rust-50k`, five runs after priming, 6,144 final
+  matches: first query update through the final completed root paint
+  **44.824 -> 17.060 ms**. Total root-frame CPU **89.132 -> 16.753 ms**
+  over the same nine frames; process CPU **220 -> 150 ms**. Query spans are
+  derived from the existing input/frame epoch trace, excluding X delivery.
+- Isolated final model-query time rises **0.687 -> 2.192 ms** in these runs,
+  although its algorithm is unchanged. The first query character costs ~4.1 ms
+  in both variants; subsequent phases differ. Pinning both processes to CPU 12
+  preserves that ordering (0.696 -> 2.282 ms), so migration is not an adequate
+  explanation. The cause is not established; do not claim an indexing gain.
+  Retain the clear improvement in complete-query time and CPU instead.
+- Exhaustive character-window comparisons against the full index cover empty
+  and reversed windows, literals, regex, Unicode clusters and line separators.
+  All-features tests, Clippy and 42 focused X11 find/replace/language/decoration/
+  viewport cases pass. The find-panel image matches the original baseline
+  across three launches. A full combined checkpoint follows.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

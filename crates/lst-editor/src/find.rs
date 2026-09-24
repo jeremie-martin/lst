@@ -89,6 +89,23 @@ pub struct FindState {
 }
 
 impl FindState {
+    /// Convert only matches overlapping the requested character window.
+    /// The index is ordered and non-overlapping, so both boundaries can be
+    /// located without converting the whole index.
+    pub(crate) fn match_ranges_in(&self, buffer: &Rope, window: Range<usize>) -> Vec<Range<usize>> {
+        if window.is_empty() {
+            return Vec::new();
+        }
+        let first = self
+            .matches
+            .partition_point(|m| m.char_range_in(buffer).end <= window.start);
+        let last = first + self.matches[first..].partition_point(|m| m.char_range_in(buffer).start < window.end);
+        self.matches[first..last]
+            .iter()
+            .map(|m| m.char_range_in(buffer))
+            .collect()
+    }
+
     pub fn new() -> Self {
         Self {
             visible: false,
@@ -571,6 +588,35 @@ pub(crate) fn for_each_ascii_literal_match(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windowed_match_ranges_equal_filtered_full_index() {
+        for text in [
+            "",
+            "aaaaa\nabc aaa\n",
+            "é e\u{301} é\r\né 👩‍💻 end\n",
+            "aaa\raaa\u{85}aaa\u{2028}aaa\nend",
+        ] {
+            let buffer = Rope::from_str(text);
+            for (query, use_regex) in [("a", false), ("aa", false), ("é", false), ("[^ ]+", true)] {
+                let mut find = FindState::new();
+                find.query = query.into();
+                find.use_regex = use_regex;
+                find.compute_matches_in_rope(&buffer);
+                let all: Vec<_> = find.matches.iter().map(|m| m.char_range_in(&buffer)).collect();
+                for start in 0..=buffer.len_chars() + 1 {
+                    for end in 0..=buffer.len_chars() + 1 {
+                        let expected: Vec<_> = all
+                            .iter()
+                            .filter(|m| start < end && m.end > start && m.start < end)
+                            .cloned()
+                            .collect();
+                        assert_eq!(find.match_ranges_in(&buffer, start..end), expected);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn rope_line_iteration_matches_str_across_chunk_boundaries() {
