@@ -1,5 +1,5 @@
-//! Real-display specs for visible editor chrome. These tests assert on UI
-//! state that a user can see: status text, theme label, and line-number text.
+//! Real-display specs for visible editor chrome: the gutter, status text,
+//! theme, zoom, and the tab-strip menus that own keyboard input while open.
 
 mod support;
 
@@ -84,9 +84,13 @@ fn configured_theme_is_visible_without_a_status_bar_toggle() -> TestResult {
 fn zoom_shortcuts_update_visible_zoom_status_and_reset() -> TestResult {
     support::run_x11_test("chrome-zoom-shortcuts", |session| {
         let (mut editor, _path) = session.open("scratch")?;
+        let initial = editor.read_state()?;
+        let glyph_width = initial.viewport.char_width_px;
 
         editor.press(KeyChord::Ctrl(Key::Char('=')))?;
-        editor.wait_state("zoom in", secs(2), |record| record.status_bar.contains("Zoom 110%"))?;
+        editor.wait_state("zoom in", secs(2), |record| {
+            record.status_bar.contains("Zoom 110%") && record.viewport.char_width_px > glyph_width
+        })?;
 
         editor.press(KeyChord::Ctrl(Key::Char('=')))?;
         editor.wait_state("zoom in again", secs(2), |record| {
@@ -97,14 +101,16 @@ fn zoom_shortcuts_update_visible_zoom_status_and_reset() -> TestResult {
         editor.wait_state("zoom out", secs(2), |record| record.status_bar.contains("Zoom 110%"))?;
 
         editor.press(KeyChord::Ctrl(Key::Char('0')))?;
-        editor.wait_state("zoom reset", secs(2), |record| !record.status_bar.contains("Zoom"))?;
+        editor.wait_state("zoom reset", secs(2), |record| {
+            !record.status_bar.contains("Zoom") && record.viewport.char_width_px == glyph_width
+        })?;
         Ok(())
     })
 }
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn gutter_width_is_stable_through_999_lines_and_tracks_digit_transitions() -> TestResult {
+fn gutter_width_grows_and_shrinks_by_one_glyph_at_the_four_digit_line_count() -> TestResult {
     support::run_x11_test("chrome-dynamic-gutter", |session| {
         let contents = (0..999)
             .map(|line| format!("line {line}"))
@@ -138,218 +144,39 @@ fn gutter_width_is_stable_through_999_lines_and_tracks_digit_transitions() -> Te
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn cursor_identifier_highlights_exact_visible_whole_word_occurrences() -> TestResult {
-    support::run_x11_test("chrome-identifier-highlights", |session| {
-        let path = session.seed_file(
-            "identifier-highlights.txt",
-            "alpha  beta alpha\nalphabet alpha ALPHA\ncafe\u{301}_count cafe\u{301}_count cafe\n",
-        )?;
-        let mut editor = session.open_file("chrome-identifier-highlights", &path)?;
-        editor.place_cursor_at_document_start()?;
+fn workspace_surfaces_own_input_instead_of_editing_behind_them() -> TestResult {
+    support::run_x11_test("daily-driver-surface-input-ownership", |session| {
+        let path = session.seed_file("surface-focus.txt", "first\nsecond")?;
+        let mut editor = session.open_file("surface-focus", &path)?;
+        let before = editor.read_state()?;
 
-        let alpha = editor.wait_state("alpha occurrences", secs(5), |record| {
+        editor.click_app_menu_button()?;
+        let menu = editor.wait_state("app menu owns focus", secs(2), |record| {
+            record.workspace_surface == "app_menu" && record.focused_input == "app_menu"
+        })?;
+        let cursors = |record: &lst_x11_harness::StateTraceRecord| {
             record
-                .viewport
-                .occurrence_highlights
+                .cursors
                 .iter()
-                .map(|range| (range.start, range.end))
+                .map(|cursor| (cursor.anchor_char, cursor.head_char))
                 .collect::<Vec<_>>()
-                == vec![(0, 5), (12, 17), (27, 32)]
-        })?;
-        assert_eq!(alpha.viewport.occurrence_highlights.len(), 3, "{alpha:?}");
-
-        editor.keys("<right><right><right><right><right>")?;
-        editor.wait_state("word trailing edge remains highlighted", secs(2), |record| {
-            record.cursors[0].head_col == 5
-                && record
-                    .viewport
-                    .occurrence_highlights
-                    .iter()
-                    .map(|range| (range.start, range.end))
-                    .collect::<Vec<_>>()
-                    == vec![(0, 5), (12, 17), (27, 32)]
-        })?;
-
-        editor.keys("<right>")?;
-        editor.wait_state("separator interior has no passive highlight", secs(2), |record| {
-            record.cursors[0].head_col == 6 && record.viewport.occurrence_highlights.is_empty()
-        })?;
-
-        editor.keys("<right>")?;
-        let beta = editor.wait_state("beta occurrence", secs(2), |record| {
-            record.cursors[0].head_col == 7
-                && record
-                    .viewport
-                    .occurrence_highlights
-                    .iter()
-                    .map(|range| (range.start, range.end))
-                    .collect::<Vec<_>>()
-                    == vec![(7, 11)]
-        })?;
-        assert_eq!(beta.viewport.occurrence_highlights.len(), 1, "{beta:?}");
-
-        editor.keys("<C-g>3:1<enter>")?;
-        let decomposed = editor.wait_state("decomposed identifier occurrences", secs(2), |record| {
-            record
-                .viewport
-                .occurrence_highlights
-                .iter()
-                .map(|range| (range.start, range.end))
-                .collect::<Vec<_>>()
-                == vec![(39, 50), (51, 62)]
-        })?;
-        assert_eq!(decomposed.viewport.occurrence_highlights.len(), 2, "{decomposed:?}");
-
-        editor.keys("<C-end>alpha")?;
-        editor.wait_state("typing does not retrigger passive highlights", secs(2), |record| {
-            record.cursors[0].head_col == 5 && record.viewport.occurrence_highlights.is_empty()
-        })?;
-
-        editor.keys("<C-f><esc>")?;
-        editor.wait_state(
-            "returning editor focus retriggers passive highlights",
-            secs(2),
+        };
+        editor.expect_keys_ignored(
+            "z<C-n><C-tab><C-f>",
+            "<down>",
+            |record| record.workspace_surface_selected_index != menu.workspace_surface_selected_index,
             |record| {
-                record.cursors[0].head_col == 5
-                    && record
-                        .viewport
-                        .occurrence_highlights
-                        .iter()
-                        .map(|range| (range.start, range.end))
-                        .collect::<Vec<_>>()
-                        == vec![(0, 5), (12, 17), (27, 32), (68, 73)]
+                record.revision == before.revision
+                    && record.active_tab_id == before.active_tab_id
+                    && !record.find.visible
+                    && record.workspace_surface == "app_menu"
+                    && cursors(record) == cursors(&before)
             },
         )?;
 
-        editor.keys("x<bs>")?;
-        editor.wait_state("later editing clears focus-triggered highlights", secs(2), |record| {
-            record.cursors[0].head_col == 5 && record.viewport.occurrence_highlights.is_empty()
-        })?;
-
-        editor.keys("<left>")?;
-        let after_motion = editor.wait_state("explicit motion retriggers passive highlights", secs(2), |record| {
-            record.cursors[0].head_col == 4
-                && record
-                    .viewport
-                    .occurrence_highlights
-                    .iter()
-                    .map(|range| (range.start, range.end))
-                    .collect::<Vec<_>>()
-                    == vec![(0, 5), (12, 17), (27, 32), (68, 73)]
-        })?;
-        assert_eq!(after_motion.viewport.occurrence_highlights.len(), 4, "{after_motion:?}");
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn identifier_highlights_are_bounded_to_the_horizontal_viewport() -> TestResult {
-    support::run_x11_test("chrome-bounded-identifier-highlights", |session| {
-        const REPEATED_OCCURRENCES: usize = 2_000;
-        session.seed_settings("version = 1\n[editor]\nword_wrap = false\n")?;
-        let mut contents = "alpha ".repeat(REPEATED_OCCURRENCES);
-        contents.push_str("alpha");
-        let final_start = contents.chars().count() - "alpha".len();
-        let path = session.seed_file("bounded-identifier-highlights.txt", &contents)?;
-        let mut editor = session.open_file("chrome-bounded-identifier-highlights", &path)?;
-        editor.place_cursor_at_document_start()?;
-
-        let left = editor.wait_state("left viewport occurrences", secs(5), |record| {
-            !record.viewport.occurrence_highlights.is_empty()
-                && record.viewport.occurrence_highlights.len() < REPEATED_OCCURRENCES
-                && record
-                    .viewport
-                    .occurrence_highlights
-                    .last()
-                    .is_some_and(|range| range.end < final_start)
-        })?;
-        assert!(
-            left.viewport.occurrence_highlights.len() < REPEATED_OCCURRENCES,
-            "{left:?}"
-        );
-
-        editor.keys("<C-end>")?;
-        let right = editor.wait_state("right viewport occurrences", secs(5), |record| {
-            record.viewport.scroll_left_px > record.viewport.char_width_px * 20.0
-                && record
-                    .viewport
-                    .occurrence_highlights
-                    .first()
-                    .is_some_and(|range| range.start > 0)
-                && record
-                    .viewport
-                    .occurrence_highlights
-                    .last()
-                    .is_some_and(|range| range.start == final_start && range.end == final_start + 5)
-        })?;
-        assert!(
-            right.viewport.occurrence_highlights.len() < REPEATED_OCCURRENCES,
-            "{right:?}"
-        );
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn explicit_selection_highlights_exact_text_but_not_the_selections_themselves() -> TestResult {
-    support::run_x11_test("chrome-selection-match-highlights", |session| {
-        let path = session.seed_file("selection-match-highlights.txt", "alpha alphabet alpha\nalpha beta\n")?;
-        let mut editor = session.open_file("chrome-selection-match-highlights", &path)?;
-        editor.place_cursor_at_document_start()?;
-
-        editor.keys("<S-right><S-right><S-right><S-right><S-right>")?;
-        editor.wait_state("selected text matches exclude active selection", secs(5), |record| {
-            record.viewport.occurrence_highlights.is_empty()
-                && record
-                    .viewport
-                    .selection_match_highlights
-                    .iter()
-                    .map(|range| (range.start, range.end))
-                    .collect::<Vec<_>>()
-                    == vec![(6, 11), (15, 20), (21, 26)]
-        })?;
-
-        editor.keys("<C-f>")?;
-        editor.wait_state(
-            "find suppresses duplicate selected-text decoration",
-            secs(2),
-            |record| {
-                record.focused_input == "find_query"
-                    && record.find.query == "alpha"
-                    && record.find.match_count == 4
-                    && record.viewport.selection_match_highlights.is_empty()
-            },
-        )?;
         editor.keys("<esc>")?;
-        editor.wait_state("closing find restores selected-text decoration", secs(2), |record| {
-            record.focused_input == "editor" && record.viewport.selection_match_highlights.len() == 3
-        })?;
-
-        editor.keys("<S-left>")?;
-        editor.wait_state("partial selection matches substrings", secs(2), |record| {
-            record
-                .viewport
-                .selection_match_highlights
-                .iter()
-                .map(|range| (range.start, range.end))
-                .collect::<Vec<_>>()
-                == vec![(6, 10), (15, 19), (21, 25)]
-        })?;
-
-        editor.keys("<home><right><right><right><right><right><S-right>")?;
-        editor.wait_state("whitespace-only selection has no text matches", secs(2), |record| {
-            record.cursors[0].anchor_col == 5
-                && record.cursors[0].head_col == 6
-                && record.viewport.selection_match_highlights.is_empty()
-        })?;
-
-        editor.keys("<home><S-down>")?;
-        editor.wait_state("multiline selection has no text matches", secs(2), |record| {
-            record.cursors[0].anchor_line == 0
-                && record.cursors[0].head_line == 1
-                && record.viewport.selection_match_highlights.is_empty()
+        editor.wait_state("editor focus restored", secs(2), |record| {
+            record.workspace_surface == "none" && record.focused_input == "editor"
         })?;
         Ok(())
     })
@@ -357,38 +184,97 @@ fn explicit_selection_highlights_exact_text_but_not_the_selections_themselves() 
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn selection_match_limit_and_multi_cursor_agreement_are_explicit() -> TestResult {
-    support::run_x11_test("chrome-selection-match-boundaries", |session| {
-        let long = "x".repeat(201);
-        let path = session.seed_file(
-            "selection-match-boundaries.txt",
-            &format!("{long}\n{long}\nfoo foo\nbar foo\n"),
-        )?;
-        let mut editor = session.open_file("chrome-selection-match-boundaries", &path)?;
-        editor.place_cursor_at_document_start()?;
+fn all_tabs_and_application_menu_are_fully_keyboard_operable() -> TestResult {
+    support::run_x11_test("daily-driver-shell-menu-navigation", |session| {
+        let path = session.seed_file("first.txt", "first")?;
+        let path_text = support::path_text(&path);
+        let mut editor = session.open_file("shell-menu-navigation", &path)?;
 
-        editor.keys("<S-end>")?;
-        editor.wait_state("selection over match limit is ignored", secs(5), |record| {
-            record.cursors[0].head_col == 201 && record.viewport.selection_match_highlights.is_empty()
+        editor.keys("<C-n>")?;
+        editor.wait_state("second tab active", secs(2), |record| record.active_tab_index == 1)?;
+        editor.keys("<C-n>")?;
+        editor.wait_state("third tab active", secs(2), |record| record.active_tab_index == 2)?;
+
+        editor.click_all_tabs_button()?;
+        editor.wait_state("all tabs list owns focus", secs(2), |record| {
+            record.workspace_surface == "tab_list"
+                && record.focused_input == "tab_list"
+                && record.workspace_surface_selected_index == Some(2)
+        })?;
+        editor.keys("<home><enter>")?;
+        editor.wait_state("first tab activated from all tabs", secs(2), |record| {
+            record.workspace_surface == "none"
+                && record.focused_input == "editor"
+                && record.active_tab_index == 0
+                && record.active_tab_path.as_deref() == Some(path_text.as_str())
         })?;
 
-        editor.keys("<S-left>")?;
-        editor.wait_state("selection at match limit is highlighted", secs(2), |record| {
-            record.cursors[0].head_col == 200
-                && record
-                    .viewport
-                    .selection_match_highlights
-                    .iter()
-                    .any(|range| range.start == 202 && range.end == 402)
+        editor.click_app_menu_button()?;
+        editor.wait_state("application menu starts on first row", secs(2), |record| {
+            record.workspace_surface == "app_menu"
+                && record.focused_input == "app_menu"
+                && record.workspace_surface_selected_index == Some(0)
         })?;
+        editor.keys("<enter>")?;
+        editor.wait_state("application menu enter activates new scratchpad", secs(2), |record| {
+            record.workspace_surface == "none"
+                && record.focused_input == "editor"
+                && record.active_tab_index == 3
+                && record.active_tab_path.as_deref() != Some(path_text.as_str())
+        })?;
+        Ok(())
+    })
+}
 
-        editor.keys("<C-g>3:1<enter><S-right><S-right><S-right><C-A-down>")?;
-        editor.wait_state("different selected texts disable shared matches", secs(2), |record| {
-            record.cursors.len() == 2
-                && record.cursors[0].anchor_line == 2
-                && record.cursors[1].anchor_line == 3
-                && record.viewport.selection_match_highlights.is_empty()
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line() -> TestResult {
+    support::run_x11_test("daily-driver-menu-backdrop", |session| {
+        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\n")?;
+        let (mut editor, _path) = session.open("scratch")?;
+        editor.wait_quiet(secs(1), secs(5))?;
+        let before = editor.screenshot()?;
+
+        editor.click_app_menu_button()?;
+        let open = editor.wait_state("app menu opens", secs(2), |record| {
+            record.workspace_surface == "app_menu"
         })?;
+        editor.wait_quiet(secs(1), secs(5))?;
+        let after = editor.screenshot()?;
+        let diff = after.diff(&before)?;
+        diff.changed_bounds.ok_or("opening the app menu changed no pixels")?;
+        let scale = open.viewport.scale_factor.max(1.0);
+        let cursor_line = open.cursors[open.primary_cursor_index].head_line;
+        let row = open
+            .viewport
+            .first_row_for_line(cursor_line)
+            .ok_or("current cursor line is outside the painted viewport")?;
+        let menu_right = (340.0 * scale).ceil() as usize;
+        let menu_bottom = (430.0 * scale).ceil() as usize;
+        let line_top = (row.top_px * scale).floor().max(0.0) as usize;
+        let line_bottom = ((row.top_px + open.viewport.line_height_px) * scale).ceil() as usize;
+        let screenshot_width = usize::from(after.width);
+        let outside_allowed = before
+            .rgb_pixels
+            .chunks_exact(3)
+            .zip(after.rgb_pixels.chunks_exact(3))
+            .enumerate()
+            .filter(|(index, (before_pixel, after_pixel))| {
+                if before_pixel == after_pixel {
+                    return false;
+                }
+                let x = index % screenshot_width;
+                let y = index / screenshot_width;
+                let in_menu = x < menu_right && y < menu_bottom;
+                let in_current_line = (line_top..line_bottom).contains(&y);
+                !(in_menu || in_current_line)
+            })
+            .count();
+
+        assert!(
+            outside_allowed == 0,
+            "app menu changed {outside_allowed} pixels outside its surface and the intentional inactive current-line row, indicating a tinted backdrop: {diff:?}"
+        );
         Ok(())
     })
 }

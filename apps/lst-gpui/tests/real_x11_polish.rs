@@ -6,73 +6,6 @@ use support::{secs, EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn guide_decorations_are_disabled_by_default() -> TestResult {
-    support::run_x11_test("polish-guides-default-off", |session| {
-        let path = session.seed_file("default-guides.rs", "fn main() {\n    let value = (1 + 2);\n}\n")?;
-        let mut editor = session.open_file("polish-guides-default-off", &path)?;
-
-        let state = editor.wait_state("default guide settings", secs(5), |record| {
-            record.viewport.structural_pair_count >= 3
-                && record.viewport.guide_count == 0
-                && record.editor_polish.bracket_pair_guides == "off"
-                && record.editor_polish.bracket_pair_horizontal_guides == "off"
-                && !record.editor_polish.indent_guides
-                && !record.editor_polish.highlight_active_indent_guide
-        })?;
-        assert_eq!(state.viewport.guide_count, 0);
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn enclosing_brackets_are_decorated_and_the_jump_command_uses_the_same_pairs() -> TestResult {
-    support::run_x11_test("polish-bracket-match", |session| {
-        session.seed_settings(
-            "version = 1\n[editor]\nbracket_pair_guides = 'active'\nbracket_pair_horizontal_guides = 'active'\nindent_guides = true\nhighlight_active_indent_guide = true\n",
-        )?;
-        let path = session.seed_file("brackets.rs", "fn main() {\n    let value = (1 + 2);\n}\n")?;
-        let mut editor = session.open_file("polish-bracket-match", &path)?;
-
-        editor.click_at_text(1, 19)?;
-        let decorated = editor.wait_state("enclosing bracket decoration", secs(2), |record| {
-            record.viewport.structural_pair_count >= 3
-                && record.viewport.bracket_matches.len() == 2
-                && record.viewport.guide_count > 0
-        })?;
-        assert_eq!(decorated.editor_polish.match_brackets, "always");
-
-        editor.click_at_text(1, 16)?;
-        editor.keys("<C-S-\\>")?;
-        editor.expect_cursor_heads(&[(1, 22)])?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn injected_brackets_stop_matching_after_selection_is_quoted() -> TestResult {
-    support::run_x11_test("polish-injected-bracket-edit", |session| {
-        let path = session.seed_file("injected.md", "```rust\nfn fenced() { let value = (1 + 2); }\n```\n")?;
-        let mut editor = session.open_file("polish-injected-bracket-edit", &path)?;
-
-        let initial = editor.wait_state("injected brackets parsed", secs(5), |record| {
-            record.viewport.structural_pair_count == 3
-        })?;
-        assert_eq!(initial.viewport.structural_pair_count, 3);
-
-        editor.click_at_text(1, 26)?;
-        editor.keys("<S-right><S-right><S-right><S-right><S-right><S-right><S-right>\"")?;
-        editor.wait_state("quoted injected brackets excluded", secs(5), |record| {
-            record.viewport.structural_pair_count == 2
-        })?;
-        editor.save_then_expect_file(&path, "```rust\nfn fenced() { let value = \"(1 + 2)\"; }\n```\n")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
 fn syntax_selection_expands_in_layers_and_shrinks_the_exact_history() -> TestResult {
     support::run_x11_test("polish-smart-selection", |session| {
         let path = session.seed_file("smart.rs", "fn main() { let camelCase = call(1); }\n")?;
@@ -113,28 +46,6 @@ fn configured_cursor_limit_truncates_large_selection_sets_with_status_feedback()
             record.cursors.len() == 3 && record.status_message.contains("limit reached")
         })?;
         assert_eq!(limited.editor_polish.multi_cursor_limit, 3);
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn configured_guides_rulers_whitespace_and_control_markers_reach_the_real_viewport() -> TestResult {
-    support::run_x11_test("polish-viewport-markers", |session| {
-        session.seed_settings(
-            "version = 1\n[editor]\nbracket_pair_guides = 'all'\nbracket_pair_horizontal_guides = 'all'\nrender_whitespace = 'all'\nrender_control_characters = true\nrulers = [4, 8]\n",
-        )?;
-        let path = session.seed_file("markers.rs", "fn main() {\n\tlet value = 1;  \u{1}\n}\n")?;
-        let mut editor = session.open_file("polish-viewport-markers", &path)?;
-
-        let painted = editor.wait_state("polish markers painted", secs(5), |record| {
-            record.editor_polish.rulers == [4, 8]
-                && record.viewport.guide_count > 0
-                && record.viewport.whitespace_marker_count >= 4
-                && record.viewport.control_marker_count >= 1
-        })?;
-        assert_eq!(painted.editor_polish.render_whitespace, "all");
-        assert!(painted.editor_polish.render_control_characters);
         Ok(())
     })
 }

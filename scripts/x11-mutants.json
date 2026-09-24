@@ -4,7 +4,7 @@
     "patch": "scripts/mutants/duplicate-line-binding.patch",
     "tests": [
       ["real_x11_daily_driver", "ctrl_alt_shift_arrows_duplicate_the_line_above_and_below", "fail"],
-      ["real_x11_daily_driver", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"],
+      ["real_x11_chrome", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"],
       ["real_x11_text_input", "backspace_deletes_seeded_combining_cluster_as_one_character", "pass"]
     ]
   },
@@ -14,7 +14,7 @@
     "tests": [
       ["real_x11_text_input", "backspace_deletes_seeded_combining_cluster_as_one_character", "fail"],
       ["real_x11_daily_driver", "ctrl_alt_shift_arrows_duplicate_the_line_above_and_below", "pass"],
-      ["real_x11_daily_driver", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"]
+      ["real_x11_chrome", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"]
     ]
   },
   {
@@ -23,14 +23,14 @@
     "tests": [
       ["real_x11_mouse", "click_below_last_line_moves_caret_to_document_end", "fail"],
       ["real_x11_daily_driver", "ctrl_alt_shift_arrows_duplicate_the_line_above_and_below", "pass"],
-      ["real_x11_daily_driver", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"]
+      ["real_x11_chrome", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"]
     ]
   },
   {
     "name": "app_menu_backdrop",
     "patch": "scripts/mutants/app-menu-backdrop.patch",
     "tests": [
-      ["real_x11_daily_driver", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "fail"],
+      ["real_x11_chrome", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "fail"],
       ["real_x11_daily_driver", "ctrl_alt_shift_arrows_duplicate_the_line_above_and_below", "pass"],
       ["real_x11_mouse", "click_below_last_line_moves_caret_to_document_end", "pass"]
     ]
@@ -41,7 +41,7 @@
     "tests": [
       ["real_x11_replace_scope", "replace_all_with_document_scope_mutates_every_match", "fail"],
       ["real_x11_replace_scope", "replace_all_in_selection_preserves_outside_text_byte_for_byte", "fail"],
-      ["real_x11_daily_driver", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"]
+      ["real_x11_chrome", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"]
     ]
   },
   {
@@ -50,7 +50,7 @@
     "tests": [
       ["real_x11_save", "ordinary_files_do_not_autosave_by_default", "fail"],
       ["real_x11_daily_driver", "ctrl_alt_shift_arrows_duplicate_the_line_above_and_below", "pass"],
-      ["real_x11_daily_driver", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"]
+      ["real_x11_chrome", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"]
     ]
   }
 ]

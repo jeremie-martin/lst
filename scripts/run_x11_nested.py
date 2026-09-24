@@ -63,6 +63,8 @@ def main() -> int:
                 "lst-gpui",
                 "--test",
                 "real_x11_daily_driver",
+                "--test",
+                "real_x11_chrome",
                 "--run-ignored",
                 "only",
                 "--no-tests=fail",
