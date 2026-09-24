@@ -189,9 +189,11 @@ mod tests {
     }
 
     #[test]
-    fn timeout_reaps_the_direct_child() {
-        let child = Command::new("sleep")
-            .arg("60")
+    fn timeout_reaps_the_direct_child_and_kills_helpers_holding_its_pipes() {
+        let pid_file = tempfile::NamedTempFile::new().unwrap();
+        let child = Command::new("sh")
+            .args(["-c", "sleep 60 & echo $! > \"$0\"; wait"])
+            .arg(pid_file.path())
             .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -201,12 +203,25 @@ mod tests {
         let pid = child.id() as libc::pid_t;
         let filter = RunningFilter { child, finished: false };
         assert_eq!(
-            filter.run(b"text", Duration::from_millis(100)).unwrap_err().kind(),
+            filter.run(b"text", Duration::from_millis(300)).unwrap_err().kind(),
             io::ErrorKind::TimedOut
         );
         // SAFETY: waitpid is queried only for the direct child created above.
         assert_eq!(unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) }, -1);
         assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ECHILD));
+
+        // The orphaned helper is reaped by init, so it may briefly remain a zombie.
+        let helper = std::fs::read_to_string(pid_file.path()).unwrap();
+        let stat = format!("/proc/{}/stat", helper.trim());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while let Ok(stat) = std::fs::read_to_string(&stat) {
+            let state = stat.rsplit_once(") ").map(|(_, fields)| &fields[..1]);
+            if state == Some("Z") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "helper survived the timeout: {stat}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
