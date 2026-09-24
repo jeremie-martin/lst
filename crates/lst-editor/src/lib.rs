@@ -20,7 +20,7 @@ pub use command::EditorCommand;
 pub use document::{for_each_rope_line, for_each_rope_line_in, EditKind, LineChange, UndoBoundary};
 pub use language::{IndentStyle, Language, LanguageConfig};
 pub use selection::{Position, Selection, SelectionSet, SelectionSetError};
-pub use tab::{BufferDelta, BufferEdit, DisplayLine, EditorTab, FileStamp, LanguageMode, SaveExpectation, TabId};
+pub use tab::{BufferDelta, BufferEdit, EditorTab, FileStamp, LanguageMode, SaveExpectation, TabId};
 pub use viewport::Viewport;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum InputMode {
@@ -162,7 +162,7 @@ use crate::{
     tab_set::TabSet,
     transaction::{EditOutcome, EditRequest, SelectionAfter, TextChange, TextChangeSet},
 };
-use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, ops::Range, path::PathBuf};
 pub const UNTITLED_PREFIX: &str = "untitled";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabCloseRequest {
@@ -253,9 +253,6 @@ impl EditorModel {
     }
     pub fn active_tab_id(&self) -> TabId {
         self.active_tab().id()
-    }
-    pub fn active_tab_lines(&mut self) -> Arc<[DisplayLine]> {
-        self.active_tab_mut().lines()
     }
     /// Returns the active tab's buffer delta since the previous call and
     /// resets the tab's record. Mirrors `EditorTab::take_buffer_delta` for

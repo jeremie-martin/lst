@@ -1449,19 +1449,9 @@ impl LstGpuiApp {
         self.archive_open_scratchpads();
         self.cleanup_empty_scratchpad_files();
         // X11 WM_DELETE_WINDOW already holds GPUI's X11 client RefCell, so defer
-        // exit until the current frame releases it. Real builds rely on the
-        // external clipboard owner spawned above instead of in-process writes
-        // (which would re-enter that same RefCell). Tests route through GPUI's
-        // `quit` so the harness can observe shutdown.
-        #[cfg(test)]
-        cx.defer(move |app| {
-            if let Some(text) = scratchpad_payload.map(|payload| payload.text) {
-                app.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                app.write_to_primary(ClipboardItem::new_string(text));
-            }
-            app.quit();
-        });
-        #[cfg(not(test))]
+        // exit until the current frame releases it. The clipboard survives exit
+        // through the external owner spawned above; in-process writes would
+        // re-enter that same RefCell.
         cx.defer(|_| process::exit(0));
     }
 

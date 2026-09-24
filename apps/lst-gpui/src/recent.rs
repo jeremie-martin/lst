@@ -22,7 +22,6 @@ use memchr::memmem;
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
-#[cfg(not(test))]
 const RECENT_CONTENT_SEARCH_DEBOUNCE_MS: u64 = 200;
 
 pub(crate) const RECENT_FILE_LIMIT: usize = 10_000;
@@ -1232,7 +1231,9 @@ impl LstGpuiApp {
 
     fn schedule_recent_content_search(&mut self, search: RecentContentSearch, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(recent_content_search_debounce()).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(RECENT_CONTENT_SEARCH_DEBOUNCE_MS))
+                .await;
             let _ = this.update(cx, |view, cx| {
                 if view.recent.search_still_relevant(&search) {
                     view.start_recent_content_search(search, cx);
@@ -1344,17 +1345,6 @@ impl LstGpuiApp {
             model.set_active_tab(tab_id);
         });
         Some(origin)
-    }
-}
-
-fn recent_content_search_debounce() -> Duration {
-    #[cfg(test)]
-    {
-        Duration::from_millis(0)
-    }
-    #[cfg(not(test))]
-    {
-        Duration::from_millis(RECENT_CONTENT_SEARCH_DEBOUNCE_MS)
     }
 }
 

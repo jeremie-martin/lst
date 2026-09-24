@@ -203,10 +203,6 @@ impl EditorModel {
         }
         true
     }
-    pub fn reload_failed(&mut self, path: PathBuf, message: String) {
-        self.status = format!("Failed to reload {}: {message}", path.display());
-    }
-
     pub fn suppress_file_conflict(&mut self, tab_id: TabId, path: PathBuf, stamp: FileStamp) {
         if let Some(tab) = self.tab_mut_by_id(tab_id) {
             tab.suppress_file_conflict(stamp);

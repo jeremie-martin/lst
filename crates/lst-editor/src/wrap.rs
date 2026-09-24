@@ -176,24 +176,6 @@ pub struct DisplayRowTarget {
     pub preferred_column: usize,
 }
 
-pub fn build_wrap_layout<T: AsRef<str>>(lines: &[T], wrap_columns: usize, show_wrap: bool) -> WrapLayout {
-    let wrap_columns = wrap_columns.max(1);
-    if !show_wrap {
-        return WrapLayout::unwrapped(lines.len(), wrap_columns);
-    }
-    let mut starts = Vec::with_capacity(lines.len() + 1);
-    let mut total_rows = 0usize;
-    starts.push(0);
-    for line in lines {
-        total_rows += visual_line_count(trim_display_line(line.as_ref()), wrap_columns);
-        starts.push(total_rows);
-    }
-    WrapLayout {
-        wrap_columns,
-        rows: LineRows::Wrapped(starts),
-    }
-}
-
 pub fn build_wrap_layout_for_rope(buffer: &Rope, wrap_columns: usize, show_wrap: bool) -> WrapLayout {
     let line_count = buffer.len_lines();
     let wrap_columns = wrap_columns.max(1);
@@ -501,10 +483,6 @@ fn cell_width(repr: char, col: usize) -> usize {
     } else {
         1
     }
-}
-
-fn trim_display_line(line: &str) -> &str {
-    line.strip_suffix('\r').unwrap_or(line)
 }
 
 #[cfg(test)]

@@ -44,7 +44,7 @@ caches. It does not own a second editor state machine.
 `crates/lst-editor` owns:
 
 - non-empty tab state, active-tab identity, and file/scratchpad origin
-- Rope-backed documents, character/line conversion, and line caches
+- Rope-backed documents and character/line conversion
 - ordered selection sets, cursor goals, multi-cursor normalization, and IME
   marked ranges
 - edit transactions, undo boundaries, history, and alternate redo branches

@@ -639,8 +639,8 @@ impl TabSyntaxState {
         if lines.is_empty() {
             return (Vec::new(), Vec::new());
         }
-        // Line topology must match `EditorTab::lines()` (which iterates
-        // `Rope::lines()` and trims trailing \n/\r), otherwise the byte-
+        // Line topology must match the viewport's display lines (one per
+        // `Rope::line`, trailing \n/\r trimmed), otherwise the byte-
         // length guard in viewport disables the cache for the wrong line
         // indices on files containing lone CR or other Unicode separators
         // that ropey treats as line breaks.
@@ -2198,7 +2198,7 @@ fn innermost_role(active: &[usize], captures: &[CapturedSpan]) -> Option<SyntaxR
 /// Build per-line `(start_byte, display_end_byte)` pairs by walking the
 /// rope. Ropey treats LF, CR, CRLF, NEL, VT, FF, LS, PS as line
 /// separators by default, so naive `\n`-only scanning over the source
-/// string disagrees with `EditorTab::lines()` on files containing lone
+/// string disagrees with the viewport's display lines on files containing lone
 /// CR (or other Unicode line terminators). Using `Rope::lines()` keeps
 /// the line indices and per-line lengths consistent with the renderer.
 fn line_bounds_from_rope(buffer: &Rope, lines: Range<usize>) -> (Vec<usize>, Vec<usize>) {

@@ -13,7 +13,6 @@ use std::{
     fs::Metadata,
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -98,14 +97,6 @@ impl TabId {
         self.0
     }
 }
-#[derive(Clone)]
-struct CachedLines {
-    revision: u64,
-    lines: Arc<[DisplayLine]>,
-}
-
-/// Immutable, cheaply cloned display text for one logical line.
-pub type DisplayLine = Arc<str>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveKind {
     Regular,
@@ -240,7 +231,6 @@ pub struct EditorTab {
     next_content_epoch: u64,
     selection: SelectionState,
     revision: u64,
-    line_cache: Option<CachedLines>,
     history: EditHistory,
     last_edit_position: Option<usize>,
     marked_range: Option<Range<usize>>,
@@ -300,7 +290,6 @@ impl EditorTab {
             next_content_epoch: 1,
             selection: SelectionState::single(Selection::collapsed(0)),
             revision: 0,
-            line_cache: None,
             history: EditHistory::new(),
             last_edit_position: None,
             marked_range: None,
@@ -482,7 +471,6 @@ impl EditorTab {
     }
     fn touch_content(&mut self) {
         self.revision = self.revision.wrapping_add(1);
-        self.line_cache = None;
     }
     fn touch_text_content(&mut self) {
         self.content_epoch = self.next_content_epoch;
@@ -519,22 +507,6 @@ impl EditorTab {
     pub fn selected_text(&self) -> Option<String> {
         self.has_selection()
             .then(|| self.buffer.slice(self.selection().range()).to_string())
-    }
-    pub fn lines(&mut self) -> Arc<[DisplayLine]> {
-        if let Some(cache) = &self.line_cache {
-            if cache.revision == self.revision {
-                return Arc::clone(&cache.lines);
-            }
-        }
-        let lines: Arc<[DisplayLine]> = (0..self.buffer.len_lines())
-            .map(|line_ix| DisplayLine::from(crate::selection::line_display_text(&self.buffer, line_ix)))
-            .collect::<Vec<_>>()
-            .into();
-        self.line_cache = Some(CachedLines {
-            revision: self.revision,
-            lines: Arc::clone(&lines),
-        });
-        lines
     }
     pub(crate) fn select_all(&mut self) {
         let end = self.len_chars();
@@ -647,28 +619,9 @@ impl EditorTab {
         selection_after: SelectionAfter,
         marked_range_after: Option<Range<usize>>,
     ) {
-        let mut cached_lines = if changes_text {
-            self.line_cache
-                .take()
-                .filter(|cache| cache.revision == self.revision)
-                // The rendered canvas can retain the previous outer slice,
-                // so clone only Arc pointers here. Unchanged line text remains
-                // shared instead of copying every String in the document.
-                .map(|cache| cache.lines.iter().cloned().collect::<Vec<_>>())
-        } else {
-            None
-        };
         if changes_text {
             remap_bookmarks_after_changes(&self.buffer, &mut self.bookmarks, &changes);
             for change in changes.iter().rev() {
-                if let Some(lines) = cached_lines.as_mut() {
-                    if !apply_change_to_cached_lines(lines, &self.buffer, change) {
-                        // Couldn't update incrementally — drop the cache so
-                        // the next `lines()` call rebuilds from the buffer
-                        // rather than serving stale text under the new revision.
-                        cached_lines = None;
-                    }
-                }
                 apply_change_to_buffer(&mut self.buffer, change);
             }
             self.record_edits(changes);
@@ -679,12 +632,6 @@ impl EditorTab {
         if changes_text {
             self.last_edit_position = Some(self.selection().head().min(self.len_chars()));
             self.touch_text_content();
-            if let Some(lines) = cached_lines {
-                self.line_cache = Some(CachedLines {
-                    revision: self.revision,
-                    lines: lines.into(),
-                });
-            }
         }
     }
     pub fn last_edit_position(&self) -> Option<usize> {
@@ -839,89 +786,6 @@ impl EditorTab {
         self.record_full_replace();
     }
 }
-/// Returns `false` when the cache cannot be incrementally updated
-/// (out-of-range line indices or empty cache) so the caller can drop the
-/// stale cache rather than stamping it under the new revision.
-fn apply_change_to_cached_lines(lines: &mut Vec<DisplayLine>, buffer: &Rope, change: &TextChange) -> bool {
-    if lines.is_empty() {
-        return false;
-    }
-
-    let len_chars = buffer.len_chars();
-    let start = change.range.start.min(len_chars);
-    let end = change.range.end.min(len_chars);
-    let start_line = buffer.char_to_line(start);
-    let end_line = buffer.char_to_line(end);
-    if start_line >= lines.len() || end_line >= lines.len() {
-        return false;
-    }
-
-    let start_col = start.saturating_sub(buffer.line_to_char(start_line));
-    let end_col = end.saturating_sub(buffer.line_to_char(end_line));
-    // Columns are raw rope offsets (line terminators included), but the cached
-    // lines have trailing CR/LF stripped. When an endpoint lands inside a
-    // multi-char terminator — the `\n` of a `\r\n`, which ropey groups into the
-    // preceding line — the column overshoots the stripped line and the splice
-    // would silently grab the whole line as prefix/suffix, corrupting the cache.
-    // Drop to a full rebuild instead of stamping a garbled line under the new
-    // revision.
-    if start_col > lines[start_line].chars().count() || end_col > lines[end_line].chars().count() {
-        return false;
-    }
-    let prefix = line_prefix_chars(lines[start_line].as_ref(), start_col);
-    let suffix = line_suffix_chars(lines[end_line].as_ref(), end_col);
-    let replacement_lines = replacement_display_lines(&change.replacement);
-
-    let mut new_lines = Vec::with_capacity(replacement_lines.len().max(1));
-    if replacement_lines.len() == 1 {
-        new_lines.push(DisplayLine::from(format!(
-            "{}{}{}",
-            prefix, replacement_lines[0], suffix
-        )));
-    } else {
-        new_lines.push(DisplayLine::from(format!("{}{}", prefix, replacement_lines[0])));
-        new_lines.extend(
-            replacement_lines[1..replacement_lines.len() - 1]
-                .iter()
-                .map(|line| DisplayLine::from(line.as_str())),
-        );
-        let last = replacement_lines.last().map(String::as_str).unwrap_or("");
-        new_lines.push(DisplayLine::from(format!("{last}{suffix}")));
-    }
-
-    lines.splice(start_line..=end_line, new_lines);
-    if lines.is_empty() {
-        lines.push(DisplayLine::from(""));
-    }
-    true
-}
-
-fn replacement_display_lines(text: &str) -> Vec<String> {
-    text.split('\n')
-        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
-        .collect()
-}
-
-fn line_prefix_chars(line: &str, char_count: usize) -> String {
-    let byte = byte_index_for_char(line, char_count);
-    line[..byte].to_string()
-}
-
-fn line_suffix_chars(line: &str, char_count: usize) -> String {
-    let byte = byte_index_for_char(line, char_count);
-    line[byte..].to_string()
-}
-
-fn byte_index_for_char(text: &str, char_ix: usize) -> usize {
-    if char_ix == 0 {
-        return 0;
-    }
-    text.char_indices()
-        .nth(char_ix)
-        .map(|(byte, _)| byte)
-        .unwrap_or(text.len())
-}
-
 fn first_line_for_detection(buffer: &Rope) -> String {
     buffer.line(0).to_string().trim_end_matches(['\r', '\n']).to_string()
 }
@@ -1068,72 +932,11 @@ mod tests {
     use super::*;
     use crate::{
         document::{EditKind, UndoBoundary},
-        transaction::{EditRequest, TextChange, TextChangeSet},
+        transaction::EditRequest,
     };
 
     fn tab_with_text(text: &str) -> EditorTab {
         EditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("test.rs"), text, None)
-    }
-
-    fn cached_lines(tab: &mut EditorTab) -> Vec<String> {
-        tab.lines().iter().map(ToString::to_string).collect()
-    }
-
-    #[test]
-    fn line_cache_updates_single_line_insert_without_full_rebuild() {
-        let mut tab = tab_with_text("alpha\nbeta\n");
-        assert_eq!(cached_lines(&mut tab), vec!["alpha", "beta", ""]);
-
-        let request = EditRequest::single(EditKind::Insert, UndoBoundary::Merge, 2..2, "Z".to_string());
-        tab.apply_edit_request(request);
-
-        assert_eq!(cached_lines(&mut tab), vec!["alZpha", "beta", ""]);
-    }
-
-    #[test]
-    fn line_cache_updates_multiline_replace() {
-        let mut tab = tab_with_text("alpha\nbeta\ngamma");
-        let _ = tab.lines();
-        let start = tab.buffer().line_to_char(0) + 2;
-        let end = tab.buffer().line_to_char(1) + 2;
-        let request = EditRequest::from_changes(
-            EditKind::Insert,
-            UndoBoundary::Break,
-            TextChangeSet::single(TextChange::replace(start..end, "X\nY".to_string())),
-        );
-
-        tab.apply_edit_request(request);
-
-        assert_eq!(cached_lines(&mut tab), vec!["alX", "Yta", "gamma"]);
-    }
-
-    #[test]
-    fn line_cache_matches_full_rebuild_for_crlf_boundary_edit() {
-        // Editing a CRLF buffer at the `\n` of a `\r\n` pair (which ropey groups
-        // into the preceding line) used to corrupt the incremental line cache:
-        // the column was computed in raw rope coordinates but applied to the
-        // CR/LF-stripped display line, overshooting it. The incremental result
-        // must equal a from-scratch rebuild of the resulting text.
-        let mut tab = tab_with_text("alpha\r\nbeta\r\ngamma");
-        let _ = tab.lines(); // prime the incremental cache
-                             // char 6 is the `\n` of the first CRLF pair.
-        let request = EditRequest::single(EditKind::Insert, UndoBoundary::Break, 6..6, "X".to_string());
-        tab.apply_edit_request(request);
-
-        let incremental = cached_lines(&mut tab);
-        let rebuilt = cached_lines(&mut tab_with_text(&tab.buffer_text()));
-        assert_eq!(incremental, rebuilt);
-    }
-
-    #[test]
-    fn undo_restores_rope_snapshot() {
-        let mut tab = tab_with_text("alpha\nbeta");
-        let request = EditRequest::single(EditKind::Insert, UndoBoundary::Break, 0..0, "Z".to_string());
-        tab.apply_edit_request(request);
-        assert_eq!(tab.buffer_text(), "Zalpha\nbeta");
-
-        assert!(tab.undo());
-        assert_eq!(tab.buffer_text(), "alpha\nbeta");
     }
 
     #[test]
