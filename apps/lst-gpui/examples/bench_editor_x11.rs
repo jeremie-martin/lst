@@ -2224,6 +2224,7 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
     match scenario {
         Scenario::All => &[],
         Scenario::LargePaste => &[
+            "paste_input_to_paint_ms",
             "paste_complete_ms",
             "select_all_ms",
             "copy_clipboard_ms",
@@ -3933,6 +3934,7 @@ mod tests {
         let mut primary_metrics = HashMap::new();
         for scenario in Scenario::All.measured_cases() {
             primary_metrics.insert(scenario.as_str(), scenario.primary_metric());
+            assert!(metric_order(scenario).contains(&scenario.primary_metric()));
         }
 
         assert_eq!(primary_metrics["large-paste"], "paste_input_to_paint_ms");

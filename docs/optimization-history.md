@@ -1259,3 +1259,47 @@ CPU time); `open-small` 334 -> ~260 ms in the current environment.
   validation and physical cohort/pixel comparisons follow.
 - Raw outputs: `width-owner-backspace.txt`, `width-owner-startup.txt`, and their
   per-run traces under `/tmp/lst-perf-sep23`.
+
+### Final physical-display cohort
+
+- Preserved production `65796dc` (the first complete-root tracing build) versus
+  `e69a78a`, using the same runner with completed-frame epochs and query-paint
+  reporting. The baseline already includes the earlier clipboard, chrome and
+  lazy GPU-resource gains; this is not a comparison against initial `8accfc9`.
+- Physical `:0`, 3816x2100, one priming run, seven measured launches per opening
+  scenario and three runs per other scenario. Variant order reverses between
+  scenarios. Every editing run verifies exact saved output. All 15 scenarios
+  complete successfully. Values below are medians; all durations are ms, except
+  typing is ms/character. CPU covers each runner scenario's observation window.
+
+| Scenario / metric | Baseline | Final | CPU baseline → final (ms) |
+| --- | ---: | ---: | ---: |
+| open-small, first frame | 185.394 | 190.478 | 330.000 → 330.000 |
+| open-large, first frame | 187.011 | 185.846 | 410.000 → 400.000 |
+| typing-medium, per character | 0.917 | 0.821 | 280.000 → 260.000 |
+| typing-large, per character | 1.117 | 1.006 | 350.000 → 330.000 |
+| typing-plain, per character | 0.461 | 0.300 | 130.000 → 100.000 |
+| large-paste, input through paint | 14.148 | 13.452 | 70.000 → 50.000 |
+| mixed-paste, input through paint | 81.976 | 83.314 | 340.000 → 300.000 |
+| scroll-highlighted, mean frame | 1.119 | 1.083 | 930.000 → 930.000 |
+| scroll-plain, mean frame | 1.115 | 1.092 | 930.000 → 920.000 |
+| search-large, query through paint | 31.766 | 13.419 | 190.000 → 180.000 |
+| multi-cursor-1k, paint | 0.492 | 0.514 | 100.000 → 70.000 |
+| idle, CPU / 2 seconds | 30.000 | 30.000 | 30.000 → 30.000 |
+| latency-typing, presentation p50 | 8.567 | 8.497 | 2120.000 → 1950.000 |
+| latency-navigation, presentation p50 | 6.881 | 6.473 | 2170.000 → 2160.000 |
+| latency-edit-navigation, presentation p50 | 6.561 | 7.231 | 2550.000 → 2530.000 |
+
+- Search's old indexing timer includes application synchronization; the newer
+  timer measures the model alone. Do not compare those phase labels directly.
+  Query injection through complete-root painting has the same boundary on both
+  builds. First-frame startup remains unchanged within these launch spreads.
+- The edit-then-navigation presentation result needs a reversed-order check:
+  app-side completion is **2.352 -> 2.299 ms**, frame work **0.608 -> 0.618 ms**,
+  and CPU **2,550 -> 2,530 ms**, while presentation p50 moves the other way.
+- The large-paste formatter omitted its primary metric from the per-run output
+  list, although `primary_value` correctly reports its median. Add the missing
+  field and assert every scenario emits its primary metric. All 12 runner tests,
+  all-features source tests and all-targets/all-features Clippy pass.
+- Raw outputs: `final-cohort-*.txt`, preserved traces, and the concise
+  `final-cohort-summary.txt` under `/tmp/lst-perf-sep23`.
