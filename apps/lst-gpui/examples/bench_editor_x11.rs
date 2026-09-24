@@ -155,71 +155,52 @@ enum Scenario {
     LatencyEditNavigation,
 }
 
+/// Command-line name of every scenario, in the order `all` measures them.
+const SCENARIOS: &[(&str, Scenario)] = &[
+    ("all", Scenario::All),
+    ("large-paste", Scenario::LargePaste),
+    ("mixed-paste", Scenario::MixedPaste),
+    ("typing-medium", Scenario::TypingMedium),
+    ("typing-large", Scenario::TypingLarge),
+    ("typing-plain", Scenario::TypingPlain),
+    ("scroll-highlighted", Scenario::ScrollHighlighted),
+    ("scroll-plain", Scenario::ScrollPlain),
+    ("open-small", Scenario::OpenSmall),
+    ("open-large", Scenario::OpenLarge),
+    ("search-large", Scenario::SearchLarge),
+    ("multi-cursor-1k", Scenario::MultiCursor1k),
+    ("idle", Scenario::Idle),
+    ("latency-typing", Scenario::LatencyTyping),
+    ("latency-navigation", Scenario::LatencyNavigation),
+    ("latency-edit-navigation", Scenario::LatencyEditNavigation),
+];
+
 impl Scenario {
     fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "all" => Ok(Self::All),
-            "large-paste" => Ok(Self::LargePaste),
-            "mixed-paste" => Ok(Self::MixedPaste),
-            "typing-medium" => Ok(Self::TypingMedium),
-            "typing-large" => Ok(Self::TypingLarge),
-            "typing-plain" => Ok(Self::TypingPlain),
-            "scroll-highlighted" => Ok(Self::ScrollHighlighted),
-            "scroll-plain" => Ok(Self::ScrollPlain),
-            "open-small" => Ok(Self::OpenSmall),
-            "open-large" => Ok(Self::OpenLarge),
-            "search-large" => Ok(Self::SearchLarge),
-            "multi-cursor-1k" => Ok(Self::MultiCursor1k),
-            "idle" => Ok(Self::Idle),
-            "latency-typing" => Ok(Self::LatencyTyping),
-            "latency-navigation" => Ok(Self::LatencyNavigation),
-            "latency-edit-navigation" => Ok(Self::LatencyEditNavigation),
-            _ => Err(format!("unknown scenario: {value}")),
-        }
+        SCENARIOS
+            .iter()
+            .find(|(name, _)| *name == value)
+            .map(|(_, scenario)| *scenario)
+            .ok_or_else(|| format!("unknown scenario: {value}"))
     }
 
     fn measured_cases(self) -> Vec<Self> {
         match self {
-            Self::All => vec![
-                Self::LargePaste,
-                Self::MixedPaste,
-                Self::TypingMedium,
-                Self::TypingLarge,
-                Self::TypingPlain,
-                Self::ScrollHighlighted,
-                Self::ScrollPlain,
-                Self::OpenSmall,
-                Self::OpenLarge,
-                Self::SearchLarge,
-                Self::MultiCursor1k,
-                Self::Idle,
-                Self::LatencyTyping,
-                Self::LatencyNavigation,
-                Self::LatencyEditNavigation,
-            ],
+            Self::All => SCENARIOS
+                .iter()
+                .map(|(_, scenario)| *scenario)
+                .filter(|scenario| *scenario != Self::All)
+                .collect(),
             scenario => vec![scenario],
         }
     }
 
     fn as_str(self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::LargePaste => "large-paste",
-            Self::MixedPaste => "mixed-paste",
-            Self::TypingMedium => "typing-medium",
-            Self::TypingLarge => "typing-large",
-            Self::TypingPlain => "typing-plain",
-            Self::ScrollHighlighted => "scroll-highlighted",
-            Self::ScrollPlain => "scroll-plain",
-            Self::OpenSmall => "open-small",
-            Self::OpenLarge => "open-large",
-            Self::SearchLarge => "search-large",
-            Self::MultiCursor1k => "multi-cursor-1k",
-            Self::Idle => "idle",
-            Self::LatencyTyping => "latency-typing",
-            Self::LatencyNavigation => "latency-navigation",
-            Self::LatencyEditNavigation => "latency-edit-navigation",
-        }
+        SCENARIOS
+            .iter()
+            .find(|(_, scenario)| *scenario == self)
+            .map(|(name, _)| *name)
+            .expect("every scenario has a command-line name")
     }
 
     fn primary_metric(self) -> &'static str {
@@ -3906,27 +3887,11 @@ mod tests {
     }
 
     #[test]
-    fn all_expands_to_every_measured_scenario() {
-        assert_eq!(
-            Scenario::All.measured_cases(),
-            vec![
-                Scenario::LargePaste,
-                Scenario::MixedPaste,
-                Scenario::TypingMedium,
-                Scenario::TypingLarge,
-                Scenario::TypingPlain,
-                Scenario::ScrollHighlighted,
-                Scenario::ScrollPlain,
-                Scenario::OpenSmall,
-                Scenario::OpenLarge,
-                Scenario::SearchLarge,
-                Scenario::MultiCursor1k,
-                Scenario::Idle,
-                Scenario::LatencyTyping,
-                Scenario::LatencyNavigation,
-                Scenario::LatencyEditNavigation,
-            ]
-        );
+    fn scenario_names_are_unique_and_round_trip() {
+        for (name, scenario) in SCENARIOS {
+            assert_eq!(Scenario::parse(name), Ok(*scenario));
+            assert_eq!(scenario.as_str(), *name);
+        }
     }
 
     #[test]
