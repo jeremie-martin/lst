@@ -8,14 +8,9 @@
 
 mod support;
 
-use lst_x11_harness::{ChordMods, FileWaitOpts, Key, KeyChord};
+use lst_x11_harness::{ChordMods, Key, KeyChord};
 
 use support::{secs, EditorTestExt, TestResult};
-
-#[cfg(unix)]
-use std::os::unix::fs::{symlink, PermissionsExt};
-#[cfg(unix)]
-use std::time::Duration;
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
@@ -128,24 +123,6 @@ fn ignored_insert_mode_recent_ctrl_does_not_poison_next_vim_key() -> TestResult 
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn undo_after_save_marks_buffer_dirty_again() -> TestResult {
-    support::run_x11_test("regression-save-undo-dirty", |session| {
-        let path = session.seed_file("save-undo-dirty.txt", "old")?;
-        let mut editor = session.open_file("regression-save-undo-dirty", &path)?;
-
-        editor.keys("new ")?;
-        editor.save()?;
-        editor.wait_state("save clears dirty", secs(5), |record| !record.active_tab_modified)?;
-        editor.keys("<C-z>")?;
-        editor.wait_state("undo after save dirties buffer", secs(5), |record| {
-            record.active_tab_modified
-        })?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
 fn crlf_line_ending_is_not_split_by_right_motion_and_insert() -> TestResult {
     support::run_x11_test("regression-crlf-motion-insert", |session| {
         let path = session.seed_file("crlf.txt", "a\r\nb")?;
@@ -154,68 +131,6 @@ fn crlf_line_ending_is_not_split_by_right_motion_and_insert() -> TestResult {
         editor.place_cursor_at_document_start()?;
         editor.keys("<end><right>X")?;
         editor.save_then_expect_file(&path, "a\r\nXb")?;
-        Ok(())
-    })
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn save_preserves_existing_executable_mode() -> TestResult {
-    support::run_x11_test("regression-save-preserves-mode", |session| {
-        let path = session.seed_file("script.sh", "#!/bin/sh\necho hi\n")?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
-        let mut editor = session.open_file("regression-save-preserves-mode", &path)?;
-
-        editor.place_cursor_at_document_start()?;
-        editor.keys("#")?;
-        editor.save_then_expect_file(&path, "##!/bin/sh\necho hi\n")?;
-        let mode = std::fs::metadata(&path)?.permissions().mode() & 0o777;
-        assert_eq!(mode, 0o755);
-        Ok(())
-    })
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn save_through_symlink_updates_target_without_replacing_link() -> TestResult {
-    support::run_x11_test("regression-save-symlink", |session| {
-        let target = session.seed_file("symlink-target.txt", "target\n")?;
-        let link = session.root().join("symlink-link.txt");
-        symlink(&target, &link)?;
-        let mut editor = session.open_file("regression-save-symlink", &link)?;
-
-        editor.place_cursor_at_document_start()?;
-        editor.keys("linked ")?;
-        editor.save_then_expect_file(&target, "linked target\n")?;
-        assert!(std::fs::symlink_metadata(&link)?.file_type().is_symlink());
-        Ok(())
-    })
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn failed_safe_save_keeps_existing_file_contents() -> TestResult {
-    support::run_x11_test("regression-save-failure-preserves-file", |session| {
-        let dir = session.root().join("locked");
-        std::fs::create_dir(&dir)?;
-        let path = dir.join("note.txt");
-        std::fs::write(&path, "old\n")?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))?;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555))?;
-        let mut editor = session.open_file("regression-save-failure-preserves-file", &path)?;
-
-        editor.keys("new ")?;
-        editor.save()?;
-        editor.wait_file_text(&path, "old\n", FileWaitOpts::new(secs(2), Duration::from_millis(300)))?;
-        let record = editor.read_state()?;
-        let text = std::fs::read_to_string(&path)?;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))?;
-
-        assert_eq!(text, "old\n");
-        assert!(record.active_tab_modified, "{record:?}");
         Ok(())
     })
 }

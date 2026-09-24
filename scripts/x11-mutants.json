@@ -48,7 +48,7 @@
     "name": "ordinary_autosave",
     "patch": "scripts/mutants/ordinary-autosave.patch",
     "tests": [
-      ["real_x11_daily_driver", "ordinary_files_do_not_autosave_by_default", "fail"],
+      ["real_x11_save", "ordinary_files_do_not_autosave_by_default", "fail"],
       ["real_x11_daily_driver", "ctrl_alt_shift_arrows_duplicate_the_line_above_and_below", "pass"],
       ["real_x11_daily_driver", "app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line", "pass"]
     ]

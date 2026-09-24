@@ -6,7 +6,7 @@
 
 mod support;
 
-use std::{fs, thread};
+use std::fs;
 
 use support::{secs, EditorTestExt, TestResult};
 
@@ -244,57 +244,6 @@ fn ctrl_alt_shift_arrows_duplicate_the_line_above_and_below() -> TestResult {
         editor.keys("<C-A-S-down>")?;
         editor.expect_cursor_heads(&[(2, 2)])?;
         editor.save_then_expect_file(&path, "alpha\nbeta\nbeta\nbeta")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn ordinary_files_do_not_autosave_by_default() -> TestResult {
-    support::run_x11_test("daily-driver-no-file-autosave", |session| {
-        let path = session.seed_file("manual-save.txt", "original")?;
-        let mut editor = session.open_file("manual-save", &path)?;
-
-        editor.keys(" changed")?;
-        thread::sleep(secs(2));
-        assert_eq!(fs::read_to_string(&path)?, "original");
-        let state = editor.read_state()?;
-        assert!(state.active_tab_modified, "{state:?}");
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn closing_a_dirty_file_requires_an_explicit_decision() -> TestResult {
-    support::run_x11_test("daily-driver-close-prompt", |session| {
-        let path = session.seed_file("close-me.txt", "body")?;
-        let mut editor = session.open_file("close-prompt", &path)?;
-
-        editor.keys(" changed<C-w>")?;
-        let identity = path.to_string_lossy().into_owned();
-        let prompted = editor.wait_state("dirty close prompt", secs(2), |record| {
-            record.close_prompt_file.as_deref() == Some(identity.as_str())
-                && record.close_prompt_status.as_deref() == Some("reviewing")
-        })?;
-        assert!(prompted.active_tab_modified, "{prompted:?}");
-
-        editor.send_keys_settle("<S-d><A-d><C-d><S-enter><A-enter><C-enter>")?;
-        let blocked = editor.read_state()?;
-        assert_eq!(
-            blocked.close_prompt_file.as_deref(),
-            Some(identity.as_str()),
-            "modified discard/save keys escaped the close prompt: {blocked:?}"
-        );
-        assert_eq!(blocked.close_prompt_status.as_deref(), Some("reviewing"), "{blocked:?}");
-        assert!(blocked.active_tab_modified, "{blocked:?}");
-        assert_eq!(fs::read_to_string(&path)?, "body");
-
-        editor.keys("<esc>")?;
-        editor.wait_state("close prompt cancelled", secs(2), |record| {
-            record.close_prompt_file.is_none() && record.active_tab_modified
-        })?;
-        assert_eq!(fs::read_to_string(&path)?, "body");
         Ok(())
     })
 }
