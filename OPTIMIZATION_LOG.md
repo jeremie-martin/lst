@@ -102,5 +102,6 @@ Static viewport caching was not added without a demonstrated worthwhile gain.
 - Earlier combined production checkpoint: **290/290** nested X11 tests pass.
 - Eight focused viewport tests pass, including widest-line growth, shrink,
   split/join extents, wrapped cursor visibility and responsive geometry.
-- The current **291-test full X11 checkpoint is running**. Final physical-display
-  benchmark and ten-scenario pixel comparisons follow it.
+- Combined production checkpoint `82b5b24`: **291/291** nested X11 tests
+  pass in 1,797.755 seconds. Final physical-display benchmark and ten-scenario
+  pixel comparisons follow it.

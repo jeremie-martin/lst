@@ -1219,3 +1219,11 @@ CPU time); `open-small` 334 -> ~260 ms in the current environment.
 - A temporary benchmark reader hit an incomplete trailing timestamp record;
   exclude that interrupted run and rerun both variants with complete-line
   parsing, matching the maintained benchmark runner's existing protection.
+
+### Combined parser, find and layout correctness checkpoint
+
+- Production `82b5b24` passes **291/291** nested X11 tests in **1,797.755 s**,
+  including all eight viewport cases and the new separator-aware find test.
+  The slow prompt-timeout and held-arrow cases also pass. No tests skipped.
+- Log: `/tmp/lst-perf-sep23/topology-parser-find-full-x11.txt`. Physical
+  measurements resume only after Xephyr has exited.
