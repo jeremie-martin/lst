@@ -117,14 +117,13 @@ pub fn input_keybindings() -> Vec<KeyBinding> {
 
 pub struct InputField {
     focus_handle: FocusHandle,
-    text: InputText,
+    state: InputState,
     placeholder: SharedString,
     extra_key_context: Option<SharedString>,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     horizontal_scroll: Pixels,
     selection_drag: Option<InputDragSelectionMode>,
-    history: InputHistory,
     vertical_navigation: bool,
 }
 
@@ -217,6 +216,86 @@ fn push_bounded(stack: &mut Vec<InputText>, snapshot: InputText) {
     stack.push(snapshot);
     if stack.len() > INPUT_HISTORY_LIMIT {
         stack.remove(0);
+    }
+}
+
+/// A field's text and its undo history. Every edit goes through here so
+/// history sees each change exactly once.
+struct InputState {
+    text: InputText,
+    history: InputHistory,
+}
+
+impl InputState {
+    fn new() -> Self {
+        Self {
+            text: InputText::new(),
+            history: InputHistory::default(),
+        }
+    }
+
+    /// Replaces the whole text without history, as for a programmatic reset.
+    fn set_text(&mut self, text: &str) -> bool {
+        let changed = self.text.set_text(text);
+        if changed {
+            self.history.clear();
+        }
+        changed
+    }
+
+    fn replace(&mut self, range_utf16: Option<&Range<usize>>, new_text: &str) {
+        let before = self.text.clone();
+        self.text.replace_text(range_utf16, new_text);
+        self.history.record_replacement(before, &self.text);
+    }
+
+    /// Deletes the selection, or else the text between the cursor and the
+    /// movement's target. Undo restores the caret, not a temporary selection.
+    fn delete(&mut self, movement: TextMovement) {
+        let before = self.text.clone();
+        if self.text.selected_range.is_empty() {
+            self.text.select_to(self.text.movement_target(movement));
+        }
+        self.text.replace_text(None, "");
+        self.history.record_replacement(before, &self.text);
+    }
+
+    fn compose(
+        &mut self,
+        range_utf16: Option<&Range<usize>>,
+        new_text: &str,
+        new_selected_range_utf16: Option<&Range<usize>>,
+    ) {
+        let before = self.text.clone();
+        self.text
+            .replace_and_mark_text(range_utf16, new_text, new_selected_range_utf16);
+        self.history.begin_composition(before, &self.text);
+    }
+
+    fn commit_composition(&mut self) {
+        self.text.marked_range = None;
+        self.history.finish_composition(&self.text);
+    }
+
+    fn undo(&mut self) -> bool {
+        self.commit_composition();
+        let snapshot = self.history.undo(self.text.clone());
+        self.restore(snapshot)
+    }
+
+    fn redo(&mut self) -> bool {
+        self.commit_composition();
+        let snapshot = self.history.redo(self.text.clone());
+        self.restore(snapshot)
+    }
+
+    fn restore(&mut self, snapshot: Option<InputText>) -> bool {
+        let Some(mut snapshot) = snapshot else {
+            return false;
+        };
+        snapshot.marked_range = None;
+        self.text = snapshot;
+        true
     }
 }
 
@@ -433,14 +512,13 @@ impl InputField {
     pub fn new(cx: &mut Context<Self>, placeholder: impl Into<SharedString>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
-            text: InputText::new(),
+            state: InputState::new(),
             placeholder: placeholder.into(),
             extra_key_context: None,
             last_layout: None,
             last_bounds: None,
             horizontal_scroll: px(0.0),
             selection_drag: None,
-            history: InputHistory::default(),
             vertical_navigation: false,
         }
     }
@@ -456,15 +534,14 @@ impl InputField {
     }
 
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        if self.text.set_text(text) {
-            self.history.clear();
+        if self.state.set_text(text) {
             self.last_layout = None;
             cx.notify();
         }
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
-        self.text.select_all();
+        self.state.text.select_all();
         cx.notify();
     }
 
@@ -473,48 +550,36 @@ impl InputField {
     }
 
     pub fn text(&self) -> &str {
-        self.text.content.as_ref()
+        self.state.text.content.as_ref()
     }
 
     fn emit_changed(&self, cx: &mut Context<Self>) {
-        cx.emit(InputFieldEvent::Changed(self.text.content.to_string()));
+        cx.emit(InputFieldEvent::Changed(self.state.text.content.to_string()));
     }
 
-    fn finish_composition_for_history(&mut self) {
-        self.text.marked_range = None;
-        self.history.finish_composition(&self.text);
+    fn text_changed(&mut self, cx: &mut Context<Self>) {
+        self.last_layout = None;
+        self.emit_changed(cx);
+        cx.notify();
     }
 
-    fn restore_history_snapshot(&mut self, mut snapshot: InputText, cx: &mut Context<Self>) {
-        snapshot.marked_range = None;
-        self.text = snapshot;
+    fn delete_toward(&mut self, movement: TextMovement, cx: &mut Context<Self>) {
+        self.state.delete(movement);
+        self.text_changed(cx);
+    }
+
+    fn history_step_taken(&mut self, cx: &mut Context<Self>) {
         self.selection_drag = None;
-        self.last_layout = None;
-        self.emit_changed(cx);
-        cx.notify();
-    }
-
-    fn replace_text_recording(
-        &mut self,
-        before: InputText,
-        range_utf16: Option<&Range<usize>>,
-        new_text: &str,
-        cx: &mut Context<Self>,
-    ) {
-        self.text.replace_text(range_utf16, new_text);
-        self.history.record_replacement(before, &self.text);
-        self.last_layout = None;
-        self.emit_changed(cx);
-        cx.notify();
+        self.text_changed(cx);
     }
 
     fn move_text(&mut self, movement: TextMovement, select: bool, cx: &mut Context<Self>) {
-        self.text.move_cursor(movement, select);
+        self.state.text.move_cursor(movement, select);
         cx.notify();
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
-        if self.text.content.is_empty() {
+        if self.state.text.content.is_empty() {
             return 0;
         }
 
@@ -525,7 +590,7 @@ impl InputField {
             return 0;
         }
         if position.y > bounds.bottom() {
-            return self.text.content.len();
+            return self.state.text.content.len();
         }
         line.closest_index_for_x(position.x - bounds.left() + self.horizontal_scroll)
     }
@@ -582,38 +647,19 @@ impl InputField {
     }
 
     fn backspace(&mut self, _: &FieldBackspace, _window: &mut Window, cx: &mut Context<Self>) {
-        let before = self.text.clone();
-        if self.text.selected_range.is_empty() {
-            self.text
-                .select_to(self.text.movement_target(TextMovement::PreviousGrapheme));
-        }
-        self.replace_text_recording(before, None, "", cx);
+        self.delete_toward(TextMovement::PreviousGrapheme, cx);
     }
 
     fn delete(&mut self, _: &FieldDelete, _window: &mut Window, cx: &mut Context<Self>) {
-        let before = self.text.clone();
-        if self.text.selected_range.is_empty() {
-            self.text
-                .select_to(self.text.movement_target(TextMovement::NextGrapheme));
-        }
-        self.replace_text_recording(before, None, "", cx);
+        self.delete_toward(TextMovement::NextGrapheme, cx);
     }
 
     fn delete_word_left(&mut self, _: &FieldDeleteWordLeft, _window: &mut Window, cx: &mut Context<Self>) {
-        let before = self.text.clone();
-        if self.text.selected_range.is_empty() {
-            self.text
-                .select_to(self.text.movement_target(TextMovement::PreviousWord));
-        }
-        self.replace_text_recording(before, None, "", cx);
+        self.delete_toward(TextMovement::PreviousWord, cx);
     }
 
     fn delete_word_right(&mut self, _: &FieldDeleteWordRight, _window: &mut Window, cx: &mut Context<Self>) {
-        let before = self.text.clone();
-        if self.text.selected_range.is_empty() {
-            self.text.select_to(self.text.movement_target(TextMovement::NextWord));
-        }
-        self.replace_text_recording(before, None, "", cx);
+        self.delete_toward(TextMovement::NextWord, cx);
     }
 
     fn paste(&mut self, _: &FieldPaste, window: &mut Window, cx: &mut Context<Self>) {
@@ -623,27 +669,25 @@ impl InputField {
     }
 
     fn copy(&mut self, _: &FieldCopy, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.text.selected_text() {
+        if let Some(text) = self.state.text.selected_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
     fn cut(&mut self, _: &FieldCut, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.text.selected_text() {
+        if let Some(text) = self.state.text.selected_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
             self.replace_text_in_range(None, "", window, cx);
         }
     }
     fn undo(&mut self, _: &FieldUndo, _: &mut Window, cx: &mut Context<Self>) {
-        self.finish_composition_for_history();
-        if let Some(snapshot) = self.history.undo(self.text.clone()) {
-            self.restore_history_snapshot(snapshot, cx);
+        if self.state.undo() {
+            self.history_step_taken(cx);
         }
     }
     fn redo(&mut self, _: &FieldRedo, _: &mut Window, cx: &mut Context<Self>) {
-        self.finish_composition_for_history();
-        if let Some(snapshot) = self.history.redo(self.text.clone()) {
-            self.restore_history_snapshot(snapshot, cx);
+        if self.state.redo() {
+            self.history_step_taken(cx);
         }
     }
     fn submit(&mut self, _: &FieldSubmit, _: &mut Window, cx: &mut Context<Self>) {
@@ -679,18 +723,18 @@ impl InputField {
             return;
         }
         if event.click_count == 2 {
-            let range = self.text.word_range_at_offset(offset);
+            let range = self.state.text.word_range_at_offset(offset);
             self.start_drag_selection(InputDragSelectionMode::Word(range.clone()));
-            self.text.select_range(range, false);
+            self.state.text.select_range(range, false);
             cx.notify();
             return;
         }
 
         self.start_drag_selection(InputDragSelectionMode::Character);
         if event.modifiers.shift {
-            self.text.select_to(offset);
+            self.state.text.select_to(offset);
         } else {
-            self.text.move_to(offset);
+            self.state.text.move_to(offset);
         }
         cx.notify();
     }
@@ -728,13 +772,13 @@ impl InputField {
         let offset = self.index_for_mouse_position(event.position);
         match self.selection_drag.clone() {
             Some(InputDragSelectionMode::Character) => {
-                self.text.select_to(offset);
+                self.state.text.select_to(offset);
                 cx.notify();
             }
             Some(InputDragSelectionMode::Word(anchor)) => {
-                let current = self.text.word_range_at_offset(offset);
+                let current = self.state.text.word_range_at_offset(offset);
                 let (range, reversed) = drag_selection_range(anchor, current);
-                self.text.select_range(range, reversed);
+                self.state.text.select_range(range, reversed);
                 cx.notify();
             }
             Some(InputDragSelectionMode::All) => self.select_all(cx),
@@ -753,9 +797,9 @@ impl EntityInputHandler for InputField {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let range = self.text.range_from_utf16(&range_utf16);
-        actual_range.replace(self.text.range_to_utf16(&range));
-        Some(self.text.content[range].to_string())
+        let range = self.state.text.range_from_utf16(&range_utf16);
+        actual_range.replace(self.state.text.range_to_utf16(&range));
+        Some(self.state.text.content[range].to_string())
     }
 
     fn selected_text_range(
@@ -765,21 +809,21 @@ impl EntityInputHandler for InputField {
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: self.text.range_to_utf16(&self.text.selected_range),
-            reversed: self.text.selection_reversed,
+            range: self.state.text.range_to_utf16(&self.state.text.selected_range),
+            reversed: self.state.text.selection_reversed,
         })
     }
 
     fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
-        self.text
+        self.state
+            .text
             .marked_range
             .as_ref()
-            .map(|range| self.text.range_to_utf16(range))
+            .map(|range| self.state.text.range_to_utf16(range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.text.marked_range = None;
-        self.history.finish_composition(&self.text);
+        self.state.commit_composition();
     }
 
     fn replace_text_in_range(
@@ -789,8 +833,8 @@ impl EntityInputHandler for InputField {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let before = self.text.clone();
-        self.replace_text_recording(before, range_utf16.as_ref(), new_text, cx);
+        self.state.replace(range_utf16.as_ref(), new_text);
+        self.text_changed(cx);
     }
 
     fn replace_and_mark_text_in_range(
@@ -801,13 +845,9 @@ impl EntityInputHandler for InputField {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let before = self.text.clone();
-        self.text
-            .replace_and_mark_text(range_utf16.as_ref(), new_text, new_selected_range_utf16.as_ref());
-        self.history.begin_composition(before, &self.text);
-        self.last_layout = None;
-        self.emit_changed(cx);
-        cx.notify();
+        self.state
+            .compose(range_utf16.as_ref(), new_text, new_selected_range_utf16.as_ref());
+        self.text_changed(cx);
     }
 
     fn bounds_for_range(
@@ -818,7 +858,7 @@ impl EntityInputHandler for InputField {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let last_layout = self.last_layout.as_ref()?;
-        let range = self.text.range_from_utf16(&range_utf16);
+        let range = self.state.text.range_from_utf16(&range_utf16);
         Some(Bounds::from_corners(
             point(
                 bounds.left() + last_layout.x_for_index(range.start) - self.horizontal_scroll,
@@ -840,7 +880,7 @@ impl EntityInputHandler for InputField {
         let line_point = self.last_bounds?.localize(&point)?;
         let last_layout = self.last_layout.as_ref()?;
         let utf8_index = last_layout.index_for_x(point.x - line_point.x + self.horizontal_scroll)?;
-        Some(self.text.offset_to_utf16(utf8_index))
+        Some(self.state.text.offset_to_utf16(utf8_index))
     }
 }
 
@@ -900,10 +940,10 @@ impl Element for TextElement {
     ) -> Self::PrepaintState {
         let theme = current_theme(cx);
         let input = self.input.read(cx);
-        let content = input.text.content.clone();
+        let content = input.state.text.content.clone();
         let content_is_empty = content.is_empty();
-        let selected_range = input.text.selected_range.clone();
-        let cursor = input.text.cursor_offset();
+        let selected_range = input.state.text.selected_range.clone();
+        let cursor = input.state.text.cursor_offset();
 
         let (display_text, text_color) = if content_is_empty {
             (input.placeholder.clone(), rgb(theme.role.text_muted))
@@ -919,7 +959,7 @@ impl Element for TextElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = if let Some(marked_range) = input.text.marked_range.as_ref() {
+        let runs = if let Some(marked_range) = input.state.text.marked_range.as_ref() {
             vec![
                 TextRun {
                     len: marked_range.start,
@@ -1123,90 +1163,64 @@ impl Render for InputField {
 mod tests {
     use super::*;
 
-    fn type_text(history: &mut InputHistory, text: &mut InputText, inserted: &str) {
-        let before = text.clone();
-        text.replace_text(None, inserted);
-        history.record_replacement(before, text);
-    }
-
     #[test]
-    fn local_history_undoes_and_redoes_text_without_recording_cursor_motion() {
-        let mut text = InputText::new();
-        let mut history = InputHistory::default();
-        type_text(&mut history, &mut text, "a");
-        type_text(&mut history, &mut text, "b");
-        assert_eq!(text.content.as_ref(), "ab");
-        assert_eq!(history.undo_stack.len(), 2);
+    fn undo_restores_the_text_and_caret_of_each_edit() {
+        let mut state = InputState::new();
+        state.replace(None, "a");
+        state.replace(None, "b");
+        assert_eq!(state.text.content.as_ref(), "ab");
 
-        text.move_to(0);
-        assert_eq!(history.undo_stack.len(), 2, "cursor movement is not an edit");
-        text = history.undo(text.clone()).expect("second typing edit is undoable");
-        assert_eq!(text.content.as_ref(), "a");
-        assert_eq!(text.selected_range, 1..1);
-        text = history.redo(text.clone()).expect("undone typing edit is redoable");
-        assert_eq!(text.content.as_ref(), "ab");
+        state.text.move_to(0);
+        assert!(state.undo());
+        assert_eq!(state.text.content.as_ref(), "a");
+        assert_eq!(state.text.selected_range, 1..1);
+        assert!(state.redo());
+        assert_eq!(state.text.content.as_ref(), "ab");
+        assert!(!state.redo());
     }
 
     #[test]
     fn local_history_is_bounded() {
-        let mut text = InputText::new();
-        let mut history = InputHistory::default();
+        let mut state = InputState::new();
         for _ in 0..INPUT_HISTORY_LIMIT + 20 {
-            type_text(&mut history, &mut text, "x");
+            state.replace(None, "x");
         }
-        assert_eq!(history.undo_stack.len(), INPUT_HISTORY_LIMIT);
-
         let mut undo_count = 0;
-        while let Some(snapshot) = history.undo(text.clone()) {
-            text = snapshot;
+        while state.undo() {
             undo_count += 1;
         }
         assert_eq!(undo_count, INPUT_HISTORY_LIMIT);
+        assert_eq!(state.text.content.len(), 20);
     }
 
     #[test]
     fn delete_history_restores_the_caret_before_the_temporary_delete_selection() {
-        let mut text = InputText::new();
-        assert!(text.set_text("ab"));
-        let mut history = InputHistory::default();
-        let before = text.clone();
-        text.select_to(text.movement_target(TextMovement::PreviousGrapheme));
-        text.replace_text(None, "");
-        history.record_replacement(before, &text);
-        assert_eq!(text.content.as_ref(), "a");
+        let mut state = InputState::new();
+        assert!(state.set_text("ab"));
+        state.delete(TextMovement::PreviousGrapheme);
+        assert_eq!(state.text.content.as_ref(), "a");
 
-        text = history.undo(text.clone()).expect("backspace is undoable");
-        assert_eq!(text.content.as_ref(), "ab");
-        assert_eq!(text.selected_range, 2..2);
+        assert!(state.undo());
+        assert_eq!(state.text.content.as_ref(), "ab");
+        assert_eq!(state.text.selected_range, 2..2);
     }
 
     #[test]
     fn ime_updates_form_one_committed_history_step() {
-        let mut text = InputText::new();
-        assert!(text.set_text("pre"));
-        let mut history = InputHistory::default();
+        let mut state = InputState::new();
+        assert!(state.set_text("pre"));
+        state.compose(None, "x", None);
+        state.compose(None, "xy", None);
+        assert_eq!(state.text.content.as_ref(), "prexy");
+        assert_eq!(state.text.marked_range, Some(3..5));
 
-        let before = text.clone();
-        text.replace_and_mark_text(None, "x", None);
-        history.begin_composition(before, &text);
-        let intermediate = text.clone();
-        text.replace_and_mark_text(None, "xy", None);
-        history.begin_composition(intermediate, &text);
-        assert_eq!(text.content.as_ref(), "prexy");
-        assert_eq!(text.marked_range, Some(3..5));
-        assert!(
-            history.undo_stack.is_empty(),
-            "composition is not committed per IME tick"
-        );
-
-        text.marked_range = None;
-        history.finish_composition(&text);
-        assert_eq!(history.undo_stack.len(), 1);
-        text = history.undo(text.clone()).expect("committed composition is undoable");
-        assert_eq!(text.content.as_ref(), "pre");
-        text = history.redo(text.clone()).expect("committed composition is redoable");
-        assert_eq!(text.content.as_ref(), "prexy");
-        assert_eq!(text.marked_range, None);
+        state.commit_composition();
+        assert!(state.undo());
+        assert_eq!(state.text.content.as_ref(), "pre");
+        assert!(!state.undo(), "composition is not committed per IME tick");
+        assert!(state.redo());
+        assert_eq!(state.text.content.as_ref(), "prexy");
+        assert_eq!(state.text.marked_range, None);
     }
 
     #[test]
