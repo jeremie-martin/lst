@@ -17,8 +17,9 @@ selected directly or used by the app's integration tests.
 
 `vendor/gpui` carries documented platform/rendering changes. A narrow upstream
 backport in `vendor/blade-graphics` lets GPUI decline unused Vulkan ray-tracing
-capabilities. Each vendor directory records its exact diff, rationale, and
-removal criteria in `lst.patch` and `LST_PATCHES.md`.
+capabilities. `vendor/tree-sitter` makes `changed_ranges` stop descending into
+every subtree it skips. Each vendor directory records its exact diff,
+rationale, and removal criteria in `lst.patch` and `LST_PATCHES.md`.
 
 ## Runtime data flow
 

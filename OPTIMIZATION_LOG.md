@@ -190,3 +190,31 @@ queries made while the device is created do not pre-pay the swapchain cost.
 lst's first present (median 172 ms) is 10–30 ms above that floor, which is
 app construction plus the first frame; the rest is driver work that any
 Vulkan client pays.
+
+### Keystroke parse cost: where it goes
+
+`latency-typing` spends ~2.3 ms of its ~4.4 ms key-to-frame-end in
+`TabSyntaxState::update`, against 0.33 ms for the same edits back to back.
+A standalone tree-sitter probe reproduces both numbers: with a 70 ms pause
+before each edit, pinned to a P-core, the parse is 7× slower, i.e. caches
+emptied by deep C-states while idle, not app code. A background parse was
+rejected in an earlier session (a frame with stale highlights), and I agree.
+
+Instead, less memory touched per edit. `Tree::changed_ranges` costs as much as
+the incremental parse (0.115 ms hot, 0.68 ms cold, on the 660 KB corpus) and
+nearly all of it is `ts_subtree_last_external_token`, run eagerly for every
+subtree the diff skips. `vendor/tree-sitter` resolves it only when a
+comparison needs it (exact; differentially fuzzed on nine grammars):
+0.115 → 0.050 ms hot, 0.68 → 0.30 ms cold. tree-sitter 0.27.0 is no faster.
+
+Interleaved A/B on `:0` (9 samples per variant, base `87f85a7`):
+typing key-to-frame-end 4.43 → 3.94 ms, key-to-paint p50 7.38 → 7.04 ms;
+typing-large 0.962 → 0.879 ms/char; typing-medium 0.787 → 0.759 ms/char;
+edit-navigation unchanged.
+
+Other checks this session, no change made:
+- Mixed paste (71 ms): 55 ms is reading 3 MB from xclip, which offers it in
+  4000-byte INCR chunks (746 lock-step round trips, 15–61 ms depending on
+  core wake-ups); GPUI's reader already waits on its socket.
+- Patch ledger: each GPUI/Blade patch still has its measured reason; the
+  ray-tracing opt-out saves ~20 ms of device creation on the critical path.

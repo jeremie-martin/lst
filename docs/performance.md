@@ -134,13 +134,14 @@ or pull request that uses them.
 the baselines they were compared against, and the framework and driver
 behaviour that bounds what the app can improve.
 
-## Patched GPUI
+## Patched dependencies
 
 The workspace builds against `vendor/gpui`, the gpui 0.2.2 release with the
 platform and rendering patches listed in `vendor/gpui/LST_PATCHES.md`. The
 workspace also backports Blade's explicit Vulkan ray-tracing opt-in; GPUI
-uses raster rendering only (see `vendor/blade-graphics/LST_PATCHES.md`). Each
-patch records the measurement that motivated it; re-measure with the
+uses raster rendering only (see `vendor/blade-graphics/LST_PATCHES.md`).
+`vendor/tree-sitter` makes `changed_ranges` cheaper without changing its
+result (see `vendor/tree-sitter/LST_PATCHES.md`). Each patch records the measurement that motivated it; re-measure with the
 `[patch.crates-io]` section of the root `Cargo.toml` removed to compare
 against the unpatched release.
 

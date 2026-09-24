@@ -29,8 +29,10 @@ inherits = "release"
 debug = 1
 strip = false
 
-# Measured platform/rendering patches and a narrow upstream Blade backport.
-# See each vendored crate's LST_PATCHES.md for rationale and removal criteria.
+# Measured platform/rendering patches, a narrow upstream Blade backport, and a
+# tree-sitter changed-ranges fix. See each vendored crate's LST_PATCHES.md for
+# rationale and removal criteria.
 [patch.crates-io]
 gpui = { path = "vendor/gpui" }
 blade-graphics = { path = "vendor/blade-graphics" }
+tree-sitter = { path = "vendor/tree-sitter" }

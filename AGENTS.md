@@ -13,9 +13,10 @@ GPUI application; the repository root is only a Cargo workspace.
   DeepSeek client.
 - `crates/lst-x11-harness` drives the production app with real X11 input. It is
   a workspace member but is excluded from `default-members`.
-- `vendor/gpui` is the pinned gpui release with lst's patches, selected through
-  `[patch.crates-io]`. Keep every change there marked `lst patch`, described in
-  `vendor/gpui/LST_PATCHES.md`, and reflected in `vendor/gpui/lst.patch`.
+- `vendor/gpui`, `vendor/blade-graphics`, and `vendor/tree-sitter` are pinned
+  releases with lst's patches, selected through `[patch.crates-io]`. Keep every
+  change there marked `lst patch`, described in the directory's
+  `LST_PATCHES.md`, and reflected in its `lst.patch`.
 
 Put editor-domain behavior in `lst-editor`. Keep operating-system and framework
 work at the app boundary. Read [Architecture](docs/architecture.md) before
