@@ -85,13 +85,20 @@ pub fn for_each_rope_line(buffer: &Rope, mut visit: impl FnMut(usize, &str)) {
     // Ropey chunks end at character boundaries and never split CRLF pairs.
     let mut partial_line = String::new();
     for chunk in buffer.chunks() {
+        // Prove once per chunk that LF is its only possible line separator.
+        // Keep Ropey's parser for CRLF, other ASCII breaks, and Unicode.
+        let lf_only = chunk.is_ascii() && memchr::memchr3(b'\r', b'\x0b', b'\x0c', chunk.as_bytes()).is_none();
         let ends_with_break = chunk.char_indices().next_back().is_some_and(|(start, _)| {
             let tail = &chunk[start..];
             ropey::str_utils::byte_to_line_idx(tail, tail.len()) != 0
         });
         let mut remaining = chunk;
         while !remaining.is_empty() {
-            let end = ropey::str_utils::line_to_byte_idx(remaining, 1);
+            let end = if lf_only {
+                memchr::memchr(b'\n', remaining.as_bytes()).map_or(remaining.len(), |newline| newline + 1)
+            } else {
+                ropey::str_utils::line_to_byte_idx(remaining, 1)
+            };
             let complete = end < remaining.len() || ends_with_break;
             let (line, rest) = remaining.split_at(end);
             if complete && partial_line.is_empty() {
@@ -140,6 +147,13 @@ mod tests {
         };
         for text in fragments {
             check(&Rope::from_str(text));
+        }
+        for text in [
+            "alpha\nbeta\n".repeat(4096),
+            "a".repeat(4096),
+            format!("{}界\r\n{}\u{2028}tail", "ascii\n".repeat(512), "more\n".repeat(512)),
+        ] {
+            check(&Rope::from_str(&text));
         }
         let mut buffer = Rope::from_str(&"alpha界\r\nbeta\u{2028}gamma\n".repeat(128));
         for step in 0..1024 {

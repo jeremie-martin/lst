@@ -520,3 +520,19 @@ in [the historical log](docs/optimization-history.md).
   query indexing rises ~0.75 -> 1.23 ms from recognizing all document boundaries.
   A separate measured iterator improvement follows; correctness is retained
   independently of that optimization.
+
+### Prove LF-only chunks once before visiting their lines
+
+- The shared visitor now checks each chunk once for ASCII text without CR,
+  VT or FF. Proven LF-only chunks use `memchr`; all others retain Ropey's exact
+  separator parser. This keeps one line-assembly path and adds no cached state.
+- Alternating isolated 50,691-line query runs return to ~0.81 ms, versus ~0.82
+  before the find boundary fix and ~1.23 ms with the general visitor. A direct
+  traversal probe falls ~0.94 -> 0.36 ms and verifies every line against Ropey.
+- Five production physical-display queries per variant: correct general
+  visitor **1.552 -> 1.196 ms** indexing, process CPU **80 -> 60 ms**. Opening
+  the 500,000-line document has no established whole-startup improvement:
+  first-frame medians **199.106 -> 200.601 ms**; retain for measured scan cost.
+- All-features tests and Clippy pass. Equivalence covers long ASCII lines,
+  multiple ASCII chunks, mixed Unicode/ASCII chunks, every separator and 1,024
+  fragmented edits. Vendor patch reverse-application checks also pass.
