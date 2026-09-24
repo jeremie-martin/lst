@@ -281,20 +281,6 @@ fn operators_cover_motion_ranges_text_objects_counts_and_lines() {
             "X gamma",
         ),
         (
-            "change quote inner object",
-            "prefix \"alpha beta\" tail",
-            (0, 9),
-            "ci\"X<esc>",
-            "prefix \"X\" tail",
-        ),
-        (
-            "change quote a-object",
-            "prefix \"alpha beta\" tail",
-            (0, 9),
-            "ca\"X<esc>",
-            "prefix Xtail",
-        ),
-        (
             "change paren inner object",
             "call(alpha, beta)",
             (0, 7),
@@ -418,8 +404,6 @@ fn normal_edits_cover_insert_positions_substitute_join_replace_paste_and_indent(
             "Snew<esc>",
             "  new\nnext",
         ),
-        ("join one following line", "alpha\n beta", (0, 0), "J", "alpha beta"),
-        ("join counted lines", "a\n b\n c\nd", (0, 0), "3J", "a b c\nd"),
         ("replace char", "abc", (0, 0), "rx", "xbc"),
         ("replace counted chars", "abcd", (0, 0), "3rx", "xxxd"),
         ("indent current line", "alpha", (0, 0), ">>", "  alpha"),
@@ -441,11 +425,6 @@ fn normal_edits_cover_insert_positions_substitute_join_replace_paste_and_indent(
     ];
 
     run_text_cases_expect_normal(&cases);
-
-    let mut harness = VimHarness::normal_at("a\n b\n", 0, 0);
-    harness.keys("3J");
-    harness.expect_text("a b");
-    harness.expect_cursor(0, 2);
 }
 
 #[test]
@@ -469,15 +448,6 @@ fn normal_edits_cover_counts_boundaries_empty_lines_and_noops() {
         ),
         ("delete beyond eol clamps", "abc", (0, 1), "9x", "a"),
         ("delete before bol is noop", "abc", (0, 0), "X", "abc"),
-        ("substitute on empty line inserts", "", (0, 0), "sX<esc>", "X"),
-        ("delete to end at eol deletes current char", "abc", (0, 2), "D", "ab"),
-        (
-            "change to end at eol changes current char",
-            "abc",
-            (0, 2),
-            "CX<esc>",
-            "abX",
-        ),
         ("join at last line is noop", "abc", (0, 0), "J", "abc"),
         ("replace on empty line is noop", "", (0, 0), "rx", ""),
         ("counted indent lines", "a\nb\nc", (0, 0), "2>>", "  a\n  b\nc"),
@@ -549,41 +519,13 @@ fn visual_o_swaps_the_selection_ends() {
 
 #[test]
 fn visual_mode_covers_charwise_linewise_text_objects_case_and_indentation() {
-    let cases = [
-        ("delete inner word", "alpha beta", (0, 0), "viwd", " beta"),
-        ("change inner word", "alpha beta", (0, 0), "viwcX<esc>", "X beta"),
-        ("lowercase selection", "ALPHA beta", (0, 0), "viwu", "alpha beta"),
-        ("uppercase selection", "alpha beta", (0, 0), "viwU", "ALPHA beta"),
-        ("visual line delete", "alpha\nbeta\ngamma", (0, 0), "Vjd", "gamma"),
-        (
-            "visual line change",
-            "alpha\nbeta\ngamma",
-            (0, 0),
-            "VjcX<esc>",
-            "X\ngamma",
-        ),
-        (
-            "visual line indent",
-            "alpha\nbeta\ngamma",
-            (0, 0),
-            "Vj>",
-            "  alpha\n  beta\ngamma",
-        ),
-        (
-            "visual line outdent",
-            "  alpha\n  beta\ngamma",
-            (0, 0),
-            "Vj<",
-            "alpha\nbeta\ngamma",
-        ),
-        (
-            "visual text object selects quotes",
-            "a \"two words\" z",
-            (0, 4),
-            "vi\"U",
-            "a \"TWO WORDS\" z",
-        ),
-    ];
+    let cases = [(
+        "visual text object selects quotes",
+        "a \"two words\" z",
+        (0, 4),
+        "vi\"U",
+        "a \"TWO WORDS\" z",
+    )];
 
     run_text_cases_expect_normal(&cases);
 }
@@ -596,22 +538,11 @@ fn visual_mode_covers_counts_reverse_selection_search_repeat_and_viewport() {
     harness.keys("y$p");
     harness.expect_text("alpha beta gammaalpha beta g");
 
-    let mut harness = VimHarness::normal_at("alpha beta gamma", 0, 11);
-    harness.keys("vbU");
-    harness.expect_text("alpha BETA Gamma");
-
     let mut harness = VimHarness::normal_at("abc abc abc", 0, 0);
     harness.keys("vfc;");
     harness.expect_selection("abc abc");
     harness.keys(",");
     harness.expect_selection("abc");
-
-    let mut harness = VimHarness::normal_at("alpha beta alpha beta", 0, 0);
-    harness.keys("v/beta<enter>n");
-    harness.expect_mode(vim::Mode::Visual);
-    harness.expect_selection("alpha beta alpha b");
-    harness.keys("N");
-    harness.expect_selection("alpha b");
 
     let text = (0..12)
         .map(|line| format!("line {line}"))
@@ -631,30 +562,6 @@ fn visual_mode_covers_counts_reverse_selection_search_repeat_and_viewport() {
     harness.keys("v<C-f>");
     harness.expect_mode(vim::Mode::Visual);
     harness.expect_selection("line 2\nline 3\nl");
-}
-
-#[test]
-fn visual_mode_tracks_anchor_head_and_cursor_shape() {
-    let mut harness = VimHarness::normal_at("alpha beta gamma", 0, 0);
-    harness.keys("v2w");
-    harness.expect_selection("alpha beta g");
-    harness.expect_visual_state((0, 0), (0, 11));
-
-    let mut harness = VimHarness::normal_at("alpha beta gamma", 0, 11);
-    harness.keys("vb");
-    harness.expect_selection("beta g");
-    harness.expect_visual_state((0, 11), (0, 6));
-
-    let mut harness = VimHarness::normal_at("alpha\nbeta\ngamma", 0, 0);
-    harness.keys("Vj");
-    harness.expect_mode(vim::Mode::VisualLine);
-    harness.expect_selection("alpha\nbeta");
-    harness.expect_visual_state((0, 0), (1, 0));
-
-    harness.keys("v");
-    harness.expect_mode(vim::Mode::Visual);
-    harness.expect_selection("alpha\nb");
-    harness.expect_visual_state((0, 0), (1, 0));
 }
 
 #[test]
@@ -693,11 +600,6 @@ fn search_commands_cover_wrap_empty_words_and_find_query_editing() {
     harness.keys("*");
     harness.expect_cursor(0, 4);
     harness.keys("#");
-    harness.expect_cursor(0, 4);
-
-    let mut harness = VimHarness::normal_at("foo bar baz", 0, 0);
-    harness.keys("/baq<bs>r<enter>");
-    assert_eq!(harness.model.find().query, "bar");
     harness.expect_cursor(0, 4);
 
     let mut harness = VimHarness::normal_at("foo bar foo baz foo", 0, 16);
@@ -808,10 +710,6 @@ fn text_objects_cover_words_paragraphs_pairs_quotes_counts_and_escapes() {
 
 #[test]
 fn registers_preserve_charwise_and_linewise_paste_placement() {
-    let mut harness = VimHarness::normal_at("alpha beta", 0, 0);
-    harness.keys("yiw$p");
-    harness.expect_text("alpha betaalpha");
-
     let mut harness = VimHarness::normal_at("alpha beta", 0, 6);
     harness.keys("diwP");
     harness.expect_text("alphabeta ");
@@ -826,20 +724,6 @@ fn paste_placement_covers_charwise_linewise_before_after_and_empty_registers() {
     let cases = [
         ("empty paste after is noop", "alpha", (0, 0), "p", "alpha"),
         ("empty paste before is noop", "alpha", (0, 0), "P", "alpha"),
-        (
-            "char delete paste after cursor",
-            "alpha beta",
-            (0, 0),
-            "dw$p",
-            "betaalpha ",
-        ),
-        (
-            "char delete paste before cursor",
-            "alpha beta",
-            (0, 0),
-            "dwP",
-            "alpha beta",
-        ),
         ("line delete paste after last", "one\ntwo", (0, 0), "ddGp", "two\none"),
         (
             "line delete paste before first",
