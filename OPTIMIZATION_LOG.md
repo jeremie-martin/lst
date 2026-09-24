@@ -503,3 +503,20 @@ in [the historical log](docs/optimization-history.md).
   Eight viewport X11 cases passed with this layout plus the subsequently
   rejected font experiment; the final combined checkpoint will cover the
   retained synchronous-font implementation.
+
+### Use document line boundaries for find and replacement
+
+- Found an actual indexing bug: find split only on LF while document positions
+  also recognize lone CR, VT, FF, NEL, LS and PS. Matches after these separators
+  could navigate to unrelated text and replacement used incorrect positions.
+  Use the shared document-line visitor and existing display-text trimming.
+- A new real-app test fails on the previous production binary at the first
+  lone CR. The fix passes navigation across all eight separator forms, copying
+  the navigated word, and exact Replace All output preserving separators.
+  The other 16 focused find/selection-replacement cases pass. The first new
+  clipboard assertion incorrectly assumed closing find selected the match;
+  corrected it to explicitly select the word without changing app behavior.
+- Source tests and Clippy pass. On the 50,691-line Rust corpus, isolated full
+  query indexing rises ~0.75 -> 1.23 ms from recognizing all document boundaries.
+  A separate measured iterator improvement follows; correctness is retained
+  independently of that optimization.

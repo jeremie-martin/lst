@@ -517,34 +517,11 @@ fn expand_match_replacement(regex: &Regex, line: &str, byte_start_in_line: usize
     template.to_string()
 }
 
-/// Visits lines with the same terminator semantics as `str::lines` without
-/// flattening the whole rope. Lines wholly contained in one rope chunk stay
-/// borrowed; only a line crossing a chunk boundary uses the carry buffer.
+/// Search the same logical lines and display text used by document positions.
 fn for_each_text_line(buffer: &Rope, mut visit: impl FnMut(usize, &str)) {
-    let mut carry = String::new();
-    let mut line_index = 0usize;
-    for chunk in buffer.chunks() {
-        let mut rest = chunk;
-        while let Some(newline) = rest.find('\n') {
-            let part = &rest[..newline];
-            if carry.is_empty() {
-                visit(line_index, part.strip_suffix('\r').unwrap_or(part));
-            } else {
-                carry.push_str(part);
-                if carry.ends_with('\r') {
-                    carry.pop();
-                }
-                visit(line_index, &carry);
-                carry.clear();
-            }
-            line_index += 1;
-            rest = &rest[newline + 1..];
-        }
-        carry.push_str(rest);
-    }
-    if !carry.is_empty() {
-        visit(line_index, &carry);
-    }
+    crate::for_each_rope_line(buffer, |index, line| {
+        visit(index, line.trim_end_matches(['\n', '\r']));
+    });
 }
 
 /// Scans `text` for every (optionally case-insensitive) occurrence of the
@@ -619,16 +596,16 @@ mod tests {
     }
 
     #[test]
-    fn rope_line_iteration_matches_str_across_chunk_boundaries() {
+    fn find_lines_use_document_boundaries_and_display_terminators() {
         let long = "x".repeat(4_096);
-        let text = format!("first\r\n{long}\n\nlone carriage\rreturn\nlast");
+        let text = format!("first\r\n{long}\n\nlone carriage\rreturn\u{b}vt\u{c}ff\u{85}nel\u{2028}ls\u{2029}last\n");
         let rope = Rope::from_str(&text);
         let mut actual = Vec::new();
         for_each_text_line(&rope, |index, line| actual.push((index, line.to_string())));
-        let expected = text
+        let expected = rope
             .lines()
             .enumerate()
-            .map(|(index, line)| (index, line.to_string()))
+            .map(|(index, line)| (index, line.to_string().trim_end_matches(['\n', '\r']).to_string()))
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }

@@ -2,8 +2,39 @@
 
 mod support;
 
-use lst_x11_harness::{clipboard::write_clipboard_text, Selection};
+use lst_x11_harness::{
+    clipboard::{wait_clipboard_text, write_clipboard_text},
+    Selection,
+};
 use support::{secs, EditorTestExt, FindChip, TestResult};
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn find_navigates_and_replaces_after_every_document_line_separator() -> TestResult {
+    support::run_x11_test("find-document-line-separators", |session| {
+        let separators = ["\r", "\r\n", "\n", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"];
+        let mut text = String::from("prefix");
+        for separator in separators {
+            text.push_str(separator);
+            text.push_str("needle");
+        }
+        let path = session.seed_file("line-separators.txt", &text)?;
+        let mut editor = session.open_file("find-line-separators", &path)?;
+        editor.keys("<C-f>needle")?;
+        editor.expect_find_state("needle", separators.len())?;
+        for line in 1..=separators.len() {
+            editor.expect_cursor_heads(&[(line, 0)])?;
+            if line != separators.len() {
+                editor.keys("<enter>")?;
+            }
+        }
+        editor.keys("<esc><S-end><C-c>")?;
+        wait_clipboard_text(Selection::Clipboard, "needle", secs(5))?;
+        editor.keys("<C-h><C-a>needle<tab>found<C-A-enter>")?;
+        editor.save_then_expect_file(&path, &text.replace("needle", "found"))?;
+        Ok(())
+    })
+}
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
