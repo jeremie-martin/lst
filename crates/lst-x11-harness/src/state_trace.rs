@@ -29,7 +29,6 @@ pub struct StateTraceRecord {
     pub line_count: usize,
     pub cursors: Vec<TraceCursor>,
     pub primary_cursor_index: usize,
-    pub marked_range: Option<TraceRange>,
     #[serde(default)]
     pub input_mode: String,
     pub vim_mode: String,
@@ -187,8 +186,6 @@ pub struct TraceEditorPolish {
     #[serde(default)]
     pub match_brackets: String,
     #[serde(default)]
-    pub bracket_pair_colorization: bool,
-    #[serde(default)]
     pub bracket_pair_guides: String,
     #[serde(default)]
     pub bracket_pair_horizontal_guides: String,
@@ -202,10 +199,6 @@ pub struct TraceEditorPolish {
     pub render_control_characters: bool,
     #[serde(default)]
     pub rulers: Vec<u16>,
-    #[serde(default)]
-    pub smart_select_subwords: bool,
-    #[serde(default)]
-    pub smart_select_include_whitespace: bool,
     #[serde(default)]
     pub multi_cursor_limit: usize,
 }
@@ -234,8 +227,6 @@ pub struct TraceViewport {
     pub bracket_matches: Vec<TraceRange>,
     #[serde(default)]
     pub structural_pair_count: usize,
-    #[serde(default)]
-    pub unmatched_bracket_count: usize,
     #[serde(default)]
     pub guide_count: usize,
     #[serde(default)]

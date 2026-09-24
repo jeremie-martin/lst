@@ -104,6 +104,7 @@ fn append_record(path: &PathBuf, record: &StateTraceRecord) -> io::Result<()> {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(Default))]
 pub(crate) struct StateTraceRecord {
     pub schema_version: u32,
     pub seq: u64,
@@ -116,7 +117,6 @@ pub(crate) struct StateTraceRecord {
     pub line_count: usize,
     pub cursors: Vec<TraceCursor>,
     pub primary_cursor_index: usize,
-    pub marked_range: Option<TraceRange>,
     pub input_mode: &'static str,
     pub vim_mode: String,
     pub vim_pending: String,
@@ -160,6 +160,7 @@ pub(crate) struct StateTraceRecord {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[cfg_attr(test, derive(Default))]
 pub(crate) struct TraceQuitReviewItem {
     pub identity: String,
     pub decision: &'static str,
@@ -176,6 +177,7 @@ pub(crate) struct TraceFileConflictButtonBounds {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(Default))]
 pub(crate) struct TraceCursor {
     pub anchor_char: usize,
     pub head_char: usize,
@@ -186,12 +188,14 @@ pub(crate) struct TraceCursor {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(Default))]
 pub(crate) struct TraceRange {
     pub start: usize,
     pub end: usize,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(Default))]
 pub(crate) struct TraceFind {
     pub visible: bool,
     pub show_replace: bool,
@@ -207,9 +211,9 @@ pub(crate) struct TraceFind {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(Default))]
 pub(crate) struct TraceEditorPolish {
     pub match_brackets: &'static str,
-    pub bracket_pair_colorization: bool,
     pub bracket_pair_guides: &'static str,
     pub bracket_pair_horizontal_guides: &'static str,
     pub indent_guides: bool,
@@ -217,8 +221,6 @@ pub(crate) struct TraceEditorPolish {
     pub render_whitespace: &'static str,
     pub render_control_characters: bool,
     pub rulers: Vec<u16>,
-    pub smart_select_subwords: bool,
-    pub smart_select_include_whitespace: bool,
     pub multi_cursor_limit: usize,
 }
 
@@ -247,7 +249,6 @@ pub(crate) struct TraceViewport {
     pub selection_match_highlights: Vec<TraceRange>,
     pub bracket_matches: Vec<TraceRange>,
     pub structural_pair_count: usize,
-    pub unmatched_bracket_count: usize,
     pub guide_count: usize,
     pub whitespace_marker_count: usize,
     pub control_marker_count: usize,
@@ -255,6 +256,7 @@ pub(crate) struct TraceViewport {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(Default))]
 pub(crate) struct TraceRow {
     pub logical_line: usize,
     pub top_px: f32,
@@ -296,10 +298,6 @@ impl LstGpuiApp {
                 }
             })
             .collect::<Vec<_>>();
-        let marked_range = tab.marked_range().map(|r| TraceRange {
-            start: r.start,
-            end: r.end,
-        });
         let find = self.model.find();
         let status_message = self
             .cleanup_message
@@ -338,7 +336,6 @@ impl LstGpuiApp {
             line_count: tab.line_count(),
             cursors,
             primary_cursor_index: selection_set.primary_index(),
-            marked_range,
             input_mode: match self.model.input_mode() {
                 lst_editor::InputMode::Standard => "standard",
                 lst_editor::InputMode::Vim => "vim",
@@ -408,7 +405,6 @@ impl LstGpuiApp {
                     crate::settings::MatchBracketsSetting::Near => "near",
                     crate::settings::MatchBracketsSetting::Always => "always",
                 },
-                bracket_pair_colorization: self.settings.settings.editor.bracket_pair_colorization,
                 bracket_pair_guides: trace_guide_mode(self.settings.settings.editor.bracket_pair_guides),
                 bracket_pair_horizontal_guides: trace_guide_mode(
                     self.settings.settings.editor.bracket_pair_horizontal_guides,
@@ -424,8 +420,6 @@ impl LstGpuiApp {
                 },
                 render_control_characters: self.settings.settings.editor.render_control_characters,
                 rulers: self.settings.settings.editor.rulers.as_slice().to_vec(),
-                smart_select_subwords: self.settings.settings.editor.smart_select_subwords,
-                smart_select_include_whitespace: self.settings.settings.editor.smart_select_include_whitespace,
                 multi_cursor_limit: self.settings.settings.editor.multi_cursor_limit,
             },
             word_wrap_enabled: self.model.show_wrap(),
@@ -606,7 +600,6 @@ impl LstGpuiApp {
                 })
                 .collect(),
             structural_pair_count: geometry.structural_pair_count,
-            unmatched_bracket_count: geometry.unmatched_bracket_count,
             guide_count: geometry.guide_count,
             whitespace_marker_count: geometry.whitespace_marker_count,
             control_marker_count: geometry.control_marker_count,
@@ -632,4 +625,55 @@ fn trace_bounds(bounds: Option<Bounds<Pixels>>) -> Option<(f32, f32, f32, f32)> 
             f32::from(bounds.size.height),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every field path of a JSON value, with array elements under `[]`.
+    fn field_paths(value: &serde_json::Value, prefix: &str, paths: &mut std::collections::BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                for (key, value) in fields {
+                    let path = format!("{prefix}.{key}");
+                    paths.insert(path.clone());
+                    field_paths(value, &path, paths);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    field_paths(item, &format!("{prefix}[]"), paths);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn the_x11_harness_reads_every_emitted_field() {
+        assert_eq!(STATE_TRACE_SCHEMA_VERSION, lst_x11_harness::STATE_TRACE_SCHEMA_VERSION);
+        // One element in every list so nested records are compared too.
+        let record = StateTraceRecord {
+            schema_version: STATE_TRACE_SCHEMA_VERSION,
+            cursors: vec![TraceCursor::default()],
+            quit_review_items: vec![TraceQuitReviewItem::default()],
+            viewport: TraceViewport {
+                occurrence_highlights: vec![TraceRange::default()],
+                selection_match_highlights: vec![TraceRange::default()],
+                bracket_matches: vec![TraceRange::default()],
+                rows: vec![TraceRow::default()],
+                ..TraceViewport::default()
+            },
+            ..StateTraceRecord::default()
+        };
+        let emitted = serde_json::to_value(&record).unwrap();
+        // The harness defaults missing fields for older binaries, so compare
+        // what it reads back rather than whether it parses.
+        let read: lst_x11_harness::StateTraceRecord = serde_json::from_value(emitted.clone()).unwrap();
+        let (mut emitted_paths, mut read_paths) = Default::default();
+        field_paths(&emitted, "", &mut emitted_paths);
+        field_paths(&serde_json::to_value(&read).unwrap(), "", &mut read_paths);
+        assert_eq!(emitted_paths, read_paths);
+    }
 }

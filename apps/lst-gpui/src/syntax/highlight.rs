@@ -35,7 +35,6 @@ pub(crate) struct StructuralSnapshot {
     pub(crate) revision: u64,
     pub(crate) pairs: Vec<StructuralPair>,
     pub(crate) tokens: Vec<StructuralToken>,
-    unmatched_count: usize,
     offsets: StructuralOffsets,
 }
 
@@ -80,18 +79,12 @@ impl StructuralOffsets {
 
 impl StructuralSnapshot {
     fn new(revision: u64, pairs: Vec<StructuralPair>, tokens: Vec<StructuralToken>) -> Self {
-        let unmatched_count = tokens.iter().filter(|token| !token.matched).count();
         Self {
             revision,
             pairs,
             tokens,
-            unmatched_count,
             offsets: StructuralOffsets::default(),
         }
-    }
-
-    pub(crate) fn unmatched_count(&self) -> usize {
-        self.unmatched_count
     }
 
     pub(crate) fn token_position(&self, index: usize) -> usize {
@@ -164,7 +157,6 @@ impl PartialEq for StructuralSnapshot {
         self.revision == other.revision
             && self.pairs.len() == other.pairs.len()
             && self.tokens.len() == other.tokens.len()
-            && self.unmatched_count == other.unmatched_count
             && self
                 .pairs
                 .iter()

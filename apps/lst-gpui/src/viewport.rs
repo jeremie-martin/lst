@@ -471,7 +471,6 @@ pub(crate) struct ViewportGeometry {
     pub(crate) selection_match_highlights: Rc<[Range<usize>]>,
     pub(crate) bracket_matches: Rc<[Range<usize>]>,
     pub(crate) structural_pair_count: usize,
-    pub(crate) unmatched_bracket_count: usize,
     pub(crate) guide_count: usize,
     pub(crate) whitespace_marker_count: usize,
     pub(crate) control_marker_count: usize,
@@ -2255,11 +2254,6 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     }
     markers.sort_by_key(|marker| marker.at);
     let structural_pair_count = if structure_current { structure.pairs.len() } else { 0 };
-    let unmatched_bracket_count = if structure_current {
-        structure.unmatched_count()
-    } else {
-        0
-    };
     let structure = StructurePaintState {
         bracket_matches: bracket_matches(structure, selection_set, match_brackets).into(),
         guides: guides.into(),
@@ -2304,7 +2298,6 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         selection_match_highlights: selection_match_highlights.clone(),
         bracket_matches: structure.bracket_matches.clone(),
         structural_pair_count,
-        unmatched_bracket_count,
         guide_count: structure.guides.len(),
         whitespace_marker_count: structure.markers.iter().filter(|marker| marker.whitespace).count(),
         control_marker_count: structure.markers.iter().filter(|marker| !marker.whitespace).count(),

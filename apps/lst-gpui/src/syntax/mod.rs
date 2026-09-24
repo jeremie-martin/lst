@@ -189,7 +189,7 @@ mod tests {
         let structure = plain_structural_snapshot(&buffer, 7, BRACKETS);
         assert_eq!(structure, plain_structural_snapshot(&buffer, 7, &unicode_brackets));
         assert_eq!(pair_positions(&structure), [(5, 10), (7, 9), (12, 18), (21, 23)]);
-        assert_eq!(structure.unmatched_count(), 1);
+        assert_eq!(structure.tokens.iter().filter(|token| !token.matched).count(), 1);
 
         let mut buffer = Rope::from_str(&"café (👩‍💻[e\u{301}]) {\r\ntext} <a> unmatched ] ((\n".repeat(150));
         for index in 0..300 {
