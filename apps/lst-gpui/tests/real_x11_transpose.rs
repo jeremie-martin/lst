@@ -5,12 +5,13 @@
 //! - In the middle of a line, swap the character to the left of the caret
 //!   with the character to the right of the caret. The caret moves one
 //!   character to the right after the swap.
-//! - At column zero, swap the first two characters of the line. (The Emacs
-//!   "first call at column 0 is a no-op" behavior is rejected — most users
-//!   expect the swap to fire.)
+//! - At column zero, swap the first two characters of the line and leave the
+//!   caret after them. (The Emacs "first call at column 0 is a no-op"
+//!   behavior is rejected — most users expect the swap to fire.)
 //! - At end-of-line, swap the two characters that sit before the caret —
 //!   matching the Emacs convention that `C-t` at EOL transposes the last
-//!   two chars rather than crossing the line break.
+//!   two chars rather than crossing the line break. The caret stays at the
+//!   line end.
 //!
 mod support;
 
@@ -31,6 +32,7 @@ fn ctrl_t_in_middle_of_word_swaps_surrounding_chars() -> TestResult {
 
         editor.keys("<C-t>")?;
         editor.save_then_expect_file(&path, "acbd")?;
+        editor.expect_cursor_heads(&[(0, 3)])?;
         Ok(())
     })
 }
@@ -45,6 +47,7 @@ fn ctrl_t_at_column_zero_swaps_first_two_chars() -> TestResult {
         editor.place_cursor_at_document_start()?;
         editor.keys("<C-t>")?;
         editor.save_then_expect_file(&path, "bacd")?;
+        editor.expect_cursor_heads(&[(0, 2)])?;
         Ok(())
     })
 }
@@ -65,6 +68,7 @@ fn ctrl_t_at_end_of_line_swaps_last_two_chars() -> TestResult {
 
         editor.keys("<C-t>")?;
         editor.save_then_expect_file(&path, "abdc\nrest")?;
+        editor.expect_cursor_heads(&[(0, 4)])?;
         Ok(())
     })
 }

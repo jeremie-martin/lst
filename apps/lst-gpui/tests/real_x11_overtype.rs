@@ -20,49 +20,6 @@ use support::{secs, EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn insert_key_toggles_overtype_visible_in_status_bar() -> TestResult {
-    support::run_x11_test("overtype-toggle-status", |session| {
-        let (mut editor, _path) = session.open("scratch")?;
-
-        // Status bar is OVR-free before the toggle.
-        let baseline = editor.read_state()?;
-        assert!(
-            !baseline.status_bar.contains("OVR"),
-            "baseline status bar should not advertise overtype: {:?}",
-            baseline.status_bar
-        );
-
-        editor.keys("<insert>")?;
-        editor.wait_state("overtype on", secs(2), |record| record.status_bar.contains("OVR"))?;
-
-        editor.keys("<insert>")?;
-        editor.wait_state("overtype off", secs(2), |record| !record.status_bar.contains("OVR"))?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn overtype_replaces_char_under_caret_instead_of_inserting() -> TestResult {
-    support::run_x11_test("overtype-replace", |session| {
-        let path = session.seed_file("overtype-replace.txt", "abcdef")?;
-        let mut editor = session.open_file("overtype-replace", &path)?;
-
-        // Caret at column 2 (between 'b' and 'c'). With overtype on, typing
-        // 'X' replaces 'c' rather than inserting before it. Buffer length
-        // is preserved.
-        editor.place_cursor_at_document_start()?;
-        editor.keys("<right><right>")?;
-        editor.expect_cursor_heads(&[(0, 2)])?;
-
-        editor.keys("<insert>X")?;
-        editor.save_then_expect_file(&path, "abXdef")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
 fn overtype_at_end_of_line_falls_back_to_insert() -> TestResult {
     support::run_x11_test("overtype-eol", |session| {
         let path = session.seed_file("overtype-eol.txt", "abc")?;

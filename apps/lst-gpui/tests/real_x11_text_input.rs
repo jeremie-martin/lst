@@ -1,4 +1,5 @@
-//! Real-display text-input edge cases that need seeded non-ASCII fixtures.
+//! Real-display text-input edge cases: auto-pairing next to a word, and
+//! editing seeded non-ASCII fixtures.
 //!
 //! The key harness cannot type arbitrary Unicode today, but it can open files
 //! that contain Unicode and drive normal movement/deletion commands through the
