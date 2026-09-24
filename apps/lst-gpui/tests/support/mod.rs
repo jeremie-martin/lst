@@ -21,7 +21,10 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use lst_x11_harness::{Display, Editor, FileWaitOpts, SpawnOpts, StateTraceRecord};
+use lst_x11_harness::{
+    clipboard::{write_clipboard_text, Selection},
+    Display, Editor, FileWaitOpts, SpawnOpts, StateTraceRecord,
+};
 
 pub type TestResult = Result<(), Box<dyn Error + Send + Sync>>;
 pub type SupportResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -69,6 +72,11 @@ impl ScratchpadSession {
         let display = Display::from_env()?;
         let binary = editor_binary()?;
         let root = temp_dir(&format!("lst-real-x11-{label}"))?;
+        // Quitting hands the clipboards to a process that outlives the
+        // editor, so start each test from contents no earlier test produced.
+        let sentinel = format!("clipboard before {}", root.display());
+        write_clipboard_text(Selection::Clipboard, &sentinel)?;
+        write_clipboard_text(Selection::Primary, &sentinel)?;
         let artifacts = root.join("artifacts");
         let home = root.join("home");
         let config_home = root.join("config");

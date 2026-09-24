@@ -182,7 +182,10 @@ fn build_command(display: &Display, opts: SpawnOpts<'_>) -> Command {
         .stdin(Stdio::null())
         .stdout(opts.stdout)
         .stderr(opts.stderr)
-        .env("DISPLAY", &display.session_env.display);
+        .env("DISPLAY", &display.session_env.display)
+        // A host Wayland session would pull GPUI and the clipboard hand-off
+        // off the X11 display under test.
+        .env_remove("WAYLAND_DISPLAY");
     if let Some(xauthority) = &display.session_env.xauthority {
         command.env("XAUTHORITY", xauthority);
     }
