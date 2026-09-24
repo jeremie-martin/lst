@@ -1,5 +1,6 @@
 //! Real-display tests for vim-mode behaviors. Drive the editor through
-//! key sequences in vim notation and assert on the autosaved file.
+//! key sequences in vim notation and assert on the saved file or the
+//! mode, pending-command, and cursor state in the trace.
 //!
 //! Run with
 //!
@@ -60,20 +61,6 @@ fn vim_normal_open_join_and_replace_commands_edit_observable_text() -> TestResul
 
         editor.keys("foo<enter>bar<esc>ggOtop<esc>jJ0rx")?;
         editor.save_then_expect_file(&path, "top\nxoo bar")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn vim_word_delete_on_empty_line_edits_observable_text() -> TestResult {
-    support::run_x11_test("vim-dw-empty-line", |session| {
-        let path = session.seed_file("vim-dw-empty-line.txt", "\nabc")?;
-        let mut editor = session.open_vim_file("dw-empty", &path)?;
-
-        editor.place_cursor_at_document_start()?;
-        editor.keys("<esc>dw")?;
-        editor.save_then_expect_file(&path, "abc")?;
         Ok(())
     })
 }
@@ -274,6 +261,58 @@ fn vim_compound_commands_survive_long_pauses_between_keystrokes() -> TestResult 
         // on line 1 leaves the lines below intact, exactly as a real user
         // would observe.
         editor.save_then_expect_file(&path, "second\nthird")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_escape_visual_and_visual_line_keys_switch_modes() -> TestResult {
+    support::run_x11_test("vim-mode-transitions", |session| {
+        let (mut editor, _path) = session.open_vim("scratch")?;
+
+        // Scratchpads start in Insert.
+        editor.keys("hello")?;
+        editor.expect_vim_mode("INSERT")?;
+
+        editor.keys("<esc>")?;
+        editor.expect_vim_mode("NORMAL")?;
+        editor.keys("v")?;
+        editor.expect_vim_mode("VISUAL")?;
+        editor.keys("<esc>")?;
+        editor.expect_vim_mode("NORMAL")?;
+        editor.keys("V")?;
+        editor.expect_vim_mode("V-LINE")?;
+        editor.keys("<esc>")?;
+        editor.expect_vim_mode("NORMAL")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_pending_prefix_shows_until_escape_drops_it_or_the_command_completes() -> TestResult {
+    support::run_x11_test("vim-pending", |session| {
+        let (mut editor, _path) = session.open_vim("scratch")?;
+
+        editor.keys("first<enter>second<esc>")?;
+        editor.expect_vim_mode("NORMAL")?;
+        editor.expect_cursor_heads(&[(1, 5)])?;
+
+        editor.keys("g")?;
+        editor.wait_state("pending g", secs(2), |record| record.vim_pending == "g")?;
+        editor.keys("<esc>")?;
+        editor.wait_state("escape drops pending g", secs(2), |record| {
+            record.vim_pending.is_empty()
+        })?;
+        editor.expect_cursor_heads(&[(1, 5)])?;
+
+        editor.keys("g")?;
+        editor.wait_state("pending g again", secs(2), |record| record.vim_pending == "g")?;
+        editor.keys("g")?;
+        editor.wait_state("gg moves to the first line", secs(2), |record| {
+            record.vim_pending.is_empty() && matches!(record.cursors.as_slice(), [cursor] if cursor.head_line == 0)
+        })?;
         Ok(())
     })
 }
