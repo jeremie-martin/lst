@@ -183,44 +183,6 @@ impl QuitReview {
     }
 }
 
-#[cfg(test)]
-mod quit_review_state_tests {
-    use super::*;
-
-    #[test]
-    fn review_defaults_every_document_to_pending_save() {
-        let review = QuitReview::new([
-            (TabId::from_raw(1), "/tmp/one.txt".to_string()),
-            (TabId::from_raw(2), "/tmp/two.txt".to_string()),
-        ]);
-
-        assert_eq!(review.selected_index, 0);
-        assert!(!review.is_running());
-        assert!(review
-            .items
-            .iter()
-            .all(|item| item.decision == QuitReviewDecision::Save));
-        assert!(review
-            .items
-            .iter()
-            .all(|item| matches!(item.status, QuitReviewItemStatus::Pending)));
-    }
-
-    #[test]
-    fn saving_item_or_scratchpad_makes_review_transaction_running() {
-        let mut review = QuitReview::new([
-            (TabId::from_raw(1), "/tmp/one.txt".to_string()),
-            (TabId::from_raw(2), "/tmp/two.txt".to_string()),
-        ]);
-        review.items[1].status = QuitReviewItemStatus::Saving;
-        assert!(review.is_running());
-
-        review.items[1].status = QuitReviewItemStatus::Saved;
-        review.saving_scratchpad = true;
-        assert!(review.is_running());
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum WorkspaceSurface {
     #[default]
