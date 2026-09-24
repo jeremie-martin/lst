@@ -7,11 +7,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use x11rb::connection::Connection as _;
-use x11rb::protocol::damage::{self, ConnectionExt as _};
+use x11rb::protocol::damage;
 use x11rb::protocol::xproto::{self, ConnectionExt as _, Keycode};
-use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
-use x11rb::NONE;
 
 use crate::display::Display;
 use crate::screenshot::{self, Screenshot};
@@ -107,18 +105,6 @@ impl FileWaitOpts {
     pub fn new(timeout: Duration, stable_for: Duration) -> Self {
         Self { stable_for, timeout }
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct FileStats {
-    pub bytes: u64,
-    pub lines: usize,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct FileWaitOutcome {
-    pub stats: FileStats,
-    pub damage_events: u64,
 }
 
 /// Handle to a spawned editor. Owns the child process and its DAMAGE
@@ -685,31 +671,6 @@ impl<'a> Editor<'a> {
         )
     }
 
-    /// Type each character in `text` literally. Uppercase letters auto-shift;
-    /// `\n` is rejected — use [`Editor::send_keys`] with `<enter>` for line
-    /// breaks, since the editor's reaction to a literal newline is
-    /// language-specific (auto-indent, vim insert mode rules).
-    pub fn type_text(&mut self, text: &str) -> Result<()> {
-        for ch in text.chars() {
-            let (code, shift) = self
-                .display
-                .keycodes
-                .lookup_char(ch)
-                .ok_or_else(|| io::Error::other(format!("unsupported text char: {ch:?}")))?;
-            self.focus_for_keyboard()?;
-            input::chord(
-                &self.display.conn,
-                self.display.root,
-                &self.display.keycodes,
-                code,
-                false,
-                false,
-                shift,
-            )?;
-        }
-        Ok(())
-    }
-
     /// Drive the editor with a vim-style key sequence. Bare characters are
     /// typed literally; `<...>` escapes name special keys and modifier
     /// chords:
@@ -810,46 +771,6 @@ impl<'a> Editor<'a> {
         Ok(())
     }
 
-    /// Hold `mods` continuously while tapping each key in `sequence`. The
-    /// editor sees one `mods-down → tap → tap → ... → mods-up` event train
-    /// per call, so chord-prefix bindings (e.g. `Ctrl+K Ctrl+D`) dispatch
-    /// correctly. `sequence` is parsed via the same vim-style notation as
-    /// `send_keys`, but each piece must be a single key without its own
-    /// `Ctrl-`/`Alt-`/`platform` modifier (Shift is allowed for inner
-    /// auto-shift).
-    /// Settles on a single damage-then-quiet at the end of the held span.
-    pub fn with_chord_held(&mut self, mods: ChordMods, sequence: &str) -> Result<()> {
-        let result: Result<()> = (|| {
-            if mods.is_empty() {
-                return Err(io::Error::other(
-                    "with_chord_held requires at least one modifier; pass send_keys for a plain sequence",
-                )
-                .into());
-            }
-            let inner = parse_held_inner(sequence, sequence)?;
-            if inner.is_empty() {
-                return Err(io::Error::other("with_chord_held sequence cannot be empty").into());
-            }
-            let token = KeyToken::Held(KeyChordHeld { mods, inner });
-            self.focus_for_keyboard()?;
-            self.dispatch_token(&token)?;
-            let conn = &self.display.conn;
-            let damage_id = self.damage.damage();
-            let window_id = self.window.id;
-            let child = child_mut(&mut self.child)?;
-            damage_wait::wait_for_damage_then_quiet(
-                conn,
-                damage_id,
-                window_id,
-                child,
-                SEND_KEYS_QUIET,
-                SEND_KEYS_TIMEOUT,
-            )?;
-            Ok(())
-        })();
-        self.attach_stderr_context(result, "with_chord_held")
-    }
-
     /// Press and release `mods`, then tap `key` immediately afterward. This
     /// drives real X11 events for the class of synthetic delivery races where
     /// the application observes a key press just after the modifier release and
@@ -879,7 +800,7 @@ impl<'a> Editor<'a> {
     }
 
     /// Synthesize the X events for one parsed token without settling. Shared
-    /// by `send_keys`, `send_keys_expect_quiet`, and `with_chord_held`.
+    /// by `send_keys` and `send_keys_settle`.
     fn dispatch_token(&self, token: &KeyToken) -> Result<()> {
         match token {
             KeyToken::Single(s) => {
@@ -943,35 +864,6 @@ impl<'a> Editor<'a> {
                 Ok(())
             }
         }
-    }
-
-    /// Drive a vim-style key sequence through the harness and assert that
-    /// **no** matching DAMAGE event arrives within `deadline`. Use this for
-    /// legitimate no-op assertions where `send_keys`'s "every key paints"
-    /// invariant would otherwise produce a false timeout: Ctrl+D on a buffer
-    /// without a current occurrence, Ctrl+S on an unmodified file, the first
-    /// half of a vim compound that is still pending, and similar.
-    ///
-    /// Drains any pre-existing damage events first so a paint from the
-    /// previous operation cannot bleed into this assertion. Then synthesizes
-    /// every key without a per-key paint wait. Finally polls for `deadline`,
-    /// returning `Ok(())` if the window expires cleanly and an error if any
-    /// matching damage arrives or the editor exits.
-    pub fn send_keys_expect_quiet(&mut self, sequence: &str, deadline: Duration) -> Result<()> {
-        let result: Result<()> = (|| {
-            let tokens = parse_keys(sequence)?;
-            damage_wait::drain_pending(&self.display.conn, self.damage.damage(), self.window.id)?;
-            for token in &tokens {
-                self.focus_for_keyboard()?;
-                self.dispatch_token(token)?;
-            }
-            let conn = &self.display.conn;
-            let damage_id = self.damage.damage();
-            let window_id = self.window.id;
-            let child = child_mut(&mut self.child)?;
-            damage_wait::expect_no_damage(conn, damage_id, window_id, child, deadline)
-        })();
-        self.attach_stderr_context(result, "send_keys_expect_quiet")
     }
 
     /// Drive a sequence and wait for the window to settle after each token
@@ -1142,25 +1034,6 @@ impl<'a> Editor<'a> {
         self.attach_stderr_context(result, "read_state")
     }
 
-    /// Convenience wrapper: read the latest state and run a predicate. On
-    /// failure the error includes a pretty-printed dump of the offending
-    /// record so test diagnostics surface what was actually observed
-    /// instead of the bare predicate name.
-    pub fn expect_state(
-        &mut self,
-        label: &str,
-        predicate: impl FnOnce(&StateTraceRecord) -> bool,
-    ) -> Result<StateTraceRecord> {
-        let record = self.read_state()?;
-        if predicate(&record) {
-            Ok(record)
-        } else {
-            let pretty = serde_json::to_string_pretty(&record)
-                .unwrap_or_else(|_| "<state-trace record could not be re-serialized for diagnostics>".to_string());
-            Err(format!("expect_state {label}: predicate returned false\n{pretty}").into())
-        }
-    }
-
     /// Drain new records since the last call. Returns them in append order.
     /// Useful for asserting state across a multi-key span (e.g. one record
     /// per keystroke). Empty `Vec` when nothing new is available.
@@ -1175,7 +1048,7 @@ impl<'a> Editor<'a> {
         self.attach_stderr_context(result, "drain_state_records")
     }
 
-    pub fn wait_file_text(&mut self, path: &Path, expected: &str, opts: FileWaitOpts) -> Result<FileWaitOutcome> {
+    pub fn wait_file_text(&mut self, path: &Path, expected: &str, opts: FileWaitOpts) -> Result<()> {
         let result = (|| {
             let display = self.display;
             let damage_id = self.damage.damage();
@@ -1184,14 +1057,6 @@ impl<'a> Editor<'a> {
             wait_file_text_impl(&display.conn, damage_id, window_id, child, path, expected, opts)
         })();
         self.attach_stderr_context(result, "wait_file_text")
-    }
-
-    pub fn wait_file_stable(&mut self, path: &Path, stable_for: Duration, timeout: Duration) -> Result<FileStats> {
-        let result = (|| {
-            let child = child_mut(&mut self.child)?;
-            wait_file_stable_impl(child, path, stable_for, timeout)
-        })();
-        self.attach_stderr_context(result, "wait_file_stable")
     }
 
     pub fn wait_for_exit(&mut self, timeout: Duration) -> Result<ExitStatus> {
@@ -1676,9 +1541,9 @@ fn resolve_key(kc: &Keycodes, key: Key) -> Result<(Keycode, bool)> {
     }
 }
 
-/// Modifier set held continuously across a chord-hold span. Used both by
-/// the parser (`<C-{k d}>`) and the programmatic [`Editor::with_chord_held`]
-/// API. Pub-fields because there is no invariant beyond "at least one of
+/// Modifier set held continuously across a chord-hold span (`<C-{k d}>`),
+/// a modifier-bearing mouse gesture, or a released-modifier race. Pub-fields
+/// because there is no invariant beyond "at least one of
 /// ctrl/alt/shift/platform is set" (enforced at use time).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ChordMods {
@@ -1707,32 +1572,9 @@ impl ChordMods {
         shift: true,
         platform: false,
     };
-    pub const PLATFORM: Self = Self {
-        ctrl: false,
-        alt: false,
-        shift: false,
-        platform: true,
-    };
 
     pub fn is_empty(self) -> bool {
         !self.ctrl && !self.alt && !self.shift && !self.platform
-    }
-
-    pub fn with_ctrl(mut self) -> Self {
-        self.ctrl = true;
-        self
-    }
-    pub fn with_alt(mut self) -> Self {
-        self.alt = true;
-        self
-    }
-    pub fn with_shift(mut self) -> Self {
-        self.shift = true;
-        self
-    }
-    pub fn with_platform(mut self) -> Self {
-        self.platform = true;
-        self
     }
 }
 
@@ -1980,26 +1822,17 @@ fn wait_file_text_impl(
     path: &Path,
     expected: &str,
     opts: FileWaitOpts,
-) -> Result<FileWaitOutcome> {
+) -> Result<()> {
     let deadline = Instant::now() + opts.timeout;
     let mut last_text = read_optional_text(path)?;
     let mut last_change = Instant::now();
-    let mut damage_events = 0u64;
 
     loop {
         if let Some(status) = child.try_wait()? {
             return Err(io::Error::other(format!("editor exited while waiting for file contents: {status}")).into());
         }
 
-        while let Some(event) = conn.poll_for_event()? {
-            if let Event::DamageNotify(notify) = event {
-                if notify.damage == damage_id && notify.drawable == window_id {
-                    damage_events += 1;
-                    conn.damage_subtract(damage_id, NONE, NONE)?;
-                }
-            }
-        }
-        conn.flush()?;
+        damage_wait::drain_pending(conn, damage_id, window_id)?;
 
         let current = read_optional_text(path)?;
         if current != last_text {
@@ -2008,14 +1841,7 @@ fn wait_file_text_impl(
         }
 
         if last_text.as_deref() == Some(expected) && last_change.elapsed() >= opts.stable_for {
-            let text = last_text.as_ref().expect("matched expected text above");
-            return Ok(FileWaitOutcome {
-                stats: FileStats {
-                    bytes: text.len() as u64,
-                    lines: text.lines().count(),
-                },
-                damage_events,
-            });
+            return Ok(());
         }
 
         if Instant::now() >= deadline {
@@ -2053,43 +1879,6 @@ fn preview_text(text: &str, max_chars: usize) -> String {
         preview.push(ch);
     }
     preview
-}
-
-fn wait_file_stable_impl(child: &mut Child, path: &Path, stable_for: Duration, timeout: Duration) -> Result<FileStats> {
-    let deadline = Instant::now() + timeout;
-    let mut last_text = read_optional_text(path)?;
-    let mut last_change = Instant::now();
-
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Err(io::Error::other(format!("editor exited while waiting for file: {status}")).into());
-        }
-        let current = read_optional_text(path)?;
-        if current != last_text {
-            last_text = current;
-            last_change = Instant::now();
-        }
-        if let Some(text) = &last_text {
-            if !text.is_empty() && last_change.elapsed() >= stable_for {
-                return Ok(FileStats {
-                    bytes: text.len() as u64,
-                    lines: text.lines().count(),
-                });
-            }
-        }
-        if Instant::now() >= deadline {
-            let observed = match &last_text {
-                Some(text) => format!("{} bytes, preview {:?}", text.len(), preview_text(text, 120)),
-                None => "missing file".to_string(),
-            };
-            return Err(io::Error::other(format!(
-                "timed out waiting for {} to stabilize; last observed {observed}",
-                path.display(),
-            ))
-            .into());
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
 }
 
 fn wait_child(child: &mut Child, timeout: Duration) -> Result<ExitStatus> {

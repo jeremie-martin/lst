@@ -28,7 +28,7 @@ impl Selection {
 
 /// Read selection text via `xclip`. Returns `None` if `xclip` exits non-zero
 /// (typically: empty selection, or X server unreachable).
-pub fn read_clipboard_text(sel: Selection) -> Option<String> {
+fn read_clipboard_text(sel: Selection) -> Option<String> {
     let output = Command::new("xclip")
         .args(["-selection", sel.xclip_arg(), "-o"])
         .stdin(Stdio::null())
@@ -74,39 +74,6 @@ pub fn wait_clipboard_text(sel: Selection, expected: &str, timeout: Duration) ->
         }
         thread::sleep(Duration::from_millis(25));
     }
-}
-
-/// Wait until the selection's raw byte count from `xclip -o` equals
-/// `expected_bytes`. ASCII-only equivalence: byte count == char count holds
-/// only for ASCII corpora.
-pub fn wait_clipboard_bytes(sel: Selection, expected_bytes: u64, timeout: Duration) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(actual) = read_clipboard_bytes(sel) {
-            if actual == expected_bytes {
-                return Ok(());
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "timed out waiting for {} selection to reach {expected_bytes} bytes",
-                sel.xclip_arg()
-            )
-            .into());
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
-fn read_clipboard_bytes(sel: Selection) -> Option<u64> {
-    let output = Command::new("xclip")
-        .args(["-selection", sel.xclip_arg(), "-o"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    output.status.success().then_some(output.stdout.len() as u64)
 }
 
 pub(crate) fn require_xclip() -> Result<()> {

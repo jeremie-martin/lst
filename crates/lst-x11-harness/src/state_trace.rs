@@ -7,7 +7,7 @@
 
 use std::fs::OpenOptions;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -332,10 +332,6 @@ impl StateTraceReader {
             buffered_partial: Vec::new(),
             last_record: None,
         }
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 
     pub fn last_observed(&self) -> Option<&StateTraceRecord> {

@@ -17,7 +17,7 @@ pub mod state_trace;
 
 pub use clipboard::Selection;
 pub use display::Display;
-pub use editor::{ChordMods, Editor, FileStats, FileWaitOpts, FileWaitOutcome, Key, KeyChord, SpawnOpts, WheelDir};
+pub use editor::{ChordMods, Editor, FileWaitOpts, Key, KeyChord, SpawnOpts, WheelDir};
 pub use screenshot::{Screenshot, ScreenshotDiff};
 pub use state_trace::{
     StateTraceReader, StateTraceRecord, TraceCursor, TraceFind, TraceRange, TraceRow, TraceViewport,
