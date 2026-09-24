@@ -2583,103 +2583,80 @@ impl LstGpuiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lst_editor::{EditorCommand, EditorModel};
 
-    #[test]
-    fn deferred_latest_save_uses_the_stamp_from_an_older_committed_save() {
-        static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+    /// Replaces the active tab's text and returns the body and revision a
+    /// save request would capture.
+    fn edit(model: &mut EditorModel, text: &str) -> (String, u64) {
+        model.execute(EditorCommand::SelectAll);
+        model.replace_text(None, text.to_string(), UndoBoundary::Break);
+        (model.active_tab().buffer_text(), model.active_tab().revision())
+    }
 
-        let directory = std::env::temp_dir().join(format!(
-            "lst-serialized-save-{}-{}",
-            process::id(),
-            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&directory).expect("create test directory");
-        let path = directory.join("document.txt");
-        fs::write(&path, "initial\n").expect("seed target");
-        let initial_stamp = file_stamp(&path).expect("stamp initial target");
-        let tab_id = TabId::from_raw(1);
-        let tab = ModelEditorTab::from_path_with_stamp(tab_id, path.clone(), "initial\n", Some(initial_stamp));
-        let mut model = lst_editor::EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string());
-
-        model.execute(lst_editor::EditorCommand::SelectAll);
-        model.replace_text(None, "older requested body\n".to_string(), UndoBoundary::Break);
-        let older_revision = model.active_tab().revision();
-        let older_body = model.active_tab().buffer_text();
-
-        model.execute(lst_editor::EditorCommand::SelectAll);
-        model.replace_text(None, "latest requested body\n".to_string(), UndoBoundary::Break);
-        let latest_revision = model.active_tab().revision();
-        let latest_body = model.active_tab().buffer_text();
-
-        let generation = Arc::new(Mutex::new(0));
-        let older = save_file_result(
-            tab_id,
-            path.clone(),
-            older_body,
-            older_revision,
-            SaveExpectation::Matching(initial_stamp),
-            SaveTicket::issue(&generation),
-            SaveTextOptions {
-                trim_trailing_whitespace: false,
-                ensure_final_newline: false,
-            },
-        );
-        let FileWriteOutcome::Written {
-            path: written_path,
-            revision,
-            stamp: older_stamp,
-            body,
-            ..
-        } = older
-        else {
-            panic!("older save should commit");
+    /// Writes a captured save request and reports its result to the model.
+    /// Returns whether the tab became clean.
+    fn save(
+        model: &mut EditorModel,
+        path: &Path,
+        (body, revision): (String, u64),
+        expectation: SaveExpectation,
+        generation: &Arc<Mutex<u64>>,
+    ) -> bool {
+        let tab_id = model.active_tab_id();
+        let options = SaveTextOptions {
+            trim_trailing_whitespace: false,
+            ensure_final_newline: false,
         };
-        assert!(!model.save_finished_for_tab(tab_id, written_path, revision, older_stamp, body));
-        assert!(model.active_tab().modified());
-
-        let latest = save_file_result(
+        let outcome = save_file_result(
             tab_id,
-            path.clone(),
-            latest_body,
-            latest_revision,
-            model.active_tab().save_expectation(),
-            SaveTicket::issue(&generation),
-            SaveTextOptions {
-                trim_trailing_whitespace: false,
-                ensure_final_newline: false,
-            },
+            path.to_path_buf(),
+            body,
+            revision,
+            expectation,
+            SaveTicket::issue(generation),
+            options,
         );
         let FileWriteOutcome::Written {
-            path: written_path,
+            path,
             revision,
             stamp,
             body,
             ..
-        } = latest
+        } = outcome
         else {
-            panic!("latest save should not conflict with the app's older write");
+            panic!("save should commit: {outcome:?}");
         };
-        assert!(model.save_finished_for_tab(tab_id, written_path, revision, stamp, body));
-        assert_eq!(
-            fs::read_to_string(&path).expect("read final target"),
-            "latest requested body\n"
-        );
-        assert!(!model.active_tab().modified());
+        model.save_finished_for_tab(tab_id, path, revision, stamp, body)
+    }
 
-        fs::remove_dir_all(directory).expect("remove test directory");
+    #[test]
+    fn deferred_latest_save_uses_the_stamp_from_an_older_committed_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("document.txt");
+        fs::write(&path, "initial\n").unwrap();
+        let initial_stamp = file_stamp(&path).unwrap();
+        let tab_id = TabId::from_raw(1);
+        let tab = ModelEditorTab::from_path_with_stamp(tab_id, path.clone(), "initial\n", Some(initial_stamp));
+        let mut model = EditorModel::from_tabs(tab, Vec::new(), "Ready.".to_string());
+        let older = edit(&mut model, "older requested body\n");
+        let latest = edit(&mut model, "latest requested body\n");
+        let generation = Arc::new(Mutex::new(0));
+
+        let expectation = SaveExpectation::Matching(initial_stamp);
+        assert!(!save(&mut model, &path, older, expectation, &generation));
+        assert!(model.active_tab().modified());
+
+        // The latest save must expect the app's own older write, not conflict with it.
+        let expectation = model.active_tab().save_expectation();
+        assert!(save(&mut model, &path, latest, expectation, &generation));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "latest requested body\n");
+        assert!(!model.active_tab().modified());
     }
 
     #[test]
     fn final_atomic_guard_preserves_a_target_recreated_after_expected_absence() {
-        static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        let directory = std::env::temp_dir().join(format!(
-            "lst-expected-absence-{}-{}",
-            process::id(),
-            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&directory).expect("create test directory");
-        let target = directory.join("document.txt");
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("document.txt");
         let temp_path = write_temp_replacement(&target, b"editor copy\n", None).expect("stage replacement");
 
         fs::write(&target, "recreated elsewhere\n").expect("recreate target");
@@ -2695,6 +2672,5 @@ mod tests {
             "recreated elsewhere\n"
         );
         assert!(!temp_path.exists(), "rejected replacement should be removed");
-        fs::remove_dir_all(directory).expect("remove test directory");
     }
 }
