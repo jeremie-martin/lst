@@ -6509,6 +6509,556 @@
       }
     },
     {
+      "name": "delete word before last word",
+      "area": "operators",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "dw",
+      "expected": {
+        "text": "beta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha "
+        }
+      }
+    },
+    {
+      "name": "delete to word end two words",
+      "area": "operators",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "de",
+      "expected": {
+        "text": " beta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha"
+        }
+      }
+    },
+    {
+      "name": "delete backward word from word start",
+      "area": "operators",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "db",
+      "expected": {
+        "text": "beta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha "
+        }
+      }
+    },
+    {
+      "name": "delete to end mid line keeps next line",
+      "area": "operators",
+      "initial_text": "abc def\nnext",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "D",
+      "expected": {
+        "text": "abc \nnext",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "def"
+        }
+      }
+    },
+    {
+      "name": "delete multiplied counts to last word",
+      "area": "operators",
+      "initial_text": "one two three four five",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2d2w",
+      "expected": {
+        "text": "five",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "one two three four "
+        }
+      }
+    },
+    {
+      "name": "delete lines to end from second line",
+      "area": "operators",
+      "initial_text": "a\nb\nc\nd",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "dG",
+      "expected": {
+        "text": "a",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "b\nc\nd"
+        }
+      }
+    },
+    {
+      "name": "change line keeps following line",
+      "area": "operators",
+      "initial_text": "alpha\nbeta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "ccX<esc>",
+      "expected": {
+        "text": "X\nbeta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "alpha"
+        }
+      }
+    },
+    {
+      "name": "change word stops at word end",
+      "area": "operators",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "cwX<esc>",
+      "expected": {
+        "text": "X beta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha"
+        }
+      }
+    },
+    {
+      "name": "change big word stops at big word end",
+      "area": "operators",
+      "initial_text": "alpha+beta gamma",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "cWX<esc>",
+      "expected": {
+        "text": "X gamma",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha+beta"
+        }
+      }
+    },
+    {
+      "name": "delete down removes two lines",
+      "area": "operators",
+      "initial_text": "a\nb\nc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "dj",
+      "expected": {
+        "text": "c",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "a\nb"
+        }
+      }
+    },
+    {
+      "name": "delete up removes two lines",
+      "area": "operators",
+      "initial_text": "a\nb\nc",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "dk",
+      "expected": {
+        "text": "a",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "b\nc"
+        }
+      }
+    },
+    {
+      "name": "delete to document start removes every line",
+      "area": "operators",
+      "initial_text": "a\nb\nc",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "dgg",
+      "expected": {
+        "text": "",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "a\nb\nc"
+        }
+      }
+    },
+    {
+      "name": "delete counted gg upward",
+      "area": "operators",
+      "initial_text": "a\nb\nc\nd",
+      "cursor": {
+        "line": 3,
+        "column": 0
+      },
+      "keys": "d2gg",
+      "expected": {
+        "text": "a",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "b\nc\nd"
+        }
+      }
+    },
+    {
+      "name": "delete counted line end from line start",
+      "area": "operators",
+      "initial_text": "a\nb\nc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "d2$",
+      "expected": {
+        "text": "c",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "a\nb"
+        }
+      }
+    },
+    {
+      "name": "delete percentage of four lines",
+      "area": "operators",
+      "initial_text": "a\nb\nc\nd",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "d50%",
+      "expected": {
+        "text": "c\nd",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "a\nb"
+        }
+      }
+    },
+    {
+      "name": "change backward word excludes cursor char",
+      "area": "operators",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "cbX<esc>",
+      "expected": {
+        "text": "Xbeta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha "
+        }
+      }
+    },
+    {
+      "name": "change to document start is linewise",
+      "area": "operators",
+      "initial_text": "a\nb\nc",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "cggX<esc>",
+      "expected": {
+        "text": "X",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "a\nb\nc"
+        }
+      }
+    },
+    {
+      "name": "yank to document start pastes linewise",
+      "area": "operators",
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "yggGp",
+      "expected": {
+        "text": "one\ntwo\nthree\none\ntwo\nthree",
+        "cursor": {
+          "line": 3,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "one\ntwo\nthree"
+        }
+      }
+    },
+    {
+      "name": "delete find char is inclusive",
+      "area": "operators",
+      "initial_text": "abc def",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "dfc",
+      "expected": {
+        "text": " def",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "abc"
+        }
+      }
+    },
+    {
+      "name": "delete till char stops before target",
+      "area": "operators",
+      "initial_text": "abc def",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "dtd",
+      "expected": {
+        "text": "def",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "abc "
+        }
+      }
+    },
+    {
+      "name": "delete failed find is noop",
+      "area": "operators",
+      "initial_text": "abc def",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "dfz",
+      "expected": {
+        "text": "abc def",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "yank word pastes charwise",
+      "area": "operators",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "yw$p",
+      "expected": {
+        "text": "alpha betaalpha ",
+        "cursor": {
+          "line": 0,
+          "column": 15
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha "
+        }
+      }
+    },
+    {
+      "name": "yank counted lines pastes linewise",
+      "area": "operators",
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2yyGp",
+      "expected": {
+        "text": "one\ntwo\nthree\none\ntwo",
+        "cursor": {
+          "line": 3,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "one\ntwo"
+        }
+      }
+    },
+    {
+      "name": "delete empty line pastes back as line",
+      "area": "operators",
+      "initial_text": "one\n\ntwo",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "ddp",
+      "expected": {
+        "text": "one\ntwo\n",
+        "cursor": {
+          "line": 2,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete to start then undo is one step",
+      "area": "operators",
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "Gdggu",
+      "expected": {
+        "text": "one\ntwo\nthree",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "one\ntwo\nthree"
+        }
+      }
+    },
+    {
       "name": "delete inner double quote via double-quote at open",
       "area": "text_objects",
       "initial_text": "prefix \"alpha beta\" tail",
@@ -12603,6 +13153,380 @@
       }
     },
     {
+      "name": "change inner paren with comma",
+      "area": "text_objects",
+      "initial_text": "call(alpha, beta)",
+      "cursor": {
+        "line": 0,
+        "column": 7
+      },
+      "keys": "ci(X<esc>",
+      "expected": {
+        "text": "call(X)",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha, beta"
+        }
+      }
+    },
+    {
+      "name": "change a bracket keeps following text",
+      "area": "text_objects",
+      "initial_text": "items[one, two] tail",
+      "cursor": {
+        "line": 0,
+        "column": 8
+      },
+      "keys": "ca[X<esc>",
+      "expected": {
+        "text": "itemsX tail",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "[one, two]"
+        }
+      }
+    },
+    {
+      "name": "change a word consumes following space",
+      "area": "text_objects",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "cawX<esc>",
+      "expected": {
+        "text": "Xbeta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha "
+        }
+      }
+    },
+    {
+      "name": "change inner big word from punctuation",
+      "area": "text_objects",
+      "initial_text": "alpha+beta gamma",
+      "cursor": {
+        "line": 0,
+        "column": 3
+      },
+      "keys": "ciWX<esc>",
+      "expected": {
+        "text": "X gamma",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha+beta"
+        }
+      }
+    },
+    {
+      "name": "change a big word from punctuation",
+      "area": "text_objects",
+      "initial_text": "alpha+beta gamma",
+      "cursor": {
+        "line": 0,
+        "column": 3
+      },
+      "keys": "caWX<esc>",
+      "expected": {
+        "text": "Xgamma",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha+beta "
+        }
+      }
+    },
+    {
+      "name": "delete counted a word through following words",
+      "area": "text_objects",
+      "initial_text": "one two three four",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "d2aw",
+      "expected": {
+        "text": "three four",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "one two "
+        }
+      }
+    },
+    {
+      "name": "delete inner paragraph is linewise",
+      "area": "text_objects",
+      "initial_text": "one\ntwo\n\nthree",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "dip",
+      "expected": {
+        "text": "\nthree",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "one\ntwo"
+        }
+      }
+    },
+    {
+      "name": "delete a paragraph includes following blank line",
+      "area": "text_objects",
+      "initial_text": "one\ntwo\n\nthree",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "dap",
+      "expected": {
+        "text": "three",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "one\ntwo\n"
+        }
+      }
+    },
+    {
+      "name": "change inner paren via close at close",
+      "area": "text_objects",
+      "initial_text": "call(alpha)",
+      "cursor": {
+        "line": 0,
+        "column": 10
+      },
+      "keys": "ci)X<esc>",
+      "expected": {
+        "text": "call(X)",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha"
+        }
+      }
+    },
+    {
+      "name": "delete a paren via b alias",
+      "area": "text_objects",
+      "initial_text": "call(alpha)",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "dab",
+      "expected": {
+        "text": "call",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "(alpha)"
+        }
+      }
+    },
+    {
+      "name": "change inner brace via B alias",
+      "area": "text_objects",
+      "initial_text": "fn { alpha }",
+      "cursor": {
+        "line": 0,
+        "column": 5
+      },
+      "keys": "ciBX<esc>",
+      "expected": {
+        "text": "fn {X}",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": " alpha "
+        }
+      }
+    },
+    {
+      "name": "delete a brace keeps surrounding spaces",
+      "area": "text_objects",
+      "initial_text": "fn { alpha } tail",
+      "cursor": {
+        "line": 0,
+        "column": 5
+      },
+      "keys": "da}",
+      "expected": {
+        "text": "fn  tail",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "{ alpha }"
+        }
+      }
+    },
+    {
+      "name": "change inner bracket via close",
+      "area": "text_objects",
+      "initial_text": "items[alpha]",
+      "cursor": {
+        "line": 0,
+        "column": 8
+      },
+      "keys": "ci]X<esc>",
+      "expected": {
+        "text": "items[X]",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha"
+        }
+      }
+    },
+    {
+      "name": "change inner angle via close",
+      "area": "text_objects",
+      "initial_text": "tag<alpha>",
+      "cursor": {
+        "line": 0,
+        "column": 5
+      },
+      "keys": "ci>X<esc>",
+      "expected": {
+        "text": "tag<X>",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha"
+        }
+      }
+    },
+    {
+      "name": "change inner single quote short",
+      "area": "text_objects",
+      "initial_text": "let 'alpha' tail",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "ci'X<esc>",
+      "expected": {
+        "text": "let 'X' tail",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha"
+        }
+      }
+    },
+    {
+      "name": "change a backtick short",
+      "area": "text_objects",
+      "initial_text": "let `alpha` tail",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "ca`X<esc>",
+      "expected": {
+        "text": "let Xtail",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "`alpha` "
+        }
+      }
+    },
+    {
+      "name": "change inner double quote over escaped quote",
+      "area": "text_objects",
+      "initial_text": "let \"a\\\"b\" tail",
+      "cursor": {
+        "line": 0,
+        "column": 7
+      },
+      "keys": "ci\"X<esc>",
+      "expected": {
+        "text": "let \"X\" tail",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "a\\\"b"
+        }
+      }
+    },
+    {
       "name": "append after cursor",
       "area": "normal_edits",
       "initial_text": "  alpha beta",
@@ -13017,6 +13941,402 @@
       }
     },
     {
+      "name": "append after first char",
+      "area": "normal_edits",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "aX<esc>",
+      "expected": {
+        "text": "aXbc",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "insert first nonblank from line end",
+      "area": "normal_edits",
+      "initial_text": "  abc",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "IX<esc>",
+      "expected": {
+        "text": "  Xabc",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "append line end from line start",
+      "area": "normal_edits",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "AX<esc>",
+      "expected": {
+        "text": "abcX",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "open line below unindented",
+      "area": "normal_edits",
+      "initial_text": "alpha\nbeta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "oX<esc>",
+      "expected": {
+        "text": "alpha\nX\nbeta",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "open line above unindented",
+      "area": "normal_edits",
+      "initial_text": "alpha\nbeta",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "OX<esc>",
+      "expected": {
+        "text": "alpha\nX\nbeta",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "open line below inherits indentation",
+      "area": "normal_edits",
+      "initial_text": "  alpha",
+      "cursor": {
+        "line": 0,
+        "column": 2
+      },
+      "keys": "oX<esc>",
+      "expected": {
+        "text": "  alpha\n  X",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "open line above inherits indentation",
+      "area": "normal_edits",
+      "initial_text": "  alpha",
+      "cursor": {
+        "line": 0,
+        "column": 2
+      },
+      "keys": "OX<esc>",
+      "expected": {
+        "text": "  X\n  alpha",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "append on empty line",
+      "area": "normal_edits",
+      "initial_text": "",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "aX<esc>",
+      "expected": {
+        "text": "X",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "insert on empty line",
+      "area": "normal_edits",
+      "initial_text": "",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "iX<esc>",
+      "expected": {
+        "text": "X",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "substitute first char of word",
+      "area": "normal_edits",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "sX<esc>",
+      "expected": {
+        "text": "Xlpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "change full line preserves indentation",
+      "area": "normal_edits",
+      "initial_text": "  abc\nnext",
+      "cursor": {
+        "line": 0,
+        "column": 2
+      },
+      "keys": "Snew<esc>",
+      "expected": {
+        "text": "  new\nnext",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "join keeps first line indent",
+      "area": "normal_edits",
+      "initial_text": "  foo\nbar",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "J",
+      "expected": {
+        "text": "  foo bar",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "join single line is noop",
+      "area": "normal_edits",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "J",
+      "expected": {
+        "text": "abc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "replace first char",
+      "area": "normal_edits",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "rx",
+      "expected": {
+        "text": "xbc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "replace three chars",
+      "area": "normal_edits",
+      "initial_text": "abcd",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "3rx",
+      "expected": {
+        "text": "xxxd",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "replace on empty line is noop",
+      "area": "normal_edits",
+      "initial_text": "",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "rx",
+      "expected": {
+        "text": "",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "replace past line end is noop",
+      "area": "normal_edits",
+      "initial_text": "ab\ncd",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "3rx",
+      "expected": {
+        "text": "ab\ncd",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "indent single line",
+      "area": "normal_edits",
+      "initial_text": "alpha",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": ">>",
+      "expected": {
+        "text": "  alpha",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "outdent single line",
+      "area": "normal_edits",
+      "initial_text": "  alpha",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "<<",
+      "expected": {
+        "text": "alpha",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "outdent first of two lines",
+      "area": "normal_edits",
+      "initial_text": "  alpha\nbeta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "<<",
+      "expected": {
+        "text": "alpha\nbeta",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "indent two of three lines",
+      "area": "normal_edits",
+      "initial_text": "a\nb\nc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2>>",
+      "expected": {
+        "text": "  a\n  b\nc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "outdent two of three lines",
+      "area": "normal_edits",
+      "initial_text": "  a\n  b\nc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2<<",
+      "expected": {
+        "text": "a\nb\nc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
       "name": "delete beyond eol clamps register",
       "area": "normal_edits",
       "initial_text": "abc",
@@ -13195,6 +14515,314 @@
       }
     },
     {
+      "name": "delete char at line start",
+      "area": "normal_edits",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "x",
+      "expected": {
+        "text": "bc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "a"
+        }
+      }
+    },
+    {
+      "name": "delete two chars",
+      "area": "normal_edits",
+      "initial_text": "abcd",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2x",
+      "expected": {
+        "text": "cd",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "ab"
+        }
+      }
+    },
+    {
+      "name": "delete before cursor mid line",
+      "area": "normal_edits",
+      "initial_text": "abcd",
+      "cursor": {
+        "line": 0,
+        "column": 2
+      },
+      "keys": "X",
+      "expected": {
+        "text": "acd",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "b"
+        }
+      }
+    },
+    {
+      "name": "substitute first char",
+      "area": "normal_edits",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "sZ<esc>",
+      "expected": {
+        "text": "Zbc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "a"
+        }
+      }
+    },
+    {
+      "name": "substitute two chars",
+      "area": "normal_edits",
+      "initial_text": "abcd",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2sZ<esc>",
+      "expected": {
+        "text": "Zcd",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "ab"
+        }
+      }
+    },
+    {
+      "name": "change to end with several chars",
+      "area": "normal_edits",
+      "initial_text": "abc def",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "CXYZ<esc>",
+      "expected": {
+        "text": "abc XYZ",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "def"
+        }
+      }
+    },
+    {
+      "name": "delete counted chars clamps at eol",
+      "area": "normal_edits",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "9x",
+      "expected": {
+        "text": "a",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "bc"
+        }
+      }
+    },
+    {
+      "name": "delete before cursor at bol is noop",
+      "area": "normal_edits",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "X",
+      "expected": {
+        "text": "abc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete counted chars stops at line end",
+      "area": "normal_edits",
+      "initial_text": "abc\ndef",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "5x",
+      "expected": {
+        "text": "a\ndef",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "bc"
+        }
+      }
+    },
+    {
+      "name": "delete counted chars before cursor stops at line start",
+      "area": "normal_edits",
+      "initial_text": "abc\ndef",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "9X",
+      "expected": {
+        "text": "abc\nef",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "d"
+        }
+      }
+    },
+    {
+      "name": "substitute counted chars stops at line end",
+      "area": "normal_edits",
+      "initial_text": "ab\ncd",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "5s<esc>",
+      "expected": {
+        "text": "a\ncd",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "b"
+        }
+      }
+    },
+    {
+      "name": "delete to end on empty line keeps newline",
+      "area": "normal_edits",
+      "initial_text": "\nabc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "D",
+      "expected": {
+        "text": "\nabc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "change to end on empty line keeps newline",
+      "area": "normal_edits",
+      "initial_text": "\nabc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "Cx<esc>",
+      "expected": {
+        "text": "x\nabc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete last word keeps newline",
+      "area": "normal_edits",
+      "initial_text": "alpha beta\ngamma",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "dw",
+      "expected": {
+        "text": "alpha \ngamma",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
       "name": "char delete paste after",
       "area": "registers",
       "initial_text": "alpha beta",
@@ -13345,6 +14973,182 @@
         "register": {
           "kind": "char",
           "text": ""
+        }
+      }
+    },
+    {
+      "name": "empty paste after single word",
+      "area": "registers",
+      "initial_text": "alpha",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "p",
+      "expected": {
+        "text": "alpha",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "empty paste before single word",
+      "area": "registers",
+      "initial_text": "alpha",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "P",
+      "expected": {
+        "text": "alpha",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "inner word delete paste before",
+      "area": "registers",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "diwP",
+      "expected": {
+        "text": "alphabeta ",
+        "cursor": {
+          "line": 0,
+          "column": 8
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "line delete paste after following line",
+      "area": "registers",
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "ddp",
+      "expected": {
+        "text": "one\nthree\ntwo",
+        "cursor": {
+          "line": 2,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "two"
+        }
+      }
+    },
+    {
+      "name": "line delete paste after last of two",
+      "area": "registers",
+      "initial_text": "one\ntwo",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "ddGp",
+      "expected": {
+        "text": "two\none",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "one"
+        }
+      }
+    },
+    {
+      "name": "line delete paste before first of two",
+      "area": "registers",
+      "initial_text": "one\ntwo",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "ddggP",
+      "expected": {
+        "text": "two\none",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "two"
+        }
+      }
+    },
+    {
+      "name": "line yank paste after last line",
+      "area": "registers",
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "yyGp",
+      "expected": {
+        "text": "one\ntwo\nthree\none",
+        "cursor": {
+          "line": 3,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "one"
+        }
+      }
+    },
+    {
+      "name": "line yank paste before first line",
+      "area": "registers",
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "yyggP",
+      "expected": {
+        "text": "three\none\ntwo\nthree",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "three"
         }
       }
     },
