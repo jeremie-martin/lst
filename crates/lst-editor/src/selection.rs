@@ -1183,7 +1183,7 @@ pub(crate) fn char_at_line_column(buffer: &Rope, line_ix: usize, column: usize) 
 }
 
 #[cfg(test)]
-mod identifier_tests {
+mod tests {
     use super::*;
 
     #[test]

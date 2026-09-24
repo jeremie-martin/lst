@@ -596,6 +596,27 @@ mod tests {
     }
 
     #[test]
+    fn ascii_fast_path_finds_what_the_regex_path_finds() {
+        let buffer = Rope::from_str("fn Foo() { foo_bar FOO }\n\tfoofoo fOo\r\nfoo");
+        for query in ["foo", "Foo", "FOO", "o", "oo", " f", "fo"] {
+            for case_sensitive in [false, true] {
+                let mut find = FindState::new();
+                find.query = query.to_string();
+                find.case_sensitive = case_sensitive;
+                find.compute_matches_in_rope(&buffer);
+                let actual = find.matches.iter().map(|m| (m.line, m.col)).collect::<Vec<_>>();
+
+                let regex = build_query_regex(query, case_sensitive, false, false).unwrap();
+                let mut expected = Vec::new();
+                for_each_text_line(&buffer, |line, text| {
+                    expected.extend(regex.find_iter(text).map(|m| (line, m.start())));
+                });
+                assert_eq!(actual, expected, "{query:?}, case sensitive: {case_sensitive}");
+            }
+        }
+    }
+
+    #[test]
     fn ascii_literal_scanner_keeps_non_overlapping_and_case_semantics() {
         let cases = [
             ("aaaaa", "aa", false, vec![0, 2]),

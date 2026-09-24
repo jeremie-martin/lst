@@ -230,26 +230,6 @@ pub(crate) fn offset_with_delta(offset: usize, delta: isize) -> usize {
     }
 }
 
-#[cfg(test)]
-fn map_offset_to_inserted_end(changes: &[TextChange], offset: usize) -> usize {
-    let mut delta = 0isize;
-    let mut mapped = None;
-    for change in changes {
-        if offset < change.range.start {
-            break;
-        }
-
-        let inserted_len = change.replacement.chars().count();
-        if offset <= change.range.end {
-            mapped = Some(offset_with_delta(change.range.start, delta) + inserted_len);
-        }
-
-        let removed_len = change.range.end - change.range.start;
-        delta += inserted_len as isize - removed_len as isize;
-    }
-    mapped.unwrap_or_else(|| offset_with_delta(offset, delta))
-}
-
 fn inserted_range_for_change(changes: &[TextChange], primary: usize) -> Range<usize> {
     let mut delta = 0isize;
     for change in &changes[..primary] {
@@ -285,6 +265,26 @@ pub(crate) fn ordered_range(start: usize, end: usize) -> Range<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Linear reference for the indexed offset mapping.
+    fn map_offset_to_inserted_end(changes: &[TextChange], offset: usize) -> usize {
+        let mut delta = 0isize;
+        let mut mapped = None;
+        for change in changes {
+            if offset < change.range.start {
+                break;
+            }
+
+            let inserted_len = change.replacement.chars().count();
+            if offset <= change.range.end {
+                mapped = Some(offset_with_delta(change.range.start, delta) + inserted_len);
+            }
+
+            let removed_len = change.range.end - change.range.start;
+            delta += inserted_len as isize - removed_len as isize;
+        }
+        mapped.unwrap_or_else(|| offset_with_delta(offset, delta))
+    }
 
     #[test]
     fn indexed_offsets_match_linear_mapping_at_every_boundary() {
