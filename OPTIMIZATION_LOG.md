@@ -460,3 +460,13 @@ in [the historical log](docs/optimization-history.md).
   only with baselines run through the same corrected runner. Startup and
   single-key latency already used epoch timestamps and are unaffected.
 
+### Combined input, find, and width checkpoint
+
+- The production `cb45390` build passes the full nested lane: **290/290**
+  tests in 1,651.808 seconds. This covers visible-only find conversion,
+  structural scan filtering, wrap reuse, framework modifier state, and the
+  measured-width cache together, including clipboard/process timeouts,
+  held keys, geometry, filesystem conflicts, Vim and multi-cursor editing.
+- The later compact-layout and deferred-font candidates are being checked
+  separately; this checkpoint does not claim coverage for those experiments.
+
