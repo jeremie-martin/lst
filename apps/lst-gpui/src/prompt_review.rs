@@ -541,8 +541,44 @@ fn render_row(row: &Row, theme: Theme, scale: f32) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone, Copy, Debug)]
+    enum Side {
+        Old,
+        New,
+    }
+
+    /// Reads one side of the comparison back out of the change rows.
+    fn side_text(review: &PreparedReview, side: Side) -> String {
+        let (other_kind, other_marks_removed) = match side {
+            Side::Old => (Kind::After, false),
+            Side::New => (Kind::Before, true),
+        };
+        review
+            .changes
+            .iter()
+            .filter(|row| row.kind != other_kind)
+            .map(|row| {
+                if row.kind != Kind::Inline {
+                    return row.text.clone();
+                }
+                // Inline rows interleave both sides; drop the other side's marks.
+                let mut text = String::new();
+                let mut offset = 0;
+                for mark in row.highlights.iter().filter(|mark| mark.removed == other_marks_removed) {
+                    text.push_str(&row.text[offset..mark.range.start]);
+                    offset = mark.range.end;
+                }
+                text.push_str(&row.text[offset..]);
+                text
+            })
+            .collect()
+    }
+
     #[test]
-    fn comparison_preserves_both_texts_and_unicode_boundaries() {
+    fn comparison_rows_are_bounded_and_preserve_both_texts() {
+        let long = "é🦀".repeat(10_000);
+        let long_changed = format!("{long} changed");
         for (old, new) in [
             ("café 🐈\n\nold\n", "café 🐕\n\nnew"),
             ("", "added"),
@@ -557,38 +593,24 @@ mod tests {
                 "Keep the old parser and all its tests.",
                 "Keep the new parser and all its tests.",
             ),
+            (&long, &long_changed),
         ] {
             let review = PreparedReview::new(old.into(), new.into(), String::new());
-            for (kind, expected) in [(Kind::After, old), (Kind::Before, new)] {
-                let actual: String = review
-                    .changes
-                    .iter()
-                    .filter(|r| r.kind != kind)
-                    .map(|r| {
-                        if r.kind != Kind::Inline {
-                            return r.text.clone();
-                        }
-                        let mut text = String::new();
-                        let mut offset = 0;
-                        for mark in &r.highlights {
-                            if mark.removed == (kind == Kind::Before) {
-                                text.push_str(&r.text[offset..mark.range.start]);
-                                offset = mark.range.end;
-                            }
-                        }
-                        text.push_str(&r.text[offset..]);
-                        text
-                    })
-                    .collect();
-                assert_eq!(actual, expected);
-            }
-            for row in review.changes {
-                for range in row.highlights {
-                    assert!(row.text.get(range.range).is_some());
+            assert_eq!(side_text(&review, Side::Old), old);
+            assert_eq!(side_text(&review, Side::New), new);
+            assert_eq!(
+                review.clean.iter().map(|row| row.text.as_str()).collect::<String>(),
+                new
+            );
+            for row in review.changes.iter().chain(&review.clean) {
+                assert!(row.text.len() <= 4096, "row of {} bytes", row.text.len());
+                for mark in &row.highlights {
+                    assert!(row.text.get(mark.range.clone()).is_some());
                 }
             }
         }
     }
+
     #[test]
     fn small_corrections_stay_inline_and_rewrites_get_separate_passages() {
         let small = PreparedReview::new(
@@ -610,16 +632,5 @@ mod tests {
         assert!(large.changes.iter().any(|row| row.kind == Kind::Before));
         assert!(large.changes.iter().any(|row| row.kind == Kind::After));
         assert!(!large.changes.iter().any(|row| row.kind == Kind::Inline));
-    }
-
-    #[test]
-    fn long_paragraphs_are_bounded_without_losing_text() {
-        let source = "é🦀".repeat(10_000);
-        let review = PreparedReview::new(source.clone(), format!("{source} changed"), String::new());
-        assert!(review.changes.iter().all(|r| r.text.len() <= 4096));
-        assert_eq!(
-            review.clean.iter().map(|r| r.text.as_str()).collect::<String>(),
-            review.result
-        );
     }
 }
