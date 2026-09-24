@@ -179,3 +179,14 @@ workaround). Limiting it to macOS cut CPU by ~6%, `open_to_quiet` from 1242 to
 NVIDIA host: frame end to damage for navigation 2.72 → 3.68 ms and for typing
 2.28 → 2.65 ms, and typing p50 7.47 → 7.94 ms. Continuous presenting keeps the
 GPU clocked up between keys. Rejected; GPUI unchanged.
+
+### Startup floor measured without lst
+
+A 60-line C program (instance, device on a second thread, XCB window,
+surface, FIFO_RELAXED swapchain) needs 116–170 ms to get its first swapchain
+on this host: instance 19–76 ms (bimodal), device 45–51 ms, first swapchain
+36–61 ms even for a 64×64 window (recreations take 0.5 ms). Surface capability
+queries made while the device is created do not pre-pay the swapchain cost.
+lst's first present (median 172 ms) is 10–30 ms above that floor, which is
+app construction plus the first frame; the rest is driver work that any
+Vulkan client pays.
