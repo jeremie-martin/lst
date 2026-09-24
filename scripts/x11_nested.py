@@ -34,6 +34,7 @@ REQUIRED_COMMANDS = (
     "xwininfo",
     "xdpyinfo",
     "xclip",
+    "setxkbmap",
 )
 REQUIRED_EXTENSIONS = ("DAMAGE", "XTEST", "XKEYBOARD")
 DISPLAY_ALLOCATION_LOCK = Path(tempfile.gettempdir()) / "lst-x11-nested-display.lock"

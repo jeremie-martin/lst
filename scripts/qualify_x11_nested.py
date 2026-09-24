@@ -52,11 +52,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="resume an interrupted run with binaries already in the artifact directory",
     )
-    parser.add_argument(
-        "--recheck-baseline-test",
-        metavar="BINARY::TEST",
-        help="re-run one corrected physical baseline test and merge it into an interrupted report",
-    )
     return parser.parse_args()
 
 
@@ -412,16 +407,6 @@ def write_report(report: Mapping[str, object], artifact_dir: Path) -> None:
                 "",
             ]
         )
-        correction = baseline.get("corrected_test_rerun")
-        if isinstance(correction, dict):
-            lines.extend(
-                [
-                    "The full physical run passed 207 unchanged tests. Its only failure was a stale",
-                    "test expectation corrected during qualification; the same test ID was then",
-                    f"re-run on the same binary and passed: `{correction.get('test')}`.",
-                    "",
-                ]
-            )
     mutants = report.get("mutants")
     if isinstance(mutants, list):
         lines.extend(
@@ -563,107 +548,11 @@ def qualify(args: argparse.Namespace) -> dict[str, object]:
     return report
 
 
-def recheck_corrected_baseline_test(args: argparse.Namespace) -> dict[str, object]:
-    artifact_dir = args.artifact_dir.resolve()
-    report_path = artifact_dir / "report.json"
-    if not report_path.is_file():
-        raise QualificationError(
-            f"cannot recheck without an existing report: {report_path}"
-        )
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    baseline = report.get("baseline")
-    mutants = report.get("mutants")
-    if not isinstance(baseline, dict) or not isinstance(mutants, list):
-        raise QualificationError("existing report has no baseline or mutant results")
-
-    try:
-        test_binary, test_name = args.recheck_baseline_test.split("::", 1)
-    except ValueError as error:
-        raise QualificationError("recheck test must use BINARY::TEST syntax") from error
-    test_id = f"lst-gpui::{test_binary}::{test_name}"
-    expected_difference = f"{test_id}: real=fail, nested=pass"
-    if baseline.get("differences") != [expected_difference]:
-        raise QualificationError(
-            "recheck is only valid when the requested test is the sole baseline difference"
-        )
-
-    real_results = junit_results(artifact_dir / "baseline-real-junit.xml")
-    nested_results = junit_results(artifact_dir / "baseline-nested-junit.xml")
-    if real_results.get(test_id) != "fail" or nested_results.get(test_id) != "pass":
-        raise QualificationError(
-            "stored JUnit reports do not contain the expected fail/pass pair"
-        )
-    if [test for test, outcome in real_results.items() if outcome != "pass"] != [
-        test_id
-    ]:
-        raise QualificationError(
-            "the physical baseline has additional non-passing tests"
-        )
-    if any(outcome != "pass" for outcome in nested_results.values()):
-        raise QualificationError("the nested baseline has a non-passing test")
-    if not all(
-        isinstance(mutant, dict) and mutant.get("qualified") for mutant in mutants
-    ):
-        raise QualificationError("not all mutant campaigns are qualified")
-
-    baseline_binary, baseline_hash = existing_binary(artifact_dir, "baseline-lst")
-    if baseline.get("binary_sha256") != baseline_hash:
-        raise QualificationError("baseline binary hash changed since the full run")
-    real_env = host_x11_env(args.real_display, args.real_xauthority)
-    test_env = dict(real_env)
-    test_env["LST_GPUI_BIN"] = str(baseline_binary)
-    status = run_logged(
-        [
-            "cargo",
-            "test",
-            "-p",
-            "lst-gpui",
-            "--test",
-            test_binary,
-            test_name,
-            "--",
-            "--ignored",
-            "--exact",
-            "--nocapture",
-        ],
-        cwd=REPO_ROOT,
-        env=test_env,
-        log_path=artifact_dir
-        / "logs"
-        / f"baseline-real-recheck-{test_binary}-{test_name}.log",
-    )
-    if status:
-        raise QualificationError("corrected physical baseline test still fails")
-
-    real_results[test_id] = "pass"
-    differences = compare_result_sets(real_results, nested_results)
-    baseline.update(
-        {
-            "real_status": 0,
-            "identical": not differences,
-            "differences": differences,
-            "qualified": not differences and baseline.get("visual_status") == 0,
-            "corrected_test_rerun": {
-                "test": test_id,
-                "original_full_run": "fail",
-                "rerun": "pass",
-            },
-        }
-    )
-    report["qualified"] = bool(baseline["qualified"]) and all(
-        mutant["qualified"] for mutant in mutants
-    )
-    return report
-
-
 def main() -> int:
     args = parse_args()
     report: dict[str, object]
     try:
-        if args.recheck_baseline_test:
-            report = recheck_corrected_baseline_test(args)
-        else:
-            report = qualify(args)
+        report = qualify(args)
     except (
         QualificationError,
         NestedDisplayError,
