@@ -1227,3 +1227,35 @@ CPU time); `open-small` 334 -> ~260 ms in the current environment.
   The slow prompt-timeout and held-arrow cases also pass. No tests skipped.
 - Log: `/tmp/lst-perf-sep23/topology-parser-find-full-x11.txt`. Physical
   measurements resume only after Xephyr has exited.
+
+### Reduce width maxima independently and retain syntax-only measurements
+
+- Split the existing numeric maximum into eight independent accumulators;
+  preserve `Pixels` total ordering, including NaNs and signed zero. Exhaustive
+  prefixes of finite and arbitrary floating-point bit patterns match the scalar
+  reduction. No additional persistent index or platform-specific SIMD is added.
+- Three alternating physical production runs on the 500k-line/29.5 MB no-wrap
+  widest-line deletion case: **204.674 -> 170.890 ms** for 320 Backspaces,
+  app cost **0.617 -> 0.503 ms/key**. All six exact saved files verified;
+  geometry 3816x2100. This improves the remaining numeric reduction after the
+  earlier borrowed-line and per-line-width changes, not another additive claim.
+- A syntax refresh at the already measured text revision now retains widths,
+  matching the wrapped-row owner's existing rule. Typography invalidation still
+  clears them; reads also validate font metrics. The first full scan remains.
+- Three alternating physical launches of a 30,000-line Rust-comment document
+  (3,000 distinct Unicode lines containing CJK, combining text and ZWJ emoji,
+  27,000 ASCII lines), wrapping disabled through an isolated configuration:
+  first frame **3,041.330 -> 3,019.960 ms**, completed background-syntax frame
+  **5,856.365 -> 3,102.480 ms**, five-second-or-completion CPU **5,910 -> 3,180 ms**.
+  Initial Unicode shaping remains costly; no first-frame speedup claimed.
+  Visible highlight preparation rises from ~3 to ~44 ms because it no longer
+  inherits warm line layouts from the redundant whole-document scan; this is
+  included in the substantially shorter completed-syntax interval.
+- An initial 30,000-all-Unicode fixture exceeded the 30-second completion
+  timeout after a 28.3-second first frame; discard that incomplete comparison.
+  Reducing only the Unicode portion lets both variants complete identically.
+- All-features tests and Clippy pass. Source coverage includes same-revision
+  retention, typography invalidation and numeric ordering. Full production X11
+  validation and physical cohort/pixel comparisons follow.
+- Raw outputs: `width-owner-backspace.txt`, `width-owner-startup.txt`, and their
+  per-run traces under `/tmp/lst-perf-sep23`.

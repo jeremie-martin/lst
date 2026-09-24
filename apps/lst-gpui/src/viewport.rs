@@ -209,6 +209,15 @@ impl ViewportCache {
         invalidation: &SyntaxInvalidation,
         line_count: usize,
     ) {
+        // Syntax refreshes do not change text extents. Font changes clear the
+        // cache separately, and measurements validate their font metrics.
+        if self
+            .max_unwrapped_line_width
+            .as_ref()
+            .is_some_and(|cached| cached.revision == revision)
+        {
+            return;
+        }
         let Some(lines) = invalidation.layout_lines(line_count) else {
             self.max_unwrapped_line_width = None;
             self.unwrapped_line_width_invalidation = None;
@@ -320,10 +329,20 @@ impl MeasuredLineWidths {
     }
 
     fn maximum(values: &[Pixels]) -> Pixels {
-        values
-            .iter()
-            .copied()
-            .fold(px(0.0), |max, width| if width > max { width } else { max })
+        // Independent reductions avoid a dependency on the preceding width
+        // at every comparison. Keep Pixels' total ordering, including NaNs.
+        let mut maxima = [px(0.0); 8];
+        let mut chunks = values.chunks_exact(maxima.len());
+        for chunk in &mut chunks {
+            for (maximum, width) in maxima.iter_mut().zip(chunk) {
+                *maximum = (*maximum).max(*width);
+            }
+        }
+        maxima
+            .into_iter()
+            .chain(chunks.remainder().iter().copied())
+            .max()
+            .unwrap_or(px(0.0))
     }
 
     fn remeasure(&mut self, lines: Range<usize>, measurements: impl ExactSizeIterator<Item = Pixels>) {
@@ -3113,6 +3132,28 @@ mod tests {
     }
 
     #[test]
+    fn independent_width_reductions_preserve_pixel_total_ordering() {
+        let mut values = vec![px(0.0), px(-0.0), px(-3.5)];
+        let mut seed = 0x743b91adu32;
+        for _ in 0..1024 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            values.push(px(seed as i32 as f32 / 1024.0));
+        }
+        values.extend([px(f32::NEG_INFINITY), px(f32::INFINITY)]);
+        for _ in 0..1024 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            values.push(px(f32::from_bits(seed)));
+        }
+        for end in 0..=values.len() {
+            let expected = values[..end].iter().copied().fold(px(0.0), |max, value| max.max(value));
+            assert_eq!(
+                f32::from(MeasuredLineWidths::maximum(&values[..end])).to_bits(),
+                f32::from(expected).to_bits()
+            );
+        }
+    }
+
+    #[test]
     fn measured_line_widths_match_a_fresh_maximum_after_range_updates() {
         let mut expected = vec![px(0.0); 128];
         let mut widths = MeasuredLineWidths::new(expected.clone());
@@ -3183,6 +3224,27 @@ mod tests {
         cache.patch_unwrapped_line_width(10, &SyntaxInvalidation::Full, 100);
         assert!(cache.max_unwrapped_line_width.is_none());
         assert!(cache.unwrapped_line_width_invalidation.is_none());
+    }
+
+    #[test]
+    fn syntax_only_refresh_preserves_current_text_widths() {
+        let mut cache = ViewportCache {
+            max_unwrapped_line_width: Some(CachedUnwrappedLineWidth {
+                revision: 7,
+                char_width: px(8.0),
+                font_size: px(13.0),
+                widths: MeasuredLineWidths::new(vec![px(800.0); 100]),
+            }),
+            ..Default::default()
+        };
+        cache.patch_unwrapped_line_width(7, &SyntaxInvalidation::Full, 100);
+        assert_eq!(
+            cache.max_unwrapped_line_width.as_ref().unwrap().widths.values.len(),
+            100
+        );
+        assert!(cache.unwrapped_line_width_invalidation.is_none());
+        cache.invalidate_typography();
+        assert!(cache.max_unwrapped_line_width.is_none());
     }
 
     #[test]

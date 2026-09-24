@@ -1,7 +1,8 @@
 # Optimization log
 
 Current results from 23–24 September 2026, starting at `8accfc9`.
-Production changes through `82b5b24`; detailed experiments, rejected candidates,
+Production changes include retained text widths across syntax refreshes; detailed
+experiments, rejected candidates,
 individual run counts and earlier sessions are in the
 [measurement history](docs/optimization-history.md).
 
@@ -33,6 +34,8 @@ phase measurements and qualifications are preserved in the history.
 | --- | --- | --- |
 | External 2.98 MB paste, input through paint | 737 → 92 ms | bounded clipboard socket readiness instead of per-chunk sleeps |
 | 500k-line no-wrap, 320 backspaces on the widest line | 23,561 → 199 ms | borrow full-scan lines, then retain per-line widths and reduce cached numbers |
+| Widest-line deletion, final numeric reduction | 205 → 171 ms / 320 keys | eight independent accumulators, preserving pixel ordering |
+| 30k-line mixed Unicode/ASCII no-wrap startup through syntax paint | 5.86 → 3.10 s | retain unchanged widths after background parsing; first frame remains ~3.02 s |
 | 500k-line no-wrap, 320 newlines | 3,879 → 93 ms (~42×) | replace changed line windows instead of rebuilding all measurements |
 | Growing widest line, 500k-line no-wrap document | 69.708 → 0.382 ms/character | remeasure changed widths; retain unaffected maximum |
 | Find with 6,144 matches, query update through final root paint | 44.824 → 17.060 ms | convert only visible matches, located by binary search |
