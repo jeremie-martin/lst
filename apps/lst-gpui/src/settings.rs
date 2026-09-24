@@ -365,9 +365,11 @@ impl SettingsStore {
 
     /// Records a reloaded store's on-disk content as seen without adopting
     /// its values. Used when a reload fails to parse: the old settings stay
-    /// in effect, but the poll must not rediscover the same content forever.
+    /// in effect, the poll must not rediscover the same content forever, and
+    /// saving must refuse to overwrite the file until it parses again.
     pub(crate) fn mark_source_seen(&mut self, reloaded: Self) {
         self.source = reloaded.source;
+        self.parse_error = reloaded.parse_error;
     }
 }
 
@@ -653,5 +655,11 @@ mod tests {
             store.reloaded_if_changed().is_none(),
             "a rejected edit is not reported again"
         );
+        assert_eq!(
+            store.settings.editor.font_size, 20,
+            "the previous settings stay in effect"
+        );
+        assert!(store.save().is_err(), "the broken file is not overwritten");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "not toml [");
     }
 }

@@ -222,3 +222,27 @@ fn scratchpad_directory_setting_chooses_where_scratchpads_are_created() -> TestR
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn failed_config_reload_is_reported_and_not_overwritten_by_settings_changes() -> TestResult {
+    support::run_x11_test("settings-invalid-reload", |session| {
+        let settings_path = session.seed_settings("version = 1\n[editor]\nword_wrap = true\n")?;
+        let (mut editor, _path) = session.open("settings-invalid-reload")?;
+
+        let broken = "version = 1\n[editor\nword_wrap = false\n";
+        fs::write(&settings_path, broken)?;
+        editor.wait_state("reload failure reported", secs(5), |record| {
+            record.status_message.starts_with("Settings reload failed") && record.word_wrap_enabled
+        })?;
+
+        editor.keys("<C-,><tab>")?;
+        editor.wait_state("first settings row selected", secs(2), |record| {
+            record.settings_selected_item.as_deref() == Some("input_mode")
+        })?;
+        editor.keys("<enter>")?;
+        editor.wait_state("input mode changed", secs(2), |record| record.input_mode == "vim")?;
+        assert_eq!(fs::read_to_string(&settings_path)?, broken);
+        Ok(())
+    })
+}
