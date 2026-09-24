@@ -47,7 +47,6 @@ pub(crate) enum WorkspaceCommand {
     ZoomReset,
     Quit,
     SetSelectNextSkipPrefix,
-    SelectNextOccurrenceOrSkip,
     /// A Ctrl chord Vim owns in Normal and Visual modes.
     VimControl(char),
 }
@@ -253,8 +252,8 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("ctrl-[", EDITOR, model(Command::Outdent)),
     fb("ctrl-a", EDITOR, model(Command::SelectAll)),
     b("cmd-a", EDITOR, model(Command::SelectAll)),
-    fb("ctrl-d", EDITOR, WorkspaceCommand::SelectNextOccurrenceOrSkip),
-    b("cmd-d", EDITOR, WorkspaceCommand::SelectNextOccurrenceOrSkip),
+    fb("ctrl-d", EDITOR, model(Command::SelectNextOccurrence)),
+    b("cmd-d", EDITOR, model(Command::SelectNextOccurrence)),
     b("ctrl-u", EDITOR, model(Command::PopPrimarySelectionCursor)),
     fb("ctrl-k", EDITOR, WorkspaceCommand::SetSelectNextSkipPrefix),
     fb("ctrl-shift-l", EDITOR, model(Command::SelectAllOccurrences)),
@@ -413,7 +412,6 @@ pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
         WorkspaceCommand::ZoomReset => "view.zoom_reset",
         WorkspaceCommand::Quit => "file.quit",
         WorkspaceCommand::SetSelectNextSkipPrefix => "selection.skip_next_prefix",
-        WorkspaceCommand::SelectNextOccurrenceOrSkip => "selection.add_next_occurrence",
         WorkspaceCommand::VimControl(_) => "vim.control",
         WorkspaceCommand::Model(command) => match command {
             RequestOpenFiles => "file.open",
@@ -703,14 +701,10 @@ impl LstGpuiApp {
                 cx.notify();
                 return;
             }
-            WorkspaceCommand::SelectNextOccurrenceOrSkip => {
-                let skip = self.x11_ctrl_k_pending;
+            // A pending Ctrl+K turns the next Ctrl+D into a skip.
+            WorkspaceCommand::Model(Command::SelectNextOccurrence) if self.x11_ctrl_k_pending => {
                 self.clear_x11_modifier_chord_state();
-                WorkspaceCommand::Model(if skip {
-                    Command::SkipNextOccurrence
-                } else {
-                    Command::SelectNextOccurrence
-                })
+                WorkspaceCommand::Model(Command::SkipNextOccurrence)
             }
             command => {
                 self.clear_x11_modifier_chord_state();
@@ -785,7 +779,7 @@ impl LstGpuiApp {
                     model.handle_vim_key(lst_editor::vim::Key::Character(key.to_string()), mods, wrap_columns);
                 });
             }
-            WorkspaceCommand::SetSelectNextSkipPrefix | WorkspaceCommand::SelectNextOccurrenceOrSkip => unreachable!(),
+            WorkspaceCommand::SetSelectNextSkipPrefix => unreachable!(),
         }
     }
 }
