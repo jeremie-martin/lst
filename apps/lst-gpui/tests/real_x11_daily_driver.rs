@@ -234,14 +234,20 @@ fn app_menu_does_not_add_a_backdrop_beyond_the_inactive_current_line() -> TestRe
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn standard_duplicate_line_above() -> TestResult {
-    support::run_x11_test("daily-driver-duplicate-up", |session| {
+fn ctrl_alt_shift_arrows_duplicate_the_line_above_and_below() -> TestResult {
+    support::run_x11_test("daily-driver-duplicate-up-down", |session| {
         let path = session.seed_file("duplicate.txt", "alpha\nbeta")?;
         let mut editor = session.open_file("duplicate", &path)?;
 
+        // The copies are identical, so the caret tells the directions apart:
+        // it stays on the upper copy for "above" and follows the lower one
+        // for "below".
         editor.click_at_text(1, 2)?;
         editor.keys("<C-A-S-up>")?;
-        editor.save_then_expect_file(&path, "alpha\nbeta\nbeta")?;
+        editor.expect_cursor_heads(&[(1, 2)])?;
+        editor.keys("<C-A-S-down>")?;
+        editor.expect_cursor_heads(&[(2, 2)])?;
+        editor.save_then_expect_file(&path, "alpha\nbeta\nbeta\nbeta")?;
         Ok(())
     })
 }

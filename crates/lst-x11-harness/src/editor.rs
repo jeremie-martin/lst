@@ -883,7 +883,7 @@ impl<'a> Editor<'a> {
     fn dispatch_token(&self, token: &KeyToken) -> Result<()> {
         match token {
             KeyToken::Single(s) => {
-                let chord = dispatchable_single_chord(s);
+                let chord = *s;
                 let (code, base_shift) = resolve_key(&self.display.keycodes, chord.key)?;
                 input::chord_with_modifiers(
                     &self.display.conn,
@@ -1245,23 +1245,6 @@ impl<'a> Editor<'a> {
         )
         .into())
     }
-}
-
-fn dispatchable_single_chord(chord: &KeyChordSingle) -> KeyChordSingle {
-    if chord.ctrl && chord.alt && chord.shift && matches!(chord.key, Key::Up | Key::Down) {
-        // Many X11 desktops reserve Ctrl+Alt+Arrow globally before the app can
-        // observe it. Drive the editor's non-reserved duplicate-line binding
-        // for this product shortcut so the real-window tests still exercise
-        // production duplicate-line behavior.
-        return KeyChordSingle {
-            ctrl: true,
-            alt: false,
-            shift: true,
-            platform: false,
-            key: Key::Char('d'),
-        };
-    }
-    *chord
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
