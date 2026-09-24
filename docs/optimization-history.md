@@ -1400,3 +1400,71 @@ CPU time); `open-small` 334 -> ~260 ms in the current environment.
   uses the same compiler/profile as final production; the current runner drives
   both preserved binaries. This closes the original baseline's timing-boundary
   mismatch without claiming older viewport-only costs are whole-frame costs.
+
+### Direct comparison with the original baseline, using equal tracing
+
+- `f0ff2a4` (`8accfc9` plus tracing only) versus final production `e69a78a`,
+  same current runner, physical 3816x2100, one priming run, three measured runs
+  per editing/scrolling case and seven startup launches. All exact saved-output
+  checks pass. Compiler: rustc 1.93.0-nightly (b6d7ff3aa), release opt-level 3,
+  LTO enabled, stripped production binaries; no test-support features.
+
+| Metric | Original baseline | Final |
+| --- | ---: | ---: |
+| Plain typing, ms/character | 0.467 | 0.312 |
+| Plain typing, scenario CPU ms | 130 | 100 |
+| Highlighted scroll, complete frame ms | 1.746 | 1.127 |
+| Highlighted scroll, scenario CPU ms | 1,170 | 930 |
+| Edit-navigation, mean complete frame ms | 1.101 | 0.632 |
+| Edit-navigation, scenario CPU ms | 3,340 | 2,590 |
+| Edit-navigation, input through app paint p50 ms | 2.299 | 1.638 |
+| Edit-navigation, presentation p50 ms | 6.814 | 6.620 |
+| Small-file first frame ms | 186.912 | 200.270 |
+
+- The earlier small presentation regression against intermediate `65796dc`
+  remains documented; the direct starting-baseline comparison does not establish
+  a general presentation-latency gain. App frame work and sustained throughput
+  improve substantially more than isolated presentation latency.
+- Startup has no gain: CPU is **320 ms** on both variants; first-frame run ranges
+  are **172.974–201.670** and **176.721–206.258 ms**. Phase medians put the gap
+  before the app view is constructed (app-init ~93 ms both, app-new ~171 vs184 ms),
+  not in subsequent editor rendering. A reversed-order startup check follows.
+- Logs: `initial-comparison-*.txt` under `/tmp/lst-perf-sep23`.
+
+### Verify line-topology gains with wrapping enabled
+
+- Three alternating physical runs per variant, 500k-line/29.5 MB plain document,
+  wrapping explicitly enabled, caret placed at line 1 column 1001, 320 Returns.
+  Pre-topology production `5e02267` versus final `e69a78a`: completed paint
+  **3,495.912 -> 209.400 ms** (~16.7x), app cost **10.906 -> 0.634 ms/newline**.
+- All six 29,512,838-byte saved files match exactly; geometry 3816x2100. Numeric
+  suffix updates remain visible compared with no-wrap's ~93 ms, but the full
+  text rescan is removed in both modes. No further index complexity is added.
+- Log: `/tmp/lst-perf-sep23/newline-wrapped-paired.txt`.
+
+### Direct original-baseline widest-line deletion comparison
+
+- Three alternating physical launches per variant on the 500k-line/29.5 MB
+  no-wrap document, deleting 320 characters from its uniquely widest first line.
+  Original baseline plus equal root tracing versus final production:
+  **23,780.259 -> 175.914 ms** through completed paint (~135x), app cost
+  **74.285 -> 0.519 ms/Backspace**. All six exact 29,512,198-byte saves verify.
+- Baseline runs: 23,883.449 / 23,780.259 / 23,607.456 ms. Final runs:
+  175.914 / 193.695 / 166.115 ms. Every client is 3816x2100.
+  This directly verifies the combined borrowed-line, width-index, compact-layout
+  and numeric-reduction result without multiplying individual speedups.
+- Log: `/tmp/lst-perf-sep23/initial-backspace-paired.txt`.
+
+### Reverse startup order and close the measurement record
+
+- Seven further measured launches plus priming in reversed order give
+  **185.234 -> 180.279 ms** first-frame medians, with **320 ms CPU** on both.
+  The direction reverses from the preceding 186.912 -> 200.270 ms comparison.
+  Pooling all 14 measured launches per variant yields **186.043 ->
+  187.281 ms**; no established whole-startup improvement.
+  Keep both orders and their complete run lists; do not select only the better
+  final-app run. Log: `initial-open-recheck-*.txt` under `/tmp/lst-perf-sep23`.
+- Final production remains `e69a78a`; later commits only improve benchmark
+  reporting or document verification. All measured edits verify exact saved
+  output. Final physical checks run after Xephyr exits, and no source changes
+  invalidate the completed 291-test production checkpoint.
