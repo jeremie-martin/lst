@@ -200,19 +200,20 @@ fn voice_segments_preserve_edits_and_follow_the_note_across_tabs() -> TestResult
             },
         ]);
         let env = configure(session, &server)?;
-        let screenshot = session.artifacts().join("voice-recording.ppm");
         let (mut editor, original) = session.open_with_env("scratch", &env_refs(&env))?;
         editor.keys("<C-A-1>")?;
         let state = voice(&mut editor, "Recording")?;
         let note = PathBuf::from(state.active_tab_path.unwrap());
         assert!(note.parent().unwrap().ends_with("audio-notes"));
-        editor.screenshot()?.write_ppm(&screenshot)?;
         editor.keys("<C-A-2>")?;
         editor.expect_file(&note, "First.")?;
         editor.keys("<C-home>Edited <C-A-2>")?;
         voice(&mut editor, "Recording")?;
         editor.keys("<C-A-2>")?;
         voice(&mut editor, "Transcribing")?;
+        // The second upload is held at the gate, so the tab switch and typing
+        // happen while it is in flight.
+        server.wait_requests(2);
         editor.keys("<C-tab>Other tab")?;
         std::fs::remove_file(gate)?;
         editor.expect_file(&note, "Edited First. Second.")?;
