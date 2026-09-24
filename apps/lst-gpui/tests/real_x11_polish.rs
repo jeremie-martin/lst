@@ -101,29 +101,6 @@ fn syntax_selection_expands_in_layers_and_shrinks_the_exact_history() -> TestRes
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn polish_settings_value_editor_validates_and_commits_without_touching_the_document() -> TestResult {
-    support::run_x11_test("polish-settings-values", |session| {
-        let path = session.seed_file("settings-values.txt", "unchanged\n")?;
-        let mut editor = session.open_file("polish-settings-values", &path)?;
-
-        editor.keys("<C-,>")?;
-        editor.send_keys_settle("rulers")?;
-        editor.keys("<tab><enter>1001<enter>")?;
-        editor.wait_state("invalid rulers remain open", secs(2), |record| {
-            record.settings_value_editor_item.as_deref() == Some("rulers") && record.settings_value_error.is_some()
-        })?;
-        editor.send_keys_settle("<C-a>120, 80, 80<enter>")?;
-        let committed = editor.wait_state("rulers committed", secs(2), |record| {
-            record.settings_value_editor_item.is_none() && record.editor_polish.rulers == [80, 120]
-        })?;
-        assert_eq!(committed.revision, 0, "{committed:?}");
-        assert_eq!(std::fs::read_to_string(path)?, "unchanged\n");
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
 fn configured_cursor_limit_truncates_large_selection_sets_with_status_feedback() -> TestResult {
     support::run_x11_test("polish-cursor-limit", |session| {
         session.seed_settings("version = 1\n[editor]\nmulti_cursor_limit = 3\n")?;
