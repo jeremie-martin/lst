@@ -195,11 +195,9 @@ impl LayoutGuard {
         let original = LayoutSnapshot::query(env)?;
         let target = requested_layout_snapshot()?;
         let needs_restore = original != target;
-        // Apply even when the query already names the target: it reports rule
-        // names, not every device's active keymap, and the first test on a
-        // fresh nested display has typed with host AZERTY keycodes ("(" as
-        // "5", Ctrl+Z as Ctrl+W) while the query said "us".
-        target.apply(env)?;
+        if needs_restore {
+            target.apply(env)?;
+        }
         Ok(Self {
             original,
             session_env: env.clone(),
