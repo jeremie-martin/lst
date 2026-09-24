@@ -200,17 +200,15 @@ fn vertical_motion_keeps_each_cursor_preferred_column() -> TestResult {
         editor.keys("<C-A-down>")?;
         editor.expect_cursor_heads(&[(0, 8), (1, 5)])?;
 
-        // Moving down puts the first cursor at the end of the short line
-        // (char 16), where it is drawn and reported at its goal column 8;
+        // Moving down clamps the first cursor to the end of the short line;
         // the second cursor keeps column 8 on the long line below.
         editor.keys("<down>")?;
-        let clamped = editor.expect_cursor_heads(&[(1, 8), (2, 8)])?;
-        assert_eq!(clamped.cursors[0].head_char, 16, "{clamped:?}");
-        // Moving down again lands the first cursor on its goal column 8.
+        editor.expect_cursor_heads(&[(1, 5), (2, 8)])?;
+        // Past the short line, the first cursor returns to its goal column 8.
         editor.keys("<down>")?;
         editor.expect_cursor_heads(&[(2, 8), (3, 8)])?;
         editor.keys("<up><up>")?;
-        editor.expect_cursor_heads(&[(0, 8), (1, 8)])?;
+        editor.expect_cursor_heads(&[(0, 8), (1, 5)])?;
         Ok(())
     })
 }

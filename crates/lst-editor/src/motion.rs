@@ -57,7 +57,7 @@ pub(crate) fn vertical(tab: &EditorTab, delta: isize, select: bool, snap: bool) 
     map(tab, |index, selection| {
         let goal = goal_for(tab, index, selection);
         let target = vertical_target(tab, selection.cursor(), goal, delta, snap);
-        transform_with_goal(tab, selection, target, select, goal)
+        transform_with_goal(selection, target, select, goal)
     })
 }
 pub(crate) fn display_rows(
@@ -88,7 +88,7 @@ pub(crate) fn display_rows(
         } else {
             CursorGoal::Column(preferred)
         };
-        transform_with_goal(tab, selection, target, select, goal)
+        transform_with_goal(selection, target, select, goal)
     })
 }
 /// Move both axes together, retaining the desired column across short rows.
@@ -123,7 +123,7 @@ pub(crate) fn diagonal(tab: &EditorTab, backward: bool, rows: isize, wrap_column
         let column = segment.start_col.saturating_add(preferred).min(last_column);
         let target = position_to_char(tab.buffer(), Position::new(line, column));
         let target = crate::selection::floor_grapheme_boundary(tab.buffer(), target);
-        transform_with_goal(tab, selection, target, false, CursorGoal::Column(preferred))
+        transform_with_goal(selection, target, false, CursorGoal::Column(preferred))
     })
 }
 
@@ -263,20 +263,8 @@ fn vertical_boundary_target(tab: &EditorTab, delta: isize) -> Option<usize> {
         None
     }
 }
-fn transform_with_goal(
-    tab: &EditorTab,
-    selection: Selection,
-    target: usize,
-    select: bool,
-    goal: CursorGoal,
-) -> SelectionTransform {
-    let selection = selection_to(selection, target, select);
-    let actual_column = char_to_position(tab.buffer(), target).column;
-    let visible_column = (!selection.has_selection()).then_some(match goal {
-        CursorGoal::Column(column) => column,
-        CursorGoal::LineEnd => actual_column,
-    });
-    SelectionTransform::with_columns(selection, goal, visible_column)
+fn transform_with_goal(selection: Selection, target: usize, select: bool, goal: CursorGoal) -> SelectionTransform {
+    SelectionTransform::with_goal(selection_to(selection, target, select), goal)
 }
 fn display_preferred(tab: &EditorTab, wrap_columns: usize, position: Position, goal: CursorGoal) -> usize {
     if !tab.selection_set().has_multiple() && tab.preferred_column().is_none() {

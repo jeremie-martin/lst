@@ -93,28 +93,24 @@ pub(crate) struct SelectionState {
 pub(crate) struct SelectionTransform {
     pub(crate) selection: Selection,
     pub(crate) movement_goal: Option<CursorGoal>,
-    pub(crate) visible_column: Option<usize>,
 }
 impl SelectionTransform {
     pub(crate) fn new(selection: Selection) -> Self {
         Self {
             selection,
             movement_goal: None,
-            visible_column: None,
         }
     }
-    pub(crate) fn with_columns(selection: Selection, movement_goal: CursorGoal, visible_column: Option<usize>) -> Self {
+    pub(crate) fn with_goal(selection: Selection, movement_goal: CursorGoal) -> Self {
         Self {
             selection,
             movement_goal: Some(movement_goal),
-            visible_column,
         }
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct CursorGoals {
     movement: Option<Vec<CursorGoal>>,
-    visible: Option<Vec<usize>>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectionSetError {
@@ -327,9 +323,6 @@ impl SelectionState {
     pub(crate) fn movement_column_for(&self, selection_index: usize) -> Option<usize> {
         self.movement_goal_for(selection_index).and_then(CursorGoal::column)
     }
-    pub(crate) fn visible_column_for(&self, selection_index: usize) -> Option<usize> {
-        self.goals.visible_for(selection_index)
-    }
     pub(crate) fn set_all_movement_goals(&mut self, goal: Option<CursorGoal>) {
         self.goals.set_all_movement(self.set.as_slice().len(), goal);
     }
@@ -382,7 +375,6 @@ impl SelectionState {
         let set = SelectionSet::from_selections(selections, primary).ok()?;
         let goals = CursorGoals {
             movement: mapped.iter().map(|entry| entry.transform.movement_goal).collect(),
-            visible: mapped.iter().map(|entry| entry.transform.visible_column).collect(),
         };
         Some(Self { set, goals })
     }
@@ -396,16 +388,11 @@ impl CursorGoals {
     fn movement_for(&self, ix: usize) -> Option<CursorGoal> {
         self.movement.as_ref().and_then(|g| g.get(ix)).copied()
     }
-    fn visible_for(&self, ix: usize) -> Option<usize> {
-        self.visible.as_ref().and_then(|c| c.get(ix)).copied()
-    }
     fn set_all_movement(&mut self, len: usize, goal: Option<CursorGoal>) {
         self.movement = goal.map(|g| vec![g; len]);
-        self.visible = None;
     }
     fn clear(&mut self) {
         self.movement = None;
-        self.visible = None;
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -415,9 +415,6 @@ impl EditorTab {
     pub(crate) fn preferred_goal_for_selection(&self, selection_index: usize) -> Option<CursorGoal> {
         self.selection.movement_goal_for(selection_index)
     }
-    pub fn visible_column_for_selection(&self, selection_index: usize) -> Option<usize> {
-        self.selection.visible_column_for(selection_index)
-    }
     pub(crate) fn set_preferred_column(&mut self, preferred_column: Option<usize>) {
         self.set_preferred_goal(preferred_column.map(CursorGoal::Column));
     }

@@ -281,20 +281,16 @@ impl LstGpuiApp {
         let cursors = selection_set
             .as_slice()
             .iter()
-            .enumerate()
-            .map(|(index, sel)| {
+            .map(|sel| {
                 let (anchor_line, anchor_col) = char_to_line_col(buffer, sel.anchor());
                 let (head_line, head_col) = char_to_line_col(buffer, sel.head());
-                let visible_col = (!sel.has_selection())
-                    .then(|| tab.visible_column_for_selection(index))
-                    .flatten();
                 TraceCursor {
                     anchor_char: sel.anchor(),
                     head_char: sel.head(),
                     anchor_line,
-                    anchor_col: visible_col.unwrap_or(anchor_col),
+                    anchor_col,
                     head_line,
-                    head_col: visible_col.unwrap_or(head_col),
+                    head_col,
                 }
             })
             .collect::<Vec<_>>();

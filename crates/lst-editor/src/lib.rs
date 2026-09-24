@@ -704,11 +704,7 @@ impl EditorModel {
         self.apply_selection_transform(|tab, _, selection| {
             let selection = motion(tab, selection);
             match goal {
-                Some(goal) => SelectionTransform::with_columns(
-                    selection,
-                    goal,
-                    (!selection.has_selection()).then_some(preferred_column.unwrap()),
-                ),
+                Some(goal) => SelectionTransform::with_goal(selection, goal),
                 None => SelectionTransform::new(selection),
             }
         })
