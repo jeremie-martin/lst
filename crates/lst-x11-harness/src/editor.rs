@@ -1002,10 +1002,36 @@ impl<'a> Editor<'a> {
         self.attach_stderr_context(result, "wait_quiet")
     }
 
+    /// Wait until the editor's newest state-trace record satisfies
+    /// `predicate`, and return it. Intermediate records are skipped, so the
+    /// predicate must describe the settled state, and it should differ from
+    /// the state before the action or the wait proves nothing.
     pub fn wait_state(
         &mut self,
         label: &str,
         timeout: Duration,
+        predicate: impl Fn(&StateTraceRecord) -> bool,
+    ) -> Result<StateTraceRecord> {
+        self.wait_trace(label, timeout, TraceWait::Newest, predicate)
+    }
+
+    /// Wait until any record since the last wait satisfies `predicate`, in
+    /// order. Use this only for a short-lived state that the editor may have
+    /// left again before the wait starts polling, such as a pending search.
+    pub fn wait_transient_state(
+        &mut self,
+        label: &str,
+        timeout: Duration,
+        predicate: impl Fn(&StateTraceRecord) -> bool,
+    ) -> Result<StateTraceRecord> {
+        self.wait_trace(label, timeout, TraceWait::AnySince, predicate)
+    }
+
+    fn wait_trace(
+        &mut self,
+        label: &str,
+        timeout: Duration,
+        mode: TraceWait,
         predicate: impl Fn(&StateTraceRecord) -> bool,
     ) -> Result<StateTraceRecord> {
         let result = (|| {
@@ -1022,17 +1048,16 @@ impl<'a> Editor<'a> {
                     io::Error::other("state trace not configured; pass `SpawnOpts::state_trace_path` at spawn time")
                 })?;
                 let records = reader.read_new_records()?;
-                for record in records {
-                    latest = Some(record.clone());
-                    if predicate(&record) {
+                if mode == TraceWait::AnySince {
+                    if let Some(record) = records.into_iter().find(|record| predicate(record)) {
                         return Ok(record);
                     }
                 }
                 if let Some(record) = reader.last_observed().cloned() {
-                    latest = Some(record.clone());
                     if predicate(&record) {
                         return Ok(record);
                     }
+                    latest = Some(record);
                 }
 
                 if Instant::now() >= deadline {
@@ -1237,6 +1262,12 @@ fn dispatchable_single_chord(chord: &KeyChordSingle) -> KeyChordSingle {
         };
     }
     *chord
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TraceWait {
+    Newest,
+    AnySince,
 }
 
 fn resolve_text_pixels(state: &StateTraceRecord, line: usize, col: usize, label: &str) -> Result<(i32, i32)> {

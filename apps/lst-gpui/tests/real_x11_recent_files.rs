@@ -149,7 +149,7 @@ fn recent_panel_content_query_opens_file_matching_body() -> TestResult {
         })?;
 
         editor.keys("needle")?;
-        editor.wait_state("recent content search pending", secs(5), |record| {
+        editor.wait_transient_state("recent content search pending", secs(5), |record| {
             record.recent_panel_open
                 && record.recent_panel_query.as_deref() == Some("needle")
                 && record.recent_panel_content_search_pending
@@ -216,7 +216,7 @@ fn recent_panel_content_query_finds_open_autosaved_scratchpad() -> TestResult {
         })?;
 
         editor.keys("<C-r>unique open scratchpad phrase")?;
-        editor.wait_state("open scratchpad content search pending", secs(5), |record| {
+        editor.wait_transient_state("open scratchpad content search pending", secs(5), |record| {
             record.recent_panel_open
                 && record.recent_panel_query.as_deref() == Some("unique open scratchpad phrase")
                 && record.recent_panel_content_search_pending
