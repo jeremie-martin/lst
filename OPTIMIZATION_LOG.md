@@ -170,3 +170,12 @@ Rejected reorderings, each measured on `:0`:
 Roughly 110–140 ms of startup is therefore NVIDIA driver time (device plus
 first swapchain), which the editor cannot remove without changing driver or
 backend; the font scan is fully hidden behind it.
+
+### GPUI's one-second re-presentation after input: kept
+
+GPUI keeps presenting for one second after any input (a macOS-motivated
+workaround). Limiting it to macOS cut CPU by ~6%, `open_to_quiet` from 1242 to
+277 ms and damage events per run from 141 to 3, but worsened latency on this
+NVIDIA host: frame end to damage for navigation 2.72 → 3.68 ms and for typing
+2.28 → 2.65 ms, and typing p50 7.47 → 7.94 ms. Continuous presenting keeps the
+GPU clocked up between keys. Rejected; GPUI unchanged.
