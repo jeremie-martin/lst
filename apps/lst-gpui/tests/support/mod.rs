@@ -41,7 +41,6 @@ pub enum FindChip {
 pub enum FileConflictAction {
     Reload,
     KeepMine,
-    SaveAs,
     Dismiss,
 }
 
@@ -425,9 +424,6 @@ pub trait EditorTestExt {
     /// Click the status-bar cleanup (sparkle) button.
     fn click_cleanup_button(&mut self) -> SupportResult<()>;
 
-    /// Click the visible status-bar theme toggle button.
-    fn click_theme_button(&mut self) -> SupportResult<()>;
-
     /// Click the visible tab-strip application-menu button.
     fn click_app_menu_button(&mut self) -> SupportResult<()>;
 
@@ -547,16 +543,6 @@ impl EditorTestExt for Editor<'_> {
         click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "cleanup-click")
     }
 
-    fn click_theme_button(&mut self) -> SupportResult<()> {
-        let record = self.wait_state("theme button bounds", FOCUS_TIMEOUT, |state| {
-            state.theme_button_bounds_px.is_some()
-        })?;
-        let (ox, oy, w, h) = record
-            .theme_button_bounds_px
-            .ok_or("theme button bounds missing after wait")?;
-        click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "theme-click")
-    }
-
     fn click_app_menu_button(&mut self) -> SupportResult<()> {
         let record = self.wait_state("app menu button bounds", FOCUS_TIMEOUT, |state| {
             state.app_menu_button_bounds_px.is_some()
@@ -645,7 +631,6 @@ fn file_conflict_action_bounds(record: &StateTraceRecord, action: FileConflictAc
     match action {
         FileConflictAction::Reload => record.file_conflict_button_bounds_px.reload,
         FileConflictAction::KeepMine => record.file_conflict_button_bounds_px.keep_mine,
-        FileConflictAction::SaveAs => record.file_conflict_button_bounds_px.save_as,
         FileConflictAction::Dismiss => record.file_conflict_button_bounds_px.dismiss,
     }
 }
@@ -694,7 +679,7 @@ fn capture_window_artifact(editor: &Editor<'_>, label: &str) -> Option<PathBuf> 
     status.success().then_some(path)
 }
 
-pub fn editor_binary() -> SupportResult<PathBuf> {
+fn editor_binary() -> SupportResult<PathBuf> {
     if let Some(path) = env::var_os("LST_GPUI_BIN") {
         return Ok(PathBuf::from(path));
     }
@@ -711,7 +696,7 @@ pub fn editor_binary() -> SupportResult<PathBuf> {
     Err("could not find lst binary; run `cargo build -p lst-gpui --bin lst` or set LST_GPUI_BIN".into())
 }
 
-pub fn wait_for_single_file(dir: &Path, timeout: Duration) -> SupportResult<PathBuf> {
+fn wait_for_single_file(dir: &Path, timeout: Duration) -> SupportResult<PathBuf> {
     let deadline = Instant::now() + timeout;
     loop {
         let mut files = fs::read_dir(dir)?
@@ -744,13 +729,13 @@ pub fn count_files(dir: &Path) -> SupportResult<usize> {
     Ok(count)
 }
 
-pub fn temp_dir(label: &str) -> SupportResult<PathBuf> {
+fn temp_dir(label: &str) -> SupportResult<PathBuf> {
     let dir = env::temp_dir().join(format!("{label}-{}", unique_id()));
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
 
-pub fn unique_title(label: &str) -> String {
+fn unique_title(label: &str) -> String {
     format!("lst-real-x11-{label}-{}", unique_id())
 }
 
@@ -781,10 +766,75 @@ fn recent_path_bytes(path: &Path) -> Vec<u8> {
     path.as_os_str().to_string_lossy().as_bytes().to_vec()
 }
 
-pub fn ms(value: u64) -> Duration {
-    Duration::from_millis(value)
-}
-
 pub fn secs(value: u64) -> Duration {
     Duration::from_secs(value)
+}
+
+/// The path as the state trace reports it (`active_tab_path`, recent-panel
+/// selection, close-prompt and quit-review identities).
+pub fn path_text(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+/// Poll `path` until its contents satisfy `predicate` and return them. For
+/// files the editor rewrites whole, such as `config.toml`, where only part of
+/// the text is the subject.
+pub fn wait_file_matching(path: &Path, label: &str, predicate: impl Fn(&str) -> bool) -> SupportResult<String> {
+    let deadline = Instant::now() + FILE_WAIT_TIMEOUT;
+    loop {
+        let text = fs::read_to_string(path).unwrap_or_default();
+        if predicate(&text) {
+            return Ok(text);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("timed out waiting for {label} in {}:\n{text}", path.display()).into());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Close the active tab without quitting: closing the only tab quits the
+/// editor, so first open a sibling scratchpad and return to the tab. The tab
+/// must close without a prompt. Returns the record with the sibling active.
+pub fn close_active_tab_keeping_window(editor: &mut Editor<'_>) -> SupportResult<StateTraceRecord> {
+    let tab_id = editor.read_state()?.active_tab_id;
+    editor.keys("<C-n>")?;
+    editor.wait_state("sibling tab active", FOCUS_TIMEOUT, |record| {
+        record.active_tab_id != tab_id
+    })?;
+    editor.keys("<C-S-tab>")?;
+    editor.wait_state("tab to close active again", FOCUS_TIMEOUT, |record| {
+        record.active_tab_id == tab_id
+    })?;
+    editor.keys("<C-w>")?;
+    editor.wait_state("tab closed", FOCUS_TIMEOUT, |record| record.active_tab_id != tab_id)
+}
+
+/// Sets a path's permission bits and restores the original bits on drop, so
+/// a failing test does not leave an unwritable directory behind.
+#[cfg(unix)]
+pub struct RestorePermissions {
+    path: PathBuf,
+    original: fs::Permissions,
+}
+
+#[cfg(unix)]
+impl RestorePermissions {
+    pub fn set_mode(path: &Path, mode: u32) -> SupportResult<Self> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let original = fs::metadata(path)?.permissions();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            original,
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RestorePermissions {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(&self.path, self.original.clone());
+    }
 }

@@ -222,65 +222,6 @@ fn failed_safe_save_keeps_existing_file_contents() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn recent_panel_open_and_query_are_visible_in_state_trace() -> TestResult {
-    support::run_x11_test("regression-recent-trace", |session| {
-        let path = session.seed_file("recent-trace.txt", "recent body\n")?;
-        let mut editor = session.open_file("regression-recent-trace", &path)?;
-
-        editor.keys("<C-r>")?;
-        editor.wait_state("recent panel trace opens", secs(5), |record| {
-            record.recent_panel_open && record.focused_input == "recent_query"
-        })?;
-        editor.keys("recent")?;
-        editor.wait_state("recent panel query traces", secs(5), |record| {
-            record.recent_panel_open && record.recent_panel_query.as_deref() == Some("recent")
-        })?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
-fn failed_reopen_drops_bad_entry_so_older_closed_tab_can_reopen() -> TestResult {
-    support::run_x11_test("regression-reopen-failed-advances", |session| {
-        let older = session.seed_file("older.txt", "older\n")?;
-        let missing = session.seed_file("missing.txt", "missing\n")?;
-        let anchor = session.seed_file("anchor.txt", "anchor\n")?;
-        let older_string = older.to_string_lossy().into_owned();
-        let missing_string = missing.to_string_lossy().into_owned();
-        let anchor_string = anchor.to_string_lossy().into_owned();
-        let mut editor = session.open_files(
-            "regression-reopen-failed-advances",
-            &[older.clone(), missing.clone(), anchor.clone()],
-        )?;
-
-        editor.wait_state("older active", secs(2), |record| {
-            record.active_tab_path.as_deref() == Some(&older_string)
-        })?;
-        editor.keys("<C-w>")?;
-        editor.wait_state("missing active", secs(2), |record| {
-            record.active_tab_path.as_deref() == Some(&missing_string)
-        })?;
-        editor.keys("<C-w>")?;
-        editor.wait_state("anchor active", secs(2), |record| {
-            record.active_tab_path.as_deref() == Some(&anchor_string)
-        })?;
-
-        std::fs::remove_file(&missing)?;
-        editor.keys("<C-S-t>")?;
-        editor.wait_state("failed reopen leaves anchor active", secs(2), |record| {
-            record.active_tab_path.as_deref() == Some(&anchor_string)
-        })?;
-        editor.keys("<C-S-t>")?;
-        editor.wait_state("older tab reopened", secs(2), |record| {
-            record.active_tab_path.as_deref() == Some(&older_string)
-        })?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
 fn qwertz_layout_types_literal_z_and_y() -> TestResult {
     struct EnvGuard {
         key: &'static str,

@@ -4,13 +4,7 @@
 
 mod support;
 
-use std::path::Path;
-
-use support::{secs, EditorTestExt, TestResult};
-
-fn path_text(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
-}
+use support::{close_active_tab_keeping_window, path_text, secs, EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
@@ -260,7 +254,7 @@ fn recent_panel_empty_states_are_visible() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn opening_missing_recent_file_prunes_it_from_the_panel() -> TestResult {
+fn recent_panel_hides_entries_whose_files_no_longer_exist() -> TestResult {
     support::run_x11_test("recent-missing-prune", |session| {
         let missing = session.root().join("missing.txt");
         session.seed_recent_files(std::slice::from_ref(&missing))?;
@@ -285,18 +279,7 @@ fn ctrl_p_reopens_archived_scratchpad_with_scratchpad_autosave() -> TestResult {
 
         editor.keys("archived scratch")?;
         editor.expect_file(&scratchpad, "archived scratch")?;
-        editor.keys("<C-n>")?;
-        editor.wait_state("sibling scratchpad active", secs(2), |record| {
-            record.active_tab_path.as_deref() != Some(scratchpad_text.as_str())
-        })?;
-        editor.keys("<C-S-tab>")?;
-        editor.wait_state("original scratchpad active", secs(2), |record| {
-            record.active_tab_path.as_deref() == Some(scratchpad_text.as_str())
-        })?;
-        editor.keys("<C-w>")?;
-        editor.wait_state("original scratchpad archived", secs(5), |record| {
-            record.active_tab_path.as_deref() != Some(scratchpad_text.as_str())
-        })?;
+        close_active_tab_keeping_window(&mut editor)?;
 
         editor.keys("<C-p>")?;
         editor.wait_state("quick picker selects archived scratchpad", secs(5), |record| {
@@ -312,6 +295,27 @@ fn ctrl_p_reopens_archived_scratchpad_with_scratchpad_autosave() -> TestResult {
 
         editor.keys("X")?;
         editor.expect_file(&scratchpad, "Xarchived scratch")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn opened_files_are_remembered_across_restarts() -> TestResult {
+    support::run_x11_test("recent-persists-across-restarts", |session| {
+        let file = session.seed_file("remembered-note.txt", "remember me\n")?;
+        let file_text = path_text(&file);
+
+        let editor = session.open_file("recent-first-launch", &file)?;
+        editor.quit_default()?;
+
+        let (mut editor, _scratchpad) = session.open("recent-second-launch")?;
+        editor.keys("<C-r>remembered")?;
+        editor.wait_state("file from the previous launch is listed", secs(5), |record| {
+            record.recent_panel_open
+                && record.recent_panel_query.as_deref() == Some("remembered")
+                && record.recent_panel_selected_path.as_deref() == Some(file_text.as_str())
+        })?;
         Ok(())
     })
 }
