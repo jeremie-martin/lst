@@ -6,6 +6,7 @@ use crate::{
 use gpui::{
     div, prelude::*, px, rgb, AnyElement, Context, CursorStyle, IntoElement, MouseButton, Pixels, Point, Styled, Window,
 };
+use lst_editor::{Language, LanguageMode};
 
 const APP_MENU_ITEMS: &[&str] = &[
     "file.new_scratchpad",
@@ -30,24 +31,27 @@ const CONTEXT_MENU_ITEMS: &[&str] = &[
     "edit.toggle_line_comment",
     "workbench.command_palette",
 ];
-const LANGUAGES: &[(lst_editor::Language, &str)] = &[
-    (lst_editor::Language::Rust, "Rust"),
-    (lst_editor::Language::Python, "Python"),
-    (lst_editor::Language::JavaScript, "JavaScript"),
-    (lst_editor::Language::Jsx, "JavaScript JSX"),
-    (lst_editor::Language::TypeScript, "TypeScript"),
-    (lst_editor::Language::Tsx, "TypeScript TSX"),
-    (lst_editor::Language::Json, "JSON"),
-    (lst_editor::Language::Jsonc, "JSON with Comments"),
-    (lst_editor::Language::Toml, "TOML"),
-    (lst_editor::Language::Yaml, "YAML"),
-    (lst_editor::Language::Markdown, "Markdown"),
-    (lst_editor::Language::Html, "HTML"),
-    (lst_editor::Language::Css, "CSS"),
-    (lst_editor::Language::Scss, "SCSS"),
-    (lst_editor::Language::Shell, "Shell"),
-    (lst_editor::Language::Bash, "Bash"),
-    (lst_editor::Language::Zsh, "Zsh"),
+/// Language menu rows, in display order.
+const LANGUAGE_MODES: &[(LanguageMode, &str)] = &[
+    (LanguageMode::Auto, "Auto-detect"),
+    (LanguageMode::PlainText, "Plain Text"),
+    (LanguageMode::Language(Language::Rust), "Rust"),
+    (LanguageMode::Language(Language::Python), "Python"),
+    (LanguageMode::Language(Language::JavaScript), "JavaScript"),
+    (LanguageMode::Language(Language::Jsx), "JavaScript JSX"),
+    (LanguageMode::Language(Language::TypeScript), "TypeScript"),
+    (LanguageMode::Language(Language::Tsx), "TypeScript TSX"),
+    (LanguageMode::Language(Language::Json), "JSON"),
+    (LanguageMode::Language(Language::Jsonc), "JSON with Comments"),
+    (LanguageMode::Language(Language::Toml), "TOML"),
+    (LanguageMode::Language(Language::Yaml), "YAML"),
+    (LanguageMode::Language(Language::Markdown), "Markdown"),
+    (LanguageMode::Language(Language::Html), "HTML"),
+    (LanguageMode::Language(Language::Css), "CSS"),
+    (LanguageMode::Language(Language::Scss), "SCSS"),
+    (LanguageMode::Language(Language::Shell), "Shell"),
+    (LanguageMode::Language(Language::Bash), "Bash"),
+    (LanguageMode::Language(Language::Zsh), "Zsh"),
 ];
 
 impl LstGpuiApp {
@@ -110,7 +114,11 @@ impl LstGpuiApp {
         } else {
             self.dismiss_focus_surfaces(cx);
             self.workspace_surface = WorkspaceSurface::LanguageMenu;
-            self.workspace_surface_selected = language_mode_index(self.model.active_tab().language_mode());
+            let mode = self.model.active_tab().language_mode();
+            self.workspace_surface_selected = LANGUAGE_MODES
+                .iter()
+                .position(|(candidate, _)| *candidate == mode)
+                .unwrap_or(0);
             self.workspace_surface_scroll
                 .scroll_to_item(self.workspace_surface_selected);
             cx.notify();
@@ -126,7 +134,7 @@ impl LstGpuiApp {
         cx.notify();
     }
 
-    fn set_language_mode(&mut self, mode: lst_editor::LanguageMode, cx: &mut Context<Self>) {
+    fn set_language_mode(&mut self, mode: LanguageMode, cx: &mut Context<Self>) {
         self.workspace_surface = WorkspaceSurface::None;
         self.context_menu_position = None;
         self.force_editor_focus = true;
@@ -165,7 +173,7 @@ impl LstGpuiApp {
         match self.workspace_surface {
             WorkspaceSurface::TabList => self.model.tab_count(),
             WorkspaceSurface::AppMenu => self.commands_for_menu(APP_MENU_ITEMS).len(),
-            WorkspaceSurface::LanguageMenu => LANGUAGES.len() + 2,
+            WorkspaceSurface::LanguageMenu => LANGUAGE_MODES.len(),
             WorkspaceSurface::ContextMenu => self.commands_for_menu(CONTEXT_MENU_ITEMS).len(),
             WorkspaceSurface::None | WorkspaceSurface::CommandPalette | WorkspaceSurface::Settings => 0,
         }
@@ -206,7 +214,7 @@ impl LstGpuiApp {
                 }
             }
             WorkspaceSurface::LanguageMenu => {
-                if let Some(mode) = language_mode_at(index) {
+                if let Some(mode) = LANGUAGE_MODES.get(index).map(|(mode, _)| *mode) {
                     self.set_language_mode(mode, cx);
                 }
             }
@@ -657,64 +665,29 @@ impl LstGpuiApp {
     pub(crate) fn render_language_menu(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
         let theme = self.theme(cx);
-        let current = self.model.active_tab().language();
+        let detected = self.model.active_tab().language().map(LanguageMode::Language);
         let mode = self.model.active_tab().language_mode();
-        let mut rows = Vec::with_capacity(LANGUAGES.len() + 2);
-        rows.push(
-            language_row(
-                "language-auto",
-                "Auto-detect",
-                mode == lst_editor::LanguageMode::Auto,
-                self.workspace_surface_selected == 0,
-                theme,
-                scale,
-            )
-            .on_click(cx.listener(|this, _, _, cx| this.set_language_mode(lst_editor::LanguageMode::Auto, cx)))
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.select_workspace_surface_row(WorkspaceSurface::LanguageMenu, 0, cx);
-                }
-            }))
-            .into_any_element(),
-        );
-        rows.push(
-            language_row(
-                "language-plain-text",
-                "Plain Text",
-                mode == lst_editor::LanguageMode::PlainText,
-                self.workspace_surface_selected == 1,
-                theme,
-                scale,
-            )
-            .on_click(cx.listener(|this, _, _, cx| this.set_language_mode(lst_editor::LanguageMode::PlainText, cx)))
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.select_workspace_surface_row(WorkspaceSurface::LanguageMenu, 1, cx);
-                }
-            }))
-            .into_any_element(),
-        );
-        rows.extend(LANGUAGES.iter().enumerate().map(|(index, (language, label))| {
-            let language = *language;
-            language_row(
-                ("language-choice", index),
-                label,
-                mode == lst_editor::LanguageMode::Language(language)
-                    || (mode == lst_editor::LanguageMode::Auto && current == Some(language)),
-                self.workspace_surface_selected == index + 2,
-                theme,
-                scale,
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.set_language_mode(lst_editor::LanguageMode::Language(language), cx)
-            }))
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.select_workspace_surface_row(WorkspaceSurface::LanguageMenu, index + 2, cx);
-                }
-            }))
-            .into_any_element()
-        }));
+        let rows: Vec<AnyElement> = LANGUAGE_MODES
+            .iter()
+            .enumerate()
+            .map(|(index, &(choice, label))| {
+                language_row(
+                    ("language-choice", index),
+                    label,
+                    mode == choice || (mode == LanguageMode::Auto && detected == Some(choice)),
+                    self.workspace_surface_selected == index,
+                    theme,
+                    scale,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.set_language_mode(choice, cx)))
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        this.select_workspace_surface_row(WorkspaceSurface::LanguageMenu, index, cx);
+                    }
+                }))
+                .into_any_element()
+            })
+            .collect();
 
         div()
             .id("language-menu-scrim")
@@ -880,27 +853,6 @@ fn language_row(
         .child(label)
 }
 
-fn language_mode_index(mode: lst_editor::LanguageMode) -> usize {
-    match mode {
-        lst_editor::LanguageMode::Auto => 0,
-        lst_editor::LanguageMode::PlainText => 1,
-        lst_editor::LanguageMode::Language(language) => LANGUAGES
-            .iter()
-            .position(|(candidate, _)| *candidate == language)
-            .map_or(0, |index| index + 2),
-    }
-}
-
-fn language_mode_at(index: usize) -> Option<lst_editor::LanguageMode> {
-    match index {
-        0 => Some(lst_editor::LanguageMode::Auto),
-        1 => Some(lst_editor::LanguageMode::PlainText),
-        index => LANGUAGES
-            .get(index - 2)
-            .map(|(language, _)| lst_editor::LanguageMode::Language(*language)),
-    }
-}
-
 fn menu_selection_after_key(current: usize, count: usize, key: &str) -> usize {
     if count == 0 {
         return 0;
@@ -950,7 +902,7 @@ fn preferred_shortcut(shortcuts: &[String]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fuzzy_subsequence_score, language_mode_at, language_mode_index, menu_selection_after_key, LANGUAGES};
+    use super::{fuzzy_subsequence_score, menu_selection_after_key};
 
     #[test]
     fn fuzzy_subsequence_prefers_contiguous_matches() {
@@ -970,21 +922,5 @@ mod tests {
         assert_eq!(menu_selection_after_key(1, 4, "end"), 3);
         assert_eq!(menu_selection_after_key(20, 4, "left"), 3);
         assert_eq!(menu_selection_after_key(20, 0, "down"), 0);
-    }
-
-    #[test]
-    fn every_language_menu_row_round_trips_through_its_index() {
-        let modes = std::iter::once(lst_editor::LanguageMode::Auto)
-            .chain(std::iter::once(lst_editor::LanguageMode::PlainText))
-            .chain(
-                LANGUAGES
-                    .iter()
-                    .map(|(language, _)| lst_editor::LanguageMode::Language(*language)),
-            );
-        for mode in modes {
-            let index = language_mode_index(mode);
-            assert_eq!(language_mode_at(index), Some(mode));
-        }
-        assert_eq!(language_mode_at(LANGUAGES.len() + 2), None);
     }
 }
