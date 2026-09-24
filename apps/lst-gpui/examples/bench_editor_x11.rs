@@ -1794,7 +1794,9 @@ impl Bench {
                 "find_query",
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
+            let reindexes_before = read_editor_trace(&trace_path)?.count("find_reindex_ms").unwrap_or(0);
             let search_input_started = Instant::now();
+            let search_input_epoch_us = epoch_micros(SystemTime::now())?;
             inject_text(&self.conn, self.root, &self.keycodes, SEARCH_QUERY)?;
             let damage_events = wait_for_damage_quiet(
                 &self.conn,
@@ -1822,6 +1824,16 @@ impl Bench {
 
             let mut metrics = RunMetrics::new(window.width, window.height);
             metrics.set("startup_ms", startup_ms);
+            let final_frame_epoch_us = frame_epoch_after_trace_count(
+                &fs::read_to_string(&trace_path)?,
+                "find_reindex_ms",
+                reindexes_before + SEARCH_QUERY.chars().count(),
+            )
+            .ok_or_else(|| io::Error::other("search benchmark produced no completed final-query frame"))?;
+            metrics.set(
+                "search_input_to_paint_ms",
+                (final_frame_epoch_us as f64 - search_input_epoch_us) / 1000.0,
+            );
             metrics.set("search_input_to_quiet_ms", search_input_to_quiet_ms);
             metrics.set("search_reindex_ms", reindex_ms);
             add_trace_last(&mut metrics, &trace, "find_query_update_ms", "search_query_update_ms");
@@ -2436,6 +2448,7 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
         Scenario::SearchLarge => &[
             "search_reindex_ms",
             "search_query_update_ms",
+            "search_input_to_paint_ms",
             "search_input_to_quiet_ms",
             "find_match_count",
             "find_query_len",

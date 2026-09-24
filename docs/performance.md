@@ -43,6 +43,12 @@ Choose the scenario whose primary metric matches the problem:
 | `idle` | `idle_cpu_ms` | CPU, repaints, and RSS over two focused idle seconds |
 | `latency-typing`, `latency-navigation`, `latency-edit-navigation` | `key_to_paint_ms_p50` | one key at a time: key press to first damaged frame, split into X delivery, app work through paint, and presentation; frames per key; per-frame cost |
 
+Search also reports `search_input_to_paint_ms`: query injection through the
+first completed frame after every query character was indexed. Keep it separate
+from `search_reindex_ms`, which measures indexing alone and excludes highlight
+conversion and rendering. Both compared applications must trace the complete
+root frame for the end-to-end metric.
+
 Examples:
 
 ```sh

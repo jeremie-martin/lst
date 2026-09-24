@@ -21,6 +21,8 @@ individual run counts and earlier sessions are in the
 - Complete-root frame tracing replaced the old viewport-only endpoint in
   `65796dc`. Use that preserved build for the final broad frame-cost comparison;
   don't compare old and new frame CPU boundaries as if they were identical.
+  Search also reports query injection through the final completed frame;
+  its indexing-only metric remains separate.
 
 ## Retained gains
 
