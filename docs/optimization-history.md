@@ -1303,3 +1303,71 @@ CPU time); `open-small` 334 -> ~260 ms in the current environment.
   all-features source tests and all-targets/all-features Clippy pass.
 - Raw outputs: `final-cohort-*.txt`, preserved traces, and the concise
   `final-cohort-summary.txt` under `/tmp/lst-perf-sep23`.
+
+### Reject the optional upstream shaping cache on correctness grounds
+
+- Isolated `cosmic-text` 0.14.2 probes with and without `shape-run-cache` show
+  changed glyph IDs for mirrored angle brackets when the same text run appears
+  in left-to-right and right-to-left contexts. The cache key contains text and
+  attributes but omits the shaping direction. Both default fallback fonts and
+  JetBrains Mono reproduce the mismatch; explicit RTL overrides do too.
+- The probe exercises 15 text cases twice, including Hebrew, Arabic, CJK,
+  combining text, ZWJ emoji, tabs and ligatures. Four outputs differ across the
+  two passes. This is a concrete rejection, not an assumption that an optional
+  upstream cache is safe merely because it exists.
+- Do not enable the feature in GPUI. Future work needs a complete direction-aware
+  key, bounded retention and invalidation when the font database changes. No new
+  vendor dependency or app change was introduced. Isolated timings are not
+  whole-app startup measurements and are not counted as retained gains.
+- Reproducer and before/after glyph dumps are under
+  `/tmp/lst-perf-sep23/cosmic-probe*`.
+
+### Final visual and source checks
+
+- Production `e69a78a` matches all **10 original `8accfc9` visual baselines** on
+  physical `:0` at 3816x2100. Each scenario checks three fresh captures; no
+  baselines were updated. Coverage includes both themes, find, selections,
+  inactive selection, identifiers, scrolled gutter, recent files and multi-cursor
+  status. Logs: `final-visual-*.txt` under `/tmp/lst-perf-sep23`.
+- `cargo test --all-features`, all 12 benchmark-runner tests, Clippy across all
+  targets/features, formatting and diff checks pass. The final full nested
+  production checkpoint follows the remaining physical measurements.
+
+### Isolate remaining Unicode shaping work
+
+- An eight-second `perf record -F 499 --call-graph dwarf` capture of the preserved
+  symbol-bearing app on physical `:0`, opening the mixed Unicode/ASCII no-wrap
+  fixture, attributes **46.56% of core-CPU samples to Rustybuzz shaping-plan
+  construction**, 5.61% to stable sorting, 4.03% to shaping with a plan and 3.20%
+  directly to Cosmic Text's fallback shaper. 3,064 samples, none lost.
+- This is an older profiling build, used only to identify unchanged text-engine
+  work; its launch time is not compared with current production performance.
+  The app is terminated after capture, before subsequent physical measurements.
+- Reusing complete shaping plans is a different prospective fix from caching
+  shaped runs. It would need correct font/direction/script/language/features
+  identity and bounded ownership in the text engine. Do not conflate that future
+  work with a retained startup gain or enable the incorrect run cache.
+- Artifacts: `unicode-width.perf`, `unicode-profile-report.txt` and the startup
+  trace under `/tmp/lst-perf-sep23`.
+
+### Repeat edit-then-navigation presentation measurements
+
+- Reversing variant order and repeating three measured runs plus priming gives
+  presentation p50 **6.354 -> 6.760 ms**, app-side completion **1.709 -> 1.874 ms**,
+  mean frame **0.613 -> 0.611 ms**, CPU **2,520 -> 2,460 ms**. The small median
+  presentation increase remains; do not call this scenario improved or dismiss
+  it solely as noise. Individual presentation medians overlap across the six
+  runs per variant. Preserved intermediate builds are checked next to localize it.
+
+- Two one-run passes through preserved milestones, reversing order on the second
+  pass (no priming), produce presentation p50 pairs: complete-root baseline
+  **7.328 / 6.396**, windowed-find **6.319 / 7.156**, modifier-state change
+  **6.529 / 6.743**, final **6.888 / 7.427 ms**. Mean frames remain ~0.6 ms.
+  These short localization checks do not identify a convincing transition;
+  retain the negative presentation result as an unresolved small regression,
+  rather than tuning delays or claiming an across-the-board latency gain.
+- The final large-paste formatter is runtime-checked: `primary_value`,
+  `paste_input_to_paint_ms_runs` and `paste_input_to_paint_ms` agree, and saved
+  output verifies. The one-run check is not used as a new performance comparison.
+- The final **291-test** nested X11 run starts at 03:16 UTC against preserved
+  production `e69a78a`. No physical latency or pixel work runs alongside it.

@@ -47,6 +47,13 @@ phase measurements and qualifications are preserved in the history.
 | 500k-line wrap construction, LF chunk proof | 17.984 → 11.773 ms | prove LF-only chunks once; retain Ropey parsing otherwise |
 | Repeated 2.98 MB replacement, wrap patch phase | 14.191 → 3.941 ms | traverse changed rope lines sequentially |
 
+The final 15-scenario cohort (`65796dc` → `e69a78a`) confirms plain typing
+**0.461 → 0.300 ms/character**, large Rust **1.117 → 1.006**, and complete find
+query paint **31.766 → 13.419 ms**. Ordinary startup, scrolling, idle and isolated
+typing latency are broadly flat. Edit-then-navigation presentation p50 rises
+**0.4–0.7 ms** in two comparisons despite flat frame cost and lower CPU; intermediate
+build checks do not isolate a cause. Keep this measured regression visible.
+
 The width index costs four bytes per measured logical line (~1.9 MiB at 500k).
 Shrinking maxima and row-offset suffix shifts remain linear numeric operations;
 unchanged text is neither reshaped nor rescanned. `LineChange` validates old/new
@@ -85,11 +92,15 @@ Glyph-cache lifetime and sprite ordering were reviewed against atlas ownership
 and paint order. Lazy path resources were checked with pixel-identical 1×/4×
 path probes across resize and hide/show.
 
-Startup remains dominated by overlapping GPU/font initialization and first
+Ordinary startup remains dominated by overlapping GPU/font initialization and first
 surface creation. Minimal Vulkan probes reproduce much of the driver cost.
 No substantial new whole-startup gain is established: a deferred-font worker
 was slower/no better and was removed; the native GLES experiment was also slower.
 No driver installation or environmental change is counted as an editor gain.
+Unwrapped Unicode-heavy files still pay for full-document advanced shaping.
+The optional upstream shaping cache was rejected: an isolated probe shows wrong
+mirrored glyphs across text directions. A future cache needs a complete key and
+bounded lifetime.
 
 Large-Rust typing still spends roughly 210 ms per 320 keys in incremental parsing.
 Deferring parsing until render did not batch it: GPUI rebuilds a dirty dispatch
@@ -106,5 +117,8 @@ Static viewport caching was not added without a demonstrated worthwhile gain.
 - Eight focused viewport tests pass, including widest-line growth, shrink,
   split/join extents, wrapped cursor visibility and responsive geometry.
 - Combined production checkpoint `82b5b24`: **291/291** nested X11 tests
-  pass in 1,797.755 seconds. Final physical-display benchmark and ten-scenario
-  pixel comparisons follow it.
+  pass in 1,797.755 seconds.
+- Final production `e69a78a` completes all 15 physical benchmark scenarios and
+  matches all ten original visual baselines exactly (three captures each).
+- The final **291-test X11 run is in progress** against `e69a78a`; physical
+  measurements have finished.
