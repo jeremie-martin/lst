@@ -1384,3 +1384,19 @@ CPU time); `open-small` 334 -> ~260 ms in the current environment.
   changes the shaping engine and font stack; it is not a drop-in performance
   switch. Keep glyph, bidi, font fallback and pixel equivalence as upgrade gates.
 - No third vendored dependency or local shaping patch is added in this session.
+
+### Final combined production checkpoint
+
+- Preserved production `e69a78a` passes **291/291** nested X11 tests in
+  **1,733.010 seconds**, with two expected slow cases and no skipped tests.
+  All viewport, modifier, Vim, clipboard, find, replacement, save/reopen and
+  conflict cases pass. The release binary and preserved benchmark binary have
+  identical SHA-256 hashes. Both vendor reverse-application checks pass.
+- Log: `/tmp/lst-perf-sep23/final-width-owner-full-x11.txt`. Xephyr has exited;
+  remaining physical checks use the unchanged validated production binary.
+- For a direct starting-point comparison, isolated commit `f0ff2a4` is `8accfc9`
+  plus only the complete-root frame observer and removal of the old viewport
+  timing endpoint. No optimization changes are included. Its clean release build
+  uses the same compiler/profile as final production; the current runner drives
+  both preserved binaries. This closes the original baseline's timing-boundary
+  mismatch without claiming older viewport-only costs are whole-frame costs.

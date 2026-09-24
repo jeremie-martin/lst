@@ -120,5 +120,5 @@ Static viewport caching was not added without a demonstrated worthwhile gain.
   pass in 1,797.755 seconds.
 - Final production `e69a78a` completes all 15 physical benchmark scenarios and
   matches all ten original visual baselines exactly (three captures each).
-- The final **291-test X11 run is in progress** against `e69a78a`; physical
-  measurements have finished.
+- Final production `e69a78a`: **291/291 X11 tests pass** in 1,733.010 seconds,
+  with no skipped tests. Both vendor patch reverse-application checks pass.
