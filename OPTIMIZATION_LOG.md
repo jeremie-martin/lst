@@ -470,3 +470,20 @@ in [the historical log](docs/optimization-history.md).
 - The later compact-layout and deferred-font candidates are being checked
   separately; this checkpoint does not claim coverage for those experiments.
 
+### Rejected experiment: defer the upstream font loader
+
+- Tested a small GPUI change that ran unchanged `FontSystem::new()` on a
+  worker, with a single lazy owner joining before the first font operation
+  and synchronous fallback if thread creation failed. This let X11 setup
+  proceed while fonts loaded; it did not skip fonts or postpone required
+  first-frame work beyond the timer.
+- Alternating production launches on the restored physical display, one
+  prime per variant: small-file first frame **174.727 -> 175.256 ms**
+  (11 measured launches each); large-file **170.886 -> 181.164 ms** (seven
+  each). No whole-startup gain, despite occasional shorter initialization
+  phases. Reverted the entire font change; no extra vendor patch retained.
+- Both candidates passed source tests/Clippy and the compact-layout/font
+  combination passed eight viewport X11 cases. A read-only adapter probe
+  found only NVIDIA exposed by the installed Vulkan ICD; the extra hardware
+  render node is not an available alternative Vulkan adapter on this setup.
+
