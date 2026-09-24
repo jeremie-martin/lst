@@ -833,6 +833,600 @@
       }
     },
     {
+      "name": "motion 0 after first word",
+      "area": "motions",
+      "initial_text": "abc def",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "0",
+      "expected": {
+        "text": "abc def",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion first nonblank from line end",
+      "area": "motions",
+      "initial_text": "  abc",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "^",
+      "expected": {
+        "text": "  abc",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion line end short line",
+      "area": "motions",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "$",
+      "expected": {
+        "text": "abc",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion word forward from leading blanks",
+      "area": "motions",
+      "initial_text": "  alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "w",
+      "expected": {
+        "text": "  alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion word end two words",
+      "area": "motions",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "e",
+      "expected": {
+        "text": "alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion word backward inside word",
+      "area": "motions",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 8
+      },
+      "keys": "b",
+      "expected": {
+        "text": "alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion big word end over punctuation",
+      "area": "motions",
+      "initial_text": "a+b c",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "E",
+      "expected": {
+        "text": "a+b c",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion gg keeps column on indented line",
+      "area": "motions",
+      "initial_text": "  a\n b\nc",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "gg",
+      "expected": {
+        "text": "  a\n b\nc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion counted gg onto indented line",
+      "area": "motions",
+      "initial_text": "a\n  b\nc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2gg",
+      "expected": {
+        "text": "a\n  b\nc",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion G onto indented line",
+      "area": "motions",
+      "initial_text": "a\n  b\n c",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "G",
+      "expected": {
+        "text": "a\n  b\n c",
+        "cursor": {
+          "line": 2,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion counted G onto indented line",
+      "area": "motions",
+      "initial_text": "a\n  b\n c",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2G",
+      "expected": {
+        "text": "a\n  b\n c",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion matching paren from open",
+      "area": "motions",
+      "initial_text": "call(foo)",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "%",
+      "expected": {
+        "text": "call(foo)",
+        "cursor": {
+          "line": 0,
+          "column": 8
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion percentage of four lines",
+      "area": "motions",
+      "initial_text": "a\nb\nc\nd",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "50%",
+      "expected": {
+        "text": "a\nb\nc\nd",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "char find forward two words",
+      "area": "motions",
+      "initial_text": "abc abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "fc",
+      "expected": {
+        "text": "abc abc",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "char till forward two words",
+      "area": "motions",
+      "initial_text": "abc abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "tc",
+      "expected": {
+        "text": "abc abc",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "char counted find forward two words",
+      "area": "motions",
+      "initial_text": "abc abc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2fb",
+      "expected": {
+        "text": "abc abc",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "char find backward two words",
+      "area": "motions",
+      "initial_text": "abc abc",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "Fb",
+      "expected": {
+        "text": "abc abc",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "char till backward two words",
+      "area": "motions",
+      "initial_text": "abc abc",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "T ",
+      "expected": {
+        "text": "abc abc",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "char repeat then reverse adjacent runs",
+      "area": "motions",
+      "initial_text": "abcabc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "fc;,",
+      "expected": {
+        "text": "abcabc",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion counted word forward short words",
+      "area": "motions",
+      "initial_text": "aa bb cc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2w",
+      "expected": {
+        "text": "aa bb cc",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion counted word end short words",
+      "area": "motions",
+      "initial_text": "aa bb cc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2e",
+      "expected": {
+        "text": "aa bb cc",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion counted word backward short words",
+      "area": "motions",
+      "initial_text": "aa bb cc",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "2b",
+      "expected": {
+        "text": "aa bb cc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion word stops on empty line",
+      "area": "motions",
+      "initial_text": "aa\n\nbb",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "w",
+      "expected": {
+        "text": "aa\n\nbb",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion counted word end skips empty line",
+      "area": "motions",
+      "initial_text": "aa\n\nbb",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "2e",
+      "expected": {
+        "text": "aa\n\nbb",
+        "cursor": {
+          "line": 2,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion big word forward over punctuation run",
+      "area": "motions",
+      "initial_text": "aa+bb cc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "W",
+      "expected": {
+        "text": "aa+bb cc",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion word forward stops at punctuation",
+      "area": "motions",
+      "initial_text": "aa+bb cc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "w",
+      "expected": {
+        "text": "aa+bb cc",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion big word backward over punctuation run",
+      "area": "motions",
+      "initial_text": "aa+bb cc",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "B",
+      "expected": {
+        "text": "aa+bb cc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion word backward stops after punctuation",
+      "area": "motions",
+      "initial_text": "aa+bb cc",
+      "cursor": {
+        "line": 0,
+        "column": 6
+      },
+      "keys": "b",
+      "expected": {
+        "text": "aa+bb cc",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion down through short line",
+      "area": "motions",
+      "initial_text": "abcdef\nab\nabcdef",
+      "cursor": {
+        "line": 0,
+        "column": 5
+      },
+      "keys": "j",
+      "expected": {
+        "text": "abcdef\nab\nabcdef",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion down restores preferred column",
+      "area": "motions",
+      "initial_text": "abcdef\nab\nabcdef",
+      "cursor": {
+        "line": 0,
+        "column": 5
+      },
+      "keys": "jj",
+      "expected": {
+        "text": "abcdef\nab\nabcdef",
+        "cursor": {
+          "line": 2,
+          "column": 5
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion up clamps preferred column again",
+      "area": "motions",
+      "initial_text": "abcdef\nab\nabcdef",
+      "cursor": {
+        "line": 0,
+        "column": 5
+      },
+      "keys": "jjk",
+      "expected": {
+        "text": "abcdef\nab\nabcdef",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion 0 resets preferred column",
+      "area": "motions",
+      "initial_text": "abcdef\nab\nabcdef",
+      "cursor": {
+        "line": 0,
+        "column": 5
+      },
+      "keys": "jjk0j",
+      "expected": {
+        "text": "abcdef\nab\nabcdef",
+        "cursor": {
+          "line": 2,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "motion named keys keep end of line column",
+      "area": "motions",
+      "initial_text": "abcdef\nab\nabcdef\nlast",
+      "cursor": {
+        "line": 0,
+        "column": 3
+      },
+      "keys": "<left><right><home><end><down><up>",
+      "expected": {
+        "text": "abcdef\nab\nabcdef\nlast",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal"
+      }
+    },
+    {
       "name": "delete word",
       "area": "operators",
       "initial_text": "alpha beta gamma delta",

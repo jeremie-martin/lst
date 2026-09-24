@@ -5,47 +5,6 @@ use lst_editor::{vim, EditorEffect, FocusTarget, RevealIntent};
 use support::{run_cursor_cases, run_text_cases, run_text_cases_expect_normal, VimHarness};
 
 #[test]
-fn normal_motions_cover_words_lines_char_search_and_brackets() {
-    let cases = [
-        ("line start", "abc def", (0, 4), "0", (0, 0)),
-        ("first nonblank", "  abc", (0, 4), "^", (0, 2)),
-        ("line end", "abc", (0, 0), "$", (0, 2)),
-        ("word forward", "  alpha beta", (0, 0), "w", (0, 2)),
-        ("word end", "alpha beta", (0, 0), "e", (0, 4)),
-        ("word backward", "alpha beta", (0, 8), "b", (0, 6)),
-        ("big word end", "a+b c", (0, 0), "E", (0, 2)),
-        ("document start", "  a\n b\nc", (2, 0), "gg", (0, 0)),
-        ("counted gg", "a\n  b\nc", (0, 0), "2gg", (1, 0)),
-        ("document end", "a\n  b\n c", (0, 0), "G", (2, 0)),
-        ("counted G", "a\n  b\n c", (0, 0), "2G", (1, 0)),
-        ("matching bracket", "call(foo)", (0, 4), "%", (0, 8)),
-        ("line percentage", "a\nb\nc\nd", (0, 0), "50%", (1, 0)),
-        ("find char", "abc abc", (0, 0), "fc", (0, 2)),
-        ("till char", "abc abc", (0, 0), "tc", (0, 1)),
-        ("counted find char", "abc abc", (0, 0), "2fb", (0, 5)),
-        ("find char backward", "abc abc", (0, 6), "Fb", (0, 5)),
-        ("till char backward", "abc abc", (0, 6), "T ", (0, 4)),
-        ("repeat and reverse char search", "abcabc", (0, 0), "fc;,", (0, 2)),
-    ];
-
-    run_cursor_cases(&cases);
-}
-
-#[test]
-fn vertical_motions_preserve_preferred_column() {
-    let mut harness = VimHarness::normal_at("abcdef\nab\nabcdef", 0, 5);
-
-    harness.keys("j");
-    harness.expect_cursor(1, 1);
-    harness.keys("j");
-    harness.expect_cursor(2, 5);
-    harness.keys("k");
-    harness.expect_cursor(1, 1);
-    harness.keys("0j");
-    harness.expect_cursor(2, 0);
-}
-
-#[test]
 fn modes_state_pending_and_escape_follow_vim_contracts() {
     let mut harness = VimHarness::new("");
     harness.keys("abc<esc>");
@@ -94,21 +53,7 @@ fn modes_state_pending_and_escape_follow_vim_contracts() {
 }
 
 #[test]
-fn named_and_page_motions_cover_keyboard_boundary_paths() {
-    let mut harness = VimHarness::normal_at("abcdef\nab\nabcdef\nlast", 0, 3);
-    harness.keys("<left>");
-    harness.expect_cursor(0, 2);
-    harness.keys("<right>");
-    harness.expect_cursor(0, 3);
-    harness.keys("<home>");
-    harness.expect_cursor(0, 0);
-    harness.keys("<end>");
-    harness.expect_cursor(0, 5);
-    harness.keys("<down>");
-    harness.expect_cursor(1, 1);
-    harness.keys("<up>");
-    harness.expect_cursor(0, 5);
-
+fn page_motions_move_by_half_and_full_viewports() {
     // Eight rows keep half-page and full-page distances apart.
     let text = (0..20).map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
     let mut harness = VimHarness::normal_at(&text, 0, 0);
@@ -141,41 +86,8 @@ fn command_modified_named_keys_are_left_for_the_caller() {
 }
 
 #[test]
-fn word_and_big_word_motions_cover_counts_punctuation_empty_lines_and_unicode() {
+fn unicode_motions_move_by_grapheme() {
     let cases = [
-        ("counted word forward", "aa bb cc", (0, 0), "2w", (0, 6)),
-        ("counted word end", "aa bb cc", (0, 0), "2e", (0, 4)),
-        ("counted word backward", "aa bb cc", (0, 6), "2b", (0, 0)),
-        ("word crosses empty line", "aa\n\nbb", (0, 0), "w", (1, 0)),
-        ("word end crosses empty line", "aa\n\nbb", (0, 0), "2e", (2, 1)),
-        (
-            "big word forward treats punctuation as word",
-            "aa+bb cc",
-            (0, 0),
-            "W",
-            (0, 6),
-        ),
-        (
-            "small word forward stops after punctuation",
-            "aa+bb cc",
-            (0, 0),
-            "w",
-            (0, 2),
-        ),
-        (
-            "big word backward treats punctuation as word",
-            "aa+bb cc",
-            (0, 6),
-            "B",
-            (0, 0),
-        ),
-        (
-            "small word backward stops at identifier run",
-            "aa+bb cc",
-            (0, 6),
-            "b",
-            (0, 3),
-        ),
         (
             "unicode word motion is grapheme aligned",
             "éclair cafe",
