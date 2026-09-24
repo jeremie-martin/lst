@@ -244,7 +244,10 @@ pub(crate) struct SettingsStore {
 
 impl SettingsStore {
     pub(crate) fn load() -> Self {
-        let path = config_path();
+        Self::load_from(config_path())
+    }
+
+    fn load_from(path: Option<PathBuf>) -> Self {
         let Some(path_ref) = path.clone() else {
             return Self {
                 path,
@@ -357,7 +360,7 @@ impl SettingsStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
             Err(_) => return None,
         };
-        (source != self.source).then(Self::load)
+        (source != self.source).then(|| Self::load_from(Some(path.clone())))
     }
 
     /// Records a reloaded store's on-disk content as seen without adopting
@@ -391,46 +394,20 @@ fn config_path() -> Option<PathBuf> {
 fn write_settings_to_document(document: &mut DocumentMut, settings: &AppSettings) {
     document["version"] = value(i64::from(CONFIG_VERSION));
     ensure_table(document, "editor");
-    document["editor"]["input_mode"] = value(match settings.editor.input_mode {
-        InputModeSetting::Standard => "standard",
-        InputModeSetting::Vim => "vim",
-    });
+    document["editor"]["input_mode"] = enum_value(settings.editor.input_mode);
     document["editor"]["word_wrap"] = value(settings.editor.word_wrap);
-    document["editor"]["line_numbers"] = value(match settings.editor.line_numbers {
-        LineNumbersSetting::Absolute => "absolute",
-        LineNumbersSetting::Relative => "relative",
-        LineNumbersSetting::Hybrid => "hybrid",
-    });
+    document["editor"]["line_numbers"] = enum_value(settings.editor.line_numbers);
     document["editor"]["cursor_blink"] = value(settings.editor.cursor_blink);
     document["editor"]["smooth_cursor"] = value(settings.editor.smooth_cursor);
     document["editor"]["font_family"] = value(&settings.editor.font_family);
     document["editor"]["font_size"] = value(i64::from(settings.editor.font_size));
-    document["editor"]["match_brackets"] = value(match settings.editor.match_brackets {
-        MatchBracketsSetting::Never => "never",
-        MatchBracketsSetting::Near => "near",
-        MatchBracketsSetting::Always => "always",
-    });
+    document["editor"]["match_brackets"] = enum_value(settings.editor.match_brackets);
     document["editor"]["bracket_pair_colorization"] = value(settings.editor.bracket_pair_colorization);
-    document["editor"]["bracket_pair_guides"] = value(match settings.editor.bracket_pair_guides {
-        GuideMode::Off => "off",
-        GuideMode::Active => "active",
-        GuideMode::All => "all",
-    });
-    document["editor"]["bracket_pair_horizontal_guides"] =
-        value(match settings.editor.bracket_pair_horizontal_guides {
-            GuideMode::Off => "off",
-            GuideMode::Active => "active",
-            GuideMode::All => "all",
-        });
+    document["editor"]["bracket_pair_guides"] = enum_value(settings.editor.bracket_pair_guides);
+    document["editor"]["bracket_pair_horizontal_guides"] = enum_value(settings.editor.bracket_pair_horizontal_guides);
     document["editor"]["indent_guides"] = value(settings.editor.indent_guides);
     document["editor"]["highlight_active_indent_guide"] = value(settings.editor.highlight_active_indent_guide);
-    document["editor"]["render_whitespace"] = value(match settings.editor.render_whitespace {
-        RenderWhitespaceSetting::None => "none",
-        RenderWhitespaceSetting::Boundary => "boundary",
-        RenderWhitespaceSetting::Selection => "selection",
-        RenderWhitespaceSetting::Trailing => "trailing",
-        RenderWhitespaceSetting::All => "all",
-    });
+    document["editor"]["render_whitespace"] = enum_value(settings.editor.render_whitespace);
     document["editor"]["render_control_characters"] = value(settings.editor.render_control_characters);
     let mut rulers = Array::new();
     for &column in settings.editor.rulers.as_slice() {
@@ -443,18 +420,11 @@ fn write_settings_to_document(document: &mut DocumentMut, settings: &AppSettings
         value(i64::try_from(settings.editor.multi_cursor_limit).unwrap_or(10_000));
 
     ensure_table(document, "appearance");
-    document["appearance"]["theme"] = value(match settings.appearance.theme {
-        ThemePreference::System => "system",
-        ThemePreference::Dark => "dark",
-        ThemePreference::Light => "light",
-    });
+    document["appearance"]["theme"] = enum_value(settings.appearance.theme);
     document["appearance"]["zoom_level"] = value(i64::from(settings.appearance.zoom_level));
 
     ensure_table(document, "files");
-    document["files"]["autosave"] = value(match settings.files.autosave {
-        AutosaveMode::Scratchpads => "scratchpads",
-        AutosaveMode::All => "all",
-    });
+    document["files"]["autosave"] = enum_value(settings.files.autosave);
     document["files"]["trim_trailing_whitespace"] = value(settings.files.trim_trailing_whitespace);
     document["files"]["ensure_final_newline"] = value(settings.files.ensure_final_newline);
     if let Some(path) = &settings.files.scratchpad_directory {
@@ -483,6 +453,15 @@ fn write_settings_to_document(document: &mut DocumentMut, settings: &AppSettings
     }
 }
 
+/// Writes a setting enum under the same name serde reads it by.
+fn enum_value(setting: impl Serialize) -> Item {
+    Item::Value(
+        setting
+            .serialize(toml_edit::ser::ValueSerializer::new())
+            .expect("setting enums serialize to strings"),
+    )
+}
+
 fn ensure_table(document: &mut DocumentMut, key: &str) {
     if !document.get(key).is_some_and(Item::is_table) {
         document[key] = Item::Table(Table::new());
@@ -503,63 +482,115 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn defaults_are_standard_scratchpad_safe_and_light() {
-        let settings = AppSettings::default();
-        assert_eq!(settings.editor.input_mode, InputModeSetting::Standard);
-        assert_eq!(settings.files.autosave, AutosaveMode::Scratchpads);
-        assert_eq!(settings.appearance.theme, ThemePreference::Light);
+    fn parse(source: &str) -> Result<AppSettings, toml_edit::de::Error> {
+        toml_edit::de::from_str(source)
+    }
+
+    fn written(settings: &AppSettings) -> String {
+        let mut document = DocumentMut::new();
+        write_settings_to_document(&mut document, settings);
+        document.to_string()
     }
 
     #[test]
-    fn parses_partial_config_and_clamps_numeric_values() {
-        let settings: AppSettings = toml_edit::de::from_str(
-            "version = 1\n[editor]\ninput_mode = 'vim'\nfont_size = 200\n[appearance]\nzoom_level = -99\n",
-        )
-        .unwrap();
-        let settings = settings.normalized();
-        assert_eq!(settings.editor.input_mode, InputModeSetting::Vim);
-        assert_eq!(settings.editor.font_size, 40);
-        assert_eq!(settings.appearance.zoom_level, -4);
-        assert_eq!(settings.editor.multi_cursor_limit, 10_000);
+    fn every_setting_round_trips_through_the_config_file() {
+        let mut settings = AppSettings::default();
+        settings.editor = EditorSettings {
+            input_mode: InputModeSetting::Vim,
+            word_wrap: false,
+            line_numbers: LineNumbersSetting::Hybrid,
+            cursor_blink: false,
+            smooth_cursor: true,
+            font_family: "Iosevka".to_string(),
+            font_size: 17,
+            match_brackets: MatchBracketsSetting::Near,
+            bracket_pair_colorization: false,
+            bracket_pair_guides: GuideMode::All,
+            bracket_pair_horizontal_guides: GuideMode::Active,
+            indent_guides: true,
+            highlight_active_indent_guide: true,
+            render_whitespace: RenderWhitespaceSetting::Trailing,
+            render_control_characters: false,
+            rulers: RulerColumns::new(vec![80, 120]).unwrap(),
+            smart_select_subwords: false,
+            smart_select_include_whitespace: false,
+            multi_cursor_limit: 42,
+        };
+        settings.appearance = AppearanceSettings {
+            theme: ThemePreference::Dark,
+            zoom_level: -2,
+        };
+        settings.files = FileSettings {
+            autosave: AutosaveMode::All,
+            trim_trailing_whitespace: true,
+            ensure_final_newline: true,
+            scratchpad_directory: Some(PathBuf::from("/tmp/lst-scratch")),
+        };
+        settings.voice = VoiceSettings {
+            language: "auto".to_string(),
+            directory: Some(PathBuf::from("/tmp/lst-voice")),
+        };
+        settings
+            .keybindings
+            .insert("edit.duplicate_line".to_string(), vec!["ctrl-shift-d".to_string()]);
+        assert_eq!(parse(&written(&settings)).unwrap(), settings);
+
+        // Clearing an optional path removes its key instead of leaving the
+        // previous value behind.
+        let mut document: DocumentMut = written(&settings).parse().unwrap();
+        settings.files.scratchpad_directory = None;
+        settings.voice.directory = None;
+        write_settings_to_document(&mut document, &settings);
+        assert_eq!(parse(&document.to_string()).unwrap(), settings);
     }
 
     #[test]
-    fn polish_defaults_are_quiet_and_structurally_aware() {
-        let editor = EditorSettings::default();
-        assert_eq!(editor.match_brackets, MatchBracketsSetting::Always);
-        assert!(editor.bracket_pair_colorization);
-        assert_eq!(editor.bracket_pair_guides, GuideMode::Off);
-        assert_eq!(editor.bracket_pair_horizontal_guides, GuideMode::Off);
-        assert!(!editor.indent_guides);
-        assert!(!editor.highlight_active_indent_guide);
-        assert_eq!(editor.render_whitespace, RenderWhitespaceSetting::Selection);
-        assert!(editor.render_control_characters);
-        assert!(editor.rulers.as_slice().is_empty());
-        assert!(editor.smart_select_subwords);
-        assert!(editor.smart_select_include_whitespace);
-        assert_eq!(editor.multi_cursor_limit, 10_000);
+    fn out_of_range_values_are_clamped_on_load() {
+        let cases = [
+            ("[editor]\nfont_size = 0", "font size floor"),
+            ("[editor]\nfont_size = 200", "font size ceiling"),
+            ("[appearance]\nzoom_level = -99", "zoom floor"),
+            ("[appearance]\nzoom_level = 99", "zoom ceiling"),
+            ("[editor]\nmulti_cursor_limit = 0", "cursor limit floor"),
+            ("[editor]\nmulti_cursor_limit = 99999", "cursor limit ceiling"),
+            ("[editor]\nfont_family = '  '", "blank font family"),
+        ];
+        let clamped = |settings: AppSettings| {
+            let settings = settings.normalized();
+            (
+                settings.editor.font_size,
+                settings.appearance.zoom_level,
+                settings.editor.multi_cursor_limit,
+                settings.editor.font_family,
+            )
+        };
+        let expected = [
+            (8, 0, 10_000, "TX-02"),
+            (40, 0, 10_000, "TX-02"),
+            (13, -4, 10_000, "TX-02"),
+            (13, 8, 10_000, "TX-02"),
+            (13, 0, 1, "TX-02"),
+            (13, 0, 10_000, "TX-02"),
+            (13, 0, 10_000, "TX-02"),
+        ];
+        for ((body, case), (font_size, zoom, limit, family)) in cases.into_iter().zip(expected) {
+            let settings = parse(&format!("version = 1\n{body}\n")).unwrap();
+            assert_eq!(
+                clamped(settings),
+                (font_size, zoom, limit, family.to_string()),
+                "{case}"
+            );
+        }
     }
 
     #[test]
     fn rulers_are_sorted_deduplicated_and_strictly_validated() {
-        let settings: AppSettings = toml_edit::de::from_str("version = 1\n[editor]\nrulers = [120, 80, 80]\n").unwrap();
-        assert_eq!(settings.editor.rulers.as_slice(), &[80, 120]);
-
-        assert!(toml_edit::de::from_str::<AppSettings>("version = 1\n[editor]\nrulers = [0]\n").is_err());
-        assert!(toml_edit::de::from_str::<AppSettings>("version = 1\n[editor]\nrulers = [1001]\n").is_err());
-    }
-
-    #[test]
-    fn voice_settings_survive_unrelated_settings_updates() {
-        let source = "version = 1\n[voice]\nlanguage = 'auto'\ndirectory = '/tmp/voice-notes'\n";
-        let mut settings: AppSettings = toml_edit::de::from_str(source).unwrap();
-        let mut document: DocumentMut = source.parse().unwrap();
-        settings.editor.font_size = 17;
-        write_settings_to_document(&mut document, &settings);
-        let restored: AppSettings = toml_edit::de::from_str(&document.to_string()).unwrap();
-        assert_eq!(restored.voice, settings.voice);
-        assert_eq!(restored.editor.font_size, 17);
+        let rulers = |list: &str| parse(&format!("version = 1\n[editor]\nrulers = [{list}]\n"));
+        assert_eq!(rulers("120, 80, 80").unwrap().editor.rulers.as_slice(), &[80, 120]);
+        assert!(rulers("0").is_err());
+        assert!(rulers("1001").is_err());
+        let seventeen = (1..=17).map(|column| column.to_string()).collect::<Vec<_>>().join(", ");
+        assert!(rulers(&seventeen).is_err());
     }
 
     #[test]
@@ -572,5 +603,55 @@ mod tests {
         assert!(output.contains("# keep me"));
         assert!(output.contains("custom = 'value'"));
         assert!(output.contains("# font comment"));
+    }
+
+    #[test]
+    fn unreadable_config_files_are_reported_and_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (source, reason) in [
+            ("version = 1\n[editor\n", "Invalid settings"),
+            ("version = 1\n[editor]\nfont_size = 'large'\n", "Invalid settings"),
+            ("version = 2\n", "Unsupported settings version"),
+        ] {
+            fs::write(&path, source).unwrap();
+            let mut store = SettingsStore::load_from(Some(path.clone()));
+            assert!(
+                store.error().is_some_and(|error| error.contains(reason)),
+                "{source:?}: {:?}",
+                store.error()
+            );
+            assert_eq!(store.settings, AppSettings::default(), "{source:?}");
+
+            store.settings.editor.font_size = 20;
+            assert!(store.save().is_err(), "{source:?}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn reload_reports_only_external_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut store = SettingsStore::load_from(Some(path.clone()));
+        store.settings.editor.font_size = 20;
+        store.save().unwrap();
+        assert!(
+            store.reloaded_if_changed().is_none(),
+            "our own save is not an external change"
+        );
+
+        fs::write(&path, "version = 1\n[editor]\nfont_size = 22\n").unwrap();
+        let reloaded = store.reloaded_if_changed().expect("external edit is detected");
+        assert_eq!(reloaded.settings.editor.font_size, 22);
+
+        fs::write(&path, "not toml [").unwrap();
+        let broken = store.reloaded_if_changed().expect("broken edit is detected");
+        assert!(broken.error().is_some());
+        store.mark_source_seen(broken);
+        assert!(
+            store.reloaded_if_changed().is_none(),
+            "a rejected edit is not reported again"
+        );
     }
 }
