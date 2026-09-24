@@ -26,22 +26,6 @@ pub(crate) enum SyntaxLanguage {
 }
 
 impl SyntaxLanguage {
-    #[cfg(test)]
-    pub(crate) const ALL: &'static [Self] = &[
-        Self::Rust,
-        Self::Python,
-        Self::JavaScript,
-        Self::Jsx,
-        Self::TypeScript,
-        Self::Tsx,
-        Self::Json,
-        Self::Toml,
-        Self::Yaml,
-        Self::Markdown,
-        Self::Html,
-        Self::Css,
-    ];
-
     pub(crate) fn from_language(language: Language) -> Option<Self> {
         match language {
             Language::Rust => Some(Self::Rust),
@@ -756,30 +740,5 @@ mod tests {
 
         assert!(invalidation.is_full());
         assert_eq!(state.compute_spans(), full_parse(SyntaxLanguage::Rust, &after));
-    }
-
-    #[test]
-    fn injected_grammars_are_not_root_syntax_modes() {
-        assert_eq!(
-            SyntaxLanguage::ALL,
-            &[
-                SyntaxLanguage::Rust,
-                SyntaxLanguage::Python,
-                SyntaxLanguage::JavaScript,
-                SyntaxLanguage::Jsx,
-                SyntaxLanguage::TypeScript,
-                SyntaxLanguage::Tsx,
-                SyntaxLanguage::Json,
-                SyntaxLanguage::Toml,
-                SyntaxLanguage::Yaml,
-                SyntaxLanguage::Markdown,
-                SyntaxLanguage::Html,
-                SyntaxLanguage::Css,
-            ]
-        );
-        assert_eq!(
-            SyntaxLanguage::from_language(lst_editor::Language::Markdown),
-            Some(SyntaxLanguage::Markdown)
-        );
     }
 }

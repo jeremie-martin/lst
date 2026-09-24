@@ -364,22 +364,53 @@ fn markdown_block_injections_query() -> String {
     injections
 }
 
-#[cfg(all(test, feature = "internal-invariants"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn catalog_configs_build_for_every_language() {
-        for language in SyntaxLanguage::ALL {
-            let _ = grammar(root_grammar(*language));
+    const ALL_GRAMMARS: [GrammarId; 13] = [
+        GrammarId::Rust,
+        GrammarId::Python,
+        GrammarId::JavaScript,
+        GrammarId::Jsx,
+        GrammarId::TypeScript,
+        GrammarId::Tsx,
+        GrammarId::Json,
+        GrammarId::Toml,
+        GrammarId::Yaml,
+        GrammarId::Markdown,
+        GrammarId::MarkdownInline,
+        GrammarId::Html,
+        GrammarId::Css,
+    ];
+
+    // A new grammar makes this match non-exhaustive, which points the author
+    // at ALL_GRAMMARS before its queries can go unvalidated.
+    #[allow(dead_code)]
+    fn listed_in_all_grammars(id: GrammarId) {
+        match id {
+            GrammarId::Rust
+            | GrammarId::Python
+            | GrammarId::JavaScript
+            | GrammarId::Jsx
+            | GrammarId::TypeScript
+            | GrammarId::Tsx
+            | GrammarId::Json
+            | GrammarId::Toml
+            | GrammarId::Yaml
+            | GrammarId::Markdown
+            | GrammarId::MarkdownInline
+            | GrammarId::Html
+            | GrammarId::Css => {}
         }
-        let _ = grammar(GrammarId::MarkdownInline);
-        // Force every injectable grammar too. Otherwise a future entry in
-        // INJECTABLE_GRAMMARS that isn't also a SyntaxLanguage root would
-        // skip catalog validation and panic at runtime on first injection
-        // match instead of failing CI.
-        for entry in INJECTABLE_GRAMMARS {
-            let _ = grammar(entry.grammar);
+    }
+
+    #[test]
+    fn every_grammar_query_compiles() {
+        // Configs are built lazily, so a broken highlight or injection query
+        // would otherwise panic the first time a user opens that language.
+        for id in ALL_GRAMMARS {
+            let _ = grammar(id);
         }
     }
 

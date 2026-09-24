@@ -10,9 +10,6 @@ autobins = false
 name = "lst"
 path = "src/main.rs"
 
-[features]
-internal-invariants = []
-
 [dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["x11"] }
 libc = "0.2"
