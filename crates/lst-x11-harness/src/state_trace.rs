@@ -413,7 +413,9 @@ impl StateTraceReader {
         if line_start < combined.len() {
             next_partial = combined[line_start..].to_vec();
         }
-        Ok((records, size, next_partial))
+        // The file may have grown after its size was read; resume after the
+        // bytes actually consumed so none are read twice.
+        Ok((records, offset + new_bytes.len() as u64, next_partial))
     }
 
     /// Drain the stream and return the most recent observed record. When no
