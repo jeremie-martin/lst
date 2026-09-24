@@ -128,24 +128,6 @@ fn ignored_insert_mode_recent_ctrl_does_not_poison_next_vim_key() -> TestResult 
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn save_trim_updates_visible_buffer_before_followup_typing() -> TestResult {
-    support::run_x11_test("regression-save-trim-visible-buffer", |session| {
-        let env = [(
-            std::ffi::OsStr::new("LST_SAVE_TRIM_TRAILING_WS"),
-            std::ffi::OsStr::new("1"),
-        )];
-        let (mut editor, path) = session.open_with_env("scratch", &env)?;
-
-        editor.keys("alpha   ")?;
-        editor.save_then_expect_file(&path, "alpha")?;
-        editor.keys("X")?;
-        editor.save_then_expect_file(&path, "alphaX")?;
-        Ok(())
-    })
-}
-
-#[test]
-#[ignore = "requires a real X11 display plus xclip"]
 fn undo_after_save_marks_buffer_dirty_again() -> TestResult {
     support::run_x11_test("regression-save-undo-dirty", |session| {
         let path = session.seed_file("save-undo-dirty.txt", "old")?;

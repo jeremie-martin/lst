@@ -3,7 +3,6 @@ use lst_editor::{EditorEffect, EditorTab as ModelEditorTab, FileStamp, SaveExpec
 use rfd::FileDialog;
 use std::{
     collections::HashSet,
-    env,
     ffi::{OsStr, OsString},
     fs, io,
     io::Write,
@@ -983,10 +982,8 @@ impl LstGpuiApp {
 
     fn save_text_options(&self) -> SaveTextOptions {
         SaveTextOptions {
-            trim_trailing_whitespace: self.settings.settings.files.trim_trailing_whitespace
-                || env_flag("LST_SAVE_TRIM_TRAILING_WS"),
-            ensure_final_newline: self.settings.settings.files.ensure_final_newline
-                || env_flag("LST_SAVE_ENSURE_FINAL_NEWLINE"),
+            trim_trailing_whitespace: self.settings.settings.files.trim_trailing_whitespace,
+            ensure_final_newline: self.settings.settings.files.ensure_final_newline,
         }
     }
 
@@ -2357,10 +2354,6 @@ fn apply_save_options(body: String, options: SaveTextOptions) -> String {
     body
 }
 
-fn env_flag(name: &str) -> bool {
-    env::var_os(name).is_some_and(|value| value == "1")
-}
-
 fn trim_trailing_ws(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut segments = body.split('\n');
@@ -2595,7 +2588,7 @@ mod tests {
     fn deferred_latest_save_uses_the_stamp_from_an_older_committed_save() {
         static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-        let directory = env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().join(format!(
             "lst-serialized-save-{}-{}",
             process::id(),
             TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -2680,7 +2673,7 @@ mod tests {
     fn final_atomic_guard_preserves_a_target_recreated_after_expected_absence() {
         static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-        let directory = env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().join(format!(
             "lst-expected-absence-{}-{}",
             process::id(),
             TEST_COUNTER.fetch_add(1, Ordering::Relaxed)

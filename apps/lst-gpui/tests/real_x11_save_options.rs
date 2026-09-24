@@ -1,33 +1,41 @@
 //! Accepted real-X11 behavior for save-time text policies.
 //!
-//! The Settings UI and TOML configuration expose two opt-in policies. These
-//! tests use their environment overrides to isolate the file-writing boundary:
+//! `[files] trim_trailing_whitespace` strips trailing spaces and tabs from
+//! every line, and `[files] ensure_final_newline` appends one `\n` to a
+//! non-empty document that lacks it. Both default off, preserving Markdown
+//! hard breaks and intentional trailing whitespace.
 //!
-//! - **Trim trailing whitespace on save**, activated by
-//!   `LST_SAVE_TRIM_TRAILING_WS=1`. When on, every line written to disk has
-//!   trailing spaces and tabs stripped.
-//! - **Ensure final newline on save**, activated by
-//!   `LST_SAVE_ENSURE_FINAL_NEWLINE=1`. When on, a non-empty buffer that
-//!   does not already end with `\n` is written with one appended.
-//!
-//! Both settings default off, preserving Markdown hard breaks and intentional
-//! trailing whitespace on a normal save.
+//! These tests edit regular files, which are not autosaved, and every seed
+//! differs from the expected result, so the file can only match after the
+//! explicit save wrote it.
 
 mod support;
 
-use std::ffi::OsStr;
-
 use support::{EditorTestExt, TestResult};
 
-const TRIM_ENV: &str = "LST_SAVE_TRIM_TRAILING_WS";
-const FINAL_NEWLINE_ENV: &str = "LST_SAVE_ENSURE_FINAL_NEWLINE";
+const TRIM_SETTINGS: &str = "version = 1\n[files]\ntrim_trailing_whitespace = true\n";
+const FINAL_NEWLINE_SETTINGS: &str = "version = 1\n[files]\nensure_final_newline = true\n";
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn default_save_keeps_trailing_whitespace_and_missing_final_newline() -> TestResult {
+    support::run_x11_test("save-policies-default-off", |session| {
+        let path = session.seed_file("notes.md", "")?;
+        let mut editor = session.open_file("save-policies-default-off", &path)?;
+
+        editor.keys("hard break  <enter>last")?;
+        editor.save_then_expect_file(&path, "hard break  \nlast")?;
+        Ok(())
+    })
+}
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
 fn trim_trailing_whitespace_strips_spaces_and_tabs_per_line() -> TestResult {
     support::run_x11_test("save-trim-strips", |session| {
-        let env: [(&OsStr, &OsStr); 1] = [(OsStr::new(TRIM_ENV), OsStr::new("1"))];
-        let (mut editor, path) = session.open_with_env("scratch", &env)?;
+        session.seed_settings(TRIM_SETTINGS)?;
+        let path = session.seed_file("trim.txt", "")?;
+        let mut editor = session.open_file("save-trim-strips", &path)?;
 
         editor.keys("alpha   <enter>beta\t\t<enter>gamma")?;
         editor.save_then_expect_file(&path, "alpha\nbeta\ngamma")?;
@@ -37,30 +45,30 @@ fn trim_trailing_whitespace_strips_spaces_and_tabs_per_line() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn trim_is_idempotent_on_already_clean_buffer() -> TestResult {
-    support::run_x11_test("save-trim-idempotent", |session| {
-        let env: [(&OsStr, &OsStr); 1] = [(OsStr::new(TRIM_ENV), OsStr::new("1"))];
-        let (mut editor, path) = session.open_with_env("scratch", &env)?;
+fn trim_on_save_updates_the_visible_buffer_before_followup_typing() -> TestResult {
+    support::run_x11_test("save-trim-visible-buffer", |session| {
+        session.seed_settings(TRIM_SETTINGS)?;
+        let path = session.seed_file("trim.txt", "")?;
+        let mut editor = session.open_file("save-trim-visible-buffer", &path)?;
 
-        // No trailing whitespace anywhere; trim must be a no-op.
-        editor.keys("alpha<enter>beta<enter>gamma")?;
-        editor.save_then_expect_file(&path, "alpha\nbeta\ngamma")?;
-
-        // Saving again without changes preserves the same bytes.
-        editor.save_then_expect_file(&path, "alpha\nbeta\ngamma")?;
+        editor.keys("alpha   ")?;
+        editor.save_then_expect_file(&path, "alpha")?;
+        // The buffer itself must hold the trimmed text; a stale buffer would
+        // save "alpha   X" here.
+        editor.keys("X")?;
+        editor.save_then_expect_file(&path, "alphaX")?;
         Ok(())
     })
 }
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn ensure_final_newline_appends_when_missing() -> TestResult {
+fn ensure_final_newline_appends_exactly_one_when_missing() -> TestResult {
     support::run_x11_test("save-final-newline-append", |session| {
-        let env: [(&OsStr, &OsStr); 1] = [(OsStr::new(FINAL_NEWLINE_ENV), OsStr::new("1"))];
-        let (mut editor, path) = session.open_with_env("scratch", &env)?;
+        session.seed_settings(FINAL_NEWLINE_SETTINGS)?;
+        let path = session.seed_file("final-newline.txt", "")?;
+        let mut editor = session.open_file("save-final-newline-append", &path)?;
 
-        // Buffer ends without a trailing newline. Save must add exactly
-        // one — not two, not none.
         editor.keys("alpha<enter>beta")?;
         editor.save_then_expect_file(&path, "alpha\nbeta\n")?;
         Ok(())
@@ -69,14 +77,13 @@ fn ensure_final_newline_appends_when_missing() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn ensure_final_newline_is_idempotent_when_already_terminated() -> TestResult {
+fn ensure_final_newline_keeps_an_existing_terminator_single() -> TestResult {
     support::run_x11_test("save-final-newline-idempotent", |session| {
-        let env: [(&OsStr, &OsStr); 1] = [(OsStr::new(FINAL_NEWLINE_ENV), OsStr::new("1"))];
-        let (mut editor, path) = session.open_with_env("scratch", &env)?;
+        session.seed_settings(FINAL_NEWLINE_SETTINGS)?;
+        let path = session.seed_file("final-newline.txt", "old")?;
+        let mut editor = session.open_file("save-final-newline-idempotent", &path)?;
 
-        // Buffer already ends with one newline. Save must not append a
-        // second one.
-        editor.keys("alpha<enter>beta<enter>")?;
+        editor.keys("<C-a>alpha<enter>beta<enter>")?;
         editor.save_then_expect_file(&path, "alpha\nbeta\n")?;
         Ok(())
     })
@@ -84,13 +91,13 @@ fn ensure_final_newline_is_idempotent_when_already_terminated() -> TestResult {
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn ensure_final_newline_does_not_touch_an_empty_buffer() -> TestResult {
+fn ensure_final_newline_leaves_an_emptied_document_empty() -> TestResult {
     support::run_x11_test("save-final-newline-empty", |session| {
-        let env: [(&OsStr, &OsStr); 1] = [(OsStr::new(FINAL_NEWLINE_ENV), OsStr::new("1"))];
-        let (mut editor, path) = session.open_with_env("scratch", &env)?;
+        session.seed_settings(FINAL_NEWLINE_SETTINGS)?;
+        let path = session.seed_file("final-newline.txt", "old\n")?;
+        let mut editor = session.open_file("save-final-newline-empty", &path)?;
 
-        // Empty scratchpad. Saving with ensure-final-newline on must not
-        // synthesize a stray `\n` — an empty buffer maps to an empty file.
+        editor.keys("<C-a><delete>")?;
         editor.save_then_expect_file(&path, "")?;
         Ok(())
     })
