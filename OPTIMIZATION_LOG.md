@@ -560,3 +560,38 @@ in [the historical log](docs/optimization-history.md).
 - Additional iterator evidence: the preceding LF-chunk change reduces the
   500,000-line production wrap build **17.984 -> 11.773 ms**, despite no
   established gain in whole startup on that comparison.
+
+### Retain line measurements when line counts change
+
+- On the 500,000-line/29.5 MB plain document with wrapping off, inserting
+  320 newlines rebuilt every measured width after each key. Three alternating
+  production launches per variant: **3,879 -> 93 ms through final paint**,
+  app cost **12.116 -> 0.282 ms/newline** (~42x). Every saved file matches
+  byte for byte. A later confirmation of the full-window refinement is 92 ms.
+- `LineChange` owns validation of corresponding old/new covering windows.
+  `WrapLayout` replaces only those row counts and shifts its numeric suffix;
+  the width owner replaces corresponding measurements and maintains its maximum.
+  Syntax still rebuilds its indexes when topology changes. Multiple unmeasured
+  topology changes conservatively discard the width index. There is no extra
+  persistent text snapshot or second line-coordinate index.
+- Use borrowed chunk traversal for large affected windows, including partial
+  rope slices. Keep ordinary no-wrap edits on the existing constant-size layout
+  reuse path. Fully affected row indexes rebuild once at the final viewport
+  width; fully replaced documents are recognized from replacement byte totals.
+- The first candidate regressed large paste. Captured traces prove an extra
+  **11.205 ms** row patch followed by a **10.936 ms** wrap rebuild after gutter
+  sizing. The refinement removes the duplicate patch (one **10.764 ms** build).
+  Avoiding an unnecessary whole-insertion character count also restores paste
+  application time: **29.383 -> 29.412 ms**. Three-run whole paste medians
+  **166.763 -> 171.692 ms** remain sensitive to external clipboard delivery;
+  no bulk-paste gain claimed. CPU across the paste/post-typing scenario is
+  **320 -> 290 ms** in that comparison.
+- All-features tests, internal invariants, and Clippy pass. Checked line-window
+  arithmetic exhaustively on small counts; 512 fragmented edits per wrap/width
+  configuration and 1,024 width replacements match fresh indexes. Partial line
+  visitors match Ropey, including empty windows and trailing empty lines.
+  Eight viewport X11 cases pass, including splitting/joining the widest line
+  and observing exact horizontal extents. The final full X11 checkpoint follows.
+- A temporary benchmark reader hit an incomplete trailing timestamp record;
+  exclude that interrupted run and rerun both variants with complete-line
+  parsing, matching the maintained benchmark runner's existing protection.

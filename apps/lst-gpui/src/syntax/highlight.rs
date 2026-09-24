@@ -204,18 +204,29 @@ fn shifted_position(position: usize, shift: isize) -> usize {
 pub(crate) enum SyntaxInvalidation {
     Full,
     Lines(Range<usize>),
+    /// Highlight indexes must rebuild, but text layout can replace this window.
+    LineTopology(Range<usize>),
 }
 
 impl SyntaxInvalidation {
     pub(crate) fn line_range(&self, line_count: usize) -> Range<usize> {
         match self {
-            Self::Full => 0..line_count,
+            Self::Full | Self::LineTopology(_) => 0..line_count,
             Self::Lines(lines) => lines.start.min(line_count)..lines.end.min(line_count),
         }
     }
 
     pub(crate) fn is_full(&self) -> bool {
-        matches!(self, Self::Full)
+        matches!(self, Self::Full | Self::LineTopology(_))
+    }
+
+    pub(crate) fn layout_lines(&self, line_count: usize) -> Option<Range<usize>> {
+        match self {
+            Self::Full => None,
+            Self::Lines(lines) | Self::LineTopology(lines) => {
+                Some(lines.start.min(line_count)..lines.end.min(line_count))
+            }
+        }
     }
 
     pub(crate) fn from_buffer_delta(
@@ -226,9 +237,22 @@ impl SyntaxInvalidation {
         match delta {
             BufferDelta::Unchanged => Self::Lines(0..0),
             BufferDelta::FullReplace => Self::Full,
-            BufferDelta::Edits(edits) if previous_line_count == Some(new_buffer.len_lines()) => {
+            // Validated edits leave no old text when their replacement bytes
+            // account for the entire new document. Avoid scanning a large
+            // insertion merely to rediscover its full invalidation window.
+            BufferDelta::Edits(edits)
+                if edits.iter().map(|edit| edit.replacement.len()).sum::<usize>() == new_buffer.len_bytes() =>
+            {
+                Self::Full
+            }
+            BufferDelta::Edits(edits) if previous_line_count.is_some() => {
                 let changed = edited_line_range(new_buffer, edits).unwrap_or(0..new_buffer.len_lines());
-                Self::Lines(changed.start.saturating_sub(1)..changed.end.saturating_add(1).min(new_buffer.len_lines()))
+                let lines = changed.start.saturating_sub(1)..changed.end.saturating_add(1).min(new_buffer.len_lines());
+                if previous_line_count == Some(new_buffer.len_lines()) {
+                    Self::Lines(lines)
+                } else {
+                    Self::LineTopology(lines)
+                }
             }
             BufferDelta::Edits(_) => Self::Full,
         }
@@ -405,7 +429,8 @@ impl TabSyntaxState {
             }
             BufferDelta::Edits(edits) => {
                 let line_topology_changed = self.parsed_buffer.len_lines() != new_buffer.len_lines();
-                let mut changed_lines = edited_line_range(new_buffer, edits);
+                let text_changed_lines = edited_line_range(new_buffer, edits);
+                let mut changed_lines = text_changed_lines.clone();
                 // Apply edits in reverse order so each edit's pre-batch
                 // coordinates (in `self.parsed_buffer`) stay valid — later
                 // edits don't shift earlier positions.
@@ -428,7 +453,10 @@ impl TabSyntaxState {
                     parse_succeeded = false;
                 }
                 if line_topology_changed {
-                    SyntaxInvalidation::Full
+                    let lines = text_changed_lines.unwrap_or(0..new_buffer.len_lines());
+                    SyntaxInvalidation::LineTopology(
+                        lines.start.saturating_sub(1)..lines.end.saturating_add(1).min(new_buffer.len_lines()),
+                    )
                 } else {
                     let line_count = new_buffer.len_lines();
                     let changed_lines = changed_lines.unwrap_or(0..line_count);

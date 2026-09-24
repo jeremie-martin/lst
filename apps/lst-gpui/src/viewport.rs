@@ -202,14 +202,23 @@ impl ViewportCache {
 
     /// Preserve the horizontal extent across ordinary edits. No-wrap mode
     /// remeasures this line window and retains all other line measurements.
-    /// Changes to line topology invalidate the index as a whole.
+    /// A topology change replaces the corresponding old line window.
     pub(crate) fn patch_unwrapped_line_width(
         &mut self,
         revision: u64,
         invalidation: &SyntaxInvalidation,
         line_count: usize,
     ) {
-        if invalidation.is_full() {
+        let Some(lines) = invalidation.layout_lines(line_count) else {
+            self.max_unwrapped_line_width = None;
+            self.unwrapped_line_width_invalidation = None;
+            return;
+        };
+        // Pending windows use the previous document's line coordinates. A
+        // second topology change before measurement needs a fresh index.
+        if matches!(invalidation, SyntaxInvalidation::LineTopology(_))
+            && self.unwrapped_line_width_invalidation.is_some()
+        {
             self.max_unwrapped_line_width = None;
             self.unwrapped_line_width_invalidation = None;
             return;
@@ -217,7 +226,6 @@ impl ViewportCache {
         let Some(cached) = self.max_unwrapped_line_width.as_mut() else {
             return;
         };
-        let lines = invalidation.line_range(line_count);
         if lines.is_empty() {
             if let Some(pending) = self.unwrapped_line_width_invalidation.as_mut() {
                 pending.revision = revision;
@@ -242,7 +250,7 @@ impl ViewportCache {
         }
     }
 
-    /// Advance a cached wrapped-row index after a same-line-topology edit.
+    /// Advance a cached wrapped-row index after an edit.
     /// Only changed lines are remeasured; later row starts receive one cheap
     /// integer shift instead of re-tokenizing every line in the document.
     pub(crate) fn patch_wrap_layout(&mut self, buffer: &Rope, revision: u64, invalidation: &SyntaxInvalidation) {
@@ -263,19 +271,20 @@ impl ViewportCache {
         {
             return;
         }
-        if invalidation.is_full() {
+        let Some(lines) = invalidation.layout_lines(buffer.len_lines()) else {
+            self.wrap_layout = None;
+            return;
+        };
+        // With no unchanged lines to retain, build once during preparation,
+        // after the new gutter and viewport have determined the wrap width.
+        if lines.start == 0 && lines.end == buffer.len_lines() {
             self.wrap_layout = None;
             return;
         }
         let Some(mut cached) = self.wrap_layout.take() else {
             return;
         };
-        let line_count = buffer.len_lines();
-        if cached.layout.line_count() != line_count {
-            return;
-        }
-        let lines = invalidation.line_range(line_count);
-        if lines.is_empty() || !cached.layout.show_wrap() {
+        if cached.layout.line_count() == buffer.len_lines() && (lines.is_empty() || !cached.layout.show_wrap()) {
             cached.revision = revision;
             self.wrap_layout = Some(cached);
             return;
@@ -317,16 +326,21 @@ impl MeasuredLineWidths {
             .fold(px(0.0), |max, width| if width > max { width } else { max })
     }
 
-    fn remeasure(&mut self, lines: Range<usize>, mut measure: impl FnMut() -> Pixels) {
+    fn remeasure(&mut self, lines: Range<usize>, measurements: impl ExactSizeIterator<Item = Pixels>) {
         let previous_maximum = self.maximum;
+        let touched_maximum = self.values[lines.clone()].contains(&previous_maximum);
         let mut changed_maximum = px(0.0);
-        let mut touched_maximum = false;
-        for width in &mut self.values[lines] {
-            touched_maximum |= *width == previous_maximum;
-            *width = measure();
+        let measurements = measurements.inspect(|width| {
             if *width > changed_maximum {
                 changed_maximum = *width;
             }
+        });
+        if lines.len() == measurements.len() {
+            for (width, measured) in self.values[lines].iter_mut().zip(measurements) {
+                *width = measured;
+            }
+        } else {
+            self.values.splice(lines, measurements);
         }
         self.maximum = if touched_maximum && changed_maximum < previous_maximum {
             Self::maximum(&self.values)
@@ -987,25 +1001,37 @@ pub(crate) fn max_unwrapped_line_width(
         }
         if cached.char_width == char_width
             && cached.font_size == font_size
-            && cache
-                .unwrapped_line_width_invalidation
-                .as_ref()
-                .is_some_and(|pending| pending.base_revision == cached.revision && pending.revision == revision)
+            && cache.unwrapped_line_width_invalidation.as_ref().is_some_and(|pending| {
+                pending.base_revision == cached.revision
+                    && pending.revision == revision
+                    && lst_editor::LineChange::new(
+                        cached.widths.values.len(),
+                        buffer.len_lines(),
+                        pending.lines.clone(),
+                    )
+                    .is_some()
+            })
         {
             let pending = cache
                 .unwrapped_line_width_invalidation
                 .take()
                 .expect("checked pending line-width invalidation");
-            let mut lines = buffer.lines_at(pending.lines.start);
-            cached.widths.remeasure(pending.lines, || {
-                unwrapped_rope_line_width(
-                    lines.next().expect("invalidated lines belong to the document"),
-                    char_width,
-                    scale,
-                    theme,
-                    window,
-                )
-            });
+            let change =
+                lst_editor::LineChange::new(cached.widths.values.len(), buffer.len_lines(), pending.lines.clone())
+                    .expect("checked line measurement window");
+            if change.before().len() == change.after().len() {
+                let measured = buffer
+                    .lines_at(pending.lines.start)
+                    .take(pending.lines.len())
+                    .map(|line| unwrapped_rope_line_width(line, char_width, scale, theme, window));
+                cached.widths.remeasure(change.before(), measured);
+            } else {
+                let mut measured = Vec::with_capacity(pending.lines.len());
+                lst_editor::for_each_rope_line_in(buffer, pending.lines, |_, line| {
+                    measured.push(unwrapped_text_line_width(line, char_width, scale, theme, window));
+                });
+                cached.widths.remeasure(change.before(), measured.into_iter());
+            }
             cached.revision = revision;
             return cached.widths.maximum;
         }
@@ -3005,7 +3031,15 @@ mod tests {
                         ..Default::default()
                     };
 
+                    let full_window = invalidated_lines == (0..after_buffer.len_lines());
                     cache.patch_wrap_layout(&after_buffer, 1, &SyntaxInvalidation::Lines(invalidated_lines));
+                    if full_window {
+                        assert!(
+                            cache.wrap_layout.is_none(),
+                            "full windows rebuild at the final viewport width"
+                        );
+                        continue;
+                    }
 
                     let patched = cache.wrap_layout.expect("patch should retain layout");
                     assert_eq!(patched.revision, 1);
@@ -3088,13 +3122,29 @@ mod tests {
             for (index, width) in expected[start..end].iter_mut().enumerate() {
                 *width = px(((step * 7 + index * 13) % 17) as f32);
             }
-            let mut changed = expected[start..end].iter().copied();
-            widths.remeasure(start..end, || changed.next().unwrap());
+            widths.remeasure(start..end, expected[start..end].iter().copied());
             assert_eq!(widths.values, expected);
             assert_eq!(widths.maximum, MeasuredLineWidths::maximum(&expected));
         }
-        widths.remeasure(0..expected.len(), || px(0.0));
+        widths.remeasure(0..expected.len(), (0..expected.len()).map(|_| px(0.0)));
         assert_eq!(widths.maximum, px(0.0));
+    }
+
+    #[test]
+    fn measured_line_replacements_match_fresh_width_indexes() {
+        let mut expected = vec![px(10.0); 100];
+        let mut widths = MeasuredLineWidths::new(expected.clone());
+        for step in 0..1024 {
+            let start = step * 17 % (expected.len() + 1);
+            let end = (start + step % 13).min(expected.len());
+            let values = (0..step % 17)
+                .map(|at| px(((step + at) % 31) as f32))
+                .collect::<Vec<_>>();
+            widths.remeasure(start..end, values.iter().copied());
+            expected.splice(start..end, values);
+            assert_eq!(widths.values, expected);
+            assert_eq!(widths.maximum, MeasuredLineWidths::maximum(&expected));
+        }
     }
 
     #[test]
@@ -3131,6 +3181,27 @@ mod tests {
         assert_eq!(pending.lines, 10..22);
 
         cache.patch_unwrapped_line_width(10, &SyntaxInvalidation::Full, 100);
+        assert!(cache.max_unwrapped_line_width.is_none());
+        assert!(cache.unwrapped_line_width_invalidation.is_none());
+    }
+
+    #[test]
+    fn a_second_unmeasured_topology_change_discards_stale_line_coordinates() {
+        let mut cache = ViewportCache {
+            max_unwrapped_line_width: Some(CachedUnwrappedLineWidth {
+                revision: 7,
+                char_width: px(8.0),
+                font_size: px(13.0),
+                widths: MeasuredLineWidths::new(vec![px(800.0); 100]),
+            }),
+            ..Default::default()
+        };
+        cache.patch_unwrapped_line_width(8, &SyntaxInvalidation::LineTopology(10..13), 101);
+        assert_eq!(
+            cache.max_unwrapped_line_width.as_ref().unwrap().widths.values.len(),
+            100
+        );
+        cache.patch_unwrapped_line_width(9, &SyntaxInvalidation::LineTopology(20..23), 102);
         assert!(cache.max_unwrapped_line_width.is_none());
         assert!(cache.unwrapped_line_width_invalidation.is_none());
     }

@@ -73,6 +73,8 @@ Core collections encode their invariants:
 - `WrapLayout` owns wrapped row offsets and the no-wrap identity mapping.
   Its checked update operations keep line counts, row starts, and wrap widths
   consistent; the app owns cache revisions and supplies invalidated ranges.
+  `LineChange` validates corresponding old/new windows when line counts change,
+  shared by wrapped-row and measured-width updates.
 
 Keep new editor behavior behind focused `EditorModel` operations and keep each
 invariant in one module. Validate data at a public or external boundary rather

@@ -132,6 +132,18 @@ fn no_wrap_horizontal_extent_tracks_a_growing_and_shrinking_longest_line() -> Te
             "{original} -> {grown}, character width {char_width}"
         );
 
+        editor.keys("<C-g>1:401<enter><enter>")?;
+        editor.expect_cursor_heads(&[(1, 0)])?;
+        let split = scroll_to_right_end(&mut editor)?;
+        assert!(
+            (split - original).abs() < 2.0,
+            "split extent {split}, original {original}"
+        );
+        editor.keys("<backspace>")?;
+        editor.expect_cursor_heads(&[(0, 400)])?;
+        let joined = scroll_to_right_end(&mut editor)?;
+        assert!((joined - grown).abs() < 2.0, "joined extent {joined}, grown {grown}");
+
         editor.keys("<C-home><S-end>z")?;
         editor.expect_cursor_heads(&[(0, 1)])?;
         let shrunk = scroll_to_right_end(&mut editor)?;

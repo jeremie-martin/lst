@@ -121,15 +121,34 @@ impl WrapLayout {
         true
     }
 
-    /// Remeasure a validated line window without changing line topology.
-    /// A mismatch leaves the layout unchanged and asks the caller to rebuild.
+    /// Remeasure a covering window in the new document, replacing its old
+    /// rows when line topology changed. Invalid windows leave the index intact.
     pub fn update_lines(&mut self, buffer: &Rope, lines: std::ops::Range<usize>) -> bool {
-        if buffer.len_lines() != self.line_count() || lines.start > lines.end || lines.end > self.line_count() {
+        let Some(change) = crate::LineChange::new(self.line_count(), buffer.len_lines(), lines.clone()) else {
             return false;
-        }
+        };
+        let old_lines = change.before();
         let LineRows::Wrapped(starts) = &mut self.rows else {
+            self.rows = LineRows::Unwrapped {
+                line_count: buffer.len_lines(),
+            };
             return true;
         };
+        if old_lines.len() != lines.len() {
+            let old_end = starts[old_lines.end];
+            let mut next_start = starts[lines.start];
+            let mut replacements = Vec::with_capacity(lines.len());
+            crate::for_each_rope_line_in(buffer, lines.clone(), |_, line| {
+                next_start = next_start.saturating_add(visual_line_count_for_str_line(line, self.wrap_columns));
+                replacements.push(next_start);
+            });
+            starts.splice(old_lines.start + 1..old_lines.end + 1, replacements);
+            let delta = next_start as isize - old_end as isize;
+            for start in &mut starts[lines.end + 1..] {
+                *start = start.saturating_add_signed(delta);
+            }
+            return true;
+        }
         if lines.is_empty() {
             return true;
         }
@@ -510,6 +529,32 @@ mod tests {
     }
 
     #[test]
+    fn line_replacements_match_fresh_layouts_after_fragmented_edits() {
+        for show_wrap in [false, true] {
+            for columns in [1, 8, 80] {
+                let mut buffer = Rope::from_str("alpha beta\r\nsecond\u{2028}last\n");
+                let mut layout = build_wrap_layout_for_rope(&buffer, columns, show_wrap);
+                let fragments = ["", "x", "\n", "\r", "\r\n", "\u{2028}", "界\tlong words"];
+                for step in 0..512 {
+                    let start = step * 97 % (buffer.len_chars() + 1);
+                    let end = (start + step % 23).min(buffer.len_chars());
+                    let replacement = fragments[step % fragments.len()];
+                    buffer.remove(start..end);
+                    buffer.insert(start, replacement);
+                    let first = buffer.char_to_line(start).saturating_sub(1);
+                    let last = (buffer.char_to_line(start + replacement.chars().count()) + 2).min(buffer.len_lines());
+                    assert!(layout.update_lines(&buffer, first..last));
+                    assert_eq!(
+                        layout,
+                        build_wrap_layout_for_rope(&buffer, columns, show_wrap),
+                        "edit {step}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn incompatible_layout_updates_leave_the_index_unchanged() {
         let buffer = Rope::from_str("alpha beta gamma\nsecond line\n");
         for show_wrap in [false, true] {
@@ -521,7 +566,7 @@ mod tests {
                 assert_eq!(layout, original);
             }
             let mut layout = original.clone();
-            assert!(!layout.update_lines(&Rope::from_str("one line"), 0..1));
+            assert!(!layout.update_lines(&Rope::from_str("one\ntwo\nthree\nfour"), 0..0));
             assert_eq!(layout, original);
             assert!(layout.update_lines(&buffer, 0..0));
             assert_eq!(layout, original);

@@ -371,7 +371,9 @@ mod tests {
                 buffer.insert(edit.range.start, &edit.replacement);
                 let invalidation = state.update(&buffer, BufferDelta::Edits(vec![edit]), revision as u64 + 1);
                 match invalidation {
-                    SyntaxInvalidation::Full => (cached_lines, cached_lens) = state.compute_spans(),
+                    SyntaxInvalidation::Full | SyntaxInvalidation::LineTopology(_) => {
+                        (cached_lines, cached_lens) = state.compute_spans()
+                    }
                     SyntaxInvalidation::Lines(lines) => {
                         let (new_lines, new_lens) = state.compute_spans_for_lines(lines.clone());
                         cached_lines.splice(lines.clone(), new_lines);
@@ -752,7 +754,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(invalidation, SyntaxInvalidation::Full);
+        assert!(invalidation.is_full());
         assert_eq!(state.compute_spans(), full_parse(SyntaxLanguage::Rust, &after));
     }
 
