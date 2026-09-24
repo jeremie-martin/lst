@@ -220,15 +220,6 @@ impl RecentFiles {
         &self.entries
     }
 
-    /// Compatibility view for callers that have not adopted typed recents yet.
-    pub(crate) fn entries(&self) -> Vec<PathBuf> {
-        self.paths().map(Path::to_path_buf).collect()
-    }
-
-    fn paths(&self) -> impl Iterator<Item = &Path> {
-        self.entries.iter().map(RecentEntry::path)
-    }
-
     pub(crate) fn record_with_origin(&mut self, path: &Path, origin: RecentOrigin) {
         let entry = RecentEntry::normalized(path, origin);
         if move_to_front(&mut self.entries, entry) {
@@ -320,10 +311,6 @@ impl RecentView {
         self.files.typed_entries()
     }
 
-    /// Compatibility view for callers that have not adopted typed recents yet.
-    pub(crate) fn entries(&self) -> Vec<PathBuf> {
-        self.files.entries()
-    }
     pub(crate) fn is_open(&self) -> bool {
         self.panel.is_some()
     }
@@ -1244,7 +1231,12 @@ impl LstGpuiApp {
     }
 
     fn start_recent_content_search(&mut self, search: RecentContentSearch, cx: &mut Context<Self>) {
-        let paths = self.recent.entries();
+        let paths = self
+            .recent
+            .typed_entries()
+            .iter()
+            .map(|entry| entry.path().to_path_buf())
+            .collect::<Vec<_>>();
         cx.spawn(async move |this, cx| {
             let background_search = search.clone();
             let result = cx
@@ -1351,41 +1343,20 @@ impl LstGpuiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    struct TestStateDir {
-        root: PathBuf,
-    }
-
-    impl TestStateDir {
-        fn new(label: &str) -> Self {
-            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-            let root = std::env::temp_dir().join(format!(
-                "lst-recent-{label}-{}-{}",
-                process::id(),
-                NEXT_ID.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir_all(&root).expect("test state directory should be created");
-            Self { root }
-        }
-
-        fn state_path(&self) -> PathBuf {
-            self.root.join("recent-files")
-        }
-    }
-
-    impl Drop for TestStateDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
-        }
+    fn with_origins(entries: &[RecentEntry]) -> Vec<(PathBuf, RecentOrigin)> {
+        entries
+            .iter()
+            .map(|entry| (entry.path().to_path_buf(), entry.origin()))
+            .collect()
     }
 
     #[test]
     fn v2_round_trip_preserves_regular_and_scratchpad_origins() {
-        let state = TestStateDir::new("v2-round-trip");
+        let state = tempfile::tempdir().unwrap();
         let entries = vec![
-            RecentEntry::normalized_without_io(&state.root.join("regular.txt"), RecentOrigin::Regular),
-            RecentEntry::normalized_without_io(&state.root.join("scratch.md"), RecentOrigin::Scratchpad),
+            RecentEntry::normalized_without_io(&state.path().join("regular.txt"), RecentOrigin::Regular),
+            RecentEntry::normalized_without_io(&state.path().join("scratch.md"), RecentOrigin::Scratchpad),
         ];
 
         let serialized = serialize_entries(&entries);
@@ -1398,10 +1369,10 @@ mod tests {
 
     #[test]
     fn loading_v1_migrates_valid_paths_to_v2_as_regular() {
-        let state = TestStateDir::new("v1-migration");
-        let state_path = state.state_path();
-        let first = state.root.join("first.txt");
-        let second = state.root.join("second.txt");
+        let state = tempfile::tempdir().unwrap();
+        let state_path = state.path().join("recent-files");
+        let first = state.path().join("first.txt");
+        let second = state.path().join("second.txt");
         fs::write(
             &state_path,
             format!(
@@ -1431,16 +1402,17 @@ mod tests {
     }
 
     #[test]
-    fn malformed_v2_records_do_not_discard_neighboring_history() {
-        let state = TestStateDir::new("malformed-records");
-        let regular = state.root.join("regular.txt");
-        let scratchpad = state.root.join("scratch.md");
+    fn malformed_and_duplicate_v2_records_do_not_discard_neighboring_history() {
+        let state = tempfile::tempdir().unwrap();
+        let regular = state.path().join("regular.txt");
+        let scratchpad = state.path().join("scratch.md");
         let body = format!(
-            "{RECENT_FILE_HEADER_V2}\nregular\t{}\ninvalid record\nscratchpad\txyz\nunknown\t{}\nscratchpad\t{}\nregular\t{}\textra\n",
+            "{RECENT_FILE_HEADER_V2}\nregular\t{}\ninvalid record\nscratchpad\txyz\nunknown\t{}\nscratchpad\t{}\nregular\t{}\textra\nscratchpad\t{}\n",
             encode_path(&regular),
             encode_path(&regular),
             encode_path(&scratchpad),
             encode_path(&scratchpad),
+            encode_path(&regular),
         );
 
         let loaded = parse_entries(&body);
@@ -1459,60 +1431,33 @@ mod tests {
     }
 
     #[test]
-    fn recording_an_existing_path_updates_its_origin_and_origin_filters() {
-        let state = TestStateDir::new("origin-update");
-        let state_path = state.state_path();
-        let first = state.root.join("first.md");
-        let second = state.root.join("second.txt");
+    fn recording_moves_a_path_to_the_front_with_its_latest_origin() {
+        let state = tempfile::tempdir().unwrap();
+        let state_path = state.path().join("recent-files");
+        let first = state.path().join("first.md");
+        let second = state.path().join("second.txt");
         let mut files = RecentFiles::load(Some(state_path.clone()));
 
         files.record_with_origin(&first, RecentOrigin::Scratchpad);
         files.record_with_origin(&second, RecentOrigin::Regular);
         files.record_with_origin(&first, RecentOrigin::Regular);
-        files.record_with_origin(&second, RecentOrigin::Scratchpad);
 
-        let scratchpads = files
-            .typed_entries()
-            .iter()
-            .filter(|entry| entry.origin() == RecentOrigin::Scratchpad)
-            .map(|entry| entry.path().to_path_buf())
-            .collect::<Vec<_>>();
-        let regular = files
-            .typed_entries()
-            .iter()
-            .filter(|entry| entry.origin() == RecentOrigin::Regular)
-            .map(|entry| entry.path().to_path_buf())
-            .collect::<Vec<_>>();
-        assert_eq!(scratchpads, vec![normalize_recent_path(&second)]);
-        assert_eq!(regular, vec![normalize_recent_path(&first)]);
-        assert_eq!(files.typed_entries().len(), 2);
-
+        assert_eq!(
+            with_origins(files.typed_entries()),
+            vec![
+                (normalize_recent_path(&first), RecentOrigin::Regular),
+                (normalize_recent_path(&second), RecentOrigin::Regular),
+            ]
+        );
         let reloaded = RecentFiles::load(Some(state_path));
         assert_eq!(reloaded.typed_entries(), files.typed_entries());
     }
 
     #[test]
-    fn path_compatibility_view_preserves_unified_order() {
-        let state = TestStateDir::new("compatibility");
-        let regular = state.root.join("regular.txt");
-        let scratchpad = state.root.join("scratch.md");
-        let mut view = RecentView::load(None);
-
-        view.record_with_origin(&regular, RecentOrigin::Regular);
-        view.record_with_origin(&scratchpad, RecentOrigin::Scratchpad);
-
-        assert_eq!(
-            view.entries(),
-            vec![normalize_recent_path(&scratchpad), normalize_recent_path(&regular)]
-        );
-        assert_eq!(view.typed_entries()[1].origin(), RecentOrigin::Regular);
-    }
-
-    #[test]
     fn opening_recent_surfaces_resets_query_and_filter_to_all() {
-        let state = TestStateDir::new("open-reset");
-        let regular = state.root.join("regular.txt");
-        let scratchpad = state.root.join("scratch.md");
+        let state = tempfile::tempdir().unwrap();
+        let regular = state.path().join("regular.txt");
+        let scratchpad = state.path().join("scratch.md");
         let mut view = RecentView::load(None);
         view.record_with_origin(&regular, RecentOrigin::Regular);
         view.record_with_origin(&scratchpad, RecentOrigin::Scratchpad);
@@ -1547,8 +1492,8 @@ mod tests {
 
     #[test]
     fn content_search_matches_across_fixed_chunks_without_line_buffering() {
-        let state = TestStateDir::new("chunked-content");
-        let path = state.root.join("minified.txt");
+        let state = tempfile::tempdir().unwrap();
+        let path = state.path().join("minified.txt");
         let mut body = vec![b'a'; CONTENT_SEARCH_BUFFER_BYTES - 3];
         body.extend_from_slice(b"NeEdLe");
         body.extend(std::iter::repeat_n(b'z', CONTENT_SEARCH_BUFFER_BYTES * 2));
@@ -1560,8 +1505,8 @@ mod tests {
 
     #[test]
     fn unicode_content_search_preserves_codepoints_split_across_chunks() {
-        let state = TestStateDir::new("chunked-unicode");
-        let path = state.root.join("unicode.txt");
+        let state = tempfile::tempdir().unwrap();
+        let path = state.path().join("unicode.txt");
         let mut body = vec![b'a'; CONTENT_SEARCH_BUFFER_BYTES - 1];
         body.extend_from_slice("ÄTAIL".as_bytes());
         fs::write(&path, body).expect("Unicode fixture should be written");
@@ -1571,11 +1516,67 @@ mod tests {
     }
 
     #[test]
+    fn content_search_reports_misses_on_both_search_paths() {
+        let state = tempfile::tempdir().unwrap();
+        let ascii = state.path().join("ascii.txt");
+        let unicode = state.path().join("unicode.txt");
+        fs::write(&ascii, "only hay here").unwrap();
+        fs::write(&unicode, "nur Heu hier: äöü").unwrap();
+
+        for (path, query) in [(&ascii, "needle"), (&unicode, "needle"), (&unicode, "nädel")] {
+            let search = RecentContentSearch::new(query.to_string());
+            assert_eq!(
+                recent_file_content_matches(path, &search.query, &search),
+                Some(false),
+                "{query:?} in {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn ascii_query_matches_text_that_only_lowercases_to_it_through_unicode() {
+        let state = tempfile::tempdir().unwrap();
+        let path = state.path().join("kelvin.txt");
+        // U+212A KELVIN SIGN lowercases to ASCII 'k'.
+        fs::write(&path, "300 \u{212A}elvin").unwrap();
+        let search = RecentContentSearch::new("kelvin".to_string());
+
+        assert_eq!(recent_file_content_matches(&path, &search.query, &search), Some(true));
+    }
+
+    #[test]
+    fn stream_matcher_agrees_with_substring_search() {
+        // Every needle and text over {a, b} up to lengths 4 and 7 exercises
+        // each partial-match fallback of the streaming matcher.
+        fn words(max_len: usize) -> Vec<String> {
+            let mut words = vec![String::new()];
+            let mut frontier = vec![String::new()];
+            for _ in 0..max_len {
+                frontier = frontier
+                    .iter()
+                    .flat_map(|word| ['a', 'b'].map(|ch| format!("{word}{ch}")))
+                    .collect();
+                words.extend(frontier.iter().cloned());
+            }
+            words
+        }
+        let texts = words(7);
+        for needle in words(4).into_iter().filter(|needle| !needle.is_empty()) {
+            for text in &texts {
+                let mut matcher = StreamMatcher::new(needle.chars().collect());
+                let found = text.chars().any(|ch| matcher.push(ch));
+                assert_eq!(found, text.contains(&needle), "{needle:?} in {text:?}");
+            }
+        }
+    }
+
+    #[test]
     fn origin_filter_limits_visible_entries_without_losing_unified_order() {
-        let state = TestStateDir::new("filter");
-        let newest_scratchpad = state.root.join("newest.md");
-        let regular = state.root.join("regular.txt");
-        let oldest_scratchpad = state.root.join("oldest.md");
+        let state = tempfile::tempdir().unwrap();
+        let newest_scratchpad = state.path().join("newest.md");
+        let regular = state.path().join("regular.txt");
+        let oldest_scratchpad = state.path().join("oldest.md");
         let mut view = RecentView::load(None);
         view.record_with_origin(&oldest_scratchpad, RecentOrigin::Scratchpad);
         view.record_with_origin(&regular, RecentOrigin::Regular);
