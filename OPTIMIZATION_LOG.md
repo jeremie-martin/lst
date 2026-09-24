@@ -487,3 +487,19 @@ in [the historical log](docs/optimization-history.md).
   found only NVIDIA exposed by the installed Vulkan ICD; the extra hardware
   render node is not an available alternative Vulkan adapter on this setup.
 
+### Store unwrapped layout as an identity mapping
+
+- Move wrap-row invariants behind `WrapLayout` operations. Unwrapped rows are
+  represented by a line count, replacing the allocated identity-offset array;
+  wrapped rows retain one sentinel-terminated array that also owns total rows.
+  Cache revision/font decisions remain at the application boundary.
+- Three alternating physical-display comparisons on the 500,000-line file:
+  median RSS **247,796 -> 243,940 KiB**, saving ~3.8 MiB. The 320-backspace
+  operation remains ~187 ms through paint; every 29.5 MB saved result matches.
+  This removes allocation and duplicated derived state, without a throughput
+  claim. The per-line width cache still uses four bytes per measured line.
+- All-features tests and Clippy pass, including incremental/full equivalence,
+  identity mapping, rejected-update atomicity, and column-reuse invariants.
+  Eight viewport X11 cases passed with this layout plus the subsequently
+  rejected font experiment; the final combined checkpoint will cover the
+  retained synchronous-font implementation.

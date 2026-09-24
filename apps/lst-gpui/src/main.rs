@@ -1445,10 +1445,7 @@ fn sync_plain_view_state(
         }
         view.structure_key = (language, revision);
         let mut cache = view.cache.borrow_mut();
-        let previous_line_count = cache
-            .wrap_layout
-            .as_ref()
-            .map(|layout| layout.layout.line_row_starts.len().saturating_sub(1));
+        let previous_line_count = cache.wrap_layout.as_ref().map(|layout| layout.layout.line_count());
         let invalidation = SyntaxInvalidation::from_buffer_delta(buffer, delta, previous_line_count);
         cache.patch_wrap_layout(buffer, revision, &invalidation);
         cache.patch_unwrapped_line_width(revision, &invalidation, buffer.len_lines());
@@ -1467,10 +1464,7 @@ fn sync_plain_view_state(
     }
 
     let mut cache = view.cache.borrow_mut();
-    let previous_line_count = cache
-        .wrap_layout
-        .as_ref()
-        .map(|layout| layout.layout.line_row_starts.len().saturating_sub(1));
+    let previous_line_count = cache.wrap_layout.as_ref().map(|layout| layout.layout.line_count());
     let invalidation = SyntaxInvalidation::from_buffer_delta(buffer, delta, previous_line_count);
     cache.patch_wrap_layout(buffer, revision, &invalidation);
     cache.patch_unwrapped_line_width(revision, &invalidation, buffer.len_lines());

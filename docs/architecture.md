@@ -70,6 +70,9 @@ Core collections encode their invariants:
   change.
 - `TabOrigin` distinguishes ordinary files, scratchpads, and untitled buffers,
   including save expectations and missing backing files.
+- `WrapLayout` owns wrapped row offsets and the no-wrap identity mapping.
+  Its checked update operations keep line counts, row starts, and wrap widths
+  consistent; the app owns cache revisions and supplies invalidated ranges.
 
 Keep new editor behavior behind focused `EditorModel` operations and keep each
 invariant in one module. Validate data at a public or external boundary rather

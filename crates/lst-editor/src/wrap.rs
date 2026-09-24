@@ -54,10 +54,100 @@ pub fn cursor_visual_row_in_line(line: &str, column: usize, max_cols: usize) -> 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WrapLayout {
-    pub show_wrap: bool,
-    pub wrap_columns: usize,
-    pub line_row_starts: Vec<usize>,
-    pub total_rows: usize,
+    wrap_columns: usize,
+    rows: LineRows,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LineRows {
+    Unwrapped { line_count: usize },
+    // Starts with zero and includes the end sentinel. Every logical line
+    // contributes at least one row; only this module mutates the index.
+    Wrapped(Vec<usize>),
+}
+
+impl WrapLayout {
+    fn unwrapped(line_count: usize, wrap_columns: usize) -> Self {
+        Self {
+            wrap_columns: wrap_columns.max(1),
+            rows: LineRows::Unwrapped { line_count },
+        }
+    }
+
+    pub fn show_wrap(&self) -> bool {
+        matches!(self.rows, LineRows::Wrapped(_))
+    }
+
+    pub fn wrap_columns(&self) -> usize {
+        self.wrap_columns
+    }
+
+    pub fn line_count(&self) -> usize {
+        match &self.rows {
+            LineRows::Unwrapped { line_count } => *line_count,
+            LineRows::Wrapped(starts) => starts.len() - 1,
+        }
+    }
+
+    pub fn total_rows(&self) -> usize {
+        match &self.rows {
+            LineRows::Unwrapped { line_count } => *line_count,
+            LineRows::Wrapped(starts) => *starts.last().expect("wrapped layout has an end sentinel"),
+        }
+        .max(1)
+    }
+
+    /// Start of a logical line, including the end sentinel at `line_count()`.
+    pub fn row_start(&self, line: usize) -> Option<usize> {
+        match &self.rows {
+            LineRows::Unwrapped { line_count } => (line <= *line_count).then_some(line),
+            LineRows::Wrapped(starts) => starts.get(line).copied(),
+        }
+    }
+
+    /// Whether existing row starts remain valid at a different width.
+    pub fn can_reuse_columns(&self, columns: usize) -> bool {
+        let columns = columns.max(1);
+        !self.show_wrap()
+            || columns == self.wrap_columns
+            || (columns > self.wrap_columns && self.total_rows() == self.line_count())
+    }
+
+    pub fn reuse_columns(&mut self, columns: usize) -> bool {
+        if !self.can_reuse_columns(columns) {
+            return false;
+        }
+        self.wrap_columns = columns.max(1);
+        true
+    }
+
+    /// Remeasure a validated line window without changing line topology.
+    /// A mismatch leaves the layout unchanged and asks the caller to rebuild.
+    pub fn update_lines(&mut self, buffer: &Rope, lines: std::ops::Range<usize>) -> bool {
+        if buffer.len_lines() != self.line_count() || lines.start > lines.end || lines.end > self.line_count() {
+            return false;
+        }
+        let LineRows::Wrapped(starts) = &mut self.rows else {
+            return true;
+        };
+        if lines.is_empty() {
+            return true;
+        }
+        let old_end = starts[lines.end];
+        let mut next_start = starts[lines.start];
+        for (line_ix, line) in lines.clone().zip(buffer.lines_at(lines.start)) {
+            starts[line_ix] = next_start;
+            next_start = next_start.saturating_add(visual_line_count_for_rope_line(line, self.wrap_columns));
+        }
+        starts[lines.end] = next_start;
+        let row_delta = next_start as isize - old_end as isize;
+        if row_delta != 0 {
+            for start in &mut starts[lines.end.saturating_add(1)..] {
+                *start = start.saturating_add_signed(row_delta);
+            }
+        }
+        true
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,25 +159,19 @@ pub struct DisplayRowTarget {
 
 pub fn build_wrap_layout<T: AsRef<str>>(lines: &[T], wrap_columns: usize, show_wrap: bool) -> WrapLayout {
     let wrap_columns = wrap_columns.max(1);
-    let mut line_row_starts = Vec::with_capacity(lines.len() + 1);
-    let mut total_rows = 0usize;
-    line_row_starts.push(0);
-
-    for line in lines {
-        let display = trim_display_line(line.as_ref());
-        total_rows += if show_wrap {
-            visual_line_count(display, wrap_columns)
-        } else {
-            1
-        };
-        line_row_starts.push(total_rows);
+    if !show_wrap {
+        return WrapLayout::unwrapped(lines.len(), wrap_columns);
     }
-
+    let mut starts = Vec::with_capacity(lines.len() + 1);
+    let mut total_rows = 0usize;
+    starts.push(0);
+    for line in lines {
+        total_rows += visual_line_count(trim_display_line(line.as_ref()), wrap_columns);
+        starts.push(total_rows);
+    }
     WrapLayout {
-        show_wrap,
         wrap_columns,
-        line_row_starts,
-        total_rows: total_rows.max(1),
+        rows: LineRows::Wrapped(starts),
     }
 }
 
@@ -95,12 +179,7 @@ pub fn build_wrap_layout_for_rope(buffer: &Rope, wrap_columns: usize, show_wrap:
     let line_count = buffer.len_lines();
     let wrap_columns = wrap_columns.max(1);
     if !show_wrap {
-        return WrapLayout {
-            show_wrap,
-            wrap_columns,
-            line_row_starts: (0..=line_count).collect(),
-            total_rows: line_count.max(1),
-        };
+        return WrapLayout::unwrapped(line_count, wrap_columns);
     }
 
     let mut line_row_starts = Vec::with_capacity(line_count.saturating_add(1));
@@ -112,10 +191,8 @@ pub fn build_wrap_layout_for_rope(buffer: &Rope, wrap_columns: usize, show_wrap:
     };
     crate::for_each_rope_line(buffer, |_, line| push_line(line));
     WrapLayout {
-        show_wrap,
         wrap_columns,
-        line_row_starts,
-        total_rows: total_rows.max(1),
+        rows: LineRows::Wrapped(line_row_starts),
     }
 }
 
@@ -136,11 +213,13 @@ fn visual_line_count_for_str_line(line: &str, max_cols: usize) -> usize {
 }
 
 pub fn line_for_visual_row(layout: &WrapLayout, visual_row: usize) -> usize {
-    layout
-        .line_row_starts
-        .partition_point(|start| *start <= visual_row)
-        .saturating_sub(1)
-        .min(layout.line_row_starts.len().saturating_sub(2))
+    match &layout.rows {
+        LineRows::Unwrapped { line_count } => visual_row.min(line_count.saturating_sub(1)),
+        LineRows::Wrapped(starts) => starts
+            .partition_point(|start| *start <= visual_row)
+            .saturating_sub(1)
+            .min(starts.len().saturating_sub(2)),
+    }
 }
 
 /// Finds the line and column `delta` display rows away from `(line, column)`
@@ -414,6 +493,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unwrapped_rows_are_the_logical_line_indices() {
+        let buffer = Rope::from_str(&"line\n".repeat(10_000));
+        let mut layout = build_wrap_layout_for_rope(&buffer, 80, false);
+        assert!(!layout.show_wrap());
+        assert_eq!(layout.line_count(), buffer.len_lines());
+        assert_eq!(layout.total_rows(), buffer.len_lines());
+        for line in 0..=buffer.len_lines() {
+            assert_eq!(layout.row_start(line), Some(line));
+            assert_eq!(line_for_visual_row(&layout, line), line.min(buffer.len_lines() - 1));
+        }
+        assert_eq!(layout.row_start(buffer.len_lines() + 1), None);
+        assert!(layout.reuse_columns(1));
+        assert_eq!(layout.total_rows(), buffer.len_lines());
+        assert!(matches!(layout.rows, LineRows::Unwrapped { .. }));
+    }
+
+    #[test]
+    fn incompatible_layout_updates_leave_the_index_unchanged() {
+        let buffer = Rope::from_str("alpha beta gamma\nsecond line\n");
+        for show_wrap in [false, true] {
+            let original = build_wrap_layout_for_rope(&buffer, 8, show_wrap);
+            for (start, end) in [(3, 2), (0, 4), (4, 4)] {
+                let range = start..end;
+                let mut layout = original.clone();
+                assert!(!layout.update_lines(&buffer, range));
+                assert_eq!(layout, original);
+            }
+            let mut layout = original.clone();
+            assert!(!layout.update_lines(&Rope::from_str("one line"), 0..1));
+            assert_eq!(layout, original);
+            assert!(layout.update_lines(&buffer, 0..0));
+            assert_eq!(layout, original);
+        }
+        let mut wrapped = build_wrap_layout_for_rope(&buffer, 8, true);
+        let original = wrapped.clone();
+        assert!(!wrapped.reuse_columns(16));
+        assert_eq!(wrapped, original);
+        let mut short = build_wrap_layout_for_rope(&Rope::from_str("short"), 8, true);
+        assert!(short.reuse_columns(80));
+        assert!(!short.reuse_columns(1));
+        assert_eq!(short.wrap_columns(), 80);
+    }
+
+    #[test]
     fn chunked_wrap_layout_matches_logical_lines_after_fragmented_unicode_edits() {
         fn check(buffer: &Rope) {
             for columns in [0, 1, 3, 8, 31, 80, 2048] {
@@ -424,8 +547,14 @@ mod tests {
                     starts.push(starts.last().unwrap() + count);
                 }
                 let actual = build_wrap_layout_for_rope(buffer, columns, true);
-                assert_eq!(actual.line_row_starts, starts, "columns {columns}");
-                assert_eq!(actual.total_rows, *starts.last().unwrap());
+                assert_eq!(
+                    (0..=actual.line_count())
+                        .map(|line| actual.row_start(line).unwrap())
+                        .collect::<Vec<_>>(),
+                    starts,
+                    "columns {columns}"
+                );
+                assert_eq!(actual.total_rows(), *starts.last().unwrap());
             }
         }
         for text in ["", "a", "\n", "\r", "\r\n", "\u{85}", "\u{2028}", "\u{2029}"] {
@@ -500,11 +629,11 @@ mod tests {
         let display_text = crate::selection::line_display_text(buffer, line);
         let column = column.min(display_text.chars().count());
         let segment_row = cursor_visual_row_in_line(&display_text, column, wrap_columns);
-        let visual_row = layout.line_row_starts[line] + segment_row;
+        let visual_row = layout.row_start(line).unwrap() + segment_row;
         let target_visual_row = if delta.is_negative() {
             visual_row.saturating_sub(delta.unsigned_abs())
         } else {
-            (visual_row + delta as usize).min(layout.total_rows.saturating_sub(1))
+            (visual_row + delta as usize).min(layout.total_rows().saturating_sub(1))
         };
         if target_visual_row == visual_row {
             return None;
@@ -515,7 +644,7 @@ mod tests {
         let target_line = line_for_visual_row(&layout, target_visual_row);
         let target_text = crate::selection::line_display_text(buffer, target_line);
         let target_segments = wrap_segments(&target_text, wrap_columns);
-        let row_in_line = target_visual_row - layout.line_row_starts[target_line];
+        let row_in_line = target_visual_row - layout.row_start(target_line).unwrap();
         let segment = target_segments
             .get(row_in_line)
             .or_else(|| target_segments.last())

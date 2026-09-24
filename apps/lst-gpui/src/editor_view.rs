@@ -250,7 +250,7 @@ impl LstGpuiApp {
                 },
             )
         };
-        layout.wrap_columns
+        layout.wrap_columns()
     }
 
     pub(crate) fn move_page(&mut self, down: bool, select: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -430,7 +430,7 @@ impl LstGpuiApp {
         if self.model.show_wrap() {
             let cache = view.cache.borrow();
             let cached = cache.wrap_layout.as_ref()?;
-            if cached.revision != tab.revision() || !cached.layout.show_wrap {
+            if cached.revision != tab.revision() || !cached.layout.show_wrap() {
                 return None;
             }
             visual_row_for_char(tab, &cached.layout)

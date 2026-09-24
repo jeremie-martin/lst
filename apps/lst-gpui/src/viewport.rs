@@ -6,8 +6,8 @@ use crate::{
 };
 use gpui::{fill, point, px, rgb, size, App, Bounds, Pixels, ScrollHandle, ShapedLine, SharedString, TextRun, Window};
 use lst_editor::wrap::{
-    build_wrap_layout_for_rope, cursor_visual_row_in_line, line_for_visual_row, visual_line_count_for_rope_line,
-    wrap_segments, WrapLayout, WrappedSegment,
+    build_wrap_layout_for_rope, cursor_visual_row_in_line, line_for_visual_row, wrap_segments, WrapLayout,
+    WrappedSegment,
 };
 use lst_editor::{
     selection::{
@@ -271,32 +271,19 @@ impl ViewportCache {
             return;
         };
         let line_count = buffer.len_lines();
-        if cached.layout.line_row_starts.len() != line_count.saturating_add(1) {
+        if cached.layout.line_count() != line_count {
             return;
         }
         let lines = invalidation.line_range(line_count);
-        if lines.is_empty() || !cached.layout.show_wrap {
+        if lines.is_empty() || !cached.layout.show_wrap() {
             cached.revision = revision;
             self.wrap_layout = Some(cached);
             return;
         }
 
-        let layout = Rc::make_mut(&mut cached.layout);
-        let old_end = layout.line_row_starts[lines.end];
-        let mut next_start = layout.line_row_starts[lines.start];
-        for (line_ix, line) in lines.clone().zip(buffer.lines_at(lines.start)) {
-            layout.line_row_starts[line_ix] = next_start;
-            let row_count = visual_line_count_for_rope_line(line, layout.wrap_columns);
-            next_start = next_start.saturating_add(row_count);
+        if !Rc::make_mut(&mut cached.layout).update_lines(buffer, lines) {
+            return;
         }
-        layout.line_row_starts[lines.end] = next_start;
-        let row_delta = next_start as isize - old_end as isize;
-        if row_delta != 0 {
-            for row_start in &mut layout.line_row_starts[lines.end.saturating_add(1)..] {
-                *row_start = row_start.saturating_add_signed(row_delta);
-            }
-        }
-        layout.total_rows = layout.total_rows.saturating_add_signed(row_delta).max(1);
         cached.revision = revision;
         self.wrap_layout = Some(cached);
     }
@@ -1128,17 +1115,17 @@ pub(crate) fn ensure_wrap_layout(cache: &mut ViewportCache, input: WrapLayoutInp
     let line_count = buffer.len_lines();
     if let Some(layout) = cache.wrap_layout.as_mut() {
         if layout.revision == revision
-            && layout.layout.show_wrap == show_wrap
-            && layout.layout.line_row_starts.len() == line_count + 1
+            && layout.layout.show_wrap() == show_wrap
+            && layout.layout.line_count() == line_count
         {
-            if layout.layout.wrap_columns == wrap_columns {
+            if layout.layout.wrap_columns() == wrap_columns {
                 return layout.layout.clone();
             }
             // Every logical line contributes at least one row. If all fit
             // already, widening cannot change any row start. Only the
             // width-keyed visible-line caches need to be rebuilt.
-            if wrap_columns > layout.layout.wrap_columns && layout.layout.total_rows == line_count {
-                Rc::make_mut(&mut layout.layout).wrap_columns = wrap_columns;
+            if layout.layout.can_reuse_columns(wrap_columns) {
+                Rc::make_mut(&mut layout.layout).reuse_columns(wrap_columns);
                 cache.code_lines.clear();
                 cache.wrapped_lines.clear();
                 return layout.layout.clone();
@@ -1874,7 +1861,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
             scale,
         },
     );
-    let visible_rows = visible_visual_row_range(scroll_top, viewport_height, layout.total_rows, row_height);
+    let visible_rows = visible_visual_row_range(scroll_top, viewport_height, layout.total_rows(), row_height);
     let first_line = line_for_visual_row(&layout, visible_rows.start);
     let last_visible_line = line_for_visual_row(&layout, visible_rows.end.saturating_sub(1));
     if let Some(syntax_state) = syntax_state {
@@ -1918,13 +1905,13 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
             )
         };
         let display_source = line.as_ref();
-        let segment_key = (line_ix, show_wrap.then_some(layout.wrap_columns));
+        let segment_key = (line_ix, show_wrap.then_some(layout.wrap_columns()));
         let segments = cache
             .wrapped_lines
             .entry(segment_key)
             .or_insert_with(|| {
                 if show_wrap {
-                    wrap_segments(display_source, layout.wrap_columns).into()
+                    wrap_segments(display_source, layout.wrap_columns()).into()
                 } else {
                     Rc::from([WrappedSegment {
                         start_col: 0,
@@ -1938,7 +1925,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         let mut highlight_spans = None;
 
         for (segment_ix, segment) in segments.iter().enumerate() {
-            let visual_row = layout.line_row_starts[line_ix] + segment_ix;
+            let visual_row = layout.row_start(line_ix).expect("painted line belongs to layout") + segment_ix;
             if !visible_rows.contains(&visual_row) {
                 continue;
             }
@@ -2262,7 +2249,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         rows: rows.clone(),
         scroll_top_at_paint: scroll_top,
         scroll_left_at_paint: scroll_left,
-        painted_wrap_columns: show_wrap.then_some(layout.wrap_columns),
+        painted_wrap_columns: show_wrap.then_some(layout.wrap_columns()),
         painted_char_width: char_width,
         painted_row_height: row_height,
         gutter_width_at_paint: layout_metrics.gutter_width(),
@@ -2729,12 +2716,12 @@ pub(crate) fn visual_row_for_char(tab: &EditorTab, layout: &WrapLayout) -> Optio
     let line_start = tab.buffer().line_to_char(line);
     let display_text = line_display_text(tab.buffer(), line);
     let column = cursor.saturating_sub(line_start).min(display_text.chars().count());
-    let row_in_line = if layout.show_wrap {
-        cursor_visual_row_in_line(display_text.as_ref(), column, layout.wrap_columns)
+    let row_in_line = if layout.show_wrap() {
+        cursor_visual_row_in_line(display_text.as_ref(), column, layout.wrap_columns())
     } else {
         0
     };
-    layout.line_row_starts.get(line).copied().map(|row| row + row_in_line)
+    layout.row_start(line).map(|row| row + row_in_line)
 }
 
 pub(crate) fn row_contains_cursor(row: &PaintedRow, cursor_char: usize) -> bool {
@@ -3081,7 +3068,7 @@ mod tests {
                         },
                     );
                     let expected_columns = if show_wrap { columns } else { usize::MAX };
-                    assert_eq!(actual.wrap_columns, expected_columns);
+                    assert_eq!(actual.wrap_columns(), expected_columns);
                     assert_eq!(
                         *actual,
                         build_wrap_layout_for_rope(&buffer, expected_columns, show_wrap)

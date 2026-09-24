@@ -1716,7 +1716,7 @@ impl Render for LstGpuiApp {
                         scale,
                     },
                 )
-                .total_rows
+                .total_rows()
             };
             buffer_content_height(total_rows, scale) + viewport_height * 0.4
         };
