@@ -37,7 +37,7 @@ Choose the scenario whose primary metric matches the problem:
 | `mixed-paste` | `paste_input_to_paint_ms` | shell-style mixed-language paste and first paint |
 | `typing-medium`, `typing-large`, `typing-plain` | `typing_ms_per_char` | sustained editing with or without highlighting |
 | `scroll-highlighted`, `scroll-plain` | `scroll_frame_wall_ms_mean` | mean app-side frame time during a scheduled wheel scroll, with frames per second, the worst frame, and `scroll_overrun_ms` (input end through redraw quiet) as secondaries |
-| `open-small`, `open-large` | `open_to_first_frame_ms`, `open_to_quiet_ms` | process spawn through the first completed frame, and through redraw quiet |
+| `open-small`, `open-large` | `open_to_first_present_ms`, `open_to_quiet_ms` | process spawn through the first frame presented on screen (first damage on the editor window), and through redraw quiet; `open_to_first_frame_ms` is the app's own first completed frame, which precedes the window manager mapping the window |
 | `search-large` | `search_reindex_ms` | find query reindexing |
 | `multi-cursor-1k` | `viewport_paint_ms` | first completed selection frame with 1,000 carets; not a later blink-hidden frame |
 | `idle` | `idle_cpu_ms` | CPU, repaints, and RSS over two focused idle seconds |

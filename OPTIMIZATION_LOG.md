@@ -129,3 +129,44 @@ Static viewport caching was not added without a demonstrated worthwhile gain.
   and huge-file edit checks verify exact saved output.
 - Both vendor patch reverse-application checks pass. Earlier checkpoints and
   complete experiment details remain in the measurement history.
+
+## 25 September 2026 session
+
+Baseline `87f85a7` on `:0` (five runs, one priming): typing latency p50
+7.705 ms (delivery 0.345, key to frame end 4.568, frame end to damage 2.532),
+navigation 6.178 ms, edit-navigation 6.362 ms; typing 0.273 / 0.781 / 0.956
+ms per character (plain / medium / large Rust); mixed paste 71.1 ms; scroll
+frames ~1.04 ms; idle CPU 20 ms per two seconds.
+
+### Startup: what the first visible frame waits for
+
+`open_to_first_frame_ms` stops at the app's own first frame, which precedes
+the window manager mapping the window and GPUI's first present by 20–55 ms.
+The runner now also records `open_to_first_present_ms` (first damage on the
+editor window, attached from `CreateNotify` so it cannot miss the frame) and
+uses it as the `open-small` primary. Baseline median 172 ms (163–228), app
+first frame 155 ms.
+
+Temporary GPUI/Blade instrumentation (not retained) gives the critical path on
+this host: Vulkan instance/device ~80 ms on the startup thread, overlapped by
+the ~70 ms system font scan on the main thread; then window and surface
+creation ~45 ms, of which the first `vkCreateSwapchainKHR` alone is 31–60 ms
+(later reconfigurations take 1.4–2 ms); app construction and first frame
+~10–30 ms; then the window manager's map. A plain X11 window (including an
+ARGB visual and GPUI's WM protocols) maps in 2–10 ms here, but while the
+NVIDIA swapchain is being created other clients stall, so the editor's map
+completes 40–60 ms after its request.
+
+Rejected reorderings, each measured on `:0`:
+- Mapping before creating the surface on the main thread: the window manager
+  stalls behind the swapchain creation; first draw unchanged (170–196 ms).
+- Creating the surface at the first draw: mapping completes in ~1 ms, but the
+  45 ms surface creation then follows it serially (168–189 ms).
+- Creating it on a worker thread from map time: the window manager resizes the
+  window after mapping (2720×1720 → 3816×2100), and the follow-up
+  reconfiguration from the main thread takes ~40 ms instead of 2 ms, i.e. the
+  driver's first-use cost appears per thread; no reliable gain.
+
+Roughly 110–140 ms of startup is therefore NVIDIA driver time (device plus
+first swapchain), which the editor cannot remove without changing driver or
+backend; the font scan is fully hidden behind it.

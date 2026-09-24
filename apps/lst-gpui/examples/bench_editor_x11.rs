@@ -209,7 +209,7 @@ impl Scenario {
             Self::LargePaste | Self::MixedPaste => "paste_input_to_paint_ms",
             Self::TypingMedium | Self::TypingLarge | Self::TypingPlain => "typing_ms_per_char",
             Self::ScrollHighlighted | Self::ScrollPlain => "scroll_frame_wall_ms_mean",
-            Self::OpenSmall => "open_to_first_frame_ms",
+            Self::OpenSmall => "open_to_first_present_ms",
             Self::OpenLarge => "open_to_quiet_ms",
             Self::SearchLarge => "search_reindex_ms",
             Self::MultiCursor1k => "viewport_paint_ms",
@@ -1373,12 +1373,25 @@ impl Bench {
 
         let title = bench_title(scenario, run_index);
         let files = [file_path.as_path()];
+        // Watch new top-level windows before spawning: the editor's window is
+        // created long before it is mapped, so damage can be attached in time
+        // to see its first presented frame.
+        let first_present = FirstPresentWatch::start(&self.conn, self.root)?;
         let spawn_epoch_us = epoch_micros(SystemTime::now())?;
         let open_started = Instant::now();
         let mut child = self.spawn_editor(&files, &title, Some(&trace_path))?;
         let pid = child.id();
 
         let result = (|| {
+            let first_present_ms = first_present.wait(
+                &self.conn,
+                &self.atoms,
+                pid,
+                &title,
+                &mut child,
+                open_started,
+                Duration::from_millis(WINDOW_DISCOVERY_TIMEOUT_MS),
+            )?;
             let window = find_window(
                 &self.conn,
                 self.root,
@@ -1421,6 +1434,7 @@ impl Bench {
                 ((first_frame_epoch_us - spawn_epoch_us) / 1000.0).max(0.0),
             );
             add_trace_last(&mut metrics, &trace, "startup_first_frame_ms", "main_to_first_frame_ms");
+            metrics.set("open_to_first_present_ms", first_present_ms);
             metrics.set("open_to_quiet_ms", open_to_quiet_ms);
             metrics.set("startup_ms", open_to_quiet_ms);
             metrics.set("trace_wall_ms", open_to_quiet_ms);
@@ -2371,6 +2385,7 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "peak_rss_mb",
         ],
         Scenario::OpenSmall => &[
+            "open_to_first_present_ms",
             "open_to_first_frame_ms",
             "main_to_first_frame_ms",
             "open_to_quiet_ms",
@@ -2382,6 +2397,7 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
         ],
         Scenario::OpenLarge => &[
             "open_to_quiet_ms",
+            "open_to_first_present_ms",
             "open_to_first_frame_ms",
             "main_to_first_frame_ms",
             "damage_events",
@@ -2894,6 +2910,89 @@ fn wait_for_trace_line_count(
             .into());
         }
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Records when a new top-level window first reports damage, which for the
+/// editor is its first frame presented on screen.
+struct FirstPresentWatch {
+    root: xproto::Window,
+}
+
+impl FirstPresentWatch {
+    fn start(conn: &RustConnection, root: xproto::Window) -> Result<Self, Box<dyn Error>> {
+        conn.change_window_attributes(
+            root,
+            &xproto::ChangeWindowAttributesAux::new().event_mask(xproto::EventMask::SUBSTRUCTURE_NOTIFY),
+        )?
+        .check()?;
+        Ok(Self { root })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn wait(
+        &self,
+        conn: &RustConnection,
+        atoms: &Atoms,
+        pid: u32,
+        title: &str,
+        child: &mut Child,
+        open_started: Instant,
+        timeout: Duration,
+    ) -> Result<f64, Box<dyn Error>> {
+        let result = self.wait_inner(conn, atoms, pid, title, child, open_started, timeout);
+        conn.change_window_attributes(
+            self.root,
+            &xproto::ChangeWindowAttributesAux::new().event_mask(xproto::EventMask::NO_EVENT),
+        )?;
+        conn.flush()?;
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn wait_inner(
+        &self,
+        conn: &RustConnection,
+        atoms: &Atoms,
+        pid: u32,
+        title: &str,
+        child: &mut Child,
+        open_started: Instant,
+        timeout: Duration,
+    ) -> Result<f64, Box<dyn Error>> {
+        let deadline = Instant::now() + timeout;
+        let mut damages = Vec::new();
+        let outcome = loop {
+            if let Some(status) = child.try_wait()? {
+                break Err(io::Error::other(format!("editor exited before its first present: {status}")).into());
+            }
+            let mut presented = None;
+            while let Some(event) = conn.poll_for_event()? {
+                match event {
+                    Event::CreateNotify(created) if created.parent == self.root => {
+                        let damage = damage::DamageWrapper::create(conn, created.window, damage::ReportLevel::NON_EMPTY)?;
+                        damages.push(damage);
+                    }
+                    Event::DamageNotify(notify) if presented.is_none() => {
+                        if window_matches(conn, notify.drawable, atoms, pid, title)? {
+                            presented = Some(elapsed_ms(open_started));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(ms) = presented {
+                break Ok(ms);
+            }
+            conn.flush()?;
+            if Instant::now() >= deadline {
+                break Err(io::Error::other("timed out waiting for the first presented frame").into());
+            }
+            thread::sleep(Duration::from_millis(1));
+        };
+        drop(damages);
+        conn.flush()?;
+        outcome
     }
 }
 
