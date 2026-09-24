@@ -116,3 +116,54 @@ fn files_have_same_identity(left: &Path, right: &Path) -> bool {
 fn files_have_same_identity(_left: &Path, _right: &Path) -> bool {
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_tab(id: u64, path: &Path) -> ModelEditorTab {
+        ModelEditorTab::from_path_with_stamp(TabId::from_raw(id), path.to_path_buf(), "", None)
+    }
+
+    #[test]
+    fn scratchpads_created_in_the_same_second_get_distinct_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let timestamp = "2026-09-24_12-00-00".to_string();
+        let (first, _) = create_scratchpad_note_with_timestamp(Some(dir.path()), timestamp.clone()).unwrap();
+        fs::write(&first, "first note").unwrap();
+
+        let (second, _) = create_scratchpad_note_with_timestamp(Some(dir.path()), timestamp).unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(fs::read_to_string(&first).unwrap(), "first note");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "");
+    }
+
+    #[test]
+    fn save_as_removes_the_old_scratchpad_only_when_nothing_else_uses_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratchpad = |name: &str| {
+            let path = dir.path().join(name);
+            fs::write(&path, "note").unwrap();
+            path
+        };
+
+        let moved = scratchpad("moved.md");
+        remove_previous_scratchpad_after_save_as(Some(moved.clone()), &dir.path().join("saved.md"), &[]);
+        assert!(!moved.exists(), "the scratchpad was saved elsewhere");
+
+        let linked = scratchpad("linked.md");
+        let link = dir.path().join("link.md");
+        std::os::unix::fs::symlink(&linked, &link).unwrap();
+        remove_previous_scratchpad_after_save_as(Some(linked.clone()), &link, &[]);
+        assert!(linked.exists(), "the save target is the scratchpad itself");
+
+        let shared = scratchpad("shared.md");
+        remove_previous_scratchpad_after_save_as(
+            Some(shared.clone()),
+            &dir.path().join("saved-copy.md"),
+            &[open_tab(2, &shared)],
+        );
+        assert!(shared.exists(), "another tab still edits the scratchpad");
+    }
+}
