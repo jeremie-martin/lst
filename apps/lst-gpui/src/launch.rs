@@ -1,8 +1,8 @@
 use crate::build_info::BUILD_IDENTITY;
 use lst_editor::InputMode;
-use std::{fmt, path::PathBuf, process};
+use std::{path::PathBuf, process};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LaunchArgs {
     pub(crate) files: Vec<PathBuf>,
     pub(crate) dictate: bool,
@@ -11,21 +11,11 @@ pub(crate) struct LaunchArgs {
     pub(crate) input_mode: Option<InputMode>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum LaunchArgError {
     Help,
     Version,
     Message(String),
-}
-
-impl fmt::Display for LaunchArgError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Help => f.write_str(usage()),
-            Self::Version => f.write_str(BUILD_IDENTITY),
-            Self::Message(message) => f.write_str(message),
-        }
-    }
 }
 
 fn usage() -> &'static str {
@@ -114,46 +104,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dictation_launch_preserves_explicit_files_and_input_mode() {
-        let args = parse_launch_args_from(["--dictate", "--vim", "notes.md"]).unwrap();
-        assert!(args.dictate);
-        assert_eq!(args.input_mode, Some(InputMode::Vim));
-        assert_eq!(args.files, [PathBuf::from("notes.md")]);
-    }
-
-    #[test]
-    fn version_flags_request_the_reproducible_build_identity() {
-        for flag in ["--version", "-V"] {
-            let error = parse_launch_args_from([flag]).expect_err("version should stop normal launch");
-            assert!(matches!(error, LaunchArgError::Version));
-            assert_eq!(error.to_string(), BUILD_IDENTITY);
+    fn launch_arguments_parse_into_options_or_stop_launch() {
+        let message = |text: &str| Err(LaunchArgError::Message(text.to_string()));
+        for (raw, expected) in [
+            (
+                &["--dictate", "--vim", "notes.md"][..],
+                Ok(LaunchArgs {
+                    files: vec![PathBuf::from("notes.md")],
+                    dictate: true,
+                    input_mode: Some(InputMode::Vim),
+                    ..LaunchArgs::default()
+                }),
+            ),
+            (
+                &[
+                    "--title",
+                    "lst-scratchpad",
+                    "--scratchpad-dir=/tmp/lst-notes",
+                    "--no-vim",
+                    "README.md",
+                ],
+                Ok(LaunchArgs {
+                    files: vec![PathBuf::from("README.md")],
+                    window_title: Some("lst-scratchpad".to_string()),
+                    scratchpad_dir: Some(PathBuf::from("/tmp/lst-notes")),
+                    input_mode: Some(InputMode::Standard),
+                    ..LaunchArgs::default()
+                }),
+            ),
+            (
+                &["--title=Notes", "--scratchpad-dir", "/tmp/notes"],
+                Ok(LaunchArgs {
+                    window_title: Some("Notes".to_string()),
+                    scratchpad_dir: Some(PathBuf::from("/tmp/notes")),
+                    ..LaunchArgs::default()
+                }),
+            ),
+            (&["--version"], Err(LaunchArgError::Version)),
+            (&["-V"], Err(LaunchArgError::Version)),
+            // Version and help stop launch before later arguments are parsed.
+            (&["README.md", "--version", "--title"], Err(LaunchArgError::Version)),
+            (&["-h", "--nope"], Err(LaunchArgError::Help)),
+            (&["--help"], Err(LaunchArgError::Help)),
+            (&["--nope", "README.md"], message("unknown argument: --nope")),
+            (&["--title"], message("missing value for --title")),
+            (&["--scratchpad-dir"], message("missing value for --scratchpad-dir")),
+        ] {
+            assert_eq!(parse_launch_args_from(raw.iter().copied()), expected, "{raw:?}");
         }
-    }
-
-    #[test]
-    fn version_takes_precedence_over_graphical_launch_arguments() {
-        let error = parse_launch_args_from(["README.md", "--version", "--title", "ignored"])
-            .expect_err("version should stop normal launch");
-        assert!(matches!(error, LaunchArgError::Version));
-    }
-
-    #[test]
-    fn existing_window_and_input_arguments_remain_supported() {
-        let args = parse_launch_args_from([
-            "--title",
-            "lst-scratchpad",
-            "--scratchpad-dir=/tmp/lst-notes",
-            "--no-vim",
-            "README.md",
-        ])
-        .expect("existing arguments should parse");
-
-        assert_eq!(args.window_title.as_deref(), Some("lst-scratchpad"));
-        assert_eq!(
-            args.scratchpad_dir.as_deref(),
-            Some(std::path::Path::new("/tmp/lst-notes"))
-        );
-        assert_eq!(args.input_mode, Some(InputMode::Standard));
-        assert_eq!(args.files, vec![PathBuf::from("README.md")]);
     }
 }
