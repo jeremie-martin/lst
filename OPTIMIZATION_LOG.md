@@ -422,6 +422,27 @@ Commands: see `docs/performance.md`.
   scans remain necessary when the scalar maximum can no longer prove the
   extent; retaining measured widths is the next experiment.
 
+### Retain measured widths when the widest line shrinks
+
+- Replace the scalar no-wrap maximum with one owner for per-line pixel widths
+  and their maximum. Remeasure only invalidated lines; when a widest line
+  shrinks, reduce the stored numbers instead of re-reading or reshaping text.
+  Growth still needs no full reduction. Font and line-topology changes rebuild.
+- Alternating-order production comparison against the borrowed-scan version,
+  three launches each, the same 500,000-line/320-backspace workload:
+  **5,704 -> 199 ms through the final paint**; app cost **17.800 -> 0.597
+  ms/backspace**. Every run verifies the exact 29.5 MB saved file. Relative
+  to the original slice-based scan, the complete operation falls ~23.6 s
+  -> 0.20 s. Growing-line typing stays in the overlapping 0.25–0.29 ms/char
+  range; both variants use 110 ms CPU in the three-run comparison.
+- Tradeoff: four bytes per logical line when no-wrap measurement is needed
+  (~1.9 MiB for 500,000 lines). Sampled whole-process RSS is ~242 MiB for
+  both variants; do not interpret allocator reuse/noise as zero storage cost.
+  Shrink reduction is still linear in line count, but reads only this array.
+- Incremental widths/maxima match fresh reductions across 1,024 updates,
+  including ties, growth, shrink, empty windows and clearing every width.
+  All-features tests and Clippy pass; the full combined X11 checkpoint follows.
+
 ## Session 3: baseline and measurement reliability
 
 - Display interruption: the user reported an accidental monitor power-off

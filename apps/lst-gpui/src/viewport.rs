@@ -201,8 +201,8 @@ impl ViewportCache {
     }
 
     /// Preserve the horizontal extent across ordinary edits. No-wrap mode
-    /// remeasures this line window, rescanning the document only if the
-    /// previous widest line may have shrunk.
+    /// remeasures this line window and retains all other line measurements.
+    /// Changes to line topology invalidate the index as a whole.
     pub(crate) fn patch_unwrapped_line_width(
         &mut self,
         revision: u64,
@@ -214,7 +214,7 @@ impl ViewportCache {
             self.unwrapped_line_width_invalidation = None;
             return;
         }
-        let Some(cached) = self.max_unwrapped_line_width else {
+        let Some(cached) = self.max_unwrapped_line_width.as_mut() else {
             return;
         };
         let lines = invalidation.line_range(line_count);
@@ -222,7 +222,7 @@ impl ViewportCache {
             if let Some(pending) = self.unwrapped_line_width_invalidation.as_mut() {
                 pending.revision = revision;
             } else {
-                self.max_unwrapped_line_width = Some(CachedUnwrappedLineWidth { revision, ..cached });
+                cached.revision = revision;
             }
             return;
         }
@@ -302,13 +302,53 @@ impl ViewportCache {
     }
 }
 
-#[derive(Clone, Copy)]
 struct CachedUnwrappedLineWidth {
     revision: u64,
     char_width: Pixels,
     font_size: Pixels,
-    width: Pixels,
-    line_ix: usize,
+    widths: MeasuredLineWidths,
+}
+
+/// Own the measured line widths and their maximum together. Shrinking a
+/// widest line only reduces this compact array, without re-reading or shaping
+/// unchanged text. Growth and edits below the maximum need no reduction.
+struct MeasuredLineWidths {
+    values: Vec<Pixels>,
+    maximum: Pixels,
+}
+
+impl MeasuredLineWidths {
+    fn new(values: Vec<Pixels>) -> Self {
+        let maximum = Self::maximum(&values);
+        Self { values, maximum }
+    }
+
+    fn maximum(values: &[Pixels]) -> Pixels {
+        values
+            .iter()
+            .copied()
+            .fold(px(0.0), |max, width| if width > max { width } else { max })
+    }
+
+    fn remeasure(&mut self, lines: Range<usize>, mut measure: impl FnMut() -> Pixels) {
+        let previous_maximum = self.maximum;
+        let mut changed_maximum = px(0.0);
+        let mut touched_maximum = false;
+        for width in &mut self.values[lines] {
+            touched_maximum |= *width == previous_maximum;
+            *width = measure();
+            if *width > changed_maximum {
+                changed_maximum = *width;
+            }
+        }
+        self.maximum = if touched_maximum && changed_maximum < previous_maximum {
+            Self::maximum(&self.values)
+        } else if changed_maximum > previous_maximum {
+            changed_maximum
+        } else {
+            previous_maximum
+        };
+    }
 }
 
 struct PendingLineWidthInvalidation {
@@ -954,9 +994,9 @@ pub(crate) fn max_unwrapped_line_width(
     window: &mut Window,
 ) -> Pixels {
     let font_size = metrics::px_for_scale(metrics::code_font_size(), scale);
-    if let Some(cached) = cache.max_unwrapped_line_width {
+    if let Some(cached) = cache.max_unwrapped_line_width.as_mut() {
         if cached.revision == revision && cached.char_width == char_width && cached.font_size == font_size {
-            return cached.width;
+            return cached.widths.maximum;
         }
         if cached.char_width == char_width
             && cached.font_size == font_size
@@ -969,44 +1009,32 @@ pub(crate) fn max_unwrapped_line_width(
                 .unwrapped_line_width_invalidation
                 .take()
                 .expect("checked pending line-width invalidation");
-            let widest_changed = pending.lines.contains(&cached.line_ix);
-            let mut updated = CachedUnwrappedLineWidth {
-                revision,
-                width: if widest_changed { px(0.0) } else { cached.width },
-                ..cached
-            };
-            for (line_ix, line) in pending.lines.clone().zip(buffer.lines_at(pending.lines.start)) {
-                let line_width = unwrapped_rope_line_width(line, char_width, scale, theme, window);
-                if line_width > updated.width {
-                    updated.width = line_width;
-                    updated.line_ix = line_ix;
-                }
-            }
-            // Unchanged lines cannot exceed the previous maximum. If a
-            // changed line still reaches it, that maximum remains proven.
-            if !widest_changed || updated.width >= cached.width {
-                cache.max_unwrapped_line_width = Some(updated);
-                return updated.width;
-            }
+            let mut lines = buffer.lines_at(pending.lines.start);
+            cached.widths.remeasure(pending.lines, || {
+                unwrapped_rope_line_width(
+                    lines.next().expect("invalidated lines belong to the document"),
+                    char_width,
+                    scale,
+                    theme,
+                    window,
+                )
+            });
+            cached.revision = revision;
+            return cached.widths.maximum;
         }
     }
 
-    let mut width = px(0.0);
-    let mut widest_line = 0;
-    lst_editor::for_each_rope_line(buffer, |line_ix, line| {
-        let line_width = unwrapped_text_line_width(line, char_width, scale, theme, window);
-        if line_width > width {
-            width = line_width;
-            widest_line = line_ix;
-        }
+    let mut values = Vec::with_capacity(buffer.len_lines());
+    lst_editor::for_each_rope_line(buffer, |_, line| {
+        values.push(unwrapped_text_line_width(line, char_width, scale, theme, window));
     });
-
+    let widths = MeasuredLineWidths::new(values);
+    let width = widths.maximum;
     cache.max_unwrapped_line_width = Some(CachedUnwrappedLineWidth {
         revision,
         char_width,
         font_size,
-        width,
-        line_ix: widest_line,
+        widths,
     });
     cache.unwrapped_line_width_invalidation = None;
     width
@@ -3064,14 +3092,32 @@ mod tests {
     }
 
     #[test]
+    fn measured_line_widths_match_a_fresh_maximum_after_range_updates() {
+        let mut expected = vec![px(0.0); 128];
+        let mut widths = MeasuredLineWidths::new(expected.clone());
+        for step in 0..1024 {
+            let start = step * 31 % expected.len();
+            let end = (start + step % 19).min(expected.len());
+            for (index, width) in expected[start..end].iter_mut().enumerate() {
+                *width = px(((step * 7 + index * 13) % 17) as f32);
+            }
+            let mut changed = expected[start..end].iter().copied();
+            widths.remeasure(start..end, || changed.next().unwrap());
+            assert_eq!(widths.values, expected);
+            assert_eq!(widths.maximum, MeasuredLineWidths::maximum(&expected));
+        }
+        widths.remeasure(0..expected.len(), || px(0.0));
+        assert_eq!(widths.maximum, px(0.0));
+    }
+
+    #[test]
     fn unwrapped_width_cache_unions_edits_until_the_next_measurement() {
         let mut cache = ViewportCache {
             max_unwrapped_line_width: Some(CachedUnwrappedLineWidth {
                 revision: 7,
                 char_width: px(8.0),
                 font_size: px(13.0),
-                width: px(800.0),
-                line_ix: 50,
+                widths: MeasuredLineWidths::new(vec![px(800.0); 100]),
             }),
             ..Default::default()
         };
@@ -3081,6 +3127,7 @@ mod tests {
         assert_eq!(
             cache
                 .max_unwrapped_line_width
+                .as_ref()
                 .expect("cached width should remain")
                 .revision,
             7,
@@ -3118,8 +3165,7 @@ mod tests {
             revision: 4,
             char_width: px(8.0),
             font_size: px(13.0),
-            width: px(24.0),
-            line_ix: 0,
+            widths: MeasuredLineWidths::new(vec![px(24.0)]),
         });
 
         cache.invalidate_after_parser_failure();
