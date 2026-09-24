@@ -2801,14 +2801,6 @@ mod tests {
         }
     }
 
-    fn rust_keyword_span(start: usize, end: usize) -> SyntaxSpan {
-        SyntaxSpan {
-            start,
-            end,
-            role: SyntaxRole::Keyword,
-        }
-    }
-
     #[test]
     fn syntax_cache_materializes_only_requested_lines() {
         let source = "let first = 1;\nfn second() {}\nlet third = 3;\n";
@@ -2966,64 +2958,33 @@ mod tests {
     }
 
     #[test]
-    fn typography_invalidation_discards_the_measured_character_width() {
-        let mut cache = ViewportCache {
-            code_char_width: Some(CachedCodeCharWidth {
-                font_size: px(13.0),
-                theme_key: 1,
-                width: px(8.0),
-            }),
-            ..ViewportCache::default()
+    fn line_syntax_spans_reuse_only_valid_unchanged_lines_of_the_active_language() {
+        let keyword = SyntaxSpan {
+            start: 0,
+            end: 2,
+            role: SyntaxRole::Keyword,
         };
-
-        cache.invalidate_typography();
-
-        assert!(cache.code_char_width.is_none());
-    }
-
-    #[test]
-    fn line_syntax_spans_returns_cached_when_byte_length_matches() {
-        // Cached state for two lines: line 0 has 7 bytes with a keyword on
-        // bytes 0..2, line 1 has 11 bytes with no spans.
-        let line_lens = vec![7u32, 11u32];
-        let line_spans = vec![vec![rust_keyword_span(0, 2)], Vec::new()];
-        let mut cache = cache_with_highlights(line_lens, line_spans);
-
-        let spans = line_syntax_spans(&mut cache, 0, 7, SyntaxMode::TreeSitter(SyntaxLanguage::Rust));
-        assert_eq!(spans, vec![rust_keyword_span(0, 2)]);
-    }
-
-    #[test]
-    fn line_syntax_spans_returns_empty_when_byte_length_differs() {
-        // Cached state recorded length 7, but the line has grown to 8 (user
-        // typed a character). Reusing the stale span at byte offset 0..2 is
-        // safe in terms of bytes, but the byte-length-mismatch guard is what
-        // forces a blank-and-reparse for the edited line so a later split
-        // never falls inside a multi-byte UTF-8 character.
-        let mut cache = cache_with_highlights(vec![7u32], vec![vec![rust_keyword_span(0, 2)]]);
-        let spans = line_syntax_spans(&mut cache, 0, 8, SyntaxMode::TreeSitter(SyntaxLanguage::Rust));
-        assert!(spans.is_empty(), "stale-length cache must return empty spans");
-    }
-
-    #[test]
-    fn line_syntax_spans_returns_empty_when_language_differs() {
-        let mut cache = cache_with_highlights(vec![7u32], vec![vec![rust_keyword_span(0, 2)]]);
-        let spans = line_syntax_spans(&mut cache, 0, 7, SyntaxMode::TreeSitter(SyntaxLanguage::Python));
-        assert!(spans.is_empty(), "language switch must invalidate cached spans");
-    }
-
-    #[test]
-    fn line_syntax_spans_returns_empty_when_mode_is_plain() {
-        let mut cache = cache_with_highlights(vec![7u32], vec![vec![rust_keyword_span(0, 2)]]);
-        let spans = line_syntax_spans(&mut cache, 0, 7, SyntaxMode::Plain);
-        assert!(spans.is_empty());
-    }
-
-    #[test]
-    fn line_syntax_spans_handles_line_beyond_cache() {
-        let mut cache = cache_with_highlights(vec![7u32], vec![vec![rust_keyword_span(0, 2)]]);
-        let spans = line_syntax_spans(&mut cache, 9, 0, SyntaxMode::TreeSitter(SyntaxLanguage::Rust));
-        assert!(spans.is_empty());
+        let rust = SyntaxMode::TreeSitter(SyntaxLanguage::Rust);
+        let mut cache = cache_with_highlights(vec![7, 7], vec![vec![keyword.clone()]; 2]);
+        cache.syntax_highlights.as_mut().unwrap().valid_lines[1] = false;
+        for (case, line, byte_len, mode, reused) in [
+            ("unchanged line", 0, 7, rust, true),
+            // A length change means the line was edited since it was cached.
+            ("edited line", 0, 8, rust, false),
+            ("invalidated line", 1, 7, rust, false),
+            (
+                "other language",
+                0,
+                7,
+                SyntaxMode::TreeSitter(SyntaxLanguage::Python),
+                false,
+            ),
+            ("plain mode", 0, 7, SyntaxMode::Plain, false),
+            ("line beyond cache", 9, 0, rust, false),
+        ] {
+            let expected = if reused { vec![keyword.clone()] } else { Vec::new() };
+            assert_eq!(line_syntax_spans(&mut cache, line, byte_len, mode), expected, "{case}");
+        }
     }
 
     #[test]
@@ -3227,13 +3188,18 @@ mod tests {
     }
 
     #[test]
-    fn syntax_only_refresh_preserves_current_text_widths() {
+    fn syntax_only_refresh_preserves_text_widths_until_typography_changes() {
         let mut cache = ViewportCache {
             max_unwrapped_line_width: Some(CachedUnwrappedLineWidth {
                 revision: 7,
                 char_width: px(8.0),
                 font_size: px(13.0),
                 widths: MeasuredLineWidths::new(vec![px(800.0); 100]),
+            }),
+            code_char_width: Some(CachedCodeCharWidth {
+                font_size: px(13.0),
+                theme_key: 1,
+                width: px(8.0),
             }),
             ..Default::default()
         };
@@ -3245,6 +3211,7 @@ mod tests {
         assert!(cache.unwrapped_line_width_invalidation.is_none());
         cache.invalidate_typography();
         assert!(cache.max_unwrapped_line_width.is_none());
+        assert!(cache.code_char_width.is_none());
     }
 
     #[test]
