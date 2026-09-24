@@ -1790,7 +1790,11 @@ impl Render for LstGpuiApp {
                     .overflow_hidden()
                     .bg(rgb(theme.role.editor_bg))
                     .track_focus(&self.focus_handle)
-                    .key_context("Editor")
+                    .key_context(if self.vim_owns_motion_keys() {
+                        "Editor VimMotion"
+                    } else {
+                        "Editor"
+                    })
                     .on_key_down(cx.listener(Self::on_key_down))
                     .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
                     .when(recent_cards_open, |viewport| {

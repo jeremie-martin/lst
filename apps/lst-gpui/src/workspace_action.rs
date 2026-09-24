@@ -8,6 +8,9 @@ use std::collections::{BTreeMap, HashSet};
 const EDITOR: &str = "Editor && !InlineInput";
 const WS_FIND_OK: &str = "(Workspace && !InlineInput) || Find";
 const WS: &str = "Workspace";
+/// The editor adds `VimMotion` to its key context in Vim Normal and Visual
+/// modes.
+const VIM_MOTION: &str = "Editor && VimMotion && !InlineInput";
 const FIND: &str = "Find";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, gpui::Action)]
@@ -33,7 +36,10 @@ pub(crate) enum WorkspaceCommand {
     MoveVertical(isize, bool),
     ScrollLines(isize),
     Page(bool, bool),
-    VisualLineBoundary { end: bool, select: bool },
+    VisualLineBoundary {
+        end: bool,
+        select: bool,
+    },
     CloseActiveTab,
     ReopenClosedTab,
     ZoomIn,
@@ -42,6 +48,8 @@ pub(crate) enum WorkspaceCommand {
     Quit,
     SetSelectNextSkipPrefix,
     SelectNextOccurrenceOrSkip,
+    /// A Ctrl chord Vim owns in Normal and Visual modes.
+    VimControl(char),
 }
 
 #[derive(Clone, Copy)]
@@ -290,6 +298,11 @@ const UNBOUND_BINDINGS: &[WorkspaceBinding] = &[
     b("", EDITOR, model(Command::ColumnSelectDown)),
 ];
 
+/// Vim's paging chords. The editor context is deeper than the workspace, so
+/// these win over find and the multi-cursor shortcuts on the same keys; they
+/// stay out of the command palette and user overrides.
+const VIM_CONTROL_KEYS: [char; 4] = ['d', 'u', 'f', 'b'];
+
 pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> Vec<KeyBinding> {
     let overridden: HashSet<&str> = overrides.keys().map(String::as_str).collect();
     let mut bindings = BINDINGS
@@ -328,6 +341,15 @@ pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> V
             ));
         }
     }
+    bindings.extend(VIM_CONTROL_KEYS.map(|key| {
+        KeyBinding::new(
+            &format!("ctrl-{key}"),
+            WorkspaceAction {
+                command: WorkspaceCommand::VimControl(key),
+            },
+            Some(VIM_MOTION),
+        )
+    }));
     bindings
 }
 
@@ -392,6 +414,7 @@ pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
         WorkspaceCommand::Quit => "file.quit",
         WorkspaceCommand::SetSelectNextSkipPrefix => "selection.skip_next_prefix",
         WorkspaceCommand::SelectNextOccurrenceOrSkip => "selection.add_next_occurrence",
+        WorkspaceCommand::VimControl(_) => "vim.control",
         WorkspaceCommand::Model(command) => match command {
             RequestOpenFiles => "file.open",
             RequestSave => "file.save",
@@ -751,6 +774,16 @@ impl LstGpuiApp {
             }
             WorkspaceCommand::Quit => {
                 self.request_quit(cx);
+            }
+            WorkspaceCommand::VimControl(key) => {
+                let wrap_columns = self.active_wrap_columns(window, cx);
+                let mods = lst_editor::vim::Modifiers {
+                    command: true,
+                    control: true,
+                };
+                self.update_model(cx, true, |model| {
+                    model.handle_vim_key(lst_editor::vim::Key::Character(key.to_string()), mods, wrap_columns);
+                });
             }
             WorkspaceCommand::SetSelectNextSkipPrefix | WorkspaceCommand::SelectNextOccurrenceOrSkip => unreachable!(),
         }

@@ -316,3 +316,30 @@ fn vim_pending_prefix_shows_until_escape_drops_it_or_the_command_completes() -> 
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_normal_mode_ctrl_f_b_d_u_page_instead_of_running_editor_shortcuts() -> TestResult {
+    support::run_x11_test("vim-ctrl-paging", |session| {
+        let text = (0..80)
+            .map(|line| format!("line {line:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let path = session.seed_file("vim-ctrl-paging.txt", &text)?;
+        let mut editor = session.open_vim_file("vim-ctrl-paging", &path)?;
+
+        editor.keys("<esc>gg0")?;
+        editor.expect_cursor_heads(&[(0, 0)])?;
+        for (keys, forward) in [("<C-f>", true), ("<C-b>", false), ("<C-d>", true), ("<C-u>", false)] {
+            editor.keys(keys)?;
+            editor.wait_state(keys, secs(3), |record| {
+                let line = record.cursors.first().map_or(0, |cursor| cursor.head_line);
+                record.vim_mode == "NORMAL"
+                    && !record.find.visible
+                    && record.cursors.len() == 1
+                    && (line > 0) == forward
+            })?;
+        }
+        Ok(())
+    })
+}

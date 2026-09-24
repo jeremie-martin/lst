@@ -954,6 +954,11 @@ impl LstGpuiApp {
             .map(|(modifiers, _)| modifiers)
     }
 
+    /// Vim Normal and Visual modes own Ctrl+D/U/F/B for paging.
+    pub(crate) fn vim_owns_motion_keys(&self) -> bool {
+        self.model.input_mode() == InputMode::Vim && self.model.vim_mode() != vim::Mode::Insert
+    }
+
     fn editor_input_is_focused(&self) -> bool {
         !self.recent.is_open()
             && self.workspace_surface == crate::WorkspaceSurface::None
