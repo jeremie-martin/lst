@@ -78,6 +78,16 @@ The oracle test replays
 Neovim version, active option profile, and editor indent policy used to create
 it.
 
+The oracle owns Normal and Visual parity for ASCII text: add those cases to
+`build_cases()` in the generator, not to `vim_behavior.rs`. `vim_behavior.rs`
+keeps what the oracle cannot express: grapheme and non-ASCII editing (Neovim
+reports byte columns), lst-specific policy such as unsupported-command no-ops,
+pending display, search focus, and `<cmd-r>` redo, viewport-dependent motions,
+`g;` and `gi`, and rows that currently diverge from Neovim, each marked with a
+comment. A command that fails in Neovim, whether with an error such as E35 or
+as a failed motion such as `fz`, discards the rest of that case's keys, so end
+a case at such a command.
+
 Regenerate the fixture only for an intentional parity change:
 
 ```sh
