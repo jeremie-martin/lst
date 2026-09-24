@@ -1,9 +1,10 @@
 mod support;
 
 use lst_editor::{
-    EditorCommand, EditorEffect, EditorModel, EditorTab, FileStamp, InputMode, Language, LanguageMode, Position,
-    SaveExpectation, Selection, SelectionSet, TabCloseRequest, TabId, UndoBoundary,
+    BufferDelta, EditorCommand, EditorEffect, EditorModel, EditorTab, FileStamp, InputMode, Language, LanguageMode,
+    Position, SaveExpectation, Selection, SelectionSet, TabCloseRequest, TabId, UndoBoundary,
 };
+use ropey::Rope;
 use std::path::PathBuf;
 use support::{position_of, ModelHarness};
 
@@ -533,4 +534,48 @@ fn external_append_preserves_a_normal_mode_caret_in_an_empty_document() {
     assert!(harness.model.append_text_to_tab(id, "spoken"));
     assert_eq!(harness.model.vim_mode(), lst_editor::vim::Mode::Normal);
     assert_eq!(harness.model.selection(), Selection::collapsed(0));
+}
+
+/// Incremental syntax highlighting keeps its own copy of the text in sync by
+/// replaying these deltas, so replaying them must reproduce the buffer after
+/// every kind of edit.
+#[test]
+fn buffer_deltas_replay_to_the_current_text() {
+    fn replay(harness: &mut ModelHarness, mirror: &mut Rope) -> BufferDelta {
+        let delta = harness.model.take_active_buffer_delta();
+        match &delta {
+            BufferDelta::Unchanged => {}
+            BufferDelta::FullReplace => *mirror = Rope::from_str(&harness.text()),
+            BufferDelta::Edits(edits) => {
+                for edit in edits.iter().rev() {
+                    mirror.remove(edit.range.clone());
+                    mirror.insert(edit.range.start, &edit.replacement);
+                }
+            }
+        }
+        assert_eq!(mirror.to_string(), harness.text());
+        delta
+    }
+
+    let mut harness = ModelHarness::new("foo bar foo\nbaz foo\n");
+    let mut mirror = Rope::from_str(&harness.text());
+
+    harness.execute(EditorCommand::SelectAllOccurrences);
+    harness.paste_text("longer");
+    assert!(
+        matches!(replay(&mut harness, &mut mirror), BufferDelta::Edits(edits) if edits.len() == 3),
+        "a multi-cursor edit is one batch of edits"
+    );
+    assert_eq!(harness.model.take_active_buffer_delta(), BufferDelta::Unchanged);
+
+    // A consumer that skips a tick sees one delta covering both edits.
+    harness.paste_text("x");
+    harness.paste_text("y");
+    replay(&mut harness, &mut mirror);
+
+    harness.execute(EditorCommand::Undo);
+    assert_eq!(replay(&mut harness, &mut mirror), BufferDelta::FullReplace);
+    harness.execute(EditorCommand::Redo);
+    replay(&mut harness, &mut mirror);
+    assert_eq!(harness.text(), "longerxy bar longerxy\nbaz longerxy\n");
 }
