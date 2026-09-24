@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use lst_x11_harness::{Editor, Screenshot, ScreenshotDiff};
 
-use support::{secs, EditorTestExt, ScratchpadSession, SupportResult, TestResult};
+use support::{path_text, secs, EditorTestExt, ScratchpadSession, SupportResult, TestResult};
 
 const CAPTURE_QUIET: Duration = Duration::from_millis(150);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -423,8 +423,4 @@ fn write_fixture(dir: &Path, name: &str, contents: &str) -> SupportResult<PathBu
     let path = dir.join(name);
     fs::write(&path, contents)?;
     Ok(path)
-}
-
-fn path_text(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
 }

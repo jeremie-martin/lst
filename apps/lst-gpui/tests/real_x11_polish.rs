@@ -1,4 +1,5 @@
-//! Real-display acceptance coverage for structural and daily-driver polish.
+//! Real-display acceptance coverage for selection commands: syntax-aware
+//! expansion, column selection, and the configured cursor limit.
 
 mod support;
 
@@ -13,21 +14,18 @@ fn syntax_selection_expands_in_layers_and_shrinks_the_exact_history() -> TestRes
         editor.click_at_text(0, 22)?;
 
         editor.keys("<S-A-right>")?;
-        let subword = editor.read_state()?;
-        let subword_width = selection_width(&subword);
-        assert_eq!(subword_width, 4, "{subword:?}");
+        editor.wait_state("subword selected", secs(2), |record| selection_width(record) == 4)?;
 
         editor.keys("<S-A-right>")?;
-        let word = editor.read_state()?;
-        assert_eq!(selection_width(&word), 9, "{word:?}");
+        editor.wait_state("word selected", secs(2), |record| selection_width(record) == 9)?;
 
         editor.keys("<S-A-right>")?;
-        let syntax = editor.read_state()?;
-        assert!(selection_width(&syntax) > 9, "{syntax:?}");
+        editor.wait_state("syntax node selected", secs(2), |record| selection_width(record) > 9)?;
 
         editor.keys("<S-A-left><S-A-left>")?;
-        let shrunk = editor.read_state()?;
-        assert_eq!(selection_width(&shrunk), subword_width, "{shrunk:?}");
+        editor.wait_state("shrunk back to the subword", secs(2), |record| {
+            selection_width(record) == 4
+        })?;
         Ok(())
     })
 }

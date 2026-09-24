@@ -24,15 +24,6 @@ report-name = "lst-x11"
 store-success-output = false
 store-failure-output = true
 
-[profile.x11-stress]
-inherits = "x11"
-
-[profile.x11-stress.junit]
-path = "junit.xml"
-report-name = "lst-x11-stress"
-store-success-output = false
-store-failure-output = true
-
 [profile.x11-nested]
 inherits = "x11"
 default-filter = '''
@@ -45,19 +36,5 @@ package(lst-gpui)
 [profile.x11-nested.junit]
 path = "junit.xml"
 report-name = "lst-x11-nested"
-store-success-output = false
-store-failure-output = true
-
-[profile.x11-regression]
-inherits = "x11"
-default-filter = '''
-package(lst-gpui)
-& kind(test)
-& binary(=real_x11_regressions)
-'''
-
-[profile.x11-regression.junit]
-path = "junit.xml"
-report-name = "lst-x11-regression"
 store-success-output = false
 store-failure-output = true

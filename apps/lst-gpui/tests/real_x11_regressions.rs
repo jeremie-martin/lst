@@ -1,10 +1,5 @@
-//! Real-display regression tests for keyboard bugs that cut across one-off
-//! feature suites. Add focused cases here when a review or production bug
-//! needs true X11 delivery coverage before the fix.
-//!
-//! Run with
-//!
-//!     cargo nextest run --profile x11-regression -p lst-gpui --run-ignored only
+//! Real-display regression tests for keyboard delivery bugs: stale modifier
+//! state, chord prefixes, and layout-dependent keys.
 
 mod support;
 
@@ -27,14 +22,10 @@ fn vim_ctrl_d_in_normal_mode_keeps_vim_half_page_motion() -> TestResult {
         editor.send_keys_settle("<esc>")?;
         editor.expect_vim_mode("NORMAL")?;
         editor.key_after_released_modifiers(ChordMods::CTRL, Key::Char('d'))?;
-        let record = editor.wait_state("vim Ctrl-D moved down", secs(5), |record| {
+        editor.wait_state("vim Ctrl-D moved down", secs(5), |record| {
             record.vim_mode == "NORMAL"
                 && matches!(record.cursors.as_slice(), [cursor] if cursor.is_collapsed() && cursor.head_line > 0)
         })?;
-        assert_eq!(record.vim_mode, "NORMAL", "{record:?}");
-        assert_eq!(record.cursors.len(), 1, "{record:?}");
-        assert!(record.cursors[0].is_collapsed(), "{record:?}");
-        assert!(record.cursors[0].head_line > 0, "{record:?}");
         Ok(())
     })
 }
@@ -47,7 +38,10 @@ fn platform_shift_tab_does_not_run_shift_only_outdent() -> TestResult {
         let mut editor = session.open_file("platform-shift-tab", &path)?;
 
         editor.send_keys_settle("<cmd-S-tab>")?;
-        editor.save_then_expect_file(&path, "    alpha")?;
+        // The file already holds the indented line; the marker proves the
+        // buffer still does.
+        editor.keys("<end>X")?;
+        editor.save_then_expect_file(&path, "    alphaX")?;
         Ok(())
     })
 }
@@ -61,18 +55,19 @@ fn ctrl_k_prefix_is_cleared_by_unrelated_selection_shortcut() -> TestResult {
 
         editor.place_cursor_at_document_start()?;
         editor.keys("<C-k><S-right><C-d>")?;
-        let record = editor.read_state()?;
-        let ranges = record
-            .cursors
-            .iter()
-            .map(|cursor| {
-                (
-                    cursor.anchor_char.min(cursor.head_char),
-                    cursor.anchor_char.max(cursor.head_char),
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(ranges, vec![(0, 1), (4, 5)], "{record:?}");
+        editor.wait_state("Ctrl+D adds the next match of the selection", secs(5), |record| {
+            let ranges = record
+                .cursors
+                .iter()
+                .map(|cursor| {
+                    (
+                        cursor.anchor_char.min(cursor.head_char),
+                        cursor.anchor_char.max(cursor.head_char),
+                    )
+                })
+                .collect::<Vec<_>>();
+            ranges == [(0, 1), (4, 5)]
+        })?;
         Ok(())
     })
 }
@@ -113,10 +108,9 @@ fn ignored_insert_mode_recent_ctrl_does_not_poison_next_vim_key() -> TestResult 
         editor.keys("abc")?;
         editor.key_after_released_modifiers(ChordMods::CTRL, Key::Char('d'))?;
         editor.keys("<esc>d")?;
-        let record = editor.wait_state("plain vim d pending", secs(2), |record| {
+        editor.wait_state("plain vim d pending", secs(2), |record| {
             record.vim_mode == "NORMAL" && record.vim_pending == "d"
         })?;
-        assert_eq!(record.vim_pending, "d", "{record:?}");
         Ok(())
     })
 }
