@@ -494,45 +494,45 @@ mod tests {
 
     #[test]
     fn every_setting_round_trips_through_the_config_file() {
-        let mut settings = AppSettings::default();
-        settings.editor = EditorSettings {
-            input_mode: InputModeSetting::Vim,
-            word_wrap: false,
-            line_numbers: LineNumbersSetting::Hybrid,
-            cursor_blink: false,
-            smooth_cursor: true,
-            font_family: "Iosevka".to_string(),
-            font_size: 17,
-            match_brackets: MatchBracketsSetting::Near,
-            bracket_pair_colorization: false,
-            bracket_pair_guides: GuideMode::All,
-            bracket_pair_horizontal_guides: GuideMode::Active,
-            indent_guides: true,
-            highlight_active_indent_guide: true,
-            render_whitespace: RenderWhitespaceSetting::Trailing,
-            render_control_characters: false,
-            rulers: RulerColumns::new(vec![80, 120]).unwrap(),
-            smart_select_subwords: false,
-            smart_select_include_whitespace: false,
-            multi_cursor_limit: 42,
+        let mut settings = AppSettings {
+            version: CONFIG_VERSION,
+            editor: EditorSettings {
+                input_mode: InputModeSetting::Vim,
+                word_wrap: false,
+                line_numbers: LineNumbersSetting::Hybrid,
+                cursor_blink: false,
+                smooth_cursor: true,
+                font_family: "Iosevka".to_string(),
+                font_size: 17,
+                match_brackets: MatchBracketsSetting::Near,
+                bracket_pair_colorization: false,
+                bracket_pair_guides: GuideMode::All,
+                bracket_pair_horizontal_guides: GuideMode::Active,
+                indent_guides: true,
+                highlight_active_indent_guide: true,
+                render_whitespace: RenderWhitespaceSetting::Trailing,
+                render_control_characters: false,
+                rulers: RulerColumns::new(vec![80, 120]).unwrap(),
+                smart_select_subwords: false,
+                smart_select_include_whitespace: false,
+                multi_cursor_limit: 42,
+            },
+            appearance: AppearanceSettings {
+                theme: ThemePreference::Dark,
+                zoom_level: -2,
+            },
+            files: FileSettings {
+                autosave: AutosaveMode::All,
+                trim_trailing_whitespace: true,
+                ensure_final_newline: true,
+                scratchpad_directory: Some(PathBuf::from("/tmp/lst-scratch")),
+            },
+            voice: VoiceSettings {
+                language: "auto".to_string(),
+                directory: Some(PathBuf::from("/tmp/lst-voice")),
+            },
+            keybindings: BTreeMap::from([("edit.duplicate_line".to_string(), vec!["ctrl-shift-d".to_string()])]),
         };
-        settings.appearance = AppearanceSettings {
-            theme: ThemePreference::Dark,
-            zoom_level: -2,
-        };
-        settings.files = FileSettings {
-            autosave: AutosaveMode::All,
-            trim_trailing_whitespace: true,
-            ensure_final_newline: true,
-            scratchpad_directory: Some(PathBuf::from("/tmp/lst-scratch")),
-        };
-        settings.voice = VoiceSettings {
-            language: "auto".to_string(),
-            directory: Some(PathBuf::from("/tmp/lst-voice")),
-        };
-        settings
-            .keybindings
-            .insert("edit.duplicate_line".to_string(), vec!["ctrl-shift-d".to_string()]);
         assert_eq!(parse(&written(&settings)).unwrap(), settings);
 
         // Clearing an optional path removes its key instead of leaving the
