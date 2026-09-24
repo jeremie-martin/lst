@@ -95,34 +95,103 @@ pub(crate) fn syntax_mode_for_language(language: Option<Language>) -> SyntaxMode
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::theme::SyntaxRole;
+    use lst_editor::{BufferDelta, BufferEdit};
+    use ropey::Rope;
+    use std::collections::HashSet;
 
-    #[test]
-    fn plain_snapshot_byte_scan_matches_the_char_scan_on_multibyte_text() {
-        // A non-ASCII pair forces the character-iterator path; the ASCII
-        // pairs take the byte scan. Both must place tokens at the same
-        // character offsets in text mixing multibyte characters and CRLF.
-        let text = "caf\u{e9} (\u{1F600}[x]) {\r\n \u{2014} }\n\u{ab}nested\u{bb} ((a)\n";
-        let buffer = ropey::Rope::from_str(text);
-        let ascii = plain_structural_snapshot(&buffer, 7, &[('(', ')'), ('[', ']'), ('{', '}')]);
-        let via_chars =
-            plain_structural_snapshot(&buffer, 7, &[('(', ')'), ('[', ']'), ('{', '}'), ('\u{ab}', '\u{bb}')]);
-        let ascii_only: Vec<_> = via_chars
-            .tokens
-            .iter()
-            .filter(|token| !matches!(buffer.char(token.at), '\u{ab}' | '\u{bb}'))
-            .map(|token| token.at)
-            .collect();
-        assert_eq!(
-            ascii.tokens.iter().map(|token| token.at).collect::<Vec<_>>(),
-            ascii_only
-        );
-        assert_eq!(ascii.pairs.len(), 4);
-        assert_eq!(ascii.unmatched_count(), 1);
+    const BRACKETS: &[(char, char)] = &[('(', ')'), ('[', ']'), ('{', '}')];
+
+    fn parse(language: SyntaxLanguage, source: &str) -> TabSyntaxState {
+        TabSyntaxState::parse_initial(language, &Rope::from_str(source), 0).expect("language is supported")
+    }
+
+    fn spans(state: &TabSyntaxState) -> (Vec<Vec<SyntaxSpan>>, Vec<u32>) {
+        state.compute_spans_for_lines(0..usize::MAX)
+    }
+
+    fn line_roles(state: &TabSyntaxState, line: usize) -> HashSet<SyntaxRole> {
+        spans(state).0[line].iter().map(|span| span.role).collect()
+    }
+
+    fn token_positions(structure: &StructuralSnapshot) -> Vec<usize> {
+        (0..structure.tokens.len())
+            .map(|index| structure.token_position(index))
+            .collect()
+    }
+
+    fn pair_positions(structure: &StructuralSnapshot) -> Vec<(usize, usize)> {
+        (0..structure.pairs.len())
+            .map(|index| structure.pair(index))
+            .map(|pair| (pair.open, pair.close))
+            .collect()
+    }
+
+    /// Replaces `len` characters of ASCII `text` at the first `marker`.
+    fn edit_at(text: &str, marker: &str, len: usize, replacement: &str) -> BufferEdit {
+        let at = text.find(marker).expect("marker is present");
+        BufferEdit {
+            range: at..at + len,
+            replacement: replacement.to_string(),
+        }
+    }
+
+    /// Applies ordered, disjoint edits expressed in `before` coordinates.
+    fn apply(before: &Rope, edits: &[BufferEdit]) -> Rope {
+        let mut after = before.clone();
+        for edit in edits.iter().rev() {
+            after.remove(edit.range.clone());
+            after.insert(edit.range.start, &edit.replacement);
+        }
+        after
+    }
+
+    /// Updates a parse of `before` with `edits` and asserts that its
+    /// highlights and structure match a fresh parse of the edited text.
+    fn incremental_matches_fresh(
+        language: SyntaxLanguage,
+        before: &str,
+        edits: Vec<BufferEdit>,
+    ) -> (TabSyntaxState, SyntaxInvalidation) {
+        let before = Rope::from_str(before);
+        let after = apply(&before, &edits);
+        let mut state = TabSyntaxState::parse_initial(language, &before, 0).unwrap();
+        let invalidation = state.update(&after, BufferDelta::Edits(edits), 1);
+        let fresh = TabSyntaxState::parse_initial(language, &after, 1).unwrap();
+        assert_eq!(spans(&state), spans(&fresh));
+        assert_eq!(*state.shared_structure().borrow(), *fresh.shared_structure().borrow());
+        (state, invalidation)
+    }
+
+    /// Updates `structure`, a plain snapshot of `before`, with one edit and
+    /// asserts that it matches a fresh scan. Returns whether it was remapped.
+    fn plain_update_matches_fresh(
+        structure: &mut StructuralSnapshot,
+        before: &Rope,
+        pairs: &[(char, char)],
+        edit: BufferEdit,
+    ) -> bool {
+        let after = apply(before, std::slice::from_ref(&edit));
+        let revision = structure.revision + 1;
+        let remapped =
+            update_plain_structural_snapshot(structure, &after, revision, pairs, &BufferDelta::Edits(vec![edit]));
+        assert_eq!(*structure, plain_structural_snapshot(&after, revision, pairs));
+        remapped
     }
 
     #[test]
-    fn plain_delimiter_search_matches_character_scan_across_fragmented_chunks() {
-        let mut buffer = ropey::Rope::from_str(&"café (👩‍💻[e\u{301}]) {\r\ntext} <a> unmatched ] ((\n".repeat(150));
+    fn plain_delimiter_byte_scan_matches_the_character_scan() {
+        // ASCII pairs take the byte scan; an absent non-ASCII pair selects
+        // the character iterator. Both must report character offsets.
+        let mut unicode_brackets = BRACKETS.to_vec();
+        unicode_brackets.push(('«', '»'));
+        let buffer = Rope::from_str("caf\u{e9} (\u{1F600}[x]) {\r\n \u{2014} }\n((a)\n");
+        let structure = plain_structural_snapshot(&buffer, 7, BRACKETS);
+        assert_eq!(structure, plain_structural_snapshot(&buffer, 7, &unicode_brackets));
+        assert_eq!(pair_positions(&structure), [(5, 10), (7, 9), (12, 18), (21, 23)]);
+        assert_eq!(structure.unmatched_count(), 1);
+
+        let mut buffer = Rope::from_str(&"café (👩‍💻[e\u{301}]) {\r\ntext} <a> unmatched ] ((\n".repeat(150));
         for index in 0..300 {
             let at = (index * 137) % (buffer.len_chars() + 1);
             buffer.insert(at, if index % 2 == 0 { "λ\t[" } else { ")中" });
@@ -136,11 +205,10 @@ mod tests {
             &[][..],
             &[('(', ')')][..],
             &[('(', ')'), ('[', ']')][..],
-            &[('(', ')'), ('[', ']'), ('{', '}')][..],
+            BRACKETS,
             &[('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')][..],
         ] {
             let mut unicode_pairs = pairs.to_vec();
-            // This absent pair selects the original character iterator.
             unicode_pairs.push(('«', '»'));
             assert_eq!(
                 plain_structural_snapshot(&buffer, 9, pairs),
@@ -149,83 +217,55 @@ mod tests {
             );
         }
     }
-    use std::path::PathBuf;
 
     #[test]
-    fn syntax_mode_maps_core_extensions() {
-        let cases = [
-            ("example.rs", SyntaxLanguage::Rust),
-            ("example.py", SyntaxLanguage::Python),
-            ("example.pyw", SyntaxLanguage::Python),
-            ("example.js", SyntaxLanguage::JavaScript),
-            ("example.mjs", SyntaxLanguage::JavaScript),
-            ("example.cjs", SyntaxLanguage::JavaScript),
-            ("example.jsx", SyntaxLanguage::Jsx),
-            ("example.ts", SyntaxLanguage::TypeScript),
-            ("example.tsx", SyntaxLanguage::Tsx),
-            ("example.json", SyntaxLanguage::Json),
-            ("example.toml", SyntaxLanguage::Toml),
-            ("example.yaml", SyntaxLanguage::Yaml),
-            ("example.yml", SyntaxLanguage::Yaml),
-            ("example.md", SyntaxLanguage::Markdown),
-            ("example.markdown", SyntaxLanguage::Markdown),
-            ("example.html", SyntaxLanguage::Html),
-            ("example.htm", SyntaxLanguage::Html),
-            ("example.css", SyntaxLanguage::Css),
-        ];
-
-        for (path, language) in cases {
-            let detected = lst_editor::language::detect(Some(&PathBuf::from(path)), None);
-            assert_eq!(syntax_mode_for_language(detected), SyntaxMode::TreeSitter(language));
+    fn language_variants_share_grammars_and_shells_stay_plain() {
+        for (language, mode) in [
+            (Some(Language::Jsonc), SyntaxMode::TreeSitter(SyntaxLanguage::Json)),
+            (Some(Language::Scss), SyntaxMode::TreeSitter(SyntaxLanguage::Css)),
+            (Some(Language::Shell), SyntaxMode::Plain),
+            (Some(Language::Bash), SyntaxMode::Plain),
+            (Some(Language::Zsh), SyntaxMode::Plain),
+            (None, SyntaxMode::Plain),
+        ] {
+            assert_eq!(syntax_mode_for_language(language), mode, "{language:?}");
         }
-        let detected = lst_editor::language::detect(Some(&PathBuf::from("example.txt")), None);
-        assert_eq!(syntax_mode_for_language(detected), SyntaxMode::Plain);
-    }
-
-    fn full_parse(language: SyntaxLanguage, source: &str) -> (Vec<Vec<SyntaxSpan>>, Vec<u32>) {
-        let buffer = ropey::Rope::from_str(source);
-        let state = TabSyntaxState::parse_initial(language, &buffer, 0).expect("language is supported");
-        state.compute_spans()
     }
 
     #[test]
     fn rust_source_produces_keyword_and_string_spans() {
         let source = "fn main() { let s = \"hi\"; }\n";
-        let (lines, byte_lens) = full_parse(SyntaxLanguage::Rust, source);
+        let state = parse(SyntaxLanguage::Rust, source);
+        let (lines, byte_lens) = spans(&state);
         assert_eq!(lines.len(), 2);
         assert_eq!(byte_lens.len(), 2);
         assert_eq!(byte_lens[0] as usize, source.lines().next().unwrap().len());
-        let roles: std::collections::HashSet<_> = lines[0].iter().map(|s| s.role).collect();
-        assert!(roles.contains(&crate::ui::theme::SyntaxRole::Keyword), "{:?}", roles);
-        assert!(roles.contains(&crate::ui::theme::SyntaxRole::String), "{:?}", roles);
+        let roles = line_roles(&state, 0);
+        assert!(roles.contains(&SyntaxRole::Keyword), "{roles:?}");
+        assert!(roles.contains(&SyntaxRole::String), "{roles:?}");
     }
 
     #[test]
     fn structural_pairs_exclude_quotes_and_delimiters_inside_strings() {
         let source = "fn main() { let text = \"([{}])\"; call(1); }\n";
-        let buffer = ropey::Rope::from_str(source);
-        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, 0).unwrap();
-        let structure = state.structure();
+        let state = parse(SyntaxLanguage::Rust, source);
+        let structure = state.shared_structure();
+        let structure = structure.borrow();
         assert_eq!(structure.pairs.len(), 3, "{structure:?}");
-        assert!(structure
-            .tokens
-            .iter()
-            .all(|token| { !matches!(buffer.char(token.at), '\"' | '\'') }));
+        assert!(token_positions(&structure)
+            .into_iter()
+            .all(|at| !matches!(source.as_bytes()[at], b'"' | b'\'')));
     }
 
     #[test]
     fn tsx_angle_pairs_are_tags_not_comparison_operators() {
         let source = "const less = a < b; const view = <div>{less}</div>;\n";
-        let buffer = ropey::Rope::from_str(source);
-        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Tsx, &buffer, 0).unwrap();
-        let angle_positions: Vec<usize> = state
-            .structure()
-            .tokens
-            .iter()
-            .filter(|token| matches!(buffer.char(token.at), '<' | '>'))
-            .map(|token| token.at)
+        let state = parse(SyntaxLanguage::Tsx, source);
+        let angle_positions: Vec<usize> = token_positions(&state.shared_structure().borrow())
+            .into_iter()
+            .filter(|&at| matches!(source.as_bytes()[at], b'<' | b'>'))
             .collect();
-        let comparison = source.chars().position(|ch| ch == '<').unwrap();
+        let comparison = source.find('<').unwrap();
         assert!(!angle_positions.contains(&comparison), "{angle_positions:?}");
         assert_eq!(angle_positions.len(), 4, "{angle_positions:?}");
     }
@@ -233,43 +273,36 @@ mod tests {
     #[test]
     fn markdown_with_rust_fence_paints_both_layers() {
         let source = "# Title\n\n```rust\nfn main() {}\n```\n";
-        let (lines, _) = full_parse(SyntaxLanguage::Markdown, source);
-        let title_roles: std::collections::HashSet<_> = lines[0].iter().map(|s| s.role).collect();
+        let state = parse(SyntaxLanguage::Markdown, source);
+        let title_roles = line_roles(&state, 0);
         assert!(
-            title_roles.contains(&crate::ui::theme::SyntaxRole::Title),
-            "expected title on heading line, got {:?}",
-            title_roles
+            title_roles.contains(&SyntaxRole::Title),
+            "expected title on heading line, got {title_roles:?}"
         );
         // The injected rust grammar should color `fn` as a keyword.
         let fn_line_index = source.lines().position(|l| l.contains("fn main")).unwrap();
-        let fn_roles: std::collections::HashSet<_> = lines[fn_line_index].iter().map(|s| s.role).collect();
+        let fn_roles = line_roles(&state, fn_line_index);
         assert!(
-            fn_roles.contains(&crate::ui::theme::SyntaxRole::Keyword),
-            "expected rust keyword in injected fence, got {:?}",
-            fn_roles
+            fn_roles.contains(&SyntaxRole::Keyword),
+            "expected rust keyword in injected fence, got {fn_roles:?}"
         );
     }
 
     #[test]
     fn markdown_fence_uses_injected_rust_for_structure_and_selection() {
         let source = "```rust\nfn fenced() { let text = \"([\"; call(1); }\n```\n";
-        let buffer = ropey::Rope::from_str(source);
-        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &buffer, 0).unwrap();
+        let state = parse(SyntaxLanguage::Markdown, source);
         let call_start = source.find("call(1)").unwrap();
         let call_open = call_start + "call".len();
         let call_close = call_start + "call(1".len();
-        assert!(state
-            .structure()
-            .pairs
-            .iter()
-            .any(|pair| pair.open == call_open && pair.close == call_close));
+        let structure = state.shared_structure();
+        let structure = structure.borrow();
+        assert!(pair_positions(&structure).contains(&(call_open, call_close)));
 
         let string_start = source.find("([\"").unwrap();
-        assert!(state
-            .structure()
-            .tokens
-            .iter()
-            .all(|token| { token.at != string_start && token.at != string_start + 1 }));
+        assert!(token_positions(&structure)
+            .into_iter()
+            .all(|at| at != string_start && at != string_start + 1));
 
         let ranges = state.selection_ranges_at(&[call_start + 1]);
         assert!(
@@ -285,9 +318,8 @@ mod tests {
         // lines. Mix LF, CRLF, lone CR, and a trailing line with no newline
         // to lock the trim semantics in step.
         let source = "a\nb\r\nc\rd\r\r\ne";
-        let buffer = ropey::Rope::from_str(source);
-        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, 0).unwrap();
-        let (_lines, byte_lens) = state.compute_spans();
+        let buffer = Rope::from_str(source);
+        let (_lines, byte_lens) = spans(&parse(SyntaxLanguage::Rust, source));
         let display_lens: Vec<u32> = (0..buffer.len_lines())
             .map(|i| {
                 let mut line = buffer.line(i).to_string();
@@ -301,39 +333,87 @@ mod tests {
     }
 
     #[test]
-    fn incremental_reparse_matches_fresh_parse_on_single_char_insert() {
-        use lst_editor::{BufferDelta, BufferEdit};
-        let before = "fn main() {\n    let x = 1;\n}\n";
-        let after = "fn main() {\n    let xx = 1;\n}\n";
-        let buffer_before = ropey::Rope::from_str(before);
-        let buffer_after = ropey::Rope::from_str(after);
-
-        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer_before, 0).unwrap();
-        // Inserted one 'x' immediately after the 'x' in `let x`.
-        let insert_at = before.find("let x").unwrap() + "let x".len();
-        let edit = BufferEdit {
-            range: insert_at..insert_at,
-            replacement: "x".to_string(),
-        };
-        state.update(&buffer_after, BufferDelta::Edits(vec![edit]), 1);
-        let (incremental_lines, incremental_lens) = state.compute_spans();
-
-        let (fresh_lines, fresh_lens) = full_parse(SyntaxLanguage::Rust, after);
-        assert_eq!(incremental_lens, fresh_lens);
-        assert_eq!(incremental_lines, fresh_lines);
+    fn incremental_updates_match_fresh_parses_and_remap_only_unaffected_structure() {
+        let macros = std::iter::once("// generated source\n".to_string())
+            .chain((0..512).map(|item| format!("fn item_{item}() {{ println!(\"item {{}}\", {item}); }}\n")))
+            .collect::<String>();
+        let paragraphs = (0..1_000)
+            .map(|line| format!("paragraph {line}: alpha [label](target) omega\n"))
+            .collect::<String>();
+        let quoted = "fn main() { let text = \"(\"; }\n";
+        let expression = "```rust\nfn fenced() { let value = (1 + 2); }\n```\n";
+        let fenced = "```rust\nfn fenced() { call(1); }\n```\n";
+        let links = "alpha [label](target)\nbeta { value }\n";
+        let rust_identifier = "fn main() {\n    let x = 1;\n}\n";
+        for (case, language, before, edits, remapped) in [
+            (
+                "identifier insert",
+                SyntaxLanguage::Rust,
+                rust_identifier,
+                vec![edit_at(rust_identifier, " = 1", 0, "x")],
+                true,
+            ),
+            (
+                "prefix before macro injections",
+                SyntaxLanguage::Rust,
+                macros.as_str(),
+                vec![edit_at(&macros, "// generated", 0, "x")],
+                true,
+            ),
+            // Removing a quote exposes a delimiter that was inside a string.
+            (
+                "quote removal",
+                SyntaxLanguage::Rust,
+                quoted,
+                vec![edit_at(quoted, "\"", 1, "")],
+                false,
+            ),
+            (
+                "quoting an injected expression",
+                SyntaxLanguage::Markdown,
+                expression,
+                vec![
+                    edit_at(expression, "(1 + 2)", 0, "\""),
+                    edit_at(expression, "; }", 0, "\""),
+                ],
+                false,
+            ),
+            (
+                "injected identifier insert",
+                SyntaxLanguage::Markdown,
+                fenced,
+                vec![edit_at(fenced, "() { call", 0, "x")],
+                true,
+            ),
+            (
+                "insert among many inline regions",
+                SyntaxLanguage::Markdown,
+                paragraphs.as_str(),
+                vec![edit_at(&paragraphs, " 500:", 0, "x")],
+                true,
+            ),
+            (
+                "insert at an inline region's start",
+                SyntaxLanguage::Markdown,
+                links,
+                vec![edit_at(links, "alpha", 0, "x")],
+                true,
+            ),
+        ] {
+            let (state, _) = incremental_matches_fresh(language, before, edits);
+            assert_eq!(state.structure_was_remapped(), remapped, "{case}");
+        }
     }
 
     #[test]
     fn incremental_highlights_match_fresh_parse_across_document_separators() {
-        use lst_editor::{BufferDelta, BufferEdit};
         for separator in ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"] {
             let source =
                 format!("fn first() {{ let x = 1; }}{separator}fn second() {{ let y = 2; }}\nfn third() {{}}\n");
-            let mut buffer = ropey::Rope::from_str(&source);
+            let mut buffer = Rope::from_str(&source);
             let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, 0).unwrap();
-            let (mut cached_lines, mut cached_lens) = state.compute_spans();
-            let at_byte = source.find("let y").unwrap();
-            let at = buffer.byte_to_char(at_byte);
+            let (mut cached_lines, mut cached_lens) = spans(&state);
+            let at = buffer.byte_to_char(source.find("let y").unwrap());
             for (revision, edit) in [
                 BufferEdit {
                     range: at..at,
@@ -351,12 +431,11 @@ mod tests {
             .into_iter()
             .enumerate()
             {
-                buffer.remove(edit.range.clone());
-                buffer.insert(edit.range.start, &edit.replacement);
+                buffer = apply(&buffer, std::slice::from_ref(&edit));
                 let invalidation = state.update(&buffer, BufferDelta::Edits(vec![edit]), revision as u64 + 1);
                 match invalidation {
                     SyntaxInvalidation::Full | SyntaxInvalidation::LineTopology(_) => {
-                        (cached_lines, cached_lens) = state.compute_spans()
+                        (cached_lines, cached_lens) = spans(&state)
                     }
                     SyntaxInvalidation::Lines(lines) => {
                         let (new_lines, new_lens) = state.compute_spans_for_lines(lines.clone());
@@ -365,15 +444,14 @@ mod tests {
                     }
                 }
                 let fresh = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, revision as u64 + 1).unwrap();
-                let (fresh_lines, fresh_lens) = fresh.compute_spans();
                 assert_eq!(
-                    (&cached_lines, &cached_lens),
-                    (&fresh_lines, &fresh_lens),
+                    (cached_lines.clone(), cached_lens.clone()),
+                    spans(&fresh),
                     "{separator:?}, edit {revision}"
                 );
                 assert_eq!(
-                    &*state.structure(),
-                    &*fresh.structure(),
+                    *state.shared_structure().borrow(),
+                    *fresh.shared_structure().borrow(),
                     "{separator:?}, edit {revision}"
                 );
             }
@@ -382,363 +460,87 @@ mod tests {
 
     #[test]
     fn ordinary_edit_recomputes_only_a_small_line_window() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
         let before = (0..200)
             .map(|line| format!("fn item_{line}() {{ let value_{line} = {line}; }}\n"))
             .collect::<String>();
-        let edit_start = before.find("value_100").unwrap() + "value_".len();
-        let mut after = before.clone();
-        after.insert(edit_start, 'x');
-        let before_buffer = ropey::Rope::from_str(&before);
-        let after_buffer = ropey::Rope::from_str(&after);
-        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &before_buffer, 0).unwrap();
-
-        let invalidation = state.update(
-            &after_buffer,
-            BufferDelta::Edits(vec![BufferEdit {
-                range: edit_start..edit_start,
-                replacement: "x".to_string(),
-            }]),
-            1,
-        );
+        let (state, invalidation) =
+            incremental_matches_fresh(SyntaxLanguage::Rust, &before, vec![edit_at(&before, "_100 =", 0, "x")]);
         let SyntaxInvalidation::Lines(changed_lines) = invalidation else {
             panic!("single-line typing should preserve line topology");
         };
         assert!(changed_lines.len() <= 4, "unexpected invalidation: {changed_lines:?}");
-
+        let (lines, lens) = spans(&state);
         let (partial_lines, partial_lens) = state.compute_spans_for_lines(changed_lines.clone());
-        let (fresh_lines, fresh_lens) = full_parse(SyntaxLanguage::Rust, &after);
-        assert_eq!(partial_lines, fresh_lines[changed_lines.clone()]);
-        assert_eq!(partial_lens, fresh_lens[changed_lines]);
+        assert_eq!(partial_lines, lines[changed_lines.clone()]);
+        assert_eq!(partial_lens, lens[changed_lines]);
         assert!(state.structure_was_remapped());
-        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &after_buffer, 1).unwrap();
-        assert_eq!(&*state.structure(), &*fresh_state.structure());
     }
 
     #[test]
-    fn prefix_edit_reuses_unchanged_macro_injection_structure() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let mut before = String::from("// generated source\n");
-        for item in 0..512 {
-            before.push_str(&format!("fn item_{item}() {{ println!(\"item {{}}\", {item}); }}\n"));
-        }
-        let after = format!("x{before}");
-        let before_buffer = ropey::Rope::from_str(&before);
-        let after_buffer = ropey::Rope::from_str(&after);
-        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &before_buffer, 0).unwrap();
-
-        state.update(
-            &after_buffer,
-            BufferDelta::Edits(vec![BufferEdit {
-                range: 0..0,
-                replacement: "x".to_string(),
-            }]),
-            1,
+    fn line_topology_change_requests_a_full_highlight_rebuild() {
+        let before = "fn first() {}\nfn second() {}\n";
+        let (_, invalidation) = incremental_matches_fresh(
+            SyntaxLanguage::Rust,
+            before,
+            vec![edit_at(before, "fn second", 0, "// inserted\n")],
         );
-
-        assert!(state.structure_was_remapped());
-        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &after_buffer, 1).unwrap();
-        assert_eq!(&*state.structure(), &*fresh_state.structure());
-    }
-
-    #[test]
-    fn edit_that_changes_delimiter_syntax_rebuilds_structure() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let before = "fn main() { let text = \"(\"; }\n";
-        let quote = before.find('\"').unwrap();
-        let mut after = before.to_string();
-        after.remove(quote);
-        let before_buffer = ropey::Rope::from_str(before);
-        let after_buffer = ropey::Rope::from_str(&after);
-        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &before_buffer, 0).unwrap();
-
-        state.update(
-            &after_buffer,
-            BufferDelta::Edits(vec![BufferEdit {
-                range: quote..quote + 1,
-                replacement: String::new(),
-            }]),
-            1,
-        );
-
-        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &after_buffer, 1).unwrap();
-        assert_eq!(&*state.structure(), &*fresh_state.structure());
-    }
-
-    #[test]
-    fn edit_inside_injected_rust_rebuilds_structure() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let before = "```rust\nfn fenced() { let value = (1 + 2); }\n```\n";
-        let expression_start = before.find("(1 + 2)").unwrap();
-        let expression_end = expression_start + "(1 + 2)".len();
-        let after = format!(
-            "{}\"{}\"{}",
-            &before[..expression_start],
-            &before[expression_start..expression_end],
-            &before[expression_end..]
-        );
-        let before_buffer = ropey::Rope::from_str(before);
-        let after_buffer = ropey::Rope::from_str(&after);
-        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &before_buffer, 0).unwrap();
-
-        state.update(
-            &after_buffer,
-            BufferDelta::Edits(vec![
-                BufferEdit {
-                    range: expression_start..expression_start,
-                    replacement: "\"".to_string(),
-                },
-                BufferEdit {
-                    range: expression_end..expression_end,
-                    replacement: "\"".to_string(),
-                },
-            ]),
-            1,
-        );
-
-        assert!(!state.structure_was_remapped());
-        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &after_buffer, 1).unwrap();
-        assert_eq!(&*state.structure(), &*fresh_state.structure());
-        let quoted_expression = after.find("(1 + 2)").unwrap();
-        assert!(state
-            .structure()
-            .tokens
-            .iter()
-            .all(|token| token.at != quoted_expression && token.at != quoted_expression + "(1 + 2)".len() - 1));
-    }
-
-    #[test]
-    fn ordinary_edit_inside_injected_rust_remaps_verified_structure() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let before = "```rust\nfn fenced() { call(1); }\n```\n";
-        let insert_at = before.find("fenced").unwrap() + "fenced".len();
-        let mut after = before.to_string();
-        after.insert(insert_at, 'x');
-        let before_buffer = ropey::Rope::from_str(before);
-        let after_buffer = ropey::Rope::from_str(&after);
-        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &before_buffer, 0).unwrap();
-
-        state.update(
-            &after_buffer,
-            BufferDelta::Edits(vec![BufferEdit {
-                range: insert_at..insert_at,
-                replacement: "x".to_string(),
-            }]),
-            1,
-        );
-
-        assert!(state.structure_was_remapped());
-        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &after_buffer, 1).unwrap();
-        assert_eq!(&*state.structure(), &*fresh_state.structure());
-    }
-
-    #[test]
-    fn ordinary_edit_inside_many_markdown_inline_regions_remaps_structure() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let before = (0..1_000)
-            .map(|line| format!("paragraph {line}: alpha [label](target) omega\n"))
-            .collect::<String>();
-        let marker = "paragraph 500";
-        let insert_at = before.find(marker).unwrap() + marker.len();
-        let mut after = before.clone();
-        after.insert(insert_at, 'x');
-        let before_buffer = ropey::Rope::from_str(&before);
-        let after_buffer = ropey::Rope::from_str(&after);
-        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &before_buffer, 0).unwrap();
-
-        state.update(
-            &after_buffer,
-            BufferDelta::Edits(vec![BufferEdit {
-                range: insert_at..insert_at,
-                replacement: "x".to_string(),
-            }]),
-            1,
-        );
-
-        assert!(state.structure_was_remapped());
-        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &after_buffer, 1).unwrap();
-        assert_eq!(&*state.structure(), &*fresh_state.structure());
-    }
-
-    #[test]
-    fn edit_at_markdown_inline_start_remaps_structure() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let before = "alpha [label](target)\nbeta { value }\n";
-        let after = format!("x{before}");
-        let before_buffer = ropey::Rope::from_str(before);
-        let after_buffer = ropey::Rope::from_str(&after);
-        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &before_buffer, 0).unwrap();
-
-        state.update(
-            &after_buffer,
-            BufferDelta::Edits(vec![BufferEdit {
-                range: 0..0,
-                replacement: "x".to_string(),
-            }]),
-            1,
-        );
-
-        assert!(state.structure_was_remapped());
-        let fresh_state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &after_buffer, 1).unwrap();
-        assert_eq!(&*state.structure(), &*fresh_state.structure());
+        assert!(invalidation.is_full());
     }
 
     #[test]
     fn plain_structure_updates_match_fresh_snapshots() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let pairs = &[('(', ')'), ('[', ']'), ('{', '}')];
-        let before = ropey::Rope::from_str("{ alpha }\n");
-        let mut structure = plain_structural_snapshot(&before, 0, pairs);
-        let inserted = ropey::Rope::from_str("{ xalpha }\n");
-        let was_remapped = update_plain_structural_snapshot(
-            &mut structure,
-            &inserted,
-            1,
-            pairs,
-            &BufferDelta::Edits(vec![BufferEdit {
-                range: 2..2,
-                replacement: "x".to_string(),
-            }]),
-        );
-        assert!(was_remapped);
-        assert_eq!(structure, plain_structural_snapshot(&inserted, 1, pairs));
-
-        let removed = ropey::Rope::from_str(" xalpha }\n");
-        let was_remapped = update_plain_structural_snapshot(
-            &mut structure,
-            &removed,
-            2,
-            pairs,
-            &BufferDelta::Edits(vec![BufferEdit {
-                range: 0..1,
-                replacement: String::new(),
-            }]),
-        );
-        assert!(!was_remapped);
-        assert_eq!(structure, plain_structural_snapshot(&removed, 2, pairs));
-    }
-
-    #[test]
-    fn plain_structure_insertions_match_fresh_snapshots_with_unicode_delimiters() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let before = ropey::Rope::from_str("café { base } tail");
-        for pairs in [
-            &[('(', ')'), ('[', ']'), ('{', '}')][..],
-            &[('(', ')'), ('[', ']'), ('{', '}'), ('«', '»')][..],
+        // Text between delimiters shifts them; removing a delimiter rescans.
+        let text = "{ alpha }\n";
+        let before = Rope::from_str(text);
+        for (edit, remapped) in [
+            (edit_at(text, "alpha", 0, "x"), true),
+            (edit_at(text, "{", 1, ""), false),
         ] {
+            let mut structure = plain_structural_snapshot(&before, 0, BRACKETS);
+            assert_eq!(
+                plain_update_matches_fresh(&mut structure, &before, BRACKETS, edit),
+                remapped
+            );
+        }
+
+        let before = Rope::from_str("café { base } tail");
+        let mut unicode_brackets = BRACKETS.to_vec();
+        unicode_brackets.push(('«', '»'));
+        for pairs in [BRACKETS, &unicode_brackets[..]] {
             for replacement in ["ordinary é", "([中])", "«λ»"] {
-                let mut after = before.clone();
-                after.insert(6, replacement);
                 let mut structure = plain_structural_snapshot(&before, 0, pairs);
-                update_plain_structural_snapshot(
-                    &mut structure,
-                    &after,
-                    1,
-                    pairs,
-                    &BufferDelta::Edits(vec![BufferEdit {
-                        range: 6..6,
-                        replacement: replacement.to_string(),
-                    }]),
-                );
-                assert_eq!(structure, plain_structural_snapshot(&after, 1, pairs));
+                let edit = BufferEdit {
+                    range: 6..6,
+                    replacement: replacement.to_string(),
+                };
+                plain_update_matches_fresh(&mut structure, &before, pairs, edit);
             }
         }
     }
 
     #[test]
-    fn plain_append_after_dense_structure_reuses_snapshot_storage() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let pairs = &[('(', ')'), ('[', ']'), ('{', '}')];
-        let before_text = "{}[]()\n".repeat(10_000);
-        let before = ropey::Rope::from_str(&before_text);
-        let mut structure = plain_structural_snapshot(&before, 0, pairs);
-        let pairs_ptr = structure.pairs.as_ptr();
-        let tokens_ptr = structure.tokens.as_ptr();
-        let at = before.len_chars();
-        let after = ropey::Rope::from_str(&(before_text + "x"));
-
-        let was_remapped = update_plain_structural_snapshot(
-            &mut structure,
-            &after,
-            1,
-            pairs,
-            &BufferDelta::Edits(vec![BufferEdit {
+    fn plain_edits_to_dense_structure_reuse_storage_and_shift_lazily() {
+        let before = Rope::from_str(&"{}[]()\n".repeat(10_000));
+        for at in [before.len_chars(), 0] {
+            let mut structure = plain_structural_snapshot(&before, 0, BRACKETS);
+            let storage = (structure.pairs.as_ptr(), structure.tokens.as_ptr());
+            let last = structure.tokens.len() - 1;
+            let raw_last = structure.tokens[last].at;
+            let edit = BufferEdit {
                 range: at..at,
                 replacement: "x".to_string(),
-            }]),
-        );
-
-        assert!(was_remapped);
-        assert_eq!(structure.revision, 1);
-        assert_eq!(structure.pairs.as_ptr(), pairs_ptr);
-        assert_eq!(structure.tokens.as_ptr(), tokens_ptr);
-        assert_eq!(structure, plain_structural_snapshot(&after, 1, pairs));
-    }
-
-    #[test]
-    fn plain_middle_edit_shifts_dense_structure_lazily() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let pairs = &[('(', ')'), ('[', ']'), ('{', '}')];
-        let before_text = "{}[]()\n".repeat(10_000);
-        let before = ropey::Rope::from_str(&before_text);
-        let mut structure = plain_structural_snapshot(&before, 0, pairs);
-        let pairs_ptr = structure.pairs.as_ptr();
-        let tokens_ptr = structure.tokens.as_ptr();
-        let last_token_index = structure.tokens.len() - 1;
-        let raw_last_position = structure.tokens[last_token_index].at;
-        let after = ropey::Rope::from_str(&format!("x{before_text}"));
-
-        let was_remapped = update_plain_structural_snapshot(
-            &mut structure,
-            &after,
-            1,
-            pairs,
-            &BufferDelta::Edits(vec![BufferEdit {
-                range: 0..0,
-                replacement: "x".to_string(),
-            }]),
-        );
-
-        assert!(was_remapped);
-        assert_eq!(structure.pairs.as_ptr(), pairs_ptr);
-        assert_eq!(structure.tokens.as_ptr(), tokens_ptr);
-        assert_eq!(structure.tokens[last_token_index].at, raw_last_position);
-        assert_eq!(structure.token_position(last_token_index), raw_last_position + 1);
-        assert_eq!(structure, plain_structural_snapshot(&after, 1, pairs));
-    }
-
-    #[test]
-    fn line_topology_change_requests_a_full_highlight_rebuild() {
-        use lst_editor::{BufferDelta, BufferEdit};
-
-        let before = "fn first() {}\nfn second() {}\n";
-        let insert_at = before.find("fn second").unwrap();
-        let after = format!("{}// inserted\n{}", &before[..insert_at], &before[insert_at..]);
-        let before_buffer = ropey::Rope::from_str(before);
-        let after_buffer = ropey::Rope::from_str(&after);
-        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &before_buffer, 0).unwrap();
-
-        let invalidation = state.update(
-            &after_buffer,
-            BufferDelta::Edits(vec![BufferEdit {
-                range: insert_at..insert_at,
-                replacement: "// inserted\n".to_string(),
-            }]),
-            1,
-        );
-
-        assert!(invalidation.is_full());
-        assert_eq!(state.compute_spans(), full_parse(SyntaxLanguage::Rust, &after));
+            };
+            assert!(
+                plain_update_matches_fresh(&mut structure, &before, BRACKETS, edit),
+                "edit at {at}"
+            );
+            assert_eq!(
+                (structure.pairs.as_ptr(), structure.tokens.as_ptr()),
+                storage,
+                "edit at {at}"
+            );
+            // Stored positions stay put; token_position resolves the shift.
+            assert_eq!(structure.tokens[last].at, raw_last, "edit at {at}");
+        }
     }
 }

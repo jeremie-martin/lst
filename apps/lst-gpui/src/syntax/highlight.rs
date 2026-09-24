@@ -548,11 +548,6 @@ impl TabSyntaxState {
         invalidation
     }
 
-    #[cfg(test)]
-    pub(crate) fn structure(&self) -> std::cell::Ref<'_, StructuralSnapshot> {
-        self.structure.borrow()
-    }
-
     pub(crate) fn shared_structure(&self) -> Rc<RefCell<StructuralSnapshot>> {
         self.structure.clone()
     }
@@ -626,11 +621,6 @@ impl TabSyntaxState {
         ranges.sort_by_key(|range| (range.end.saturating_sub(range.start), range.start, range.end));
         ranges.dedup();
         ranges
-    }
-
-    #[cfg(test)]
-    pub(crate) fn compute_spans(&self) -> (Vec<Vec<SyntaxSpan>>, Vec<u32>) {
-        self.compute_spans_for_lines(0..self.parsed_buffer.len_lines())
     }
 
     pub(crate) fn compute_spans_for_lines(&self, lines: Range<usize>) -> (Vec<Vec<SyntaxSpan>>, Vec<u32>) {
