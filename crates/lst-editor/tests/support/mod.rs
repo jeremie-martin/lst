@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use lst_editor::{
     vim::{self, Key, NamedKey},
-    EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, InputMode, Position, Selection, TabId,
+    EditorCommand, EditorEffect, EditorModel, EditorTab, FocusTarget, InputMode, Position, TabId,
 };
 
 const WRAP_COLUMNS: usize = 80;
@@ -63,27 +63,8 @@ impl ModelHarness {
         self.clipboard = Some(text.into());
     }
 
-    pub fn clear_transfer_buffers(&mut self) {
-        self.clipboard = None;
-        self.primary = None;
-    }
-
     pub fn set_cursor(&mut self, position: Position) {
         self.model.set_active_cursor_position(position.line, position.column);
-        self.sync_effects();
-    }
-
-    pub fn select_first_lines(&mut self, requested_lines: usize) {
-        let end = {
-            let tab = self.model.active_tab();
-            let selected_lines = requested_lines.min(tab.line_count());
-            if selected_lines >= tab.line_count() {
-                tab.len_chars()
-            } else {
-                tab.buffer().line_to_char(selected_lines)
-            }
-        };
-        self.model.set_selection(Selection::from_range(0..end, false));
         self.sync_effects();
     }
 
@@ -136,16 +117,8 @@ impl ModelHarness {
         self.model.selection_set().as_slice().len()
     }
 
-    pub fn find_match_count(&self) -> usize {
-        self.model.find().matches.len()
-    }
-
     pub fn clipboard_text(&self) -> Option<&str> {
         self.clipboard.as_deref()
-    }
-
-    pub fn primary_text(&self) -> Option<&str> {
-        self.primary.as_deref()
     }
 }
 
@@ -384,21 +357,6 @@ pub fn run_text_cases_expect_normal(cases: &[TextCase<'_>]) {
         assert_eq!(harness.text(), expected, "{}", name);
         harness.expect_mode(vim::Mode::Normal);
     }
-}
-
-pub fn position_of(text: &str, needle: &str) -> Position {
-    let byte = text.find(needle).expect("needle exists in text");
-    let mut line = 0usize;
-    let mut column = 0usize;
-    for ch in text[..byte].chars() {
-        if ch == '\n' {
-            line += 1;
-            column = 0;
-        } else {
-            column += 1;
-        }
-    }
-    Position { line, column }
 }
 
 pub fn parse_keys(sequence: &str) -> Vec<(Key, vim::Modifiers)> {
