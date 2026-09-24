@@ -33,7 +33,7 @@ Choose the scenario whose primary metric matches the problem:
 
 | Scenario | Primary metric | Surface |
 | --- | --- | --- |
-| `large-paste` | `paste_complete_ms` | select/copy/tab-switch/paste/save workflow |
+| `large-paste` | `paste_input_to_paint_ms` | app-owned clipboard paste and first completed paint; surrounding copy/tab-switch/save phases reported separately |
 | `mixed-paste` | `paste_input_to_paint_ms` | shell-style mixed-language paste and first paint |
 | `typing-medium`, `typing-large`, `typing-plain` | `typing_ms_per_char` | sustained editing with or without highlighting |
 | `scroll-highlighted`, `scroll-plain` | `scroll_frame_wall_ms_mean` | mean app-side frame time during a scheduled wheel scroll, with frames per second, the worst frame, and `scroll_overrun_ms` (input end through redraw quiet) as secondaries |
@@ -61,6 +61,12 @@ operation. An earlier frame during the burst does not count: parsing and layout
 required to show the final text remain inside the measured interval.
 Paste-to-paint and the first post-paste key use the same ordering rule: the
 completed frame must follow the corresponding edit, not precede it.
+These paint-completion durations use the app's recorded frame timestamp, not
+when the runner's 10 ms polling loop notices it. `typing_completion_observed_ms`
+retains that polling observation as a diagnostic; `paste_complete_ms` likewise
+reports the runner's observation of paste application and is not the primary
+large-paste metric. Partial timestamp records and later blink frames do not
+count as the completion boundary.
 
 `search_reindex_ms` measures the model's query update and active-result
 selection. `search_query_update_ms` includes the surrounding application

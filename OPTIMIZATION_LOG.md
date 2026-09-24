@@ -444,3 +444,19 @@ in [the historical log](docs/optimization-history.md).
   including ties, growth, shrink, empty windows and clearing every width.
   All-features tests and Clippy pass; the full combined X11 checkpoint follows.
 
+### Use completion timestamps instead of polling wakeups
+
+- Short typing runs landed in ~0.032 ms/character steps: a 10 ms polling
+  interval divided by 320 characters. Keep the final-input completion gate,
+  but calculate typing and paste-to-paint durations from injection time to
+  the first corresponding completed-frame epoch. Reject incomplete trailing
+  timestamp records, and never substitute a later blink frame.
+- `typing_completion_observed_ms` preserves the runner's observation latency
+  as a diagnostic. Large paste now uses `paste_input_to_paint_ms` as its
+  primary; `paste_complete_ms` remains the polling-based application-phase
+  diagnostic. Update the performance guide and benchmark contract tests.
+- Twelve benchmark self-tests, all-features tests and Clippy pass. Earlier
+  typing/paste numbers in this log include polling delay; compare new numbers
+  only with baselines run through the same corrected runner. Startup and
+  single-key latency already used epoch timestamps and are unaffected.
+

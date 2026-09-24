@@ -225,8 +225,7 @@ impl Scenario {
     fn primary_metric(self) -> &'static str {
         match self {
             Self::All => "primary_value",
-            Self::LargePaste => "paste_complete_ms",
-            Self::MixedPaste => "paste_input_to_paint_ms",
+            Self::LargePaste | Self::MixedPaste => "paste_input_to_paint_ms",
             Self::TypingMedium | Self::TypingLarge | Self::TypingPlain => "typing_ms_per_char",
             Self::ScrollHighlighted | Self::ScrollPlain => "scroll_frame_wall_ms_mean",
             Self::OpenSmall => "open_to_first_frame_ms",
@@ -734,6 +733,7 @@ impl Bench {
             };
 
             let paste_started = Instant::now();
+            let paste_started_epoch_us = epoch_micros(SystemTime::now())?;
             let paste_apply_count = read_editor_trace(&trace_path)?
                 .count("paste_clipboard_apply_ms")
                 .unwrap_or(0);
@@ -746,13 +746,13 @@ impl Bench {
             )?;
             let paste_damage_events = 0u64;
             let paste_complete_ms = elapsed_ms(paste_started);
-            wait_for_frame_after_trace_count(
+            let paste_frame_epoch_us = wait_for_frame_after_trace_count(
                 &trace_path,
                 "paste_clipboard_apply_ms",
                 paste_apply_count + 1,
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
-            let paste_input_to_paint_ms = elapsed_ms(paste_started);
+            let paste_input_to_paint_ms = (paste_frame_epoch_us as f64 - paste_started_epoch_us) / 1000.0;
             let paste_trace = read_editor_trace(&trace_path)?;
             if let Some(owner) = clipboard_owner.as_mut() {
                 terminate_child(owner)?;
@@ -761,30 +761,33 @@ impl Bench {
             let (post_paste_first_key_ms, post_paste_typing_ms) = if let Some(payload) = post_paste_payload.as_ref() {
                 self.position_editor(target_line, &trace_path, damage.damage(), window.id, &mut child)?;
                 reset_editor_trace(&trace_path)?;
-                let typing_started = Instant::now();
+                let typing_started_epoch_us = epoch_micros(SystemTime::now())?;
                 let mut payload_chars = payload.chars();
                 let first_char = payload_chars
                     .next()
                     .expect("mixed-paste typing payload is non-empty")
                     .to_string();
                 let remaining = payload_chars.collect::<String>();
-                let first_key_started = Instant::now();
+                let first_key_started_epoch_us = epoch_micros(SystemTime::now())?;
                 inject_text(&self.conn, self.root, &self.keycodes, &first_char)?;
-                wait_for_frame_after_trace_count(
+                let first_frame_epoch_us = wait_for_frame_after_trace_count(
                     &trace_path,
                     "text_input_apply_ms",
                     1,
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
-                let first_key_ms = elapsed_ms(first_key_started);
+                let first_key_ms = (first_frame_epoch_us as f64 - first_key_started_epoch_us) / 1000.0;
                 inject_text(&self.conn, self.root, &self.keycodes, &remaining)?;
-                wait_for_frame_after_trace_count(
+                let final_frame_epoch_us = wait_for_frame_after_trace_count(
                     &trace_path,
                     "text_input_apply_ms",
                     payload.chars().count(),
                     Duration::from_millis(TRACE_TIMEOUT_MS),
                 )?;
-                (Some(first_key_ms), Some(elapsed_ms(typing_started)))
+                (
+                    Some(first_key_ms),
+                    Some((final_frame_epoch_us as f64 - typing_started_epoch_us) / 1000.0),
+                )
             } else {
                 (None, None)
             };
@@ -1064,20 +1067,22 @@ impl Bench {
             let before = proc_sample(pid)?;
             let trace_started = Instant::now();
             let typing_started = Instant::now();
+            let typing_started_epoch_us = epoch_micros(SystemTime::now())?;
             let input_count = read_editor_trace(&trace_path)?
                 .count("text_input_apply_ms")
                 .unwrap_or(0);
             let typing_send_started = Instant::now();
             inject_text(&self.conn, self.root, &self.keycodes, &payload)?;
             let typing_send_ms = elapsed_ms(typing_send_started);
-            wait_for_frame_after_trace_count(
+            let final_frame_epoch_us = wait_for_frame_after_trace_count(
                 &trace_path,
                 "text_input_apply_ms",
                 input_count + payload.chars().count(),
                 Duration::from_millis(TRACE_TIMEOUT_MS),
             )?;
             let damage_events = 0u64;
-            let typing_input_to_quiet_ms = elapsed_ms(typing_started);
+            let typing_completion_observed_ms = elapsed_ms(typing_started);
+            let typing_input_to_paint_ms = (final_frame_epoch_us as f64 - typing_started_epoch_us) / 1000.0;
             if scenario == Scenario::TypingLarge {
                 let occurrence_count = read_editor_trace(&trace_path)?
                     .count("occurrence_highlight_ms")
@@ -1133,10 +1138,11 @@ impl Bench {
             let mut metrics = RunMetrics::new(window.width, window.height);
             metrics.set("startup_ms", startup_ms);
             metrics.set("typing_send_ms", typing_send_ms);
-            metrics.set("typing_input_to_quiet_ms", typing_input_to_quiet_ms);
+            metrics.set("typing_completion_observed_ms", typing_completion_observed_ms);
+            metrics.set("typing_input_to_paint_ms", typing_input_to_paint_ms);
             metrics.set(
                 "typing_ms_per_char",
-                typing_input_to_quiet_ms / payload.chars().count() as f64,
+                typing_input_to_paint_ms / payload.chars().count() as f64,
             );
             metrics.set("typing_completion_ms", trace_wall_ms);
             metrics.set("trace_wall_ms", trace_wall_ms);
@@ -2300,7 +2306,8 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
         Scenario::TypingMedium | Scenario::TypingLarge | Scenario::TypingPlain => &[
             "typing_ms_per_char",
             "typing_send_ms",
-            "typing_input_to_quiet_ms",
+            "typing_input_to_paint_ms",
+            "typing_completion_observed_ms",
             "typing_completion_ms",
             "typed_chars",
             "text_input_apply_ms_sum",
@@ -2715,20 +2722,25 @@ fn wait_for_trace_count(
 
 /// A burst is visible only once a frame has completed after its final input.
 /// Counting frames since the beginning of the burst can accept an earlier one.
-fn has_frame_after_trace_count(contents: &str, label: &str, minimum_count: usize) -> bool {
+fn frame_epoch_after_trace_count(contents: &str, label: &str, minimum_count: usize) -> Option<u64> {
+    // Ignore an incomplete final record: a timestamp can be numeric before
+    // its writer has finished writing all the digits.
+    let complete = contents.rsplit_once('\n').map_or("", |(complete, _)| complete);
     let mut count = 0;
-    for line in contents.lines() {
+    for line in complete.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
         if key == label {
             count += 1;
         }
-        if key == "frame_end_epoch_us" && count >= minimum_count && value.parse::<u64>().is_ok() {
-            return true;
+        if key == "frame_end_epoch_us" && count >= minimum_count {
+            if let Ok(epoch) = value.parse() {
+                return Some(epoch);
+            }
         }
     }
-    false
+    None
 }
 
 fn wait_for_frame_after_trace_count(
@@ -2736,12 +2748,12 @@ fn wait_for_frame_after_trace_count(
     label: &str,
     minimum_count: usize,
     timeout: Duration,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<u64, Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
     loop {
         let contents = fs::read_to_string(path)?;
-        if has_frame_after_trace_count(&contents, label, minimum_count) {
-            return Ok(());
+        if let Some(epoch) = frame_epoch_after_trace_count(&contents, label, minimum_count) {
+            return Ok(epoch);
         }
         if Instant::now() >= deadline {
             return Err(io::Error::other(format!(
@@ -3910,7 +3922,7 @@ mod tests {
             primary_metrics.insert(scenario.as_str(), scenario.primary_metric());
         }
 
-        assert_eq!(primary_metrics["large-paste"], "paste_complete_ms");
+        assert_eq!(primary_metrics["large-paste"], "paste_input_to_paint_ms");
         assert_eq!(primary_metrics["mixed-paste"], "paste_input_to_paint_ms");
         assert_eq!(primary_metrics["typing-medium"], "typing_ms_per_char");
         assert_eq!(primary_metrics["typing-large"], "typing_ms_per_char");
@@ -3988,18 +4000,27 @@ mod tests {
     }
 
     #[test]
-    fn typing_completion_requires_a_frame_after_the_final_input() {
+    fn typing_completion_uses_first_complete_timestamp_after_final_input() {
         let label = "text_input_apply_ms";
         let earlier_frame = "text_input_apply_ms=1\nframe_end_epoch_us=100\ntext_input_apply_ms=2\n";
-        assert!(!has_frame_after_trace_count(earlier_frame, label, 2));
-        assert!(!has_frame_after_trace_count(
-            &format!("{earlier_frame}viewport_paint_ms=1\nframe_end_epoch_us="),
-            label,
-            2
-        ));
+        assert_eq!(frame_epoch_after_trace_count(earlier_frame, label, 2), None);
+        for partial in ["", "2", "20", "200"] {
+            assert_eq!(
+                frame_epoch_after_trace_count(
+                    &format!("{earlier_frame}viewport_paint_ms=1\nframe_end_epoch_us={partial}"),
+                    label,
+                    2,
+                ),
+                None,
+            );
+        }
         let completed = format!("{earlier_frame}viewport_paint_ms=1\nframe_end_epoch_us=200\n");
-        assert!(has_frame_after_trace_count(&completed, label, 2));
-        assert!(!has_frame_after_trace_count(&completed, label, 3));
+        assert_eq!(frame_epoch_after_trace_count(&completed, label, 2), Some(200));
+        assert_eq!(frame_epoch_after_trace_count(&completed, label, 3), None);
+        assert_eq!(
+            frame_epoch_after_trace_count(&format!("{completed}frame_end_epoch_us=500\n"), label, 2),
+            Some(200),
+        );
     }
 
     #[test]
