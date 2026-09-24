@@ -2279,7 +2279,7 @@ mod tests {
     }
 
     #[test]
-    fn font_dropdown_navigation_is_bounded_to_known_families() {
+    fn font_dropdown_navigation_wraps_and_unknown_families_fall_back_to_the_default() {
         assert_eq!(FontFamilyChoice::Tx02.previous(), FontFamilyChoice::IbmPlexMono);
         assert_eq!(FontFamilyChoice::IbmPlexMono.next(), FontFamilyChoice::Tx02);
         assert_eq!(
@@ -2290,16 +2290,17 @@ mod tests {
     }
 
     #[test]
-    fn ruler_editor_normalizes_valid_columns() {
-        let columns = parse_ruler_columns("120, 80  120").expect("valid ruler columns");
-        assert_eq!(columns.as_slice(), &[80, 120]);
-        assert!(parse_ruler_columns("").expect("empty ruler list").as_slice().is_empty());
-    }
-
-    #[test]
-    fn ruler_editor_rejects_malformed_or_out_of_range_columns() {
-        assert!(parse_ruler_columns("80, nope").is_err());
-        assert!(parse_ruler_columns("0").is_err());
-        assert!(parse_ruler_columns("1001").is_err());
+    fn ruler_editor_splits_columns_on_commas_and_whitespace() {
+        for (text, columns) in [
+            ("", Some(&[][..])),
+            ("   ", Some(&[][..])),
+            ("120, 80  120", Some(&[80, 120][..])),
+            ("80\t100,", Some(&[80, 100][..])),
+            ("80, nope", None),
+            ("-5", None),
+        ] {
+            let parsed = parse_ruler_columns(text).ok();
+            assert_eq!(parsed.as_ref().map(|columns| columns.as_slice()), columns, "{text:?}");
+        }
     }
 }
