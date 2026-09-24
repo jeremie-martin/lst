@@ -1623,41 +1623,40 @@ fn main() {
 #[cfg(test)]
 mod syntax_cache_tests {
     use super::*;
-    use crate::ui::theme::SyntaxRole;
-    use std::path::PathBuf;
+    use crate::viewport::ensure_syntax_cache_for_lines;
+    use lst_editor::{BufferDelta, BufferEdit};
 
     #[test]
-    fn rebuild_syntax_cache_repopulates_invalidated_current_state() {
-        let source = "fn main() { let value = \"hi\"; }\n";
-        let tab = ModelEditorTab::from_path_with_stamp(TabId::from_raw(1), PathBuf::from("test.rs"), source, None);
-        let state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, tab.buffer(), tab.revision())
-            .expect("rust parser should be available");
+    fn partial_syntax_refresh_recomputes_edited_lines_to_match_a_fresh_parse() {
+        let source = (0..6)
+            .map(|line| format!("fn item_{line}() {{ let value = {line}; }}\n"))
+            .collect::<String>();
+        let mut buffer = Rope::from_str(&source);
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, 0).unwrap();
         let mut cache = ViewportCache::default();
+        refresh_syntax_cache(&mut cache, &state, &buffer, 0, SyntaxInvalidation::Full, false);
+        ensure_syntax_cache_for_lines(&mut cache, &state, 0, 0..usize::MAX);
 
-        assert!(!syntax_cache_is_current(&cache, SyntaxLanguage::Rust, tab.revision()));
-        refresh_syntax_cache(
-            &mut cache,
-            &state,
-            tab.buffer(),
-            tab.revision(),
-            SyntaxInvalidation::Full,
-            false,
-        );
-        assert!(cache
-            .syntax_highlights
-            .as_ref()
-            .is_some_and(|highlights| highlights.valid_lines.iter().all(|valid| !valid)));
-        crate::viewport::ensure_syntax_cache_for_lines(&mut cache, &state, tab.revision(), 0..1);
+        // Turning a number into a string changes one line's spans without
+        // changing line topology, so the cache takes the patch path.
+        let at = source.find("= 3").unwrap() + "= ".len();
+        let edit = BufferEdit {
+            range: at..at + 1,
+            replacement: "\"3\"".to_string(),
+        };
+        buffer.remove(edit.range.clone());
+        buffer.insert(edit.range.start, &edit.replacement);
+        let invalidation = state.update(&buffer, BufferDelta::Edits(vec![edit]), 1);
+        assert!(matches!(invalidation, SyntaxInvalidation::Lines(_)), "{invalidation:?}");
+        let structure_remapped = state.structure_was_remapped();
+        refresh_syntax_cache(&mut cache, &state, &buffer, 1, invalidation, structure_remapped);
+        ensure_syntax_cache_for_lines(&mut cache, &state, 1, 0..usize::MAX);
 
-        let highlights = cache
-            .syntax_highlights
-            .as_ref()
-            .expect("syntax cache should be repopulated");
-        assert!(syntax_cache_is_current(&cache, SyntaxLanguage::Rust, tab.revision()));
-        assert!(
-            highlights.lines[0].iter().any(|span| span.role == SyntaxRole::Keyword),
-            "{:?}",
-            highlights.lines[0]
-        );
+        let fresh = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, 1).unwrap();
+        let (fresh_lines, fresh_lens) = fresh.compute_spans_for_lines(0..usize::MAX);
+        let highlights = cache.syntax_highlights.as_ref().unwrap();
+        assert!(syntax_cache_is_current(&cache, SyntaxLanguage::Rust, 1));
+        assert_eq!(highlights.lines, fresh_lines);
+        assert_eq!(highlights.line_byte_lens, fresh_lens);
     }
 }
