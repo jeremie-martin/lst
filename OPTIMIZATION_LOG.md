@@ -289,3 +289,12 @@ each of the ~21 caret-animation frames per keystroke (~0.6 ms each), and
 tree-sitter's cold-cache cost per edit. The first needs the text viewport in
 a cached view with the caret painted outside it. That is worth a design of its
 own, checked in the pixel lane, rather than a late-night patch.
+
+Clean rerun after the transcode ended (idle machine, `87f85a7` vs `6e8ed46`,
+nine samples each, interleaved): typing-large 0.957 → 0.885 ms/char,
+typing-medium 0.800 → 0.760, latency-typing key-to-frame-end 4.60 → 4.16 ms
+and key-to-paint p50 7.50 → 7.25 ms; idle unchanged. Navigation's per-run
+key-to-frame-end median is bimodal (~1.6–1.7 or ~2.1 ms) independent of the
+binary: three A/Bs gave +21%, +24% and −21% with identical frames per key,
+and key-to-paint moved ±4%. Do not read navigation differences below ~5%
+from fewer than ~30 runs.
