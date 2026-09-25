@@ -242,3 +242,14 @@ present to wait behind. Reverted.
 - Trace reads parsed a trailing partial line. The app writes each line in
   several `write` calls, so a wait or a frame pairing could see a truncated
   epoch. Trace readers now parse complete lines only.
+
+### Large paste: first frame at the old scroll position (bug fix)
+
+A paste that grows the document past the viewport rendered one frame at the
+old scroll position, then scrolled to the cursor on the next frame. The
+inline reveal clamped against the scroll handle's extent, which GPUI only
+updates during layout, so it gave up and retried a frame later. The reveal
+now clamps against the extent this frame lays out (content height and width
+are computed just before it). `large_paste_reveals_the_cursor_in_its_first_frame`
+fails on the old binary (first frame at `scroll_top 0`) and passes now; the
+paste costs one frame fewer.

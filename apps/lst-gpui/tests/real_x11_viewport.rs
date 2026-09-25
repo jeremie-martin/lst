@@ -169,6 +169,33 @@ fn no_wrap_horizontal_extent_tracks_a_growing_and_shrinking_longest_line() -> Te
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn large_paste_reveals_the_cursor_in_its_first_frame() -> TestResult {
+    support::run_x11_test("viewport-large-paste-first-frame", |session| {
+        let path = session.seed_file("paste-target.txt", "")?;
+        let mut editor = session.open_file("viewport-large-paste-first-frame", &path)?;
+        editor.wait_text_viewport(secs(10))?;
+
+        let pasted = (0..2_000).map(|line| format!("pasted line {line}\n")).collect::<String>();
+        write_clipboard_text(Selection::Clipboard, &pasted)?;
+        editor.keys("<C-v>")?;
+
+        // The scroll extent grows with the paste; revealing against the
+        // previous frame's extent left one frame at the old position.
+        let first = editor.wait_transient_state("first frame showing the paste", secs(10), |record| {
+            record.line_count > 2_000
+        })?;
+        assert!(
+            matches!(first.cursors.as_slice(), [cursor] if row_covers_char(&first, cursor.head_line, cursor.head_char)),
+            "cursor {:?} not painted in the first frame (scroll_top {})",
+            first.cursors,
+            first.viewport.scroll_top_px
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn typing_at_wrapped_line_end_keeps_cursor_visible() -> TestResult {
     support::run_x11_test("viewport-wrapped-eof-typing", |session| {
         let path = session.seed_file("long-wrapped.txt", &"a".repeat(30_000))?;

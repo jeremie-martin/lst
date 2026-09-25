@@ -4,7 +4,7 @@ use crate::ui::{
     IconButton, IconKind,
 };
 use gpui::{
-    canvas, div, prelude::*, px, rgb, AnyElement, App, Bounds, Context, CursorStyle, ElementInputHandler,
+    canvas, div, prelude::*, px, rgb, size, AnyElement, App, Bounds, Context, CursorStyle, ElementInputHandler,
     InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, ParentElement, Pixels,
     Render, SharedString, Stateful, StatefulInteractiveElement, Styled, Window,
 };
@@ -1720,15 +1720,20 @@ impl Render for LstGpuiApp {
             };
             buffer_content_height(total_rows, scale) + viewport_height * 0.4
         };
-        // Reveal the caret against the previous frame's viewport geometry so
-        // the scroll offset is final before this frame paints. Only the very
-        // first frame lacks geometry and falls back to a next-frame reveal.
-        self.reveal_pending_cursor_now(window, cx);
         let total_content_width = (!show_wrap).then(|| {
             let mut cache = active_cache.borrow_mut();
             let width = max_unwrapped_line_width(&mut cache, &buffer, revision, char_width, scale, theme, window);
             layout_metrics.code_origin_pad() + width + char_width * 2.0
         });
+        // Reveal the caret against the previous frame's viewport geometry and
+        // this frame's content extent, so the scroll offset is final before
+        // this frame paints. Only the very first frame lacks geometry and
+        // falls back to a next-frame reveal.
+        let max_scroll = size(
+            total_content_width.map_or(px(0.0), |width| (width - viewport_width).max(px(0.0))),
+            (total_content_height - viewport_height).max(px(0.0)),
+        );
+        self.reveal_pending_cursor_now(max_scroll, window, cx);
         let viewport_scroll = active_scroll;
         let scrollbar_scroll = viewport_scroll.clone();
         let h_scrollbar_scroll = viewport_scroll.clone();

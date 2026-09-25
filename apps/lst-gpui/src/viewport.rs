@@ -629,12 +629,22 @@ pub(crate) fn max_scroll_left(scroll: &ScrollHandle) -> Pixels {
 
 /// Sets scroll position, clamped to `[0, max_offset]`, preserving the other axis.
 pub(crate) fn scroll_to_top(scroll: &ScrollHandle, top: Pixels) {
-    let top = top.max(px(0.0)).min(max_scroll_top(scroll));
+    scroll_to_top_within(scroll, top, max_scroll_top(scroll));
+}
+
+/// Sets scroll position, clamped to `[0, max_top]` rather than to the extent
+/// of the last layout, preserving the other axis.
+pub(crate) fn scroll_to_top_within(scroll: &ScrollHandle, top: Pixels, max_top: Pixels) {
+    let top = top.min(max_top).max(px(0.0));
     scroll.set_offset(gpui::point(scroll.offset().x, -top));
 }
 
 pub(crate) fn scroll_to_left(scroll: &ScrollHandle, left: Pixels) {
-    let left = left.max(px(0.0)).min(max_scroll_left(scroll));
+    scroll_to_left_within(scroll, left, max_scroll_left(scroll));
+}
+
+pub(crate) fn scroll_to_left_within(scroll: &ScrollHandle, left: Pixels, max_left: Pixels) {
+    let left = left.min(max_left).max(px(0.0));
     scroll.set_offset(gpui::point(-left, scroll.offset().y));
 }
 pub(crate) fn reset_scroll(scroll: &ScrollHandle) {

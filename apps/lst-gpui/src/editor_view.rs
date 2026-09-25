@@ -3,7 +3,7 @@ use std::time::Instant;
 use gpui::{
     canvas, div, point, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, InteractiveElement,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, ScrollDelta, ScrollHandle,
-    ScrollWheelEvent, Styled, Window,
+    ScrollWheelEvent, Size, Styled, Window,
 };
 use lst_editor::{EditorCommand as Command, EditorTab as ModelEditorTab, RevealIntent};
 
@@ -15,8 +15,8 @@ use crate::{
     },
     viewport::{
         code_char_width, ensure_wrap_layout, line_display_text, max_scroll_left, max_scroll_top, scroll_left_for,
-        scroll_to_left, scroll_to_top, scroll_top_for, visual_row_for_char, x_for_display_char, ViewportLayoutMetrics,
-        WrapLayoutInput,
+        scroll_to_left, scroll_to_left_within, scroll_to_top, scroll_to_top_within, scroll_top_for,
+        visual_row_for_char, x_for_display_char, ViewportLayoutMetrics, WrapLayoutInput,
     },
     EditorScrollbarDrag, EditorTabView, FocusTarget, LstGpuiApp, SmoothScroll,
 };
@@ -383,12 +383,19 @@ impl LstGpuiApp {
     }
 
     /// Applies a queued reveal immediately when painted geometry exists.
-    /// Called from `render` so the reveal costs no extra frame.
-    pub(crate) fn reveal_pending_cursor_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Called from `render` so the reveal costs no extra frame; `max_scroll`
+    /// is the extent of the content this frame lays out, which the scroll
+    /// handle only learns during layout.
+    pub(crate) fn reveal_pending_cursor_now(
+        &mut self,
+        max_scroll: Size<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(intent) = self.pending_reveal else {
             return;
         };
-        if self.try_reveal_active_cursor(intent, window, cx) {
+        if self.try_reveal_active_cursor(intent, max_scroll, window, cx) {
             self.pending_reveal = None;
             diagnostics::record_notify("reveal_inline");
         }
@@ -413,7 +420,8 @@ impl LstGpuiApp {
             return;
         };
 
-        if self.try_reveal_active_cursor(intent, window, cx) {
+        let max_scroll = self.active_view().scroll.max_offset();
+        if self.try_reveal_active_cursor(intent, max_scroll, window, cx) {
             diagnostics::record_notify("reveal_applied");
             cx.notify();
         } else {
@@ -438,7 +446,13 @@ impl LstGpuiApp {
         }
     }
 
-    fn try_reveal_active_cursor(&self, intent: RevealIntent, window: &mut Window, cx: &App) -> bool {
+    fn try_reveal_active_cursor(
+        &self,
+        intent: RevealIntent,
+        max_scroll: Size<Pixels>,
+        window: &mut Window,
+        cx: &App,
+    ) -> bool {
         let view = self.active_view();
         let viewport_bounds = {
             let geometry = view.geometry.borrow();
@@ -478,15 +492,15 @@ impl LstGpuiApp {
         };
 
         if let Some(target) = target {
-            let max_top = max_scroll_top(&view.scroll);
-            scroll_to_top(&view.scroll, target);
+            let max_top = max_scroll.height.max(px(0.0));
+            scroll_to_top_within(&view.scroll, target, max_top);
             if target > max_top && caret_bottom > max_top + viewport_height {
                 return false;
             }
         }
 
         if !self.model.show_wrap() {
-            return self.try_reveal_active_cursor_horizontally(view, viewport_bounds, window, cx);
+            return self.try_reveal_active_cursor_horizontally(view, viewport_bounds, max_scroll.width, window, cx);
         }
         true
     }
@@ -495,6 +509,7 @@ impl LstGpuiApp {
         &self,
         view: &EditorTabView,
         viewport_bounds: Bounds<Pixels>,
+        max_left: Pixels,
         window: &mut Window,
         cx: &App,
     ) -> bool {
@@ -535,11 +550,11 @@ impl LstGpuiApp {
         };
 
         if let Some(target_x) = target_x {
-            if target_x > px(0.0) && max_scroll_left(&view.scroll) <= px(0.0) {
+            if target_x > px(0.0) && max_left <= px(0.0) {
                 return false;
             }
             drop(geometry);
-            scroll_to_left(&view.scroll, target_x);
+            scroll_to_left_within(&view.scroll, target_x, max_left);
         }
         true
     }
