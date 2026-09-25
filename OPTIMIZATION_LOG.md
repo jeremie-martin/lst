@@ -265,3 +265,27 @@ key. So, like the parse, lst's per-frame cost on an idle desktop is mostly
 cold caches and clocks, not instructions. Holding a CPU latency QoS request
 would need root (`/dev/cpu_dma_latency`) and costs power; not pursued.
 Numbers from such a run are not comparable with idle baselines.
+
+### Session result
+
+Kept: `vendor/tree-sitter` (lazy external-scanner state in
+`changed_ranges`), the first-frame cursor reveal after a document-growing
+edit, and two runner fixes (first-present pairing, complete-line trace
+reads). Final interleaved A/B of `cabc293` against `87f85a7` (six samples
+each, taken while the Jellyfin transcode kept cores warm, which understates
+the cold-core gain measured earlier on an idle machine): typing-large
+0.961 → 0.890 ms/char, typing-medium 0.777 → 0.762, latency-typing
+key-to-paint p50 6.32 → 5.55 ms, large paste 3.91 → 3.52 ms; navigation
+key-to-frame-end unchanged (0.478 vs 0.477 ms).
+
+Measured and rejected or left alone: a background parse (stale-highlight
+frame), dropping the one-second re-presentation, earlier presenting of the
+pre-dispatch frame (FIFO backlog), a lazy reuse token in the parser (no
+gain), surface/map reorderings at startup (driver-bound), and caching the
+whitespace-marker scan (1.9% of frame CPU).
+
+What remains is structural: GPUI rebuilds and repaints the whole window for
+each of the ~21 caret-animation frames per keystroke (~0.6 ms each), and
+tree-sitter's cold-cache cost per edit. The first needs the text viewport in
+a cached view with the caret painted outside it. That is worth a design of its
+own, checked in the pixel lane, rather than a late-night patch.
