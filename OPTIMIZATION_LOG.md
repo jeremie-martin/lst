@@ -231,3 +231,14 @@ but made key-to-damage worse in all three latency scenarios (typing p50
 GPUI re-presenting every tick for a second after input, an extra present
 between ticks leaves one more image in the FIFO queue for every later
 present to wait behind. Reverted.
+
+### Runner fixes
+
+- `open_to_first_present_ms` took the first damage on the editor window,
+  which can come from mapping or a window-manager resize before any present
+  (seen as a "present" before the app's first frame). It now takes the first
+  damage at or after the app's first-frame stamp, and clears each damage so
+  that later ones are reported. Frame to present is 1–30 ms on this host.
+- Trace reads parsed a trailing partial line. The app writes each line in
+  several `write` calls, so a wait or a frame pairing could see a truncated
+  epoch. Trace readers now parse complete lines only.

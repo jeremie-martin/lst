@@ -1383,13 +1383,13 @@ impl Bench {
         let pid = child.id();
 
         let result = (|| {
-            let first_present_ms = first_present.wait(
+            let first_present_us = first_present.wait(
                 &self.conn,
                 &self.atoms,
                 pid,
                 &title,
+                &trace_path,
                 &mut child,
-                open_started,
                 Duration::from_millis(WINDOW_DISCOVERY_TIMEOUT_MS),
             )?;
             let window = find_window(
@@ -1434,7 +1434,7 @@ impl Bench {
                 ((first_frame_epoch_us - spawn_epoch_us) / 1000.0).max(0.0),
             );
             add_trace_last(&mut metrics, &trace, "startup_first_frame_ms", "main_to_first_frame_ms");
-            metrics.set("open_to_first_present_ms", first_present_ms);
+            metrics.set("open_to_first_present_ms", (first_present_us - spawn_epoch_us) / 1000.0);
             metrics.set("open_to_quiet_ms", open_to_quiet_ms);
             metrics.set("startup_ms", open_to_quiet_ms);
             metrics.set("trace_wall_ms", open_to_quiet_ms);
@@ -1820,7 +1820,7 @@ impl Bench {
             let mut metrics = RunMetrics::new(window.width, window.height);
             metrics.set("startup_ms", startup_ms);
             let final_frame_epoch_us = frame_epoch_after_trace_count(
-                &fs::read_to_string(&trace_path)?,
+                &read_trace_text(&trace_path)?,
                 "find_reindex_ms",
                 reindexes_before + SEARCH_QUERY.chars().count(),
             )
@@ -1932,7 +1932,7 @@ impl Bench {
             // Measure the first frame showing the new selections. The last
             // frame after redraw quiet may have blinking carets hidden.
             let painted_frame = EditorTrace::first_frame_after(
-                &fs::read_to_string(&trace_path)?,
+                &read_trace_text(&trace_path)?,
                 "command_complete=select_all_occurrences",
             );
             if painted_frame.count("viewport_paint_ms") != Some(1) {
@@ -2679,12 +2679,20 @@ impl EditorTrace {
 }
 
 fn read_editor_trace(path: &Path) -> Result<EditorTrace, Box<dyn Error>> {
-    let contents = match fs::read_to_string(path) {
+    let contents = match read_trace_text(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(EditorTrace::default()),
         Err(error) => return Err(error.into()),
     };
     Ok(EditorTrace::parse(&contents))
+}
+
+/// The trace's complete lines. The editor may be mid-write, and a trailing
+/// line without its newline can hold a truncated value.
+fn read_trace_text(path: &Path) -> io::Result<String> {
+    let mut contents = fs::read_to_string(path)?;
+    contents.truncate(contents.rfind('\n').map_or(0, |end| end + 1));
+    Ok(contents)
 }
 
 fn reset_editor_trace(path: &Path) -> Result<(), Box<dyn Error>> {
@@ -2762,7 +2770,7 @@ fn wait_for_frame_after_trace_count(
 ) -> Result<u64, Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
     loop {
-        let contents = fs::read_to_string(path)?;
+        let contents = read_trace_text(path)?;
         if let Some(epoch) = frame_epoch_after_trace_count(&contents, label, minimum_count) {
             return Ok(epoch);
         }
@@ -2929,6 +2937,9 @@ impl FirstPresentWatch {
         Ok(Self { root })
     }
 
+    /// Returns the wall-clock time (µs since the epoch) of the first damage
+    /// on the editor window at or after the app's own first-frame stamp.
+    /// Earlier damage (mapping, window-manager resizes) is not a present.
     #[allow(clippy::too_many_arguments)]
     fn wait(
         &self,
@@ -2936,11 +2947,11 @@ impl FirstPresentWatch {
         atoms: &Atoms,
         pid: u32,
         title: &str,
+        trace_path: &Path,
         child: &mut Child,
-        open_started: Instant,
         timeout: Duration,
     ) -> Result<f64, Box<dyn Error>> {
-        let result = self.wait_inner(conn, atoms, pid, title, child, open_started, timeout);
+        let result = self.wait_inner(conn, atoms, pid, title, trace_path, child, timeout);
         conn.change_window_attributes(
             self.root,
             &xproto::ChangeWindowAttributesAux::new().event_mask(xproto::EventMask::NO_EVENT),
@@ -2956,33 +2967,43 @@ impl FirstPresentWatch {
         atoms: &Atoms,
         pid: u32,
         title: &str,
+        trace_path: &Path,
         child: &mut Child,
-        open_started: Instant,
         timeout: Duration,
     ) -> Result<f64, Box<dyn Error>> {
         let deadline = Instant::now() + timeout;
         let mut damages = Vec::new();
+        let mut editor_damage_us = Vec::new();
+        let mut first_frame_us = None;
         let outcome = loop {
             if let Some(status) = child.try_wait()? {
                 break Err(io::Error::other(format!("editor exited before its first present: {status}")).into());
             }
-            let mut presented = None;
             while let Some(event) = conn.poll_for_event()? {
                 match event {
                     Event::CreateNotify(created) if created.parent == self.root => {
-                        let damage = damage::DamageWrapper::create(conn, created.window, damage::ReportLevel::NON_EMPTY)?;
+                        let damage =
+                            damage::DamageWrapper::create(conn, created.window, damage::ReportLevel::NON_EMPTY)?;
                         damages.push(damage);
                     }
-                    Event::DamageNotify(notify) if presented.is_none() => {
+                    Event::DamageNotify(notify) => {
+                        let at = epoch_micros(SystemTime::now())?;
+                        // NON_EMPTY reports again only once the damage is cleared.
+                        conn.damage_subtract(notify.damage, NONE, NONE)?;
                         if window_matches(conn, notify.drawable, atoms, pid, title)? {
-                            presented = Some(elapsed_ms(open_started));
+                            editor_damage_us.push(at);
                         }
                     }
                     _ => {}
                 }
             }
-            if let Some(ms) = presented {
-                break Ok(ms);
+            if first_frame_us.is_none() && !editor_damage_us.is_empty() {
+                first_frame_us = read_editor_trace(trace_path)?.last("startup_first_frame_epoch_us");
+            }
+            let present_us =
+                first_frame_us.and_then(|frame_us| editor_damage_us.iter().copied().find(|&at| at >= frame_us));
+            if let Some(at) = present_us {
+                break Ok(at);
             }
             conn.flush()?;
             if Instant::now() >= deadline {
