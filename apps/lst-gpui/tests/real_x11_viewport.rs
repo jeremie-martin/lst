@@ -175,7 +175,9 @@ fn large_paste_reveals_the_cursor_in_its_first_frame() -> TestResult {
         let mut editor = session.open_file("viewport-large-paste-first-frame", &path)?;
         editor.wait_text_viewport(secs(10))?;
 
-        let pasted = (0..2_000).map(|line| format!("pasted line {line}\n")).collect::<String>();
+        let pasted = (0..2_000)
+            .map(|line| format!("pasted line {line}\n"))
+            .collect::<String>();
         write_clipboard_text(Selection::Clipboard, &pasted)?;
         editor.keys("<C-v>")?;
 
