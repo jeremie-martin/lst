@@ -253,3 +253,15 @@ now clamps against the extent this frame lays out (content height and width
 are computed just before it). `large_paste_reveals_the_cursor_in_its_first_frame`
 fails on the old binary (first frame at `scroll_top 0`) and passes now; the
 paste costs one frame fewer.
+
+### The cold-core penalty, measured by accident
+
+At 03:20 a Jellyfin `ffmpeg` transcode (one core, nice 10, GPU at P0) started
+during a full benchmark pass of `6e8ed46`. With cores kept out of deep idle
+states, and against the idle-machine baseline: scroll frames 1.04 → 0.33 ms,
+multi-cursor paint 0.51 → 0.13 ms, typing latency p50 7.7 → 5.4 ms,
+navigation 6.2 → 4.2 ms, latency-run CPU time −65%, with the same frames per
+key. So, like the parse, lst's per-frame cost on an idle desktop is mostly
+cold caches and clocks, not instructions. Holding a CPU latency QoS request
+would need root (`/dev/cpu_dma_latency`) and costs power; not pursued.
+Numbers from such a run are not comparable with idle baselines.
