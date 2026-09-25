@@ -218,3 +218,16 @@ Other checks this session, no change made:
   core wake-ups); GPUI's reader already waits on its socket.
 - Patch ledger: each GPUI/Blade patch still has its measured reason; the
   ray-tracing opt-out saves ~20 ms of device creation on the critical path.
+
+### Presenting the pre-dispatch frame: rejected
+
+GPUI draws a dirty window, without presenting, before dispatching a key event
+to it. The benchmark's press and release arrive in one batch, so each key's
+first frame is drawn before the release, the post-input refresh finds the
+window clean, and the frame is re-rendered and presented at the next timer
+tick. Presenting it at the end of the batch cut key-to-frame-end by 9–14%
+but made key-to-damage worse in all three latency scenarios (typing p50
+7.09 → 7.61 ms, navigation 6.29 → 6.90, p95 +13–16%; 9 samples each). With
+GPUI re-presenting every tick for a second after input, an extra present
+between ticks leaves one more image in the FIFO queue for every later
+present to wait behind. Reverted.
