@@ -204,7 +204,7 @@ Instead, less memory touched per edit. `Tree::changed_ranges` costs as much as
 the incremental parse (0.115 ms hot, 0.68 ms cold, on the 660 KB corpus) and
 nearly all of it is `ts_subtree_last_external_token`, run eagerly for every
 subtree the diff skips. `vendor/tree-sitter` resolves it only when a
-comparison needs it (exact; differentially fuzzed on nine grammars):
+comparison needs it (exact; differentially fuzzed on eleven grammars):
 0.115 → 0.050 ms hot, 0.68 → 0.30 ms cold. tree-sitter 0.27.0 is no faster.
 
 Interleaved A/B on `:0` (9 samples per variant, base `87f85a7`):

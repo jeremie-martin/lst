@@ -21,9 +21,10 @@ Measured on the 660 KB Rust benchmark corpus, one-character edits (standalone
 probe, 60 edits): `changed_ranges` 0.115 → 0.050 ms back to back and 0.68 →
 0.30 ms with a 70 ms pause before each edit (the keystroke case, with caches
 cold after idle). A differential fuzzer comparing stock and patched builds on
-Rust, Python, Markdown and its inline grammar, YAML, HTML, CSS, JavaScript and
-TSX (68 runs of 150–400 random edits, including quotes, comment and raw-string
-delimiters, indentation, and newlines) produced byte-identical ranges and trees.
+Rust, Python, Markdown and its inline grammar, YAML, HTML, CSS, JavaScript,
+TSX, JSON and TOML (308 runs of 150–1000 random edits, including quotes,
+comment and raw-string delimiters, indentation, and newlines) produced
+byte-identical ranges and trees.
 
 Remove this vendor copy when a tree-sitter release includes an equivalent
 change.
