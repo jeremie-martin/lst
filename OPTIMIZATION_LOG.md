@@ -1,7 +1,7 @@
 # Optimization log
 
-Current results from 23–24 September 2026, starting at `8accfc9`.
-Production changes through `e69a78a`; detailed experiments, rejected candidates,
+Results through 28 September 2026, starting at `8accfc9`.
+Detailed experiments, rejected candidates,
 individual run counts and earlier sessions are in the
 [measurement history](docs/optimization-history.md).
 
@@ -115,7 +115,7 @@ tree before the next key. That experiment was removed. Skipping those renders
 without a sound input-routing design would risk stale contexts and handlers.
 Static viewport caching was not added without a demonstrated worthwhile gain.
 
-## Verification
+## Earlier verification
 
 - Source gates pass: `cargo test --all-features`,
   `cargo test -p lst-editor --features internal-invariants`,
@@ -130,263 +130,101 @@ Static viewport caching was not added without a demonstrated worthwhile gain.
 - Both vendor patch reverse-application checks pass. Earlier checkpoints and
   complete experiment details remain in the measurement history.
 
-## 25 September 2026 session
+## 25 September 2026 checkpoint
 
-Baseline `87f85a7` on `:0` (five runs, one priming): typing latency p50
-7.705 ms (delivery 0.345, key to frame end 4.568, frame end to damage 2.532),
-navigation 6.178 ms, edit-navigation 6.362 ms; typing 0.273 / 0.781 / 0.956
-ms per character (plain / medium / large Rust); mixed paste 71.1 ms; scroll
-frames ~1.04 ms; idle CPU 20 ms per two seconds.
+- Lazy external-scanner lookup in tree-sitter `changed_ranges`: hot 0.115 →
+  0.050 ms; cold 0.68 → 0.30 ms, with matching ranges across eleven grammars.
+  Clean interleaved app pairs: large typing 0.957 → 0.885 ms/character;
+  typing key-to-frame-end 4.60 → 4.16 ms. Patch rationale and removal criteria
+  remain in `vendor/tree-sitter/LST_PATCHES.md`.
+- Fixed first-frame cursor reveal after document-growing edits, first-present
+  pairing (exclude mapping/resize damage), and partial trace-line reads.
+- Startup remains dominated by overlapping font/device initialization and the
+  first NVIDIA swapchain. A minimal Vulkan client takes 116–170 ms to create
+  its first swapchain; surface/map reorderings did not reliably improve lst.
+- Retained GPUI's one-second re-presentation: removing it saves some CPU but
+  worsens presentation latency on this host. Also rejected presenting the
+  pre-dispatch frame (FIFO backlog), background parsing with stale highlights,
+  and a whitespace-marker cache with negligible projected benefit.
+- Cold clocks/caches materially change frame costs. A background transcode made
+  the same editor look several times faster; those measurements were separated
+  from idle-machine comparisons. Navigation differences are particularly noisy.
 
-### Startup: what the first visible frame waits for
+Commands, individual comparisons, rejected experiments and environment controls
+are in the [25 September history](docs/optimization-history.md#25-september-2026-session).
 
-`open_to_first_frame_ms` stops at the app's own first frame, which precedes
-the window manager mapping the window and GPUI's first present by 20–55 ms.
-The runner now also records `open_to_first_present_ms` (first damage on the
-editor window, attached from `CreateNotify` so it cannot miss the frame) and
-uses it as the `open-small` primary. Baseline median 172 ms (163–228), app
-first frame 155 ms.
+## 28 September 2026 checkpoint
 
-Temporary GPUI/Blade instrumentation (not retained) gives the critical path on
-this host: Vulkan instance/device ~80 ms on the startup thread, overlapped by
-the ~70 ms system font scan on the main thread; then window and surface
-creation ~45 ms, of which the first `vkCreateSwapchainKHR` alone is 31–60 ms
-(later reconfigurations take 1.4–2 ms); app construction and first frame
-~10–30 ms; then the window manager's map. A plain X11 window (including an
-ARGB visual and GPUI's WM protocols) maps in 2–10 ms here, but while the
-NVIDIA swapchain is being created other clients stall, so the editor's map
-completes 40–60 ms after its request.
+Baseline `bf7c206`; production changes through `acab9d5`. Same i9-14900K,
+physical `:0`, 3816×2100 client and production build profile. Preserved binaries,
+profiles and raw logs: `/tmp/lst-perf-sep28`. Commands, intermediate results and
+rejected candidates are in the [session history](docs/optimization-history.md#28-september-2026-session).
 
-Rejected reorderings, each measured on `:0`:
-- Mapping before creating the surface on the main thread: the window manager
-  stalls behind the swapchain creation; first draw unchanged (170–196 ms).
-- Creating the surface at the first draw: mapping completes in ~1 ms, but the
-  45 ms surface creation then follows it serially (168–189 ms).
-- Creating it on a worker thread from map time: the window manager resizes the
-  window after mapping (2720×1720 → 3816×2100), and the follow-up
-  reconfiguration from the main thread takes ~40 ms instead of 2 ms, i.e. the
-  driver's first-use cost appears per thread; no reliable gain.
+### Retained changes
 
-Roughly 110–140 ms of startup is therefore NVIDIA driver time (device plus
-first swapchain), which the editor cannot remove without changing driver or
-backend; the font scan is fully hidden behind it.
+| Existing model benchmark, 320 typed characters | Before | Final | Throughput gain |
+| --- | ---: | ---: | ---: |
+| Small corpus | 1.365 ms | 0.229 ms | 5.95× |
+| Medium corpus | 1.381 ms | 0.231 ms | 5.98× |
+| Large corpus | 1.429 ms | 0.265 ms | 5.40× |
 
-### GPUI's one-second re-presentation after input: kept
+Final matched original/final executables use identical Criterion settings: 2 s
+measurement, 0.2 s warmup and 15 samples. These supersede preliminary typing
+figures.
 
-GPUI keeps presenting for one second after any input (a macOS-motivated
-workaround). Limiting it to macOS cut CPU by ~6%, `open_to_quiet` from 1242 to
-277 ms and damage events per run from 141 to 3, but worsened latency on this
-NVIDIA host: frame end to damage for navigation 2.72 → 3.68 ms and for typing
-2.28 → 2.65 ms, and typing p50 7.47 → 7.94 ms. Continuous presenting keeps the
-GPU clocked up between keys. Rejected; GPUI unchanged.
+- Profiling put 65% of model typing CPU in repeated prefix grapheme iteration.
+  Round from the requested position using Unicode's `GraphemeCursor`, borrow
+  contiguous rope lines, and supply complete line context when necessary.
+  Reuse an already validated endpoint for ordinary insertions; interior-cluster
+  inputs still expand to the complete cluster. No persistent cache or ASCII
+  exception. An exhaustive complete-line oracle covers every character offset
+  in long combining clusters, emoji joins, flags, Indic conjuncts, separators
+  and shifted rope chunk boundaries.
+- A paired navigation control caught unnecessary context preparation at column
+  zero. Returning that known boundary restores wrapped-page work from 2.33 ms
+  to 2.20 ms (old binary 2.23–2.27 ms).
+- Binary lookup uses the existing ordered find index for nearest, exact and
+  strict next/previous positions. No new index. Existing 512-step Vim search
+  benchmarks isolate a 1.6–4% improvement from this lookup change. Exhaustive
+  comparison preserves empty-index, exact-hit, strict-direction and wraparound
+  behavior. Including the boundary changes, final next-match work falls 29–33%
+  versus the original baseline (small/medium/large: 330/455/582 → 234/317/392 µs).
+  Vertical Vim motion falls 11–20%; an original/final/original control confirms
+  both improvements, including variability in the small vertical case.
 
-### Startup floor measured without lst
+These are **model** improvements. No substantial desktop-latency or startup
+improvement is established. All 15 final physical benchmark scenarios complete
+and editing scenarios verify saved output. Six interleaved samples per binary
+(before/final/final/before blocks) give large typing 0.906 → 0.889 ms/character,
+typing latency p50 7.234 → 7.333 ms, and 1k-cursor paint 0.516 → 0.509 ms.
+These small differences do not establish a substantial desktop gain or regression.
 
-A 60-line C program (instance, device on a second thread, XCB window,
-surface, FIFO_RELAXED swapchain) needs 116–170 ms to get its first swapchain
-on this host: instance 19–76 ms (bimodal), device 45–51 ms, first swapchain
-36–61 ms even for a 64×64 window (recreations take 0.5 ms). Surface capability
-queries made while the device is created do not pre-pay the swapchain cost.
-lst's first present (median 172 ms) is 10–30 ms above that floor, which is
-app construction plus the first frame; the rest is driver work that any
-Vulkan client pays.
+### Rejected work and remaining costs
 
-### Keystroke parse cost: where it goes
+- Discarded a chunk-feeding Unicode cursor adapter after a differential test
+  found a wrong boundary in a long joined-emoji sequence. Complete-line context
+  is simpler and passes the oracle.
+- Built and measured a cached GPUI child scene for immutable code/marker text,
+  preserving glyph identity, geometry and paint order. Navigation mean frame
+  0.662 → 0.642 ms and CPU 1810 → 1780 ms; highlighted scrolling worsened
+  1.113 → 1.145 ms and CPU 820 → 860 ms. Removed it: scene replay still copies
+  and finishes the scene, and comparison/layout adds work on changing frames.
+  Complete-root timing and process CPU include the new child's prepaint work.
+- Page-navigation profiling puts only ~3% in character iteration, with rope
+  indexing/slice metadata dominating. No speculative line-length shortcut.
+- Existing vendor patches remain unchanged and all three reverse-application
+  checks pass. Their documented startup, transport, geometry, glyph and GPU
+  resource-lifetime gains still justify them. Remaining large costs are Vulkan
+  initialization/presentation, cold incremental parsing and whole-window frame
+  construction. No environment or clock changes count as editor improvements.
 
-`latency-typing` spends ~2.3 ms of its ~4.4 ms key-to-frame-end in
-`TabSyntaxState::update`, against 0.33 ms for the same edits back to back.
-A standalone tree-sitter probe reproduces both numbers: with a 70 ms pause
-before each edit, pinned to a P-core, the parse is 7× slower, i.e. caches
-emptied by deep C-states while idle, not app code. A background parse was
-rejected in an earlier session (a frame with stale highlights), and I agree.
+### Verification
 
-Instead, less memory touched per edit. `Tree::changed_ranges` costs as much as
-the incremental parse (0.115 ms hot, 0.68 ms cold, on the 660 KB corpus) and
-nearly all of it is `ts_subtree_last_external_token`, run eagerly for every
-subtree the diff skips. `vendor/tree-sitter` resolves it only when a
-comparison needs it (exact; differentially fuzzed on eleven grammars):
-0.115 → 0.050 ms hot, 0.68 → 0.30 ms cold. tree-sitter 0.27.0 is no faster.
-
-Interleaved A/B on `:0` (9 samples per variant, base `87f85a7`):
-typing key-to-frame-end 4.43 → 3.94 ms, key-to-paint p50 7.38 → 7.04 ms;
-typing-large 0.962 → 0.879 ms/char; typing-medium 0.787 → 0.759 ms/char;
-edit-navigation unchanged.
-
-Other checks this session, no change made:
-- Mixed paste (71 ms): 55 ms is reading 3 MB from xclip, which offers it in
-  4000-byte INCR chunks (746 lock-step round trips, 15–61 ms depending on
-  core wake-ups); GPUI's reader already waits on its socket.
-- Patch ledger: each GPUI/Blade patch still has its measured reason; the
-  ray-tracing opt-out saves ~20 ms of device creation on the critical path.
-
-### Presenting the pre-dispatch frame: rejected
-
-GPUI draws a dirty window, without presenting, before dispatching a key event
-to it. The benchmark's press and release arrive in one batch, so each key's
-first frame is drawn before the release, the post-input refresh finds the
-window clean, and the frame is re-rendered and presented at the next timer
-tick. Presenting it at the end of the batch cut key-to-frame-end by 9–14%
-but made key-to-damage worse in all three latency scenarios (typing p50
-7.09 → 7.61 ms, navigation 6.29 → 6.90, p95 +13–16%; 9 samples each). With
-GPUI re-presenting every tick for a second after input, an extra present
-between ticks leaves one more image in the FIFO queue for every later
-present to wait behind. Reverted.
-
-### Runner fixes
-
-- `open_to_first_present_ms` took the first damage on the editor window,
-  which can come from mapping or a window-manager resize before any present
-  (seen as a "present" before the app's first frame). It now takes the first
-  damage at or after the app's first-frame stamp, and clears each damage so
-  that later ones are reported. Frame to present is 1–30 ms on this host.
-- Trace reads parsed a trailing partial line. The app writes each line in
-  several `write` calls, so a wait or a frame pairing could see a truncated
-  epoch. Trace readers now parse complete lines only.
-
-### Large paste: first frame at the old scroll position (bug fix)
-
-A paste that grows the document past the viewport rendered one frame at the
-old scroll position, then scrolled to the cursor on the next frame. The
-inline reveal clamped against the scroll handle's extent, which GPUI only
-updates during layout, so it gave up and retried a frame later. The reveal
-now clamps against the extent this frame lays out (content height and width
-are computed just before it). `large_paste_reveals_the_cursor_in_its_first_frame`
-fails on the old binary (first frame at `scroll_top 0`) and passes now; the
-paste costs one frame fewer.
-
-### The cold-core penalty, measured by accident
-
-At 03:20 a Jellyfin `ffmpeg` transcode (one core, nice 10, GPU at P0) started
-during a full benchmark pass of `6e8ed46`. With cores kept out of deep idle
-states, and against the idle-machine baseline: scroll frames 1.04 → 0.33 ms,
-multi-cursor paint 0.51 → 0.13 ms, typing latency p50 7.7 → 5.4 ms,
-navigation 6.2 → 4.2 ms, latency-run CPU time −65%, with the same frames per
-key. So, like the parse, lst's per-frame cost on an idle desktop is mostly
-cold caches and clocks, not instructions. Holding a CPU latency QoS request
-would need root (`/dev/cpu_dma_latency`) and costs power; not pursued.
-Numbers from such a run are not comparable with idle baselines.
-
-### Session result
-
-Kept: `vendor/tree-sitter` (lazy external-scanner state in
-`changed_ranges`), the first-frame cursor reveal after a document-growing
-edit, and two runner fixes (first-present pairing, complete-line trace
-reads). Final interleaved A/B of `cabc293` against `87f85a7` (six samples
-each, taken while the Jellyfin transcode kept cores warm, which understates
-the cold-core gain measured earlier on an idle machine): typing-large
-0.961 → 0.890 ms/char, typing-medium 0.777 → 0.762, latency-typing
-key-to-paint p50 6.32 → 5.55 ms, large paste 3.91 → 3.52 ms; navigation
-key-to-frame-end unchanged (0.478 vs 0.477 ms).
-
-Measured and rejected or left alone: a background parse (stale-highlight
-frame), dropping the one-second re-presentation, earlier presenting of the
-pre-dispatch frame (FIFO backlog), a lazy reuse token in the parser (no
-gain), surface/map reorderings at startup (driver-bound), and caching the
-whitespace-marker scan (1.9% of frame CPU).
-
-What remains is structural: GPUI rebuilds and repaints the whole window for
-each of the ~21 caret-animation frames per keystroke (~0.6 ms each), and
-tree-sitter's cold-cache cost per edit. The first needs the text viewport in
-a cached view with the caret painted outside it. That is worth a design of its
-own, checked in the pixel lane, rather than a late-night patch.
-
-Clean rerun after the transcode ended (idle machine, `87f85a7` vs `6e8ed46`,
-nine samples each, interleaved): typing-large 0.957 → 0.885 ms/char,
-typing-medium 0.800 → 0.760, latency-typing key-to-frame-end 4.60 → 4.16 ms
-and key-to-paint p50 7.50 → 7.25 ms; idle unchanged. Navigation's per-run
-key-to-frame-end median is bimodal (~1.6–1.7 or ~2.1 ms) independent of the
-binary: three A/Bs gave +21%, +24% and −21% with identical frames per key,
-and key-to-paint moved ±4%. Do not read navigation differences below ~5%
-from fewer than ~30 runs.
-
-## 28 September 2026 session
-
-Baseline `bf7c206`, same reference host and physical `:0`; preserved production
-binary, runner, profiles and raw results in `/tmp/lst-perf-sep28`. A fresh
-one-run broad pass reproduces the previous main costs: typing plain/medium/large
-0.268/0.763/0.904 ms per character, scroll frames 1.09–1.16 ms, typing
-key-to-frame-end 4.16 ms. These are reconnaissance, not paired gain claims.
-The existing model sweep used `cargo bench -p lst-editor --bench editor_model --
---save-baseline sep28 --measurement-time 1 --warm-up-time 0.1 --sample-size 10`.
-
-### Stop segmenting the line prefix for every text input
-
-A symbolized model-typing profile (`cargo bench --profile profiling -p lst-editor
---bench editor_model --no-run`, then `perf record -F 999 --call-graph dwarf` on
-`editor_typing/type_chars/large --bench --profile-time 5`) attributes 65% of CPU
-to grapheme iteration and another 9% to floor/ceil boundary rounding. Both
-rounding operations started at the beginning of the line for every input.
-Use Unicode segmentation's `GraphemeCursor` at the requested byte position;
-borrow contiguous rope lines and materialize only lines crossing chunks. Keep
-line terminator semantics unchanged and share the floor/ceil implementation.
-No persistent cache, ASCII exception, or vendor change.
-
-The existing 320-character typing benchmarks fall from 1.40–1.45 ms to about
-0.36 ms (~4× model throughput). This is model work, not a claim of a fourfold
-end-to-end typing gain. The production app still spends much more in syntax,
-layout and painting. Paired app measurements and acceptance verification follow.
-
-Rejected the more complicated chunk-feeding cursor adapter: differential tests
-found a wrong boundary inside a long joined-emoji sequence at a rope chunk edge.
-Complete-line context passes every character offset in long combining clusters,
-regional-indicator runs, emoji joins, Indic conjuncts, all document separators,
-and deliberately shifted chunk boundaries. Keep the simpler implementation.
-Model internal-invariant and Vim suites pass.
-
-### Ordered find navigation
-
-Use binary partitioning of the existing sorted match index for nearest, exact,
-and strict next/previous lookup, preserving wraparound and empty-index behavior.
-No second index or cache. Exhaustive small-index comparison with the linear
-reference and the model/Vim suites pass. The existing `vim_search/next_matches`
-benchmarks (512 forward steps, 15 samples, 2 s measurement, 0.2 s warmup) improve
-only 1.6–4.0%; large 559 → 552 µs. Retain for bounded lookup cost and direct use
-of the ordering invariant, not as a substantial overall editor gain.
-
-The unwrapped page-navigation profile does **not** justify optimizing character
-counting next: only ~3% is in rope character iteration; rope indexing and slice
-metadata construction dominate. No line-length shortcut was added.
-
-### Reject a retained code-text scene
-
-An app CPU profile still attributes ~8% of main-thread samples to `paint_glyph`.
-Tried GPUI's existing cached child-view support for immutable code and marker
-lines, keyed by their exact shared layout identities and complete paint geometry;
-kept their paint order and all other layers live. No vendor patch was needed.
-Compared preserved production binaries, three measured runs and one priming run
-per case on idle `:0`, same runner and complete-root frame boundary:
-
-- Navigation mean frame 0.662 → 0.642 ms; scenario CPU 1810 → 1780 ms;
-  key-to-paint p50 5.977 → 5.911 ms. These small changes are not a step-change.
-- Highlighted scroll mean frame 1.113 → 1.145 ms; CPU 820 → 860 ms.
-- Plain typing 0.285 → 0.271 ms/character, CPU unchanged at 90 ms.
-- First completed startup frame 197.861 → 216.946 ms: no startup improvement.
-
-The replay still copies/finishes GPUI's scene, and preparing/comparing the child
-adds work when its text moves. Removed the experiment: its small animation gain
-and scrolling regression do not earn another retained-view protocol. Raw logs
-and rejected sources are preserved with the session artifacts. Existing GPUI
-patches remain unchanged: glyph-tile caching still serves every fresh scene;
-startup concurrency/raster-only initialization address the measured critical
-path; transport, geometry and resource-lifetime fixes remain at their owners.
-
-The production grapheme change passes 15 of 16 focused physical-X11 motion/input
-tests. The held-perpendicular-arrows test hits the 120 s physical-profile timeout
-on **both** the candidate and untouched baseline. No test assertion or timeout
-was relaxed; the documented nested behavior gate is the next checkpoint.
-
-### Follow-up: boundary reuse and the navigation control
-
-An interleaved before/after/after/before check reproduced a small wrapped-page
-regression: 2.23–2.27 → 2.33 ms. Page motion also rounds its cursor, often at
-column zero. Do not prepare Unicode context at a line start, which is already a
-boundary under the editor's line-local segmentation contract. This restores the
-same benchmark to 2.20 ms. The unchanged constructor control varies independently
-between runs; do not treat every small Criterion comparison as a code effect.
-
-Text input now reuses the rounded start when the other endpoint is that same
-validated boundary. Interior-cluster insertions still round both ends and replace
-the complete cluster. Final existing typing benchmarks reach ~5.7× baseline
-model throughput (320 characters ~0.25 ms versus 1.40–1.45 ms). The exhaustive
-boundary oracle and internal-invariant/Vim suites remain green. This removes
-redundant validation, without persistent state or another character-class path.
+Source tests, internal-invariant/Vim suites, formatting and Clippy pass.
+The earlier grapheme checkpoint passes fifteen of sixteen focused physical
+motion/input tests; the held-arrow test
+hits the 120-second timeout on both untouched baseline and candidate, with no
+assertion or timeout relaxed. The final release passes **271/271 nested X11
+tests** in 1828.857 seconds (two expected slow cases, no skipped tests), including
+the held-arrow case in 90.578 seconds. The tested binary matches the physical
+benchmark binary by SHA-256; before/final benchmark runners are byte-identical.
