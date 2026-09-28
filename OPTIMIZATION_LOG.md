@@ -346,3 +346,47 @@ of the ordering invariant, not as a substantial overall editor gain.
 The unwrapped page-navigation profile does **not** justify optimizing character
 counting next: only ~3% is in rope character iteration; rope indexing and slice
 metadata construction dominate. No line-length shortcut was added.
+
+### Reject a retained code-text scene
+
+An app CPU profile still attributes ~8% of main-thread samples to `paint_glyph`.
+Tried GPUI's existing cached child-view support for immutable code and marker
+lines, keyed by their exact shared layout identities and complete paint geometry;
+kept their paint order and all other layers live. No vendor patch was needed.
+Compared preserved production binaries, three measured runs and one priming run
+per case on idle `:0`, same runner and complete-root frame boundary:
+
+- Navigation mean frame 0.662 → 0.642 ms; scenario CPU 1810 → 1780 ms;
+  key-to-paint p50 5.977 → 5.911 ms. These small changes are not a step-change.
+- Highlighted scroll mean frame 1.113 → 1.145 ms; CPU 820 → 860 ms.
+- Plain typing 0.285 → 0.271 ms/character, CPU unchanged at 90 ms.
+- First completed startup frame 197.861 → 216.946 ms: no startup improvement.
+
+The replay still copies/finishes GPUI's scene, and preparing/comparing the child
+adds work when its text moves. Removed the experiment: its small animation gain
+and scrolling regression do not earn another retained-view protocol. Raw logs
+and rejected sources are preserved with the session artifacts. Existing GPUI
+patches remain unchanged: glyph-tile caching still serves every fresh scene;
+startup concurrency/raster-only initialization address the measured critical
+path; transport, geometry and resource-lifetime fixes remain at their owners.
+
+The production grapheme change passes 15 of 16 focused physical-X11 motion/input
+tests. The held-perpendicular-arrows test hits the 120 s physical-profile timeout
+on **both** the candidate and untouched baseline. No test assertion or timeout
+was relaxed; the documented nested behavior gate is the next checkpoint.
+
+### Follow-up: boundary reuse and the navigation control
+
+An interleaved before/after/after/before check reproduced a small wrapped-page
+regression: 2.23–2.27 → 2.33 ms. Page motion also rounds its cursor, often at
+column zero. Do not prepare Unicode context at a line start, which is already a
+boundary under the editor's line-local segmentation contract. This restores the
+same benchmark to 2.20 ms. The unchanged constructor control varies independently
+between runs; do not treat every small Criterion comparison as a code effect.
+
+Text input now reuses the rounded start when the other endpoint is that same
+validated boundary. Interior-cluster insertions still round both ends and replace
+the complete cluster. Final existing typing benchmarks reach ~5.7× baseline
+model throughput (320 characters ~0.25 ms versus 1.40–1.45 ms). The exhaustive
+boundary oracle and internal-invariant/Vim suites remain green. This removes
+redundant validation, without persistent state or another character-class path.

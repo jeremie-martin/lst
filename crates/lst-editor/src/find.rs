@@ -271,10 +271,10 @@ impl FindState {
         let index = self
             .matches
             .partition_point(|m| Position::new(m.line, m.col) < *position);
-        if !self
+        if self
             .matches
             .get(index)
-            .is_some_and(|m| Position::new(m.line, m.col) == *position)
+            .is_none_or(|m| Position::new(m.line, m.col) != *position)
         {
             return false;
         }

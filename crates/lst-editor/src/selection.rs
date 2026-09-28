@@ -989,6 +989,11 @@ fn round_grapheme_boundary(buffer: &Rope, char_index: usize, up: bool) -> usize 
     }
     let line_index = buffer.char_to_line(ci);
     let line_start = buffer.line_to_char(line_index);
+    // Line-local segmentation always starts at a boundary. Page and vertical
+    // motions frequently land here; no line context is needed to round it.
+    if ci == line_start {
+        return ci;
+    }
     let line = buffer.line(line_index);
     let mut body_len = line.len_chars();
     while body_len > 0 && matches!(line.char(body_len - 1), '\r' | '\n') {

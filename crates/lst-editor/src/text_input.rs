@@ -357,7 +357,15 @@ pub(crate) fn resolve_range(tab: &EditorTab, range: Option<Range<usize>>) -> Ran
     let range = range
         .or_else(|| tab.marked_range().cloned())
         .unwrap_or_else(|| tab.selected_range());
-    floor_grapheme_boundary(tab.buffer(), range.start)..ceil_grapheme_boundary(tab.buffer(), range.end)
+    let start = floor_grapheme_boundary(tab.buffer(), range.start);
+    // When both endpoints name the boundary just validated, reuse it. An
+    // insertion inside a cluster still expands to that cluster's full range.
+    let end = if range.end == start {
+        start
+    } else {
+        ceil_grapheme_boundary(tab.buffer(), range.end)
+    };
+    start..end
 }
 
 pub(crate) fn marked_text_request(
