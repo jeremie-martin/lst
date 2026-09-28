@@ -1,6 +1,6 @@
 use ropey::Rope;
-use std::ops::Range;
-use unicode_segmentation::UnicodeSegmentation;
+use std::{borrow::Cow, ops::Range};
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Position {
     pub line: usize,
@@ -976,56 +976,49 @@ pub fn next_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
     line_start + next_grapheme_column(&body, local_ci)
 }
 pub(crate) fn floor_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let total = buffer.len_chars();
-    let ci = char_index.min(total);
-    if ci == total {
-        return total;
-    }
-    let line = buffer.char_to_line(ci);
-    let line_start = buffer.line_to_char(line);
-    let body = line_display_text(buffer, line);
-    let local_ci = ci - line_start;
-    let body_chars = body.chars().count();
-    if local_ci >= body_chars {
-        return ci;
-    }
-    let mut char_start = 0usize;
-    let mut best = 0usize;
-    for cluster in body.graphemes(true) {
-        if char_start > local_ci {
-            break;
-        }
-        best = char_start;
-        char_start += cluster.chars().count();
-    }
-    line_start + best
+    round_grapheme_boundary(buffer, char_index, false)
 }
 pub(crate) fn ceil_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
-    let total = buffer.len_chars();
-    let ci = char_index.min(total);
-    if ci == total {
-        return total;
-    }
-    let line = buffer.char_to_line(ci);
-    let line_start = buffer.line_to_char(line);
-    let body = line_display_text(buffer, line);
-    let local_ci = ci - line_start;
-    let body_chars = body.chars().count();
-    if local_ci >= body_chars {
+    round_grapheme_boundary(buffer, char_index, true)
+}
+
+fn round_grapheme_boundary(buffer: &Rope, char_index: usize, up: bool) -> usize {
+    let ci = char_index.min(buffer.len_chars());
+    if ci == buffer.len_chars() {
         return ci;
     }
-    let mut char_start = 0usize;
-    for cluster in body.graphemes(true) {
-        let next = char_start + cluster.chars().count();
-        if local_ci == char_start {
-            return ci;
-        }
-        if local_ci < next {
-            return line_start + next;
-        }
-        char_start = next;
+    let line_index = buffer.char_to_line(ci);
+    let line_start = buffer.line_to_char(line_index);
+    let line = buffer.line(line_index);
+    let mut body_len = line.len_chars();
+    while body_len > 0 && matches!(line.char(body_len - 1), '\r' | '\n') {
+        body_len -= 1;
     }
-    line_start + body_chars
+    let local = ci - line_start;
+    // Preserve the editor's separate treatment of line terminators.
+    if local >= body_len {
+        return ci;
+    }
+    let body = line.slice(..body_len);
+    let byte = body.char_to_byte(local);
+    let text = body
+        .as_str()
+        .map_or_else(|| Cow::Owned(body.to_string()), Cow::Borrowed);
+    // Start at the requested position instead of segmenting the line prefix.
+    // Supplying the complete line also preserves unbounded Unicode context
+    // for regional indicators, joined emoji, and Indic conjuncts.
+    let mut cursor = GraphemeCursor::new(byte, text.len(), true);
+    if cursor.is_boundary(&text, 0).expect("complete line context") {
+        return ci;
+    }
+    let boundary = if up {
+        cursor.next_boundary(&text, 0)
+    } else {
+        cursor.prev_boundary(&text, 0)
+    }
+    .expect("complete line context")
+    .expect("an interior grapheme has both boundaries");
+    line_start + body.byte_to_char(boundary)
 }
 pub fn previous_grapheme_boundary(buffer: &Rope, char_index: usize) -> usize {
     let total = buffer.len_chars();
@@ -1172,6 +1165,49 @@ pub(crate) fn char_at_line_column(buffer: &Rope, line_ix: usize, column: usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grapheme_rounding_matches_complete_line_segmentation() {
+        let mut texts = vec![
+            String::new(),
+            "a\r\nb\rc\nd\u{b}e\u{c}f\u{85}g\u{2028}h\u{2029}".into(),
+            "aé e\u{301} 👩‍👩‍👧‍👦 🇦🇧🇨 क्‍क\r\n".repeat(80),
+            format!("a{}z", "\u{301}".repeat(2048)),
+            "🇦".repeat(600),
+            "👩‍".repeat(600),
+            "क्".repeat(600),
+        ];
+        for padding in [0, 1, 499, 500, 501, 999, 1000, 1001] {
+            texts.push(format!("{}e\u{301}👩‍👩‍👧‍👦🇦🇧🇨{}", "x".repeat(padding), "z".repeat(1100)));
+        }
+        for text in texts {
+            let buffer = Rope::from_str(&text);
+            for line_index in 0..buffer.len_lines() {
+                let line_start = buffer.line_to_char(line_index);
+                let line = buffer.line(line_index);
+                let body = line_display_text(&buffer, line_index);
+                let body_len = body.chars().count();
+                let mut boundaries = vec![0];
+                for cluster in body.graphemes(true) {
+                    boundaries.push(boundaries.last().unwrap() + cluster.chars().count());
+                }
+                for local in 0..=line.len_chars() {
+                    let ci = line_start + local;
+                    let (floor, ceil) = if local >= body_len {
+                        (ci, ci)
+                    } else {
+                        let after = boundaries.partition_point(|boundary| *boundary <= local);
+                        let at = boundaries.partition_point(|boundary| *boundary < local);
+                        (line_start + boundaries[after - 1], line_start + boundaries[at])
+                    };
+                    assert_eq!(floor_grapheme_boundary(&buffer, ci), floor, "floor at {ci}");
+                    assert_eq!(ceil_grapheme_boundary(&buffer, ci), ceil, "ceil at {ci}");
+                }
+            }
+            assert_eq!(floor_grapheme_boundary(&buffer, usize::MAX), buffer.len_chars());
+            assert_eq!(ceil_grapheme_boundary(&buffer, usize::MAX), buffer.len_chars());
+        }
+    }
 
     #[test]
     fn ascii_cells_match_unicode_segmentation_for_every_adjacent_byte_pair() {

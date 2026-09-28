@@ -298,3 +298,37 @@ key-to-frame-end median is bimodal (~1.6–1.7 or ~2.1 ms) independent of the
 binary: three A/Bs gave +21%, +24% and −21% with identical frames per key,
 and key-to-paint moved ±4%. Do not read navigation differences below ~5%
 from fewer than ~30 runs.
+
+## 28 September 2026 session
+
+Baseline `bf7c206`, same reference host and physical `:0`; preserved production
+binary, runner, profiles and raw results in `/tmp/lst-perf-sep28`. A fresh
+one-run broad pass reproduces the previous main costs: typing plain/medium/large
+0.268/0.763/0.904 ms per character, scroll frames 1.09–1.16 ms, typing
+key-to-frame-end 4.16 ms. These are reconnaissance, not paired gain claims.
+The existing model sweep used `cargo bench -p lst-editor --bench editor_model --
+--save-baseline sep28 --measurement-time 1 --warm-up-time 0.1 --sample-size 10`.
+
+### Stop segmenting the line prefix for every text input
+
+A symbolized model-typing profile (`cargo bench --profile profiling -p lst-editor
+--bench editor_model --no-run`, then `perf record -F 999 --call-graph dwarf` on
+`editor_typing/type_chars/large --bench --profile-time 5`) attributes 65% of CPU
+to grapheme iteration and another 9% to floor/ceil boundary rounding. Both
+rounding operations started at the beginning of the line for every input.
+Use Unicode segmentation's `GraphemeCursor` at the requested byte position;
+borrow contiguous rope lines and materialize only lines crossing chunks. Keep
+line terminator semantics unchanged and share the floor/ceil implementation.
+No persistent cache, ASCII exception, or vendor change.
+
+The existing 320-character typing benchmarks fall from 1.40–1.45 ms to about
+0.36 ms (~4× model throughput). This is model work, not a claim of a fourfold
+end-to-end typing gain. The production app still spends much more in syntax,
+layout and painting. Paired app measurements and acceptance verification follow.
+
+Rejected the more complicated chunk-feeding cursor adapter: differential tests
+found a wrong boundary inside a long joined-emoji sequence at a rope chunk edge.
+Complete-line context passes every character offset in long combining clusters,
+regional-indicator runs, emoji joins, Indic conjuncts, all document separators,
+and deliberately shifted chunk boundaries. Keep the simpler implementation.
+Model internal-invariant and Vim suites pass.
