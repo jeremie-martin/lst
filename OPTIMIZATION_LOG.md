@@ -332,3 +332,17 @@ Complete-line context passes every character offset in long combining clusters,
 regional-indicator runs, emoji joins, Indic conjuncts, all document separators,
 and deliberately shifted chunk boundaries. Keep the simpler implementation.
 Model internal-invariant and Vim suites pass.
+
+### Ordered find navigation
+
+Use binary partitioning of the existing sorted match index for nearest, exact,
+and strict next/previous lookup, preserving wraparound and empty-index behavior.
+No second index or cache. Exhaustive small-index comparison with the linear
+reference and the model/Vim suites pass. The existing `vim_search/next_matches`
+benchmarks (512 forward steps, 15 samples, 2 s measurement, 0.2 s warmup) improve
+only 1.6–4.0%; large 559 → 552 µs. Retain for bounded lookup cost and direct use
+of the ordering invariant, not as a substantial overall editor gain.
+
+The unwrapped page-navigation profile does **not** justify optimizing character
+counting next: only ~3% is in rope character iteration; rope indexing and slice
+metadata construction dominate. No line-length shortcut was added.

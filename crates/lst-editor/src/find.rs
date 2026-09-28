@@ -261,23 +261,23 @@ impl FindState {
             self.active = None;
             return;
         }
-        for (i, m) in self.matches.iter().enumerate() {
-            if m.line > position.line || (m.line == position.line && m.col >= position.column) {
-                self.active = Some(i);
-                return;
-            }
-        }
-        self.active = Some(0);
+        let index = self
+            .matches
+            .partition_point(|m| Position::new(m.line, m.col) < *position);
+        self.active = Some(if index == self.matches.len() { 0 } else { index });
     }
 
     fn select_exact(&mut self, position: &Position) -> bool {
-        let Some(index) = self
+        let index = self
             .matches
-            .iter()
-            .position(|m| m.line == position.line && m.col == position.column)
-        else {
+            .partition_point(|m| Position::new(m.line, m.col) < *position);
+        if !self
+            .matches
+            .get(index)
+            .is_some_and(|m| Position::new(m.line, m.col) == *position)
+        {
             return false;
-        };
+        }
         self.active = Some(index);
         true
     }
@@ -393,17 +393,24 @@ impl FindState {
     }
 
     fn select_relative_from(&mut self, position: Position, forward: bool) -> Option<Position> {
+        if self.matches.is_empty() {
+            return None;
+        }
         let index = if forward {
-            self.matches
-                .iter()
-                .position(|m| m.line > position.line || (m.line == position.line && m.col > position.column))
-                .or_else(|| (!self.matches.is_empty()).then_some(0))
+            let after = self
+                .matches
+                .partition_point(|m| Position::new(m.line, m.col) <= position);
+            if after == self.matches.len() {
+                0
+            } else {
+                after
+            }
         } else {
             self.matches
-                .iter()
-                .rposition(|m| m.line < position.line || (m.line == position.line && m.col < position.column))
-                .or_else(|| self.matches.len().checked_sub(1))
-        }?;
+                .partition_point(|m| Position::new(m.line, m.col) < position)
+                .checked_sub(1)
+                .unwrap_or(self.matches.len() - 1)
+        };
         self.active = Some(index);
         let m = self.matches[index];
         Some(Position::new(m.line, m.col))
@@ -565,6 +572,55 @@ pub(crate) fn for_each_ascii_literal_match(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordered_match_navigation_matches_linear_search() {
+        for mask in 0..64 {
+            let mut find = FindState::new();
+            find.matches = (0..6)
+                .filter(|index| mask & (1 << index) != 0)
+                .map(|index| MatchPos {
+                    line: index / 3,
+                    col: index % 3,
+                    char_len: 1,
+                })
+                .collect();
+            for line in 0..=2 {
+                for column in 0..=3 {
+                    let position = Position::new(line, column);
+                    let at = |m: &MatchPos| Position::new(m.line, m.col);
+                    let nearest = find
+                        .matches
+                        .iter()
+                        .position(|m| at(m) >= position)
+                        .or_else(|| (!find.matches.is_empty()).then_some(0));
+                    find.find_nearest(&position);
+                    assert_eq!(find.active, nearest);
+                    let exact = find.matches.iter().position(|m| at(m) == position);
+                    assert_eq!(find.select_exact(&position), exact.is_some());
+                    assert_eq!(find.active, exact.or(nearest));
+                    for forward in [true, false] {
+                        let expected = if forward {
+                            find.matches
+                                .iter()
+                                .position(|m| at(m) > position)
+                                .or_else(|| (!find.matches.is_empty()).then_some(0))
+                        } else {
+                            find.matches
+                                .iter()
+                                .rposition(|m| at(m) < position)
+                                .or_else(|| find.matches.len().checked_sub(1))
+                        };
+                        let expected_position = expected.map(|index| at(&find.matches[index]));
+                        assert_eq!(find.select_relative_from(position, forward), expected_position);
+                        if expected.is_some() {
+                            assert_eq!(find.active, expected);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn windowed_match_ranges_equal_filtered_full_index() {
