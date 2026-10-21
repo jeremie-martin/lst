@@ -164,7 +164,6 @@ impl TabStrip {
             }))
             .on_click(self.listener(move |this, _, window, cx| {
                 this.close_recent_files_panel(cx);
-                this.force_editor_focus = true;
                 this.set_focus(FocusTarget::Editor);
                 this.update_model(cx, true, |model| {
                     if let Some(id) = model.tab_id_at(ix) {

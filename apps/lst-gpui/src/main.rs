@@ -323,8 +323,7 @@ struct LstGpuiApp {
     command_palette_selected: usize,
     pending_workspace_command: Option<WorkspaceCommand>,
     context_menu_position: Option<Point<Pixels>>,
-    focus_target: FocusTarget,
-    focus_last_applied: FocusTarget,
+    pending_focus: Option<FocusTarget>,
     pending_exit_save: Option<PendingExitSave>,
     close_prompt: Option<ClosePrompt>,
     quit_review: Option<QuitReview>,
@@ -345,7 +344,6 @@ struct LstGpuiApp {
     settings_generation: u64,
     scratchpad_dir: Option<PathBuf>,
     recent: RecentView,
-    force_editor_focus: bool,
     modifier_chord_accumulated: Modifiers,
     recent_modifier_chord: Option<(Modifiers, Instant)>,
     x11_ctrl_k_pending: bool,
@@ -372,6 +370,8 @@ struct LstGpuiApp {
     /// Surfaced through the state trace so real-X11 tests can click the
     /// find chips without relying on fixed shell geometry.
     find_chip_bounds_px: FindChipBounds,
+    find_disclosure_bounds_px: Option<Bounds<Pixels>>,
+    find_close_bounds_px: Option<Bounds<Pixels>>,
     /// Surfaced through the state trace so real-X11 tests can click tab-strip
     /// chrome without relying on fixed shell geometry.
     app_menu_button_bounds_px: Option<Bounds<Pixels>>,
@@ -566,8 +566,7 @@ impl LstGpuiApp {
             command_palette_selected: 0,
             pending_workspace_command: None,
             context_menu_position: None,
-            focus_target: FocusTarget::Editor,
-            focus_last_applied: FocusTarget::Editor,
+            pending_focus: Some(FocusTarget::Editor),
             pending_exit_save: None,
             close_prompt: None,
             quit_review: None,
@@ -588,7 +587,6 @@ impl LstGpuiApp {
             settings_generation: 0,
             scratchpad_dir,
             recent,
-            force_editor_focus: false,
             modifier_chord_accumulated: Modifiers::default(),
             recent_modifier_chord: None,
             x11_ctrl_k_pending: false,
@@ -606,6 +604,8 @@ impl LstGpuiApp {
             held_arrows: Default::default(),
             cursor_motion: Default::default(),
             find_chip_bounds_px: FindChipBounds::default(),
+            find_disclosure_bounds_px: None,
+            find_close_bounds_px: None,
             app_menu_button_bounds_px: None,
             all_tabs_button_bounds_px: None,
             recent_button_bounds_px: None,
@@ -724,99 +724,90 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn set_focus(&mut self, target: FocusTarget) {
-        if self.focus_target != target {
-            if target == FocusTarget::Editor {
-                self.refresh_passive_occurrence_query();
-            } else {
-                self.passive_occurrence_query = None;
-            }
-            diagnostics::record_label("focus_queued", focus_trace_label(target));
-            self.focus_target = target;
-        }
+        diagnostics::record_label("focus_queued", focus_trace_label(target));
+        self.pending_focus = Some(target);
     }
 
     fn apply_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.close_prompt.is_some()
+        // Modal surfaces own focus while visible. Any earlier nonmodal request
+        // is superseded, rather than replayed when the surface is dismissed.
+        let requested = self.pending_focus.take();
+        let surface_handle = if self.close_prompt.is_some()
             || self.quit_review.is_some()
             || self.cleanup_confirmation.is_some()
             || self.prompt_review.is_some()
         {
-            if !self.surface_focus_handle.is_focused(window) {
-                window.focus(&self.surface_focus_handle);
-            }
-            return;
-        }
-        if self.workspace_surface == WorkspaceSurface::Settings {
-            let handle = if matches!(self.settings_overlay, settings_ui::SettingsOverlay::ValueEditor { .. }) {
-                self.settings_value_input.read(cx).focus_handle()
-            } else if self.settings_overlay.wants_surface_focus() || self.settings_selection.is_active() {
-                self.surface_focus_handle.clone()
-            } else {
-                self.settings_search_input.read(cx).focus_handle()
-            };
-            if !handle.is_focused(window) {
-                window.focus(&handle);
-            }
-            return;
-        }
-        if matches!(
+            Some(self.surface_focus_handle.clone())
+        } else if self.workspace_surface == WorkspaceSurface::Settings {
+            Some(
+                if matches!(self.settings_overlay, settings_ui::SettingsOverlay::ValueEditor { .. }) {
+                    self.settings_value_input.read(cx).focus_handle()
+                } else if self.settings_overlay.wants_surface_focus() || self.settings_selection.is_active() {
+                    self.surface_focus_handle.clone()
+                } else {
+                    self.settings_search_input.read(cx).focus_handle()
+                },
+            )
+        } else if matches!(
             self.workspace_surface,
             WorkspaceSurface::TabList
                 | WorkspaceSurface::AppMenu
                 | WorkspaceSurface::LanguageMenu
                 | WorkspaceSurface::ContextMenu
         ) {
-            if !self.surface_focus_handle.is_focused(window) {
-                window.focus(&self.surface_focus_handle);
-            }
-            return;
-        }
-        if self.workspace_surface == WorkspaceSurface::CommandPalette {
-            let handle = self.command_palette_input.read(cx).focus_handle();
-            if !handle.is_focused(window) {
-                window.focus(&handle);
-            }
-            return;
-        }
-        if self.recent.is_open() {
-            let handle = self.recent_query_input.read(cx).focus_handle();
+            Some(self.surface_focus_handle.clone())
+        } else if self.workspace_surface == WorkspaceSurface::CommandPalette {
+            Some(self.command_palette_input.read(cx).focus_handle())
+        } else if self.recent.is_open() {
+            Some(self.recent_query_input.read(cx).focus_handle())
+        } else {
+            None
+        };
+        if let Some(handle) = surface_handle {
             if !handle.is_focused(window) {
                 window.focus(&handle);
             }
             return;
         }
 
-        if self.force_editor_focus {
-            diagnostics::record_notify("focus_forced");
-            window.focus(&self.focus_handle);
-            self.focus_last_applied = FocusTarget::Editor;
-            self.force_editor_focus = false;
-            self.refresh_passive_occurrence_query();
+        let focused_field = if self.find_replace_focus_handle.is_focused(window) {
+            Some(FocusTarget::FindReplace)
+        } else if self.find_query_focus_handle.is_focused(window) {
+            Some(FocusTarget::FindQuery)
+        } else if self.goto_line_focus_handle.is_focused(window) {
+            Some(FocusTarget::GotoLine)
+        } else {
+            None
+        };
+        let hidden_field = focused_field.filter(|target| self.renderable_focus_target(*target) != *target);
+        let Some(target) = requested
+            .or(hidden_field)
+            .map(|target| self.renderable_focus_target(target))
+        else {
             return;
-        }
-
-        let target = self.focus_target;
-        let just_changed = target != self.focus_last_applied;
-        if matches!(target, FocusTarget::Editor) && !just_changed {
-            return;
-        }
+        };
         let handle = self.handle_for(target, cx);
-        let needs_focus = just_changed || !handle.is_focused(window);
-        if needs_focus {
+        if !handle.is_focused(window) {
             diagnostics::record_notify("focus_apply");
             window.focus(&handle);
-            let label = if just_changed {
-                "focus_applied"
-            } else {
-                "focus_maintained"
-            };
-            diagnostics::record_label(label, focus_trace_label(target));
+            diagnostics::record_label("focus_applied", focus_trace_label(target));
         }
-        self.focus_last_applied = target;
+        if target == FocusTarget::Editor {
+            self.refresh_passive_occurrence_query();
+        } else {
+            self.passive_occurrence_query = None;
+        }
     }
 
-    /// Invariant: every `Focus(target)` emitter mutates the model into `target`'s
-    /// renderable state in the same call before queueing the effect, so this is total.
+    fn renderable_focus_target(&self, target: FocusTarget) -> FocusTarget {
+        match target {
+            FocusTarget::FindQuery | FocusTarget::FindReplace if !self.model.find().visible => FocusTarget::Editor,
+            FocusTarget::FindReplace if !self.model.find().show_replace => FocusTarget::FindQuery,
+            FocusTarget::GotoLine if self.model.goto_line().is_none() => FocusTarget::Editor,
+            _ => target,
+        }
+    }
+
     fn handle_for(&self, target: FocusTarget, cx: &mut Context<Self>) -> FocusHandle {
         match target {
             FocusTarget::Editor => self.focus_handle.clone(),
@@ -1260,12 +1251,17 @@ impl LstGpuiApp {
                 self.update_model(cx, true, EditorModel::cancel_find_query);
             }
             InputFieldEvent::NextRequested => {
-                if self.model.find().show_replace {
-                    self.set_focus(FocusTarget::FindReplace);
-                    cx.notify();
-                }
+                self.set_focus(if self.model.find().show_replace {
+                    FocusTarget::FindReplace
+                } else {
+                    FocusTarget::Editor
+                });
+                cx.notify();
             }
-            InputFieldEvent::PreviousRequested => {}
+            InputFieldEvent::PreviousRequested => {
+                self.set_focus(FocusTarget::Editor);
+                cx.notify();
+            }
             InputFieldEvent::Navigate(_) => {}
         }
     }
@@ -1281,9 +1277,12 @@ impl LstGpuiApp {
                 self.execute_model_command(cx, Command::ReplaceCurrentMatch);
             }
             InputFieldEvent::Cancelled => {
-                self.update_model(cx, true, EditorModel::close_find_panel);
+                self.update_model(cx, true, EditorModel::cancel_find_query);
             }
-            InputFieldEvent::NextRequested => {}
+            InputFieldEvent::NextRequested => {
+                self.set_focus(FocusTarget::Editor);
+                cx.notify();
+            }
             InputFieldEvent::PreviousRequested => {
                 self.set_focus(FocusTarget::FindQuery);
                 cx.notify();

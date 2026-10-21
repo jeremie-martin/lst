@@ -281,6 +281,7 @@ const BINDINGS: &[WorkspaceBinding] = &[
     b("ctrl-shift-t", WS_FIND_OK, WorkspaceCommand::ReopenClosedTab),
     b("cmd-shift-t", WS_FIND_OK, WorkspaceCommand::ReopenClosedTab),
     b("alt-s", WS, model(Command::ToggleFindInSelection)),
+    b("shift-enter", FIND, model(Command::FindPrev)),
     b("ctrl-alt-enter", FIND, model(Command::ReplaceAllMatches)),
     b("cmd-alt-enter", FIND, model(Command::ReplaceAllMatches)),
 ];

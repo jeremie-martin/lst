@@ -137,7 +137,7 @@ impl LstGpuiApp {
     fn set_language_mode(&mut self, mode: LanguageMode, cx: &mut Context<Self>) {
         self.workspace_surface = WorkspaceSurface::None;
         self.context_menu_position = None;
-        self.force_editor_focus = true;
+        self.set_focus(crate::FocusTarget::Editor);
         self.update_model(cx, true, |model| model.set_active_language_mode(mode));
     }
 
@@ -236,7 +236,7 @@ impl LstGpuiApp {
             return;
         };
         self.workspace_surface = WorkspaceSurface::None;
-        self.force_editor_focus = true;
+        self.set_focus(crate::FocusTarget::Editor);
         self.tab_bar_scroll.scroll_to_item(index);
         self.update_model(cx, true, |model| model.set_active_tab(tab_id));
     }
@@ -258,7 +258,7 @@ impl LstGpuiApp {
             }
             self.workspace_surface = WorkspaceSurface::None;
             self.context_menu_position = None;
-            self.force_editor_focus = true;
+            self.set_focus(crate::FocusTarget::Editor);
             cx.notify();
         }
     }
@@ -270,7 +270,7 @@ impl LstGpuiApp {
         }
         self.close_recent_files_panel(cx);
         if self.model.find().visible {
-            self.update_model(cx, true, |model| model.close_find_panel());
+            self.update_model(cx, true, |model| model.cancel_find_query());
         }
         if self.model.goto_line().is_some() {
             self.update_model(cx, true, |model| model.close_goto_line_panel());
@@ -330,7 +330,7 @@ impl LstGpuiApp {
         };
         self.pending_workspace_command = Some(spec.command);
         self.workspace_surface = WorkspaceSurface::None;
-        self.force_editor_focus = true;
+        self.set_focus(crate::FocusTarget::Editor);
         cx.notify();
     }
 
@@ -338,7 +338,7 @@ impl LstGpuiApp {
         self.pending_workspace_command = Some(command);
         self.workspace_surface = WorkspaceSurface::None;
         self.context_menu_position = None;
-        self.force_editor_focus = true;
+        self.set_focus(crate::FocusTarget::Editor);
         cx.notify();
     }
 

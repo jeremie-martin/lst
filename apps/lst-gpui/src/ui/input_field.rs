@@ -1,16 +1,17 @@
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
 use gpui::{
-    actions, div, fill, point, prelude::*, px, relative, rgb, size, App, Bounds, ClipboardItem, Context, CursorStyle,
-    Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    GlobalElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
+    actions, canvas, div, fill, point, prelude::*, px, relative, rgb, size, App, Bounds, ClipboardItem, Context,
+    CursorStyle, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, Subscription, TextRun, UTF16Selection, UnderlineStyle,
+    Window,
 };
 use lst_editor::selection::{
     drag_selection_range, next_subword_boundary_in_text, next_word_boundary_in_text, previous_subword_boundary_in_text,
     previous_word_boundary_in_text, word_range_in_text,
 };
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 use crate::ui::theme::{current_theme, metrics};
 
@@ -102,10 +103,15 @@ pub fn input_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-x", FieldCut, Some("InlineInput")),
         KeyBinding::new("ctrl-z", FieldUndo, Some("InlineInput")),
         KeyBinding::new("cmd-z", FieldUndo, Some("InlineInput")),
+        KeyBinding::new("ctrl-y", FieldRedo, Some("InlineInput")),
         KeyBinding::new("ctrl-shift-z", FieldRedo, Some("InlineInput")),
         KeyBinding::new("cmd-shift-z", FieldRedo, Some("InlineInput")),
         KeyBinding::new("home", FieldHome, Some("InlineInput")),
         KeyBinding::new("end", FieldEnd, Some("InlineInput")),
+        KeyBinding::new("ctrl-home", FieldHome, Some("InlineInput")),
+        KeyBinding::new("ctrl-end", FieldEnd, Some("InlineInput")),
+        KeyBinding::new("ctrl-shift-home", FieldSelectHome, Some("InlineInput")),
+        KeyBinding::new("ctrl-shift-end", FieldSelectEnd, Some("InlineInput")),
         KeyBinding::new("enter", FieldSubmit, Some("InlineInput")),
         KeyBinding::new("escape", FieldCancel, Some("InlineInput")),
         KeyBinding::new("tab", FieldNext, Some("InlineInput")),
@@ -122,9 +128,19 @@ pub struct InputField {
     extra_key_context: Option<SharedString>,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    field_bounds: Option<Bounds<Pixels>>,
+    last_caret_bounds: Option<Bounds<Pixels>>,
     horizontal_scroll: Pixels,
-    selection_drag: Option<InputDragSelectionMode>,
+    selection_drag: Option<InputDragSelection>,
+    drag_generation: usize,
     vertical_navigation: bool,
+    subscriptions: Vec<Subscription>,
+}
+
+struct InputDragSelection {
+    mode: InputDragSelectionMode,
+    last_point: Point<Pixels>,
+    autoscroll_active: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -252,6 +268,7 @@ impl InputState {
     /// Deletes the selection, or else the text between the cursor and the
     /// movement's target. Undo restores the caret, not a temporary selection.
     fn delete(&mut self, movement: TextMovement) {
+        self.commit_composition();
         let before = self.text.clone();
         if self.text.selected_range.is_empty() {
             self.text.select_to(self.text.movement_target(movement));
@@ -272,9 +289,11 @@ impl InputState {
         self.history.begin_composition(before, &self.text);
     }
 
-    fn commit_composition(&mut self) {
-        self.text.marked_range = None;
+    fn commit_composition(&mut self) -> bool {
+        let marked = self.text.marked_range.take().is_some();
+        let selection_changed = self.text.normalize_selection();
         self.history.finish_composition(&self.text);
+        marked || selection_changed
     }
 
     fn undo(&mut self) -> bool {
@@ -314,7 +333,11 @@ impl InputText {
             return false;
         }
 
-        self.content = SharedString::from(text.to_string());
+        let text = single_line_text(text);
+        if self.content.as_ref() == text.as_ref() {
+            return false;
+        }
+        self.content = SharedString::from(text.into_owned());
         let end = self.content.len();
         self.selected_range = end..end;
         self.selection_reversed = false;
@@ -356,6 +379,18 @@ impl InputText {
         self.selected_range = range.start.min(self.content.len())..range.end.min(self.content.len());
         self.selection_reversed = reversed;
         self.marked_range = None;
+    }
+
+    fn normalize_selection(&mut self) -> bool {
+        let previous = self.selected_range.clone();
+        self.selected_range = if previous.is_empty() {
+            let offset = round_grapheme_boundary(self.content.as_ref(), previous.start, true);
+            offset..offset
+        } else {
+            round_grapheme_boundary(self.content.as_ref(), previous.start, false)
+                ..round_grapheme_boundary(self.content.as_ref(), previous.end, true)
+        };
+        self.selected_range != previous
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
@@ -466,8 +501,11 @@ impl InputText {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        self.content = (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..]).into();
-        self.selected_range = range.start + new_text.len()..range.start + new_text.len();
+        let new_text = single_line_text(new_text);
+        self.content =
+            (self.content[0..range.start].to_owned() + new_text.as_ref() + &self.content[range.end..]).into();
+        let cursor = round_grapheme_boundary(self.content.as_ref(), range.start + new_text.len(), true);
+        self.selected_range = cursor..cursor;
         self.selection_reversed = false;
         self.marked_range = None;
     }
@@ -483,16 +521,52 @@ impl InputText {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        self.content = (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..]).into();
+        let selected_range = new_selected_range_utf16.map(|range_utf16| {
+            let start = utf8_offset_from_utf16(new_text, range_utf16.start);
+            let end = utf8_offset_from_utf16(new_text, range_utf16.end);
+            single_line_text(&new_text[..start]).len()..single_line_text(&new_text[..end]).len()
+        });
+        let new_text = single_line_text(new_text);
+        self.content =
+            (self.content[0..range.start].to_owned() + new_text.as_ref() + &self.content[range.end..]).into();
         self.marked_range = (!new_text.is_empty()).then_some(range.start..range.start + new_text.len());
-        self.selected_range = new_selected_range_utf16
-            .map(|range_utf16| {
-                utf8_offset_from_utf16(new_text, range_utf16.start)..utf8_offset_from_utf16(new_text, range_utf16.end)
-            })
+        self.selected_range = selected_range
             .map(|new_range| new_range.start + range.start..new_range.end + range.start)
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
         self.selection_reversed = false;
     }
+}
+
+fn single_line_text(text: &str) -> Cow<'_, str> {
+    const LINE_BREAKS: [char; 7] = ['\r', '\n', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}'];
+    let Some(first_break) = text.find(LINE_BREAKS) else {
+        return Cow::Borrowed(text);
+    };
+    let mut normalized = String::with_capacity(text.len());
+    normalized.push_str(&text[..first_break]);
+    let mut chars = text[first_break..].chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' && chars.peek() == Some(&'\n') {
+            chars.next();
+        }
+        normalized.push(if LINE_BREAKS.contains(&ch) { ' ' } else { ch });
+    }
+    Cow::Owned(normalized)
+}
+
+fn round_grapheme_boundary(text: &str, offset: usize, up: bool) -> usize {
+    let offset = offset.min(text.len());
+    let mut cursor = GraphemeCursor::new(offset, text.len(), true);
+    if cursor.is_boundary(text, 0).expect("complete field context") {
+        return offset;
+    }
+    if up {
+        cursor.next_boundary(text, 0)
+    } else {
+        cursor.prev_boundary(text, 0)
+    }
+    .expect("complete field context")
+    .expect("an interior grapheme has both boundaries")
 }
 
 fn utf8_offset_from_utf16(text: &str, offset: usize) -> usize {
@@ -517,9 +591,13 @@ impl InputField {
             extra_key_context: None,
             last_layout: None,
             last_bounds: None,
+            field_bounds: None,
+            last_caret_bounds: None,
             horizontal_scroll: px(0.0),
             selection_drag: None,
+            drag_generation: 0,
             vertical_navigation: false,
+            subscriptions: Vec::new(),
         }
     }
 
@@ -536,11 +614,14 @@ impl InputField {
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if self.state.set_text(text) {
             self.last_layout = None;
+            self.cancel_drag_selection();
             cx.notify();
         }
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.state.commit_composition();
+        self.cancel_drag_selection();
         self.state.text.select_all();
         cx.notify();
     }
@@ -553,12 +634,34 @@ impl InputField {
         self.state.text.content.as_ref()
     }
 
+    pub(crate) fn bounds(&self) -> Option<Bounds<Pixels>> {
+        self.field_bounds
+    }
+
+    pub(crate) fn text_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.last_bounds
+    }
+
+    /// The visible selection in UTF-8 bytes.
+    pub(crate) fn selected_range(&self) -> Range<usize> {
+        self.state.text.selected_range.clone()
+    }
+
+    pub(crate) fn horizontal_scroll(&self) -> Pixels {
+        self.horizontal_scroll
+    }
+
+    pub(crate) fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.last_caret_bounds
+    }
+
     fn emit_changed(&self, cx: &mut Context<Self>) {
         cx.emit(InputFieldEvent::Changed(self.state.text.content.to_string()));
     }
 
     fn text_changed(&mut self, cx: &mut Context<Self>) {
         self.last_layout = None;
+        self.cancel_drag_selection();
         self.emit_changed(cx);
         cx.notify();
     }
@@ -574,6 +677,8 @@ impl InputField {
     }
 
     fn move_text(&mut self, movement: TextMovement, select: bool, cx: &mut Context<Self>) {
+        self.state.commit_composition();
+        self.cancel_drag_selection();
         self.state.text.move_cursor(movement, select);
         cx.notify();
     }
@@ -586,13 +691,15 @@ impl InputField {
         let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref()) else {
             return 0;
         };
-        if position.y < bounds.top() {
-            return 0;
+        let x = position.x - bounds.left() + self.horizontal_scroll;
+        let offset = line.closest_index_for_x(x);
+        let left = round_grapheme_boundary(self.text(), offset, false);
+        let right = round_grapheme_boundary(self.text(), offset, true);
+        if x - line.x_for_index(left) <= line.x_for_index(right) - x {
+            left
+        } else {
+            right
         }
-        if position.y > bounds.bottom() {
-            return self.state.text.content.len();
-        }
-        line.closest_index_for_x(position.x - bounds.left() + self.horizontal_scroll)
     }
     fn left(&mut self, _: &FieldLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.move_text(TextMovement::PreviousGrapheme, false, cx);
@@ -664,17 +771,24 @@ impl InputField {
 
     fn paste(&mut self, _: &FieldPaste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text.replace('\n', " "), window, cx);
+            self.state.commit_composition();
+            self.replace_text_in_range(None, &text, window, cx);
         }
     }
 
     fn copy(&mut self, _: &FieldCopy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.state.commit_composition() {
+            cx.notify();
+        }
         if let Some(text) = self.state.text.selected_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
     fn cut(&mut self, _: &FieldCut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.commit_composition() {
+            cx.notify();
+        }
         if let Some(text) = self.state.text.selected_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
             self.replace_text_in_range(None, "", window, cx);
@@ -690,16 +804,28 @@ impl InputField {
             self.history_step_taken(cx);
         }
     }
+    fn finish_interaction(&mut self, cx: &mut Context<Self>) {
+        let composing = self.state.commit_composition();
+        let dragging = self.selection_drag.take().is_some();
+        if composing || dragging {
+            cx.notify();
+        }
+    }
+
     fn submit(&mut self, _: &FieldSubmit, _: &mut Window, cx: &mut Context<Self>) {
+        self.finish_interaction(cx);
         cx.emit(InputFieldEvent::Submitted);
     }
     fn cancel(&mut self, _: &FieldCancel, _: &mut Window, cx: &mut Context<Self>) {
+        self.finish_interaction(cx);
         cx.emit(InputFieldEvent::Cancelled);
     }
     fn next(&mut self, _: &FieldNext, _: &mut Window, cx: &mut Context<Self>) {
+        self.finish_interaction(cx);
         cx.emit(InputFieldEvent::NextRequested);
     }
     fn previous(&mut self, _: &FieldPrevious, _: &mut Window, cx: &mut Context<Self>) {
+        self.finish_interaction(cx);
         cx.emit(InputFieldEvent::PreviousRequested);
     }
     fn up(&mut self, _: &FieldUp, _: &mut Window, cx: &mut Context<Self>) {
@@ -716,21 +842,23 @@ impl InputField {
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         window.focus(&self.focus_handle);
+        self.state.commit_composition();
         let offset = self.index_for_mouse_position(event.position);
         if event.click_count >= 3 {
-            self.start_drag_selection(InputDragSelectionMode::All);
-            self.select_all(cx);
+            self.start_drag_selection(InputDragSelectionMode::All, event.position);
+            self.state.text.select_all();
+            cx.notify();
             return;
         }
         if event.click_count == 2 {
             let range = self.state.text.word_range_at_offset(offset);
-            self.start_drag_selection(InputDragSelectionMode::Word(range.clone()));
+            self.start_drag_selection(InputDragSelectionMode::Word(range.clone()), event.position);
             self.state.text.select_range(range, false);
             cx.notify();
             return;
         }
 
-        self.start_drag_selection(InputDragSelectionMode::Character);
+        self.start_drag_selection(InputDragSelectionMode::Character, event.position);
         if event.modifiers.shift {
             self.state.text.select_to(offset);
         } else {
@@ -739,51 +867,117 @@ impl InputField {
         cx.notify();
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        // `on_mouse_up_out` runs during capture. Only consume that release
-        // when this field actually owns an in-progress selection drag;
-        // otherwise a focused field would swallow every button click elsewhere
-        // in the workspace before the target receives mouse-up.
-        if self.selection_drag.is_some() {
-            cx.stop_propagation();
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus_handle.is_focused(window) || !window.is_window_active() {
             self.cancel_drag_selection();
+            return;
+        }
+        if self.selection_drag.is_some() {
+            self.apply_drag_selection(event.position, cx);
+            self.cancel_drag_selection();
+            cx.stop_propagation();
         }
     }
 
-    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !event.dragging() || !self.focus_handle.is_focused(window) || !window.is_window_active() {
+            self.cancel_drag_selection();
+            return;
+        }
+        let Some(drag) = self.selection_drag.as_mut() else {
+            return;
+        };
+        drag.last_point = event.position;
+        self.apply_drag_selection(event.position, cx);
+        self.schedule_drag_autoscroll(window, cx);
         cx.stop_propagation();
-        self.update_drag_selection(event, cx);
     }
 
-    fn start_drag_selection(&mut self, mode: InputDragSelectionMode) {
-        self.selection_drag = Some(mode);
+    fn start_drag_selection(&mut self, mode: InputDragSelectionMode, position: Point<Pixels>) {
+        self.drag_generation = self.drag_generation.wrapping_add(1);
+        self.selection_drag = Some(InputDragSelection {
+            mode,
+            last_point: position,
+            autoscroll_active: false,
+        });
     }
 
     fn cancel_drag_selection(&mut self) {
         self.selection_drag = None;
     }
 
-    fn update_drag_selection(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        if !event.dragging() {
-            self.cancel_drag_selection();
-            return;
-        }
-
-        let offset = self.index_for_mouse_position(event.position);
-        match self.selection_drag.clone() {
-            Some(InputDragSelectionMode::Character) => {
-                self.state.text.select_to(offset);
-                cx.notify();
-            }
+    fn apply_drag_selection(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let offset = self.index_for_mouse_position(position);
+        let mode = self.selection_drag.as_ref().map(|drag| drag.mode.clone());
+        match mode {
+            Some(InputDragSelectionMode::Character) => self.state.text.select_to(offset),
             Some(InputDragSelectionMode::Word(anchor)) => {
                 let current = self.state.text.word_range_at_offset(offset);
                 let (range, reversed) = drag_selection_range(anchor, current);
                 self.state.text.select_range(range, reversed);
-                cx.notify();
             }
-            Some(InputDragSelectionMode::All) => self.select_all(cx),
-            None => {}
+            Some(InputDragSelectionMode::All) => self.state.text.select_all(),
+            None => return,
         }
+        cx.notify();
+    }
+
+    fn drag_scroll_target(&self, window: &Window) -> Option<Pixels> {
+        let drag = self.selection_drag.as_ref()?;
+        if matches!(drag.mode, InputDragSelectionMode::All) {
+            return None;
+        }
+        let bounds = self.last_bounds?;
+        let line = self.last_layout.as_ref()?;
+        let distance = if drag.last_point.x < bounds.left() {
+            drag.last_point.x - bounds.left()
+        } else if drag.last_point.x > bounds.right() {
+            drag.last_point.x - bounds.right()
+        } else {
+            return None;
+        };
+        let scale = metrics::scale_for_rem(window.rem_size());
+        let magnitude = (distance.abs() / 3.0).max(px(scale)).min(px(36.0 * scale));
+        let delta = if distance < px(0.0) { -magnitude } else { magnitude };
+        let max_scroll = (line.width - bounds.size.width + metrics::px_for_rem(4.0, window.rem_size())).max(px(0.0));
+        let target = (self.horizontal_scroll + delta).max(px(0.0)).min(max_scroll);
+        (target != self.horizontal_scroll).then_some(target)
+    }
+
+    fn schedule_drag_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selection_drag.as_ref().is_none_or(|drag| drag.autoscroll_active)
+            || self.drag_scroll_target(window).is_none()
+        {
+            return;
+        }
+        if let Some(drag) = self.selection_drag.as_mut() {
+            drag.autoscroll_active = true;
+        }
+        let generation = self.drag_generation;
+        cx.on_next_frame(window, move |this, window, cx| {
+            this.run_drag_autoscroll(generation, window, cx);
+        });
+    }
+
+    fn run_drag_autoscroll(&mut self, generation: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if generation != self.drag_generation {
+            return;
+        }
+        if !window.is_window_active() || !self.focus_handle.contains_focused(window, cx) {
+            self.cancel_drag_selection();
+            return;
+        }
+        let Some(drag) = self.selection_drag.as_mut() else {
+            return;
+        };
+        drag.autoscroll_active = false;
+        if let Some(target) = self.drag_scroll_target(window) {
+            self.horizontal_scroll = target;
+            if let Some(position) = self.selection_drag.as_ref().map(|drag| drag.last_point) {
+                self.apply_drag_selection(position, cx);
+            }
+        }
+        self.schedule_drag_autoscroll(window, cx);
     }
 }
 
@@ -822,8 +1016,10 @@ impl EntityInputHandler for InputField {
             .map(|range| self.state.text.range_to_utf16(range))
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.state.commit_composition();
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.commit_composition() {
+            cx.notify();
+        }
     }
 
     fn replace_text_in_range(
@@ -853,10 +1049,11 @@ impl EntityInputHandler for InputField {
     fn bounds_for_range(
         &mut self,
         range_utf16: Range<usize>,
-        bounds: Bounds<Pixels>,
+        _bounds: Bounds<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        let bounds = self.last_bounds?;
         let last_layout = self.last_layout.as_ref()?;
         let range = self.state.text.range_from_utf16(&range_utf16);
         Some(Bounds::from_corners(
@@ -877,10 +1074,11 @@ impl EntityInputHandler for InputField {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let line_point = self.last_bounds?.localize(&point)?;
-        let last_layout = self.last_layout.as_ref()?;
-        let utf8_index = last_layout.index_for_x(point.x - line_point.x + self.horizontal_scroll)?;
-        Some(self.state.text.offset_to_utf16(utf8_index))
+        if !self.field_bounds?.contains(&point) {
+            return None;
+        }
+        self.last_layout.as_ref()?;
+        Some(self.state.text.offset_to_utf16(self.index_for_mouse_position(point)))
     }
 }
 
@@ -998,25 +1196,19 @@ impl Element for TextElement {
         } else {
             input.horizontal_scroll.min(max_scroll)
         };
-        if cursor_pos < horizontal_scroll + caret_margin {
-            horizontal_scroll = (cursor_pos - caret_margin).max(px(0.0));
-        } else if cursor_pos > horizontal_scroll + visible_width - caret_margin {
-            horizontal_scroll = (cursor_pos - visible_width + caret_margin).min(max_scroll);
+        if input.selection_drag.is_none() {
+            if cursor_pos < horizontal_scroll + caret_margin {
+                horizontal_scroll = (cursor_pos - caret_margin).max(px(0.0));
+            } else if cursor_pos > horizontal_scroll + visible_width - caret_margin {
+                horizontal_scroll = (cursor_pos - visible_width + caret_margin).min(max_scroll);
+            }
         }
+        let caret_bounds = Bounds::new(
+            point(bounds.left() + cursor_pos - horizontal_scroll, bounds.top()),
+            size(metrics::px_for_rem(2.0, window.rem_size()), bounds.size.height),
+        );
         let (selection, cursor) = if selected_range.is_empty() {
-            (
-                None,
-                Some(fill(
-                    Bounds::new(
-                        point(bounds.left() + cursor_pos - horizontal_scroll, bounds.top()),
-                        size(
-                            metrics::px_for_rem(2.0, window.rem_size()),
-                            bounds.bottom() - bounds.top(),
-                        ),
-                    ),
-                    rgb(theme.role.accent),
-                )),
-            )
+            (None, Some(fill(caret_bounds, rgb(theme.role.accent))))
         } else {
             (
                 Some(fill(
@@ -1036,6 +1228,12 @@ impl Element for TextElement {
             )
         };
 
+        self.input.update(cx, |input, _| {
+            input.last_layout = Some(line.clone());
+            input.last_bounds = Some(bounds);
+            input.last_caret_bounds = Some(caret_bounds);
+            input.horizontal_scroll = horizontal_scroll;
+        });
         PrepaintState {
             line: Some(line),
             cursor,
@@ -1068,10 +1266,17 @@ impl Element for TextElement {
             }
         }
 
-        self.input.update(cx, |input, _cx| {
-            input.last_layout = Some(line);
-            input.last_bounds = Some(bounds);
-            input.horizontal_scroll = prepaint.horizontal_scroll;
+        let input_for_move = self.input.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase.capture() && input_for_move.read(cx).selection_drag.is_some() {
+                input_for_move.update(cx, |input, cx| input.on_mouse_move(event, window, cx));
+            }
+        });
+        let input_for_up = self.input.clone();
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+            if phase.capture() && event.button == MouseButton::Left && input_for_up.read(cx).selection_drag.is_some() {
+                input_for_up.update(cx, |input, cx| input.on_mouse_up(event, window, cx));
+            }
         });
     }
 }
@@ -1084,7 +1289,23 @@ impl Focusable for InputField {
 
 impl Render for InputField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.subscriptions.is_empty() {
+            self.subscriptions
+                .push(cx.on_blur(&self.focus_handle, window, |input, _, cx| {
+                    input.cancel_drag_selection();
+                    if input.state.commit_composition() {
+                        cx.notify();
+                    }
+                }));
+            self.subscriptions
+                .push(cx.observe_window_activation(window, |input, window, _| {
+                    if !window.is_window_active() {
+                        input.cancel_drag_selection();
+                    }
+                }));
+        }
         let entity = cx.entity();
+        let entity_for_bounds = entity.clone();
         let focused = self.focus_handle.is_focused(window);
         let theme = current_theme(cx);
         let border = if focused {
@@ -1152,9 +1373,16 @@ impl Render for InputField {
             .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
             .cursor(CursorStyle::IBeam)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .child(
+                canvas(
+                    move |bounds, _, cx| {
+                        entity_for_bounds.update(cx, |input, _| input.field_bounds = Some(bounds));
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .child(TextElement { input: entity })
     }
 }
@@ -1231,5 +1459,150 @@ mod tests {
         assert_eq!(text.content.as_ref(), "pré🦀x");
         assert_eq!(text.marked_range, Some(4..9));
         assert_eq!(text.selected_range, 8..9);
+    }
+
+    #[test]
+    fn every_text_entry_boundary_normalizes_single_line_breaks() {
+        for separator in ["\r\n", "\r", "\n", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+            let multiline = format!("a{separator}b");
+            let mut state = InputState::new();
+            state.set_text(&multiline);
+            assert_eq!(state.text.content.as_ref(), "a b", "programmatic {separator:?}");
+            state.text.select_all();
+            state.replace(None, &multiline);
+            assert_eq!(state.text.content.as_ref(), "a b", "committed {separator:?}");
+            state.text.select_all();
+            state.compose(None, &multiline, None);
+            assert_eq!(state.text.content.as_ref(), "a b", "composition {separator:?}");
+            assert_eq!(state.text.marked_range, Some(0..3));
+        }
+        assert_eq!(single_line_text("a\r\nb\r\nc\nd").as_ref(), "a b c d");
+        assert!(matches!(single_line_text("plain 🦀 text"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn canonical_model_echo_preserves_composition_selection_and_history() {
+        let mut state = InputState::new();
+        state.set_text("base");
+        state.compose(None, "x\r\n🦀y", Some(&(3..5)));
+        let before_echo = state.text.clone();
+        assert_eq!(state.text.content.as_ref(), "basex 🦀y");
+        assert_eq!(state.text.selected_range, 6..10);
+        assert!(!state.set_text("basex 🦀y"));
+        assert!(!state.set_text("basex\r\n🦀y"));
+        assert_eq!(state.text, before_echo);
+
+        state.compose(None, "xy", None);
+        state.commit_composition();
+        assert!(state.undo());
+        assert_eq!(state.text.content.as_ref(), "base");
+        assert!(!state.undo());
+        assert!(state.redo());
+        assert_eq!(state.text.content.as_ref(), "basexy");
+    }
+
+    #[test]
+    fn composition_offsets_map_crlf_and_utf16_surrogates_without_rounding_graphemes() {
+        for (selection, expected) in [
+            (0..0, 4..4),
+            (1..2, 5..6),
+            (2..3, 6..6),
+            (3..5, 6..10),
+            (4..4, 10..10),
+            (6..99, 11..11),
+        ] {
+            let mut text = InputText::new();
+            text.set_text("pré");
+            text.replace_and_mark_text(None, "x\r\n🦀y", Some(&selection));
+            assert_eq!(text.content.as_ref(), "préx 🦀y");
+            assert_eq!(text.marked_range, Some(4..11));
+            assert_eq!(text.selected_range, expected, "UTF-16 {selection:?}");
+        }
+    }
+
+    #[test]
+    fn committed_edits_round_the_caret_after_joining_neighboring_graphemes() {
+        let mut state = InputState::new();
+        state.set_text("👩💻");
+        state.text.move_to("👩".len());
+        state.replace(None, "\u{200d}");
+        assert_eq!(state.text.content.as_ref(), "👩‍💻");
+        assert_eq!(state.text.selected_range, "👩‍💻".len().."👩‍💻".len());
+        state.delete(TextMovement::NextGrapheme);
+        assert_eq!(state.text.content.as_ref(), "👩‍💻");
+        state.delete(TextMovement::PreviousGrapheme);
+        assert_eq!(state.text.content.as_ref(), "");
+        assert!(state.undo());
+        assert_eq!(state.text.content.as_ref(), "👩‍💻");
+
+        state.set_text("🇫x🇷");
+        state.text.select_range(4..5, false);
+        state.replace(None, "");
+        assert_eq!(state.text.content.as_ref(), "🇫🇷");
+        assert_eq!(state.text.selected_range, 8..8);
+        state.delete(TextMovement::PreviousGrapheme);
+        assert_eq!(state.text.content.as_ref(), "");
+    }
+
+    #[test]
+    fn preedit_can_select_inside_a_grapheme_until_composition_is_committed() {
+        let mut state = InputState::new();
+        state.set_text("👩💻");
+        state.text.move_to(4);
+        state.compose(None, "\u{200d}", None);
+        assert_eq!(state.text.selected_range, 7..7);
+        assert_eq!(state.text.marked_range, Some(4..7));
+        assert!(!state.set_text("👩‍💻"));
+        assert_eq!(state.text.selected_range, 7..7);
+        assert!(state.commit_composition());
+        assert_eq!(state.text.selected_range, 11..11);
+        assert_eq!(state.text.marked_range, None);
+        assert!(state.undo());
+        assert_eq!(state.text.content.as_ref(), "👩💻");
+        assert_eq!(state.text.selected_range, 4..4);
+        assert!(state.redo());
+        assert_eq!(state.text.content.as_ref(), "👩‍💻");
+        assert_eq!(state.text.selected_range, 11..11);
+    }
+
+    #[test]
+    fn command_deletion_commits_preedit_before_editing_the_selection() {
+        let mut state = InputState::new();
+        state.set_text("base");
+        state.compose(None, "xy", None);
+        state.delete(TextMovement::PreviousGrapheme);
+        assert_eq!(state.text.content.as_ref(), "basex");
+        assert!(state.undo());
+        assert_eq!(state.text.content.as_ref(), "basexy");
+        assert_eq!(state.text.marked_range, None);
+        assert!(state.undo());
+        assert_eq!(state.text.content.as_ref(), "base");
+    }
+
+    #[test]
+    fn grapheme_rounding_preserves_exact_boundaries_and_complete_unicode_context() {
+        let text = "é👩‍💻🇫🇷🇩🇪क्ष";
+        let boundaries = text
+            .grapheme_indices(true)
+            .map(|(offset, _)| offset)
+            .chain([text.len()])
+            .collect::<Vec<_>>();
+        for &boundary in &boundaries {
+            assert_eq!(round_grapheme_boundary(text, boundary, false), boundary);
+            assert_eq!(round_grapheme_boundary(text, boundary, true), boundary);
+        }
+        for (offset, _) in text.char_indices() {
+            let floor = *boundaries
+                .iter()
+                .rev()
+                .find(|&&boundary| boundary <= offset)
+                .expect("starts at zero");
+            let ceil = *boundaries
+                .iter()
+                .find(|&&boundary| boundary >= offset)
+                .expect("includes text end");
+            assert_eq!(round_grapheme_boundary(text, offset, false), floor);
+            assert_eq!(round_grapheme_boundary(text, offset, true), ceil);
+        }
     }
 }

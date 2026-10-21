@@ -7,6 +7,8 @@ mod support;
 use std::fs;
 use std::path::Path;
 
+use lst_x11_harness::{clipboard::wait_clipboard_text, Selection};
+
 use support::{secs, wait_file_matching, EditorTestExt, TestResult};
 
 #[test]
@@ -77,6 +79,50 @@ fn settings_search_and_rows_are_keyboard_operable_without_editing_the_document()
         editor.wait_state("settings closes from selected row", secs(2), |record| {
             record.workspace_surface == "none" && record.focused_input == "editor"
         })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn clicking_settings_search_clears_row_focus_before_typing() -> TestResult {
+    support::run_x11_test("settings-mouse-search-focus", |session| {
+        let path = session.seed_file("settings-mouse-search.txt", "keep me unchanged\n")?;
+        let mut editor = session.open_file("settings-mouse-search", &path)?;
+        editor.keys("<C-,>word wrap<tab>")?;
+        let record = editor.wait_state(
+            "filtered settings row selected before search click",
+            secs(5),
+            |record| {
+                record.settings_selected_item.as_deref() == Some("word_wrap")
+                    && record
+                        .settings_search_input
+                        .as_ref()
+                        .and_then(|field| field.bounds_px)
+                        .is_some()
+            },
+        )?;
+        let (x, y, width, height) = record
+            .settings_search_input
+            .as_ref()
+            .and_then(|field| field.bounds_px)
+            .ok_or("settings search bounds missing")?;
+        let scale = if record.viewport.scale_factor > 0.0 {
+            record.viewport.scale_factor
+        } else {
+            1.0
+        };
+        editor.click_at(
+            ((x + width * 0.5) * scale).round() as i32,
+            ((y + height * 0.5) * scale).round() as i32,
+        )?;
+        editor.wait_state("mouse focus clears the selected-row owner", secs(5), |record| {
+            record.workspace_surface == "settings" && record.settings_selected_item.is_none()
+        })?;
+        editor.keys("_<C-a><C-c>")?;
+        wait_clipboard_text(Selection::Clipboard, "word wrap_", secs(5))?;
+        editor.keys("<esc>")?;
+        editor.save_then_expect_file(&path, "keep me unchanged\n")?;
         Ok(())
     })
 }

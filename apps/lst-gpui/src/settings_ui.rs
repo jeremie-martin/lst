@@ -1663,6 +1663,16 @@ impl LstGpuiApp {
                                     .flex_1()
                                     .min_w_0()
                                     .max_w(metrics::px_for_scale(420.0, scale))
+                                    .capture_any_mouse_down(cx.listener(
+                                        |this, event: &gpui::MouseDownEvent, window, cx| {
+                                            if event.button == MouseButton::Left
+                                                && matches!(this.settings_overlay, SettingsOverlay::None)
+                                            {
+                                                this.focus_settings_search(window, cx);
+                                                cx.notify();
+                                            }
+                                        },
+                                    ))
                                     .child(self.settings_search_input.clone()),
                             )
                             .child(div().flex_1())

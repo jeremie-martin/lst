@@ -139,7 +139,13 @@ Prefer the highest-level observable:
   `expect_find_state` for state that is not cleanly observable through a file.
 - Use text-coordinate mouse helpers such as `click_at_text`,
   `alt_click_at_text`, and `drag_text`; fixed pixels are reserved for chrome
-  whose bounds are themselves the subject of the test.
+  whose bounds are themselves the subject of the test. For find fields, use
+  the trace's current field/text/caret bounds rather than estimated panel
+  positions. Field selection ranges are UTF-8 byte offsets; document cursor
+  offsets remain character coordinates.
+- To test sustained field autoscroll, hold the pointer stationary beyond an
+  edge and wait for observable selection/scroll progress before releasing.
+  An immediate drag-and-release proves outside selection, not autoscroll.
 
 The key DSL accepts printable ASCII, names such as `<enter>`, `<esc>`, `<bs>`,
 `<delete>`, `<home>`, and `<pageup>`, modifier forms such as `<C-x>` and

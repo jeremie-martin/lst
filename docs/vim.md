@@ -3,7 +3,11 @@
 Vim is an optional input mode implemented by `lst-editor`; it is not an
 embedded Vim or a compatibility claim for the full Vim language. Enable it in
 Settings or start one launch with `lst --vim`. Vim input currently starts in
-Insert mode; press `Escape` to enter Normal mode.
+Insert mode; press `Escape` to enter Normal mode. Search, replacement, and other
+text fields always use standard field editing while focused; their keys do not
+execute document Vim commands. Cancelling an incremental `/` or `?` search with
+Escape or the find close button restores its starting position; Enter accepts
+the preview.
 
 ## Supported surface
 

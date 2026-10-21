@@ -23,6 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lst_x11_harness::{
     clipboard::{write_clipboard_text, Selection},
+    state_trace::TraceInputField,
     Display, Editor, FileWaitOpts, SpawnOpts, StateTraceRecord,
 };
 
@@ -35,6 +36,19 @@ pub enum FindChip {
     WholeWord,
     Regex,
     Scope,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum FindInput {
+    Query,
+    Replace,
+}
+
+pub fn find_input(record: &StateTraceRecord, input: FindInput) -> Option<&TraceInputField> {
+    match input {
+        FindInput::Query => record.find.query_input.as_ref(),
+        FindInput::Replace => record.find.replace_input.as_ref(),
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -421,6 +435,15 @@ pub trait EditorTestExt {
     /// Click one of the visible find-panel option chips.
     fn click_find_chip(&mut self, chip: FindChip) -> SupportResult<()>;
 
+    /// Click the middle of a rendered search or replacement field.
+    fn click_find_input(&mut self, input: FindInput) -> SupportResult<()>;
+
+    /// Compare focus regressions with a preserved binary whose trace predates field geometry.
+    fn click_find_input_baseline_compatible(&mut self, input: FindInput) -> SupportResult<()>;
+
+    fn click_find_disclosure(&mut self) -> SupportResult<()>;
+    fn click_find_close(&mut self) -> SupportResult<()>;
+
     /// Click the status-bar cleanup (sparkle) button.
     fn click_cleanup_button(&mut self) -> SupportResult<()>;
 
@@ -531,6 +554,69 @@ impl EditorTestExt for Editor<'_> {
         })?;
         let (ox, oy, w, h) = find_chip_bounds(&record, chip).ok_or("find chip bounds missing after wait")?;
         click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "find-chip-click")
+    }
+
+    fn click_find_input(&mut self, input: FindInput) -> SupportResult<()> {
+        let record = self.wait_state("find input bounds", FOCUS_TIMEOUT, |state| {
+            find_input(state, input).and_then(|field| field.bounds_px).is_some()
+        })?;
+        let (ox, oy, w, h) = find_input(&record, input)
+            .and_then(|field| field.bounds_px)
+            .ok_or("find input bounds missing after wait")?;
+        click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "find-input-click")
+    }
+
+    fn click_find_input_baseline_compatible(&mut self, input: FindInput) -> SupportResult<()> {
+        let record = self.wait_state("find input or baseline chip bounds", FOCUS_TIMEOUT, |state| {
+            state.find.visible
+                && (find_input(state, input).and_then(|field| field.bounds_px).is_some()
+                    || (state.schema_version < 12 && state.find.chip_bounds_px.case_sensitive.is_some()))
+        })?;
+        if find_input(&record, input).and_then(|field| field.bounds_px).is_some() {
+            return self.click_find_input(input);
+        }
+        // Older traces report the adjacent case chip. These points lie well
+        // inside the unchanged baseline panel's fields; only focus comparisons
+        // use this fallback, never geometry/selection acceptance tests.
+        let (x, y, _, h) = record
+            .find
+            .chip_bounds_px
+            .case_sensitive
+            .ok_or("baseline find chip bounds missing")?;
+        let y = y + h * 0.5 + if matches!(input, FindInput::Replace) { 38.0 } else { 0.0 };
+        let scale = if record.viewport.scale_factor > 0.0 {
+            record.viewport.scale_factor
+        } else {
+            1.0
+        };
+        self.click_at(((x - 180.0) * scale).round() as i32, (y * scale).round() as i32)
+    }
+
+    fn click_find_disclosure(&mut self) -> SupportResult<()> {
+        let record = self.wait_state("find disclosure bounds", FOCUS_TIMEOUT, |state| {
+            state.find.visible && state.find.disclosure_bounds_px.is_some()
+        })?;
+        let (ox, oy, w, h) = record
+            .find
+            .disclosure_bounds_px
+            .ok_or("find disclosure bounds missing")?;
+        click_trace_bounds_center(
+            self,
+            ox,
+            oy,
+            w,
+            h,
+            record.viewport.scale_factor,
+            "find-disclosure-click",
+        )
+    }
+
+    fn click_find_close(&mut self) -> SupportResult<()> {
+        let record = self.wait_state("find close bounds", FOCUS_TIMEOUT, |state| {
+            state.find.visible && state.find.close_bounds_px.is_some()
+        })?;
+        let (ox, oy, w, h) = record.find.close_bounds_px.ok_or("find close bounds missing")?;
+        click_trace_bounds_center(self, ox, oy, w, h, record.viewport.scale_factor, "find-close-click")
     }
 
     fn click_cleanup_button(&mut self) -> SupportResult<()> {

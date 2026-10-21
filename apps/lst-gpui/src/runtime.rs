@@ -395,7 +395,17 @@ impl LstGpuiApp {
                 let _ = view.update(cx, |this, cx| this.capture_arrow_hold(event, window, cx));
             }));
         self._shell_subscriptions
-            .push(cx.on_blur(&self.focus_handle, window, |this, _, _| this.held_arrows.clear()));
+            .push(cx.on_focus(&self.focus_handle, window, |this, _, cx| {
+                this.refresh_passive_occurrence_query();
+                cx.notify();
+            }));
+        self._shell_subscriptions
+            .push(cx.on_blur(&self.focus_handle, window, |this, _, cx| {
+                this.held_arrows.clear();
+                if this.passive_occurrence_query.take().is_some() {
+                    cx.notify();
+                }
+            }));
         self._shell_subscriptions
             .push(cx.observe_window_activation(window, |this, _, _| this.held_arrows.clear()));
         let view = cx.entity();
@@ -1149,7 +1159,7 @@ impl LstGpuiApp {
         }
         if self.cleanup_in_flight {
             self.cleanup_message = Some("Wait for prompt improvement to finish before quitting.".to_string());
-            self.force_editor_focus = true;
+            self.set_focus(crate::FocusTarget::Editor);
             cx.notify();
             return;
         }
@@ -1247,7 +1257,7 @@ impl LstGpuiApp {
             // revisions into some later, unrelated quit request.
             self.exit_discarded_revisions.clear();
             self.clipboard_quit_bypass = None;
-            self.force_editor_focus = true;
+            self.set_focus(crate::FocusTarget::Editor);
             cx.notify();
         }
     }
@@ -1341,7 +1351,7 @@ impl LstGpuiApp {
         if self.quit_review.take().is_some() {
             self.exit_discarded_revisions.clear();
             self.clipboard_quit_bypass = None;
-            self.force_editor_focus = true;
+            self.set_focus(crate::FocusTarget::Editor);
             cx.notify();
         }
     }
@@ -1437,7 +1447,7 @@ impl LstGpuiApp {
                 self.cleanup_message = Some(format!(
                     "Could not keep the scratchpad in the system clipboard: {error}. Press Ctrl+Q again to quit anyway; the scratchpad remains archived on disk."
                 ));
-                self.force_editor_focus = true;
+                self.set_focus(crate::FocusTarget::Editor);
                 cx.notify();
                 return;
             }
@@ -2443,7 +2453,7 @@ impl LstGpuiApp {
         let Some(confirmation) = self.cleanup_confirmation.take() else {
             return;
         };
-        self.force_editor_focus = true;
+        self.set_focus(crate::FocusTarget::Editor);
         let Some(tab) = self.model.tab_by_id(confirmation.tab_id) else {
             cx.notify();
             return;
@@ -2460,7 +2470,7 @@ impl LstGpuiApp {
 
     pub(crate) fn cancel_cleanup_confirmation(&mut self, cx: &mut Context<Self>) {
         if self.cleanup_confirmation.take().is_some() {
-            self.force_editor_focus = true;
+            self.set_focus(crate::FocusTarget::Editor);
             cx.notify();
         }
     }
@@ -2539,7 +2549,7 @@ impl LstGpuiApp {
 
     pub(crate) fn discard_prompt_review(&mut self, cx: &mut Context<Self>) {
         if self.prompt_review.take().is_some() {
-            self.force_editor_focus = true;
+            self.set_focus(crate::FocusTarget::Editor);
             self.cleanup_message = Some("Prompt changes discarded; original text kept.".to_string());
             cx.notify();
         }
@@ -2560,7 +2570,7 @@ impl LstGpuiApp {
             return;
         }
         let review = self.prompt_review.take().expect("validated review");
-        self.force_editor_focus = true;
+        self.set_focus(crate::FocusTarget::Editor);
         if review.prepared.source != review.prepared.result {
             self.update_model(cx, false, |model| {
                 model.replace_text(Some(review.range), review.prepared.result.clone(), UndoBoundary::Break);

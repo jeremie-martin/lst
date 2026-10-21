@@ -119,7 +119,7 @@ impl Render for StatusBar {
                             .cursor(CursorStyle::PointingHand)
                             .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
                             .on_click(self.listener(|this, _, window, cx| {
-                                this.force_editor_focus = true;
+                                this.set_focus(crate::FocusTarget::Editor);
                                 this.dispatch_workspace_command(
                                     crate::workspace_action::WorkspaceCommand::CleanupText,
                                     window,

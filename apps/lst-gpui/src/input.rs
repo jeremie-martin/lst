@@ -129,9 +129,8 @@ impl LstGpuiApp {
             .iter()
             .any(|command| overrides.contains_key(command_id(*command)))
             || overrides.values().flatten().any(|key| HeldArrows::bit(key) != 0);
-        if !self.focus_handle.is_focused(window)
+        if !self.editor_input_is_focused(window)
             || !window.is_window_active()
-            || !self.editor_input_is_focused()
             || self.model.input_mode() != InputMode::Standard
             || modifiers_active(event.keystroke.modifiers)
             || custom_arrows
@@ -650,7 +649,7 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.editor_input_is_focused() {
+        if !self.editor_input_is_focused(window) {
             return false;
         }
 
@@ -701,7 +700,7 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.editor_input_is_focused() {
+        if !self.editor_input_is_focused(window) {
             return false;
         }
 
@@ -724,7 +723,7 @@ impl LstGpuiApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.editor_input_is_focused() || self.model.input_mode() != InputMode::Vim {
+        if !self.editor_input_is_focused(window) || self.model.input_mode() != InputMode::Vim {
             return false;
         }
 
@@ -825,8 +824,8 @@ impl EntityInputHandler for LstGpuiApp {
             .map(|range| char_range_to_utf16_range(tab.buffer(), range))
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.editor_input_is_focused() {
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editor_input_is_focused(window) {
             return;
         }
         self.x11_ctrl_k_pending = false;
@@ -839,10 +838,10 @@ impl EntityInputHandler for LstGpuiApp {
         &mut self,
         range_utf16: Option<Range<usize>>,
         text: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.editor_input_is_focused() {
+        if !self.editor_input_is_focused(window) {
             return;
         }
         let apply_started = Instant::now();
@@ -867,10 +866,10 @@ impl EntityInputHandler for LstGpuiApp {
         range_utf16: Option<Range<usize>>,
         new_text: &str,
         new_selected_range_utf16: Option<Range<usize>>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.editor_input_is_focused() {
+        if !self.editor_input_is_focused(window) {
             return;
         }
         let apply_started = Instant::now();
@@ -959,14 +958,14 @@ impl LstGpuiApp {
         self.model.input_mode() == InputMode::Vim && self.model.vim_mode() != vim::Mode::Insert
     }
 
-    fn editor_input_is_focused(&self) -> bool {
+    fn editor_input_is_focused(&self, window: &Window) -> bool {
         !self.recent.is_open()
             && self.workspace_surface == crate::WorkspaceSurface::None
             && self.close_prompt.is_none()
             && self.quit_review.is_none()
             && self.cleanup_confirmation.is_none()
             && self.prompt_review.is_none()
-            && self.focus_last_applied == crate::FocusTarget::Editor
+            && self.focus_handle.is_focused(window)
     }
 }
 

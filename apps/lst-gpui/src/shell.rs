@@ -8,7 +8,7 @@ use gpui::{
     InteractiveElement, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, ParentElement, Pixels,
     Render, SharedString, Stateful, StatefulInteractiveElement, Styled, Window,
 };
-use lst_editor::EditorCommand as Command;
+use lst_editor::{EditorCommand as Command, EditorModel};
 
 use crate::recent::{RecentFilter, RecentOrigin, RecentPresentation, RecentPreviewState};
 use crate::syntax::syntax_mode_for_language;
@@ -58,6 +58,32 @@ impl LstGpuiApp {
             this.update_model(cx, true, |model| model.set_find_replace_visible(!show_replace));
             cx.stop_propagation();
         }));
+        let disclosure_entity = cx.entity();
+        let disclosure = div()
+            .flex_none()
+            .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, _, cx| {
+                disclosure_entity.update(cx, |this, _| {
+                    this.find_disclosure_bounds_px = bounds.first().copied();
+                });
+            })
+            .child(disclosure);
+
+        let close_entity = cx.entity();
+        let close_button = div()
+            .flex_none()
+            .on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, _, cx| {
+                close_entity.update(cx, |this, _| {
+                    this.find_close_bounds_px = bounds.first().copied();
+                });
+            })
+            .child(
+                IconButton::new("find-close", IconKind::Close, theme)
+                    .tooltip("Close find (Esc)")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.update_model(cx, true, EditorModel::cancel_find_query);
+                        cx.stop_propagation();
+                    })),
+            );
 
         let query_row = div()
             .flex()
@@ -155,14 +181,7 @@ impl LstGpuiApp {
                 cx,
                 |this, cx| this.execute_model_command(cx, Command::ToggleFindInSelection),
             ))
-            .child(
-                IconButton::new("find-close", IconKind::Close, theme)
-                    .tooltip("Close find (Esc)")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.update_model(cx, true, |model| model.close_find_panel());
-                        cx.stop_propagation();
-                    })),
-            );
+            .child(close_button);
 
         let replace_row = show_replace.then(|| {
             div()
@@ -203,6 +222,7 @@ impl LstGpuiApp {
 
         div()
             .key_context("Find")
+            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .flex_none()
             .flex()
             .flex_col()
@@ -1438,7 +1458,7 @@ impl LstGpuiApp {
                 return;
             }
             if self.model.find().visible {
-                self.update_model(cx, true, |model| model.close_find_panel());
+                self.update_model(cx, true, |model| model.cancel_find_query());
                 cx.stop_propagation();
                 return;
             }
@@ -1757,9 +1777,12 @@ impl Render for LstGpuiApp {
         }
         if !self.model.find().visible {
             self.find_chip_bounds_px = crate::FindChipBounds::default();
+            self.find_disclosure_bounds_px = None;
+            self.find_close_bounds_px = None;
         }
 
         let surface_focus_handle = self.surface_focus_handle.clone();
+        let mouse_focus_entity = cx.entity().downgrade();
         let root = attach_workspace_actions(div().flex().flex_col().key_context("Workspace"), cx)
             .size_full()
             .track_focus(&surface_focus_handle)
@@ -1770,6 +1793,22 @@ impl Render for LstGpuiApp {
             .bg(rgb(theme.role.app_bg))
             .font(typography::ui_font())
             .text_color(rgb(theme.role.text))
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |_, _, window, _| {
+                        let entity = mouse_focus_entity.clone();
+                        // Capture before child handlers, even when a surface occludes the root hitbox.
+                        window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                            if phase.capture() && event.button == MouseButton::Left {
+                                let _ = entity.update(cx, |this, _| this.pending_focus = None);
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
             // The tab strip, editor, and status bar are direct children of the
             // root column, and the editor's focus/key handlers sit on the
             // viewport element itself: two fewer layout levels per frame with
@@ -2055,7 +2094,7 @@ impl Render for LstGpuiApp {
             let entity = cx.entity().downgrade();
             // Publish sibling geometry together, after every surface has prepainted.
             root.on_children_prepainted(move |_, window, cx| {
-                let _ = entity.update(cx, |this, _| this.emit_state_trace(window));
+                let _ = entity.update(cx, |this, cx| this.emit_state_trace(window, cx));
             })
         });
         crate::frame_diagnostics::observe(root, frame_clock)

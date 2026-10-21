@@ -12,7 +12,7 @@ use std::thread;
 
 use lst_x11_harness::{ChordMods, Key};
 
-use support::{secs, EditorTestExt, TestResult};
+use support::{secs, EditorTestExt, FindInput, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
@@ -196,6 +196,71 @@ fn vim_search_that_finds_nothing_or_is_cancelled_keeps_the_cursor() -> TestResul
             !record.find.visible && record.focused_input == "editor"
         })?;
         editor.expect_cursor_heads(&[(0, 4)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn mouse_refocused_search_never_dispatches_field_text_as_a_vim_edit() -> TestResult {
+    support::run_x11_test("vim-mouse-search-input-isolation", |session| {
+        let original = "alpha beta gamma\nhello world\n";
+        let path = session.seed_file("vim-mouse-search.txt", original)?;
+        let mut editor = session.open_vim_file("vim-mouse-search", &path)?;
+        editor.keys("<esc>gg0/alpha")?;
+        editor.expect_find_state("alpha", 1)?;
+        editor.click_at_text(1, 2)?;
+        editor.wait_state(
+            "editor owns true Vim Normal input before field click",
+            secs(5),
+            |record| record.focused_input == "editor" && record.vim_mode == "NORMAL",
+        )?;
+        editor.click_find_input_baseline_compatible(FindInput::Query)?;
+        editor.wait_state("mouse visibly focuses the search field", secs(5), |record| {
+            record.focused_input == "find_query"
+        })?;
+        editor.keys("x")?;
+        editor.save_then_expect_file(&path, original)?;
+        editor.wait_state("x is query text, not a Normal-mode deletion", secs(5), |record| {
+            record.find.query == "alphax" && record.vim_mode == "NORMAL" && !record.active_tab_modified
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn closing_find_or_escaping_replacement_cancels_vim_search_preview() -> TestResult {
+    support::run_x11_test("vim-find-dismissal-cancels-preview", |session| {
+        let path = session.seed_file("vim-find-dismissal.txt", "abc def zebra foo")?;
+        let mut editor = session.open_vim_file("vim-find-dismissal", &path)?;
+        editor.keys("<esc>0w/foo")?;
+        editor.expect_cursor_heads(&[(0, 14)])?;
+        editor.click_find_close()?;
+        editor.wait_state("close icon cancels the incremental search", secs(5), |record| {
+            !record.find.visible
+                && record.focused_input == "editor"
+                && matches!(record.cursors.as_slice(), [cursor] if cursor.head_pos() == (0, 4))
+        })?;
+
+        editor.keys("/foo<C-h>")?;
+        editor.wait_state("replacement field focused during Vim preview", secs(5), |record| {
+            record.find.visible
+                && record.find.show_replace
+                && record.focused_input == "find_replace"
+                && matches!(record.cursors.as_slice(), [cursor] if cursor.head_pos() == (0, 14))
+        })?;
+        editor.keys("<esc>")?;
+        editor.wait_state(
+            "replacement Escape also cancels the incremental search",
+            secs(5),
+            |record| {
+                !record.find.visible
+                    && record.focused_input == "editor"
+                    && matches!(record.cursors.as_slice(), [cursor] if cursor.head_pos() == (0, 4))
+            },
+        )?;
+        editor.save_then_expect_file(&path, "abc def zebra foo")?;
         Ok(())
     })
 }

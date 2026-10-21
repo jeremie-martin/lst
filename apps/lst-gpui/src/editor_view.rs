@@ -1,9 +1,9 @@
 use std::time::Instant;
 
 use gpui::{
-    canvas, div, point, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, InteractiveElement,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, ScrollDelta, ScrollHandle,
-    ScrollWheelEvent, Size, Styled, Window,
+    canvas, div, point, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, HitboxBehavior,
+    InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
+    ScrollDelta, ScrollHandle, ScrollWheelEvent, Size, Styled, Window,
 };
 use lst_editor::{EditorCommand as Command, EditorTab as ModelEditorTab, RevealIntent};
 
@@ -701,16 +701,17 @@ impl LstGpuiApp {
 
         bar.when(has_overflow, |bar| bar.cursor(CursorStyle::Arrow)).child(
             canvas(
-                move |bounds, _, _| {
-                    scrollbar_layout(
+                move |bounds, window, _| {
+                    let layout = scrollbar_layout(
                         axis,
                         bounds,
                         scrollbar_current_offset(axis, &prepare_scroll),
                         scrollbar_max_offset(axis, &prepare_scroll),
                         scale,
-                    )
+                    );
+                    (layout, window.insert_hitbox(bounds, HitboxBehavior::Normal))
                 },
-                move |_, layout, window, cx| {
+                move |_, (layout, hitbox), window, cx| {
                     let Some(layout) = layout else {
                         return;
                     };
@@ -726,9 +727,11 @@ impl LstGpuiApp {
 
                     let entity_for_down = entity.clone();
                     let scroll_for_down = paint_scroll.clone();
+                    let hitbox_for_down = hitbox.clone();
                     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
                         if !phase.bubble()
                             || event.button != MouseButton::Left
+                            || !hitbox_for_down.is_hovered(window)
                             || !layout.track_bounds.contains(&event.position)
                         {
                             return;
@@ -763,7 +766,8 @@ impl LstGpuiApp {
 
                     let entity_for_move = entity.clone();
                     let scroll_for_move = paint_scroll.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    let hitbox_for_move = hitbox.clone();
+                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                         if !phase.bubble() {
                             return;
                         }
@@ -791,7 +795,8 @@ impl LstGpuiApp {
                             return;
                         }
 
-                        let hovered = layout.thumb_bounds.contains(&event.position);
+                        let hovered =
+                            hitbox_for_move.is_hovered(window) && layout.thumb_bounds.contains(&event.position);
                         if entity_for_move.read(cx).scrollbar_hovered(axis) != hovered {
                             entity_for_move.update(cx, |this, _| {
                                 this.set_scrollbar_hovered(axis, hovered);
@@ -801,13 +806,16 @@ impl LstGpuiApp {
                     });
 
                     let entity_for_up = entity.clone();
-                    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                    let hitbox_for_up = hitbox.clone();
+                    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
                         if !phase.bubble() || event.button != MouseButton::Left {
                             return;
                         }
 
                         let was_dragging = entity_for_up.read(cx).scrollbar_drag(axis).is_some();
-                        if was_dragging || layout.track_bounds.contains(&event.position) {
+                        if was_dragging
+                            || (hitbox_for_up.is_hovered(window) && layout.track_bounds.contains(&event.position))
+                        {
                             entity_for_up.update(cx, |this, _| {
                                 this.set_scrollbar_drag(axis, None);
                                 this.set_scrollbar_hovered(axis, layout.thumb_bounds.contains(&event.position));

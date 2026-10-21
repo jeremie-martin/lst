@@ -1096,7 +1096,7 @@ impl LstGpuiApp {
 
     fn open_recent_surface(&mut self, window: &mut Window, presentation: RecentPresentation, cx: &mut Context<Self>) {
         if self.model.find().visible {
-            self.update_model(cx, false, |model| model.close_find_panel());
+            self.update_model(cx, false, |model| model.cancel_find_query());
         }
         if self.model.goto_line().is_some() {
             self.update_model(cx, false, |model| model.close_goto_line_panel());
@@ -1125,7 +1125,7 @@ impl LstGpuiApp {
     pub(crate) fn close_recent_files_panel(&mut self, cx: &mut Context<Self>) {
         if self.recent.is_open() {
             self.recent.close();
-            self.force_editor_focus = true;
+            self.set_focus(crate::FocusTarget::Editor);
             cx.notify();
         }
     }

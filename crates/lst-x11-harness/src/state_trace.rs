@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-pub const STATE_TRACE_SCHEMA_VERSION: u32 = 11;
+pub const STATE_TRACE_SCHEMA_VERSION: u32 = 12;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StateTraceRecord {
@@ -51,6 +51,8 @@ pub struct StateTraceRecord {
     pub workspace_surface_selected_index: Option<usize>,
     #[serde(default)]
     pub settings_selected_item: Option<String>,
+    #[serde(default)]
+    pub settings_search_input: Option<TraceInputField>,
     #[serde(default)]
     pub settings_value_editor_item: Option<String>,
     #[serde(default)]
@@ -158,6 +160,8 @@ pub struct TraceFind {
     pub show_replace: bool,
     pub query: String,
     #[serde(default)]
+    pub replacement: String,
+    #[serde(default)]
     pub error: Option<String>,
     pub case_sensitive: bool,
     pub whole_word: bool,
@@ -167,6 +171,24 @@ pub struct TraceFind {
     pub active_index: Option<usize>,
     #[serde(default)]
     pub chip_bounds_px: TraceFindChipBounds,
+    #[serde(default)]
+    pub query_input: Option<TraceInputField>,
+    #[serde(default)]
+    pub replace_input: Option<TraceInputField>,
+    #[serde(default)]
+    pub disclosure_bounds_px: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    pub close_bounds_px: Option<(f32, f32, f32, f32)>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TraceInputField {
+    pub bounds_px: Option<(f32, f32, f32, f32)>,
+    pub text_bounds_px: Option<(f32, f32, f32, f32)>,
+    pub caret_bounds_px: Option<(f32, f32, f32, f32)>,
+    /// UTF-8 byte offsets in the visible field value.
+    pub selection: TraceRange,
+    pub scroll_left_px: f32,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

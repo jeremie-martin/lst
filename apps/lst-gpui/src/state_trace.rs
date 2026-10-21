@@ -15,7 +15,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use gpui::{Bounds, Pixels, Window};
+use gpui::{App, Bounds, Pixels, Window};
 use lst_editor::find::FindScope;
 use serde::Serialize;
 
@@ -24,7 +24,7 @@ use crate::{
     WorkspaceSurface,
 };
 
-pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 11;
+pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 12;
 
 /// Holds the state-trace path and emitter state. Constructed once at app
 /// init from the env var; subsequent calls to `try_emit` are no-ops when
@@ -131,6 +131,7 @@ pub(crate) struct StateTraceRecord {
     pub workspace_surface: &'static str,
     pub workspace_surface_selected_index: Option<usize>,
     pub settings_selected_item: Option<&'static str>,
+    pub settings_search_input: Option<TraceInputField>,
     pub settings_value_editor_item: Option<&'static str>,
     pub settings_value_error: Option<String>,
     pub editor_polish: TraceEditorPolish,
@@ -200,6 +201,7 @@ pub(crate) struct TraceFind {
     pub visible: bool,
     pub show_replace: bool,
     pub query: String,
+    pub replacement: String,
     pub error: Option<String>,
     pub case_sensitive: bool,
     pub whole_word: bool,
@@ -208,6 +210,34 @@ pub(crate) struct TraceFind {
     pub match_count: usize,
     pub active_index: Option<usize>,
     pub chip_bounds_px: TraceFindChipBounds,
+    pub query_input: Option<TraceInputField>,
+    pub replace_input: Option<TraceInputField>,
+    pub disclosure_bounds_px: Option<(f32, f32, f32, f32)>,
+    pub close_bounds_px: Option<(f32, f32, f32, f32)>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct TraceInputField {
+    pub bounds_px: Option<(f32, f32, f32, f32)>,
+    pub text_bounds_px: Option<(f32, f32, f32, f32)>,
+    pub caret_bounds_px: Option<(f32, f32, f32, f32)>,
+    /// UTF-8 byte offsets in the visible field value.
+    pub selection: TraceRange,
+    pub scroll_left_px: f32,
+}
+
+fn trace_input_field(input: &crate::ui::input_field::InputField) -> TraceInputField {
+    let selection = input.selected_range();
+    TraceInputField {
+        bounds_px: trace_bounds(input.bounds()),
+        text_bounds_px: trace_bounds(input.text_bounds()),
+        caret_bounds_px: trace_bounds(input.caret_bounds()),
+        selection: TraceRange {
+            start: selection.start,
+            end: selection.end,
+        },
+        scroll_left_px: f32::from(input.horizontal_scroll()),
+    }
 }
 
 #[derive(Serialize)]
@@ -269,12 +299,12 @@ impl LstGpuiApp {
     /// Append one record to the state-trace channel when one is configured.
     /// No-op in production. Re-entrant calls (during effect handling) are
     /// dropped by `StateTraceEmitter::try_emit`'s internal guard.
-    pub(crate) fn emit_state_trace(&self, window: &Window) {
+    pub(crate) fn emit_state_trace(&self, window: &Window, cx: &App) {
         self.state_trace
-            .try_emit(|seq| self.build_state_trace_record(seq, window));
+            .try_emit(|seq| self.build_state_trace_record(seq, window, cx));
     }
 
-    fn build_state_trace_record(&self, seq: u64, window: &Window) -> StateTraceRecord {
+    fn build_state_trace_record(&self, seq: u64, window: &Window, cx: &App) -> StateTraceRecord {
         let tab = self.active_tab();
         let buffer = tab.buffer();
         let selection_set = tab.selection_set();
@@ -342,6 +372,7 @@ impl LstGpuiApp {
                 visible: find.visible,
                 show_replace: find.show_replace,
                 query: find.query.clone(),
+                replacement: find.replacement.clone(),
                 error: find.error.clone(),
                 case_sensitive: find.case_sensitive,
                 whole_word: find.whole_word,
@@ -358,6 +389,11 @@ impl LstGpuiApp {
                     regex: trace_bounds(self.find_chip_bounds_px.regex),
                     scope: trace_bounds(self.find_chip_bounds_px.scope),
                 },
+                query_input: find.visible.then(|| trace_input_field(self.find_query_input.read(cx))),
+                replace_input: (find.visible && find.show_replace)
+                    .then(|| trace_input_field(self.find_replace_input.read(cx))),
+                disclosure_bounds_px: trace_bounds(self.find_disclosure_bounds_px),
+                close_bounds_px: trace_bounds(self.find_close_bounds_px),
             },
             goto_line_input: self.model.goto_line().map(ToOwned::to_owned),
             recent_panel_open: self.recent.is_open(),
@@ -390,6 +426,8 @@ impl LstGpuiApp {
             settings_selected_item: (self.workspace_surface == WorkspaceSurface::Settings)
                 .then(|| self.settings_selection.selected_id())
                 .flatten(),
+            settings_search_input: (self.workspace_surface == WorkspaceSurface::Settings)
+                .then(|| trace_input_field(self.settings_search_input.read(cx))),
             settings_value_editor_item: match self.settings_overlay {
                 crate::settings_ui::SettingsOverlay::ValueEditor { item } => Some(item.id()),
                 _ => None,

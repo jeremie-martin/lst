@@ -50,6 +50,30 @@ The main entry points are:
 The application menu and command palette expose the rest of the active command
 set and its current shortcuts.
 
+## Find and replace
+
+`Ctrl+F` opens or refocuses Search. `Ctrl+H` opens Search with Replace shown;
+if the panel is already open, it focuses Replace. A selected passage seeds Search
+only when it occupies one document line. Clicking the document leaves the panel
+open; clicking either field reliably returns editing to that field, even in Vim
+mode.
+
+- **Enter** in Search advances to the next match (or accepts a Vim search
+  preview); **Shift+Enter** or **Shift+F3** goes to the previous match.
+  **F3** advances from either field.
+- **Enter** in Replace replaces the current match; **Ctrl+Alt+Enter** replaces all.
+- **Tab** moves Search → Replace when shown, then to the editor; without Replace,
+  it moves directly to the editor. **Shift+Tab** moves Replace → Search, or
+  Search → editor. **Esc** closes the panel and returns to the editor.
+- Fields support ordinary text selection, word movement, clipboard shortcuts,
+  local undo/redo (`Ctrl+Z`, `Ctrl+Y` or `Ctrl+Shift+Z`), and
+  `Ctrl(+Shift)+Home/End`. Mouse selections continue beyond field edges and
+  horizontally scroll long values.
+
+The fields are single-line: pasted line breaks become spaces, with CRLF treated
+as one break. Document line endings are not changed by this normalization.
+Field undo histories are separate from document edits.
+
 ## Install
 
 The installer requires Cargo, Git, fontconfig, and the `TX-02` font. It builds

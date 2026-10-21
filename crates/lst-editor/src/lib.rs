@@ -411,8 +411,11 @@ impl EditorModel {
         self.find.visible = true;
         self.find.show_replace = show_replace;
         self.find_submit = FindSubmit::Panel;
-        if let Some(text) = self.active_tab().selected_text() {
-            if !text.contains('\n') {
+        let tab = self.active_tab();
+        let selection = tab.selected_range();
+        let single_line = tab.buffer().char_to_line(selection.start) == tab.buffer().char_to_line(selection.end);
+        if single_line {
+            if let Some(text) = tab.selected_text() {
                 self.find.query = text;
                 self.reindex_find_matches_to_nearest();
             }

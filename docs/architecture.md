@@ -40,6 +40,14 @@ and reports their results back through model APIs.
 Rendering reads model state plus app-owned per-tab layout and tree-sitter
 caches. It does not own a second editor state machine.
 
+GPUI owns actual keyboard focus. Model focus effects are one-shot requests, not
+persistent desired-focus state; editor and Vim input routing checks the actual
+editor handle. Rendering maintains focus only for dominant modal/workspace
+surfaces and redirects a focused field when it is removed (Replace to Search,
+closed find/goto to the editor). A newer primary mouse interaction supersedes
+queued nonmodal focus before its handlers run, including through occluding
+surfaces. Rendering does not undo ordinary mouse focus changes.
+
 ## Editor domain
 
 `crates/lst-editor` owns:
@@ -139,7 +147,10 @@ resolution notice. A deleted backing file remains a save-or-discard state.
 UI state should have one geometric and visual owner:
 
 - Derive coordinates once for painting, hit testing, wrapping, scrolling,
-  cursor reveal, IME bounds, and the observable test trace.
+  cursor reveal, IME bounds, and the observable test trace. Shared input fields
+  publish their current geometry during prepaint, before root trace observation.
+  Field selections own their pointer drag beyond hitbox bounds and schedule
+  horizontal autoscroll only while that drag can make progress.
 - Give each border or separator one owner.
 - Use the stable UI font for chrome and the configured editor font for document
   text and gutter digits.

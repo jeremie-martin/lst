@@ -70,7 +70,7 @@ impl LstGpuiApp {
             }
             Err(error) => self.voice.message = Some(error),
         }
-        self.force_editor_focus = true;
+        self.set_focus(crate::FocusTarget::Editor);
         cx.notify();
     }
 
@@ -134,7 +134,7 @@ impl LstGpuiApp {
                 VoiceAction::Cancel => unreachable!(),
             }
         }
-        self.force_editor_focus = true;
+        self.set_focus(crate::FocusTarget::Editor);
         cx.notify();
     }
 

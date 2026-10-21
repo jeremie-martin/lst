@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use x11rb::connection::Connection as _;
 use x11rb::protocol::damage;
 use x11rb::protocol::xproto::{self, ConnectionExt as _, Keycode};
+use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
 use crate::display::Display;
@@ -485,6 +486,119 @@ impl<'a> Editor<'a> {
         input::move_pointer_to_window_point(&self.display.conn, self.display.root, &self.window, local_x, local_y)?;
         thread::sleep(POINTER_SETTLE);
         input::click_button(&self.display.conn, self.display.root, BUTTON_LEFT)
+    }
+
+    /// Click window-local pixels with held modifiers and a desktop click count.
+    pub fn click_at_with_modifiers(
+        &mut self,
+        local_x: i32,
+        local_y: i32,
+        mods: ChordMods,
+        click_count: usize,
+    ) -> Result<()> {
+        if !(1..=4).contains(&click_count) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "click count must be between one and four").into());
+        }
+        let conn = &self.display.conn;
+        let root = self.display.root;
+        let kc = &self.display.keycodes;
+        input::move_pointer_to_window_point(conn, root, &self.window, local_x, local_y)?;
+        thread::sleep(POINTER_SETTLE);
+        input::press_modifiers_with_platform(conn, root, kc, mods.ctrl, mods.alt, mods.shift, mods.platform)?;
+        conn.flush()?;
+        if !mods.is_empty() {
+            thread::sleep(POINTER_SETTLE);
+        }
+        let clicked = input::multi_click_button(conn, root, BUTTON_LEFT, click_count);
+        let released =
+            input::release_modifiers_with_platform(conn, root, kc, mods.ctrl, mods.alt, mods.shift, mods.platform);
+        conn.flush()?;
+        clicked?;
+        released
+    }
+
+    /// Move the pointer without clicking; works while a selection drag is held.
+    pub fn move_pointer_at(&mut self, local_x: i32, local_y: i32) -> Result<()> {
+        input::move_pointer_to_window_point(&self.display.conn, self.display.root, &self.window, local_x, local_y)?;
+        thread::sleep(POINTER_SETTLE);
+        Ok(())
+    }
+
+    /// Queue an optional shortcut and consecutive primary clicks without
+    /// inter-event settling, to exercise input that arrives within one frame.
+    pub fn input_burst_at(&mut self, shortcut: Option<KeyChord>, points: &[(i32, i32)]) -> Result<()> {
+        let conn = &self.display.conn;
+        let root = self.display.root;
+        let origin = conn.translate_coordinates(self.window.id, root, 0, 0)?.reply()?;
+        let points: Vec<(i16, i16)> = points
+            .iter()
+            .map(|&(x, y)| {
+                let x = i16::try_from(i32::from(origin.dst_x) + x).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "burst pointer X is outside X11 coordinates",
+                    )
+                })?;
+                let y = i16::try_from(i32::from(origin.dst_y) + y).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "burst pointer Y is outside X11 coordinates",
+                    )
+                })?;
+                Ok((x, y))
+            })
+            .collect::<io::Result<_>>()?;
+        if let Some(shortcut) = shortcut {
+            let (key, ctrl) = match shortcut {
+                KeyChord::Key(key) => (key, false),
+                KeyChord::Ctrl(key) => (key, true),
+            };
+            let kc = &self.display.keycodes;
+            let (code, shift) = resolve_key(kc, key)?;
+            if ctrl {
+                input::key_press(conn, root, kc.control_l)?;
+            }
+            if shift {
+                input::key_press(conn, root, kc.shift_l)?;
+            }
+            input::key_press(conn, root, code)?;
+            input::key_release(conn, root, code)?;
+            if shift {
+                input::key_release(conn, root, kc.shift_l)?;
+            }
+            if ctrl {
+                input::key_release(conn, root, kc.control_l)?;
+            }
+        }
+        for (x, y) in points {
+            conn.xtest_fake_input(xproto::MOTION_NOTIFY_EVENT, 0, 0, root, x, y, 0)?;
+            conn.xtest_fake_input(xproto::BUTTON_PRESS_EVENT, BUTTON_LEFT, 0, root, x, y, 0)?;
+            conn.xtest_fake_input(xproto::BUTTON_RELEASE_EVENT, BUTTON_LEFT, 0, root, x, y, 0)?;
+        }
+        conn.flush()?;
+        Ok(())
+    }
+
+    /// Hold a left-button drag while the caller observes or drives its result.
+    /// Releases the button even when the observation fails.
+    pub fn drag_at<T>(
+        &mut self,
+        from: (i32, i32),
+        to: (i32, i32),
+        while_held: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        self.move_pointer_at(from.0, from.1)?;
+        input::button_press(&self.display.conn, self.display.root, BUTTON_LEFT)?;
+        self.display.conn.flush()?;
+        let result = (|| {
+            self.move_pointer_at(to.0, to.1)?;
+            while_held(self)
+        })();
+        let released = input::button_release(&self.display.conn, self.display.root, BUTTON_LEFT);
+        self.display.conn.flush()?;
+        let value = result?;
+        released?;
+        Ok(value)
     }
 
     /// Single left click at the given (line, col) text position. Resolves
@@ -1470,6 +1584,13 @@ fn state_key_context_changed_after(before: &StateTraceRecord, after: &StateTrace
             || after.vim_pending != before.vim_pending
             || after.find.visible != before.find.visible
             || after.find.query != before.find.query
+            || after.find.replacement != before.find.replacement
+            || after.find.query_input.as_ref().map(|field| field.selection)
+                != before.find.query_input.as_ref().map(|field| field.selection)
+            || after.find.replace_input.as_ref().map(|field| field.selection)
+                != before.find.replace_input.as_ref().map(|field| field.selection)
+            || after.settings_search_input.as_ref().map(|field| field.selection)
+                != before.settings_search_input.as_ref().map(|field| field.selection)
             || after.goto_line_input != before.goto_line_input
             || after.recent_panel_open != before.recent_panel_open
             || after.recent_panel_query != before.recent_panel_query
