@@ -389,6 +389,20 @@ def build_cases() -> list[dict]:
         ("yank counted lines pastes linewise", "one\ntwo\nthree", (0, 0), "2yyGp"),
         ("delete empty line pastes back as line", "one\n\ntwo", (1, 0), "ddp"),
         ("delete to start then undo is one step", "one\ntwo\nthree", (0, 0), "Gdggu"),
+        ("delete backward word from line start keeps line break", "x foo\nbar", (1, 0), "db"),
+        ("delete backward word from line start onto indented word is linewise", "  foo\nbar", (1, 0), "db"),
+        ("change backward word from line start keeps line break", "x foo\nbar", (1, 0), "cbX<esc>"),
+        ("yank backward word from line start pastes linewise", "foo\nbar", (1, 0), "ybp"),
+        ("delete counted backward words across a line stays charwise", "one two\nthree four\nfive", (2, 0), "d3b"),
+        ("change word on one-letter word stops at its end", "a bc", (0, 0), "cwX<esc>"),
+        ("change word from last letter keeps the line break", "ab\ncd", (0, 1), "cwX<esc>"),
+        ("change word on blanks stops before next word", "a  b", (0, 1), "cwX<esc>"),
+        ("change word on empty line keeps the next line", "\nabc", (0, 0), "cwX<esc>"),
+        ("change word from last letter keeps the following space", "alpha beta", (0, 4), "cwX<esc>"),
+        ("delete two words from empty line skips indentation", "\n  abc def", (0, 0), "d2w"),
+        ("delete counted line end from mid line stays charwise", "abc\ndef\nghi", (0, 1), "d2$"),
+        ("change counted line end from mid line keeps line start", "abc\ndef\nghi", (0, 1), "c2$X<esc>"),
+        ("yank counted line end from mid line pastes charwise", "abc\ndef\nghi", (0, 1), "y2$Gp"),
     ]:
         cases.append(case(name, "operators", text, cursor, keys, assert_register=True))
 

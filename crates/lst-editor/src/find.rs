@@ -461,7 +461,7 @@ pub(crate) fn replace_one_request(tab: &EditorTab, find: &FindState) -> Option<E
         let line_start = buffer.char_to_byte(buffer.line_to_char(start.line));
         expand_match_replacement(
             &re,
-            &line_display_text(buffer, start.line),
+            searchable_text(&line_display_text(buffer, start.line)),
             buffer.char_to_byte(range.start) - line_start,
             &template,
         )
@@ -495,7 +495,7 @@ pub(crate) fn replace_all_request(tab: &EditorTab, find: &FindState, cursor: Pos
                 let match_start = buffer.char_to_byte(range.start);
                 expand_match_replacement(
                     re,
-                    &line_display_text(buffer, m.line),
+                    searchable_text(&line_display_text(buffer, m.line)),
                     match_start - line_start,
                     &find.replacement,
                 )
@@ -524,11 +524,16 @@ fn expand_match_replacement(regex: &Regex, line: &str, byte_start_in_line: usize
     template.to_string()
 }
 
-/// Search the same logical lines and display text used by document positions.
+/// Search the same logical lines used by document positions.
 fn for_each_text_line(buffer: &Rope, mut visit: impl FnMut(usize, &str)) {
-    crate::for_each_rope_line(buffer, |index, line| {
-        visit(index, line.trim_end_matches(['\n', '\r']));
-    });
+    crate::for_each_rope_line(buffer, |index, line| visit(index, searchable_text(line)));
+}
+
+/// A line's text without the break that ends it. Ropey also ends lines at VT,
+/// FF, NEL, LS and PS, which display text keeps; excluding them means no match
+/// can span or replace a line separator.
+fn searchable_text(line: &str) -> &str {
+    line.trim_end_matches(['\n', '\r', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}'])
 }
 
 /// Scans `text` for every (optionally case-insensitive) occurrence of the
@@ -648,6 +653,44 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn regex_replace_all_never_removes_a_line_separator() {
+        fn replace_all(text: &str, query: &str, replacement: &str) -> String {
+            let tab = crate::EditorTab::from_path_with_stamp(
+                crate::TabId::from_raw(1),
+                std::path::PathBuf::from("separators.txt"),
+                text,
+                None,
+            );
+            let mut model = crate::EditorModel::from_tabs(tab, Vec::new(), String::new());
+            model.open_find_panel(true);
+            model.execute(crate::EditorCommand::ToggleFindRegex);
+            model.update_find_query_and_activate(query.to_string());
+            model.update_find_replacement(replacement.to_string());
+            model.execute(crate::EditorCommand::ReplaceAllMatches);
+            model.active_tab().buffer_text()
+        }
+        for separator in ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+            let trailing = format!("foo {separator}bar{separator}");
+            assert_eq!(
+                replace_all(&trailing, r"\s+$", ""),
+                format!("foo{separator}bar{separator}"),
+                "{separator:?}"
+            );
+            let lines = format!("foo{separator}bar");
+            assert_eq!(
+                replace_all(&lines, ".+", "X"),
+                format!("X{separator}X"),
+                "{separator:?}"
+            );
+            assert_eq!(
+                replace_all(&lines, "(o+)$", "[$1]"),
+                format!("f[oo]{separator}bar"),
+                "{separator:?}"
+            );
         }
     }
 

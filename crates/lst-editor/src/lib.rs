@@ -217,10 +217,18 @@ struct OwnedClipboard {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FindSubmit {
     Panel,
-    /// A Vim `/` or `?` prompt, which searches from where it was opened.
+    /// A Vim `/` or `?` prompt, which searches from where it was opened in
+    /// `tab` at `revision`. `shown` is the cursor the prompt last placed, and
+    /// `navigated` records that a find step inside the prompt chose it. Once
+    /// the active tab, its text, or the cursor differs, the user has moved on:
+    /// the prompt searches from the new cursor and cancelling leaves it alone.
     Vim {
         backward: bool,
         origin: Position,
+        tab: TabId,
+        revision: u64,
+        shown: Position,
+        navigated: bool,
     },
 }
 impl EditorModel {
@@ -443,8 +451,9 @@ impl EditorModel {
     }
     pub fn update_find_query_and_activate(&mut self, text: String) {
         self.find.query = text;
-        if let FindSubmit::Vim { backward, origin } = self.find_submit {
-            self.preview_vim_search(origin, backward);
+        if matches!(self.find_submit, FindSubmit::Vim { .. }) {
+            self.reindex_find_matches();
+            self.preview_vim_search();
             return;
         }
         self.reindex_find_matches_to_nearest();
@@ -457,18 +466,17 @@ impl EditorModel {
             FindSubmit::Panel => {
                 self.execute(EditorCommand::FindNext);
             }
-            FindSubmit::Vim { backward, origin } => {
-                self.preview_vim_search(origin, backward);
+            FindSubmit::Vim { .. } => {
+                self.accept_vim_search();
                 self.close_find_panel();
             }
         }
     }
     /// Closes the find prompt without accepting it. A Vim search returns to
-    /// where it started, as Neovim does on Esc.
+    /// where it started, as Neovim does on Esc, unless the user has moved the
+    /// cursor, edited, or switched tabs since the prompt last placed it.
     pub fn cancel_find_query(&mut self) {
-        if let FindSubmit::Vim { origin, .. } = self.find_submit {
-            self.move_to_vim_search_target(origin);
-        }
+        self.restore_vim_search_origin();
         self.close_find_panel();
     }
     pub fn update_find_replacement(&mut self, text: String) {
@@ -518,12 +526,16 @@ impl EditorModel {
         if self.find.matches.is_empty() {
             return false;
         }
+        self.refresh_vim_search_anchor();
         if forward {
             self.find.next();
         } else {
             self.find.prev();
         }
-        self.move_to_current_find_match()
+        let moved = self.move_to_current_find_match();
+        // Inside an open Vim prompt, the stepped-to match is what Enter accepts.
+        self.record_vim_search_cursor(true);
+        moved
     }
     fn replace_one(&mut self) -> bool {
         self.ensure_find_matches_current();

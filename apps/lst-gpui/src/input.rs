@@ -679,6 +679,12 @@ impl LstGpuiApp {
             self.x11_ctrl_k_pending = false;
             return false;
         }
+        // A released chord only completes the Vim chords above. Any other key
+        // pressed without a modifier in Normal or Visual mode is a Vim command.
+        if !insert_mode && !modifiers_active(self.effective_current_modifiers(event.keystroke.modifiers, window)) {
+            self.clear_recent_x11_modifier_chord();
+            return false;
+        }
 
         if let Some(command) = workspace_fallback_command(&key, modifiers) {
             self.dispatch_workspace_command(command, window, cx);
@@ -941,10 +947,23 @@ impl LstGpuiApp {
     }
 
     fn effective_current_modifiers(&self, event_modifiers: Modifiers, window: &Window) -> Modifiers {
+        let mut modifiers = merge_modifiers(event_modifiers, self.modifier_chord_accumulated);
         // GPUI normalizes Shift out of symbol keystrokes. Its window modifier
-        // state retains that information while a chord spans several commands.
-        let modifiers = merge_modifiers(event_modifiers, self.modifier_chord_accumulated);
-        merge_modifiers(modifiers, window.modifiers())
+        // state retains that information while a chord spans several commands,
+        // but it goes stale when a modifier is released while another window
+        // has focus. Take only Shift from it, and only for a chord whose other
+        // modifiers it agrees with, so a plain key never becomes a chord.
+        let window_modifiers = window.modifiers();
+        if (event_modifiers.control || event_modifiers.alt || event_modifiers.platform)
+            && (
+                window_modifiers.control,
+                window_modifiers.alt,
+                window_modifiers.platform,
+            ) == (event_modifiers.control, event_modifiers.alt, event_modifiers.platform)
+        {
+            modifiers.shift |= window_modifiers.shift;
+        }
+        modifiers
     }
 
     fn recent_modifier_chord(&self) -> Option<Modifiers> {

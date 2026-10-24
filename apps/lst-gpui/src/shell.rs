@@ -1585,6 +1585,16 @@ impl Render for LstGpuiApp {
                 ),
             );
         }
+        // Chrome sizes itself from the rem size, cached chrome from the zoom
+        // level. Keep them in step however the zoom changed, including a
+        // settings reload, which has no window to update.
+        let rem_size = self.ui_px(metrics::BASE_REM_SIZE);
+        if window.rem_size() != rem_size {
+            window.set_rem_size(rem_size);
+            for view in self.tab_views.values_mut() {
+                view.invalidate_visual_state();
+            }
+        }
         if let Some(command) = self.pending_workspace_command.take() {
             self.dispatch_workspace_command(command, window, cx);
         }

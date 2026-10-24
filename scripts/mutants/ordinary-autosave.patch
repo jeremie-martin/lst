@@ -2,13 +2,13 @@ diff --git a/apps/lst-gpui/src/runtime.rs b/apps/lst-gpui/src/runtime.rs
 index 686fd11..bb1b999 100644
 --- a/apps/lst-gpui/src/runtime.rs
 +++ b/apps/lst-gpui/src/runtime.rs
-@@ -436,8 +436,7 @@ impl LstGpuiApp {
+@@ -450,8 +450,7 @@ impl LstGpuiApp {
                          if eligible_tabs.is_empty() {
                              return;
                          }
 -                        let include_ordinary =
 -                            view.settings.settings.files.autosave == crate::settings::AutosaveMode::All;
 +                        let include_ordinary = true;
-                         view.update_model(cx, false, |model| {
+                         view.update_model_in_background(cx, false, |model| {
                              model.autosave_tick(include_ordinary, &eligible_tabs);
                          });

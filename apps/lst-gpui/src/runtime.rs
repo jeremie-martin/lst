@@ -407,7 +407,12 @@ impl LstGpuiApp {
                 }
             }));
         self._shell_subscriptions
-            .push(cx.observe_window_activation(window, |this, _, _| this.held_arrows.clear()));
+            .push(cx.observe_window_activation(window, |this, _, _| {
+                this.held_arrows.clear();
+                // A chord interrupted by a window switch must not apply to
+                // keys typed after returning.
+                this.clear_x11_modifier_chord_state();
+            }));
         let view = cx.entity();
         window
             .spawn(cx, async move |cx| loop {
@@ -447,7 +452,7 @@ impl LstGpuiApp {
                         }
                         let include_ordinary =
                             view.settings.settings.files.autosave == crate::settings::AutosaveMode::All;
-                        view.update_model(cx, false, |model| {
+                        view.update_model_in_background(cx, false, |model| {
                             model.autosave_tick(include_ordinary, &eligible_tabs);
                         });
                     })
@@ -1745,7 +1750,7 @@ impl LstGpuiApp {
                 });
                 let body_is_blank = body.trim().is_empty();
                 let mut saved = false;
-                self.update_model(cx, true, |model| {
+                self.update_model_in_background(cx, true, |model| {
                     saved = model.autosave_finished_for_tab(tab_id, path, revision, stamp, body);
                 });
                 if saved {

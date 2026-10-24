@@ -6,8 +6,9 @@ Settings or start one launch with `lst --vim`. Vim input currently starts in
 Insert mode; press `Escape` to enter Normal mode. Search, replacement, and other
 text fields always use standard field editing while focused; their keys do not
 execute document Vim commands. Cancelling an incremental `/` or `?` search with
-Escape or the find close button restores its starting position; Enter accepts
-the preview.
+Escape or the find close button restores its starting position, unless the
+cursor has since moved, the text changed, or another tab became active; Enter
+accepts the preview, or a match chosen with a find step such as Shift+Enter.
 
 ## Supported surface
 

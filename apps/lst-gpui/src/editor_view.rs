@@ -550,11 +550,14 @@ impl LstGpuiApp {
         };
 
         if let Some(target_x) = target_x {
-            if target_x > px(0.0) && max_left <= px(0.0) {
-                return false;
-            }
             drop(geometry);
             scroll_to_left_within(&view.scroll, target_x, max_left);
+            // Content that fits cannot honor the whole margin, and that still
+            // reveals the caret. Only an extent too short to show the caret
+            // itself, as before layout catches up with an edit, needs a retry.
+            if target_x > max_left && cursor_x > max_left + visible_width {
+                return false;
+            }
         }
         true
     }

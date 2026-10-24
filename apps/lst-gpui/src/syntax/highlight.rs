@@ -5,7 +5,13 @@ use super::{
 use crate::{diagnostics, ui::theme::SyntaxRole};
 use lst_editor::{BufferDelta, BufferEdit};
 use ropey::Rope;
-use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    ops::Range,
+    rc::Rc,
+    time::Instant,
+};
 use tree_sitter::{InputEdit, Node, Parser, Point, QueryCursor, Range as TsRange, StreamingIterator, Tree};
 
 /// Embedded grammars can be parsed synchronously during incremental updates.
@@ -389,16 +395,17 @@ impl TabSyntaxState {
     pub(crate) fn update(&mut self, new_buffer: &Rope, delta: BufferDelta, new_revision: u64) -> SyntaxInvalidation {
         let parse_started = diagnostics::trace_enabled().then(Instant::now);
         let mut changed_byte_ranges = Vec::new();
+        let mut edited_old_tree = None;
         let mut parse_succeeded = true;
         let root_config = catalog::grammar(catalog::root_grammar(self.language));
-        let edits_touch_old_injection = match &delta {
-            BufferDelta::Edits(edits) => edits_touch_injected_syntax(
+        let old_injections_near_edits = match &delta {
+            BufferDelta::Edits(edits) => injection_starts(
                 &self.tree,
                 &self.parsed_buffer,
                 root_config,
-                edits.iter().map(|edit| edit.range.clone()),
+                edit_contexts(&self.parsed_buffer, edits.iter().map(|edit| edit.range.clone())),
             ),
-            BufferDelta::Unchanged | BufferDelta::FullReplace => false,
+            BufferDelta::Unchanged | BufferDelta::FullReplace => Vec::new(),
         };
         let invalidation = match &delta {
             BufferDelta::Unchanged => {
@@ -423,13 +430,17 @@ impl TabSyntaxState {
                 let line_topology_changed = self.parsed_buffer.len_lines() != new_buffer.len_lines();
                 let text_changed_lines = edited_line_range(new_buffer, edits);
                 let mut changed_lines = text_changed_lines.clone();
-                // Apply edits in reverse order so each edit's pre-batch
-                // coordinates (in `self.parsed_buffer`) stay valid — later
-                // edits don't shift earlier positions.
+                // Resolve every edit's parser points in the pre-batch buffer,
+                // in document order so a fallback LF scan stays linear, then
+                // apply them in reverse so later edits don't shift earlier
+                // positions.
                 let positions = ParserPositions::new(&self.parsed_buffer, &self.tree);
-                for edit in edits.iter().rev() {
-                    let input_edit = input_edit_for(&positions, edit);
-                    self.tree.edit(&input_edit);
+                let input_edits = edits
+                    .iter()
+                    .map(|edit| input_edit_for(&positions, edit))
+                    .collect::<Vec<_>>();
+                for input_edit in input_edits.iter().rev() {
+                    self.tree.edit(input_edit);
                 }
                 if let Some(tree) = parse_rope(&mut self.parser, new_buffer, Some(&self.tree)) {
                     for range in self.tree.changed_ranges(&tree) {
@@ -440,7 +451,7 @@ impl TabSyntaxState {
                                 ..new_buffer.byte_to_line(range.end_byte).saturating_add(1),
                         );
                     }
-                    self.tree = tree;
+                    edited_old_tree = Some(std::mem::replace(&mut self.tree, tree));
                 } else {
                     parse_succeeded = false;
                 }
@@ -462,17 +473,20 @@ impl TabSyntaxState {
             diagnostics::record_ms("syntax_parse_update_ms", started.elapsed().as_secs_f64() * 1000.0);
         }
         let structure_started = diagnostics::trace_enabled().then(Instant::now);
-        let edits_touch_new_injection = match &delta {
-            BufferDelta::Edits(edits) => {
-                edits_touch_injected_syntax(&self.tree, new_buffer, root_config, post_edit_ranges(edits))
-            }
-            BufferDelta::Unchanged | BufferDelta::FullReplace => false,
+        let mut new_injections_near_edits = match &delta {
+            BufferDelta::Edits(edits) => injection_starts(
+                &self.tree,
+                new_buffer,
+                root_config,
+                edit_contexts(new_buffer, post_edit_ranges(edits)),
+            ),
+            BufferDelta::Unchanged | BufferDelta::FullReplace => Vec::new(),
         };
         let mut verified_root_injections = None;
         let structure_remapped = parse_succeeded
             && matches!(&delta, BufferDelta::Edits(edits) if {
-                if !edits_touch_old_injection
-                    && !edits_touch_new_injection
+                if old_injections_near_edits.is_empty()
+                    && new_injections_near_edits.is_empty()
                     && can_remap_structural_snapshot(
                     &self.parsed_buffer,
                     new_buffer,
@@ -481,10 +495,22 @@ impl TabSyntaxState {
                 ) {
                     true
                 } else if root_config.injections.is_some() {
+                    // A reparsed host node can start or end an injection away
+                    // from the edits; the edited old tree is in new coordinates.
+                    for tree in edited_old_tree.iter().chain([&self.tree]) {
+                        new_injections_near_edits.extend(injection_starts(
+                            tree,
+                            new_buffer,
+                            root_config,
+                            changed_byte_ranges.iter().cloned(),
+                        ));
+                    }
                     verified_root_injections = verified_injection_remap(
                         InjectionRemapInput {
                             snapshot: &self.structure.borrow(),
                             old_regions: &self.root_injections,
+                            old_injection_starts: &old_injections_near_edits,
+                            new_injection_starts: &new_injections_near_edits,
                             new_buffer,
                             edits,
                             changed_byte_ranges: &changed_byte_ranges,
@@ -655,27 +681,41 @@ impl TabSyntaxState {
     }
 }
 
-fn edits_touch_injected_syntax(
-    tree: &Tree,
-    buffer: &Rope,
-    config: &catalog::GrammarConfig,
-    ranges: impl IntoIterator<Item = Range<usize>>,
-) -> bool {
-    if config.injections.is_none() || buffer.len_chars() == 0 {
-        return false;
-    }
+/// The byte ranges of character `ranges` widened by one character on both
+/// sides, so edits to an injection boundary (a fence, tag, or template
+/// delimiter) query the containing injection pattern as well as edits within
+/// its content.
+fn edit_contexts<'a>(
+    buffer: &'a Rope,
+    ranges: impl IntoIterator<Item = Range<usize>> + 'a,
+) -> impl Iterator<Item = Range<usize>> + 'a {
     let len_chars = buffer.len_chars();
-    ranges.into_iter().any(|range| {
-        // Include one character of context on both sides so edits to an
-        // injection boundary (a fence, tag, or template delimiter) query the
-        // containing injection pattern as well as edits within its content.
+    ranges.into_iter().filter(move |_| len_chars > 0).map(move |range| {
         let start = range.start.min(len_chars);
         let end = range.end.min(len_chars).max(start);
         let context_start = start.saturating_sub(1);
         let context_end = end.max(start.saturating_add(1)).saturating_add(1).min(len_chars);
-        let bytes = buffer.char_to_byte(context_start)..buffer.char_to_byte(context_end);
-        !collect_rope_injection_matches(tree, buffer, config, bytes).is_empty()
+        buffer.char_to_byte(context_start)..buffer.char_to_byte(context_end)
     })
+}
+
+/// The content starts, as character offsets, of the injections whose
+/// patterns match within `byte_ranges`.
+fn injection_starts(
+    tree: &Tree,
+    buffer: &Rope,
+    config: &catalog::GrammarConfig,
+    byte_ranges: impl IntoIterator<Item = Range<usize>>,
+) -> Vec<usize> {
+    if config.injections.is_none() {
+        return Vec::new();
+    }
+    let len_bytes = buffer.len_bytes();
+    byte_ranges
+        .into_iter()
+        .flat_map(|bytes| collect_rope_injection_matches(tree, buffer, config, bytes))
+        .map(|injection| buffer.byte_to_char(injection.content_start.min(len_bytes)))
+        .collect()
 }
 
 fn post_edit_ranges(edits: &[BufferEdit]) -> impl Iterator<Item = Range<usize>> + '_ {
@@ -721,6 +761,13 @@ fn can_remap_structure_after_parse_change(
     new_tree: &Tree,
     grammar: GrammarId,
 ) -> bool {
+    // Inserted text can hold a new delimiter where the tree reports no
+    // change, as inside an error node, so it is compared as well.
+    let len_chars = new_buffer.len_chars();
+    let inserted_ranges = post_edit_ranges(edits).map(|range| {
+        let start = range.start.min(len_chars);
+        new_buffer.char_to_byte(start)..new_buffer.char_to_byte(range.end.min(len_chars).max(start))
+    });
     let changed_ranges = merge_byte_ranges(
         changed_byte_ranges
             .iter()
@@ -729,21 +776,28 @@ fn can_remap_structure_after_parse_change(
                 let end = range.end.min(new_buffer.len_bytes()).max(start);
                 start..end
             })
+            .chain(inserted_ranges)
             .filter(|range| !range.is_empty())
             .collect(),
     );
     if changed_ranges.is_empty() {
         return true;
     }
+    let changed_chars = changed_ranges
+        .iter()
+        .map(|range| new_buffer.byte_to_char(range.start)..new_buffer.byte_to_char(range.end))
+        .collect::<Vec<_>>();
     let injection_ranges = merge_byte_ranges(
         injection_regions
             .iter()
-            .map(|injection| new_buffer.char_to_byte(injection.start)..new_buffer.char_to_byte(injection.end))
+            .map(|injection| injection.start.min(len_chars)..injection.end.min(len_chars))
             .filter(|injection| {
-                changed_ranges
-                    .iter()
-                    .any(|changed| changed.start < injection.end && injection.start < changed.end)
+                let first = changed_chars.partition_point(|changed| changed.end <= injection.start);
+                changed_chars
+                    .get(first)
+                    .is_some_and(|changed| changed.start < injection.end)
             })
+            .map(|injection| new_buffer.char_to_byte(injection.start)..new_buffer.char_to_byte(injection.end))
             .collect(),
     );
 
@@ -754,15 +808,27 @@ fn can_remap_structure_after_parse_change(
     actual.dedup();
 
     let offsets = OffsetMapper::new(edits);
+    let mapped = |index: usize| offsets.map(snapshot.token_position(index));
     let mut expected = Vec::new();
-    for (index, _) in snapshot.tokens.iter().enumerate() {
-        let at = offsets.map(snapshot.token_position(index)).min(new_buffer.len_chars());
-        if at == new_buffer.len_chars() {
-            continue;
+    for changed in &changed_chars {
+        // No edit removed a token, so mapped positions still ascend.
+        let (mut first, mut last) = (0, snapshot.tokens.len());
+        while first < last {
+            let middle = first + (last - first) / 2;
+            if mapped(middle) < changed.start {
+                first = middle + 1;
+            } else {
+                last = middle;
+            }
         }
-        let byte = new_buffer.char_to_byte(at);
-        if ranges_contain(&changed_ranges, byte) && !ranges_contain(&injection_ranges, byte) {
-            expected.push((byte, new_buffer.char(at)));
+        for at in (first..snapshot.tokens.len())
+            .map(mapped)
+            .take_while(|at| *at < changed.end)
+        {
+            let byte = new_buffer.char_to_byte(at);
+            if !ranges_contain(&injection_ranges, byte) {
+                expected.push((byte, new_buffer.char(at)));
+            }
         }
     }
     expected.sort_unstable();
@@ -773,6 +839,10 @@ fn can_remap_structure_after_parse_change(
 struct InjectionRemapInput<'a> {
     snapshot: &'a StructuralSnapshot,
     old_regions: &'a [InjectionRegion],
+    /// Content starts of injections whose patterns matched near an edit, in
+    /// the old buffer, and near an edit or a changed range, in the new one.
+    old_injection_starts: &'a [usize],
+    new_injection_starts: &'a [usize],
     new_buffer: &'a Rope,
     edits: &'a [BufferEdit],
     changed_byte_ranges: &'a [Range<usize>],
@@ -787,12 +857,29 @@ fn verified_injection_remap(
     let InjectionRemapInput {
         snapshot,
         old_regions,
+        old_injection_starts,
+        new_injection_starts,
         new_buffer,
         edits,
         changed_byte_ranges,
         new_tree,
         root_grammar,
     } = input;
+    // Remapping shifts regions and tokens but never drops one. An injection
+    // boundary or a token inside a removed range would keep an offset that
+    // names nothing, possibly past the end of the new buffer.
+    if edits.iter().any(|edit| {
+        let first_token = snapshot.token_index_at_or_after(edit.range.start);
+        snapshot
+            .tokens
+            .get(first_token)
+            .is_some_and(|_| snapshot.token_position(first_token) < edit.range.end)
+    }) || old_regions
+        .iter()
+        .any(|region| edits_remove_offset(edits, region.start) || edits_remove_offset(edits, region.end))
+    {
+        return None;
+    }
     let offsets = OffsetMapper::new(edits);
     let mut regions = old_regions.to_vec();
     remap_injection_regions(&mut regions, edits);
@@ -807,6 +894,17 @@ fn verified_injection_remap(
             .saturating_add(1)
             .min(new_buffer.len_chars());
         affected_bytes.push(new_buffer.char_to_byte(context_start)..new_buffer.char_to_byte(context_end));
+    }
+    // An edit to a fence's language or a template's tag, or a reparsed host
+    // node, can start or end an injection without touching its content.
+    let len_chars = new_buffer.len_chars();
+    for at in old_injection_starts
+        .iter()
+        .map(|at| offsets.map(*at))
+        .chain(new_injection_starts.iter().copied())
+    {
+        let at = at.min(len_chars.saturating_sub(1));
+        affected_bytes.push(new_buffer.char_to_byte(at)..new_buffer.char_to_byte((at + 1).min(len_chars)));
     }
     let affected_bytes = merge_byte_ranges(
         affected_bytes
@@ -887,6 +985,13 @@ fn verified_injection_remap(
     .then_some(regions)
 }
 
+/// Whether `at` lies strictly inside a range that `edits`, sorted and
+/// disjoint, remove.
+fn edits_remove_offset(edits: &[BufferEdit], at: usize) -> bool {
+    let index = edits.partition_point(|edit| edit.range.end <= at);
+    edits.get(index).is_some_and(|edit| edit.range.start < at)
+}
+
 fn injection_region_shape(region: &InjectionRegion) -> (usize, usize, GrammarId, bool) {
     (region.start, region.end, region.embedded, region.include_children)
 }
@@ -920,6 +1025,16 @@ fn injected_structure_was_reused(
 
     let first = snapshot.token_index_at_or_after(old_region.start);
     let last = snapshot.token_index_at_or_after(old_region.end);
+    // The new region must hold exactly the old region's tokens. One that grew
+    // over host delimiters or shrank away from its own would pair them in a
+    // different stream.
+    let mapped = |index: usize| offsets.map(snapshot.token_position(index));
+    if (first > 0 && mapped(first - 1) >= new_region.start)
+        || (last < snapshot.tokens.len() && mapped(last) < new_region.end)
+        || (first < last && (mapped(first) < new_region.start || mapped(last - 1) >= new_region.end))
+    {
+        return false;
+    }
     let expected_unmatched = (first..last)
         .filter(|index| !snapshot.tokens[*index].matched)
         .map(|index| offsets.map(snapshot.token_position(index)))
@@ -940,23 +1055,28 @@ fn collect_structural_delimiters_in_ranges(
     ranges: &[Range<usize>],
     out: &mut Vec<(usize, char)>,
 ) {
-    if !ranges
-        .iter()
-        .any(|range| range.start < node.end_byte() && node.start_byte() < range.end)
-    {
+    // `ranges` are sorted and disjoint, so only the first one ending after
+    // the node starts can overlap it.
+    let (start, end) = (node.start_byte(), node.end_byte());
+    let first = ranges.partition_point(|range| range.end <= start);
+    if ranges.get(first).is_none_or(|range| range.start >= end) {
         return;
     }
     if node.child_count() == 0 {
+        // A missing node has no text; `/>` would claim the character before it.
+        if node.is_missing() {
+            return;
+        }
         let kind = node.kind().as_bytes();
-        let delimiter = if kind.len() == 1 && node.end_byte() == node.start_byte() + 1 {
+        let delimiter = if kind.len() == 1 && end == start + 1 {
             let ch = kind[0] as char;
             let basic = matches!(ch, '(' | ')' | '[' | ']' | '{' | '}');
             let angle = matches!(ch, '<' | '>') && angle_is_structural(grammar, node);
-            (basic || angle).then_some((node.start_byte(), ch))
+            (basic || angle).then_some((start, ch))
         } else if angle_is_structural(grammar, node) {
             match kind {
-                b"</" => Some((node.start_byte(), '<')),
-                b"/>" => Some((node.end_byte().saturating_sub(1), '>')),
+                b"</" => Some((start, '<')),
+                b"/>" => Some((end.saturating_sub(1), '>')),
                 _ => None,
             }
         } else {
@@ -2263,10 +2383,12 @@ fn input_edit_for(positions: &ParserPositions<'_>, edit: &BufferEdit) -> InputEd
 
 /// Tree-sitter counts only LF rows; document positions also count other
 /// Unicode separators. The parsed root can prove that both indexes agree.
-/// Otherwise scan LF bytes, without adding a second persistent line index.
+/// Otherwise scan LF bytes, without adding a second persistent line index;
+/// lookups in ascending order continue from the previous one.
 struct ParserPositions<'a> {
     buffer: &'a Rope,
     document_lines_match: bool,
+    scanned: Cell<(usize, Point)>,
 }
 
 impl<'a> ParserPositions<'a> {
@@ -2276,6 +2398,7 @@ impl<'a> ParserPositions<'a> {
             buffer,
             document_lines_match: root.end_byte() == buffer.len_bytes()
                 && root.end_position().row == buffer.len_lines().saturating_sub(1),
+            scanned: Cell::new((0, Point { row: 0, column: 0 })),
         }
     }
 
@@ -2287,32 +2410,32 @@ impl<'a> ParserPositions<'a> {
                 column: byte_offset - self.buffer.line_to_byte(row),
             };
         }
-        let mut point = Point { row: 0, column: 0 };
-        for chunk in self.buffer.byte_slice(..byte_offset).chunks() {
-            let bytes = chunk.as_bytes();
-            point.row += memchr::memchr_iter(b'\n', bytes).count();
-            point.column = memchr::memrchr(b'\n', bytes).map_or(point.column + bytes.len(), |at| bytes.len() - at - 1);
+        let (mut from, mut point) = self.scanned.get();
+        if byte_offset < from {
+            (from, point) = (0, Point { row: 0, column: 0 });
         }
+        for chunk in self.buffer.byte_slice(from..byte_offset).chunks() {
+            point = position_after_insertion(point, chunk);
+        }
+        self.scanned.set((byte_offset, point));
         point
     }
 }
 
-fn position_after_insertion(start: Point, replacement: &str) -> Point {
-    let bytes = replacement.as_bytes();
-    let mut row = start.row;
-    let mut last_line_start = 0usize;
-    for (i, byte) in bytes.iter().enumerate() {
-        if *byte == b'\n' {
-            row += 1;
-            last_line_start = i + 1;
-        }
+/// The tree-sitter point reached by inserting `text` at `start`: rows count
+/// LF bytes, and columns count bytes after the last one.
+fn position_after_insertion(start: Point, text: &str) -> Point {
+    let bytes = text.as_bytes();
+    match memchr::memrchr(b'\n', bytes) {
+        Some(last) => Point {
+            row: start.row + memchr::memchr_iter(b'\n', bytes).count(),
+            column: bytes.len() - last - 1,
+        },
+        None => Point {
+            row: start.row,
+            column: start.column + bytes.len(),
+        },
     }
-    let column = if row == start.row {
-        start.column + bytes.len()
-    } else {
-        bytes.len() - last_line_start
-    };
-    Point { row, column }
 }
 
 #[cfg(test)]
@@ -2334,19 +2457,25 @@ mod injection_budget_tests {
             let tree = parse_rope(&mut parser, &buffer, None).unwrap();
             let positions = ParserPositions::new(&buffer, &tree);
             assert_eq!(positions.document_lines_match, !source.contains('\u{b}'));
-            for char_offset in 0..=buffer.len_chars() {
-                let byte_offset = buffer.char_to_byte(char_offset);
-                let prefix = &source.as_bytes()[..byte_offset];
-                let expected = Point {
-                    row: prefix.iter().filter(|byte| **byte == b'\n').count(),
-                    column: prefix
-                        .iter()
-                        .rposition(|byte| *byte == b'\n')
-                        .map_or(byte_offset, |at| byte_offset - at - 1),
-                };
+            let points = (0..=buffer.len_chars())
+                .map(|char_offset| {
+                    let byte_offset = buffer.char_to_byte(char_offset);
+                    let prefix = &source.as_bytes()[..byte_offset];
+                    let point = Point {
+                        row: prefix.iter().filter(|byte| **byte == b'\n').count(),
+                        column: prefix
+                            .iter()
+                            .rposition(|byte| *byte == b'\n')
+                            .map_or(byte_offset, |at| byte_offset - at - 1),
+                    };
+                    (byte_offset, point)
+                })
+                .collect::<Vec<_>>();
+            // Ascending lookups continue the previous scan; others restart it.
+            for (byte_offset, expected) in points.iter().chain(points.iter().rev()) {
                 assert_eq!(
-                    positions.at_byte(byte_offset),
-                    expected,
+                    positions.at_byte(*byte_offset),
+                    *expected,
                     "at byte {byte_offset} in {source:?}"
                 );
             }

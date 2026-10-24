@@ -345,6 +345,13 @@ mod tests {
         let fenced = "```rust\nfn fenced() { call(1); }\n```\n";
         let links = "alpha [label](target)\nbeta { value }\n";
         let rust_identifier = "fn main() {\n    let x = 1;\n}\n";
+        let rust_macro = "fn main() {\n    let v = vec![1, 2, 3];\n}\n";
+        let rust_tail = "fn helper() {}\n\nfn main() {\n    println!(\"{}\", 1);\n    assert_eq!(2, 2);\n}\n";
+        let tail_start = rust_tail.find("\nfn main").unwrap();
+        let wrong_close = "fn f() { let a = [1(; }\n";
+        let tagged = "const a = html`<div></div>`;\n";
+        let templates = "html`<div>(</div>`html`<div>(</div>`;function f() { const a = `t${a}`";
+        let style = "<div>)<style>)<!-- ( --></style></style>f(1);</div></style>";
         for (case, language, before, edits, remapped) in [
             (
                 "identifier insert",
@@ -399,10 +406,73 @@ mod tests {
                 vec![edit_at(links, "alpha", 0, "x")],
                 true,
             ),
+            // Remapping cannot drop the tokens and regions an edit removes.
+            (
+                "typing over a selected macro",
+                SyntaxLanguage::Rust,
+                rust_macro,
+                vec![edit_at(rust_macro, "fn", rust_macro.len(), "x")],
+                false,
+            ),
+            (
+                "deleting from a macro to the end",
+                SyntaxLanguage::Rust,
+                rust_tail,
+                vec![edit_at(rust_tail, "\nfn main", rust_tail.len() - tail_start, "")],
+                false,
+            ),
+            (
+                "replacing a delimiter",
+                SyntaxLanguage::Rust,
+                wrong_close,
+                vec![edit_at(wrong_close, "(;", 1, "]")],
+                false,
+            ),
+            // An inserted delimiter can lie outside every changed range.
+            (
+                "inserting a delimiter",
+                SyntaxLanguage::Rust,
+                "){",
+                vec![edit_at("){", "{", 0, ")")],
+                false,
+            ),
+            // An injection can end without an edit touching its content.
+            (
+                "renaming a template's tag",
+                SyntaxLanguage::JavaScript,
+                tagged,
+                vec![edit_at(tagged, "tml`", 1, "")],
+                false,
+            ),
+            (
+                "reparsing a later template",
+                SyntaxLanguage::JavaScript,
+                templates,
+                vec![edit_at(templates, "tion f", 3, "")],
+                false,
+            ),
+            (
+                "growing an injection over host delimiters",
+                SyntaxLanguage::Html,
+                style,
+                vec![edit_at(style, "style></style>f", 2, "\n")],
+                false,
+            ),
         ] {
             let (state, _) = incremental_matches_fresh(language, before, edits);
             assert_eq!(state.structure_was_remapped(), remapped, "{case}");
         }
+    }
+
+    #[test]
+    fn an_unclosed_tag_adds_no_delimiter_for_its_missing_end() {
+        // Tree-sitter ends `<div` with an empty, missing `/>`.
+        let source = "<div\n";
+        let positions = token_positions(&parse(SyntaxLanguage::Html, source).shared_structure().borrow());
+        assert!(
+            positions.iter().all(|at| matches!(source.as_bytes()[*at], b'<' | b'>')),
+            "{positions:?}"
+        );
     }
 
     #[test]

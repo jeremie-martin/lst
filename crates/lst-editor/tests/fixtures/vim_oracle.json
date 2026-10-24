@@ -7059,6 +7059,314 @@
       }
     },
     {
+      "name": "delete backward word from line start keeps line break",
+      "area": "operators",
+      "initial_text": "x foo\nbar",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "db",
+      "expected": {
+        "text": "x \nbar",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "foo"
+        }
+      }
+    },
+    {
+      "name": "delete backward word from line start onto indented word is linewise",
+      "area": "operators",
+      "initial_text": "  foo\nbar",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "db",
+      "expected": {
+        "text": "bar",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "  foo"
+        }
+      }
+    },
+    {
+      "name": "change backward word from line start keeps line break",
+      "area": "operators",
+      "initial_text": "x foo\nbar",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "cbX<esc>",
+      "expected": {
+        "text": "x X\nbar",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "foo"
+        }
+      }
+    },
+    {
+      "name": "yank backward word from line start pastes linewise",
+      "area": "operators",
+      "initial_text": "foo\nbar",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "ybp",
+      "expected": {
+        "text": "foo\nfoo\nbar",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "foo"
+        }
+      }
+    },
+    {
+      "name": "delete counted backward words across a line stays charwise",
+      "area": "operators",
+      "initial_text": "one two\nthree four\nfive",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "d3b",
+      "expected": {
+        "text": "one \nfive",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "two\nthree four"
+        }
+      }
+    },
+    {
+      "name": "change word on one-letter word stops at its end",
+      "area": "operators",
+      "initial_text": "a bc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "cwX<esc>",
+      "expected": {
+        "text": "X bc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "a"
+        }
+      }
+    },
+    {
+      "name": "change word from last letter keeps the line break",
+      "area": "operators",
+      "initial_text": "ab\ncd",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "cwX<esc>",
+      "expected": {
+        "text": "aX\ncd",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "b"
+        }
+      }
+    },
+    {
+      "name": "change word on blanks stops before next word",
+      "area": "operators",
+      "initial_text": "a  b",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "cwX<esc>",
+      "expected": {
+        "text": "aXb",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "  "
+        }
+      }
+    },
+    {
+      "name": "change word on empty line keeps the next line",
+      "area": "operators",
+      "initial_text": "\nabc",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "cwX<esc>",
+      "expected": {
+        "text": "X\nabc",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "change word from last letter keeps the following space",
+      "area": "operators",
+      "initial_text": "alpha beta",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "cwX<esc>",
+      "expected": {
+        "text": "alphX beta",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "a"
+        }
+      }
+    },
+    {
+      "name": "delete two words from empty line skips indentation",
+      "area": "operators",
+      "initial_text": "\n  abc def",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "d2w",
+      "expected": {
+        "text": "def",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "\n  abc "
+        }
+      }
+    },
+    {
+      "name": "delete counted line end from mid line stays charwise",
+      "area": "operators",
+      "initial_text": "abc\ndef\nghi",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "d2$",
+      "expected": {
+        "text": "a\nghi",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "bc\ndef"
+        }
+      }
+    },
+    {
+      "name": "change counted line end from mid line keeps line start",
+      "area": "operators",
+      "initial_text": "abc\ndef\nghi",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "c2$X<esc>",
+      "expected": {
+        "text": "aX\nghi",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "bc\ndef"
+        }
+      }
+    },
+    {
+      "name": "yank counted line end from mid line pastes charwise",
+      "area": "operators",
+      "initial_text": "abc\ndef\nghi",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "y2$Gp",
+      "expected": {
+        "text": "abc\ndef\nghbc\ndefi",
+        "cursor": {
+          "line": 2,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "bc\ndef"
+        }
+      }
+    },
+    {
       "name": "delete inner double quote via double-quote at open",
       "area": "text_objects",
       "initial_text": "prefix \"alpha beta\" tail",

@@ -897,6 +897,21 @@ impl LstGpuiApp {
         }
     }
 
+    /// Applies a model update that no user input caused, such as an autosave
+    /// tick or its completion, without dismissing the message on screen.
+    fn update_model_in_background(
+        &mut self,
+        cx: &mut Context<Self>,
+        notify_after_update: bool,
+        update: impl FnOnce(&mut EditorModel),
+    ) {
+        let message = self.cleanup_message.take();
+        self.update_model(cx, notify_after_update, update);
+        if self.cleanup_message.is_none() {
+            self.cleanup_message = message;
+        }
+    }
+
     fn update_model(
         &mut self,
         cx: &mut Context<Self>,

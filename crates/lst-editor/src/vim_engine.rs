@@ -209,20 +209,33 @@ impl EditorModel {
         if motion.starts_with(['f', 'F', 't', 'T']) && motion.chars().count() < 2 {
             return false;
         }
-        let op_motion = match (op, motion) {
-            (Op::Change, "w") => "e",
-            (Op::Change, "W") => "E",
-            _ => motion,
-        };
+        if op == Op::Change && matches!(motion, "w" | "W") {
+            if let Some(at) = self.change_word_end(count, motion == "W") {
+                self.vim.preferred_column = None;
+                return self.vim_apply_motion(
+                    op,
+                    Motion {
+                        at,
+                        linewise: false,
+                        inclusive: true,
+                    },
+                );
+            }
+        }
         if motion == "$" && count > 1 {
             let first = self.cursor().line;
+            if first + 1 >= self.active_tab().line_count() {
+                // Vim's cursor_down fails on the last line, cancelling the operator.
+                return true;
+            }
             let last = (first + count - 1).min(self.active_tab().line_count() - 1);
-            if op == Op::Delete {
+            let range = self.cursor_offset()..self.line_end(last);
+            if op == Op::Delete && self.vim_delete_is_linewise(&range, last) {
                 return self.vim_apply_lines_span(op, first, last);
             }
-            return self.vim_apply_range(op, self.line_start(first)..self.line_end(last));
+            return self.vim_apply_range(op, range);
         }
-        if let Some(m) = self.vim_motion_command(count, op_motion, true) {
+        if let Some(m) = self.vim_motion_command(count, motion, true) {
             return self.vim_apply_motion(op, m);
         }
         true
@@ -300,9 +313,9 @@ impl EditorModel {
                     inclusive: count == 1,
                 });
             }
-            "H" => return Some(self.screen_motion(self.viewport.screen_top_row())),
-            "M" => return Some(self.screen_motion(self.viewport.screen_middle_row())),
-            "L" => return Some(self.screen_motion(self.viewport.screen_bottom_row())),
+            "H" => return Some(self.screen_motion(self.viewport.screen_top_row(), operator)),
+            "M" => return Some(self.screen_motion(self.viewport.screen_middle_row(), operator)),
+            "L" => return Some(self.screen_motion(self.viewport.screen_bottom_row(), operator)),
             ";" | "," => return self.repeat_char_find(cmd == ";", operator),
             _ if cmd.starts_with(['f', 'F', 't', 'T']) && cmd.chars().count() == 2 => {
                 let mut chars = cmd.chars();
@@ -374,26 +387,61 @@ impl EditorModel {
             return self.vim_apply_lines_span(op, a, b);
         }
         let cur = self.cursor_offset();
-        let mut at = motion.at;
-        // Vim's exclusive-motion rule (:h exclusive-linewise): an exclusive
-        // motion that ends in column 0 of a later line ends at the end of the
-        // previous line instead; if it started at or before the first
-        // non-blank, it becomes linewise, so `dw` on an empty line deletes it.
-        if !motion.inclusive && at > cur {
-            let buffer = self.active_tab().buffer();
-            let (at_pos, cur_pos) = (char_to_position(buffer, at), char_to_position(buffer, cur));
-            if at_pos.column == 0 && at_pos.line > cur_pos.line {
-                if cur_pos.column <= self.indent_of(cur_pos.line).chars().count() {
-                    return self.vim_apply_lines_span(op, cur_pos.line, at_pos.line - 1);
-                }
-                at = self.line_end(at_pos.line - 1);
-            }
-        }
+        let at = motion.at;
         let mut range = if at >= cur { cur..at } else { at..cur };
         if motion.inclusive && at >= cur {
             range.end = self.next_grapheme(range.end);
         }
+        // Vim's exclusive-motion rule (:h exclusive-linewise) adjusts the end of
+        // the operated text whichever way the motion went: an end in column 0
+        // of a later line moves to the end of the previous line, and if the
+        // start is at or before the first non-blank the motion becomes linewise
+        // (`dw` on an empty line, `db` from column 0 onto a one-word line).
+        if !motion.inclusive {
+            let buffer = self.active_tab().buffer();
+            let (start_pos, end_pos) = (
+                char_to_position(buffer, range.start),
+                char_to_position(buffer, range.end),
+            );
+            if end_pos.column == 0 && end_pos.line > start_pos.line {
+                if start_pos.column <= self.indent_of(start_pos.line).chars().count() {
+                    if op == Op::Yank {
+                        self.active_tab_mut().move_to(range.start);
+                    }
+                    return self.vim_apply_lines_span(op, start_pos.line, end_pos.line - 1);
+                }
+                range.end = self.line_end(end_pos.line - 1);
+            }
+        }
+        if op == Op::Delete && !range.is_empty() {
+            let last = if motion.inclusive {
+                self.prev_grapheme(range.end)
+            } else {
+                range.end
+            };
+            let last_line = char_to_position(self.active_tab().buffer(), last).line;
+            if self.vim_delete_is_linewise(&range, last_line) {
+                let first = char_to_position(self.active_tab().buffer(), range.start).line;
+                return self.vim_apply_lines_span(op, first, last_line);
+            }
+        }
         self.vim_apply_range(op, range)
+    }
+
+    /// Vim's op_delete rule: a characterwise delete over several lines that
+    /// starts at or before the first non-blank and leaves only blanks on its
+    /// last line deletes those lines linewise.
+    fn vim_delete_is_linewise(&self, range: &Range<usize>, last_line: usize) -> bool {
+        let buffer = self.active_tab().buffer();
+        let start = char_to_position(buffer, range.start);
+        let line_end = self.line_end(last_line);
+        last_line > start.line
+            && start.column <= self.indent_of(start.line).chars().count()
+            && (range.end >= line_end
+                || buffer
+                    .slice(range.end..line_end)
+                    .chars()
+                    .all(|c| matches!(c, ' ' | '\t')))
     }
 
     fn vim_apply_range(&mut self, op: Op, range: Range<usize>) -> bool {
@@ -793,22 +841,37 @@ impl EditorModel {
             return true;
         }
 
+        // Display text keeps VT, FF, NEL, LS and PS line breaks; join without
+        // them, and leave the last line's own break in place.
         let buffer = self.active_tab().buffer();
-        let mut joined = line_display_text(buffer, first);
+        let body = |line| {
+            let mut text = line_display_text(buffer, line);
+            if text.ends_with(['\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}']) {
+                text.pop();
+            }
+            text
+        };
+        let mut joined = body(first);
+        let mut joined_chars = joined.chars().count();
         let mut ends_in_blank = joined.ends_with([' ', '\t']);
         let mut last_join = 0;
+        let mut last_body_chars = 0;
         for line in first + 1..=last {
-            let text = line_display_text(buffer, line);
+            let text = body(line);
+            last_body_chars = text.chars().count();
             let part = text.trim_start_matches([' ', '\t']);
-            last_join = joined.chars().count();
+            last_join = joined_chars;
             if !part.is_empty() && !part.starts_with(')') && !joined.is_empty() && !ends_in_blank {
                 joined.push(' ');
+                joined_chars += 1;
             }
             joined.push_str(part);
+            joined_chars += part.chars().count();
             ends_in_blank = part.ends_with([' ', '\t']);
         }
-        let cursor_col = last_join.min(joined.chars().count().saturating_sub(1));
-        let change = TextChange::replace(self.line_start(first)..self.line_end(last), joined);
+        let cursor_col = last_join.min(joined_chars.saturating_sub(1));
+        let end = self.line_start(last) + last_body_chars;
+        let change = TextChange::replace(self.line_start(first)..end, joined);
         self.apply_active_edit_request(
             EditRequest::single_other_at_position(change, Position::new(first, cursor_col)),
             Some(RevealIntent::NearestEdge),
@@ -820,6 +883,10 @@ impl EditorModel {
         self.find_submit = crate::FindSubmit::Vim {
             backward,
             origin: self.cursor(),
+            tab: self.active_tab_id(),
+            revision: self.active_tab().revision(),
+            shown: self.cursor(),
+            navigated: false,
         };
         self.vim.search_backward = backward;
         self.find.visible = true;
@@ -829,18 +896,90 @@ impl EditorModel {
     }
 
     /// Neovim's incremental search: show the match the search would land on
-    /// from where it started, or stay there while nothing matches.
-    pub(crate) fn preview_vim_search(&mut self, origin: Position, backward: bool) {
-        self.reindex_find_matches();
+    /// from where it started, or stay there while nothing matches. Callers
+    /// index the current query first.
+    pub(crate) fn preview_vim_search(&mut self) {
+        self.refresh_vim_search_anchor();
+        let crate::FindSubmit::Vim { backward, origin, .. } = self.find_submit else {
+            return;
+        };
         let target = if backward {
             self.find.prev_from(origin)
         } else {
             self.find.next_from(origin)
         };
         self.move_to_vim_search_target(target.unwrap_or(origin));
-        if target.is_some() {
-            self.queue_reveal(RevealIntent::Center);
+        self.queue_reveal(if target.is_some() {
+            RevealIntent::Center
+        } else {
+            RevealIntent::NearestEdge
+        });
+        self.record_vim_search_cursor(false);
+    }
+
+    /// Enter: keep a match chosen by stepping inside the prompt, otherwise
+    /// land where the preview shows from the search origin.
+    pub(crate) fn accept_vim_search(&mut self) {
+        let navigated = matches!(self.find_submit, crate::FindSubmit::Vim { navigated: true, .. });
+        if !(navigated && self.vim_search_anchor_current()) {
+            // The last query edit already indexed this query.
+            self.ensure_find_matches_current();
+            self.preview_vim_search();
         }
+    }
+
+    /// Returns a Vim search to where it started, as Neovim does on Esc, unless
+    /// the user has since moved the cursor, edited, or switched tabs.
+    pub(crate) fn restore_vim_search_origin(&mut self) {
+        let crate::FindSubmit::Vim { origin, shown, .. } = self.find_submit else {
+            return;
+        };
+        if self.vim_search_anchor_current() && shown != origin {
+            self.move_to_vim_search_target(origin);
+            self.queue_reveal(RevealIntent::NearestEdge);
+        }
+    }
+
+    /// Searches an open Vim prompt from the cursor when the cursor, the text,
+    /// or the active tab changed since the prompt last placed the cursor.
+    pub(crate) fn refresh_vim_search_anchor(&mut self) {
+        if let crate::FindSubmit::Vim { backward, .. } = self.find_submit {
+            if !self.vim_search_anchor_current() {
+                self.find_submit = crate::FindSubmit::Vim {
+                    backward,
+                    origin: self.cursor(),
+                    tab: self.active_tab_id(),
+                    revision: self.active_tab().revision(),
+                    shown: self.cursor(),
+                    navigated: false,
+                };
+            }
+        }
+    }
+
+    /// Records the cursor an open Vim prompt has just placed.
+    pub(crate) fn record_vim_search_cursor(&mut self, navigated: bool) {
+        if let crate::FindSubmit::Vim { backward, origin, .. } = self.find_submit {
+            self.find_submit = crate::FindSubmit::Vim {
+                backward,
+                origin,
+                tab: self.active_tab_id(),
+                revision: self.active_tab().revision(),
+                shown: self.cursor(),
+                navigated,
+            };
+        }
+    }
+
+    /// Whether the open Vim search prompt still owns the cursor it last placed.
+    fn vim_search_anchor_current(&self) -> bool {
+        matches!(
+            self.find_submit,
+            crate::FindSubmit::Vim { tab, revision, shown, .. }
+                if tab == self.active_tab_id()
+                    && revision == self.active_tab().revision()
+                    && shown == self.cursor()
+        )
     }
 
     fn vim_search_step(&mut self, same_direction: bool) -> bool {
@@ -1053,13 +1192,15 @@ impl EditorModel {
         self.vim_finish_normal();
     }
 
-    fn screen_motion(&mut self, row: usize) -> Motion {
+    /// `H`, `M` and `L` move to a screen row's first non-blank; like `G`,
+    /// they are linewise under an operator.
+    fn screen_motion(&mut self, row: usize, operator: bool) -> Motion {
         let row = row.min(self.active_tab().line_count() - 1);
         let at = self.line_first_nonblank(row);
         self.queue_reveal(RevealIntent::NearestEdge);
         Motion {
             at,
-            linewise: false,
+            linewise: operator,
             inclusive: false,
         }
     }
@@ -1194,7 +1335,8 @@ impl EditorModel {
 
     /// `count` words forward. Under an operator, Vim ends the last word at the
     /// end of a non-empty line rather than moving on to the next line
-    /// (:h word, "Another special case").
+    /// (:h word, "Another special case"), and at the start of the next line
+    /// when it begins on an empty line.
     fn word_forward_motion(&self, count: usize, big: bool, operator: bool) -> usize {
         let start = self.cursor_offset();
         let before_last = if count > 1 {
@@ -1205,11 +1347,41 @@ impl EditorModel {
         let last = self.word_forward(before_last, big);
         let line = char_to_position(self.active_tab().buffer(), before_last).line;
         let leaves_line = char_to_position(self.active_tab().buffer(), last).line > line;
-        if operator && leaves_line && self.line_end(line) > self.line_start(line) {
-            self.line_end(line)
+        if operator && leaves_line {
+            if self.line_end(line) > self.line_start(line) {
+                self.line_end(line)
+            } else {
+                self.line_start(line + 1)
+            }
+        } else if !operator {
+            // Past the last word of the buffer the cursor stays on the last
+            // character, as Vim's adjust_cursor() keeps it off the line end.
+            last.min(self.line_last(char_to_position(self.active_tab().buffer(), last).line))
         } else {
             last
         }
+    }
+
+    /// Where `cw`/`cW` end on a non-blank (Vim's nv_wordcmd): the end of the
+    /// current word, even when the cursor is already on its last character,
+    /// then `count - 1` more word ends. `None` on a blank or an empty line,
+    /// where `cw` is an ordinary `w`.
+    fn change_word_end(&self, count: usize, big: bool) -> Option<usize> {
+        let cursor = self.cursor();
+        let tokens = TokenLine(cursor.line, self.line_cells(cursor.line), big);
+        if tokens.1.is_empty() {
+            return None;
+        }
+        let run = tokens.run(cell_containing_char(&tokens.1, cursor.column));
+        if run.class == TokenClass::Whitespace {
+            return None;
+        }
+        let end = self.line_start(cursor.line) + tokens.1[run.end].char_start;
+        Some(if count > 1 {
+            repeat_offset(self, end, count - 1, |s, off| s.word_end(off, big))
+        } else {
+            end
+        })
     }
 
     fn word_forward(&self, at: usize, big: bool) -> usize {
@@ -1230,12 +1402,6 @@ impl EditorModel {
 
     fn word_forward_position(&self, mut line: usize, col: usize, big: bool) -> (usize, usize) {
         let mut tokens = TokenLine(line, self.line_cells(line), big);
-        if tokens.1.is_empty() {
-            if line + 1 < self.active_tab().line_count() {
-                return (line + 1, 0);
-            }
-            return (line, 0);
-        }
         let mut ix = if col >= self.line_len(line) {
             tokens.1.len()
         } else {

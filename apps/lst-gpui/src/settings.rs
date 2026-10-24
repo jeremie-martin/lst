@@ -334,6 +334,26 @@ impl SettingsStore {
                 format!("refusing to overwrite invalid settings: {error}"),
             ));
         }
+        // An edit made outside lst since the last poll is reloaded on the next
+        // poll, valid or not, rather than overwritten by this save.
+        if let Some(path) = self.path.as_deref() {
+            let on_disk = match fs::read_to_string(path) {
+                Ok(source) => source,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+                Err(error) => return Err(error),
+            };
+            if on_disk != self.source {
+                return Err(io::Error::other(format!(
+                    "{} changed on disk; reloading it instead of overwriting it",
+                    path.display()
+                )));
+            }
+        }
+        self.write()
+    }
+
+    /// Writes the current settings over the file, whatever it holds now.
+    fn write(&mut self) -> io::Result<()> {
         self.settings = self.settings.clone().normalized();
         write_settings_to_document(&mut self.document, &self.settings);
         let path = self
@@ -350,7 +370,8 @@ impl SettingsStore {
         self.settings = AppSettings::default();
         self.document = DocumentMut::new();
         self.parse_error = None;
-        self.save()
+        // Resetting is an explicit request to replace the file.
+        self.write()
     }
 
     pub(crate) fn reloaded_if_changed(&self) -> Option<Self> {
@@ -661,5 +682,30 @@ mod tests {
         );
         assert!(store.save().is_err(), "the broken file is not overwritten");
         assert_eq!(fs::read_to_string(&path).unwrap(), "not toml [");
+    }
+
+    #[test]
+    fn saving_never_overwrites_an_edit_the_reload_poll_has_not_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for external in ["version = 1\n[editor]\nfont_size = 22\n", "not toml [", ""] {
+            fs::write(&path, "version = 1\n").unwrap();
+            let mut store = SettingsStore::load_from(Some(path.clone()));
+            if external.is_empty() {
+                fs::remove_file(&path).unwrap();
+            } else {
+                fs::write(&path, external).unwrap();
+            }
+            store.settings.editor.font_size = 20;
+            assert!(store.save().is_err(), "{external:?}");
+            assert_eq!(fs::read_to_string(&path).unwrap_or_default(), external, "{external:?}");
+
+            let reloaded = store.reloaded_if_changed().expect("the edit is reloaded instead");
+            store = reloaded;
+            store.settings.editor.font_size = 14;
+            if store.error().is_none() {
+                store.save().expect("a seen edit can be saved over");
+            }
+        }
     }
 }

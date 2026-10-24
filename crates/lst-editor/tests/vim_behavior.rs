@@ -4,7 +4,7 @@
 
 mod support;
 
-use lst_editor::{vim, EditorEffect, FocusTarget, RevealIntent};
+use lst_editor::{vim, EditorCommand, EditorEffect, FocusTarget, RevealIntent};
 
 use support::{run_cursor_cases, run_text_cases, VimHarness};
 
@@ -313,4 +313,122 @@ fn viewport_page_motions_preserve_visual_state() {
     harness.keys("<pagedown><pageup>");
     let effects = harness.take_effects();
     assert!(effects.contains(&EditorEffect::Reveal(RevealIntent::NearestEdge)));
+}
+
+#[test]
+fn search_prompt_left_open_does_not_pull_the_cursor_back() {
+    // Moving the cursor while the prompt stays open (a click, Tab to the
+    // editor, a context menu) hands it to the user: dismissing the prompt
+    // later leaves it there.
+    let mut harness = VimHarness::normal_at("zero\none foo\ntwo\nthree\nfour", 0, 0);
+    harness.keys("/foo");
+    harness.expect_cursor(1, 4);
+    harness.model.set_active_cursor_position(3, 2);
+    harness.sync_effects();
+    harness.model.cancel_find_query();
+    harness.sync_effects();
+    harness.expect_cursor(3, 2);
+
+    // A prompt carried into another tab searches from that tab's cursor and
+    // never applies the first tab's start position there.
+    let mut harness = VimHarness::with_two_tabs("aaa\nbbb\nccc\nddd\neee\n", "x\nx\nx\nx\nfoo\nx\nfoo\n");
+    harness.keys("<esc>");
+    harness.model.set_active_cursor_position(4, 0);
+    harness.sync_effects();
+    harness.keys("/");
+    harness.model.execute(EditorCommand::NextTab);
+    harness.model.set_active_cursor_position(0, 0);
+    harness.sync_effects();
+    harness.model.update_find_query_and_activate("foo".to_string());
+    harness.sync_effects();
+    harness.expect_cursor(4, 0);
+    harness.model.set_active_cursor_position(2, 0);
+    harness.sync_effects();
+    harness.model.cancel_find_query();
+    harness.sync_effects();
+    harness.expect_cursor(2, 0);
+}
+
+#[test]
+fn search_prompt_reveals_the_start_position_it_returns_to() {
+    let text = (0..400)
+        .map(|line| {
+            if line == 300 {
+                "zebra".to_string()
+            } else {
+                format!("line {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut harness = VimHarness::normal_at(&text, 0, 0);
+    harness.keys("/z");
+    harness.expect_cursor(300, 0);
+    harness.take_effects();
+    harness.keys("q");
+    harness.expect_cursor(0, 0);
+    assert!(harness
+        .take_effects()
+        .iter()
+        .any(|effect| matches!(effect, EditorEffect::Reveal(_))));
+    harness.keys("<bs>");
+    harness.expect_cursor(300, 0);
+    harness.take_effects();
+    harness.keys("<esc>");
+    harness.expect_cursor(0, 0);
+    assert!(harness
+        .take_effects()
+        .iter()
+        .any(|effect| matches!(effect, EditorEffect::Reveal(RevealIntent::NearestEdge))));
+}
+
+#[test]
+fn enter_accepts_a_match_chosen_by_stepping_inside_the_search_prompt() {
+    let mut harness = VimHarness::normal_at("foo\nfoo\nfoo\nfoo\n", 0, 1);
+    harness.keys("/foo");
+    harness.expect_cursor(1, 0);
+    harness.model.execute(EditorCommand::FindPrev);
+    harness.sync_effects();
+    harness.expect_cursor(0, 0);
+    harness.keys("<enter>");
+    harness.expect_cursor(0, 0);
+    assert!(!harness.model.find().visible);
+
+    let mut harness = VimHarness::normal_at("foo\nfoo\nfoo\nfoo\n", 0, 1);
+    harness.keys("/foo");
+    harness.model.execute(EditorCommand::FindNext);
+    harness.sync_effects();
+    harness.expect_cursor(2, 0);
+    harness.keys("<esc>");
+    harness.expect_cursor(0, 1);
+}
+
+#[test]
+fn join_removes_unicode_line_separators_between_joined_lines() {
+    for separator in ["\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+        let mut harness = VimHarness::normal_at(&format!("a{separator}b"), 0, 0);
+        harness.keys("J");
+        harness.expect_text("a b");
+
+        // The last joined line keeps the break that ends it.
+        let mut harness = VimHarness::normal_at(&format!("a\nb{separator}c"), 0, 0);
+        harness.keys("J");
+        harness.expect_text(&format!("a b{separator}c"));
+    }
+}
+
+#[test]
+fn screen_motions_are_linewise_under_operators() {
+    for (keys, line, text) in [
+        ("dL", 0, "e\nf"),
+        ("dM", 0, "c\nd\ne\nf"),
+        ("dH", 3, "e\nf"),
+        ("cLX<esc>", 0, "X\ne\nf"),
+    ] {
+        let mut harness = VimHarness::normal_at("a\nb\nc\nd\ne\nf", line, 0);
+        harness.model.set_viewport_rows(4);
+        harness.model.set_viewport_top(0);
+        harness.keys(keys);
+        harness.expect_text(text);
+    }
 }

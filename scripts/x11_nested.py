@@ -39,6 +39,22 @@ REQUIRED_COMMANDS = (
 )
 REQUIRED_EXTENSIONS = ("DAMAGE", "XTEST", "XKEYBOARD")
 DISPLAY_ALLOCATION_LOCK = Path(tempfile.gettempdir()) / "lst-x11-nested-display.lock"
+# The standard session bus policy, without <standard_session_servicedirs/>:
+# nothing is activated on demand, so no portal or settings service can reach
+# the host display or read the host user's settings.
+PRIVATE_SESSION_BUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"""
 
 
 class NestedDisplayError(RuntimeError):
@@ -239,12 +255,17 @@ class NestedDisplay:
     def _start_session_bus(self) -> None:
         # A private session bus keeps the editor under test away from the
         # host desktop: a file dialog or settings portal must not open on,
-        # or read from, the developer's real session.
+        # or read from, the developer's real session. The bus lists no
+        # service directories, so it activates no portal, and it runs with
+        # the nested environment rather than the host's.
+        config = self.session_dir / "session-bus.conf"
+        config.write_text(PRIVATE_SESSION_BUS_CONFIG, encoding="utf-8")
         self.dbus = subprocess.Popen(
-            ["dbus-daemon", "--session", "--nofork", "--print-address=1"],
+            ["dbus-daemon", f"--config-file={config}", "--nofork", "--print-address=1"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            env=self.nested_env(),
             start_new_session=True,
         )
         assert self.dbus.stdout is not None
