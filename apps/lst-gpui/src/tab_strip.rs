@@ -48,12 +48,13 @@ impl LstGpuiApp {
                 .model
                 .tabs()
                 .iter()
+                .zip(self.tab_display_labels())
                 .enumerate()
-                .map(|(ix, tab)| {
+                .map(|(ix, (tab, label))| {
                     let active = !self.recent.is_open() && ix == self.model.active_index();
                     TabProps {
                         id: tab.id(),
-                        label: self.tab_display_label(ix),
+                        label,
                         modified: tab.modified(),
                         missing: tab.backing_file_missing(),
                         saving: tab.path().is_some_and(|path| self.save_inflight.contains_key(path)),

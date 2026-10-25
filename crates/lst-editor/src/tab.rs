@@ -430,13 +430,12 @@ impl EditorTab {
     pub fn modified(&self) -> bool {
         self.content_epoch != self.saved_content_epoch
     }
-    pub fn display_name(&self) -> String {
+    pub fn display_name(&self) -> &str {
         self.origin
             .path()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| self.name_hint.clone())
+            .unwrap_or(&self.name_hint)
     }
     pub fn revision(&self) -> u64 {
         self.revision

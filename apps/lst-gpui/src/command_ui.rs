@@ -141,25 +141,24 @@ impl LstGpuiApp {
         self.update_model(cx, true, |model| model.set_active_language_mode(mode));
     }
 
-    pub(crate) fn tab_display_label(&self, index: usize) -> String {
-        let Some(tab) = self.model.tab(index) else {
-            return String::new();
-        };
-        let base_name = tab.display_name().to_string();
-        let duplicate_name = self
-            .model
-            .tabs()
-            .iter()
-            .enumerate()
-            .any(|(other_index, other)| other_index != index && other.display_name() == base_name);
-        if !duplicate_name {
-            return base_name;
+    pub(crate) fn tab_display_labels(&self) -> impl Iterator<Item = String> + '_ {
+        let mut counts = std::collections::HashMap::new();
+        for tab in self.model.tabs() {
+            *counts.entry(tab.display_name()).or_insert(0usize) += 1;
         }
-        tab.path()
-            .and_then(|path| path.parent())
-            .and_then(|parent| parent.file_name())
-            .map(|parent| format!("{base_name} — {}", parent.to_string_lossy()))
-            .unwrap_or(base_name)
+        self.model.tabs().iter().map(move |tab| {
+            let name = tab.display_name();
+            if counts[name] > 1 {
+                if let Some(parent) = tab
+                    .path()
+                    .and_then(|path| path.parent())
+                    .and_then(|path| path.file_name())
+                {
+                    return format!("{name} — {}", parent.to_string_lossy());
+                }
+            }
+            name.to_owned()
+        })
     }
 
     fn commands_for_menu(&self, ids: &[&str]) -> Vec<crate::workspace_action::CommandSpec> {
@@ -455,11 +454,12 @@ impl LstGpuiApp {
             .model
             .tabs()
             .iter()
+            .zip(self.tab_display_labels())
             .enumerate()
-            .map(|(index, tab)| {
+            .map(|(index, (tab, label))| {
                 (
                     index,
-                    self.tab_display_label(index),
+                    label,
                     tab.path().map(|path| path.to_string_lossy().into_owned()),
                     tab.modified(),
                     tab.backing_file_missing(),

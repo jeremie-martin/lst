@@ -47,7 +47,7 @@ impl EditorModel {
         } else {
             self.queue_effect(EditorEffect::SaveFileAs {
                 tab_id,
-                suggested_name: tab.display_name(),
+                suggested_name: tab.display_name().to_owned(),
                 body,
                 revision,
                 previous_scratchpad_path: tab.scratchpad_path().cloned(),
@@ -65,7 +65,7 @@ impl EditorModel {
         };
         self.queue_effect(EditorEffect::SaveFileAs {
             tab_id,
-            suggested_name: tab.display_name(),
+            suggested_name: tab.display_name().to_owned(),
             body: tab.buffer_text(),
             revision: tab.revision(),
             previous_scratchpad_path: tab.scratchpad_path().cloned(),

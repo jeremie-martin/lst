@@ -562,11 +562,15 @@ add caching, pooling or another layer.
   The historical slowdown is not a fresh timing result; an optimization needs a current
   controlled comparison.
 
-- [ ] **Cost confirmed; impact unmeasured:** Tab-label construction repeatedly scans all
-  tabs and allocates labels, producing quadratic work per render. (23/EF4; October 24
-  EF8)
-  Review: Every tab label scans all other tabs during prop construction, even when the
-  cached child is reused. Quadratic work is present; material cost depends on tab count.
+- [x] **Implemented (2026-10-26):** Tab-label construction repeatedly scans all tabs
+  and allocates names, producing quadratic work per render. (23/EF4; October 24 EF8)
+  Resolution: Display names borrow the existing path/name storage. Both the tab strip
+  and tab list count duplicate names once, then allocate only their resulting labels.
+  No retained cache, invalidation protocol or extra source lines were added. Isolated
+  release measurements at 10/50/200/1,000 unique tabs show the computation improves
+  across the range; this does not claim an end-to-end frame speedup. Fast all-feature
+  tests pass; combined X11 acceptance remains pending. Source, individual runs and
+  methodology: `/home/holo/agent-exports/foundation-costs-2026-10-25`.
 
 - [x] **Resolved (2026-10-25):** Syntax changes can unnecessarily remeasure
   unchanged layout through the end of a large construct. (23/AL2; October 24 EF1)
