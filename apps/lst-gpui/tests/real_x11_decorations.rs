@@ -326,14 +326,19 @@ fn selection_match_limit_and_multi_cursor_agreement_are_explicit() -> TestResult
         let mut editor = session.open_file("chrome-selection-match-boundaries", &path)?;
         editor.place_cursor_at_document_start()?;
 
-        editor.keys("<S-end>")?;
+        // Shift+End selects a visual row under wrapping. Select this logical
+        // span explicitly so the limit check is independent of DPI and width.
+        editor.keys("<C-g>1:202<enter><C-S-home>")?;
         editor.wait_state("selection over match limit is ignored", secs(5), |record| {
-            record.cursors[0].head_col == 201 && record.viewport.selection_match_highlights.is_empty()
+            record.cursors[0].anchor_char == 201
+                && record.cursors[0].head_char == 0
+                && record.viewport.selection_match_highlights.is_empty()
         })?;
 
-        editor.keys("<S-left>")?;
+        editor.keys("<S-right>")?;
         editor.wait_state("selection at match limit is highlighted", secs(2), |record| {
-            record.cursors[0].head_col == 200
+            record.cursors[0].anchor_char == 201
+                && record.cursors[0].head_char == 1
                 && record
                     .viewport
                     .selection_match_highlights

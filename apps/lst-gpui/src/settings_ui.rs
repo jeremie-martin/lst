@@ -1731,7 +1731,7 @@ impl LstGpuiApp {
                                         gpui::FontWeight::NORMAL
                                     })
                                     .text_color(rgb(if active {
-                                        theme.role.accent
+                                        theme.role.text
                                     } else {
                                         theme.role.text_subtle
                                     }))
@@ -2180,7 +2180,7 @@ fn setting_choice(
         } else {
             theme.role.control_bg
         }))
-        .text_color(rgb(if active { theme.role.accent } else { theme.role.text }))
+        .text_color(rgb(theme.role.text))
         .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
         .cursor(CursorStyle::PointingHand)
         .hover(move |style| style.bg(rgb(hover_bg)))
@@ -2215,7 +2215,7 @@ fn font_family_option(
         .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
         .child(family)
         .when(current, |row| {
-            row.child(div().text_color(rgb(theme.role.accent)).child("Selected"))
+            row.child(div().text_color(rgb(theme.role.text)).child("Selected"))
         })
 }
 

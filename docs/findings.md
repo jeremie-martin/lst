@@ -852,10 +852,14 @@ changing code. Rejection is a valid outcome.
   action. No new missed-action failure was established. Avoid inventing a general
   acknowledgement layer without a reproducer.
 
-- [ ] **Needs evidence:** Settings selected-row contrast is inadequate. (C43)
-  Review: Active category colours have relatively low contrast, especially in Dark, but
-  the ledger does not establish a readability failure or accepted visual criterion. Keep
-  this as a visual review question, not an automatic palette redesign.
+- [x] **Implemented (2026-10-26):** Settings selected-label contrast. (C43)
+  Resolution: selected category, segmented choices and the font picker's Selected
+  label use the existing text color. Selected-choice contrast rises from 1.88:1 to
+  5.29:1 in Dark and from 3.42:1 to 10.41:1 in Light, exceeding the 4.5:1 normal-text
+  criterion in [WCAG's contrast guidance](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html).
+  This is a local text-color correction, not a claim of whole-application conformance.
+  Stable real-app before/after captures for both themes were visually reviewed:
+  `/home/holo/agent-exports/foundation-polish-2026-10-26/settings-*.png`.
 
 - [ ] **Needs evidence:** Continuous input plus drawing can starve the main event loop.
   (C75)
@@ -1073,6 +1077,21 @@ further optimizations.
    Record the comparison and required regression checks. Close this follow-up with
    either a verified improvement or an explicit, evidence-backed explanation of
    any remaining cost; do not treat the current regression as inherently necessary.
+
+## Combined acceptance checkpoint — 2026-10-26
+
+The candidate now includes dependency alignment, field-session reset, stronger
+observable acceptance, borrowed tab labels, lazy hidden Find, ASCII line scanning,
+voice boundary polish and Settings contrast. All-feature fast tests and Clippy pass
+(with existing warnings). Focused physical cases pass for retained Find, all regex
+line separators, voice credentials and the long selection limit.
+
+The first runtime qualification exposed a physical-display fixture assumption:
+Shift+End selected a wrapped row rather than the intended 201-character logical
+line on a narrow, scaled window. The test now positions its endpoint explicitly,
+selects back to document start, and asserts both range ends. The corrected case
+passes on that display. Preserve the failed attempt as evidence; the final combined
+candidate still requires full physical/nested qualification and visual gates.
 
 ## Closed, already resolved or outside current scope
 
