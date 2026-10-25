@@ -1101,15 +1101,23 @@ impl LstGpuiApp {
     /// A prompt, review or confirmation is waiting for the user's answer.
     /// Closing and quitting must not open a second decision underneath it:
     /// keys go to whichever surface is checked first, not the one on top.
-    fn decision_pending(&self) -> bool {
+    pub(crate) fn decision_pending(&self) -> bool {
         self.close_prompt.is_some()
             || self.quit_review.is_some()
             || self.pending_exit_save.is_some()
-            || self.prompt_review.is_some()
-            || self.cleanup_confirmation.is_some()
+            || self.prompt_review_visible()
+            || self.prompt.confirmation().is_some()
     }
 
     pub(crate) fn request_close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(tab_id) = self.model.tab_id_at(index) else {
+            return;
+        };
+        if self.prompt.target() == Some(tab_id) {
+            self.cleanup_message = Some("Finish prompt improvement or review before closing this document.".into());
+            cx.notify();
+            return;
+        }
         if self.voice_blocks_close(self.model.tab_id_at(index), cx) {
             return;
         }
@@ -1118,11 +1126,11 @@ impl LstGpuiApp {
         }
         self.hovered_tab = None;
         if self.tab_is_empty_scratchpad(index) {
-            self.cleanup_scratchpad_tab_file(index);
             if self.model.tab_count() == 1 && index == self.model.active_index() {
                 self.request_quit(cx);
                 return;
             }
+            self.cleanup_scratchpad_tab_file(index);
             if let Some(tab_id) = self.model.tab_id_at(index) {
                 self.update_model(cx, true, |model| {
                     model.discard_close_tab(tab_id);
@@ -1168,8 +1176,8 @@ impl LstGpuiApp {
         if self.decision_pending() {
             return;
         }
-        if self.cleanup_in_flight {
-            self.cleanup_message = Some("Wait for prompt improvement to finish before quitting.".to_string());
+        if !self.prompt.is_idle() {
+            self.cleanup_message = Some("Finish prompt improvement or review before quitting.".to_string());
             self.set_focus(crate::FocusTarget::Editor);
             cx.notify();
             return;
@@ -2354,7 +2362,7 @@ fn save_conflict_stamp(path: &Path, expectation: SaveExpectation) -> std::io::Re
 
 impl LstGpuiApp {
     pub(crate) fn start_cleanup(&mut self, cx: &mut Context<Self>) {
-        if self.cleanup_in_flight || self.cleanup_confirmation.is_some() || self.prompt_review.is_some() {
+        if !self.prompt.is_idle() || self.decision_pending() {
             return;
         }
         let tab = self.active_tab();
@@ -2376,12 +2384,12 @@ impl LstGpuiApp {
             cx.notify();
             return;
         }
-        self.cleanup_confirmation = Some(crate::CleanupConfirmation { tab_id, revision });
+        self.prompt = crate::PromptState::Confirm(crate::CleanupConfirmation { tab_id, revision });
         cx.notify();
     }
 
     pub(crate) fn confirm_cleanup_whole_document(&mut self, cx: &mut Context<Self>) {
-        let Some(confirmation) = self.cleanup_confirmation.take() else {
+        let Some(confirmation) = self.prompt.take_confirmation() else {
             return;
         };
         self.set_focus(crate::FocusTarget::Editor);
@@ -2400,7 +2408,7 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn cancel_cleanup_confirmation(&mut self, cx: &mut Context<Self>) {
-        if self.cleanup_confirmation.take().is_some() {
+        if self.prompt.take_confirmation().is_some() {
             self.set_focus(crate::FocusTarget::Editor);
             cx.notify();
         }
@@ -2414,24 +2422,29 @@ impl LstGpuiApp {
         source_text: String,
         cx: &mut Context<Self>,
     ) {
-        self.cleanup_in_flight = true;
+        self.prompt = crate::PromptState::Running { tab: tab_id };
         self.cleanup_message = Some("Improving prompt\u{2026}".to_string());
         cx.notify();
 
+        let (sender, result) = tokio::sync::oneshot::channel();
+        let worker = std::thread::Builder::new()
+            .name("prompt-improve".into())
+            .spawn(move || {
+                let result = crate::prompt_add::rewrite(&source_text)
+                    .map(|result| crate::prompt_review::PreparedReview::new(source_text, result.text, result.warning));
+                let _ = sender.send(result);
+            });
+        if let Err(error) = worker {
+            self.prompt = crate::PromptState::Idle;
+            self.finish_cleanup_with_error(format!("Could not start prompt worker: {error}"), cx);
+            return;
+        }
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let result = crate::prompt_add::rewrite(&source_text)?;
-                    Ok(crate::prompt_review::PreparedReview::new(
-                        source_text,
-                        result.text,
-                        result.warning,
-                    ))
-                })
-                .await;
+            let result = result
+                .await
+                .unwrap_or_else(|_| Err("Prompt worker stopped unexpectedly".into()));
             let _ = this.update(cx, |app, cx| {
-                app.cleanup_in_flight = false;
+                app.prompt = crate::PromptState::Idle;
                 match result {
                     Ok(cleaned) => app.apply_cleanup_result(tab_id, revision, range, cleaned, cx),
                     Err(err) => app.finish_cleanup_with_error(err, cx),
@@ -2439,6 +2452,15 @@ impl LstGpuiApp {
             });
         })
         .detach();
+    }
+
+    pub(crate) fn prompt_review_visible(&self) -> bool {
+        self.prompt
+            .review()
+            .is_some_and(|review| review.tab_id == self.model.active_tab_id())
+            && self.close_prompt.is_none()
+            && self.quit_review.is_none()
+            && self.pending_exit_save.is_none()
     }
 
     fn apply_cleanup_result(
@@ -2450,7 +2472,7 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         let stale = match self.model.tab_by_id(tab_id) {
-            Some(tab) => self.model.active_tab_id() != tab_id || tab.revision() != revision,
+            Some(tab) => tab.revision() != revision,
             None => true,
         };
         if stale {
@@ -2470,16 +2492,21 @@ impl LstGpuiApp {
             .slice(range.end..(range.end + 120).min(tab.buffer().len_chars()))
             .to_string();
         let prepared = cleaned.with_context(&before, &after);
-        self.dismiss_focus_surfaces(cx);
-        self.prompt_review = Some(crate::prompt_review::PromptReview::new(
+        let name = tab.display_name().to_string();
+        self.prompt = crate::PromptState::Review(Box::new(crate::prompt_review::PromptReview::new(
             tab_id, revision, range, selection, prepared,
+        )));
+        if self.prompt_review_visible() {
+            self.dismiss_focus_surfaces(cx);
+        }
+        self.cleanup_message = Some(format!(
+            "Prompt improvement ready for {name}. Review it in that tab before applying."
         ));
-        self.cleanup_message = Some("Review the improved prompt before applying.".to_string());
         cx.notify();
     }
 
     pub(crate) fn discard_prompt_review(&mut self, cx: &mut Context<Self>) {
-        if self.prompt_review.take().is_some() {
+        if self.prompt.take_review().is_some() {
             self.set_focus(crate::FocusTarget::Editor);
             self.cleanup_message = Some("Prompt changes discarded; original text kept.".to_string());
             cx.notify();
@@ -2487,7 +2514,7 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn apply_prompt_review(&mut self, cx: &mut Context<Self>) {
-        let Some(review) = self.prompt_review.as_ref() else {
+        let Some(review) = self.prompt.review() else {
             return;
         };
         if self.model.active_tab_id() != review.tab_id
@@ -2500,7 +2527,7 @@ impl LstGpuiApp {
             cx.notify();
             return;
         }
-        let review = self.prompt_review.take().expect("validated review");
+        let review = *self.prompt.take_review().expect("validated review");
         self.set_focus(crate::FocusTarget::Editor);
         if review.prepared.source != review.prepared.result {
             self.update_model(cx, false, |model| {

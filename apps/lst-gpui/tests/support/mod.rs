@@ -210,6 +210,15 @@ impl ScratchpadSession {
         self.open_files_with_mode_and_env(name, &[file.to_path_buf()], false, extra_env)
     }
 
+    pub fn open_files_with_env(
+        &mut self,
+        name: &str,
+        files: &[PathBuf],
+        extra_env: &[(&OsStr, &OsStr)],
+    ) -> SupportResult<Editor<'_>> {
+        self.open_files_with_mode_and_env(name, files, false, extra_env)
+    }
+
     pub fn open_vim_file(&mut self, name: &str, file: &Path) -> SupportResult<Editor<'_>> {
         self.open_files_with_mode(name, &[file.to_path_buf()], true)
     }

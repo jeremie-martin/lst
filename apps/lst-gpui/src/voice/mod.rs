@@ -13,6 +13,7 @@ pub(crate) struct Voice {
     session: Option<session::Session>,
     task: Option<Task<()>>,
     message: Option<String>,
+    pub button_bounds: std::collections::BTreeMap<&'static str, gpui::Bounds<gpui::Pixels>>,
 }
 
 #[derive(Clone, Copy)]
@@ -22,6 +23,7 @@ pub(crate) enum VoiceAction {
     Cancel,
     Retry,
     ShowNote,
+    Dismiss,
 }
 
 impl Voice {
@@ -38,6 +40,9 @@ impl Voice {
 
 impl LstGpuiApp {
     pub(crate) fn start_voice_note(&mut self, cx: &mut Context<Self>) {
+        if self.decision_pending() {
+            return;
+        }
         if self.voice.active() {
             self.voice_action(VoiceAction::ShowNote, cx);
             return;
@@ -54,8 +59,9 @@ impl LstGpuiApp {
                 .ok_or("Cannot locate audio-notes: HOME is not set")?;
             let (path, stamp) = crate::runtime::create_scratchpad_note(Some(&directory))
                 .map_err(|e| format!("Could not create voice note: {e}"))?;
+            let directory = path.parent().expect("note directory").to_path_buf();
             self.update_model(cx, true, |model| model.new_scratchpad_tab(path, stamp));
-            session::Session::new(self.model.active_tab_id(), provider)
+            session::Session::new(self.model.active_tab_id(), provider, directory)
         })();
         match result {
             Ok(session) => {
@@ -94,7 +100,7 @@ impl LstGpuiApp {
             // the trim and final-newline options and replace the text under
             // a user who is still typing in it.
             let mut accepted = false;
-            self.update_model(cx, true, |model| {
+            self.update_model_in_background(cx, true, |model| {
                 accepted = model.append_text_to_tab(tab, &text);
             });
             if accepted {
@@ -119,7 +125,12 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn voice_action(&mut self, action: VoiceAction, cx: &mut Context<Self>) {
-        if matches!(action, VoiceAction::Cancel) {
+        if self.decision_pending() {
+            return;
+        }
+        if matches!(action, VoiceAction::Dismiss) {
+            self.voice.message = None;
+        } else if matches!(action, VoiceAction::Cancel) {
             self.voice.session = None;
             self.voice.task = None;
             self.voice.message = Some("Pending dictation cancelled. Text already inserted is kept.".into());
@@ -132,7 +143,7 @@ impl LstGpuiApp {
                     let tab = session.tab;
                     self.update_model(cx, true, |model| model.set_active_tab(tab));
                 }
-                VoiceAction::Cancel => unreachable!(),
+                VoiceAction::Cancel | VoiceAction::Dismiss => unreachable!(),
             }
         }
         self.set_focus(crate::FocusTarget::Editor);
@@ -154,8 +165,9 @@ impl LstGpuiApp {
         blocked
     }
 
-    pub(crate) fn render_voice_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_voice_bar(&mut self, cx: &Context<Self>) -> impl IntoElement {
         let theme = self.theme(cx);
+        self.voice.button_bounds.clear();
         let mut buttons = Vec::new();
         if let Some(session) = &self.voice.session {
             buttons.push(("voice-show", "Show Note", VoiceAction::ShowNote));
@@ -171,9 +183,16 @@ impl LstGpuiApp {
                 buttons.push(("voice-retry", "Retry", VoiceAction::Retry));
             }
             buttons.push(("voice-cancel", "Cancel Pending", VoiceAction::Cancel));
+        } else {
+            buttons.push(("voice-dismiss", "Dismiss", VoiceAction::Dismiss));
         }
         let level = self.voice.session.as_ref().map_or(0, |s| s.level());
         div()
+            .when(self.decision_pending(), |bar| {
+                bar.opacity(0.5)
+                    .capture_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .capture_any_mouse_up(|_, _, cx| cx.stop_propagation())
+            })
             .flex_none()
             .flex()
             .items_center()
@@ -202,32 +221,33 @@ impl LstGpuiApp {
             .child(div().flex_1().min_w_0().child(self.voice.status().unwrap_or_default()))
             .children(buttons.into_iter().map(|(id, label, action)| {
                 div()
-                    .id(id)
                     .flex_none()
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .bg(rgb(theme.role.control_bg))
-                    .cursor(gpui::CursorStyle::PointingHand)
-                    .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.voice_action(action, cx);
-                        cx.stop_propagation();
-                    }))
-                    .child(label)
+                    .on_children_prepainted({
+                        let entity = cx.entity();
+                        move |bounds, _, cx| {
+                            if let Some(bounds) = bounds.first().copied() {
+                                entity.update(cx, |this, _| {
+                                    this.voice.button_bounds.insert(id, bounds);
+                                });
+                            }
+                        }
+                    })
+                    .child(
+                        div()
+                            .id(id)
+                            .flex_none()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .bg(rgb(theme.role.control_bg))
+                            .cursor(gpui::CursorStyle::PointingHand)
+                            .hover(move |style| style.bg(rgb(theme.role.control_bg_hover)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.voice_action(action, cx);
+                                cx.stop_propagation();
+                            }))
+                            .child(label),
+                    )
             }))
-            .when(!self.voice.active(), |bar| {
-                bar.child(
-                    div()
-                        .id("voice-dismiss")
-                        .px_2()
-                        .cursor(gpui::CursorStyle::PointingHand)
-                        .child("Dismiss")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.voice.message = None;
-                            cx.notify();
-                        })),
-                )
-            })
     }
 }

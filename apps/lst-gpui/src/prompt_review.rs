@@ -49,7 +49,7 @@ pub(crate) struct PreparedReview {
 impl PreparedReview {
     pub fn new(source: String, result: String, warning: String) -> Self {
         // Both passes share one deadline. On difficult inputs similar returns a coarser,
-        // still exact comparison. Work is performed on the background executor.
+        // still exact comparison. Work is performed on the dedicated prompt worker.
         let deadline = Instant::now() + Duration::from_millis(150);
         let diff = TextDiff::configure().deadline(deadline).diff_lines(&source, &result);
         let mut changes = Vec::new();
@@ -253,14 +253,14 @@ impl PromptReview {
 
 impl LstGpuiApp {
     pub(crate) fn toggle_prompt_review_view(&mut self, cx: &mut Context<Self>) {
-        if let Some(review) = self.prompt_review.as_mut() {
+        if let Some(review) = self.prompt.review_mut() {
             review.show_result = !review.show_result;
             cx.notify();
         }
     }
 
     pub(crate) fn scroll_prompt_review(&mut self, key: &str, cx: &mut Context<Self>) {
-        let Some(review) = self.prompt_review.as_ref() else {
+        let Some(review) = self.prompt.review() else {
             return;
         };
         let (scroll, count) = if review.show_result {
@@ -286,7 +286,7 @@ impl LstGpuiApp {
     pub(crate) fn render_prompt_review(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = self.ui_scale();
         let theme = self.theme(cx);
-        let review = self.prompt_review.as_mut().expect("review is open");
+        let review = self.prompt.review_mut().expect("review is open");
         let layout_key = (
             typography::primary_font(),
             metrics::code_font_size().to_bits(),
@@ -357,7 +357,7 @@ impl LstGpuiApp {
                     .child(
                         review_button("review-changes", "Changes", !show_result, true, theme, scale).on_click(
                             cx.listener(|this, _, _, cx| {
-                                if this.prompt_review.as_ref().is_some_and(|r| r.show_result) {
+                                if this.prompt.review().is_some_and(|r| r.show_result) {
                                     this.toggle_prompt_review_view(cx);
                                 }
                             }),
@@ -366,7 +366,7 @@ impl LstGpuiApp {
                     .child(
                         review_button("review-result", "Result", show_result, true, theme, scale).on_click(
                             cx.listener(|this, _, _, cx| {
-                                if this.prompt_review.as_ref().is_some_and(|r| !r.show_result) {
+                                if this.prompt.review().is_some_and(|r| !r.show_result) {
                                     this.toggle_prompt_review_view(cx);
                                 }
                             }),

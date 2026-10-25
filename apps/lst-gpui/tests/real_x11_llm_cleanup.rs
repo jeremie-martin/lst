@@ -188,7 +188,7 @@ fn quitting_waits_for_inflight_cleanup_and_keeps_its_result_visible() -> TestRes
 
         editor.press(lst_x11_harness::KeyChord::Ctrl(lst_x11_harness::Key::Char('q')))?;
         let blocked = editor.wait_transient_state("quit waits for cleanup", secs(3), |record| {
-            record.status_message == "Wait for prompt improvement to finish before quitting."
+            record.status_message == "Finish prompt improvement or review before quitting."
         })?;
         assert_eq!(blocked.revision, before.revision, "{blocked:?}");
         assert!(blocked.close_prompt_file.is_none(), "{blocked:?}");
@@ -510,6 +510,134 @@ fn prompt_timeout_preserves_text_allows_retry_and_unblocks_quitting() -> TestRes
         editor.keys("<escape>")?;
         assert!(editor.quit(secs(5))?.success());
         assert_eq!(std::fs::read_to_string(path)?, "original");
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn pending_prompt_survives_other_tab_work_and_cannot_lose_its_target() -> TestResult {
+    support::run_x11_test("prompt-tab-lifetime", |session| {
+        let filter_path = install_filter(session)?;
+        let gate = session.seed_file("gate", "wait")?;
+        let path = session.seed_file("prompt.txt", "original")?;
+        let env: [(&OsStr, &OsStr); 3] = [
+            (OsStr::new("PATH"), &filter_path),
+            (OsStr::new(FAKE_ENV), OsStr::new("polished")),
+            (OsStr::new("LST_TEST_PROMPT_GATE"), gate.as_os_str()),
+        ];
+        let mut editor = session.open_file_with_env("prompt", &path, &env)?;
+        editor.keys("<C-end> dirty<C-a>")?;
+        editor.click_cleanup_button()?;
+        let target = editor.wait_state("prompt running", secs(3), |r| {
+            r.status_message.contains("Improving prompt")
+        })?;
+        editor.keys("<C-w>")?;
+        let blocked = editor.wait_state("target close refused", secs(3), |r| {
+            r.status_message.contains("before closing this document")
+        })?;
+        assert!(blocked.close_prompt_file.is_none());
+        assert_eq!(blocked.active_tab_id, target.active_tab_id);
+        editor.keys("<C-n>other work")?;
+        let other = editor.read_state()?;
+        let other_path = std::path::PathBuf::from(other.active_tab_path.unwrap());
+        // A waiting process must not occupy the worker needed by file saves.
+        editor.save_then_expect_file(&other_path, "other work")?;
+        std::fs::remove_file(gate)?;
+        let ready = editor.wait_state("result retained for inactive tab", secs(5), |r| {
+            r.status_message.contains("Prompt improvement ready")
+        })?;
+        assert_eq!(ready.active_tab_id, other.active_tab_id);
+        assert!(ready.prompt_review_view.is_none());
+        editor.keys(" continued")?;
+        editor.save_then_expect_file(&other_path, "other work continued")?;
+        editor.keys("<C-S-tab>")?;
+        editor.wait_state("review returns with target tab", secs(5), |r| {
+            r.active_tab_id == target.active_tab_id
+                && r.prompt_review_view.is_some()
+                && r.focused_input == "prompt_review"
+        })?;
+        editor.keys("<enter>")?;
+        editor.save_then_expect_file(&path, "polished")?;
+        editor.keys("<C-z>")?;
+        editor.save_then_expect_file(&path, "original dirty")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn refusing_last_blank_tab_close_preserves_its_file_during_prompt_work() -> TestResult {
+    support::run_x11_test("prompt-blank-close", |session| {
+        let filter_path = install_filter(session)?;
+        let gate = session.seed_file("gate", "wait")?;
+        let env: [(&OsStr, &OsStr); 3] = [
+            (OsStr::new("PATH"), &filter_path),
+            (OsStr::new(FAKE_ENV), OsStr::new("polished")),
+            (OsStr::new("LST_TEST_PROMPT_GATE"), gate.as_os_str()),
+        ];
+        let (mut editor, path) = session.open_with_env("blank", &env)?;
+        editor.keys("   <C-a>")?;
+        editor.save_then_expect_file(&path, "   ")?;
+        editor.click_cleanup_button()?;
+        editor.wait_state("prompt running", secs(3), |r| {
+            r.status_message.contains("Improving prompt")
+        })?;
+        editor.keys("<C-w>")?;
+        editor.wait_state("close refused before deleting file", secs(3), |r| {
+            r.status_message.contains("before closing this document")
+        })?;
+        assert_eq!(std::fs::read_to_string(&path)?, "   ");
+        std::fs::remove_file(gate)?;
+        editor.wait_state("review available", secs(5), |r| r.prompt_review_view.is_some())?;
+        editor.keys("<esc>")?;
+        editor.keys("<C-end>kept")?;
+        editor.save_then_expect_file(&path, "   kept")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn prompt_arrival_waits_for_another_documents_close_decision() -> TestResult {
+    support::run_x11_test("prompt-other-close", |session| {
+        let filter_path = install_filter(session)?;
+        let gate = session.seed_file("gate", "wait")?;
+        let path = session.seed_file("prompt.txt", "original")?;
+        let other = session.seed_file("other.txt", "other")?;
+        let env: [(&OsStr, &OsStr); 3] = [
+            (OsStr::new("PATH"), &filter_path),
+            (OsStr::new(FAKE_ENV), OsStr::new("polished")),
+            (OsStr::new("LST_TEST_PROMPT_GATE"), gate.as_os_str()),
+        ];
+        let mut editor = session.open_files_with_env("prompt", &[path.clone(), other.clone()], &env)?;
+        if editor.read_state()?.active_tab_path.as_deref() != path.to_str() {
+            editor.keys("<C-tab>")?;
+        }
+        editor.keys("<C-a>")?;
+        editor.click_cleanup_button()?;
+        editor.wait_state("prompt running", secs(3), |r| {
+            r.status_message.contains("Improving prompt")
+        })?;
+        editor.keys("<C-tab><C-end> edited<C-w>")?;
+        let closing = editor.wait_state("other document close decision", secs(3), |r| {
+            r.close_prompt_file.is_some()
+        })?;
+        std::fs::remove_file(gate)?;
+        let arrived = editor.wait_state("result ready during close decision", secs(5), |r| {
+            r.status_message.contains("Prompt improvement ready")
+        })?;
+        assert_eq!(arrived.close_prompt_file, closing.close_prompt_file);
+        assert!(arrived.prompt_review_view.is_none());
+        assert_eq!(arrived.focused_input, "close_prompt");
+        editor.keys("<esc><C-s>")?;
+        editor.expect_file(&other, "other edited")?;
+        editor.keys("<C-tab>")?;
+        editor.wait_state("target review available after decision", secs(3), |r| {
+            r.prompt_review_view.is_some()
+        })?;
+        editor.keys("<enter>")?;
+        editor.save_then_expect_file(&path, "polished")?;
         Ok(())
     })
 }

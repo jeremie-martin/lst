@@ -1,6 +1,7 @@
 //! Microphone ownership stays on a worker thread. Stopping drains delivered
 //! samples before finalizing the WAV; dropping a recorder also stops capture.
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::{io::BufWriter, path::Path};
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -24,7 +25,8 @@ pub(super) struct Recorder {
 }
 
 impl Recorder {
-    pub fn start() -> Result<Self, String> {
+    pub fn start(directory: &Path) -> Result<Self, String> {
+        let directory = directory.to_path_buf();
         let stop = Arc::new(AtomicBool::new(false));
         let ready = Arc::new(AtomicBool::new(false));
         let level = Arc::new(AtomicU32::new(0));
@@ -33,7 +35,7 @@ impl Recorder {
         std::thread::Builder::new()
             .name("voice-capture".into())
             .spawn(move || {
-                let result = capture(stopped, started, meter).map_err(|e| e.to_string());
+                let result = capture(stopped, started, meter, &directory).map_err(|e| e.to_string());
                 let _ = tx.send(result);
             })
             .map_err(|e| e.to_string())?;
@@ -71,19 +73,30 @@ struct Block {
     captured_through: Instant,
 }
 
-fn capture(stop: Arc<AtomicBool>, ready: Arc<AtomicBool>, level: Arc<AtomicU32>) -> Result<Audio, Error> {
+fn capture(
+    stop: Arc<AtomicBool>,
+    ready: Arc<AtomicBool>,
+    level: Arc<AtomicU32>,
+    directory: &Path,
+) -> Result<Audio, Error> {
     // X11 tests substitute only the microphone boundary; WAV upload and the
     // entire application lifecycle still use production code.
     if std::env::var_os("LST_X11_STATE_TRACE_FILE").is_some() {
         if let Some(path) = std::env::var_os("LST_TEST_VOICE_AUDIO") {
             let mut source = std::fs::File::open(path)?;
-            let mut file = NamedTempFile::new()?;
+            let mut file = tempfile::Builder::new()
+                .prefix(".lst-audio-")
+                .suffix(".wav")
+                .tempfile_in(directory)?;
             std::io::copy(&mut source, &mut file)?;
             let reader = hound::WavReader::open(file.path())?;
             let duration = Duration::from_secs_f64(reader.duration() as f64 / reader.spec().sample_rate as f64);
             ready.store(true, Ordering::Release);
             while !stop.load(Ordering::Acquire) {
                 std::thread::sleep(Duration::from_millis(10));
+            }
+            if std::env::var_os("LST_TEST_VOICE_FINALIZE_ERROR").is_some() {
+                return Err(retain_unfinalized(file, "Injected finalization failure").into());
             }
             return Ok(Audio {
                 file,
@@ -111,9 +124,12 @@ fn capture(stop: Arc<AtomicBool>, ready: Arc<AtomicBool>, level: Arc<AtomicU32>)
         cpal::SampleFormat::U16 => build::<u16>(&device, &config, tx, error_tx, level, overflow.clone()),
         format => return Err(format!("Unsupported microphone sample format: {format}").into()),
     }?;
-    let mut file = NamedTempFile::new()?;
+    let mut file = tempfile::Builder::new()
+        .prefix(".lst-audio-")
+        .suffix(".wav")
+        .tempfile_in(directory)?;
     let mut writer = hound::WavWriter::new(
-        file.as_file_mut(),
+        BufWriter::new(file.as_file_mut()),
         hound::WavSpec {
             channels: 1,
             sample_rate: rate,
@@ -181,12 +197,24 @@ fn capture(stop: Arc<AtomicBool>, ready: Arc<AtomicBool>, level: Arc<AtomicU32>)
     // A failed sample write (a full or failing temp filesystem) ends the
     // segment like the other stop paths: finalize what was written so the
     // audio captured so far is still transcribed instead of deleted.
-    writer.finalize()?;
+    if let Err(error) = writer.finalize() {
+        return Err(retain_unfinalized(file, &error.to_string()).into());
+    }
     Ok(Audio {
         file,
         duration: Duration::from_secs_f64(samples as f64 / f64::from(rate)),
         warning,
     })
+}
+
+// A damaged header must never make a temporary-file destructor erase captured
+// bytes. Keep the file beside the note, even if finalization cannot be retried.
+fn retain_unfinalized(mut file: NamedTempFile, error: &str) -> String {
+    file.disable_cleanup(true);
+    format!(
+        "Audio finalization failed ({error}). Recoverable bytes retained at {}. This segment was not transcribed.",
+        file.path().display()
+    )
 }
 
 /// Appends samples to the WAV, counting only the ones written.
@@ -275,6 +303,95 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_finalization_keeps_the_recorded_bytes_beside_the_note() {
+        use std::io::{Seek, SeekFrom, Write};
+        struct FailSeek<'a>(&'a mut std::fs::File);
+        impl Write for FailSeek<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.write(bytes)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.0.flush()
+            }
+        }
+        impl Seek for FailSeek<'_> {
+            fn seek(&mut self, _: SeekFrom) -> std::io::Result<u64> {
+                Err(std::io::Error::other("header update failed"))
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let mut file = NamedTempFile::new_in(directory.path()).unwrap();
+        let path = file.path().to_path_buf();
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::new(FailSeek(file.as_file_mut()), spec).unwrap();
+        for sample in [1i16, 2, 3] {
+            writer.write_sample(sample).unwrap();
+        }
+        let error = writer.finalize().unwrap_err();
+        let before = std::fs::read(&path).unwrap();
+        assert!(before.ends_with(&[1, 0, 2, 0, 3, 0]));
+        let notice = retain_unfinalized(file, &error.to_string());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(notice.contains(path.to_str().unwrap()));
+        assert!(notice.contains("not transcribed"));
+    }
+
+    #[test]
+    fn buffering_preserves_wav_bytes_and_reduces_underlying_writes() {
+        use std::io::{Cursor, Seek, SeekFrom, Write};
+        #[derive(Default)]
+        struct Counted {
+            bytes: Cursor<Vec<u8>>,
+            writes: usize,
+        }
+        impl Write for Counted {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.writes += 1;
+                self.bytes.write(bytes)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Seek for Counted {
+            fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+                self.bytes.seek(pos)
+            }
+        }
+        fn record(output: impl Write + Seek) {
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: 48000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::new(output, spec).unwrap();
+            let pcm: Vec<i16> = (0..48000).map(|i| i as i16).collect();
+            let mut samples = 0;
+            write_pcm(&mut writer, &pcm, &mut samples).unwrap();
+            writer.finalize().unwrap();
+            assert_eq!(samples, 48000);
+        }
+        let (mut direct, mut buffered) = (Counted::default(), Counted::default());
+        record(&mut direct);
+        record(BufWriter::new(&mut buffered));
+        assert_eq!(direct.bytes.get_ref(), buffered.bytes.get_ref());
+        assert!(direct.writes >= 48000);
+        assert!(buffered.writes < 20);
+        eprintln!(
+            "one second of 48 kHz PCM: {} direct writes, {} buffered writes; identical {} WAV bytes",
+            direct.writes,
+            buffered.writes,
+            direct.bytes.get_ref().len()
+        );
+    }
 
     #[test]
     fn downmix_preserves_frames_and_bounds_pcm_and_meter() {

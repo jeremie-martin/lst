@@ -121,6 +121,7 @@ pub(crate) struct StateTraceRecord {
     pub vim_pending: String,
     pub find: TraceFind,
     pub goto_line_input: Option<String>,
+    pub goto_field: Option<TraceInputField>,
     pub recent_panel_open: bool,
     pub recent_panel_query: Option<String>,
     pub recent_panel_selected_path: Option<String>,
@@ -146,6 +147,7 @@ pub(crate) struct StateTraceRecord {
     pub file_conflict_path: Option<String>,
     pub file_conflict_button_bounds_px: TraceFileConflictButtonBounds,
     pub voice_status: Option<String>,
+    pub voice_button_bounds_px: std::collections::BTreeMap<String, (f32, f32, f32, f32)>,
     pub cleanup_confirmation_open: bool,
     pub prompt_review_view: Option<String>,
     pub status_message: String,
@@ -352,6 +354,15 @@ impl LstGpuiApp {
         StateTraceRecord {
             schema_version: STATE_TRACE_SCHEMA_VERSION,
             voice_status: self.voice.status(),
+            voice_button_bounds_px: if self.voice.status().is_some() {
+                self.voice
+                    .button_bounds
+                    .iter()
+                    .map(|(id, bounds)| (id.to_string(), trace_bounds(Some(*bounds)).unwrap()))
+                    .collect()
+            } else {
+                Default::default()
+            },
             seq,
             revision: tab.revision(),
             active_tab_index: self.model.active_index(),
@@ -397,6 +408,10 @@ impl LstGpuiApp {
                 close_bounds_px: trace_bounds(self.find_close_bounds_px),
             },
             goto_line_input: self.model.goto_line().map(ToOwned::to_owned),
+            goto_field: self
+                .model
+                .goto_line()
+                .map(|_| trace_input_field(self.goto_line_input.read(cx))),
             recent_panel_open: self.recent.is_open(),
             recent_panel_query: self.recent.is_open().then(|| self.recent.query().to_string()),
             recent_panel_selected_path,
@@ -514,10 +529,11 @@ impl LstGpuiApp {
                 save_as: trace_bounds(self.file_conflict_button_bounds_px.save_as),
                 dismiss: trace_bounds(self.file_conflict_button_bounds_px.dismiss),
             },
-            cleanup_confirmation_open: self.cleanup_confirmation.is_some(),
+            cleanup_confirmation_open: self.prompt.confirmation().is_some(),
             prompt_review_view: self
-                .prompt_review
-                .as_ref()
+                .prompt
+                .review()
+                .filter(|_| self.prompt_review_visible())
                 .map(|r| if r.show_result { "result" } else { "changes" }.to_string()),
             status_message,
             status_bar,
@@ -567,9 +583,9 @@ impl LstGpuiApp {
             "quit_review"
         } else if self.close_prompt.is_some() && self.surface_focus_handle.is_focused(window) {
             "close_prompt"
-        } else if self.prompt_review.is_some() && self.surface_focus_handle.is_focused(window) {
+        } else if self.prompt_review_visible() && self.surface_focus_handle.is_focused(window) {
             "prompt_review"
-        } else if self.cleanup_confirmation.is_some() && self.surface_focus_handle.is_focused(window) {
+        } else if self.prompt.confirmation().is_some() && self.surface_focus_handle.is_focused(window) {
             "cleanup_confirmation"
         } else if self.focus_handle.is_focused(window) {
             "editor"

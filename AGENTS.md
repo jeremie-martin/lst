@@ -9,8 +9,8 @@ GPUI application; the repository root is only a Cargo workspace.
   documents, tabs, selections, transactions, history, find, language behavior,
   viewport intent, effects, and Vim.
 - `apps/lst-gpui` adapts desktop input, renders model state, and owns GPUI,
-  filesystem, clipboard, dialogs, settings, recent files, tree-sitter, and the
-  DeepSeek client.
+  filesystem, clipboard, dialogs, settings, recent files, tree-sitter, prompt-add
+  process execution, and voice transcription.
 - `crates/lst-x11-harness` drives the production app with real X11 input. It is
   a workspace member but is excluded from `default-members`.
 - `vendor/gpui`, `vendor/blade-graphics`, and `vendor/tree-sitter` are pinned

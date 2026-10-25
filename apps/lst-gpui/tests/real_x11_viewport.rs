@@ -377,3 +377,33 @@ fn window_stays_operable_across_wrap_modes_sizes_and_zoom_extremes() -> TestResu
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn goto_label_and_padding_keep_typing_out_of_the_document() -> TestResult {
+    support::run_x11_test("goto-label-focus", |session| {
+        let text = "one\ntwo\nthree\nfour\n";
+        let path = session.seed_file("lines.txt", text)?;
+        let mut editor = session.open_file("lines", &path)?;
+        for offset in [6.0, 27.0] {
+            editor.keys("<C-g>")?;
+            let state = editor.wait_state("goto input laid out", secs(3), |r| {
+                r.goto_field.as_ref().is_some_and(|field| field.bounds_px.is_some())
+            })?;
+            let (x, y, _, h) = state.goto_field.unwrap().bounds_px.unwrap();
+            let scale = state.viewport.scale_factor;
+            // Gap beside the field, then the label, both outside the input.
+            editor.click_at(
+                ((x - offset) * scale).round() as i32,
+                ((y + h / 2.0) * scale).round() as i32,
+            )?;
+            editor.keys("<C-a>3<enter>")?;
+            editor.wait_state("goto navigates after chrome click", secs(3), |r| {
+                r.goto_line_input.is_none() && r.focused_input == "editor" && r.cursors[0].head_line == 2
+            })?;
+            editor.save_then_expect_file(&path, text)?;
+            editor.keys("<C-home>")?;
+        }
+        Ok(())
+    })
+}

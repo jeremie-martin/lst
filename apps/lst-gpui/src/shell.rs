@@ -264,6 +264,14 @@ impl LstGpuiApp {
         let scale = self.ui_scale();
         let theme = self.theme(cx);
         div()
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    window.focus(&this.goto_line_input.read(cx).focus_handle());
+                    cx.stop_propagation();
+                }),
+            )
             .flex_none()
             .flex()
             .flex_wrap()
@@ -1342,7 +1350,8 @@ impl LstGpuiApp {
         let scale = self.ui_scale();
         let theme = self.theme(cx);
         let identity = self
-            .cleanup_confirmation
+            .prompt
+            .confirmation()
             .and_then(|confirmation| self.model.tab_by_id(confirmation.tab_id))
             .map(tab_identity)
             .unwrap_or_else(|| "this document".to_string());
@@ -1416,7 +1425,7 @@ impl LstGpuiApp {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.prompt_review.is_some() {
+        if self.prompt_review_visible() {
             cx.stop_propagation();
             return;
         }
@@ -1524,7 +1533,7 @@ impl LstGpuiApp {
                     _ => {}
                 }
             }
-        } else if self.prompt_review.is_some() {
+        } else if self.prompt_review_visible() {
             if modal_key_is_unmodified(event) {
                 match event.keystroke.key.as_str() {
                     "escape" => self.discard_prompt_review(cx),
@@ -1536,7 +1545,7 @@ impl LstGpuiApp {
                     _ => {}
                 }
             }
-        } else if self.cleanup_confirmation.is_some() {
+        } else if self.prompt.confirmation().is_some() {
             if modal_key_is_unmodified(event) {
                 match event.keystroke.key.as_str() {
                     "escape" => self.cancel_cleanup_confirmation(cx),
@@ -1830,7 +1839,7 @@ impl Render for LstGpuiApp {
             // root column, and the editor's focus/key handlers sit on the
             // viewport element itself: two fewer layout levels per frame with
             // the same geometry.
-            .child(if self.prompt_review.is_some() {
+            .child(if self.prompt_review_visible() {
                 div()
                     .flex_none()
                     .capture_any_mouse_down(|_, _, cx| cx.stop_propagation())
@@ -1841,7 +1850,16 @@ impl Render for LstGpuiApp {
                 self.render_tab_strip(cx).into_any_element()
             })
             .when(file_conflict_open, |root| {
-                root.child(self.render_file_conflict_banner(cx))
+                root.child(
+                    div()
+                        .flex_none()
+                        .when(self.prompt_review_visible(), |bar| {
+                            bar.opacity(0.5)
+                                .capture_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                                .capture_any_mouse_up(|_, _, cx| cx.stop_propagation())
+                        })
+                        .child(self.render_file_conflict_banner(cx)),
+                )
             })
             .child(
                 div()
@@ -1861,10 +1879,10 @@ impl Render for LstGpuiApp {
                     .when(recent_cards_open, |viewport| {
                         viewport.child(self.render_recent_cards_view(cx))
                     })
-                    .when(self.prompt_review.is_some(), |viewport| {
+                    .when(self.prompt_review_visible(), |viewport| {
                         viewport.child(self.render_prompt_review(cx))
                     })
-                    .when(!recent_cards_open && self.prompt_review.is_none(), |viewport| {
+                    .when(!recent_cards_open && !self.prompt_review_visible(), |viewport| {
                         viewport
                             .child(
                                 div()
@@ -2065,7 +2083,7 @@ impl Render for LstGpuiApp {
             .when(self.voice.status().is_some(), |root| {
                 root.child(self.render_voice_bar(cx))
             })
-            .child(if self.prompt_review.is_some() {
+            .child(if self.prompt_review_visible() {
                 div()
                     .flex_none()
                     .capture_any_mouse_down(|_, _, cx| cx.stop_propagation())
@@ -2102,7 +2120,7 @@ impl Render for LstGpuiApp {
             .when(self.quit_review.is_some(), |root| {
                 root.child(self.render_quit_review(cx))
             })
-            .when(self.cleanup_confirmation.is_some(), |root| {
+            .when(self.prompt.confirmation().is_some(), |root| {
                 root.child(self.render_cleanup_confirmation(cx))
             });
         self.schedule_pending_reveal(window, cx);

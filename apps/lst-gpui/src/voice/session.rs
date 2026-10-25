@@ -2,12 +2,13 @@
 //! successful queue heads leave the session, so retries cannot duplicate text.
 use super::{
     audio::{Audio, Recorder},
-    provider::Provider,
+    provider::{Provider, Transcription},
 };
 use lst_editor::TabId;
 use std::{
     collections::VecDeque,
-    sync::{atomic::Ordering, mpsc, Arc},
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
 
@@ -20,7 +21,7 @@ enum Capture {
 
 enum Upload {
     Idle,
-    Running(mpsc::Receiver<Result<String, String>>),
+    Running(Transcription),
     Failed(String),
     Ready(String),
 }
@@ -28,6 +29,7 @@ enum Upload {
 pub(super) struct Session {
     pub tab: TabId,
     provider: Provider,
+    directory: PathBuf,
     capture: Capture,
     upload: Upload,
     queue: VecDeque<Arc<Audio>>,
@@ -36,14 +38,15 @@ pub(super) struct Session {
 }
 
 impl Session {
-    pub fn new(tab: TabId, provider: Provider) -> Result<Self, String> {
+    pub fn new(tab: TabId, provider: Provider, directory: PathBuf) -> Result<Self, String> {
         Ok(Self {
             tab,
             provider,
             capture: Capture::Recording {
-                recorder: Recorder::start()?,
+                recorder: Recorder::start(&directory)?,
                 since: Instant::now(),
             },
+            directory,
             upload: Upload::Idle,
             queue: VecDeque::new(),
             elapsed: Duration::ZERO,
@@ -68,7 +71,7 @@ impl Session {
                     self.notice = Some("Finish or retry pending segments before recording more.".into());
                     return;
                 }
-                match Recorder::start() {
+                match Recorder::start(&self.directory) {
                     Ok(recorder) => {
                         self.capture = Capture::Recording {
                             recorder,
@@ -193,18 +196,11 @@ impl Session {
                 }
                 Err(error) => {
                     self.notice = Some(format!("Recording failed: {error}"));
-                    self.capture = Capture::Paused;
                 }
             }
         }
         let result = match &self.upload {
-            Upload::Running(rx) => match rx.try_recv() {
-                Ok(result) => Some(result),
-                Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => Some(Err(
-                    "Transcription worker stopped. Audio retained; retry or cancel.".into(),
-                )),
-            },
+            Upload::Running(request) => request.poll(),
             _ => None,
         };
         if let Some(result) = result {
@@ -220,17 +216,10 @@ impl Session {
         }
         if matches!(self.upload, Upload::Idle) {
             if let Some(audio) = self.queue.front() {
-                let audio = audio.clone();
-                let provider = self.provider.clone();
-                let (tx, rx) = mpsc::channel();
-                match std::thread::Builder::new()
-                    .name("voice-transcribe".into())
-                    .spawn(move || {
-                        let _ = tx.send(provider.transcribe(&audio));
-                    }) {
-                    Ok(_) => self.upload = Upload::Running(rx),
-                    Err(error) => self.upload = Upload::Failed(format!("Could not start transcription: {error}")),
-                }
+                self.upload = match self.provider.start(audio.clone()) {
+                    Ok(request) => Upload::Running(request),
+                    Err(error) => Upload::Failed(format!("Could not start transcription: {error}")),
+                };
             }
         }
     }

@@ -134,10 +134,10 @@ impl LstGpuiApp {
             || self.model.input_mode() != InputMode::Standard
             || modifiers_active(event.keystroke.modifiers)
             || custom_arrows
-            || self.prompt_review.is_some()
+            || self.prompt_review_visible()
             || self.quit_review.is_some()
             || self.close_prompt.is_some()
-            || self.cleanup_confirmation.is_some()
+            || self.prompt.confirmation().is_some()
             || self.recent.is_open()
             || self.workspace_surface != crate::WorkspaceSurface::None
         {
@@ -986,8 +986,8 @@ impl LstGpuiApp {
             && self.workspace_surface == crate::WorkspaceSurface::None
             && self.close_prompt.is_none()
             && self.quit_review.is_none()
-            && self.cleanup_confirmation.is_none()
-            && self.prompt_review.is_none()
+            && self.prompt.confirmation().is_none()
+            && !self.prompt_review_visible()
             && self.focus_handle.is_focused(window)
     }
 }

@@ -44,7 +44,8 @@ similar = { version = "3.2", features = ["unicode"] }
 cpal = "0.15.3"
 hound = "3.5"
 tempfile = "3"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "multipart", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["multipart", "stream", "json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 
 [dev-dependencies]
 libc = "0.2"

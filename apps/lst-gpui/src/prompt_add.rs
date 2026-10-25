@@ -5,6 +5,18 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const TIMEOUT: Duration = Duration::from_secs(60);
+const STDERR_LIMIT: usize = 64 * 1024;
+const DIAGNOSTIC_CHARS: usize = 1024;
+
+fn diagnostic(text: &str) -> String {
+    let single_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = single_line.chars();
+    let mut result: String = chars.by_ref().take(DIAGNOSTIC_CHARS).collect();
+    if chars.next().is_some() {
+        result.push('…');
+    }
+    result
+}
 
 pub(crate) struct Rewrite {
     pub text: String,
@@ -30,12 +42,13 @@ fn rewrite_with_command(command: &mut Command, source: &str, timeout: Duration) 
     let (output, written) = RunningFilter { child, finished: false }
         .run(source.as_bytes(), timeout)
         .map_err(|error| format!("prompt-add: {error}"))?;
-    let diagnostic = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let error_detail = diagnostic(&stderr);
     if !output.status.success() {
-        return Err(if diagnostic.is_empty() {
+        return Err(if error_detail.is_empty() {
             format!("prompt-add exited with {}", output.status)
         } else {
-            diagnostic
+            error_detail
         });
     }
     written.map_err(|error| format!("Could not send text to prompt-add: {error}"))?;
@@ -43,12 +56,15 @@ fn rewrite_with_command(command: &mut Command, source: &str, timeout: Duration) 
     if text.trim().is_empty() {
         return Err("prompt-add returned an empty message".to_string());
     }
-    let warning = diagnostic
+    let warning = stderr
         .lines()
         .filter(|line| !matches!(*line, "Rewritten" | "Unchanged"))
         .collect::<Vec<_>>()
         .join("\n");
-    Ok(Rewrite { text, warning })
+    Ok(Rewrite {
+        text,
+        warning: diagnostic(&warning),
+    })
 }
 
 // Own cleanup across every return path, including I/O setup errors and timeouts.
@@ -91,7 +107,7 @@ fn nonblocking(pipe: &impl AsRawFd) -> io::Result<()> {
 
 // Read one bounded chunk per turn so continuous output cannot starve the deadline
 // or the other pipe. EOF closes the handle; WouldBlock leaves it for the next turn.
-fn read_chunk(pipe: &mut Option<impl Read>, output: &mut Vec<u8>) -> io::Result<bool> {
+fn read_chunk(pipe: &mut Option<impl Read>, output: &mut Vec<u8>, limit: usize, truncate: bool) -> io::Result<bool> {
     let Some(reader) = pipe else {
         return Ok(false);
     };
@@ -102,7 +118,14 @@ fn read_chunk(pipe: &mut Option<impl Read>, output: &mut Vec<u8>) -> io::Result<
             Ok(true)
         }
         Ok(count) => {
-            output.extend_from_slice(&bytes[..count]);
+            let remaining = limit.saturating_sub(output.len());
+            if count > remaining && !truncate {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("output exceeds the {limit}-byte limit"),
+                ));
+            }
+            output.extend_from_slice(&bytes[..count.min(remaining)]);
             Ok(true)
         }
         Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) => Ok(false),
@@ -128,8 +151,16 @@ fn exchange(child: &mut Child, source: &[u8], timeout: Duration) -> io::Result<(
                 format!("timed out after {} seconds", timeout.as_secs_f64()),
             ));
         }
-        let mut progressed = read_chunk(&mut stdout, &mut out)?;
-        progressed |= read_chunk(&mut stderr, &mut err)?;
+        // Permit substantial expansion, while bounding producer output relative
+        // to text the user already chose to send. Drain excess stderr without
+        // retaining it, so verbose warnings cannot deadlock a successful filter.
+        let mut progressed = read_chunk(
+            &mut stdout,
+            &mut out,
+            source.len().saturating_mul(4).max(1024 * 1024),
+            false,
+        )?;
+        progressed |= read_chunk(&mut stderr, &mut err, STDERR_LIMIT, true)?;
         if sent == source.len() {
             stdin = None;
         }
@@ -231,7 +262,21 @@ mod tests {
             "import sys; sys.stdout.write('x'*131072); sys.stdout.flush(); sys.stderr.write('w'*131072); sys.stderr.flush(); sys.stdout.write(sys.stdin.read())"
         ]), &source, Duration::from_secs(5)).unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(result.text, format!("{}{source}", "x".repeat(131072)));
-        assert_eq!(result.warning, "w".repeat(131072));
+        assert_eq!(result.warning, format!("{}…", "w".repeat(DIAGNOSTIC_CHARS)));
+    }
+
+    #[test]
+    fn runaway_output_is_stopped_and_diagnostics_are_bounded_single_line_text() {
+        let error = rewrite_with_command(
+            Command::new("python3").args(["-c", "import sys; sys.stdout.write('x'*2097152); sys.stdout.flush()"]),
+            "small input",
+            Duration::from_secs(5),
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("output exceeds"), "{error}");
+        assert_eq!(diagnostic("first\nsecond\tthird"), "first second third");
+        assert_eq!(diagnostic(&"é".repeat(2000)).chars().count(), DIAGNOSTIC_CHARS + 1);
     }
 
     #[test]

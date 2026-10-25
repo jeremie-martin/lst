@@ -349,3 +349,162 @@ fn missing_credentials_leave_the_document_and_microphone_alone() -> TestResult {
         Ok(())
     })
 }
+
+fn click_voice(editor: &mut lst_x11_harness::Editor<'_>, id: &str) -> support::SupportResult<()> {
+    let state = editor.wait_state("voice button laid out", secs(3), |r| {
+        r.voice_button_bounds_px.contains_key(id)
+    })?;
+    let (x, y, w, h) = state.voice_button_bounds_px[id];
+    editor.click_at(
+        ((x + w / 2.0) * state.viewport.scale_factor).round() as i32,
+        ((y + h / 2.0) * state.viewport.scale_factor).round() as i32,
+    )?;
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn failed_finalization_after_finish_keeps_audio_and_allows_closing() -> TestResult {
+    support::run_x11_test("voice-finalize-failure", |session| {
+        let server = Service::new(vec![]);
+        let mut env = configure(session, &server)?;
+        env.push(("LST_TEST_VOICE_FINALIZE_ERROR".into(), "1".into()));
+        let fixture = std::fs::read(session.root().join("microphone.wav"))?;
+        let (mut editor, _) = session.open_with_env("scratch", &env_refs(&env))?;
+        editor.keys("<C-A-1>")?;
+        let state = voice(&mut editor, "Recording")?;
+        let note = PathBuf::from(state.active_tab_path.unwrap());
+        editor.keys("<C-A-3>")?;
+        let failed = voice(&mut editor, "not transcribed")?;
+        assert!(failed.voice_status.unwrap().contains("Dictation finished"));
+        let audio: Vec<_> = std::fs::read_dir(note.parent().unwrap())?
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "wav"))
+            .collect();
+        assert_eq!(audio.len(), 1);
+        assert_eq!(std::fs::read(&audio[0])?, fixture);
+        editor.keys("<C-w>")?;
+        editor.wait_state("finished note can close", secs(3), |r| {
+            r.active_tab_id != state.active_tab_id
+        })?;
+        assert!(audio[0].exists(), "closing the note must preserve recovery bytes");
+        assert_eq!(server.requests.lock().unwrap().len(), 0);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn dismissing_voice_message_returns_typing_to_the_editor() -> TestResult {
+    support::run_x11_test("voice-dismiss-focus", |session| {
+        let server = Service::new(vec![]);
+        let env = configure(session, &server)?;
+        let (mut editor, path) = session.open_with_env("scratch", &env_refs(&env))?;
+        editor.keys("<C-A-1>")?;
+        voice(&mut editor, "Recording")?;
+        editor.keys("<C-A-4><C-tab>")?;
+        voice(&mut editor, "cancelled")?;
+        click_voice(&mut editor, "voice-dismiss")?;
+        editor.wait_state("voice message dismissed with editor focus", secs(3), |r| {
+            r.voice_status.is_none() && r.focused_input == "editor"
+        })?;
+        editor.keys("typing works")?;
+        editor.save_then_expect_file(&path, "typing works")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn arriving_transcript_preserves_status_and_external_primary_selection() -> TestResult {
+    use lst_x11_harness::clipboard::{wait_clipboard_text, write_clipboard_text, Selection};
+    support::run_x11_test("voice-background-effects", |session| {
+        let gate = session.seed_file("gate", "wait")?;
+        let server = Service::new(vec![Reply {
+            gate: Some(gate.clone()),
+            ..Reply::ok("Arrived.")
+        }]);
+        let env = configure(session, &server)?;
+        let settings = session.root().join("config/lst/config.toml");
+        let (mut editor, _) = session.open_with_env("scratch", &env_refs(&env))?;
+        editor.keys("<C-A-1>")?;
+        let state = voice(&mut editor, "Recording")?;
+        let note = PathBuf::from(state.active_tab_path.unwrap());
+        editor.keys("Selected<C-a><C-A-2>")?;
+        server.wait_requests(1);
+        write_clipboard_text(Selection::Primary, "another application's selection")?;
+        std::fs::write(settings, "not valid [ toml")?;
+        let failed = editor.wait_state("unrelated settings error", secs(5), |r| {
+            r.status_message.contains("Settings reload failed")
+        })?;
+        std::fs::remove_file(gate)?;
+        editor.expect_file(&note, "Selected Arrived.")?;
+        let after = editor.read_state()?;
+        assert_eq!(after.status_message, failed.status_message);
+        assert_eq!(
+            serde_json::to_value(&after.cursors)?,
+            serde_json::to_value(&failed.cursors)?
+        );
+        wait_clipboard_text(Selection::Primary, "another application's selection", secs(1))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn prompt_review_blocks_voice_and_conflict_buttons() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    support::run_x11_test("voice-review-modal", |session| {
+        let server = Service::new(vec![]);
+        let mut env = configure(session, &server)?;
+        let filter = session.seed_file(
+            "prompt-add",
+            "#!/usr/bin/python3\nimport sys\nsys.stdin.read()\nsys.stdout.write('polished')\n",
+        )?;
+        std::fs::set_permissions(&filter, std::fs::Permissions::from_mode(0o755))?;
+        let mut paths = vec![session.root().to_path_buf()];
+        paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+        env.push(("PATH".into(), std::env::join_paths(paths)?));
+        let path = session.seed_file("prompt.txt", "original")?;
+        let mut editor = session.open_file_with_env("prompt", &path, &env_refs(&env))?;
+        editor.keys("<C-A-1>")?;
+        voice(&mut editor, "Recording")?;
+        editor.keys("<C-tab><C-end> dirty")?;
+        std::fs::write(&path, "changed on disk")?;
+        editor.wait_state("conflict banner visible", secs(5), |r| {
+            r.file_conflict_button_bounds_px.reload.is_some()
+        })?;
+        editor.keys("<C-a>")?;
+        editor.click_cleanup_button()?;
+        let review = editor.wait_state("review ready", secs(5), |r| r.prompt_review_view.is_some())?;
+        click_voice(&mut editor, "voice-show")?;
+        editor.keys("<tab>")?;
+        let after_show = editor.wait_state("review still receives keys", secs(3), |r| {
+            r.prompt_review_view.as_deref() == Some("result")
+        })?;
+        assert_eq!(after_show.active_tab_id, review.active_tab_id);
+        assert_eq!(after_show.revision, review.revision);
+        click_voice(&mut editor, "voice-cancel")?;
+        let (x, y, w, h) = after_show.file_conflict_button_bounds_px.reload.unwrap();
+        let scale = after_show.viewport.scale_factor;
+        editor.click_at(
+            ((x + w / 2.0) * scale).round() as i32,
+            ((y + h / 2.0) * scale).round() as i32,
+        )?;
+        editor.keys("<tab>")?;
+        let after_reload = editor.wait_state("review remains intact", secs(3), |r| {
+            r.prompt_review_view.as_deref() == Some("changes")
+        })?;
+        assert_eq!(after_reload.revision, review.revision);
+        assert!(after_reload.voice_status.as_deref().unwrap().contains("Recording"));
+        assert!(after_reload.file_conflict_path.is_some());
+        // The live microphone meter redraws every 100 ms. Wait within that cadence.
+        editor.wait_quiet(Duration::from_millis(30), secs(3))?;
+        // Keep an inspectable image of the disabled controls around the review.
+        editor.screenshot()?.write_ppm(path.with_extension("review.ppm"))?;
+        editor.keys("<esc>")?;
+        click_voice(&mut editor, "voice-cancel")?;
+        voice(&mut editor, "cancelled")?;
+        Ok(())
+    })
+}

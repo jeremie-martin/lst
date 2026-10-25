@@ -98,11 +98,13 @@ with `23/` refer to October 23. Duplicate findings share an item.
   checks creation under HOME, preservation on save, and rejection of an invalid reload
   while retaining the last valid directory. Boundary tests cover both directory fields.
 
-- [ ] **Prompt results and tab switches:** keep an improvement result available when its
+- [x] **Prompt results and tab switches (implemented 2026-10-25):** keep an improvement result available when its
   target document is unchanged, even if another tab is active. Apply must still refuse a
   result whose target document changed. (October 24 final sweep)
-  Review: runtime.rs apply_cleanup_result still rejects a result solely because another
-  tab is active.
+  Resolution: the prompt state retains an unchanged target's result independently of
+  the active tab. Returning to that tab presents the review; Apply still checks its
+  revision. Real-app tests cover other-tab edits/saves, return/apply/undo, changed-target
+  rejection, and arrival during another document's close decision.
 
 ## Reconfirmed defects
 
@@ -236,57 +238,75 @@ are noted where they matter. Resolutions name their regression coverage.
 
 ### Voice
 
-- [ ] **Source-confirmed:** Finalization errors can still delete captured audio.
+- [x] **Implemented (2026-10-25):** Finalization errors can still delete captured audio.
   Sample-write recovery was added, but `finalize()` can return early and drop the
   recording. Retain recoverable bytes and accurately report whether transcription is
-  possible. (C8, partially fixed)
-  Review: Current capture still uses finalize()? with the NamedTempFile owned locally.
-  An isolated faulting-WAV boundary reproduces finalization failure followed by file
-  deletion; native device capture was not fault-injected.
+  possible. (C8)
+  Resolution: finalization failure disables automatic deletion and reports the recovery
+  file beside the note, explicitly saying that segment was not transcribed. A faulting
+  WAV seek boundary checks retained sample bytes; the real-app Finish/failure case
+  checks the notice, absence of an upload, closing, and retained recovery bytes.
 
-- [ ] **Source-confirmed:** The fixed 120-second upload deadline cannot accommodate long
+- [x] **Implemented (2026-10-25):** The fixed 120-second upload deadline cannot accommodate long
   segments on slow links. Repeated retries can fail while blocking all later segments.
   (C7)
-  Review: Provider uses a 120-second total request deadline; capture permits 15 minutes
-  of device-rate, 16-bit mono PCM. That payload can require longer than the deadline on
-  a slow uplink. No new slow-link throughput measurement was made.
+  Resolution: allow two minutes of processing plus transfer time at 16 KiB/s for the
+  recorded byte count; retain a 15-second connection deadline and bounded response
+  body. Dropping the request cancels network work and releases audio, including a
+  stalled upload. Boundary tests check the full-segment budget and actual local HTTP
+  cancellation; existing real-app retry/cancel cases exercise the queue. This is a
+  bounded transfer policy, not a guarantee for arbitrarily slow links.
 
-- [ ] **Source-confirmed:** Transcript delivery clears unrelated status messages and can
+- [x] **Implemented (2026-10-25):** Transcript delivery clears unrelated status messages and can
   reclaim X11 PRIMARY despite being a background update. (C17)
-  Review: poll_voice calls update_model, which clears cleanup_message and compares
-  PRIMARY identity using the changed revision, even when selected text is unchanged.
+  Resolution: transcript insertion uses the common background-update path, preserving
+  unrelated status and never publishing PRIMARY as a foreground selection change.
+  The real-app regression holds a response, changes PRIMARY externally, produces an
+  unrelated settings error, then checks delivered text, selections, status and PRIMARY.
 
-- [ ] **Reproduced:** Dismissing a voice message can leave keyboard focus on an
+- [x] **Implemented (2026-10-25):** Dismissing a voice message can leave keyboard focus on an
   invisible root surface, so typing appears unresponsive. (C37)
+  Resolution: Dismiss is a voice action with the same explicit editor-focus handoff
+  as the other controls. The real-pointer regression dismisses the message, types,
+  and checks saved text.
 
-- [ ] **Reproduced:** Capture failure after Finish can restore Paused and keep closing
+- [x] **Implemented (2026-10-25):** Capture failure after Finish can restore Paused and keep closing
   blocked. (C10)
-  Review: Included current Session against a faulting recorder boundary: Finish plus
-  capture error leaves done=false and can_toggle=true; a second Finish is needed. This
-  is a session-state reproduction, not a real microphone failure.
+  Resolution: capture completion honors the requested Finished transition on success
+  and failure. The real-app finalization-failure case needs only one Finish, reports
+  the failure and recovery path, and closes the note without another Finish.
 
 ### Prompts, closing and focus
 
-- [ ] **Source-confirmed:** Voice controls remain interactive during prompt review. Show
+- [x] **Implemented (2026-10-25):** Voice controls remain interactive during prompt review. Show
   Note can switch tabs and make an otherwise usable review stale; the conflict banner
   has a related interaction gap. (C16)
+  Resolution: voice actions and buttons respect pending decisions. Review dims and
+  blocks the voice toolbar and file-conflict banner. A real-pointer case attempts
+  Show Note, Cancel Pending and Reload, uses handled review keys as synchronization,
+  and verifies the target, revision, recording and conflict remain intact.
 
-- [ ] **Reproduced:** A tab can enter its close flow while prompt improvement is
+- [x] **Implemented (2026-10-25):** A tab can enter its close flow while prompt improvement is
   running; the arriving result can coexist with the close prompt and leave a stale
   review covering another tab. (C4)
-  Review: Real app with a gated prompt-add process: closing the dirty tab opens
-  close_prompt; releasing the result opens prompt_review too. Both remain present, with
-  focus on close_prompt.
+  Resolution: one prompt state owns confirmation, running work or review and its
+  target identity. Closing that target is refused before a close flow can start.
+  Another tab's close decision takes precedence over a retained result. Real-app
+  cases cover both the dirty target and a different dirty document.
 
-- [ ] **Reproduced:** Closing the last blank scratchpad during improvement can delete
+- [x] **Implemented (2026-10-25):** Closing the last blank scratchpad during improvement can delete
   its file before quitting is refused, leaving an open tab with a missing-file warning.
   (C54)
-  Review: Real app with a whitespace scratchpad and gated improvement: Ctrl+W deletes
-  the backing file, keeps the tab open and reports it missing.
+  Resolution: close eligibility is checked before scratchpad cleanup; the last-tab
+  path delegates cleanup to successful quitting. A gated real-app regression checks
+  that refusal preserves the whitespace file, then discards the result and edits/saves.
 
-- [ ] **Reproduced:** Clicking the goto bar's label or padding passes through to
+- [x] **Implemented (2026-10-25):** Clicking the goto bar's label or padding passes through to
   document text, moves the caret and redirects subsequent typing into the document.
   (C87)
+  Resolution: the whole bar occludes the document and hands primary clicks to its
+  field. The pointer regression clicks the label and padding using current field
+  geometry, submits a line number and verifies navigation without text changes.
 
 ### Vim and shortcuts
 
@@ -399,28 +419,30 @@ are noted where they matter. Resolutions name their regression coverage.
   process sessions and normal cleanup is in the context manager/KeyboardInterrupt path,
   which default termination bypasses.
 
-- [ ] **Source-confirmed:** Thread exhaustion can panic through infallible thread
-  spawning. (C5)
-  Review: The startup warm-up still calls std::thread::spawn, which panics on
-  thread-creation failure. That optional warm-up should not make launch fail. Resource
-  exhaustion was not induced on this host.
+- [x] **Implemented (2026-10-25):** Optional startup warm-up can panic through
+  infallible thread spawning. (C5)
+  Resolution: use a named, fallible thread builder and skip optional warm-up if thread
+  creation fails. Voice and prompt workers also report spawn failure. This is a
+  source-verified boundary change; host thread exhaustion was not induced.
 
-- [ ] **Source-confirmed:** Prompt-add output/error buffering is unbounded. (C9)
-  Review: read_chunk appends without an output bound until the deadline. Error/warning
-  text is also retained wholesale and shown in a single-line surface. A deadline does
-  not bound memory; no destructive exhaustion test was run.
+- [x] **Implemented (2026-10-25):** Prompt-add output/error buffering is unbounded. (C9)
+  Resolution: stdout is limited to the larger of 1 MiB or four times the input size;
+  exceeding that bound uses the existing process-group cleanup. Stderr retains at
+  most 64 KiB while draining the pipe; displayed diagnostics are single-line and at
+  most 1,024 characters plus an ellipsis. Boundary tests cover runaway output,
+  simultaneous full pipes, large input, and bounded Unicode diagnostics.
 
-- [ ] **Source-confirmed:** Blocking prompt-add occupies a shared background-executor
+- [x] **Implemented (2026-10-25):** Blocking prompt-add occupies a shared background-executor
   worker. (C11)
-  Review: The blocking process exchange runs on the shared executor. Its worker count
-  can be one; in that supported configuration, a waiting prompt can delay
-  saves/maintenance for its full deadline. No starvation was induced in the daily app.
+  Resolution: a fallibly spawned dedicated thread owns process exchange and review
+  preparation. GPUI awaits a one-shot result without occupying a shared worker. The
+  real-app other-tab save and retained-review workflow also runs with app CPU affinity
+  restricted to one CPU, giving GPUI one shared background worker.
 
-- [ ] **Source-confirmed:** The contributor guide still describes an app-owned DeepSeek
+- [x] **Implemented (2026-10-25):** The contributor guide still describes an app-owned DeepSeek
   client. (C18; stale wording observed)
-  Review: AGENTS.md still calls this an app-owned DeepSeek client; current prompt
-  improvement invokes prompt-add and voice uses ElevenLabs. This is stale ownership
-  documentation.
+  Resolution: AGENTS.md now names prompt-add process execution and voice transcription
+  at the app boundary; the architecture document records their actual ownership.
 
 - [ ] **Reproduced:** Wide CJK characters count incorrectly in wrapping. (C57)
   Review: Current wrapping counts each non-tab grapheme as one cell. Current GPUI
@@ -489,11 +511,12 @@ add caching, pooling or another layer.
   no overrun attributable to it was reproduced. Measure before introducing buffer-pool
   machinery.
 
-- [ ] **Cost confirmed; impact unmeasured:** Unbuffered WAV output performs many tiny
+- [x] **Implemented (2026-10-25):** Unbuffered WAV output performs many tiny
   writes. (C14)
-  Review: Current hound/File output performs 48,000 sample writes for one second at 48
-  kHz, confirmed with a counting I/O boundary. This establishes excessive write
-  granularity, not a measured end-to-end latency regression.
+  Resolution: wrap the file in BufWriter. The same one-second, 48 kHz mono PCM boundary
+  produces byte-identical 96,044-byte WAV files with 14 underlying writes instead of
+  48,003. This verifies write granularity, not end-to-end latency. Callback buffer
+  pooling remains a separate, unmeasured item.
 
 ## Test and benchmark findings
 
@@ -957,6 +980,40 @@ intentional behavior as a defect.
   hold up. (23/V14)
 
 ## Verification and evidence
+
+### Implementation checkpoint: voice and prompt lifecycle (2026-10-25)
+
+- Addressed the retained-result contract; voice recovery, timeout, background effects
+  and focus (C8, C7, C17, C37, C10); review/close/goto interaction (C16, C4, C54, C87);
+  worker/output boundaries and ownership documentation (C5, C9, C11, C18); and buffered
+  WAV output (C14): 15 checklist entries. The remaining findings stay in scope.
+- A single prompt state replaces three independently mutable flags/options. Reviews
+  belong to their target document; visibility and focus follow the active tab and
+  pending close/save decisions. Background transcript delivery uses the existing
+  background model-update path without publishing PRIMARY.
+- Voice requests stream asynchronously on an owned worker and cancel when dropped.
+  Recording finalization failures retain recoverable bytes beside the note, while
+  Finish still ends the session. Prompt process work uses a dedicated fallible worker,
+  bounded output and bounded single-line diagnostics.
+- Eight added real-app cases cover the interacting workflows. Three selected cases
+  fail against the preserved pre-change binary: inactive-target result retention,
+  refused blank-tab close preserving its file, and background status preservation.
+  Four cases also pass with the app restricted to one CPU, including saves while
+  prompt-add waits and both voice/conflict pointer suppression during review.
+- Boundary checks cover cancellation releasing the HTTP connection and audio,
+  finalization failure preserving sample bytes, transfer budgeting, runaway process
+  output and simultaneous full pipes. Buffering produces byte-identical 96,044-byte
+  WAV output with 14 underlying writes versus 48,003 for one second at 48 kHz.
+  This is a write-count result, not an end-to-end performance claim; C13 remains open.
+- Final verification: `cargo test --all-features` (205 passed), harness tests (32
+  passed), Clippy, formatting and diff checks, and the full nested-X11 gate (314/314
+  passed in 2,741 seconds). Existing compiler/vendor warnings remain. The nested lane
+  used the documented temporary wmctrl/xsel tools and compatible lwm wrapper; the
+  stock-runner compatibility item remains open.
+- The inspected screenshot shows the active review with disabled voice and conflict
+  controls. Logs, baseline failure states, the one-CPU launcher, write counts and the
+  screenshot are in `/home/holo/agent-exports/foundation-lifecycle-2026-10-25`.
+
 
 ### Implementation checkpoint: settings persistence (2026-10-25)
 

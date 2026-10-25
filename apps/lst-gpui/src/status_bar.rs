@@ -48,10 +48,8 @@ impl LstGpuiApp {
                 .language()
                 .map(|language| format!("{language:?}"))
                 .unwrap_or_else(|| "Plain Text".to_string()),
-            polishing: self.cleanup_in_flight,
-            polish_enabled: !self.cleanup_in_flight
-                && self.prompt_review.is_none()
-                && self.active_tab().buffer().len_chars() > 0,
+            polishing: self.prompt.is_running(),
+            polish_enabled: self.prompt.is_idle() && self.active_tab().buffer().len_chars() > 0,
         };
         let mut changed = false;
         let view = if let Some(view) = &self.status_bar_view {

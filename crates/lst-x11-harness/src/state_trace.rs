@@ -35,6 +35,8 @@ pub struct StateTraceRecord {
     pub vim_pending: String,
     pub find: TraceFind,
     pub goto_line_input: Option<String>,
+    #[serde(default)]
+    pub goto_field: Option<TraceInputField>,
     pub recent_panel_open: bool,
     pub recent_panel_query: Option<String>,
     #[serde(default)]
@@ -83,6 +85,8 @@ pub struct StateTraceRecord {
     pub file_conflict_button_bounds_px: TraceFileConflictButtonBounds,
     #[serde(default)]
     pub voice_status: Option<String>,
+    #[serde(default)]
+    pub voice_button_bounds_px: std::collections::BTreeMap<String, (f32, f32, f32, f32)>,
     #[serde(default)]
     pub cleanup_confirmation_open: bool,
     pub prompt_review_view: Option<String>,

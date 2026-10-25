@@ -153,6 +153,64 @@ struct CleanupConfirmation {
     revision: u64,
 }
 
+#[derive(Default)]
+enum PromptState {
+    #[default]
+    Idle,
+    Confirm(CleanupConfirmation),
+    Running {
+        tab: TabId,
+    },
+    Review(Box<prompt_review::PromptReview>),
+}
+
+impl PromptState {
+    fn is_idle(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
+    fn is_running(&self) -> bool {
+        matches!(self, Self::Running { .. })
+    }
+    fn target(&self) -> Option<TabId> {
+        match self {
+            Self::Idle => None,
+            Self::Confirm(c) => Some(c.tab_id),
+            Self::Running { tab } => Some(*tab),
+            Self::Review(r) => Some(r.tab_id),
+        }
+    }
+    fn confirmation(&self) -> Option<CleanupConfirmation> {
+        match self {
+            Self::Confirm(c) => Some(*c),
+            _ => None,
+        }
+    }
+    fn take_confirmation(&mut self) -> Option<CleanupConfirmation> {
+        let confirmation = self.confirmation()?;
+        *self = Self::Idle;
+        Some(confirmation)
+    }
+    fn review(&self) -> Option<&prompt_review::PromptReview> {
+        match self {
+            Self::Review(r) => Some(r),
+            _ => None,
+        }
+    }
+    fn review_mut(&mut self) -> Option<&mut prompt_review::PromptReview> {
+        match self {
+            Self::Review(r) => Some(r),
+            _ => None,
+        }
+    }
+    fn take_review(&mut self) -> Option<Box<prompt_review::PromptReview>> {
+        self.review()?;
+        match std::mem::take(self) {
+            Self::Review(r) => Some(r),
+            _ => unreachable!(),
+        }
+    }
+}
+
 impl QuitReview {
     fn new(items: impl IntoIterator<Item = (TabId, String)>) -> Self {
         let items = items
@@ -349,9 +407,7 @@ struct LstGpuiApp {
     x11_ctrl_k_pending: bool,
     zoom_level: i32,
     state_trace: StateTraceEmitter,
-    cleanup_in_flight: bool,
-    cleanup_confirmation: Option<CleanupConfirmation>,
-    prompt_review: Option<prompt_review::PromptReview>,
+    prompt: PromptState,
     cleanup_message: Option<String>,
     clipboard_quit_bypass: Option<ScratchpadClipboardPayload>,
     /// A passive word highlight exists only after focus or a cursor-only
@@ -595,9 +651,7 @@ impl LstGpuiApp {
             x11_ctrl_k_pending: false,
             zoom_level: settings.settings.appearance.zoom_level,
             state_trace: StateTraceEmitter::from_env(),
-            cleanup_in_flight: false,
-            cleanup_confirmation: None,
-            prompt_review: None,
+            prompt: PromptState::Idle,
             voice: voice::Voice::default(),
             cleanup_message: None,
             clipboard_quit_bypass: None,
@@ -738,8 +792,8 @@ impl LstGpuiApp {
         let requested = self.pending_focus.take();
         let surface_handle = if self.close_prompt.is_some()
             || self.quit_review.is_some()
-            || self.cleanup_confirmation.is_some()
-            || self.prompt_review.is_some()
+            || self.prompt.confirmation().is_some()
+            || self.prompt_review_visible()
         {
             Some(self.surface_focus_handle.clone())
         } else if self.workspace_surface == WorkspaceSurface::Settings {
@@ -910,7 +964,7 @@ impl LstGpuiApp {
         update: impl FnOnce(&mut EditorModel),
     ) {
         let message = self.cleanup_message.take();
-        self.update_model(cx, notify_after_update, update);
+        self.update_model_inner(cx, notify_after_update, false, update);
         if self.cleanup_message.is_none() {
             self.cleanup_message = message;
         }
@@ -922,12 +976,22 @@ impl LstGpuiApp {
         notify_after_update: bool,
         update: impl FnOnce(&mut EditorModel),
     ) {
+        self.update_model_inner(cx, notify_after_update, true, update);
+    }
+
+    fn update_model_inner(
+        &mut self,
+        cx: &mut Context<Self>,
+        notify_after_update: bool,
+        publish_selection: bool,
+        update: impl FnOnce(&mut EditorModel),
+    ) {
         // Every input-driven model mutation funnels through here, so this
         // stamp lets the benchmark split key latency into delivery, work,
         // and presentation.
         diagnostics::record_epoch("input_epoch_us");
         self.cursor_visible = true;
-        if !self.cleanup_in_flight {
+        if !self.prompt.is_running() {
             self.cleanup_message = None;
         }
         self.sync_viewport_state();
@@ -959,10 +1023,13 @@ impl LstGpuiApp {
         // selection with this tab's stale one. Comparing (tab, revision,
         // selection) also avoids materializing the selected text on every
         // input event just to detect a change.
-        if new_primary_state != old_primary_state && new_primary_state.0 == old_primary_state.0 {
+        if publish_selection && new_primary_state != old_primary_state && new_primary_state.0 == old_primary_state.0 {
             if let Some(text) = self.model.active_tab().selected_text().filter(|text| !text.is_empty()) {
                 cx.write_to_primary(gpui::ClipboardItem::new_string(text));
             }
+        }
+        if new_primary_state.0 != old_primary_state.0 && self.prompt_review_visible() {
+            self.dismiss_focus_surfaces(cx);
         }
         self.sync_tab_views(old_show_wrap);
         self.sync_active_syntax_state(cx);
@@ -1357,7 +1424,7 @@ fn warm_first_frame_caches(launch: &LaunchArgs, cx: &App) {
     languages.dedup();
     let text_system = cx.text_system().clone();
     let fonts = [typography::primary_font(), typography::ui_font()];
-    std::thread::spawn(move || {
+    let _ = std::thread::Builder::new().name("syntax-warmup".into()).spawn(move || {
         let started = Instant::now();
         for language in languages {
             syntax::warm_grammar(language);

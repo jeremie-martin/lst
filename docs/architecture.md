@@ -166,12 +166,21 @@ than scattering fallback checks through the core.
   segments block later uploads until explicitly retried or cancelled. Only
   finalized text crosses into the editor domain. Recording and HTTP work run
   off the UI thread; the UI polls only while a session exists. Dropping a
-  session stops capture and detaches late results.
+  session stops capture and cancels its HTTP request, releasing the worker and
+  audio files. Upload deadlines scale with the recorded byte count. WAV writes
+  are buffered; failed finalization leaves recoverable bytes beside the note
+  and reports their location without treating them as a transcribable segment.
+  Background delivery preserves unrelated status and X11 PRIMARY ownership.
 - `prompt_add.rs` runs the installed prompt-add filter with a 60-second deadline
   covering input, output, and exit. Nonblocking pipes keep every phase bounded;
-  failure terminates its private process group and reaps the child. The runtime
-  confirms whole-document sharing and prepares a response only if the tab and
-  revision still match the request.
+  failure terminates its private process group and reaps the child. Stdout is
+  bounded relative to the input; stderr is drained with bounded retention and
+  single-line diagnostics. A dedicated, fallibly spawned worker handles the
+  blocking exchange and comparison preparation, leaving GPUI workers available.
+  One prompt state owns confirmation, running work, or review. Its target tab
+  cannot close until that work is resolved. Results survive tab switches when
+  the target revision still matches; only the active target presents a review,
+  and another close/save decision takes precedence.
 - `prompt_review.rs` owns read-only comparison presentation: immutable original
   and proposed text, cached adaptive word highlights, and virtualized review rows
   inside the existing editor area. It uses editor typography and line spacing.
