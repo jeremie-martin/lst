@@ -61,6 +61,13 @@ language = "en"                           # auto or language code
 also autosaves ordinary files. Scratchpads always use their timestamped backing
 file.
 
+Explicit Save and Save As apply the two optional text policies. Trimming removes
+trailing spaces and tabs while preserving existing line-ending bytes. Ensuring
+a final newline uses the first existing line-ending style, or LF when there is
+none; empty documents stay empty. Successful normalization is one undoable edit
+and keeps selections attached to the remaining text. Autosave preserves the
+document exactly and does not apply these policies.
+
 The `--vim` and `--no-vim` launch options choose the initial input mode instead
 of `[editor].input_mode`. `--scratchpad-dir` chooses the scratchpad directory
 for that launch. Run `lst --help` for the full launch interface.

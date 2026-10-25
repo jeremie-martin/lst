@@ -2,7 +2,7 @@ mod support;
 
 use lst_editor::{
     BufferDelta, EditorCommand, EditorEffect, FileStamp, InputMode, Language, LanguageMode, Position, SaveExpectation,
-    Selection, SelectionSet, TabCloseRequest, TabId, UndoBoundary,
+    SaveTextOptions, Selection, SelectionSet, TabCloseRequest, TabId, UndoBoundary,
 };
 use ropey::Rope;
 use std::path::PathBuf;
@@ -50,14 +50,54 @@ fn stale_save_completion_keeps_an_undone_buffer_dirty_against_the_committed_body
     assert!(!harness.model.active_tab().modified());
 
     let committed_stamp = FileStamp::from_raw(requested_body.len() as u64, Some(42));
-    assert!(!harness
-        .model
-        .save_finished_for_tab(tab_id, path, requested_revision, committed_stamp, requested_body,));
+    assert!(!harness.model.save_finished_for_tab(
+        tab_id,
+        path,
+        requested_revision,
+        committed_stamp,
+        lst_editor::SaveTextOptions::default().prepare(requested_body),
+    ));
     assert!(
         harness.model.active_tab().modified(),
         "the editor copy differs from the body that actually reached disk"
     );
     assert_eq!(harness.model.active_tab().file_stamp(), Some(committed_stamp));
+}
+
+#[test]
+fn normalizing_save_completion_maps_the_current_selection_and_rejects_newer_text() {
+    for stale in [false, true] {
+        let mut harness = ModelHarness::new("ab  \nnext  ");
+        let tab_id = harness.model.active_tab_id();
+        let revision = harness.model.active_tab().revision();
+        let prepared = SaveTextOptions {
+            trim_trailing_whitespace: true,
+            ensure_final_newline: true,
+        }
+        .prepare(harness.text());
+        let stamp = FileStamp::from_raw(prepared.text().len() as u64, Some(50));
+        // Navigation while I/O is in flight does not invalidate the save.
+        harness.set_cursor(Position::new(1, 2));
+        if stale {
+            harness.model.replace_text(None, "X".to_string(), UndoBoundary::Break);
+        }
+        assert_eq!(
+            harness
+                .model
+                .save_finished_for_tab(tab_id, "model-spec.rs".into(), revision, stamp, prepared,),
+            !stale
+        );
+        if stale {
+            assert_eq!(harness.text(), "ab  \nneXxt  ");
+            assert_eq!(harness.cursor(), Position::new(1, 3));
+            assert!(harness.model.active_tab().modified());
+        } else {
+            assert_eq!(harness.text(), "ab\nnext\n");
+            assert_eq!(harness.cursor(), Position::new(1, 2));
+            assert!(!harness.model.active_tab().modified());
+        }
+        assert_eq!(harness.model.active_tab().file_stamp(), Some(stamp));
+    }
 }
 
 #[test]
@@ -76,7 +116,7 @@ fn explicit_language_survives_save_as_and_auto_redetects_from_the_new_path() {
         PathBuf::from("renamed.py"),
         revision,
         FileStamp::from_raw(body.len() as u64, Some(1)),
-        body,
+        lst_editor::SaveTextOptions::default().prepare(body),
     ));
     assert_eq!(harness.model.active_tab().language(), Some(Language::Markdown));
     assert_eq!(

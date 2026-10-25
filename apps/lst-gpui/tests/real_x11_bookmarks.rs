@@ -16,6 +16,31 @@
 //!
 mod support;
 
+use lst_x11_harness::{clipboard::write_clipboard_text, Selection};
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn bookmarks_follow_pasted_line_separators_through_undo_and_redo() -> TestResult {
+    support::run_x11_test("bookmarks-line-separators", |session| {
+        let path = session.seed_file("separators.txt", "first\nmarked\nlast")?;
+        let mut editor = session.open_file("bookmarks-line-separators", &path)?;
+        editor.keys("<C-home><down><C-A-k>")?;
+        for separator in ["\n", "\r", "\r\n", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+            editor.keys("<C-home>")?;
+            write_clipboard_text(Selection::Clipboard, &format!("x{separator}y"))?;
+            editor.keys("<C-v><C-home><C-A-l>")?;
+            editor.expect_cursor_heads(&[(2, 0)])?;
+            editor.keys("<C-z><C-home><C-A-l>")?;
+            editor.expect_cursor_heads(&[(1, 0)])?;
+            editor.keys("<C-S-z><C-home><C-A-l>")?;
+            editor.expect_cursor_heads(&[(2, 0)])?;
+            editor.keys("<C-z><C-home><C-A-l>")?;
+            editor.expect_cursor_heads(&[(1, 0)])?;
+        }
+        Ok(())
+    })
+}
+
 use support::{EditorTestExt, TestResult};
 
 fn ten_line_fixture() -> String {

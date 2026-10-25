@@ -5,7 +5,7 @@ use crate::{
     selection::{CursorGoal, Position, Selection, SelectionSet, SelectionState},
     transaction::{
         apply_change_to_buffer, clamped_range, inserted_relative_range, EditOutcome, EditRequest, SelectionAfter,
-        TextChange,
+        TextChange, TextChangeSet,
     },
 };
 use ropey::Rope;
@@ -82,8 +82,8 @@ pub enum BufferDelta {
     /// Buffer changed via a batch of edits whose offsets are valid against
     /// the prior buffer state. Consumers should apply them in reverse order.
     Edits(Vec<BufferEdit>),
-    /// Buffer was replaced wholesale (undo/redo, file reload, save body
-    /// reapply). Consumers should reparse from scratch.
+    /// Buffer was replaced wholesale (undo/redo or file reload).
+    /// Consumers should reparse from scratch.
     FullReplace,
 }
 
@@ -235,7 +235,7 @@ pub struct EditorTab {
     last_edit_position: Option<usize>,
     marked_range: Option<Range<usize>>,
     /// Bookmarked logical lines, sorted ascending. Stored as raw line
-    /// numbers — no anchor tracking, so bookmarks drift on edits.
+    /// numbers, mapped through the character edits before resolving new lines.
     bookmarks: Vec<usize>,
     buffer_delta: BufferDelta,
 }
@@ -583,8 +583,7 @@ impl EditorTab {
         let len = self.len_chars();
         let normalized_changes = request.changes.normalized_for_len(len);
         let primary_inserted_range = normalized_changes.primary_inserted_range();
-        let changes = normalized_changes.into_changes();
-        let changes_text = changes_modify_text(&self.buffer, &changes);
+        let changes_text = changes_modify_text(&self.buffer, normalized_changes.as_slice());
         let selection_before = self.selection.clone();
         let marked_range_before = self.marked_range.clone();
         if changes_text {
@@ -596,7 +595,7 @@ impl EditorTab {
                 .record_edit(request.kind, request.boundary, snapshot_before);
         }
         self.apply_normalized_change(
-            changes,
+            normalized_changes,
             changes_text,
             primary_inserted_range,
             request.selection_after,
@@ -610,23 +609,44 @@ impl EditorTab {
     }
     fn apply_normalized_change(
         &mut self,
-        changes: Vec<TextChange>,
+        changes: TextChangeSet,
         changes_text: bool,
         primary_inserted_range: Range<usize>,
         selection_after: SelectionAfter,
         marked_range_after: Option<Range<usize>>,
     ) {
         if changes_text {
-            remap_bookmarks_after_changes(&self.buffer, &mut self.bookmarks, &changes);
-            for change in changes.iter().rev() {
+            // Map line-start anchors in the old document, then let Rope
+            // resolve the new lines (including CRLF formed across edits).
+            let bookmark_offsets = if self.bookmarks.is_empty() {
+                Vec::new()
+            } else {
+                let map = changes.offset_map();
+                self.bookmarks
+                    .iter()
+                    .map(|&line| map.map_offset(self.buffer.line_to_char(line.min(self.buffer.len_lines() - 1))))
+                    .collect()
+            };
+            for change in changes.as_slice().iter().rev() {
                 apply_change_to_buffer(&mut self.buffer, change);
             }
-            self.record_edits(changes);
+            self.bookmarks = bookmark_offsets
+                .into_iter()
+                .map(|offset| self.buffer.char_to_line(offset))
+                .collect();
+            self.bookmarks.dedup();
         }
-        let selection = selection_after_edit(selection_after, primary_inserted_range.clone(), &self.buffer);
+        let selection = selection_after_edit(
+            selection_after,
+            primary_inserted_range.clone(),
+            &self.buffer,
+            self.selection_set(),
+            &changes,
+        );
         self.selection.replace_set(selection);
         self.marked_range = marked_range_after_edit(marked_range_after, primary_inserted_range, self.len_chars());
         if changes_text {
+            self.record_edits(changes.into_changes());
             self.last_edit_position = Some(self.selection().head().min(self.len_chars()));
             self.touch_text_content();
         }
@@ -649,7 +669,7 @@ impl EditorTab {
         self.origin.mark_saved(path, file_stamp);
         self.reset_from_disk(text);
     }
-    pub(crate) fn mark_autosaved(&mut self, file_stamp: FileStamp, saved_body: &str) {
+    pub(crate) fn mark_autosaved(&mut self, file_stamp: FileStamp, saved_body: &crate::PreparedSave) {
         self.apply_saved_body(saved_body);
         self.mark_current_content_saved();
         self.origin.update_file_stamp(file_stamp);
@@ -745,7 +765,7 @@ impl EditorTab {
         path: PathBuf,
         revision: u64,
         file_stamp: FileStamp,
-        saved_body: &str,
+        saved_body: &crate::PreparedSave,
     ) -> bool {
         if self.revision != revision || self.path() != Some(&path) {
             return false;
@@ -761,7 +781,7 @@ impl EditorTab {
         path: PathBuf,
         revision: u64,
         file_stamp: FileStamp,
-        saved_body: &str,
+        saved_body: &crate::PreparedSave,
     ) -> bool {
         if self.revision != revision {
             return false;
@@ -772,15 +792,13 @@ impl EditorTab {
         self.mark_current_content_saved();
         true
     }
-    fn apply_saved_body(&mut self, saved_body: &str) {
-        if self.buffer.slice(..) == saved_body {
-            return;
+    fn apply_saved_body(&mut self, saved_body: &crate::PreparedSave) {
+        if let Some(changes) = saved_body.changes() {
+            self.apply_edit_request(
+                EditRequest::other_break(changes.clone()).with_selection_after(SelectionAfter::Map),
+            );
         }
-        self.buffer = Rope::from_str(saved_body);
-        self.selection = normalized_selection_state_for_buffer(&self.buffer, self.selection.clone());
-        self.marked_range = marked_range_after_edit(self.marked_range.clone(), 0..0, self.len_chars());
-        self.touch_text_content();
-        self.record_full_replace();
+        debug_assert!(self.buffer.slice(..) == saved_body.text());
     }
 }
 fn first_line_for_detection(buffer: &Rope) -> String {
@@ -790,48 +808,6 @@ fn changes_modify_text(buffer: &Rope, changes: &[TextChange]) -> bool {
     changes
         .iter()
         .any(|change| buffer.slice(change.range.clone()) != change.replacement.as_str())
-}
-fn remap_bookmarks_after_changes(buffer: &Rope, bookmarks: &mut Vec<usize>, changes: &[TextChange]) {
-    if bookmarks.is_empty() {
-        return;
-    }
-    let mut mapped = bookmarks.iter().copied().map(|line| line as isize).collect::<Vec<_>>();
-    let mut line_delta = 0isize;
-    for change in changes {
-        let start_char = change.range.start.min(buffer.len_chars());
-        let end_char = change.range.end.min(buffer.len_chars());
-        let start_line = buffer.char_to_line(start_char);
-        let removed = buffer.char_to_line(end_char).saturating_sub(start_line);
-        let inserted = change.replacement.chars().filter(|ch| *ch == '\n').count();
-        let start = start_line as isize + line_delta;
-        let end = start + removed as isize;
-        let shift = inserted as isize - removed as isize;
-        let insertion_before_start_line = removed == 0 && inserted > 0 && start_char == buffer.line_to_char(start_line);
-        for line in &mut mapped {
-            if *line < start {
-                continue;
-            }
-            if insertion_before_start_line {
-                *line += inserted as isize;
-                continue;
-            }
-            if *line > end {
-                *line += shift;
-            } else {
-                *line = start;
-            }
-        }
-        line_delta += shift;
-    }
-    let line_count = (buffer.len_lines() as isize + line_delta).max(1) as usize;
-    let last_line = line_count.saturating_sub(1);
-    *bookmarks = mapped
-        .into_iter()
-        .filter(|line| *line >= 0)
-        .map(|line| (line as usize).min(last_line))
-        .collect();
-    bookmarks.sort_unstable();
-    bookmarks.dedup();
 }
 fn normalized_selection_for_buffer(buffer: &Rope, selection: Selection) -> Selection {
     let range = selection.range();
@@ -884,9 +860,31 @@ fn normalized_selection_state_for_buffer(buffer: &Rope, selection_state: Selecti
         SelectionState::from_set(normalized)
     }
 }
-fn selection_after_edit(selection_after: SelectionAfter, inserted_range: Range<usize>, buffer: &Rope) -> SelectionSet {
+fn selection_after_edit(
+    selection_after: SelectionAfter,
+    inserted_range: Range<usize>,
+    buffer: &Rope,
+    previous: &SelectionSet,
+    changes: &TextChangeSet,
+) -> SelectionSet {
     let len = buffer.len_chars();
     match selection_after {
+        SelectionAfter::Map => {
+            let map = changes.offset_map();
+            let selections = previous
+                .as_slice()
+                .iter()
+                .map(|selection| {
+                    Selection::new(
+                        map.map_offset_before(selection.anchor()),
+                        map.map_offset_before(selection.head()),
+                    )
+                })
+                .collect();
+            let mapped = SelectionSet::from_selections_coalescing_cursors(selections, previous.primary_index())
+                .expect("monotone offset mapping preserves selection order");
+            normalized_selection_set_for_buffer(buffer, mapped)
+        }
         SelectionAfter::CollapseToInsertedEnd => {
             SelectionSet::single(Selection::collapsed(inserted_range.end.min(len)))
         }
@@ -922,4 +920,32 @@ fn marked_range_after_edit(
     let range = inserted_relative_range(inserted_range, marked_range_after?);
     let range = clamped_range(range, len);
     (range.start < range.end).then_some(range)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bookmark_line_anchors_follow_crlf_formation_and_splitting_at_edit_boundaries() {
+        for (original, change, expected) in [
+            ("a\rb\nmarked", TextChange::insert(2, "\n"), 2),
+            ("a\r\nb\nmarked", TextChange::insert(2, "x"), 3),
+            ("a\rX\nb\nmarked", TextChange::delete(2..3), 2),
+            ("a\nb\nmarked", TextChange::replace(0..4, "x\r\n"), 1),
+        ] {
+            let mut tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), "test.txt".into(), original, None);
+            tab.move_to(original.chars().count() - "marked".len());
+            tab.toggle_bookmark_at_cursor();
+            tab.apply_edit_request(EditRequest::other_break(TextChangeSet::single(change)));
+            assert_eq!(tab.next_bookmark_line(0), Some(expected), "{original:?}");
+            assert!(tab.undo());
+            assert_eq!(
+                tab.next_bookmark_line(0),
+                Some(Rope::from_str(original).len_lines() - 1)
+            );
+            assert!(tab.redo());
+            assert_eq!(tab.next_bookmark_line(0), Some(expected));
+        }
+    }
 }

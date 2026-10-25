@@ -2,8 +2,9 @@
 //! text policies, the autosave policy, and save failures.
 //!
 //! `[files] trim_trailing_whitespace` strips trailing spaces and tabs from
-//! every line, and `[files] ensure_final_newline` appends one `\n` to a
-//! non-empty document that lacks it. Both default off, preserving Markdown
+//! every line, and `[files] ensure_final_newline` appends the first existing
+//! line-ending style (LF if absent) to a non-empty unterminated document.
+//! Both default off, preserving Markdown
 //! hard breaks and intentional trailing whitespace.
 //!
 //! These tests edit regular files, which are not autosaved by default, and
@@ -17,10 +18,77 @@ use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::PathBuf;
 
-use support::{path_text, secs, EditorTestExt, TestResult};
+use lst_x11_harness::{clipboard::wait_clipboard_text, Selection};
+use support::{path_text, secs, EditorTestExt, SelectionTestExt, TestResult};
 
 const TRIM_SETTINGS: &str = "version = 1\n[files]\ntrim_trailing_whitespace = true\n";
 const FINAL_NEWLINE_SETTINGS: &str = "version = 1\n[files]\nensure_final_newline = true\n";
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn normalizing_save_preserves_line_endings_and_caret_and_is_undoable() -> TestResult {
+    support::run_x11_test("save-normalization-positions", |session| {
+        session
+            .seed_settings("version = 1\n[files]\ntrim_trailing_whitespace = true\nensure_final_newline = true\n")?;
+        let original = "aα  \r\nβ \t\rγ  \u{b}δ\t\u{c}ε \u{85}ζ \u{2028}η \u{2029}last \t";
+        let normalized = "aα\r\nβ\rγ\u{b}δ\u{c}ε\u{85}ζ\u{2028}η\u{2029}last\r\n";
+        let path = session.seed_file("mixed.txt", original.strip_prefix('a').unwrap())?;
+        let mut editor = session.open_file("save-normalization-positions", &path)?;
+        editor.keys("<C-home>a<C-end><home><right><right>")?;
+        assert!(editor.expect_cursor_heads(&[(7, 2)])?.active_tab_modified);
+        editor.save_then_expect_file(&path, normalized)?;
+        editor.expect_cursor_heads(&[(7, 2)])?;
+
+        editor.keys("<C-z>")?;
+        editor.wait_state("normalization undone", secs(5), |r| r.active_tab_modified)?;
+        editor.expect_cursor_heads(&[(7, 2)])?;
+        editor.keys("<C-a><C-c>")?;
+        wait_clipboard_text(Selection::Clipboard, original, secs(5))?;
+        editor.keys("<C-S-z>")?;
+        editor.wait_state("normalization redone", secs(5), |r| !r.active_tab_modified)?;
+        editor.keys("<C-a><C-c>")?;
+        wait_clipboard_text(Selection::Clipboard, normalized, secs(5))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn normalizing_save_refreshes_find_results_without_another_find_command() -> TestResult {
+    support::run_x11_test("save-normalization-find", |session| {
+        session.seed_settings(TRIM_SETTINGS)?;
+        let path = session.seed_file("find.txt", "lpha  \nbeta  ")?;
+        let mut editor = session.open_file("save-normalization-find", &path)?;
+        editor.keys("<C-home>a<C-f>  ")?;
+        assert!(editor.expect_find_state("  ", 2)?.active_tab_modified);
+        editor.save_then_expect_file(&path, "alpha\nbeta")?;
+        editor.expect_find_state("  ", 0)?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn normalizing_save_maps_every_reversed_selection_and_keeps_the_final_caret_before_newline() -> TestResult {
+    support::run_x11_test("save-normalization-selections", |session| {
+        session
+            .seed_settings("version = 1\n[files]\ntrim_trailing_whitespace = true\nensure_final_newline = true\n")?;
+        let path = session.seed_file("selections.txt", "b  \nlong  \nlast  ")?;
+        let mut editor = session.open_file("save-normalization-selections", &path)?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("a<C-home><C-A-down><C-A-down><end><S-home>")?;
+        assert!(
+            editor
+                .expect_selections(&[((0, 4), (0, 0)), ((1, 6), (1, 0)), ((2, 6), (2, 0))])?
+                .active_tab_modified
+        );
+        editor.save_then_expect_file(&path, "ab\nlong\nlast\n")?;
+        editor.expect_selections(&[((0, 2), (0, 0)), ((1, 4), (1, 0)), ((2, 4), (2, 0))])?;
+        editor.keys("Z")?;
+        editor.save_then_expect_file(&path, "Z\nZ\nZ\n")?;
+        Ok(())
+    })
+}
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]

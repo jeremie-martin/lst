@@ -78,14 +78,17 @@ impl EditorModel {
         path: PathBuf,
         revision: u64,
         file_stamp: FileStamp,
-        saved_body: String,
+        saved_body: crate::PreparedSave,
     ) -> bool {
         let Some(tab) = self.tab_mut_by_id(tab_id) else {
             return false;
         };
         if !tab.mark_saved_if_current(path.clone(), revision, file_stamp, &saved_body) {
-            tab.observe_committed_body_if_path(&path, file_stamp, &saved_body);
+            tab.observe_committed_body_if_path(&path, file_stamp, saved_body.text());
             return false;
+        }
+        if self.active_tab_id() == tab_id {
+            self.ensure_find_matches_current();
         }
         self.status = format!("Saved {}.", path.display());
         true
@@ -97,13 +100,16 @@ impl EditorModel {
         path: PathBuf,
         revision: u64,
         file_stamp: FileStamp,
-        saved_body: String,
+        saved_body: crate::PreparedSave,
     ) -> bool {
         let Some(tab) = self.tab_mut_by_id(tab_id) else {
             return false;
         };
         if !tab.mark_saved_as_if_current(path.clone(), revision, file_stamp, &saved_body) {
             return false;
+        }
+        if self.active_tab_id() == tab_id {
+            self.ensure_find_matches_current();
         }
         self.status = format!("Saved {}.", path.display());
         true
@@ -156,7 +162,7 @@ impl EditorModel {
         path: PathBuf,
         revision: u64,
         file_stamp: FileStamp,
-        saved_body: String,
+        saved_body: crate::PreparedSave,
     ) -> bool {
         let active_id = self.active_tab_id();
         let Some(tab) = self.tab_mut_by_id(tab_id) else {
@@ -166,11 +172,12 @@ impl EditorModel {
             return false;
         }
         if tab.revision() != revision {
-            tab.observe_committed_body_if_path(&path, file_stamp, &saved_body);
+            tab.observe_committed_body_if_path(&path, file_stamp, saved_body.text());
             return false;
         }
         tab.mark_autosaved(file_stamp, &saved_body);
         if tab_id == active_id {
+            self.ensure_find_matches_current();
             self.status = format!("Autosaved {}.", path.display());
         }
         true

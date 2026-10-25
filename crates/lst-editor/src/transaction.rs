@@ -62,6 +62,21 @@ pub(crate) struct TextChangeOffsetMap<'a> {
 }
 
 impl TextChangeOffsetMap<'_> {
+    /// Keep a position before text inserted at that position; positions
+    /// inside replaced text collapse to the start of the replacement.
+    pub(crate) fn map_offset_before(&self, offset: usize) -> usize {
+        let after = self.changes.partition_point(|change| change.range.start < offset);
+        let Some(index) = after.checked_sub(1) else {
+            return offset;
+        };
+        let change = &self.changes[index];
+        if offset < change.range.end {
+            self.inserted_ends[index] - change.replacement.chars().count()
+        } else {
+            self.inserted_ends[index] + offset - change.range.end
+        }
+    }
+
     pub(crate) fn map_offset(&self, offset: usize) -> usize {
         let after = self.changes.partition_point(|change| change.range.start <= offset);
         let Some(index) = after.checked_sub(1) else {
@@ -188,6 +203,8 @@ impl EditRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SelectionAfter {
+    /// Map the existing selections, staying before insertions at their ends.
+    Map,
     /// Caret at the end of the primary inserted span.
     CollapseToInsertedEnd,
     /// Final selection set in post-transaction character coordinates.
@@ -265,6 +282,23 @@ pub(crate) fn ordered_range(start: usize, end: usize) -> Range<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn positions_can_stay_before_insertions_and_collapse_into_deleted_text() {
+        let changes = TextChangeSet::new(
+            vec![
+                TextChange::delete(2..4),
+                TextChange::replace(6..8, "é🦀"),
+                TextChange::insert(8, "\r\n"),
+            ],
+            0,
+        );
+        let map = changes.offset_map();
+        let expected = [0, 1, 2, 2, 2, 3, 4, 4, 6, 9];
+        for (offset, expected) in expected.into_iter().enumerate() {
+            assert_eq!(map.map_offset_before(offset), expected, "{offset}");
+        }
+    }
 
     /// Linear reference for the indexed offset mapping.
     fn map_offset_to_inserted_end(changes: &[TextChange], offset: usize) -> usize {

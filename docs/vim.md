@@ -52,9 +52,9 @@ clears pending input. The current contract excludes:
 - surround commands
 - full Vim option and regular-expression compatibility
 
-Vim behavior with multiple active cursors is also undefined. Establish an
-explicit user contract before extending it; do not preserve incidental current
-results.
+Vim behavior with multiple active cursors is currently undefined. The accepted
+single-cursor contract is recorded in [Findings and agreed changes](findings.md)
+and awaits implementation; do not preserve incidental multi-cursor results.
 
 ## Implementation
 

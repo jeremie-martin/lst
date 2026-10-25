@@ -1,5 +1,8 @@
 use gpui::{ClipboardItem, Context, Window};
-use lst_editor::{EditorEffect, EditorTab as ModelEditorTab, FileStamp, SaveExpectation, TabCloseRequest, TabId};
+use lst_editor::{
+    EditorEffect, EditorTab as ModelEditorTab, FileStamp, PreparedSave, SaveExpectation, SaveTextOptions,
+    TabCloseRequest, TabId,
+};
 use rfd::FileDialog;
 use std::{
     collections::HashSet,
@@ -178,7 +181,7 @@ enum FileWriteOutcome {
         path: PathBuf,
         revision: u64,
         stamp: FileStamp,
-        body: String,
+        body: PreparedSave,
     },
     Failed {
         tab_id: TabId,
@@ -218,12 +221,6 @@ enum ConflictWrite {
     Autosave {
         revision: u64,
     },
-}
-
-#[derive(Clone, Copy, Debug)]
-struct SaveTextOptions {
-    trim_trailing_whitespace: bool,
-    ensure_final_newline: bool,
 }
 
 #[derive(Debug)]
@@ -1019,7 +1016,13 @@ impl LstGpuiApp {
         self.file_conflicts.remove(&tab_id);
         self.update_model(cx, true, |model| {
             if same_text && modified {
-                model.autosave_finished_for_tab(tab_id, path, revision, disk_stamp, text);
+                model.autosave_finished_for_tab(
+                    tab_id,
+                    path,
+                    revision,
+                    disk_stamp,
+                    SaveTextOptions::default().prepare(text),
+                );
             } else if same_text {
                 model.refresh_file_stamp_for_tab(tab_id, path, disk_stamp);
             } else {
@@ -1751,7 +1754,7 @@ impl LstGpuiApp {
                         RecentOrigin::Regular
                     }
                 });
-                let body_is_blank = body.trim().is_empty();
+                let body_is_blank = body.text().trim().is_empty();
                 let mut saved = false;
                 self.update_model_in_background(cx, true, |model| {
                     saved = model.autosave_finished_for_tab(tab_id, path, revision, stamp, body);
@@ -2188,11 +2191,11 @@ fn save_file_result(
     if !ticket.is_current() {
         return stale_save_result(tab_id, path, revision);
     }
-    let body = apply_save_options(body, options);
+    let body = options.prepare(body);
 
     match save_conflict_stamp(&path, expectation) {
         Ok(Some(disk_stamp)) => {
-            if fs::read_to_string(&path).is_ok_and(|disk_body| disk_body == body) {
+            if fs::read_to_string(&path).is_ok_and(|disk_body| disk_body == body.text()) {
                 return FileWriteOutcome::Written {
                     tab_id,
                     path,
@@ -2226,12 +2229,12 @@ fn save_file_result(
 fn write_file_result(
     tab_id: TabId,
     path: PathBuf,
-    body: String,
+    body: PreparedSave,
     revision: u64,
     expectation: SaveExpectation,
     ticket: SaveTicket,
 ) -> FileWriteOutcome {
-    match write_file_with_guards(&path, body.as_bytes(), expectation, Some(&ticket)) {
+    match write_file_with_guards(&path, body.text().as_bytes(), expectation, Some(&ticket)) {
         Ok(AtomicWriteOutcome::Written) => match file_stamp(&path) {
             Ok(stamp) => FileWriteOutcome::Written {
                 tab_id,
@@ -2269,67 +2272,15 @@ fn write_autosave_body_result(
     expectation: SaveExpectation,
     ticket: SaveTicket,
 ) -> FileWriteOutcome {
-    if !ticket.is_current() {
-        return stale_save_result(tab_id, path, revision);
-    }
-    match save_conflict_stamp(&path, expectation) {
-        Ok(Some(disk_stamp)) if fs::read_to_string(&path).is_ok_and(|disk_body| disk_body == body) => {
-            return FileWriteOutcome::Written {
-                tab_id,
-                path,
-                revision,
-                stamp: disk_stamp,
-                body,
-            };
-        }
-        Ok(Some(disk_stamp)) => {
-            return FileWriteOutcome::Conflict {
-                tab_id,
-                path,
-                revision,
-                disk_stamp,
-            };
-        }
-        Ok(None) => {}
-        Err(error) => {
-            return FileWriteOutcome::Failed {
-                tab_id,
-                path,
-                message: error.to_string(),
-            };
-        }
-    }
-    if !ticket.is_current() {
-        return stale_save_result(tab_id, path, revision);
-    }
-    match write_file_with_guards(&path, body.as_bytes(), expectation, Some(&ticket)) {
-        Ok(AtomicWriteOutcome::Written) => match file_stamp(&path) {
-            Ok(stamp) => FileWriteOutcome::Written {
-                tab_id,
-                path,
-                revision,
-                stamp,
-                body,
-            },
-            Err(err) => FileWriteOutcome::Failed {
-                tab_id,
-                path,
-                message: err.to_string(),
-            },
-        },
-        Ok(AtomicWriteOutcome::Stale) => stale_save_result(tab_id, path, revision),
-        Ok(AtomicWriteOutcome::Conflict(disk_stamp)) => FileWriteOutcome::Conflict {
-            tab_id,
-            path,
-            revision,
-            disk_stamp,
-        },
-        Err(err) => FileWriteOutcome::Failed {
-            tab_id,
-            path,
-            message: err.to_string(),
-        },
-    }
+    save_file_result(
+        tab_id,
+        path,
+        body,
+        revision,
+        expectation,
+        ticket,
+        SaveTextOptions::default(),
+    )
 }
 
 pub(crate) fn read_file_with_stamp(path: &Path) -> std::io::Result<(String, FileStamp)> {
@@ -2355,34 +2306,6 @@ fn can_start_autosave_job(
     revision: u64,
 ) -> bool {
     !inflight.contains(path) && autosave_revision_is_current(tabs, tab_id, path, revision)
-}
-
-fn apply_save_options(body: String, options: SaveTextOptions) -> String {
-    if !options.trim_trailing_whitespace && !options.ensure_final_newline {
-        return body;
-    }
-    let mut body = if options.trim_trailing_whitespace {
-        trim_trailing_ws(&body)
-    } else {
-        body
-    };
-    if options.ensure_final_newline && !body.is_empty() && !body.ends_with('\n') {
-        body.push('\n');
-    }
-    body
-}
-
-fn trim_trailing_ws(body: &str) -> String {
-    let mut out = String::with_capacity(body.len());
-    let mut segments = body.split('\n');
-    if let Some(first) = segments.next() {
-        out.push_str(first.trim_end_matches([' ', '\t']));
-    }
-    for segment in segments {
-        out.push('\n');
-        out.push_str(segment.trim_end_matches([' ', '\t']));
-    }
-    out
 }
 
 pub(crate) fn autosave_revision_is_current(tabs: &[ModelEditorTab], tab_id: TabId, path: &Path, revision: u64) -> bool {

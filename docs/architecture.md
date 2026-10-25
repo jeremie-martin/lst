@@ -70,6 +70,13 @@ ordered, disjoint `TextChangeSet`. Applying one request determines the resulting
 selection and one undo boundary. Editing helpers return transactions instead of
 mutating unrelated model fields in stages.
 
+Save text policies also produce exact `TextChangeSet` edits in `lst-editor`.
+`PreparedSave` carries those edits with the bytes written by the app. A successful
+save applies them only to the requested revision, through the same transaction
+and undo boundary, mapping the current selections and refreshing Find results.
+Bookmarks follow line-start character anchors through edits; Rope determines
+their resulting logical lines, including CRLF pairs formed at edit boundaries.
+
 Core collections encode their invariants:
 
 - `TabSet` always contains a tab and owns active-index and tab-ID validity.
@@ -162,16 +169,19 @@ UI state should have one geometric and visual owner:
 Exact-pixel X11 baselines are regression checks, not design approval. Inspect a
 changed image before updating a baseline.
 
-## Deliberately unresolved behavior
+## Accepted behavior awaiting implementation
 
-Two existing surfaces do not yet have a complete product contract:
+Two existing surfaces still have behavior that differs from the accepted
+contracts in [Findings and agreed changes](findings.md):
 
-- Vim commands with multiple active cursors have no accepted semantics.
-- Find-in-selection currently scopes to the primary selection; behavior across
-  several selections is undecided.
+- Vim currently permits multiple active cursors without defined semantics. The
+  accepted target is single-cursor Vim, retaining the primary selection on entry.
+- Find-in-selection currently captures one primary range with fixed offsets.
+  The accepted target captures all nonempty ranges and tracks them through edits
+  and history.
 
-Do not infer either policy from incidental model behavior. Decide the user
-contract first and add real-X11 acceptance coverage with the implementation.
+Implement the recorded contracts with real-X11 acceptance coverage; incidental
+current behavior does not supersede those decisions.
 Direct keybinding capture is also not implemented; the Settings UI displays
 bindings and the TOML file is the editing interface.
 
