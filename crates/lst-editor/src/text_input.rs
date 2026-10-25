@@ -14,10 +14,7 @@ use std::ops::Range;
 
 pub(crate) enum TextInputAction {
     MoveCursor(usize),
-    Edit {
-        request: EditRequest,
-        align_find_current: bool,
-    },
+    Edit(EditRequest),
 }
 
 pub(crate) fn edit_action(
@@ -35,34 +32,36 @@ pub(crate) fn edit_action(
         return TextInputAction::MoveCursor(new_cursor);
     }
     if let Some(dedent_range) = auto_dedent_close_brace_range(tab, &resolved_range, &text) {
-        return TextInputAction::Edit {
-            request: EditRequest::single(EditKind::Insert, UndoBoundary::Break, dedent_range, text),
-            align_find_current: false,
-        };
+        return TextInputAction::Edit(EditRequest::single(
+            EditKind::Insert,
+            UndoBoundary::Break,
+            dedent_range,
+            text,
+        ));
     }
     if let Some((edit_range, replacement, new_selection)) = auto_pair_surround_edit(tab, &resolved_range, &text) {
         let reversed = tab.selection_reversed();
         let relative_selection =
             new_selection.start.saturating_sub(edit_range.start)..new_selection.end.saturating_sub(edit_range.start);
-        return TextInputAction::Edit {
-            request: EditRequest::single(EditKind::Insert, UndoBoundary::Break, edit_range, replacement)
-                .with_selection_after(SelectionAfter::InsertedRange {
+        return TextInputAction::Edit(
+            EditRequest::single(EditKind::Insert, UndoBoundary::Break, edit_range, replacement).with_selection_after(
+                SelectionAfter::InsertedRange {
                     range: relative_selection,
                     reversed,
-                }),
-            align_find_current: true,
-        };
+                },
+            ),
+        );
     }
     if let Some((edit_range, replacement, caret)) = auto_pair_insert_edit(tab, &resolved_range, &text) {
         let relative_caret = caret.saturating_sub(edit_range.start);
-        return TextInputAction::Edit {
-            request: EditRequest::single(EditKind::Insert, UndoBoundary::Break, edit_range, replacement)
-                .with_selection_after(SelectionAfter::InsertedRange {
+        return TextInputAction::Edit(
+            EditRequest::single(EditKind::Insert, UndoBoundary::Break, edit_range, replacement).with_selection_after(
+                SelectionAfter::InsertedRange {
                     range: relative_caret..relative_caret,
                     reversed: false,
-                }),
-            align_find_current: true,
-        };
+                },
+            ),
+        );
     }
 
     let kind = if text.is_empty() {
@@ -70,10 +69,7 @@ pub(crate) fn edit_action(
     } else {
         EditKind::Insert
     };
-    TextInputAction::Edit {
-        request: EditRequest::single(kind, boundary, resolved_range, text),
-        align_find_current: false,
-    }
+    TextInputAction::Edit(EditRequest::single(kind, boundary, resolved_range, text))
 }
 pub(crate) fn replace_request(
     tab: &EditorTab,
@@ -303,11 +299,6 @@ fn multi_edit_action(
         return None;
     }
 
-    let edit = |request, align_find_current| TextInputAction::Edit {
-        request,
-        align_find_current,
-    };
-
     if let Some(request) = request_for_each(tab, EditKind::Other, UndoBoundary::Merge, |_index, selection| {
         // Overtype skips a closer rather than inserting text. The empty change
         // keeps each selection in the change-set delta accounting; the cursor
@@ -315,13 +306,13 @@ fn multi_edit_action(
         let cursor = auto_pair_overtype_cursor(tab, &selection.range(), text)?;
         Some(SelectionEdit::insert_with_absolute_cursor(selection.cursor(), cursor))
     }) {
-        return Some(edit(request, true));
+        return Some(TextInputAction::Edit(request));
     }
     if let Some(request) = request_for_each(tab, EditKind::Insert, UndoBoundary::Break, |_index, selection| {
         let range = auto_dedent_close_brace_range(tab, &selection.range(), text)?;
         Some(SelectionEdit::replace_with_collapsed_end(range, text.to_string()))
     }) {
-        return Some(edit(request, false));
+        return Some(TextInputAction::Edit(request));
     }
     if let Some(request) = request_for_each(tab, EditKind::Insert, UndoBoundary::Break, |_index, selection| {
         let (edit_range, replacement, new_selection) = auto_pair_surround_edit(tab, &selection.range(), text)?;
@@ -334,7 +325,7 @@ fn multi_edit_action(
             selection.is_reversed(),
         ))
     }) {
-        return Some(edit(request, true));
+        return Some(TextInputAction::Edit(request));
     }
     if let Some(request) = request_for_each(tab, EditKind::Insert, UndoBoundary::Break, |_index, selection| {
         let (edit_range, replacement, caret) = auto_pair_insert_edit(tab, &selection.range(), text)?;
@@ -346,11 +337,11 @@ fn multi_edit_action(
             false,
         ))
     }) {
-        return Some(edit(request, true));
+        return Some(TextInputAction::Edit(request));
     }
 
     let request = multi_selection::replacement_request(tab, text.to_string(), boundary)?;
-    Some(edit(request, false))
+    Some(TextInputAction::Edit(request))
 }
 
 pub(crate) fn resolve_range(tab: &EditorTab, range: Option<Range<usize>>) -> Range<usize> {

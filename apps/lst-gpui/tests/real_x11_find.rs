@@ -422,3 +422,64 @@ fn replace_current_match_only_rewrites_active_match() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn find_reopens_and_navigates_current_text_after_hidden_edits_and_tab_switches() -> TestResult {
+    support::run_x11_test("find-retained-query", |session| {
+        let first = session.seed_file("first.txt", "needle\nspare\nneedle\n")?;
+        let second = session.seed_file("second.txt", "needle needle\n")?;
+        let mut editor = session.open_files("find-retained-query", &[first, second])?;
+        editor.keys("<C-home><C-f>needle")?;
+        editor.expect_find_state("needle", 2)?;
+        editor.keys("<esc><C-end>needle<C-home><f3>")?;
+        editor.expect_cursor_heads(&[(2, 0)])?;
+        editor.keys("<f3>")?;
+        editor.expect_cursor_heads(&[(3, 0)])?;
+        editor.keys("<S-f3>")?;
+        editor.expect_cursor_heads(&[(2, 0)])?;
+        editor.keys("<C-f>")?;
+        editor.expect_find_state("needle", 3)?;
+        editor.keys("<esc><C-home><S-end>gone<C-f>")?;
+        editor.expect_find_state("needle", 2)?;
+        editor.keys("<esc><C-z><C-f>")?;
+        editor.expect_find_state("needle", 3)?;
+        editor.keys("<esc><C-tab><C-home><f3>")?;
+        editor.expect_cursor_heads(&[(0, 7)])?;
+        editor.keys("<C-S-tab><C-f>")?;
+        editor.expect_find_state("needle", 3)?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn regex_replacements_preserve_every_document_line_separator() -> TestResult {
+    support::run_x11_test("find-regex-line-separators", |session| {
+        session.seed_settings("version = 1\n[files]\ntrim_trailing_whitespace = false\n")?;
+        let separators = ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"];
+        let text = separators
+            .iter()
+            .map(|sep| format!("foo {sep}bar{sep}"))
+            .collect::<String>();
+        let path = session.seed_file("regex-separators.txt", &text)?;
+        let mut editor = session.open_file("find-regex-line-separators", &path)?;
+        editor.keys(r"<C-home><C-h>\s+$")?;
+        editor.click_find_chip(FindChip::Regex)?;
+        editor.expect_find_state(r"\s+$", 8)?;
+        editor.keys("<tab><C-A-enter>")?;
+        let trimmed = text.replace("foo ", "foo");
+        editor.save_then_expect_file(&path, &trimmed)?;
+
+        editor.keys("<C-f><C-a>(o+)$")?;
+        editor.expect_find_state("(o+)$", 8)?;
+        editor.keys("<tab><C-a>[$1]<C-A-enter>")?;
+        editor.save_then_expect_file(&path, &trimmed.replace("foo", "f[oo]"))?;
+        editor.keys("<C-f><C-a>.+")?;
+        editor.expect_find_state(".+", 16)?;
+        editor.keys("<tab><C-a>X<C-A-enter>")?;
+        let replaced = separators.iter().map(|sep| format!("X{sep}X{sep}")).collect::<String>();
+        editor.save_then_expect_file(&path, &replaced)?;
+        Ok(())
+    })
+}

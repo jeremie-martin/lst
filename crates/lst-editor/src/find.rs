@@ -267,15 +267,12 @@ impl FindState {
         }
     }
     pub(crate) fn sync_with_tab(&mut self, tab: &EditorTab) {
-        if self.query.is_empty() {
-            self.clear_results();
+        if self.visible && !self.query.is_empty() {
+            self.reindex_to_nearest(tab);
         } else {
-            self.reindex_to_nearest(tab);
-        }
-    }
-    pub(crate) fn sync_after_edit(&mut self, tab: &EditorTab) {
-        if !self.query.is_empty() {
-            self.reindex_to_nearest(tab);
+            // Retain the query for reopening and navigation, never stale ranges.
+            // Those entry points ensure the revision-keyed index is current.
+            self.clear_results();
         }
     }
 
@@ -592,44 +589,6 @@ mod tests {
                     }
                 }
             }
-        }
-    }
-
-    #[test]
-    fn regex_replace_all_never_removes_a_line_separator() {
-        fn replace_all(text: &str, query: &str, replacement: &str) -> String {
-            let tab = crate::EditorTab::from_path_with_stamp(
-                crate::TabId::from_raw(1),
-                std::path::PathBuf::from("separators.txt"),
-                text,
-                None,
-            );
-            let mut model = crate::EditorModel::from_tabs(tab, Vec::new(), String::new());
-            model.open_find_panel(true);
-            model.execute(crate::EditorCommand::ToggleFindRegex);
-            model.update_find_query_and_activate(query.to_string());
-            model.update_find_replacement(replacement.to_string());
-            model.execute(crate::EditorCommand::ReplaceAllMatches);
-            model.active_tab().buffer_text()
-        }
-        for separator in ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"] {
-            let trailing = format!("foo {separator}bar{separator}");
-            assert_eq!(
-                replace_all(&trailing, r"\s+$", ""),
-                format!("foo{separator}bar{separator}"),
-                "{separator:?}"
-            );
-            let lines = format!("foo{separator}bar");
-            assert_eq!(
-                replace_all(&lines, ".+", "X"),
-                format!("X{separator}X"),
-                "{separator:?}"
-            );
-            assert_eq!(
-                replace_all(&lines, "(o+)$", "[$1]"),
-                format!("f[oo]{separator}bar"),
-                "{separator:?}"
-            );
         }
     }
 

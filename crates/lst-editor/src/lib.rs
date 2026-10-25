@@ -435,6 +435,7 @@ impl EditorModel {
                 self.reindex_find_matches_to_nearest();
             }
         }
+        self.ensure_find_matches_current();
         self.queue_focus(FocusTarget::FindQuery);
     }
     pub fn set_find_replace_visible(&mut self, show_replace: bool) {
@@ -514,7 +515,7 @@ impl EditorModel {
         self.find.sync_with_tab(self.tabs.active());
     }
     fn sync_find_after_edit(&mut self) {
-        self.find.sync_after_edit(self.tabs.active());
+        self.find.sync_with_tab(self.tabs.active());
     }
     fn find_step(&mut self, forward: bool) -> bool {
         self.ensure_find_matches_current();
@@ -925,14 +926,8 @@ impl EditorModel {
                 self.assign_selection(Selection::collapsed(new_cursor));
                 self.queue_reveal(RevealIntent::NearestEdge);
             }
-            text_input::TextInputAction::Edit {
-                request,
-                align_find_current,
-            } => {
-                let outcome = self.apply_active_edit_request(request, None);
-                if align_find_current && outcome.text_changed {
-                    self.find.reindex_to_nearest(self.tabs.active());
-                }
+            text_input::TextInputAction::Edit(request) => {
+                self.apply_active_edit_request(request, None);
                 self.queue_reveal(RevealIntent::NearestEdge);
             }
         }

@@ -158,17 +158,20 @@ fn for_each_chunk_line<'a>(chunks: impl Iterator<Item = &'a str>, mut visit: imp
     // Ropey chunks end at character boundaries and never split CRLF pairs.
     let mut partial_line = String::new();
     for chunk in chunks {
-        // Prove once per chunk that LF is its only possible line separator.
-        // Keep Ropey's parser for CRLF, other ASCII breaks, and Unicode.
-        let lf_only = chunk.is_ascii() && memchr::memchr3(b'\r', b'\x0b', b'\x0c', chunk.as_bytes()).is_none();
+        // LF, CRLF and CR share a byte scan. Other ASCII breaks and Unicode
+        // keep Ropey's parser; chunks never split a CRLF pair.
+        let ascii_lines = chunk.is_ascii() && memchr::memchr2(b'\x0b', b'\x0c', chunk.as_bytes()).is_none();
         let ends_with_break = chunk.char_indices().next_back().is_some_and(|(start, _)| {
             let tail = &chunk[start..];
             ropey::str_utils::byte_to_line_idx(tail, tail.len()) != 0
         });
         let mut remaining = chunk;
         while !remaining.is_empty() {
-            let end = if lf_only {
-                memchr::memchr(b'\n', remaining.as_bytes()).map_or(remaining.len(), |newline| newline + 1)
+            let end = if ascii_lines {
+                let bytes = remaining.as_bytes();
+                memchr::memchr2(b'\r', b'\n', bytes).map_or(bytes.len(), |newline| {
+                    newline + 1 + usize::from(bytes[newline] == b'\r' && bytes.get(newline + 1) == Some(&b'\n'))
+                })
             } else {
                 ropey::str_utils::line_to_byte_idx(remaining, 1)
             };
@@ -271,6 +274,9 @@ mod tests {
         }
         for text in [
             "alpha\nbeta\n".repeat(4096),
+            "alpha\r\nbeta\r\n".repeat(4096),
+            "alpha\rbeta\r".repeat(4096),
+            "alpha\r\nbeta\rgamma\n".repeat(4096),
             "a".repeat(4096),
             format!("{}界\r\n{}\u{2028}tail", "ascii\n".repeat(512), "more\n".repeat(512)),
         ] {

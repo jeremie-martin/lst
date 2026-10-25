@@ -559,12 +559,14 @@ The work below exists, but its current end-to-end impact has not been measured.
 It is a reason to investigate an appropriate scenario, not an instruction to
 add caching, pooling or another layer.
 
-- [ ] **Cost confirmed; impact unmeasured:** CRLF search uses a slower indexing path.
-  The first review's optimization was deliberately reverted to stay within its report
-  limit. (23/EF3)
-  Review: CRLF chunks still take Ropey line parsing rather than the LF-only fast path.
-  The historical slowdown is not a fresh timing result; an optimization needs a current
-  controlled comparison.
+- [x] **Implemented (2026-10-26):** CRLF search used a slower indexing path. (23/EF3)
+  Resolution: one byte scanner handles ASCII LF, CRLF and CR; other separators retain
+  Ropey's parser. Chunk/line equivalence coverage includes dense and mixed endings.
+  A release model probe (one warm-up, seven measured runs) reduced median query time
+  on 500,000 CRLF lines from 33.15 to 24.13 ms. LF changed from 23.53 to 24.15 ms
+  (about 3% slower in this run). This modest tradeoff keeps one scanner and avoids
+  a cache or another retained representation. Whole-app latency is not measured here.
+  Evidence: `/home/holo/agent-exports/foundation-costs-2026-10-25/scan-{before,after}.log`.
 
 - [x] **Implemented (2026-10-26):** Tab-label construction repeatedly scans all tabs
   and allocates names, producing quadratic work per render. (23/EF4; October 24 EF8)
@@ -587,10 +589,13 @@ add caching, pooling or another layer.
   allocation. Background highlight completion does not invalidate text. Performance
   comparisons are recorded in the presentation checkpoint.
 
-- [ ] **Cost confirmed; impact unmeasured:** Wrapped H/M/L scans the lines above the
+- [ ] **Model cost measured; design review open:** Wrapped H/M/L scans the lines above the
   viewport on every invocation, making its cost grow with document depth.
-  Review: screen_lines walks from line zero to the viewport in wrapped documents. Linear
-  work is present; measure its actual latency before choosing a change.
+  Review: screen_lines walks from line zero to the viewport in wrapped documents.
+  A release public-model probe now measures about 108 ms per H/M/L key near the end
+  of 500,000 lines, versus 0.008 ms at the start. This is a measured model cost,
+  not a full-app latency result. The app already owns incremental wrap geometry;
+  resolve ownership before adding another cache or caller-maintained viewport hint.
 
 - [ ] **Cost confirmed; impact unmeasured:** Background polling, blinking, PRIMARY
   publication, retained Find queries and per-request HTTP-client creation were reported
@@ -599,6 +604,13 @@ add caching, pooling or another layer.
   Review: Background work is present, but some is necessary for live meters, maintenance
   and searches. Separate measured redundant work from useful behavior; the current
   evidence does not justify removing those mechanisms wholesale.
+  Progress (2026-10-26): hidden Find now retains only its query and clears obsolete
+  ranges; reopening, F3 and explicit match selection rebuild through existing
+  revision validation. Removed duplicate text-input reindexing. A 500,000-line
+  release model probe falls from 34.22 ms/key to 0.00068 ms/key with a retained query;
+  this isolates model work, not display latency. Real-X11 coverage passes hidden
+  edits, reopen, forward/back navigation, undo and tab switching. Other mechanisms
+  in this grouped finding still need their individual dispositions.
 
 - [ ] **Cost confirmed; impact unmeasured:** Allocation occurs inside the realtime
   microphone callback. (C13)
@@ -936,12 +948,12 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   introduces representable-size constraints; no current benefit justifies that choice by
   itself.
 
-- **Optional:** Some tests assert transaction shape or place behavior coverage in a lane
-  that does not match the repository testing rules. (October 24 K4, K5, K8)
-  Review: The public BufferDelta replay test is also a real consumer-equivalence
-  contract, not simply an internal transaction-shape test. The source-side regex
-  replacement test is a workflow under the repository lane policy; review individual
-  coverage/placement without mass relocation.
+- [x] **Assessed (2026-10-26):** Test boundaries reviewed individually. (October 24 K4, K5, K8)
+  Disposition: retain public BufferDelta replay as a consumer-equivalence contract.
+  Move regex replacement workflow coverage to real X11: whitespace matching, capture
+  expansion and replacement preserve all eight document line separators in saved
+  files. The physical-display case passes; remove its source-side workflow duplicate.
+  Keep small algorithm and representation tests in their current lanes.
 
 - **Optional:** Additional duplicated logic was reported in code-line builders,
   command-modifier declarations, settings metadata, line-edit builders and invalidation
