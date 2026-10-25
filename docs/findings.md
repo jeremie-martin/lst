@@ -597,7 +597,7 @@ add caching, pooling or another layer.
   not a full-app latency result. The app already owns incremental wrap geometry;
   resolve ownership before adding another cache or caller-maintained viewport hint.
 
-- [ ] **Cost confirmed; impact unmeasured:** Background polling, blinking, PRIMARY
+- [x] **Assessed (2026-10-26):** Background polling, blinking, PRIMARY
   publication, retained Find queries and per-request HTTP-client creation were reported
   as unnecessary work. Their current costs and useful behavior need checking. (October
   24 EF2-EF7)
@@ -609,8 +609,16 @@ add caching, pooling or another layer.
   revision validation. Removed duplicate text-input reindexing. A 500,000-line
   release model probe falls from 34.22 ms/key to 0.00068 ms/key with a retained query;
   this isolates model work, not display latency. Real-X11 coverage passes hidden
-  edits, reopen, forward/back navigation, undo and tab switching. Other mechanisms
-  in this grouped finding still need their individual dispositions.
+  edits, reopen, forward/back navigation, undo and tab switching.
+  Retained mechanisms: PRIMARY compares tab/revision/selection before materializing
+  selected text and does not publish on tab switches. The 500 ms blink timer notifies
+  only when visibility changes; maintenance observes settings/files and schedules
+  idle autosaves. Voice's 100 ms poll exists only during a session and delivers meter
+  and worker results. A transcription owns its cancellable runtime, request timeout
+  and HTTP client; a reusable client would also need a persistent runtime owner.
+  Existing idle comparisons report zero measured CPU in both variants, without
+  proving zero work. No measured regression justifies new timers, watchers or a
+  network service lifetime. Keep these mechanisms and their current failure handling.
 
 - [ ] **Cost confirmed; impact unmeasured:** Allocation occurs inside the realtime
   microphone callback. (C13)
@@ -886,11 +894,12 @@ is not a disposition. Checked entries record completed assessments or changes.
 Some duplication is real, but shared code may be more complex or join boundaries
 with different semantics. No blanket refactoring or new subsystem is implied.
 
-- **Optional:** Passive-occurrence refresh is duplicated during focus handling and can
-  recreate a query that was just cleared. (23/S4)
-  Review: The refresh can run both for a focus callback and an explicit editor-focus
-  request. Some requests intentionally restore passive highlights. No new harmful case
-  was established; removing the tail unconditionally could change useful behavior.
+- [x] **Retained after review (2026-10-26):** Passive-occurrence focus triggers. (23/S4)
+  Disposition: native focus callbacks cover mouse/native focus changes; explicit
+  editor-focus requests also restore the query when the handle is already focused
+  and no native transition occurs. Keep both entry points sharing the same query
+  builder. Removing either changes a useful trigger; coordinating focus-delivery
+  state would add complexity to avoid one bounded word lookup on a focus transition.
 
 - [x] **Retained after review (2026-10-25):** Width remeasurement keeps its Rope and
   borrowed-string paths. (23/S2)
@@ -899,10 +908,13 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   same line-content boundary. Sharing their small adapters or repeated `LineChange`
   validation would add plumbing without removing an invalid state or demonstrated cost.
 
-- **Optional:** Tab strip and status bar duplicate cached-view plumbing. (23/S3, R6;
-  October 24 S5)
-  Review: Cached-view plumbing remains similar, but each view has different props and
-  layout. Share only if that actually reduces production complexity.
+- [x] **Retained after review (2026-10-26):** Tab-strip/status cached-view adapters.
+  (23/S3, R6; October 24 S5)
+  Disposition: both compare a complete props value, render changed props immediately,
+  and cache unchanged views. Tab scrolling and intrinsic status geometry have distinct
+  owners. A generic helper would need props access, construction, notification and
+  layout callbacks for only two small adapters. Keep the explicit adapters rather
+  than introduce a view trait or callback protocol; preserve their same-frame rule.
 
 - [x] **Retained after review (2026-10-25):** Input fields and documents keep their own
   grapheme-boundary adapters. (23/S5, R7)
@@ -925,9 +937,12 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   helper for constructing two `Position` values would not simplify ownership or
   improve the measured navigation path.
 
-- **Optional:** Benchmark trace truncation/polling logic is duplicated. (23/S8)
-  Review: The benchmark has repeated trace/polling scaffolding. No independent defect
-  was established; timing correctness is tracked separately below.
+- [x] **Retained after review (2026-10-26):** Benchmark polling helpers. (23/S8)
+  Disposition: count thresholds, exact labels, quiet periods and a completed frame
+  after the final input are different observation contracts. Numeric trace parsing
+  already shares complete-line handling. Keep the short loops and their specific
+  diagnostics rather than add a generic predicate/deadline layer. This does not
+  close the separate damage-timestamp or startup-measurement validity findings.
 
 - [x] **Assessed (2026-10-25):** Test helpers duplicate input synthesis already owned by the harness.
   (23/R5, CV4)
@@ -994,10 +1009,13 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   incorrect language choice was shown. Display naming polish does not require a new
   abstraction.
 
-- **Optional:** Non-LF parser-position translation still adds linear rescans. (C47)
-  Review: Ascending edits use one memoized LF scan and share position_after_insertion.
-  Non-LF translation requires work, but no remaining excessive-cost case was
-  established. The original quadratic fallback was already fixed.
+- [x] **Retained after review (2026-10-26):** Non-LF parser-position translation. (C47)
+  Disposition: input edits resolve positions in ascending document order before
+  applying edits in reverse. The memoized LF scan therefore visits each intervening
+  byte once, and insertion positions share the same conversion. Normal LF documents
+  use Rope's index directly. Keep this linear fallback: a second persistent LF index
+  would add memory and invalidation ownership without an established remaining
+  excessive-cost case. Parser-point and incremental/full equivalence tests remain.
 
 - **Optional:** Grapheme rounding copies long lines repeatedly. (23/EF5, plausible)
   Review: Long-line fallback copying exists, but its contribution to real movement cost
@@ -1028,7 +1046,13 @@ optional assessments; resume that work after any upgrades as well. The focused
 typing-performance follow-up remains deferred until the foundation work is done.
 
 - [ ] **Upstream review and rebasing:** Implementation candidate prepared; acceptance
-  remains pending the full display gates and controlled performance comparison.
+  remains pending the full display gates. Controlled comparison is complete:
+  typing latency medians 20.445 → 18.179 ms, large typing 1.529 → 1.309 ms/character,
+  Markdown paste 50.625 → 51.470 ms, idle CPU zero in both. One priming and three
+  measured runs used the same runner and software Vulkan display, without concurrent
+  tests/builds. These short runs establish no clear regression, not a speedup claim.
+  Startup first-present still times out on the baseline and remains unqualified.
+  Evidence: `/home/holo/agent-exports/foundation-upstream-2026-10-25`.
   - GPUI 0.2.2 is still the newest non-yanked registry release. Retain that released
     base and its documented patches; upstream main now splits platform work into
     additional workspace crates, requiring a separate unreleased-platform migration.
