@@ -60,8 +60,7 @@ impl LstGpuiApp {
         self.workspace_surface = WorkspaceSurface::CommandPalette;
         self.command_palette_selected = 0;
         self.command_palette_scroll.scroll_to_item(0);
-        self.command_palette_input
-            .update(cx, |input, cx| input.set_text("", cx));
+        self.command_palette_input.update(cx, |input, cx| input.reset("", cx));
         let focus = self.command_palette_input.read(cx).focus_handle();
         window.focus(&focus);
         cx.notify();
@@ -75,8 +74,7 @@ impl LstGpuiApp {
             self.workspace_surface = WorkspaceSurface::Settings;
             self.settings_overlay = crate::settings_ui::SettingsOverlay::None;
             self.settings_selection.clear();
-            self.settings_search_input
-                .update(cx, |input, cx| input.set_text("", cx));
+            self.settings_search_input.update(cx, |input, cx| input.reset("", cx));
             self.settings_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
             window.focus(&self.settings_search_input.read(cx).focus_handle());
             cx.notify();

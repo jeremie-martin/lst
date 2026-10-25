@@ -521,8 +521,7 @@ impl LstGpuiApp {
         };
         self.settings_value_error = None;
         self.settings_overlay = SettingsOverlay::ValueEditor { item };
-        self.settings_value_input
-            .update(cx, |input, cx| input.set_text(&text, cx));
+        self.settings_value_input.update(cx, |input, cx| input.reset(&text, cx));
         window.focus(&self.settings_value_input.read(cx).focus_handle());
         cx.notify();
     }
@@ -650,8 +649,7 @@ impl LstGpuiApp {
         self.cleanup_message = Some("Settings reset.".to_string());
         self.settings_overlay = SettingsOverlay::None;
         self.settings_selection.clear();
-        self.settings_search_input
-            .update(cx, |input, cx| input.set_text("", cx));
+        self.settings_search_input.update(cx, |input, cx| input.reset("", cx));
         self.focus_settings_search(window, cx);
         cx.notify();
     }
@@ -676,8 +674,7 @@ impl LstGpuiApp {
         self.settings_selection.category = category;
         self.settings_selection.clear();
         self.settings_overlay = SettingsOverlay::None;
-        self.settings_search_input
-            .update(cx, |input, cx| input.set_text("", cx));
+        self.settings_search_input.update(cx, |input, cx| input.reset("", cx));
         self.settings_scroll.set_offset(point(px(0.0), px(0.0)));
         self.focus_settings_search(window, cx);
         cx.notify();
@@ -1706,6 +1703,18 @@ impl LstGpuiApp {
                             .flex()
                             .flex_col()
                             .gap_1()
+                            .when(self.state_trace.is_enabled(), |rail| {
+                                let entity = cx.weak_entity();
+                                rail.on_children_prepainted(move |bounds, _window, cx| {
+                                    let _ = entity.update(cx, |this, _| {
+                                        this.settings_category_bounds = SettingsCategory::ALL
+                                            .into_iter()
+                                            .zip(bounds)
+                                            .map(|(category, bounds)| (category.label(), bounds))
+                                            .collect();
+                                    });
+                                })
+                            })
                             .children(SettingsCategory::ALL.into_iter().enumerate().map(|(index, entry)| {
                                 let active = !searching && category == entry;
                                 div()

@@ -429,8 +429,9 @@ struct LstGpuiApp {
     find_chip_bounds_px: FindChipBounds,
     find_disclosure_bounds_px: Option<Bounds<Pixels>>,
     find_close_bounds_px: Option<Bounds<Pixels>>,
-    /// Surfaced through the state trace so real-X11 tests can click tab-strip
-    /// chrome without relying on fixed shell geometry.
+    /// Painted Settings rail bounds for real-X11 acceptance input.
+    settings_category_bounds: Vec<(&'static str, Bounds<Pixels>)>,
+    /// Tab-strip chrome bounds for real-X11 acceptance input.
     app_menu_button_bounds_px: Option<Bounds<Pixels>>,
     all_tabs_button_bounds_px: Option<Bounds<Pixels>>,
     recent_button_bounds_px: Option<Bounds<Pixels>>,
@@ -439,9 +440,6 @@ struct LstGpuiApp {
     /// Surfaced through the state trace so real-X11 tests can click the
     /// button without depending on theme-name / status-details widths.
     cleanup_button_bounds_px: Option<Bounds<Pixels>>,
-    /// Surfaced through the state trace so real-X11 tests can click the
-    /// visible theme button without depending on fixed status-bar geometry.
-    theme_button_bounds_px: Option<Bounds<Pixels>>,
     theme_name_rendered: String,
     status_details_rendered: String,
     /// Stack of recently closed path-backed tabs, most-recent-last. `Ctrl+Shift+T`
@@ -663,13 +661,13 @@ impl LstGpuiApp {
             find_chip_bounds_px: FindChipBounds::default(),
             find_disclosure_bounds_px: None,
             find_close_bounds_px: None,
+            settings_category_bounds: Vec::new(),
             app_menu_button_bounds_px: None,
             all_tabs_button_bounds_px: None,
             recent_button_bounds_px: None,
             new_tab_button_bounds_px: None,
             file_conflict_button_bounds_px: FileConflictButtonBounds::default(),
             cleanup_button_bounds_px: None,
-            theme_button_bounds_px: None,
             theme_name_rendered: initial_theme.theme().name.to_string(),
             status_details_rendered: String::new(),
             closed_tabs_history: Vec::new(),
@@ -1041,7 +1039,7 @@ impl LstGpuiApp {
         let effects = self.model.drain_effects();
         self.sync_find_inputs_if_changed(old_find_state.clone(), cx);
         if self.model.goto_line() != old_goto_line.as_deref() {
-            self.sync_goto_input(cx);
+            self.sync_goto_input(old_goto_line.is_none(), cx);
         }
         self.select_query_after_panel_open(old_find_state, cx);
         self.handle_model_effects(effects, cx);
@@ -1313,20 +1311,37 @@ impl LstGpuiApp {
 
     fn sync_find_inputs_if_changed(&mut self, old_state: (bool, bool, String, String), cx: &mut Context<Self>) {
         let current = self.find_input_state();
-        if current.2 != old_state.2 {
-            let query = current.2;
-            self.find_query_input.update(cx, |input, cx| input.set_text(&query, cx));
+        let opening = current.0 && !old_state.0;
+        if opening || current.2 != old_state.2 {
+            self.find_query_input.update(cx, |input, cx| {
+                if opening {
+                    input.reset(&current.2, cx);
+                } else {
+                    input.set_text(&current.2, cx);
+                }
+            });
         }
-        if current.3 != old_state.3 {
-            let replacement = current.3;
-            self.find_replace_input
-                .update(cx, |input, cx| input.set_text(&replacement, cx));
+        let opening_replace = current.0 && current.1 && (!old_state.0 || !old_state.1);
+        if opening_replace || current.3 != old_state.3 {
+            self.find_replace_input.update(cx, |input, cx| {
+                if opening_replace {
+                    input.reset(&current.3, cx);
+                } else {
+                    input.set_text(&current.3, cx);
+                }
+            });
         }
     }
 
-    fn sync_goto_input(&mut self, cx: &mut Context<Self>) {
+    fn sync_goto_input(&mut self, opening: bool, cx: &mut Context<Self>) {
         let text = self.model.goto_line().unwrap_or_default().to_string();
-        self.goto_line_input.update(cx, |input, cx| input.set_text(&text, cx));
+        self.goto_line_input.update(cx, |input, cx| {
+            if opening {
+                input.reset(&text, cx);
+            } else {
+                input.set_text(&text, cx);
+            }
+        });
     }
 
     fn handle_find_query_input_event(&mut self, event: &InputFieldEvent, cx: &mut Context<Self>) {

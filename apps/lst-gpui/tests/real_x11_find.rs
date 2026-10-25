@@ -145,6 +145,14 @@ fn repeated_ctrl_f_refocuses_without_closing_or_collapsing_replace() -> TestResu
         editor.wait_state("replace opens expanded", secs(2), |record| {
             record.find.visible && record.find.show_replace && record.focused_input == "find_query"
         })?;
+        // Ctrl+F while the query is already focused keeps Replace expanded.
+        // Typing a new query is the fence, so closing/reopening cannot satisfy it.
+        editor.expect_keys_ignored(
+            "<C-f>",
+            "alpha",
+            |record| record.find.query == "alpha",
+            |record| record.find.visible && record.find.show_replace && record.focused_input == "find_query",
+        )?;
         editor.click_at_text(0, 0)?;
         editor.wait_state("editor focused with replace still open", secs(2), |record| {
             record.find.visible && record.find.show_replace && record.focused_input == "editor"

@@ -33,7 +33,6 @@ impl LstGpuiApp {
         self.theme_name_rendered = theme.name.to_string();
         let segments = self.status_detail_segments();
         self.status_details_rendered = segments.join("  ");
-        self.theme_button_bounds_px = None;
         let props = StatusBarProps {
             scale,
             theme,

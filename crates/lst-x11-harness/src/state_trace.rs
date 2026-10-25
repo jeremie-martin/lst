@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-pub const STATE_TRACE_SCHEMA_VERSION: u32 = 12;
+pub const STATE_TRACE_SCHEMA_VERSION: u32 = 13;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StateTraceRecord {
@@ -55,6 +55,8 @@ pub struct StateTraceRecord {
     pub settings_selected_item: Option<String>,
     #[serde(default)]
     pub settings_search_input: Option<TraceInputField>,
+    #[serde(default)]
+    pub settings_category_bounds_px: std::collections::BTreeMap<String, (f32, f32, f32, f32)>,
     #[serde(default)]
     pub settings_value_editor_item: Option<String>,
     #[serde(default)]
@@ -241,6 +243,8 @@ pub struct TraceViewport {
     pub line_height_px: f32,
     pub scroll_top_px: f32,
     pub scroll_left_px: f32,
+    pub horizontal_scrollbar_track_px: Option<(f32, f32, f32, f32)>,
+    pub horizontal_scrollbar_thumb_px: Option<(f32, f32, f32, f32)>,
     /// Window-local x where the first code char of an unwrapped line lives.
     /// Combine with `char_width_px` to convert col → x.
     #[serde(default)]

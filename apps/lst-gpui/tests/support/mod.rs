@@ -959,7 +959,7 @@ impl Drop for HeldKeys {
     }
 }
 
-fn click_trace_bounds_center(
+pub fn click_trace_bounds_center(
     editor: &mut Editor<'_>,
     ox: f32,
     oy: f32,

@@ -190,25 +190,19 @@ fn down_moves_each_cursor_one_line_and_coalesces_duplicate_edge_targets() -> Tes
 #[ignore = "requires a real X11 display plus xclip"]
 fn vertical_motion_keeps_each_cursor_preferred_column() -> TestResult {
     support::run_x11_test("multi-cursor-preferred-column", |session| {
-        let path = session.seed_file("preferred.txt", "abcdefghij\nshort\nabcdefghij\nabcdefghij")?;
+        let path = session.seed_file("preferred.txt", "abcdefghij\nx\nabcdefghij\nabcdefghij\nx\nabcdefghij")?;
         let mut editor = session.open_file("preferred", &path)?;
 
-        editor.keys(&format!("<C-home>{}", "<right>".repeat(8)))?;
-        editor.expect_cursor_heads(&[(0, 8)])?;
-        // Ctrl+Alt+Down adds a cursor below each cursor at the goal column,
-        // clamped to the short middle line.
-        editor.keys("<C-A-down>")?;
-        editor.expect_cursor_heads(&[(0, 8), (1, 5)])?;
-
-        // Moving down clamps the first cursor to the end of the short line;
-        // the second cursor keeps column 8 on the long line below.
+        editor.click_at_text(0, 8)?;
+        editor.alt_click_at_text(3, 3)?;
+        editor.expect_cursor_heads(&[(0, 8), (3, 3)])?;
         editor.keys("<down>")?;
-        editor.expect_cursor_heads(&[(1, 5), (2, 8)])?;
-        // Past the short line, the first cursor returns to its goal column 8.
+        editor.expect_cursor_heads(&[(1, 1), (4, 1)])?;
+        // Both are clamped to column 1, but retain different preferred columns.
         editor.keys("<down>")?;
-        editor.expect_cursor_heads(&[(2, 8), (3, 8)])?;
+        editor.expect_cursor_heads(&[(2, 8), (5, 3)])?;
         editor.keys("<up><up>")?;
-        editor.expect_cursor_heads(&[(0, 8), (1, 5)])?;
+        editor.expect_cursor_heads(&[(0, 8), (3, 3)])?;
         Ok(())
     })
 }

@@ -171,18 +171,18 @@ fn closing_a_dirty_file_requires_an_explicit_decision() -> TestResult {
 
         // Only plain d, s, and Enter decide; modified variants must neither
         // save, discard, nor leave the prompt before Escape cancels it.
-        editor.expect_keys_ignored(
-            "<S-d><A-d><C-d><S-enter><A-enter><C-enter>",
-            "<esc>",
-            |record| record.close_prompt_file.is_none(),
-            |record| {
-                record.active_tab_id == prompted.active_tab_id
-                    && record.revision == prompted.revision
-                    && record.active_tab_modified
-                    && (record.close_prompt_file.is_none()
-                        || record.close_prompt_status.as_deref() == Some("reviewing"))
-            },
-        )?;
+        editor.send_keys_settle("<S-d><A-d><C-d><S-enter><A-enter><C-enter>")?;
+        // A completed resize proves the app processed a later X11 event while
+        // the prompt must still be present; dismissal cannot act as its own fence.
+        editor.resize(1000, 650)?;
+        let after = editor.read_state()?;
+        assert_eq!(after.active_tab_id, prompted.active_tab_id);
+        assert_eq!(after.revision, prompted.revision);
+        assert!(after.active_tab_modified);
+        assert_eq!(after.close_prompt_file.as_deref(), Some(identity.as_str()));
+        assert_eq!(after.close_prompt_status.as_deref(), Some("reviewing"));
+        editor.keys("<esc>")?;
+        editor.wait_state("close prompt cancelled", secs(2), |r| r.close_prompt_file.is_none())?;
         assert_eq!(fs::read_to_string(&path)?, "body");
         Ok(())
     })
@@ -388,7 +388,14 @@ fn closing_an_empty_scratchpad_removes_its_file() -> TestResult {
 fn quitting_a_regular_file_preserves_clipboard_and_primary() -> TestResult {
     support::run_x11_test("quit-regular-clipboard", |session| {
         let path = session.seed_file("quit-source.txt", SCRATCHPAD_TEXT)?;
-        let editor = session.open_file("text", &path)?;
+        // Any attempted nonempty clipboard persistence would block this quit
+        // at the process boundary. A late owner cannot hide behind an early
+        // successful read of the existing sentinel.
+        let editor = session.open_file_with_env(
+            "text",
+            &path,
+            &[(OsStr::new("LST_TEST_CLIPBOARD_OWNER_FAILURE"), OsStr::new("1"))],
+        )?;
         write_clipboard_text(Selection::Clipboard, "clipboard sentinel")?;
         write_clipboard_text(Selection::Primary, "primary sentinel")?;
 

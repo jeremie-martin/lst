@@ -64,16 +64,18 @@ fn polish_button_replaces_whole_buffer_inline_with_atomic_undo() -> TestResult {
         })?;
         // Only Enter confirms: Ctrl+N and Shift+Enter must neither start the
         // cleanup nor leave the confirmation. Escape then cancels it.
-        editor.expect_keys_ignored(
-            "<C-n><S-enter>",
-            "<esc>",
-            |record| !record.cleanup_confirmation_open && record.focused_input == "editor",
-            |record| {
-                record.active_tab_id == confirmation.active_tab_id
-                    && record.revision == confirmation.revision
-                    && record.prompt_review_view.is_none()
-            },
-        )?;
+        editor.send_keys_settle("<C-n><S-enter>")?;
+        editor.resize(1000, 650)?;
+        let after = editor.read_state()?;
+        assert!(after.cleanup_confirmation_open);
+        assert_eq!(after.focused_input, "cleanup_confirmation");
+        assert_eq!(after.active_tab_id, confirmation.active_tab_id);
+        assert_eq!(after.revision, confirmation.revision);
+        assert!(after.prompt_review_view.is_none());
+        editor.keys("<esc>")?;
+        editor.wait_state("cleanup confirmation cancelled", secs(3), |r| {
+            !r.cleanup_confirmation_open && r.focused_input == "editor"
+        })?;
         editor.click_cleanup_button()?;
         editor.wait_state("cleanup confirmation reopened", secs(3), |record| {
             record.cleanup_confirmation_open && record.focused_input == "cleanup_confirmation"

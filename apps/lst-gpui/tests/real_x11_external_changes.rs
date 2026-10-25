@@ -15,7 +15,8 @@ fn external_change_uses_a_non_modal_per_tab_banner_and_dismiss_is_version_scoped
     support::run_x11_test("external-conflict-banner", |session| {
         let path = session.seed_file("external-conflict.txt", "original\n")?;
         let identity = path_text(&path);
-        let mut editor = session.open_file("external-conflict", &path)?;
+        let probe = session.seed_file("maintenance-probe.txt", "probe")?;
+        let mut editor = session.open_files("external-conflict", &[path.clone(), probe.clone()])?;
 
         editor.keys("local edit")?;
         fs::write(&path, "external version\n")?;
@@ -31,8 +32,8 @@ fn external_change_uses_a_non_modal_per_tab_banner_and_dismiss_is_version_scoped
         })?;
 
         // Per-tab: another tab has no banner, and returning shows it again.
-        editor.keys("<C-n>")?;
-        editor.wait_state("new tab without banner", secs(2), |record| {
+        editor.keys("<C-tab>")?;
+        editor.wait_state("other tab without banner", secs(2), |record| {
             record.active_tab_id != edited.active_tab_id && record.file_conflict_path.is_none()
         })?;
         editor.keys("<C-S-tab>")?;
@@ -46,6 +47,23 @@ fn external_change_uses_a_non_modal_per_tab_banner_and_dismiss_is_version_scoped
             record.file_conflict_path.is_none() && record.active_tab_modified
         })?;
 
+        // Each clean-tab reload proves another complete disk-observation pass
+        // ran after Dismiss. The conflict tab is visited in the same pass.
+        for lines in 2..=4 {
+            fs::write(&probe, "probe\n".repeat(lines - 1))?;
+            editor.keys("<C-tab>")?;
+            editor.wait_state("maintenance probe reloaded", secs(4), |record| {
+                record.active_tab_id != edited.active_tab_id && record.line_count == lines
+            })?;
+            editor.keys("<C-S-tab>")?;
+            let state = editor.wait_state("return to dismissed conflict", secs(2), |record| {
+                record.active_tab_id == edited.active_tab_id
+            })?;
+            assert!(state.file_conflict_path.is_none());
+            assert!(state.active_tab_modified);
+            assert_eq!(fs::read_to_string(&path)?, "external version\n");
+        }
+
         // Version-scoped: Dismiss covers only the version it was shown for.
         fs::write(&path, "second external version\n")?;
         editor.wait_state("banner for the next external version", secs(4), |record| {
@@ -55,6 +73,8 @@ fn external_change_uses_a_non_modal_per_tab_banner_and_dismiss_is_version_scoped
         editor.wait_state("second version dismissed", secs(2), |record| {
             record.file_conflict_path.is_none() && record.active_tab_modified
         })?;
+
+        assert_eq!(fs::read_to_string(&path)?, "second external version\n");
 
         // A later explicit Save is the user's intentional overwrite.
         editor.save_then_expect_file(&path, "original\nlocal editZ")?;

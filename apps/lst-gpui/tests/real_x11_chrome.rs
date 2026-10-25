@@ -71,9 +71,7 @@ fn configured_theme_is_visible_without_a_status_bar_toggle() -> TestResult {
         session.seed_settings("version = 1\n[appearance]\ntheme = \"dark\"\n")?;
         let (mut editor, _path) = session.open("scratch")?;
 
-        let configured = editor.wait_state("configured theme", secs(2), |record| {
-            record.theme_name == "Dark" && record.theme_button_bounds_px.is_none()
-        })?;
+        let configured = editor.wait_state("configured theme", secs(2), |record| record.theme_name == "Dark")?;
         assert_eq!(configured.theme_name, "Dark", "{configured:?}");
         Ok(())
     })

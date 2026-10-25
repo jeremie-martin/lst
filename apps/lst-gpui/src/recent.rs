@@ -1107,7 +1107,7 @@ impl LstGpuiApp {
             RecentPresentation::Quick => self.recent.open_quick(),
         }
         reset_scroll(&self.recent_scroll);
-        self.recent_query_input.update(cx, |input, cx| input.set_text("", cx));
+        self.recent_query_input.update(cx, |input, cx| input.reset("", cx));
         let focus_handle = self.recent_query_input.read(cx).focus_handle();
         window.focus(&focus_handle);
         self.spawn_recent_previews(cx);

@@ -23,7 +23,7 @@ use crate::{
     WorkspaceSurface,
 };
 
-pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 12;
+pub(crate) const STATE_TRACE_SCHEMA_VERSION: u32 = 13;
 
 /// Holds the state-trace path and emitter state. Constructed once at app
 /// init from the env var; subsequent calls to `try_emit` are no-ops when
@@ -132,6 +132,7 @@ pub(crate) struct StateTraceRecord {
     pub workspace_surface_selected_index: Option<usize>,
     pub settings_selected_item: Option<&'static str>,
     pub settings_search_input: Option<TraceInputField>,
+    pub settings_category_bounds_px: std::collections::BTreeMap<String, (f32, f32, f32, f32)>,
     pub settings_value_editor_item: Option<&'static str>,
     pub settings_value_error: Option<String>,
     pub settings_error: Option<String>,
@@ -273,6 +274,8 @@ pub(crate) struct TraceViewport {
     pub line_height_px: f32,
     pub scroll_top_px: f32,
     pub scroll_left_px: f32,
+    pub horizontal_scrollbar_track_px: Option<(f32, f32, f32, f32)>,
+    pub horizontal_scrollbar_thumb_px: Option<(f32, f32, f32, f32)>,
     /// Window-local x of the first code char on an unwrapped line. See
     /// `viewport::ViewportGeometry::code_origin_x_at_paint` for details.
     pub code_origin_x_px: f32,
@@ -350,10 +353,17 @@ impl LstGpuiApp {
         let all_tabs_button_bounds_px = trace_bounds(self.all_tabs_button_bounds_px);
         let recent_button_bounds_px = trace_bounds(self.recent_button_bounds_px);
         let new_tab_button_bounds_px = trace_bounds(self.new_tab_button_bounds_px);
-        let theme_button_bounds_px = trace_bounds(self.theme_button_bounds_px);
         StateTraceRecord {
             schema_version: STATE_TRACE_SCHEMA_VERSION,
             voice_status: self.voice.status(),
+            settings_category_bounds_px: if self.workspace_surface == WorkspaceSurface::Settings {
+                self.settings_category_bounds
+                    .iter()
+                    .map(|(name, bounds)| (name.to_string(), trace_bounds(Some(*bounds)).unwrap()))
+                    .collect()
+            } else {
+                Default::default()
+            },
             voice_button_bounds_px: if self.voice.status().is_some() {
                 self.voice
                     .button_bounds
@@ -543,7 +553,8 @@ impl LstGpuiApp {
             new_tab_button_bounds_px,
             cleanup_button_bounds_px,
             theme_name: self.theme_name_rendered.clone(),
-            theme_button_bounds_px,
+            // Retain the deprecated null field for trace consumers.
+            theme_button_bounds_px: None,
             viewport: self.build_state_trace_viewport(window),
         }
     }
@@ -627,6 +638,8 @@ impl LstGpuiApp {
             line_height_px: f32::from(geometry.painted_row_height),
             scroll_top_px: f32::from(geometry.scroll_top_at_paint),
             scroll_left_px: f32::from(geometry.scroll_left_at_paint),
+            horizontal_scrollbar_track_px: trace_bounds(geometry.horizontal_scrollbar.map(|(track, _)| track)),
+            horizontal_scrollbar_thumb_px: trace_bounds(geometry.horizontal_scrollbar.map(|(_, thumb)| thumb)),
             code_origin_x_px: f32::from(geometry.code_origin_x_at_paint),
             gutter_width_px: f32::from(geometry.gutter_width_at_paint),
             occurrence_highlights: geometry
@@ -707,9 +720,23 @@ mod tests {
     #[test]
     fn the_x11_harness_reads_every_emitted_field() {
         assert_eq!(STATE_TRACE_SCHEMA_VERSION, lst_x11_harness::STATE_TRACE_SCHEMA_VERSION);
-        // One element in every list so nested records are compared too.
+        // Populate optional field records and lists so nested keys are compared.
+        let field = || TraceInputField {
+            bounds_px: Some((1.0, 2.0, 3.0, 4.0)),
+            text_bounds_px: Some((1.0, 2.0, 3.0, 4.0)),
+            caret_bounds_px: Some((1.0, 2.0, 1.0, 4.0)),
+            selection: TraceRange { start: 2, end: 5 },
+            scroll_left_px: 10.0,
+        };
         let record = StateTraceRecord {
             schema_version: STATE_TRACE_SCHEMA_VERSION,
+            goto_field: Some(field()),
+            settings_search_input: Some(field()),
+            find: TraceFind {
+                query_input: Some(field()),
+                replace_input: Some(field()),
+                ..TraceFind::default()
+            },
             cursors: vec![TraceCursor::default()],
             quit_review_items: vec![TraceQuitReviewItem::default()],
             viewport: TraceViewport {

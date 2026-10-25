@@ -442,6 +442,8 @@ pub(crate) struct ViewportGeometry {
     /// painted for this content" — otherwise they compare a fresh cursor
     /// position against last revision's char ranges.
     pub(crate) painted_revision: u64,
+    /// Track and thumb captured by the horizontal scrollbar prepaint.
+    pub(crate) horizontal_scrollbar: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
     pub(crate) rows: Rc<[PaintedRow]>,
     pub(crate) scroll_top_at_paint: Pixels,
     pub(crate) scroll_left_at_paint: Pixels,
@@ -2287,6 +2289,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
         layout_valid: true,
         bounds: Some(bounds),
         painted_revision: revision,
+        horizontal_scrollbar: None,
         rows: rows.clone(),
         scroll_top_at_paint: scroll_top,
         scroll_left_at_paint: scroll_left,

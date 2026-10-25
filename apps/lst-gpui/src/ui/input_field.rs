@@ -250,7 +250,7 @@ impl InputState {
         }
     }
 
-    /// Replaces the whole text without history, as for a programmatic reset.
+    /// Synchronizes model text, preserving local state for an unchanged echo.
     fn set_text(&mut self, text: &str) -> bool {
         let changed = self.text.set_text(text);
         if changed {
@@ -617,6 +617,17 @@ impl InputField {
             self.cancel_drag_selection();
             cx.notify();
         }
+    }
+
+    /// Starts a new use of this field, even if its initial text is unchanged.
+    pub fn reset(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.state = InputState::new();
+        self.state.set_text(text);
+        self.last_layout = None;
+        self.last_caret_bounds = None;
+        self.horizontal_scroll = px(0.0);
+        self.cancel_drag_selection();
+        cx.notify();
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {

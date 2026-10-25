@@ -125,25 +125,37 @@ fn no_wrap_paste_scrolls_horizontally_to_the_grown_line_end() -> TestResult {
     })
 }
 
-/// Page right through the horizontal scrollbar track until the thumb covers
-/// the click point and the offset stops changing, and return that offset:
-/// the no-wrap horizontal extent.
+/// Drag the actual painted thumb to the track's right edge. Completion is
+/// visible geometry, not a second read of an unchanged scroll offset.
 fn scroll_to_right_end(editor: &mut Editor) -> SupportResult<f32> {
-    let state = editor.read_state()?;
-    let (x, y) = state.viewport.bounds_origin_px.ok_or("viewport origin")?;
-    let (width, height) = state.viewport.bounds_size_px.ok_or("viewport size")?;
-    let scale = state.viewport.scale_factor;
-    let mut previous = None;
-    for _ in 0..40 {
-        editor.click_at((x + width - 11.0 * scale) as i32, (y + height - 5.0 * scale) as i32)?;
-        editor.wait_quiet(Duration::from_millis(75), secs(5))?;
-        let current = editor.read_state()?.viewport.scroll_left_px;
-        if previous == Some(current) {
-            return Ok(current);
-        }
-        previous = Some(current);
+    let state = editor.wait_state("horizontal scrollbar painted", secs(5), |state| {
+        state.viewport.horizontal_scrollbar_track_px.is_some() && state.viewport.horizontal_scrollbar_thumb_px.is_some()
+    })?;
+    let at_end = |state: &lst_x11_harness::StateTraceRecord| {
+        let Some((x, y, width, height)) = state.viewport.horizontal_scrollbar_track_px else {
+            return false;
+        };
+        let Some((tx, ty, tw, th)) = state.viewport.horizontal_scrollbar_thumb_px else {
+            return false;
+        };
+        // At the end, the right and bottom gaps equal the same painted edge pad.
+        ((x + width - tx - tw) - (y + height - ty - th)).abs() < 0.5
+    };
+    if at_end(&state) {
+        return Ok(state.viewport.scroll_left_px);
     }
-    Err(format!("horizontal scrolling never settled at an end; last offset {previous:?}").into())
+    let (x, _, width, _) = state.viewport.horizontal_scrollbar_track_px.unwrap();
+    let (tx, ty, tw, th) = state.viewport.horizontal_scrollbar_thumb_px.unwrap();
+    let scale = state.viewport.scale_factor;
+    let from = (
+        ((tx + tw * 0.5) * scale).round() as i32,
+        ((ty + th * 0.5) * scale).round() as i32,
+    );
+    let to = (((x + width + tw) * scale).round() as i32, from.1);
+    editor.drag_at(from, to, |editor| {
+        let state = editor.wait_state("horizontal thumb reaches right edge", secs(5), at_end)?;
+        Ok(state.viewport.scroll_left_px)
+    })
 }
 
 #[test]

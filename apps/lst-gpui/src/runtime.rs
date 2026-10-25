@@ -2622,6 +2622,36 @@ mod tests {
     }
 
     #[test]
+    fn final_atomic_guard_preserves_a_newer_version_after_staging_a_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("document.txt");
+        fs::write(&target, "observed external version\n").unwrap();
+        let observed = file_stamp(&target).unwrap();
+        let temp_path = write_temp_replacement(&target, b"editor copy\n", None).unwrap();
+
+        fs::write(&target, "newer external version must survive\n").unwrap();
+        let newer = file_stamp(&target).unwrap();
+        assert_ne!(newer, observed);
+        let generation = Arc::new(Mutex::new(0));
+        let ticket = SaveTicket::issue(&generation);
+        let outcome = commit_temp_replacement(
+            &target,
+            &target,
+            &temp_path,
+            SaveExpectation::Matching(observed),
+            Some(&ticket),
+        )
+        .unwrap();
+
+        assert_eq!(outcome, AtomicWriteOutcome::Conflict(newer));
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "newer external version must survive\n"
+        );
+        assert!(!temp_path.exists());
+    }
+
+    #[test]
     fn final_atomic_guard_preserves_a_target_recreated_after_expected_absence() {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("document.txt");

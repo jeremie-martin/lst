@@ -470,10 +470,14 @@ are noted where they matter. Resolutions name their regression coverage.
   the post-input refresh period and checks that release stops scrolling and selection
   growth.
 
-- [ ] **Reproduced:** Reopening an input field with unchanged text preserves undo
+- [x] **Implemented (2026-10-25):** Reopening an input field with unchanged text preserves undo
   history from its previous use. (C86)
   Review: Real app: type abc, erase it, close/reopen the palette, then Ctrl+Z. The
   screenshot shows a restored a in the newly opened palette.
+  Resolution: Opening a field explicitly starts a new local edit session, clearing history,
+  composition, drag and scroll state even when its text is unchanged. Ordinary model echoes
+  retain local history. The real-app reopening test exercises undo and redo in palette,
+  Settings, recent-file search and Find.
 
 - [x] **Implemented (2026-10-25):** SIGTERM/SIGHUP can leave nested-display child processes,
   including the private D-Bus daemon, running. (23/V13)
@@ -614,12 +618,16 @@ add caching, pooling or another layer.
 These are defects or specific gaps in verification. The passing baseline does
 not demonstrate the missing observations.
 
-- [ ] **Source-confirmed:** Close, cleanup-confirmation and Settings tests can accept
+- [x] **Implemented (2026-10-25):** Close, cleanup-confirmation and Settings tests can accept
   premature dismissal as successful ignored-key handling. (23/B3-1; October 24 AT1, AT2,
   T4)
+  Resolution: Modal cases assert the still-open modal after a later resize event; Settings
+  observes the typed search selection before closing. Dismissal can no longer serve as the
+  successful observation of ignored input.
 
-- [ ] **Source-confirmed:** Multi-cursor goal tests give every cursor the same goal, so
+- [x] **Implemented (2026-10-25):** Multi-cursor goal tests give every cursor the same goal, so
   they cannot prove independent preferred columns. (23/B3-2)
+  Resolution: Two independent preferred columns (eight and three) clamp on short lines, then restore their distinct columns when moving down and back up.
 
 - [x] **Implemented (2026-10-25):** Malformed-settings reload coverage uses default
   values and cannot prove that nondefault active settings survive. (23/B3-3)
@@ -646,8 +654,9 @@ not demonstrate the missing observations.
   plain shell variants, so new variants require a decision. A boundary test covers all
   17 languages, shared JSON/JSONC and CSS/SCSS backends, and the no-language case.
 
-- [ ] **Source-confirmed:** Held-chord repetition tests cannot distinguish three
+- [x] **Implemented (2026-10-25):** Held-chord repetition tests cannot distinguish three
   successful presses from one. (23/B3-8; October 24 AT4)
+  Resolution: The shifted-symbol case keeps Control and Shift held while asserting each of three alternating bracket destinations independently.
 
 - [ ] **Source-confirmed:** The Keep Mine test never introduces a newer disk version
   after the conflict banner, leaving the version guard untested. (October 24 AT3)
@@ -658,25 +667,34 @@ not demonstrate the missing observations.
   asserts the undone and redone query before replacing it, and the redone replacement
   before cutting it.
 
-- [ ] **Source-confirmed:** Dismiss tests cannot prove suppression lasts for the
+- [x] **Implemented (2026-10-25):** Dismiss tests cannot prove suppression lasts for the
   observed disk version, and no longer check that Dismiss preserves external file
   contents. (October 24 AT6, T7)
+  Resolution: Three successive clean-tab reloads prove later external-file observation passes
+  completed. Each return to the dismissed tab requires no banner, retained local modifications
+  and unchanged external bytes; a newer external version still raises a banner.
 
 - [x] **Resolved (2026-10-25):** Find-field mouse tests could use caret geometry from before
   the preceding key action. (October 24 AT7)
   Resolution: every `caret_point` caller supplies the expected field offset; the
   helper waits for that exact collapsed selection and its rendered caret geometry.
 
-- [ ] **Source-confirmed:** Horizontal-scroll tests mix logical and physical coordinates
+- [x] **Implemented (2026-10-25):** Horizontal-scroll tests mix logical and physical coordinates
   and may mistake an unprocessed click for the rightmost scroll position. (October 24
   AT8)
   Review: The helper scales only the inset, rather than the whole logical coordinate,
   and treats an unchanged offset as proof that scrolling reached the end. The current
   scale-one suite does not exercise the scaling difference.
+  Resolution: The trace exposes painted track/thumb bounds. Tests scale whole coordinates, drag
+  the actual thumb, and wait for its right edge to reach the track end instead of accepting an
+  unchanged offset.
 
-- [ ] **Source-confirmed:** Coverage no longer checks that multiline selections ending
+- [x] **Implemented (2026-10-25):** Coverage no longer checks that multiline selections ending
   at column zero exclude that final line when indenting or adding line-end cursors.
   (October 24 T1)
+  Resolution: A real-app case ends a multiline selection at column zero, checks saved
+  indentation excludes that line, then checks line-end cursor positions and resulting edits
+  after undo.
 
 - [x] **Resolved (2026-10-25):** Replace All coverage did not check that Find results
   refresh after replacement. (October 24 T2)
@@ -689,17 +707,20 @@ not demonstrate the missing observations.
   hold that phase while sending cancellation input. The guard is present; this is
   coverage, not a confirmed quit bug.
 
-- [ ] **Source-confirmed:** Multi-cursor indent coverage checks text but not retained
+- [x] **Implemented (2026-10-25):** Multi-cursor indent coverage checks text but not retained
   cursor count. (October 24 T5)
+  Resolution: Indent and outdent now assert both cursor positions and saved text.
 
-- [ ] **Source-confirmed:** Ctrl+F while Search is focused with Replace open is no
+- [x] **Implemented (2026-10-25):** Ctrl+F while Search is focused with Replace open is no
   longer covered. (October 24 T6)
+  Resolution: The Find case invokes Ctrl+F with Search already focused and Replace expanded, then observes new query input while both conditions remain true.
 
-- [ ] **Source-confirmed:** Trace-schema checks leave optional input records empty, so
+- [x] **Implemented (2026-10-25):** Trace-schema checks leave optional input records empty, so
   nested field mismatches escape the contract check. (C33)
   Review: Optional nested field records remain None in the trace contract fixture, so
   their nested keys never enter field_paths. App/harness field definitions currently
   agree.
+  Resolution: The schema fixture populates Go To, Settings search and both Find input records, including their nested selection and geometry fields.
 
 - [x] **Resolved (2026-10-25):** Partial syntax-cache checks miss the injected-language cases
   that still produce stale visible results.
@@ -715,11 +736,12 @@ not demonstrate the missing observations.
   Resolution: repeated and reversed-order generation agree. Latest-nightly comparison
   and the four undo-cursor differences are recorded in [Vim mode](vim.md).
 
-- [ ] **Source-confirmed:** Settings tests use fixed, unscaled pixels; the older-schema
+- [x] **Implemented (2026-10-25):** Settings tests use fixed, unscaled pixels; the older-schema
   find helper also estimates field positions. (23/CV2, CV3)
   Review: Current settings tests contain unscaled pixel assumptions. The estimated
   find-field fallback is limited to older schemas and is intentional compatibility
   behavior; that part is not a current-schema defect.
+  Resolution: Settings clicks use captured category/search geometry and the shared whole-coordinate scaling helper. Older-schema Find fallback remains compatibility behavior.
 
 - [x] **Resolved (2026-10-25):** Navigation benchmarks at `--position end` mostly time no-op
   Down keys. (October 24 H1)
@@ -791,11 +813,14 @@ changing code. Rejection is a valid outcome.
   added license file). Logical changes have source markers and manifest coverage.
   Repeating a marker on every hunk would add noise without identifying a missing patch.
 
-- [ ] **Needs evidence:** Clipboard preservation checks may finish before a late
-  clipboard owner overwrites the selection. This race remains plausible. (23/B3-6)
-  Review: There is a possible interval between spawning the clipboard owner and
-  selection acquisition. No wrong result was reproduced; do not add a new
-  synchronization protocol solely on this claim.
+- [x] **Coverage strengthened (2026-10-26):** Clipboard preservation checks may
+  finish before a late clipboard owner overwrites the selection. (23/B3-6)
+  Disposition: The regular-file quit case now makes any nonempty persistence attempt
+  fail at the existing process boundary, which would keep the app open. Successful
+  quit plus unchanged CLIPBOARD and PRIMARY proves this path did not attempt to spawn
+  an owner; an early sentinel read cannot mask a late acquisition. Existing scratchpad
+  cases separately cover acquisition and the visible failure/retry behavior. No
+  production acknowledgement protocol was added.
 
 - [ ] **Needs evidence:** Damage receipt timestamps may pair an old re-presentation with
   a newer frame, understating key latency. (October 24 H3, candidate)
@@ -870,11 +895,12 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   segmentation to `GraphemeCursor`. Sharing the adapters would introduce coordinate
   conversion and coupling without removing duplicated segmentation logic.
 
-- **Optional:** Unused theme-button trace state gives no evidence that a theme button is
+- [x] **Assessed (2026-10-25):** Unused theme-button trace state gives no evidence that a theme button is
   absent. The theme-application assertion itself remains meaningful. (23/S6)
   Review: The trace field is always None. Its absence assertion is vacuous, but the same
   test still checks theme application and can fail for that. Cleanup should preserve
   trace compatibility.
+  Disposition: Removed the unused app state and vacuous absence assertion. The old trace key remains null for compatibility; the meaningful theme-application assertion stays.
 
 - [x] **Retained after review (2026-10-25):** Find keeps its short match-position
   conversions. (23/S7)
@@ -887,15 +913,21 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   Review: The benchmark has repeated trace/polling scaffolding. No independent defect
   was established; timing correctness is tracked separately below.
 
-- **Optional:** Test helpers duplicate input synthesis already owned by the harness.
+- [x] **Assessed (2026-10-25):** Test helpers duplicate input synthesis already owned by the harness.
   (23/R5, CV4)
   Review: Some held-key and drag helpers duplicate harness operations, while also owning
   test scope/cleanup. No blanket migration is justified. The killed-test key-release
   defect is separate.
+  Disposition: Retained the small scoped HeldKeys adapter: it allows observable assertions and
+  mouse actions while modifiers remain down, and releases them on scope exit. The key DSL owns
+  complete sequences and cannot provide this lifetime. The strengthened held-chord test
+  exercises the distinction; a new shared input abstraction would add plumbing without removing
+  production complexity.
 
-- **Optional:** Settings tests duplicate trace-to-window scaling. (23/R8)
+- [x] **Assessed (2026-10-25):** Settings tests duplicate trace-to-window scaling. (23/R8)
   Review: Coordinate conversion appears in multiple test helpers. The actual scaling
   error is tracked separately; sharing helpers is optional.
+  Disposition: Settings category and search clicks now use the existing shared click_trace_bounds_center helper. No new coordinate abstraction was introduced.
 
 - **Optional:** GraphemeCell's increased size adds per-cell memory cost. Assess its
   impact; the suggested narrower integer representation is not a correctness
@@ -1172,6 +1204,27 @@ intentional behavior as a defect.
   hold up. (23/V14)
 
 ## Verification and evidence
+
+### Implementation checkpoint: field sessions and observable acceptance (2026-10-25)
+
+- Fresh field sessions clear local history; ordinary model synchronization preserves it.
+- Acceptance cases now observe independent cursor goals, each held-key repetition,
+  selection boundaries, retained cursor positions, modal persistence, Find focus,
+  version-scoped Dismiss, and actual painted geometry. Trace schema 13 adds scrollbar
+  and Settings category bounds; older optional trace fields remain readable.
+- The 71-case focused nested run passes, as do the separate confirmation, Dismiss
+  and Find checks. Three affected Settings/scrollbar cases also pass at 150% scaling.
+  The new field-session test fails against the preserved pre-fix release binary.
+- All 219 fast all-feature tests, 32 harness tests, Clippy and formatting pass (only
+  existing warnings). The first close-prompt check used the wrong input helper and
+  timed out waiting for an intentionally absent state change; the corrected case
+  uses send_keys_settle plus the resize observation and passes. Full combined
+  acceptance and runtime environment qualification remain pending.
+- Evidence: `/home/holo/agent-exports/foundation-acceptance-2026-10-26` contains
+  focused/scaled logs, the old-binary failure and fast/tooling results.
+- The final save boundary also checks that an external version written after staging
+  a replacement survives. The separate Keep Mine UI race and in-flight scratchpad
+  quit coverage remain open; this narrower test does not claim to cover them.
 
 ### Implementation checkpoint: launch and X11 runtime boundaries (2026-10-25)
 

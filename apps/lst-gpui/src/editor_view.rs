@@ -686,6 +686,7 @@ impl LstGpuiApp {
         let prepare_scroll = viewport_scroll.clone();
         let paint_scroll = viewport_scroll;
         let entity = cx.entity();
+        let geometry = self.active_view().geometry.clone();
 
         let bar = match axis {
             ScrollbarAxis::Vertical => div()
@@ -714,6 +715,10 @@ impl LstGpuiApp {
                         scrollbar_max_offset(axis, &prepare_scroll),
                         scale,
                     );
+                    if matches!(axis, ScrollbarAxis::Horizontal) {
+                        geometry.borrow_mut().horizontal_scrollbar =
+                            layout.map(|layout| (layout.track_bounds, layout.thumb_bounds));
+                    }
                     (layout, window.insert_hitbox(bounds, HitboxBehavior::Normal))
                 },
                 move |_, (layout, hitbox), window, cx| {

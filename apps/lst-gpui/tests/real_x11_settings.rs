@@ -9,7 +9,7 @@ use std::path::Path;
 
 use lst_x11_harness::{clipboard::wait_clipboard_text, Selection};
 
-use support::{secs, wait_file_matching, EditorTestExt, TestResult};
+use support::{click_trace_bounds_center, secs, wait_file_matching, EditorTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
@@ -29,12 +29,20 @@ fn standard_mode_is_default_and_workspace_surfaces_are_keyboard_reachable() -> T
             record.workspace_surface == "settings" && record.focused_input == "settings"
         })?;
         // Typing goes to the settings search, not the document behind it.
-        editor.expect_keys_ignored(
-            "save as",
-            "<esc>",
-            |record| record.workspace_surface == "none" && record.focused_input == "editor",
-            |record| record.revision == initial.revision,
-        )?;
+        editor.keys("save as")?;
+        let searched = editor.wait_state("settings search accepts text", secs(2), |record| {
+            record.workspace_surface == "settings"
+                && record.focused_input == "settings"
+                && record
+                    .settings_search_input
+                    .as_ref()
+                    .is_some_and(|field| field.selection.start == 7 && field.selection.end == 7)
+        })?;
+        assert_eq!(searched.revision, initial.revision);
+        editor.keys("<esc>")?;
+        editor.wait_state("settings dismissed", secs(2), |record| {
+            record.workspace_surface == "none" && record.focused_input == "editor"
+        })?;
         Ok(())
     })
 }
@@ -107,14 +115,14 @@ fn clicking_settings_search_clears_row_focus_before_typing() -> TestResult {
             .as_ref()
             .and_then(|field| field.bounds_px)
             .ok_or("settings search bounds missing")?;
-        let scale = if record.viewport.scale_factor > 0.0 {
-            record.viewport.scale_factor
-        } else {
-            1.0
-        };
-        editor.click_at(
-            ((x + width * 0.5) * scale).round() as i32,
-            ((y + height * 0.5) * scale).round() as i32,
+        click_trace_bounds_center(
+            &mut editor,
+            x,
+            y,
+            width,
+            height,
+            record.viewport.scale_factor,
+            "settings-search",
         )?;
         editor.wait_state("mouse focus clears the selected-row owner", secs(5), |record| {
             record.workspace_surface == "settings" && record.settings_selected_item.is_none()
@@ -125,6 +133,22 @@ fn clicking_settings_search_clears_row_focus_before_typing() -> TestResult {
         editor.save_then_expect_file(&path, "keep me unchanged\n")?;
         Ok(())
     })
+}
+
+fn click_category(editor: &mut lst_x11_harness::Editor, name: &str) -> support::SupportResult<()> {
+    let state = editor.wait_state("settings category painted", secs(3), |state| {
+        state.workspace_surface == "settings" && state.settings_category_bounds_px.contains_key(name)
+    })?;
+    let (x, y, width, height) = state.settings_category_bounds_px[name];
+    click_trace_bounds_center(
+        editor,
+        x,
+        y,
+        width,
+        height,
+        state.viewport.scale_factor,
+        "settings-category",
+    )
 }
 
 #[test]
@@ -138,9 +162,7 @@ fn settings_categories_keep_search_global_and_changes_persistent() -> TestResult
         editor.keys("<C-,>")?;
         editor.wait_state("settings opens", secs(2), |state| state.workspace_surface == "settings")?;
 
-        // The category rail has no keyboard route and no traced bounds; at
-        // this window size these points are its Appearance and Guides rows.
-        editor.click_at(140, 110)?;
+        click_category(&mut editor, "Appearance")?;
         editor.keys("<tab>")?;
         editor.wait_state("appearance category starts at typography", secs(2), |state| {
             state.settings_selected_item.as_deref() == Some("font_family")
@@ -163,7 +185,7 @@ fn settings_categories_keep_search_global_and_changes_persistent() -> TestResult
         editor.wait_state("theme changed from search", secs(2), |state| state.theme_name == "Dark")?;
         wait_file_matching(&settings_path, "dark theme", |text| text.contains("theme = \"dark\""))?;
 
-        editor.click_at(140, 144)?;
+        click_category(&mut editor, "Guides & whitespace")?;
         editor.keys("<tab>")?;
         editor.wait_state("guides category is reachable", secs(2), |state| {
             state.settings_selected_item.as_deref() == Some("match_brackets")

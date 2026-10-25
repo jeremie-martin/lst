@@ -173,8 +173,11 @@ expecting a state or file contents that already held passes whether or not the
 action worked. `wait_state` judges the newest trace record, so it describes the
 settled result; use `wait_transient_state` only for a short-lived state such as
 a pending search. To show that a surface ignores keys, use
-`expect_keys_ignored`, which follows them with a key the surface does handle
-instead of sleeping.
+`expect_keys_ignored`, which follows them with a key the surface does handle.
+The later action must distinguish an intact surface from premature dismissal:
+Escape alone cannot prove a modal stayed open. A later resize and its changed
+viewport geometry can provide that observation while the modal remains visible.
+Do not substitute a fixed sleep.
 
 ## Diagnostics and artifacts
 

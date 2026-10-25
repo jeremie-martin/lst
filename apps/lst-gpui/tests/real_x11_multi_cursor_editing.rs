@@ -488,9 +488,11 @@ fn indent_and_outdent_coalesce_multiple_cursors_on_one_line() -> TestResult {
 
         editor.keys("<C-]>")?;
         editor.save_then_expect_file(&path, "    foo foo")?;
+        editor.expect_selections(&carets(&[(0, 7), (0, 11)]))?;
 
         editor.keys("<C-[>")?;
         editor.save_then_expect_file(&path, "foo foo")?;
+        editor.expect_selections(&carets(&[(0, 3), (0, 7)]))?;
         Ok(())
     })
 }
@@ -557,6 +559,24 @@ fn toggle_line_comment_coalesces_multiple_cursors_on_one_line() -> TestResult {
 
         editor.keys("<C-/>")?;
         editor.save_then_expect_file(&path, "// let foo = foo;")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn a_selection_ending_at_column_zero_excludes_that_line_from_indent_and_line_end_cursors() -> TestResult {
+    support::run_x11_test("selection-final-column-zero", |session| {
+        let path = session.seed_file("selection-lines.rs", "alpha\nbravo\ncharlie")?;
+        let mut editor = session.open_file("selection-lines", &path)?;
+        editor.keys("<C-home><S-down><S-down>")?;
+        editor.expect_selection_ranges(&[(0, 12)])?;
+        editor.keys("<C-]>")?;
+        editor.save_then_expect_file(&path, "    alpha\n    bravo\ncharlie")?;
+        editor.keys("<C-z><C-home><S-down><S-down><A-S-i>")?;
+        editor.expect_cursor_heads(&[(0, 5), (1, 5)])?;
+        editor.keys("!")?;
+        editor.save_then_expect_file(&path, "alpha!\nbravo!\ncharlie")?;
         Ok(())
     })
 }
