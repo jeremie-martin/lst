@@ -1,5 +1,34 @@
 use crate::selection::{self, line_display_text, Position};
-use ropey::Rope;
+use ropey::{Rope, RopeSlice};
+
+pub(crate) fn is_line_break(ch: char) -> bool {
+    matches!(ch, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}')
+}
+
+/// Content of one logical Rope line, excluding its terminator. CRLF is one
+/// terminator; all separators recognized by Rope have the same boundary rule.
+pub fn line_content(line: RopeSlice<'_>) -> RopeSlice<'_> {
+    let mut end = line.len_chars();
+    if end > 0 && is_line_break(line.char(end - 1)) {
+        let last = line.char(end - 1);
+        end -= 1;
+        if last == '\n' && end > 0 && line.char(end - 1) == '\r' {
+            end -= 1;
+        }
+    }
+    line.slice(..end)
+}
+
+/// String counterpart for callers visiting borrowed logical lines.
+pub fn line_content_str(line: &str) -> &str {
+    if let Some(content) = line.strip_suffix("\r\n") {
+        content
+    } else if let Some(last) = line.chars().next_back().filter(|ch| is_line_break(*ch)) {
+        &line[..line.len() - last.len_utf8()]
+    } else {
+        line
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditKind {
@@ -27,11 +56,7 @@ pub fn char_to_position(buffer: &Rope, char_offset: usize) -> Position {
 pub fn position_to_char(buffer: &Rope, position: Position) -> usize {
     let line = position.line.min(buffer.len_lines().saturating_sub(1));
     let line_start = buffer.line_to_char(line);
-    let line_len = buffer
-        .line(line)
-        .chars()
-        .take_while(|ch| *ch != '\n' && *ch != '\r')
-        .count();
+    let line_len = line_content(buffer.line(line)).len_chars();
     line_start + position.column.min(line_len)
 }
 
@@ -63,10 +88,8 @@ pub(crate) fn inclusive_position_to_exclusive_char(buffer: &Rope, position: Posi
 }
 
 pub fn line_indent_prefix(buffer: &Rope, line_ix: usize) -> String {
-    buffer
-        .line(line_ix.min(buffer.len_lines().saturating_sub(1)))
+    line_content(buffer.line(line_ix.min(buffer.len_lines().saturating_sub(1))))
         .chars()
-        .take_while(|ch| *ch != '\n' && *ch != '\r')
         .take_while(|ch| ch.is_whitespace())
         .collect()
 }
@@ -170,6 +193,23 @@ fn for_each_chunk_line<'a>(chunks: impl Iterator<Item = &'a str>, mut visit: imp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logical_line_content_and_position_clamping_exclude_every_rope_terminator() {
+        for ending in ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+            for content in ["".to_string(), "aé\u{301}".to_string(), "🦀".repeat(4096)] {
+                let text = format!("{content}{ending}last");
+                let rope = Rope::from_str(&text);
+                assert_eq!(line_content(rope.line(0)).to_string(), content);
+                assert_eq!(line_content_str(&rope.line(0).to_string()), content);
+                assert_eq!(
+                    position_to_char(&rope, Position::new(0, usize::MAX)),
+                    content.chars().count()
+                );
+                assert_eq!(line_content(rope.line(1)).to_string(), "last");
+            }
+        }
+    }
 
     #[test]
     fn line_change_windows_preserve_prefix_and_suffix_lengths() {

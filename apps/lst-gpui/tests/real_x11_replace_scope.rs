@@ -32,7 +32,10 @@ fn replace_all_with_document_scope_mutates_every_match() -> TestResult {
             record.focused_input == "find_query" && record.find.show_replace && record.find.scope == "document"
         })?;
 
-        editor.keys("foo<tab>bar<C-A-enter>")?;
+        editor.keys("foo")?;
+        editor.expect_find_state("foo", 4)?;
+        editor.keys("<tab>bar<C-A-enter>")?;
+        editor.expect_find_state("foo", 0)?;
         editor.save_then_expect_file(&path, "x bar\ny bar bar\nz bar\n")?;
         Ok(())
     })
@@ -62,7 +65,10 @@ fn replace_all_in_selection_preserves_outside_text_byte_for_byte() -> TestResult
         editor.keys("<A-s>")?;
         editor.wait_state("scope captured", secs(2), |record| record.find.scope == "selection")?;
 
-        editor.keys("foo<tab>bar<C-A-enter>")?;
+        editor.keys("foo")?;
+        editor.expect_find_state("foo", 2)?;
+        editor.keys("<tab>bar<C-A-enter>")?;
+        editor.expect_find_state("foo", 0)?;
         // Inside-selection "foo" instances become "bar". Trailing two spaces
         // on the outside lines must survive — this catches an implementation
         // that accidentally normalizes trailing whitespace as part of the

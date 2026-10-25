@@ -8,6 +8,38 @@ use std::time::{Duration, Instant};
 use lst_x11_harness::{clipboard::write_clipboard_text, Editor, Selection, WheelDir};
 use support::{secs, EditorTestExt, SupportResult, TestResult};
 
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn separator_boundaries_paint_only_one_current_line_and_settle_with_smooth_cursor() -> TestResult {
+    support::run_x11_test("viewport-separator-caret", |session| {
+        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\nsmooth_cursor = true\n")?;
+        let path = session.seed_file("endings.txt", "a\u{85}b\u{85}c")?;
+        let screenshot_path = session.root().join("separator-caret.ppm");
+        let mut editor = session.open_file("viewport-separator-caret", &path)?;
+        editor.keys("<C-home><down>")?;
+        let state = editor.expect_cursor_heads(&[(1, 0)])?;
+        editor.wait_quiet(Duration::from_millis(500), secs(5))?;
+        let shot = editor.screenshot()?;
+        shot.write_ppm(screenshot_path)?;
+        let viewport = &state.viewport;
+        let pixel = |line| {
+            let row = viewport.first_row_for_line(line).unwrap();
+            let x =
+                ((viewport.code_origin_x_px + 10.0 * viewport.char_width_px) * viewport.scale_factor).round() as usize;
+            let y = ((row.top_px + viewport.line_height_px * 0.5) * viewport.scale_factor).round() as usize;
+            let at = (y * usize::from(shot.width) + x) * 3;
+            &shot.rgb_pixels[at..at + 3]
+        };
+        assert_eq!(pixel(0), pixel(2), "the preceding line must not also be highlighted");
+        assert_ne!(pixel(1), pixel(2), "the current line must be highlighted");
+        for line in 0..3 {
+            let row = viewport.first_row_for_line(line).unwrap();
+            assert_eq!(row.display_end_char - row.line_start_char, 1);
+        }
+        Ok(())
+    })
+}
+
 fn row_covers_char(record: &lst_x11_harness::StateTraceRecord, line: usize, ch: usize) -> bool {
     record
         .viewport

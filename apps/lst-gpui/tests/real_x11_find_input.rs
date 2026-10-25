@@ -37,10 +37,11 @@ fn geometry(editor: &mut Editor<'_>, input: FindInput) -> SupportResult<StateTra
     })
 }
 
-fn caret_point(editor: &mut Editor<'_>, input: FindInput) -> SupportResult<(i32, i32)> {
+fn caret_point(editor: &mut Editor<'_>, input: FindInput, offset: usize) -> SupportResult<(i32, i32)> {
     let record = editor.wait_state("find field caret geometry", secs(5), |record| {
-        find_input(record, input)
-            .is_some_and(|field| field.selection.start == field.selection.end && field.caret_bounds_px.is_some())
+        find_input(record, input).is_some_and(|field| {
+            field.selection.start == offset && field.selection.end == offset && field.caret_bounds_px.is_some()
+        })
     })?;
     let field = find_input(&record, input).ok_or("field disappeared after caret wait")?;
     let (x, y, _, height) = field.caret_bounds_px.ok_or("caret geometry missing after wait")?;
@@ -304,14 +305,20 @@ fn standard_boundary_shortcuts_and_redo_use_local_field_history() -> TestResult 
         expect_query(&mut editor, "XabcY")?;
         editor.keys("<C-y>")?;
         expect_query(&mut editor, "Z")?;
-        editor.keys("<C-z><C-S-z><home><C-S-end>W")?;
+        editor.keys("<C-z>")?;
+        expect_query(&mut editor, "XabcY")?;
+        editor.keys("<C-S-z>")?;
+        expect_query(&mut editor, "Z")?;
+        editor.keys("<home><C-S-end>W")?;
         expect_query(&mut editor, "W")?;
 
         editor.keys("<tab>uvw<home><C-end>!")?;
         expect_replacement(&mut editor, "uvw!")?;
         editor.keys("<C-S-home>R<C-z>")?;
         expect_replacement(&mut editor, "uvw!")?;
-        editor.keys("<C-y><C-a><C-x>")?;
+        editor.keys("<C-y>")?;
+        expect_replacement(&mut editor, "R")?;
+        editor.keys("<C-a><C-x>")?;
         expect_replacement(&mut editor, "")?;
         wait_clipboard_text(Selection::Clipboard, "R", secs(5))?;
         editor.keys("<C-z>")?;
@@ -418,7 +425,7 @@ fn field_padding_uses_horizontal_caret_placement_and_click_selection_remains_sta
         let mut editor = session.open_file("find-padding", &path)?;
         set_query(&mut editor, text)?;
         editor.keys("<home><right><right><right><right><right><right>")?;
-        let (x, _) = caret_point(&mut editor, FindInput::Query)?;
+        let (x, _) = caret_point(&mut editor, FindInput::Query, 6)?;
         let record = geometry(&mut editor, FindInput::Query)?;
         let field = find_input(&record, FindInput::Query).ok_or("query geometry missing")?;
         let (_, top, _, height) = field.bounds_px.ok_or("query bounds missing")?;
@@ -433,7 +440,7 @@ fn field_padding_uses_horizontal_caret_placement_and_click_selection_remains_sta
         }
 
         editor.keys("<home><right><right><right><right><right><right><right><right>")?;
-        let target = caret_point(&mut editor, FindInput::Query)?;
+        let target = caret_point(&mut editor, FindInput::Query, 8)?;
         editor.click_at_with_modifiers(target.0, target.1, ChordMods::default(), 2)?;
         expect_selection(&mut editor, FindInput::Query, 6, 10)?;
         editor.keys("<C-c>")?;
@@ -443,7 +450,7 @@ fn field_padding_uses_horizontal_caret_placement_and_click_selection_remains_sta
         editor.keys("<C-c>")?;
         wait_clipboard_text(Selection::Clipboard, text, secs(5))?;
         editor.keys("<home>")?;
-        let start = caret_point(&mut editor, FindInput::Query)?;
+        let start = caret_point(&mut editor, FindInput::Query, 0)?;
         // Move the click origin so this is a fresh Shift+click, not a fourth
         // click in the preceding word/all-selection gesture.
         editor.click_at(start.0, start.1)?;
@@ -464,7 +471,7 @@ fn selection_drag_continues_beyond_both_field_edges() -> TestResult {
         let mut editor = session.open_file("find-drag-outside", &path)?;
         set_query(&mut editor, text)?;
         editor.keys("<home><right><right><right><right><right><right><right><right>")?;
-        let from = caret_point(&mut editor, FindInput::Query)?;
+        let from = caret_point(&mut editor, FindInput::Query, 8)?;
         let record = geometry(&mut editor, FindInput::Query)?;
         let (left, top, width, height) = find_input(&record, FindInput::Query)
             .and_then(|field| field.bounds_px)
@@ -477,7 +484,7 @@ fn selection_drag_continues_beyond_both_field_edges() -> TestResult {
         wait_clipboard_text(Selection::Clipboard, "alpha be", secs(5))?;
 
         editor.keys("<home><right><right><right><right><right><right>")?;
-        let from = caret_point(&mut editor, FindInput::Query)?;
+        let from = caret_point(&mut editor, FindInput::Query, 6)?;
         let outside_right = window_point(&record, left + width + 24.0, top + height * 0.5);
         editor.drag_at(from, outside_right, |editor| {
             expect_selection(editor, FindInput::Query, 6, text.len())
@@ -497,7 +504,7 @@ fn long_field_drag_autoscrolls_while_held_and_stops_after_release_or_hide() -> T
         let text = "0123456789".repeat(40);
         set_query(&mut editor, &text)?;
         editor.keys("<home>")?;
-        let from = caret_point(&mut editor, FindInput::Query)?;
+        let from = caret_point(&mut editor, FindInput::Query, 0)?;
         let record = geometry(&mut editor, FindInput::Query)?;
         let (left, top, width, height) = find_input(&record, FindInput::Query)
             .and_then(|field| field.bounds_px)
@@ -516,7 +523,7 @@ fn long_field_drag_autoscrolls_while_held_and_stops_after_release_or_hide() -> T
         wait_clipboard_text(Selection::Clipboard, &text, secs(5))?;
 
         editor.keys("<end>")?;
-        let from = caret_point(&mut editor, FindInput::Query)?;
+        let from = caret_point(&mut editor, FindInput::Query, text.len())?;
         editor.drag_at(from, outside_left, |editor| {
             editor.wait_state("held drag reaches long query start", secs(10), |record| {
                 find_input(record, FindInput::Query).is_some_and(|field| {
@@ -529,7 +536,7 @@ fn long_field_drag_autoscrolls_while_held_and_stops_after_release_or_hide() -> T
         wait_clipboard_text(Selection::Clipboard, &text, secs(5))?;
 
         editor.keys("<home>")?;
-        let from = caret_point(&mut editor, FindInput::Query)?;
+        let from = caret_point(&mut editor, FindInput::Query, 0)?;
         editor.drag_at(from, outside_right, |editor| {
             editor.wait_state("partially autoscrolled selection before release", secs(10), |record| {
                 find_input(record, FindInput::Query)
@@ -549,7 +556,7 @@ fn long_field_drag_autoscrolls_while_held_and_stops_after_release_or_hide() -> T
         wait_clipboard_text(Selection::Clipboard, &text[..selection.end], secs(5))?;
 
         editor.keys("<home>")?;
-        let from = caret_point(&mut editor, FindInput::Query)?;
+        let from = caret_point(&mut editor, FindInput::Query, 0)?;
         editor.drag_at(from, outside_right, |editor| {
             editor.wait_state("autoscroll active before hiding find", secs(10), |record| {
                 find_input(record, FindInput::Query)

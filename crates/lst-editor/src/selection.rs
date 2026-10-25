@@ -1147,20 +1147,10 @@ fn byte_of_char_index(text: &str, char_index: usize) -> usize {
         .unwrap_or(text.len())
 }
 pub(crate) fn line_display_text(buffer: &Rope, line_ix: usize) -> String {
-    let mut line = buffer
-        .line(line_ix.min(buffer.len_lines().saturating_sub(1)))
-        .to_string();
-    while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
-        line.pop();
-    }
-    line
+    crate::line_content(buffer.line(line_ix.min(buffer.len_lines().saturating_sub(1)))).to_string()
 }
 pub(crate) fn display_line_char_len(buffer: &Rope, line_ix: usize) -> usize {
-    buffer
-        .line(line_ix.min(buffer.len_lines().saturating_sub(1)))
-        .chars()
-        .take_while(|ch| *ch != '\n' && *ch != '\r')
-        .count()
+    crate::line_content(buffer.line(line_ix.min(buffer.len_lines().saturating_sub(1)))).len_chars()
 }
 pub(crate) fn char_at_line_column(buffer: &Rope, line_ix: usize, column: usize) -> usize {
     let line = line_ix.min(buffer.len_lines().saturating_sub(1));

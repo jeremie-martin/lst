@@ -44,12 +44,16 @@ with `23/` refer to October 23. Duplicate findings share an item.
 
 ## Agreed behavior to implement
 
-- [ ] **Standard F3 / Shift+F3:** find the next/previous match from the current caret,
+- [x] **Standard F3 / Shift+F3 (implemented 2026-10-25):** find the next/previous match from the current caret,
   wrapping once. Advance beyond an already selected active match and handle empty regex
   matches without getting stuck. Matches on lines 0, 2 and 4: from line 2, F3 goes to 4
   and Shift+F3 goes to 0. (C27, Standard-mode remainder)
-  Review: Fresh model probe still advances from the old active index: with the caret on
-  line 2, FindNext returns line 2 rather than line 4.
+  Resolution: Standard and Vim navigation share the ordered, caret-relative search.
+  An exactly selected match contributes its start, including regex matches whose length
+  differs from the query. Empty regex matches remain indexed and navigation advances
+  strictly past the origin. Covered by
+  `f3_and_shift_f3_search_from_the_current_caret_and_wrap` and
+  `zero_width_regex_matches_navigate_and_replace_without_stalling`.
 
 - [ ] **Supported Vim commands:** match a pinned Neovim reference for the supported
   single-cursor commands, including counts, register types, failed motions and resulting
@@ -97,19 +101,24 @@ are noted where they matter. Resolutions name their regression coverage.
 
 ### Text, line endings and saving
 
-- [ ] **Reproduced:** End and Shift+End cross into the following line on VT/FF/NEL/LS/PS
-  terminators; Left and Backspace can get stuck at the following line's start. Related
-  Vim commands, including `$`, `A`, `D` and word operators, can join lines or edit the
+- [x] **Resolved (2026-10-25):** End and Shift+End crossed into the following line on VT/FF/NEL/LS/PS
+  terminators; Left and Backspace could get stuck at the following line's start. Related
+  Vim commands, including `$`, `A`, `D` and word operators, could join lines or edit the
   wrong line. (C55, C85; 23/AL4)
-  Review: Current model probes fail for all five named separators; LF and CR controls
-  pass. selection.rs display_line_char_len and line_display_text only exclude CR/LF.
+  Resolution: shared logical-line content helpers exclude the complete Rope terminator
+  for position conversion, motion, editing, wrapping, display, and search. Newline
+  insertion preserves the first existing style. Covered for all eight endings by
+  `end_selection_and_left_motion_respect_every_logical_line_ending`,
+  `backspace_removes_one_complete_logical_line_ending_and_undo_restores_it`, the Vim
+  logical-line regression, and document/wrap representation tests.
 
-- [ ] **Source-confirmed:** The caret and current-line highlight can appear on both
-  sides of those separators. With smooth cursors enabled, animation can keep redrawing.
+- [x] **Resolved (2026-10-25):** The caret and current-line highlight could appear on both
+  sides of those separators. With smooth cursors enabled, animation could keep redrawing.
   (C45)
-  Review: viewport.rs marks the separator-containing row inclusive at its end while the
-  next row starts at that same character. Both row membership tests accept the caret.
-  Animation consequences remain conditional on smooth_cursor.
+  Resolution: viewport row endpoints now use the shared line-content boundary, so
+  a terminator is not part of either row's displayed text. Covered by
+  `separator_boundaries_paint_only_one_current_line_and_settle_with_smooth_cursor`:
+  row geometry, screenshot pixels, and redraw quiet with smooth cursors enabled.
 
 - [x] **Resolved (2026-10-25):** Bookmark positions drifted after inserting non-LF separators or
   forming/splitting a CRLF pair at an edit boundary. (C89)
@@ -493,17 +502,20 @@ not demonstrate the missing observations.
 - [ ] **Source-confirmed:** The Keep Mine test never introduces a newer disk version
   after the conflict banner, leaving the version guard untested. (October 24 AT3)
 
-- [ ] **Source-confirmed:** Local field redo is overwritten before its result is
+- [x] **Resolved (2026-10-25):** Local field redo was overwritten before its result was
   asserted. (October 24 AT5)
+  Resolution: `standard_boundary_shortcuts_and_redo_use_local_field_history` now
+  asserts the undone and redone query before replacing it, and the redone replacement
+  before cutting it.
 
 - [ ] **Source-confirmed:** Dismiss tests cannot prove suppression lasts for the
   observed disk version, and no longer check that Dismiss preserves external file
   contents. (October 24 AT6, T7)
 
-- [ ] **Source-confirmed:** Find-field mouse tests may use caret geometry from before
+- [x] **Resolved (2026-10-25):** Find-field mouse tests could use caret geometry from before
   the preceding key action. (October 24 AT7)
-  Review: caret_point accepts any collapsed caret with geometry, including a record
-  predating Home/Right. It does not pin the requested field offset.
+  Resolution: every `caret_point` caller supplies the expected field offset; the
+  helper waits for that exact collapsed selection and its rendered caret geometry.
 
 - [ ] **Source-confirmed:** Horizontal-scroll tests mix logical and physical coordinates
   and may mistake an unprocessed click for the rightmost scroll position. (October 24
@@ -516,8 +528,10 @@ not demonstrate the missing observations.
   at column zero exclude that final line when indenting or adding line-end cursors.
   (October 24 T1)
 
-- [ ] **Source-confirmed:** Replace All coverage no longer checks that Find results
+- [x] **Resolved (2026-10-25):** Replace All coverage did not check that Find results
   refresh after replacement. (October 24 T2)
+  Resolution: both document-scope and selection-scope acceptance tests assert a
+  nonzero match count before replacement and zero afterward, alongside saved bytes.
 
 - [ ] **Source-confirmed:** Quit-review coverage no longer checks input blocking while
   scratchpads are saving. (October 24 T3)
@@ -644,7 +658,8 @@ changing code. Rejection is a valid outcome.
 
 ## Optional improvements
 
-These are reviewed opportunities, not required fixes. Some duplication is real,
+Unchecked opportunities below are not required fixes. Checked entries record an
+explicit disposition. Some duplication is real,
 but shared code may be more complex or join boundaries with different semantics.
 No blanket refactoring or new subsystem is implied.
 
@@ -654,21 +669,24 @@ No blanket refactoring or new subsystem is implied.
   request. Some requests intentionally restore passive highlights. No new harmful case
   was established; removing the tail unconditionally could change useful behavior.
 
-- **Optional:** Width remeasurement duplicates paths and line-change calculations.
-  (23/S2)
-  Review: The repeated LineChange validation and two width-measurement paths remain.
-  They handle borrowed lines and changed topology differently. Duplication alone does
-  not justify a new abstraction.
+- [x] **Retained after review (2026-10-25):** Width remeasurement keeps its Rope and
+  borrowed-string paths. (23/S2)
+  Disposition: the Rope path measures unchanged line topology without copying ordinary
+  lines; the visitor path handles changed topology and full rebuilds. Both now use the
+  same line-content boundary. Sharing their small adapters or repeated `LineChange`
+  validation would add plumbing without removing an invalid state or demonstrated cost.
 
 - **Optional:** Tab strip and status bar duplicate cached-view plumbing. (23/S3, R6;
   October 24 S5)
   Review: Cached-view plumbing remains similar, but each view has different props and
   layout. Share only if that actually reduces production complexity.
 
-- **Optional:** Input fields duplicate grapheme-boundary rounding. (23/S5, R7)
-  Review: These helpers operate at different boundaries: field UTF-8 byte offsets versus
-  Rope character offsets. They are not interchangeable copies. No behavior defect
-  follows just from having both.
+- [x] **Retained after review (2026-10-25):** Input fields and documents keep their own
+  grapheme-boundary adapters. (23/S5, R7)
+  Disposition: fields use UTF-8 byte offsets into one string; documents use Rope
+  character offsets, line context, and separate terminator handling. Both delegate
+  segmentation to `GraphemeCursor`. Sharing the adapters would introduce coordinate
+  conversion and coupling without removing duplicated segmentation logic.
 
 - **Optional:** Unused theme-button trace state gives no evidence that a theme button is
   absent. The theme-application assertion itself remains meaningful. (23/S6)
@@ -676,9 +694,12 @@ No blanket refactoring or new subsystem is implied.
   test still checks theme application and can fail for that. Cleanup should preserve
   trace compatibility.
 
-- **Optional:** Find repeats match-position conversions. (23/S7)
-  Review: Repeated Position construction is short and has no demonstrated invalid state
-  or measurable cost. A conversion helper is optional, not required remediation.
+- [x] **Retained after review (2026-10-25):** Find keeps its short match-position
+  conversions. (23/S7)
+  Disposition: public position conversion clamps to document boundaries, while indexed
+  ranges use already validated line offsets. Their distinct contracts are useful; a
+  helper for constructing two `Position` values would not simplify ownership or
+  improve the measured navigation path.
 
 - **Optional:** Benchmark trace truncation/polling logic is duplicated. (23/S8)
   Review: The benchmark has repeated trace/polling scaffolding. No independent defect
@@ -750,17 +771,20 @@ No blanket refactoring or new subsystem is implied.
   is unmeasured and other segmentation work can dominate. Preserve grapheme correctness;
   no automatic chunk adapter rewrite.
 
-- **Optional:** Wrap updates duplicate branches whose simplification must preserve the
-  unchanged-row case. (23/S1, R1, plausible)
-  Review: The branches have different topology/unchanged-row handling and are covered by
-  equivalence tests. Sharing them is optional if it reduces complexity without weakening
-  the zero-change case.
+- [x] **Retained after review (2026-10-25):** Wrap updates keep separate topology-change
+  and in-place branches. (23/S1, R1)
+  Disposition: changed topology splices a replacement index; unchanged topology updates
+  existing entries and skips the suffix entirely when row counts do not change. A common
+  replacement-vector path would add allocation and suffix work to ordinary edits.
+  Existing incremental/full equivalence tests protect both paths.
 
-- **Optional:** Line-terminator handling and syntax line-window calculations duplicate
-  logic. (23/R2, R3, plausible)
-  Review: Line-ending inconsistency is already a confirmed behavioral issue above. The
-  remaining syntax-window code has different responsibilities; duplicated-looking
-  expressions do not establish another defect.
+- [x] **Addressed / retained after review (2026-10-25):** Line-content boundaries are
+  shared; syntax line-window adapters remain local. (23/R2, R3)
+  Disposition: the confirmed line-ending inconsistency is resolved above. Syntax's
+  edited-text window, invalidation window, and layout window serve different consumers;
+  a full highlight invalidation can still permit a narrow layout update. Combining
+  their range expressions would obscure that distinction. The confirmed stale syntax
+  defects remain open in their own entries.
 
 ## Closed, already resolved or outside current scope
 
@@ -903,6 +927,43 @@ intentional behavior as a defect.
   hold up. (23/V14)
 
 ## Verification and evidence
+
+### Implementation checkpoint: line boundaries and Find navigation (2026-10-25)
+
+- Closed the logical-line motion/editing defects (C55, C85, 23/AL4), duplicate
+  caret/current-line rendering (C45), Standard Find navigation (C27), and
+  Find-test gaps AT5, AT7, and T2. These are six checklist entries; related
+  candidate IDs share resolutions. The remaining checklist stays in scope.
+- The line-content rule now has one editor-domain owner. Display, wrapping,
+  search, selection bounds, and line-oriented edits use that rule. Standard
+  Find navigation shares the caret-relative path already used by Vim.
+- All five new real-app regressions fail against the preserved pre-change
+  binary and pass after the fixes. The F3 harness escape was added before the
+  valid baseline comparison; the earlier unsupported-escape failure is not
+  counted as evidence of an editor defect. The strengthened selected-match
+  assertion is included in the full run.
+- Five optional duplication suggestions have explicit dispositions above:
+  line-content logic is shared, while coordinate adapters, width adapters,
+  syntax windows, and wrap-update branches retain their distinct contracts.
+- The inspected separator screenshot shows one current-line highlight and
+  one caret. The acceptance case also checks geometry and redraw quiet with
+  smooth cursors enabled; no visual baseline was replaced.
+- An isolated, CPU-pinned model benchmark comparison in both run orders finds
+  typing within noise and unwrapped page navigation about 4% faster. Correct
+  caret-relative Find stepping is about 26–27% slower in the isolated loop,
+  approximately 0.3 microseconds more per step. This is not an end-to-end
+  latency measurement. Commands, host details, raw results, the screenshot,
+  and verification logs are retained in the external
+  `foundation-navigation-2026-10-25` evidence directory.
+- `cargo test --all-features`: 193 passed, zero failed. The harness's own
+  suite passed all 32 tests. Formatting, whitespace checks, and `cargo clippy
+  --all-targets --all-features` passed with existing warnings only.
+- Full serial nested X11 lane: 295 passed, zero failed, including the strengthened
+  field-geometry, redo, replacement-count, and selected-match assertions. Production
+  code was unchanged throughout the full run.
+- The run used the same temporary newer-lwm compatibility shim and software
+  Vulkan as the earlier checkpoints. The two physical-display visual tests
+  were outside this run; the runner compatibility finding remains open.
 
 ### Implementation checkpoint: saving and bookmark mapping (2026-10-25)
 

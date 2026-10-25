@@ -802,7 +802,7 @@ impl EditorTab {
     }
 }
 fn first_line_for_detection(buffer: &Rope) -> String {
-    buffer.line(0).to_string().trim_end_matches(['\r', '\n']).to_string()
+    crate::line_content(buffer.line(0)).to_string()
 }
 fn changes_modify_text(buffer: &Rope, changes: &[TextChange]) -> bool {
     changes

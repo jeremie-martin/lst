@@ -14,6 +14,63 @@ use std::time::Duration;
 use lst_x11_harness::{clipboard::wait_clipboard_text, Selection};
 use support::{secs, EditorTestExt, HeldKeys, SelectionTestExt, TestResult, XK_DOWN, XK_LEFT, XK_RIGHT, XK_UP};
 
+const LINE_ENDINGS: [&str; 8] = ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"];
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn end_selection_and_left_motion_respect_every_logical_line_ending() -> TestResult {
+    support::run_x11_test("motion-all-line-endings", |session| {
+        let text = LINE_ENDINGS
+            .iter()
+            .map(|ending| format!("ab{ending}"))
+            .collect::<String>()
+            + "last";
+        let path = session.seed_file("endings.txt", &text)?;
+        let mut editor = session.open_file("motion-all-line-endings", &path)?;
+        editor.place_cursor_at_document_start()?;
+        for line in 0..LINE_ENDINGS.len() {
+            editor.keys("<end>")?;
+            editor.expect_cursor_heads(&[(line, 2)])?;
+            editor.keys("<home><S-end><C-c>")?;
+            editor.expect_selections(&[((line, 0), (line, 2))])?;
+            wait_clipboard_text(Selection::Clipboard, "ab", secs(5))?;
+            editor.keys("<right><right>")?;
+            editor.expect_cursor_heads(&[(line + 1, 0)])?;
+            editor.keys("<left>")?;
+            editor.expect_cursor_heads(&[(line, 2)])?;
+            editor.keys("<right>")?;
+            editor.expect_cursor_heads(&[(line + 1, 0)])?;
+        }
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn backspace_removes_one_complete_logical_line_ending_and_undo_restores_it() -> TestResult {
+    support::run_x11_test("backspace-all-line-endings", |session| {
+        let text = LINE_ENDINGS
+            .iter()
+            .map(|ending| format!("ab{ending}"))
+            .collect::<String>()
+            + "last";
+        let path = session.seed_file("endings.txt", &text)?;
+        let mut editor = session.open_file("backspace-all-line-endings", &path)?;
+        for (line, ending) in LINE_ENDINGS.iter().enumerate() {
+            editor.keys(&format!("<C-g>{}<enter>", line + 2))?;
+            editor.expect_cursor_heads(&[(line + 1, 0)])?;
+            editor.keys("<bs>")?;
+            editor.expect_cursor_heads(&[(line, 2)])?;
+            let start: usize = LINE_ENDINGS[..line].iter().map(|s| 2 + s.len()).sum::<usize>() + 2;
+            let expected = format!("{}{}", &text[..start], &text[start + ending.len()..]);
+            editor.save_then_expect_file(&path, &expected)?;
+            editor.keys("<C-z>")?;
+            editor.expect_cursor_heads(&[(line + 1, 0)])?;
+        }
+        Ok(())
+    })
+}
+
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
 fn home_and_end_target_the_current_wrapped_visual_row() -> TestResult {

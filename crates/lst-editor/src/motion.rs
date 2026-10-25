@@ -305,12 +305,13 @@ fn display_line_char_len(tab: &EditorTab, line_ix: usize) -> usize {
 }
 
 fn first_non_blank_column(tab: &EditorTab, line_ix: usize) -> usize {
-    tab.buffer()
-        .line(line_ix.min(tab.buffer().len_lines().saturating_sub(1)))
-        .chars()
-        .take_while(|ch| *ch != '\n' && *ch != '\r')
-        .position(|ch| !ch.is_whitespace())
-        .unwrap_or(0)
+    crate::line_content(
+        tab.buffer()
+            .line(line_ix.min(tab.buffer().len_lines().saturating_sub(1))),
+    )
+    .chars()
+    .position(|ch| !ch.is_whitespace())
+    .unwrap_or(0)
 }
 
 #[cfg(test)]

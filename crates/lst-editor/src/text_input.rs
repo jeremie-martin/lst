@@ -215,7 +215,7 @@ pub(crate) fn tab_request(tab: &EditorTab) -> EditRequest {
 }
 
 pub(crate) fn linewise_paste_request(tab: &EditorTab, mut text: String) -> EditRequest {
-    if !text.ends_with(['\n', '\r']) {
+    if !text.ends_with(crate::document::is_line_break) {
         text.push_str(preferred_newline(tab));
     }
     let line_starts = tab
@@ -388,16 +388,18 @@ pub(crate) fn marked_text_request(
     }
 }
 pub(crate) fn preferred_newline(tab: &EditorTab) -> &'static str {
-    let mut chars = tab.buffer().chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\r' {
-            return if chars.peek() == Some(&'\n') { "\r\n" } else { "\n" };
-        }
-        if ch == '\n' {
-            return "\n";
-        }
+    let line = tab.buffer().line(0);
+    let content_len = crate::line_content(line).len_chars();
+    match line.get_char(content_len) {
+        Some('\r') if line.len_chars() - content_len == 2 => "\r\n",
+        Some('\r') => "\r",
+        Some('\u{b}') => "\u{b}",
+        Some('\u{c}') => "\u{c}",
+        Some('\u{85}') => "\u{85}",
+        Some('\u{2028}') => "\u{2028}",
+        Some('\u{2029}') => "\u{2029}",
+        _ => "\n",
     }
-    "\n"
 }
 fn soft_tab_backspace_range_at(tab: &EditorTab, cursor: usize) -> Option<Range<usize>> {
     let cfg = tab.language_config();
@@ -565,7 +567,7 @@ fn next_line_join_whitespace_end(buffer: &ropey::Rope, cursor: usize) -> Option<
                 end += 1;
             }
         }
-        '\n' => end += 1,
+        ch if crate::document::is_line_break(ch) => end += 1,
         ch if ch.is_whitespace() => return Some(horizontal_whitespace_end(buffer, end, len)),
         _ => return None,
     }
@@ -574,7 +576,7 @@ fn next_line_join_whitespace_end(buffer: &ropey::Rope, cursor: usize) -> Option<
 fn horizontal_whitespace_end(buffer: &ropey::Rope, mut end: usize, len: usize) -> usize {
     while end < len {
         let ch = buffer.char(end);
-        if ch.is_whitespace() && ch != '\n' && ch != '\r' {
+        if ch.is_whitespace() && !crate::document::is_line_break(ch) {
             end += 1;
         } else {
             break;

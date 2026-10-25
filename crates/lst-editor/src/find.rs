@@ -165,11 +165,6 @@ impl FindState {
             for m in regex.find_iter(line) {
                 let abs_byte = m.start();
                 let end_byte = m.end();
-                if abs_byte == end_byte {
-                    // Skip zero-width matches (e.g. /^/, /\b/) — they have no
-                    // selectable span and cause infinite loops in find/replace.
-                    continue;
-                }
                 let cells = cells.get_or_insert_with(|| cells_of_str(line));
                 let line_char_len = cells.last().map(|c| c.char_start + c.char_len).unwrap_or(0);
                 let start_idx = cell_partition_by_byte(cells, abs_byte);
@@ -239,21 +234,9 @@ impl FindState {
         ))
     }
 
-    pub fn next(&mut self) {
-        let len = self.matches.len();
-        if len > 0 {
-            self.active = Some(self.active.map_or(0, |c| (c + 1) % len));
-        }
-    }
-
-    pub fn prev(&mut self) {
-        let len = self.matches.len();
-        if len > 0 {
-            self.active = Some(match self.active {
-                Some(0) | None => len - 1,
-                Some(c) => c - 1,
-            });
-        }
+    pub(crate) fn step_from_tab(&mut self, tab: &EditorTab, forward: bool) {
+        let origin = self.selected_match_start(tab).unwrap_or_else(|| tab.cursor_position());
+        self.select_relative_from(origin, forward);
     }
 
     fn find_nearest(&mut self, position: &Position) {
@@ -386,10 +369,12 @@ impl FindState {
             return None;
         }
         let selected = tab.selected_range();
-        if selected.end.saturating_sub(selected.start) != self.query.chars().count() {
-            return None;
-        }
-        Some(char_to_position(tab.buffer(), selected.start))
+        let start = char_to_position(tab.buffer(), selected.start);
+        let index = self.matches.partition_point(|m| Position::new(m.line, m.col) < start);
+        self.matches
+            .get(index)
+            .filter(|m| m.indexed_char_range_in(tab.buffer()) == selected)
+            .map(|_| start)
     }
 
     fn select_relative_from(&mut self, position: Position, forward: bool) -> Option<Position> {
@@ -461,7 +446,7 @@ pub(crate) fn replace_one_request(tab: &EditorTab, find: &FindState) -> Option<E
         let line_start = buffer.char_to_byte(buffer.line_to_char(start.line));
         expand_match_replacement(
             &re,
-            searchable_text(&line_display_text(buffer, start.line)),
+            &line_display_text(buffer, start.line),
             buffer.char_to_byte(range.start) - line_start,
             &template,
         )
@@ -495,7 +480,7 @@ pub(crate) fn replace_all_request(tab: &EditorTab, find: &FindState, cursor: Pos
                 let match_start = buffer.char_to_byte(range.start);
                 expand_match_replacement(
                     re,
-                    searchable_text(&line_display_text(buffer, m.line)),
+                    &line_display_text(buffer, m.line),
                     match_start - line_start,
                     &find.replacement,
                 )
@@ -526,14 +511,7 @@ fn expand_match_replacement(regex: &Regex, line: &str, byte_start_in_line: usize
 
 /// Search the same logical lines used by document positions.
 fn for_each_text_line(buffer: &Rope, mut visit: impl FnMut(usize, &str)) {
-    crate::for_each_rope_line(buffer, |index, line| visit(index, searchable_text(line)));
-}
-
-/// A line's text without the break that ends it. Ropey also ends lines at VT,
-/// FF, NEL, LS and PS, which display text keeps; excluding them means no match
-/// can span or replace a line separator.
-fn searchable_text(line: &str) -> &str {
-    line.trim_end_matches(['\n', '\r', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}'])
+    crate::for_each_rope_line(buffer, |index, line| visit(index, crate::line_content_str(line)));
 }
 
 /// Scans `text` for every (optionally case-insensitive) occurrence of the

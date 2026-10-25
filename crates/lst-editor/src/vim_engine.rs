@@ -611,7 +611,7 @@ impl EditorModel {
                 } else {
                     self.cursor_offset()
                 };
-                let cursor = if text.contains('\n') {
+                let cursor = if text.contains(crate::document::is_line_break) {
                     0
                 } else {
                     text.chars().count().saturating_sub(1)
@@ -694,15 +694,16 @@ impl EditorModel {
     fn vim_open_line(&mut self, below: bool) -> bool {
         let line = self.cursor().line;
         let indent = self.indent_of(line);
+        let newline = crate::text_input::preferred_newline(self.active_tab());
         let at = if below {
             self.line_end(line)
         } else {
             self.line_start(line)
         };
         let text = if below {
-            format!("\n{indent}")
+            format!("{newline}{indent}")
         } else {
-            format!("{indent}\n")
+            format!("{indent}{newline}")
         };
         let cursor = if below {
             Position::new(line + 1, indent.chars().count())

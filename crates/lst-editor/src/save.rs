@@ -39,7 +39,7 @@ impl SaveTextOptions {
         while !remaining.is_empty() {
             let end = ropey::str_utils::line_to_byte_idx(remaining, 1);
             let (line, rest) = remaining.split_at(end);
-            let content = line.trim_end_matches(['\r', '\n', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}']);
+            let content = crate::line_content_str(line);
             let ending = &line[content.len()..];
             if !ending.is_empty() {
                 preferred_ending.get_or_insert(ending);
@@ -61,13 +61,7 @@ impl SaveTextOptions {
             offset += content_len + ending.chars().count();
             remaining = rest;
         }
-        if self.ensure_final_newline
-            && !output.is_empty()
-            && output
-                .chars()
-                .next_back()
-                .is_some_and(|ch| !matches!(ch, '\r' | '\n' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}'))
-        {
+        if self.ensure_final_newline && !output.is_empty() && !output.ends_with(crate::document::is_line_break) {
             // Preserve mixed endings. An added terminator uses the first
             // existing style, or LF for a document with no line endings.
             let ending = preferred_ending.unwrap_or("\n");

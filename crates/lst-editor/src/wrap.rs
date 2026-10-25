@@ -205,7 +205,7 @@ pub fn visual_line_count_for_rope_line(line: RopeSlice<'_>, max_cols: usize) -> 
 }
 
 fn visual_line_count_for_str_line(line: &str, max_cols: usize) -> usize {
-    let display = line.trim_end_matches(['\n', '\r']);
+    let display = crate::line_content_str(line);
     if display.len() <= max_cols && display.is_ascii() && !display.as_bytes().contains(&b'\t') {
         1
     } else {
@@ -500,6 +500,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn logical_terminators_do_not_add_a_wrapped_row_at_the_column_limit() {
+        for ending in ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+            for text in ["x".repeat(80), "é".repeat(80)] {
+                let buffer = Rope::from_str(&format!("{text}{ending}last"));
+                let layout = build_wrap_layout_for_rope(&buffer, 80, true);
+                assert_eq!(layout.total_rows(), 2, "{ending:?}");
+                assert_eq!(layout.row_start(1), Some(1));
+            }
+        }
+    }
+
+    #[test]
     fn unwrapped_rows_are_the_logical_line_indices() {
         let buffer = Rope::from_str(&"line\n".repeat(10_000));
         let mut layout = build_wrap_layout_for_rope(&buffer, 80, false);
@@ -576,7 +588,7 @@ mod tests {
                 let mut starts = vec![0];
                 for line in buffer.lines() {
                     let text = line.to_string();
-                    let count = visual_line_count(text.trim_end_matches(['\n', '\r']), columns.max(1));
+                    let count = visual_line_count(crate::line_content_str(&text), columns.max(1));
                     starts.push(starts.last().unwrap() + count);
                 }
                 let actual = build_wrap_layout_for_rope(buffer, columns, true);
@@ -639,7 +651,7 @@ mod tests {
         for columns in [0, 1, 4, 8, 17, 80, 1024] {
             for line in rope.lines() {
                 let owned = line.to_string();
-                let display = owned.trim_end_matches(['\n', '\r']);
+                let display = crate::line_content_str(&owned);
                 assert_eq!(
                     visual_line_count_for_rope_line(line, columns),
                     visual_line_count(display, columns.max(1)),

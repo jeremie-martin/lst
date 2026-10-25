@@ -652,7 +652,7 @@ pub(crate) fn toggle_block_comment_request(tab: &EditorTab, open: &str, close: &
         tab.selected_range()
     } else {
         let mut range = line_range_at_char(buffer, tab.cursor_char());
-        while range.end > range.start && matches!(buffer.char(range.end - 1), '\n' | '\r') {
+        while range.end > range.start && crate::document::is_line_break(buffer.char(range.end - 1)) {
             range.end -= 1;
         }
         range
@@ -726,14 +726,14 @@ fn span_range(buffer: &ropey::Rope, first: usize, last: usize) -> Option<(std::o
                 }
                 prefix_newline = true;
             }
-            '\r' => {
+            ch if crate::document::is_line_break(ch) => {
                 start -= 1;
                 prefix_newline = true;
             }
             _ => {}
         }
     }
-    let trailing_newline = end > start && matches!(buffer.char(end - 1), '\n' | '\r');
+    let trailing_newline = end > start && crate::document::is_line_break(buffer.char(end - 1));
     Some((start..end, prefix_newline, trailing_newline))
 }
 fn line_span_without_prefix(buffer: &ropey::Rope, first: usize, last: usize) -> Option<(std::ops::Range<usize>, bool)> {
@@ -748,6 +748,6 @@ fn line_span_without_prefix(buffer: &ropey::Rope, first: usize, last: usize) -> 
     } else {
         buffer.len_chars()
     };
-    let trailing_newline = end > start && matches!(buffer.char(end - 1), '\n' | '\r');
+    let trailing_newline = end > start && crate::document::is_line_break(buffer.char(end - 1));
     Some((start..end, trailing_newline))
 }

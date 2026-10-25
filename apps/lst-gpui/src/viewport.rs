@@ -650,20 +650,12 @@ pub(crate) fn scroll_to_left_within(scroll: &ScrollHandle, left: Pixels, max_lef
 pub(crate) fn reset_scroll(scroll: &ScrollHandle) {
     scroll.set_offset(gpui::point(px(0.0), px(0.0)));
 }
-fn trim_display_line(line: &str) -> &str {
-    line.strip_suffix('\r').unwrap_or(line)
-}
-
 pub(crate) fn line_display_text(buffer: &Rope, line_ix: usize) -> SharedString {
     display_text_of(buffer.line(line_ix))
 }
 
 fn display_text_of(line: ropey::RopeSlice<'_>) -> SharedString {
-    let mut line = line.to_string();
-    while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
-        line.pop();
-    }
-    SharedString::from(line)
+    SharedString::from(lst_editor::line_content(line).to_string())
 }
 
 fn cached_line_display_text(cache: &mut ViewportCache, buffer: &Rope, line_ix: usize) -> SharedString {
@@ -1000,7 +992,7 @@ pub(crate) fn x_for_display_char(
     theme: Theme,
     window: &mut Window,
 ) -> Pixels {
-    let line_text = trim_display_line(line_text);
+    let line_text = lst_editor::line_content_str(line_text);
     let char_offset = char_offset.min(line_text.chars().count());
     if is_plain_monospace_text(line_text) {
         return char_width * char_offset as f32;
@@ -1088,11 +1080,7 @@ fn unwrapped_rope_line_width(
     theme: Theme,
     window: &mut Window,
 ) -> Pixels {
-    let mut end = line.len_chars();
-    while end > 0 && matches!(line.char(end - 1), '\n' | '\r') {
-        end -= 1;
-    }
-    let display = line.slice(..end);
+    let display = lst_editor::line_content(line);
     if display.chunks().all(is_plain_monospace_text) {
         char_width * display.len_chars() as f32
     } else {
@@ -1102,7 +1090,7 @@ fn unwrapped_rope_line_width(
 }
 
 fn unwrapped_text_line_width(line: &str, char_width: Pixels, scale: f32, theme: Theme, window: &mut Window) -> Pixels {
-    let display = line.trim_end_matches(['\n', '\r']);
+    let display = lst_editor::line_content_str(line);
     if is_plain_monospace_text(display) {
         char_width * display.len() as f32
     } else {

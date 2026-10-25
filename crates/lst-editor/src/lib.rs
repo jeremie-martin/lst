@@ -18,7 +18,9 @@ pub mod vim;
 mod vim_engine;
 pub mod wrap;
 pub use command::EditorCommand;
-pub use document::{for_each_rope_line, for_each_rope_line_in, EditKind, LineChange, UndoBoundary};
+pub use document::{
+    for_each_rope_line, for_each_rope_line_in, line_content, line_content_str, EditKind, LineChange, UndoBoundary,
+};
 pub use language::{IndentStyle, Language, LanguageConfig};
 pub use save::{PreparedSave, SaveTextOptions};
 pub use selection::{Position, Selection, SelectionSet, SelectionSetError};
@@ -529,11 +531,7 @@ impl EditorModel {
             return false;
         }
         self.refresh_vim_search_anchor();
-        if forward {
-            self.find.next();
-        } else {
-            self.find.prev();
-        }
+        self.find.step_from_tab(self.tabs.active(), forward);
         let moved = self.move_to_current_find_match();
         // Inside an open Vim prompt, the stepped-to match is what Enter accepts.
         self.record_vim_search_cursor(true);

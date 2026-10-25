@@ -10,6 +10,53 @@ use support::{secs, EditorTestExt, FindChip, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn f3_and_shift_f3_search_from_the_current_caret_and_wrap() -> TestResult {
+    support::run_x11_test("find-caret-relative", |session| {
+        let path = session.seed_file("matches.txt", "foo\ngap\nfoo\ngap\nfoo")?;
+        let mut editor = session.open_file("find-caret-relative", &path)?;
+        editor.keys("<C-home><C-f>foo")?;
+        editor.expect_find_state("foo", 3)?;
+        editor.keys("<esc><C-g>3<enter><f3>")?;
+        editor.expect_cursor_heads(&[(4, 0)])?;
+        editor.keys("<C-g>3<enter><S-f3>")?;
+        editor.expect_cursor_heads(&[(0, 0)])?;
+        editor.keys("<S-f3>")?;
+        editor.expect_cursor_heads(&[(4, 0)])?;
+        editor.keys("<f3>")?;
+        editor.expect_cursor_heads(&[(0, 0)])?;
+        editor.keys("<C-g>3<enter><S-end>")?;
+        editor.expect_cursor_heads(&[(2, 3)])?;
+        editor.keys("<S-f3>")?;
+        editor.expect_cursor_heads(&[(0, 0)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn zero_width_regex_matches_navigate_and_replace_without_stalling() -> TestResult {
+    support::run_x11_test("find-zero-width", |session| {
+        let path = session.seed_file("anchors.txt", "a\nb\nc")?;
+        let mut editor = session.open_file("find-zero-width", &path)?;
+        editor.keys("<C-home><C-f>^|$")?;
+        editor.click_find_chip(FindChip::Regex)?;
+        editor.expect_find_state("^|$", 6)?;
+        editor.keys("<esc><f3>")?;
+        editor.expect_cursor_heads(&[(0, 1)])?;
+        editor.keys("<f3>")?;
+        editor.expect_cursor_heads(&[(1, 0)])?;
+        editor.keys("<S-f3>")?;
+        editor.expect_cursor_heads(&[(0, 1)])?;
+        editor.keys("<C-h><tab>|<C-A-enter>")?;
+        editor.save_then_expect_file(&path, "|a|\n|b|\n|c|")?;
+        editor.keys("<esc><C-z>")?;
+        editor.save_then_expect_file(&path, "a\nb\nc")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn find_navigates_and_replaces_after_every_document_line_separator() -> TestResult {
     support::run_x11_test("find-document-line-separators", |session| {
         let separators = ["\r", "\r\n", "\n", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"];

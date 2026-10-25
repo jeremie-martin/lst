@@ -77,6 +77,17 @@ and undo boundary, mapping the current selections and refreshing Find results.
 Bookmarks follow line-start character anchors through edits; Rope determines
 their resulting logical lines, including CRLF pairs formed at edit boundaries.
 
+Logical line boundaries follow Rope, including CRLF, CR, LF, VT, FF, NEL,
+LS, and PS. The editor's `line_content` helpers exclude the complete terminator
+for cursor bounds, display text, wrapping, and search. The app uses those same
+helpers when measuring and painting rows. Newline insertion preserves the first
+existing line-ending style, with LF as the default for a document without one.
+
+Find navigation searches from the current caret and wraps. An exactly selected
+match supplies its start as the origin, so backward navigation advances past
+that match too. Empty regex matches participate in the ordered index; strict
+next/previous position comparisons ensure progress.
+
 Core collections encode their invariants:
 
 - `TabSet` always contains a tab and owns active-index and tab-ID validity.

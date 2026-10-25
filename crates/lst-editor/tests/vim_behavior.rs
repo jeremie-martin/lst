@@ -9,6 +9,32 @@ use lst_editor::{vim, EditorCommand, EditorEffect, FocusTarget, RevealIntent};
 use support::{run_cursor_cases, run_text_cases, VimHarness};
 
 #[test]
+fn logical_line_terminators_are_boundaries_for_vim_motions_and_edits() {
+    for ending in ["\n", "\r\n", "\r", "\u{b}", "\u{c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+        let text = format!("ab{ending}cd");
+        let mut h = VimHarness::normal_at(&text, 0, 0);
+        h.keys("$");
+        h.expect_cursor(0, 1);
+        h.keys("AX<esc>");
+        h.expect_text(&format!("abX{ending}cd"));
+        h.expect_cursor(0, 2);
+        for keys in ["D", "de", "dw"] {
+            let mut h = VimHarness::normal_at(&text, 0, 0);
+            h.keys(keys);
+            h.expect_text(&format!("{ending}cd"));
+            h.expect_cursor(0, 0);
+        }
+        let mut h = VimHarness::normal_at(&text, 1, 0);
+        h.keys("dd");
+        h.expect_text("ab");
+        h.keys("u");
+        h.expect_text(&text);
+        h.keys("Onew<esc>");
+        h.expect_text(&format!("ab{ending}new{ending}cd"));
+    }
+}
+
+#[test]
 fn modes_state_pending_and_escape_follow_vim_contracts() {
     let mut harness = VimHarness::new("");
     harness.keys("abc<esc>");
