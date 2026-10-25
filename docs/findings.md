@@ -974,17 +974,16 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   Killing the final owner would lose the copied contents; restoring arbitrary prior
   clipboard formats would add a separate desktop-restoration feature. Retain ownership.
 
-- **Optional:** Microphone sample-format support excludes usable device formats. (C12)
-  Review: Unsupported default formats already produce an explicit error. No affected
-  device was demonstrated. Additional sample-format support is a portability extension
-  until such a device establishes applicability.
+- [x] **Implemented (2026-10-26):** Microphone sample-format portability. (C12)
+  Resolution: dispatch all ten formats exposed by the pinned CPAL release through
+  the existing generic capture/downmix path. No new conversion abstraction is needed.
+  Boundary tests cover the new formats' silence conversion. This verifies conversion,
+  not every physical microphone; unknown future formats still return a clear error.
 
-- **Optional:** API credentials are checked after trimming but transmitted untrimmed.
-  (C20)
-  Review: The trim is only an emptiness check, not a promised key normalization step.
-  Whitespace-bearing keys fail authentication/header validation safely. Accepting
-  trimmed keys is optional boundary polish, not a proven violation of the current
-  contract.
+- [x] **Implemented (2026-10-26):** Normalize voice API credentials at the boundary. (C20)
+  Resolution: trim once before emptiness validation and header construction. The real
+  voice workflow's local HTTP server verifies that a whitespace-padded fixture key
+  arrives as the exact trimmed header. Configuration documentation states the behavior.
 
 - **Optional:** Status language labels use debug formatting. (C34)
   Review: Debug formatting is present, but current labels are readable enum names and no

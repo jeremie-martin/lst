@@ -128,7 +128,8 @@ for existing keybindings. It has no default keyboard shortcut.
 
 Voice notes use the default microphone and ElevenLabs Scribe v2 batch
 transcription. Set `ELEVENLABS_API_KEY` in the environment that launches LST;
-LST does not load another project's `.env` file or store the key in settings.
+leading and trailing whitespace is ignored. LST does not load another project's
+`.env` file or store the key in settings.
 `[voice].language` accepts `auto` or a lowercase two/three-letter language code
 (default `en`). `[voice].directory` overrides `~/audio-notes`. These two options
 are edited in TOML and apply to the next recording session.

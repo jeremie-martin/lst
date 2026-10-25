@@ -122,6 +122,13 @@ fn capture(
         cpal::SampleFormat::F32 => build::<f32>(&device, &config, tx, error_tx, level, overflow.clone()),
         cpal::SampleFormat::I16 => build::<i16>(&device, &config, tx, error_tx, level, overflow.clone()),
         cpal::SampleFormat::U16 => build::<u16>(&device, &config, tx, error_tx, level, overflow.clone()),
+        cpal::SampleFormat::I8 => build::<i8>(&device, &config, tx, error_tx, level, overflow.clone()),
+        cpal::SampleFormat::I32 => build::<i32>(&device, &config, tx, error_tx, level, overflow.clone()),
+        cpal::SampleFormat::I64 => build::<i64>(&device, &config, tx, error_tx, level, overflow.clone()),
+        cpal::SampleFormat::U8 => build::<u8>(&device, &config, tx, error_tx, level, overflow.clone()),
+        cpal::SampleFormat::U32 => build::<u32>(&device, &config, tx, error_tx, level, overflow.clone()),
+        cpal::SampleFormat::U64 => build::<u64>(&device, &config, tx, error_tx, level, overflow.clone()),
+        cpal::SampleFormat::F64 => build::<f64>(&device, &config, tx, error_tx, level, overflow.clone()),
         format => return Err(format!("Unsupported microphone sample format: {format}").into()),
     }?;
     let mut file = tempfile::Builder::new()
@@ -400,6 +407,13 @@ mod tests {
         assert_eq!(level, 100);
         assert_eq!(downmix(&[0i16; 8], 1), (vec![0; 8], 0));
         assert_eq!(downmix(&[32768u16; 8], 2), (vec![0; 4], 0));
+        assert_eq!(downmix(&[0i8; 8], 2), (vec![0; 4], 0));
+        assert_eq!(downmix(&[0i32; 8], 2), (vec![0; 4], 0));
+        assert_eq!(downmix(&[0i64; 8], 2), (vec![0; 4], 0));
+        assert_eq!(downmix(&[128u8; 8], 2), (vec![0; 4], 0));
+        assert_eq!(downmix(&[1u32 << 31; 8], 2), (vec![0; 4], 0));
+        assert_eq!(downmix(&[1u64 << 63; 8], 2), (vec![0; 4], 0));
+        assert_eq!(downmix(&[0f64; 8], 2), (vec![0; 4], 0));
         assert_eq!(downmix(&[] as &[f32], 1), (vec![], 0));
     }
 }

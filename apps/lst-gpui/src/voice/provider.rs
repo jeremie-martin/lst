@@ -17,7 +17,8 @@ impl Provider {
     pub fn new(language: &str) -> Result<Self, String> {
         let key = std::env::var("ELEVENLABS_API_KEY")
             .ok()
-            .filter(|s| !s.trim().is_empty())
+            .map(|key| key.trim().to_owned())
+            .filter(|key| !key.is_empty())
             .ok_or("Set ELEVENLABS_API_KEY before starting dictation.")?;
         let language = language.trim();
         if language != "auto" && !(matches!(language.len(), 2 | 3) && language.bytes().all(|b| b.is_ascii_lowercase()))

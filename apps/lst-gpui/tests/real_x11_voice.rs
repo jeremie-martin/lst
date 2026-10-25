@@ -123,7 +123,7 @@ impl Service {
             assert!(text.contains("name=\"no_verbatim\"\r\n\r\ntrue"));
             assert!(text.contains("name=\"tag_audio_events\"\r\n\r\nfalse"));
             assert!(request.windows(4).any(|bytes| bytes == b"RIFF"));
-            assert!(text.contains("xi-api-key: fixture-key"));
+            assert!(text.contains("xi-api-key: fixture-key\r\n"));
         }
     }
 }
@@ -167,7 +167,8 @@ fn configure(
     }
     wav.finalize()?;
     Ok(vec![
-        ("ELEVENLABS_API_KEY".into(), "fixture-key".into()),
+        // Header normalization belongs at the environment boundary.
+        ("ELEVENLABS_API_KEY".into(), "  fixture-key \n".into()),
         ("LST_TEST_VOICE_AUDIO".into(), path.into_os_string()),
         ("LST_TEST_VOICE_PORT".into(), server.port.clone().into()),
     ])
