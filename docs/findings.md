@@ -860,6 +860,14 @@ changing code. Rejection is a valid outcome.
   action. No new missed-action failure was established. Avoid inventing a general
   acknowledgement layer without a reproducer.
 
+- [x] **Implemented (2026-10-26):** An unchanged window-size request can time out
+  waiting for viewport dimensions to change. Discovered during qualification review.
+  Resolution: check actual server geometry before requesting the resize. A no-op
+  requires an available painted viewport; a changed size still requires new painted
+  bounds. The external old-harness reproducer times out on a repeated size. The
+  regression drives three sizes twice each, checks real server and viewport geometry,
+  and edits/saves afterward. Application code and test timeouts are unchanged.
+
 - [x] **Implemented (2026-10-26):** Settings selected-label contrast. (C43)
   Resolution: selected category, segmented choices and the font picker's Selected
   label use the existing text color. Selected-choice contrast rises from 1.88:1 to

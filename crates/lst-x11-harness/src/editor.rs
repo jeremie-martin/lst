@@ -229,6 +229,8 @@ impl<'a> Editor<'a> {
             .read_state()
             .ok()
             .map(|state| (state.seq, state.viewport.bounds_size_px));
+        let current = self.display.conn.get_geometry(self.window.id)?.reply()?;
+        let size_changes = current.width != width || current.height != height;
         let window_id = format!("0x{:x}", self.window.id);
         let geometry = format!("0,-1,-1,{width},{height}");
         let status = Command::new("wmctrl")
@@ -258,9 +260,12 @@ impl<'a> Editor<'a> {
         }
         self.wait_state("editor window resize paint", TEXT_VIEWPORT_TIMEOUT, |state| {
             state.viewport.bounds_size_px.is_some()
-                && before
-                    .as_ref()
-                    .is_none_or(|(seq, bounds)| state.seq > *seq && state.viewport.bounds_size_px != *bounds)
+                // An already-matching size need not produce a configure event
+                // or another paint. Actual resizes still require changed bounds.
+                && (!size_changes
+                    || before
+                        .as_ref()
+                        .is_none_or(|(seq, bounds)| state.seq > *seq && state.viewport.bounds_size_px != *bounds))
         })?;
         Ok(())
     }

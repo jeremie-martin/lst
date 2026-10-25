@@ -21,6 +21,30 @@ use x11rb::{
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
+fn repeated_window_sizes_preserve_geometry_and_allow_later_resizes() -> TestResult {
+    support::run_x11_test("runtime-repeat-resize", |session| {
+        let path = session.seed_file("resize.txt", "text")?;
+        let mut editor = session.open_file("runtime-repeat-resize", &path)?;
+        let (conn, _) = x11rb::connect(None)?;
+        let mut previous = None;
+        for (width, height) in [(900, 600), (640, 480), (1000, 700)] {
+            editor.resize(width, height)?;
+            let bounds = editor.read_state()?.viewport.bounds_size_px;
+            assert_ne!(bounds, previous, "a different width must repaint the viewport");
+            editor.resize(width, height)?;
+            assert_eq!(editor.read_state()?.viewport.bounds_size_px, bounds);
+            let geometry = conn.get_geometry(editor.window_id())?.reply()?;
+            assert_eq!((geometry.width, geometry.height), (width, height));
+            previous = bounds;
+        }
+        editor.keys("<C-end>!")?;
+        editor.save_then_expect_file(&path, "text!")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
 fn non_utf8_file_paths_open_and_save_without_changing_their_bytes() -> TestResult {
     support::run_x11_test("runtime-path-bytes", |session| {
         let path = session.root().join(OsString::from_vec(b"notes-\xff.txt".to_vec()));
