@@ -90,6 +90,11 @@ pub(crate) struct WindowRef {
 }
 
 impl WindowRef {
+    // lst patch: immediate input draws and periodic refresh share visibility.
+    fn is_visible(&self) -> bool {
+        self.is_mapped && !matches!(self.last_visibility, Visibility::FULLY_OBSCURED)
+    }
+
     pub fn handle(&self) -> AnyWindowHandle {
         self.window.state.borrow().handle
     }
@@ -700,6 +705,7 @@ impl X11Client {
                     .borrow()
                     .windows
                     .values()
+                    .filter(|window_ref| window_ref.is_visible())
                     .map(|window_ref| window_ref.window.clone())
                     .collect();
                 for window in windows {
@@ -1009,20 +1015,28 @@ impl X11Client {
                 {
                     drop(state);
                 } else {
-                    let focused_window_id = state.keyboard_focused_window?;
+                    // lst patch: root modifier events are not input for a hidden
+                    // window, even if its focus-out notification was filtered.
+                    // Dispatching them can force a layout before the draw guard.
+                    let focused_window = state
+                        .keyboard_focused_window
+                        .and_then(|id| state.windows.get(&id))
+                        .filter(|window| window.is_visible())
+                        .map(|window| window.window.clone());
                     state.modifiers = modifiers;
                     state.last_modifiers_changed_event = modifiers;
                     state.capslock = capslock;
                     state.last_capslock_changed_event = capslock;
                     drop(state);
 
-                    let focused_window = self.get_window(focused_window_id)?;
-                    focused_window.handle_input(PlatformInput::ModifiersChanged(
-                        ModifiersChangedEvent {
-                            modifiers,
-                            capslock,
-                        },
-                    ));
+                    if let Some(focused_window) = focused_window {
+                        focused_window.handle_input(PlatformInput::ModifiersChanged(
+                            ModifiersChangedEvent {
+                                modifiers,
+                                capslock,
+                            },
+                        ));
+                    }
                 }
 
                 if new_layout != old_layout {
@@ -1572,7 +1586,7 @@ impl LinuxClient for X11Client {
             )
             .map(|cookie| cookie.ignore_error())
             .map_err(|error| anyhow!("Failed to set cursor style: {error:?}"))
-        .log_err();
+            .log_err();
         state.xcb_connection.flush().log_err();
     }
 
@@ -1746,8 +1760,7 @@ impl X11ClientState {
         let Some(window_ref) = self.windows.get_mut(&x_window) else {
             return;
         };
-        let is_visible = window_ref.is_mapped
-            && !matches!(window_ref.last_visibility, Visibility::FULLY_OBSCURED);
+        let is_visible = window_ref.is_visible();
         match (is_visible, window_ref.refresh_state.take()) {
             (false, refresh_state @ Some(RefreshState::Hidden { .. }))
             | (false, refresh_state @ None)
@@ -1775,49 +1788,36 @@ impl X11ClientState {
                 });
             }
             (true, None) => {
-                let Some(screen_resources) = get_reply(
+                // lst patch: absent RandR, failed replies and invalid mode timings
+                // all use the same positive fallback; a visible window always gets
+                // a timer. Retain the fastest valid active CRTC's refresh period.
+                let refresh_rate = get_reply(
                     || "Failed to get screen resources",
                     self.xcb_connection
                         .randr_get_screen_resources_current(x_window),
                 )
-                .log_err() else {
-                    return;
-                };
-
-                // Ideally this would be re-queried when the window changes screens, but there
-                // doesn't seem to be an efficient / straightforward way to do this. Should also be
-                // updated when screen configurations change.
-                // lst patch: tick at the fastest active CRTC's rate rather than
-                // the first CRTC's, so a window on a high-refresh monitor is not
-                // capped by a slower secondary display.
-                let refresh_rate = screen_resources
-                    .crtcs
-                    .iter()
-                    .filter_map(|crtc| {
-                        let crtc_info = self
-                            .xcb_connection
-                            .randr_get_crtc_info(*crtc, x11rb::CURRENT_TIME)
-                            .ok()?
-                            .reply()
-                            .ok()?;
-
-                        screen_resources
-                            .modes
-                            .iter()
-                            .find(|m| m.id == crtc_info.mode)
-                            .map(mode_refresh_rate)
-                    })
-                    .min();
-                let refresh_rate = match refresh_rate {
-                    Some(refresh_rate) => refresh_rate,
-                    None => {
-                        log::error!(
-                            "Failed to get screen mode info from xrandr, \
-                            defaulting to 60hz refresh rate."
-                        );
-                        Duration::from_micros(1_000_000 / 60)
-                    }
-                };
+                .log_err()
+                .and_then(|resources| {
+                    resources
+                        .crtcs
+                        .iter()
+                        .filter_map(|crtc| {
+                            let info = self
+                                .xcb_connection
+                                .randr_get_crtc_info(*crtc, x11rb::CURRENT_TIME)
+                                .ok()?
+                                .reply()
+                                .ok()?;
+                            let mode = resources.modes.iter().find(|mode| mode.id == info.mode)?;
+                            super::refresh::mode_refresh_period(
+                                mode.dot_clock,
+                                mode.htotal,
+                                mode.vtotal,
+                            )
+                        })
+                        .min()
+                })
+                .unwrap_or(IDLE_REFRESH_PERIOD);
 
                 let event_loop_token = self.start_refresh_loop(x_window, refresh_rate);
                 let Some(window_ref) = self.windows.get_mut(&x_window) else {
@@ -1863,8 +1863,8 @@ impl X11ClientState {
                     // re-presentation after input can be running. Otherwise
                     // tick at 60 Hz, the cadence the unpatched client used
                     // on this host, so an idle window costs no extra wakeups.
-                    let recently_active = client.0.borrow().last_event_batch.elapsed()
-                        < Duration::from_millis(1_200);
+                    let recently_active =
+                        client.0.borrow().last_event_batch.elapsed() < Duration::from_millis(1_200);
                     let period = if recently_active {
                         refresh_rate
                     } else {
@@ -1953,19 +1953,6 @@ impl X11ClientState {
         self.cursor_cache.insert(style, cursor);
         cursor
     }
-}
-
-// Adapted from:
-// https://docs.rs/winit/0.29.11/src/winit/platform_impl/linux/x11/monitor.rs.html#103-111
-pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
-    if mode.dot_clock == 0 || mode.htotal == 0 || mode.vtotal == 0 {
-        return Duration::from_millis(16);
-    }
-
-    let millihertz = mode.dot_clock as u64 * 1_000 / (mode.htotal as u64 * mode.vtotal as u64);
-    let micros = 1_000_000_000 / millihertz;
-    log::info!("Refreshing every {}ms", micros / 1_000);
-    Duration::from_micros(micros)
 }
 
 fn fp3232_to_f32(value: xinput::Fp3232) -> f32 {

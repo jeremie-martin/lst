@@ -265,8 +265,16 @@ pub(crate) fn release_modifiers_with_platform(
     Ok(())
 }
 
-pub(crate) fn release_all_modifiers(conn: &RustConnection, root: Window, kc: &Keycodes) -> Result<()> {
-    release_modifiers_with_platform(conn, root, kc, true, true, true, true)
+/// Recover server-side key state left by an interrupted test, including arrows
+/// and either side of every modifier. A killed process cannot run Drop.
+pub(crate) fn release_pressed_keys(conn: &RustConnection, root: Window) -> Result<()> {
+    let pressed = conn.query_keymap()?.reply()?.keys;
+    for code in conn.setup().min_keycode..=conn.setup().max_keycode {
+        if pressed[usize::from(code) / 8] & (1 << (code % 8)) != 0 {
+            key_release(conn, root, code)?;
+        }
+    }
+    Ok(())
 }
 
 /// Press and release a single keycode without flushing. Used inside

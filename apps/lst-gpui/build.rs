@@ -48,28 +48,55 @@ fn emit_repository_inputs(manifest_dir: &Path) {
 
     if let Some(paths) = git_output(&repository_root, &["ls-files"]) {
         for path in paths.lines().filter(|path| !path.is_empty()) {
-            println!("cargo:rerun-if-changed={}", repository_root.join(path).display());
+            let path = repository_root.join(path);
+            // Git's index covers tracked additions/removals. A parent-directory
+            // watch here could include Cargo's own target output and self-trigger.
+            if path.exists() {
+                emit_watch(&path);
+            }
         }
     }
 
-    let Some(git_dir) = git_output(&repository_root, &["rev-parse", "--git-dir"]).map(PathBuf::from) else {
-        return;
-    };
-    let git_dir = if git_dir.is_absolute() {
-        git_dir
-    } else {
-        repository_root.join(git_dir)
-    };
-    println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
-    println!("cargo:rerun-if-changed={}", git_dir.join("index").display());
-
-    if let Some(head_ref) = git_output(manifest_dir, &["symbolic-ref", "-q", "HEAD"]) {
-        println!("cargo:rerun-if-changed={}", git_dir.join(head_ref).display());
+    for name in [
+        Some("HEAD"),
+        Some("index"),
+        git_output(manifest_dir, &["symbolic-ref", "-q", "HEAD"]).as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(path) = git_output(
+            &repository_root,
+            &["rev-parse", "--path-format=absolute", "--git-path", name],
+        ) {
+            emit_watch(Path::new(&path));
+        }
     }
+    // Packed refs live in the common directory, including for linked worktrees.
+    // A loose ref's deletion already triggers a rebuild when it is first packed.
+    if let Some(path) = git_output(
+        &repository_root,
+        &["rev-parse", "--path-format=absolute", "--git-path", "packed-refs"],
+    ) {
+        if Path::new(&path).exists() {
+            emit_watch(Path::new(&path));
+        }
+    }
+}
+
+fn emit_watch(mut path: &Path) {
+    // Cargo considers a missing watched file perpetually changed. Watch its
+    // nearest existing directory instead, so later creation is still observed.
+    while !path.exists() {
+        let Some(parent) = path.parent() else { return };
+        path = parent;
+    }
+    println!("cargo:rerun-if-changed={}", path.display());
 }
 
 fn git_output(manifest_dir: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
+        .arg("--no-optional-locks")
         .arg("-C")
         .arg(manifest_dir)
         .args(args)

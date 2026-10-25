@@ -133,6 +133,7 @@ impl Display {
         let title = opts.title;
         let stderr_log_path = opts.stderr_log_path.map(PathBuf::from);
         let state_trace = opts.state_trace_path.map(StateTraceReader::new);
+        release_stale_keys(self)?;
         let mut child = build_command(self, opts).spawn()?;
         let pid = child.id();
 
@@ -163,7 +164,6 @@ impl Display {
             }
         };
         display.conn.flush()?;
-        release_stale_modifiers(display)?;
 
         Ok(Editor {
             display,
@@ -206,8 +206,8 @@ fn build_command(display: &Display, opts: SpawnOpts<'_>) -> Command {
     command
 }
 
-fn release_stale_modifiers(display: &Display) -> Result<()> {
-    input::release_all_modifiers(&display.conn, display.root, &display.keycodes)?;
+fn release_stale_keys(display: &Display) -> Result<()> {
+    input::release_pressed_keys(&display.conn, display.root)?;
     display.conn.flush()?;
     thread::sleep(input::KEY_PHASE_SETTLE);
     Ok(())
@@ -1192,7 +1192,7 @@ impl<'a> Editor<'a> {
     pub fn quit(mut self, timeout: Duration) -> Result<ExitStatus> {
         let result = (|| -> Result<ExitStatus> {
             self.press(KeyChord::Ctrl(Key::Char('q')))?;
-            release_stale_modifiers(self.display)?;
+            release_stale_keys(self.display)?;
             let mut child = self.child.take().expect("child still present at quit entry");
             match wait_child(&mut child, timeout) {
                 Ok(status) => Ok(status),

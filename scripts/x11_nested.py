@@ -57,6 +57,27 @@ PRIVATE_SESSION_BUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD 
 """
 
 
+@contextlib.contextmanager
+def termination_signals():
+    """Turn termination into stack unwinding so owned process groups are reaped."""
+    signals = (signal.SIGTERM, signal.SIGHUP)
+    previous = {sig: signal.getsignal(sig) for sig in signals}
+
+    def terminate(signum, _frame):
+        # A second signal must not interrupt the cleanup already in progress.
+        for sig in signals:
+            signal.signal(sig, signal.SIG_IGN)
+        raise SystemExit(128 + signum)
+
+    try:
+        for sig in signals:
+            signal.signal(sig, terminate)
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 class NestedDisplayError(RuntimeError):
     pass
 
@@ -148,16 +169,19 @@ def parse_xwininfo(output: str) -> dict[str, int | str]:
 def terminate_process(
     process: subprocess.Popen[object] | None, timeout: float = 3
 ) -> None:
-    if process is None or process.poll() is not None:
+    if process is None:
         return
     with contextlib.suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=timeout)
+        pass
+    # The leader may exit before a descendant (or have exited already). Its
+    # status cannot prove that the owned process group has finished.
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait(timeout=timeout)
 
 
 class NestedDisplay:
@@ -248,9 +272,8 @@ class NestedDisplay:
         )
         try:
             return process.wait()
-        except KeyboardInterrupt:
+        finally:
             terminate_process(process)
-            raise
 
     def _start_session_bus(self) -> None:
         # A private session bus keeps the editor under test away from the
@@ -448,9 +471,10 @@ class NestedDisplay:
         }
 
     def _start_window_manager(self) -> None:
+        run_text(["lwm", "--config", str(LWM_FIXTURE), "--check-config"])
         log = (self.session_dir / "lwm.log").open("wb")
         self.wm = subprocess.Popen(
-            ["lwm", str(LWM_FIXTURE)],
+            ["lwm", "--config", str(LWM_FIXTURE), "--log-target", "stderr"],
             env=self.nested_env(),
             stdout=log,
             stderr=subprocess.STDOUT,

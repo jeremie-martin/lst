@@ -76,7 +76,9 @@ nextest profile:
 
 This needs a host X11 session, Cargo nextest, Python Xlib, and these commands on
 `PATH`: `Xephyr`, `lwm`, `wmctrl`, `xclip`, `xprop`, `xwininfo`, `xdpyinfo`, and
-`setxkbmap`. The required and recommended nextest versions are recorded in
+`setxkbmap`. The runner requires lwm's `--config PATH`, `--check-config` and
+`--log-target stderr` interface; the fixture uses workspace names rather than a
+separate count. It validates the fixture before launching lwm. The required and recommended nextest versions are recorded in
 `.config/nextest.toml`.
 
 Useful forms are:
@@ -101,7 +103,16 @@ DISPLAY=:0 cargo nextest run --profile x11 -p lst-gpui --tests --run-ignored onl
 
 The nested runner also gives the editor a private D-Bus session bus, so a file
 dialog or settings portal never reaches the host desktop; the physical-display
-profile uses the host session.
+profile uses the host session. Physical-display tests take keyboard focus and
+replace CLIPBOARD and PRIMARY; they do not restore the user's prior selections.
+A selection owner must remain alive to serve its last contents. Nested-display
+teardown ends those owners along with the private display.
+
+SIGTERM and SIGHUP unwind both runner entry points through normal cleanup,
+including their command groups, window manager, Xephyr and private D-Bus daemon.
+SIGKILL cannot run cleanup. The harness releases server-reported pressed keys
+before each app launch, recovering arrows and either side of modifiers left by
+an interrupted test.
 
 Both profiles run serially because tests take keyboard focus and move the X11
 pointer. `x11-nested` excludes `real_x11_visual`; `x11` includes it. All test

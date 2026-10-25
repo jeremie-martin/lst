@@ -2,6 +2,8 @@ mod client;
 mod clipboard;
 mod display;
 mod event;
+// lst patch: validate external monitor timings before scheduling refresh.
+mod refresh;
 mod window;
 mod xim_handler;
 

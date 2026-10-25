@@ -15,7 +15,9 @@ Every change is marked `lst patch` in the source.
    shows it was even rendered.
    After handling a batch of X11 input events, every window that the input
    left dirty is now drawn and presented immediately; clean windows and
-   next-frame callbacks are left to the timer as before.
+   next-frame callbacks are left to the timer as before. Immediate draws and
+   global modifier routing now use the same mapped/unobscured predicate as the
+   periodic timer; a stale focused-window reference cannot redraw hidden content.
 2. **Fastest monitor refresh rate, only while active**
    (`src/platform/linux/x11/client.rs`, `src/window.rs`). The refresh timer
    took the mode of the first CRTC, which on a multi-monitor host can be a
@@ -25,7 +27,10 @@ Every change is marked `lst patch` in the source.
    own one-second re-presentation after input, and falls back to a 60 Hz
    tick otherwise so an idle window costs no more wakeups than before. A
    tick with nothing to run, draw, or present also returns before entering
-   an app update.
+   an app update. XRandR timings are converted directly to a positive period in
+   `src/platform/linux/x11/refresh.rs`, avoiding a rounded-zero divisor or timer
+   period. Missing RandR, failed resource queries and unusable modes share the
+   existing 60 Hz fallback, so visible windows always get a refresh timer.
 3. **Parallel system font scan — retired.** Restored upstream
    `FontSystem::new()` and removed the custom fontconfig/directory parser and
    its three direct dependencies. On the current host, font loading fits
@@ -60,7 +65,10 @@ Every change is marked `lst patch` in the source.
    CPU time); every later title change cost a round trip. Both writes are
    now sent and flushed without waiting, as is the cursor-style attribute
    change in `src/platform/linux/x11/client.rs`, which runs during painting
-   whenever the pointer crosses into a region with another cursor.
+   whenever the pointer crosses into a region with another cursor. Creation and
+   updates share one title writer: `_NET_WM_NAME` contains UTF-8, and legacy
+   `WM_NAME` contains Latin-1 with `?` for unrepresentable characters. This also
+   fixes non-ASCII launch titles, which previously bypassed the UTF-8 property.
 
 7. **Per-window glyph tile cache** (`src/window.rs`). `paint_glyph` looked
    up every glyph's raster bounds behind the text system's lock and its

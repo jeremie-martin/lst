@@ -10,7 +10,19 @@
  pub(crate) const XINPUT_ALL_DEVICES: xinput::DeviceId = 0;
 
  /// Value for DeviceId parameters which selects all device groups. Events that
-@@ -171,6 +174,9 @@
+@@ -87,6 +90,11 @@
+ }
+
+ impl WindowRef {
++    // lst patch: immediate input draws and periodic refresh share visibility.
++    fn is_visible(&self) -> bool {
++        self.is_mapped && !matches!(self.last_visibility, Visibility::FULLY_OBSCURED)
++    }
++
+     pub fn handle(&self) -> AnyWindowHandle {
+         self.window.state.borrow().handle
+     }
+@@ -171,6 +179,9 @@
  pub struct X11ClientState {
      pub(crate) loop_handle: LoopHandle<'static, X11Client>,
      pub(crate) event_loop: Option<calloop::EventLoop<'static, X11Client>>,
@@ -20,7 +32,7 @@
 
      pub(crate) last_click: Instant,
      pub(crate) last_mouse_button: Option<MouseButton>,
-@@ -302,6 +308,15 @@
+@@ -302,6 +313,15 @@
 
  impl X11Client {
      pub(crate) fn new() -> anyhow::Result<Self> {
@@ -36,7 +48,7 @@
          let event_loop = EventLoop::try_new()?;
 
          let (common, main_receiver) = LinuxCommon::new(event_loop.get_signal());
-@@ -411,6 +426,13 @@
+@@ -411,6 +431,13 @@
              .to_string();
          let keyboard_layout = LinuxKeyboardLayout::new(layout_name.into());
 
@@ -50,7 +62,7 @@
          let gpu_context = BladeContext::new().context("Unable to init GPU context")?;
 
          let resource_database = x11rb::resource_manager::new_from_default(&xcb_connection)
-@@ -471,6 +493,7 @@
+@@ -471,6 +498,7 @@
          xcb_flush(&xcb_connection);
 
          Ok(X11Client(Rc::new(RefCell::new(X11ClientState {
@@ -58,7 +70,7 @@
              modifiers: Modifiers::default(),
              capslock: Capslock::default(),
              last_modifiers_changed_event: Modifiers::default(),
-@@ -608,6 +631,8 @@
+@@ -608,6 +636,8 @@
              if events.is_empty() && windows_to_refresh.is_empty() {
                  break;
              }
@@ -67,10 +79,12 @@
 
              for window in windows_to_refresh.into_iter() {
                  let mut state = self.0.borrow_mut();
-@@ -665,6 +690,25 @@
+@@ -663,6 +693,26 @@
+                         drop(state);
+                         self.handle_event(event);
                      }
-                 }
-             }
++                }
++            }
 +
 +            // lst patch: draw windows the input just dirtied now, instead of
 +            // waiting up to one period of the refresh timer. Clean windows
@@ -81,6 +95,7 @@
 +                    .borrow()
 +                    .windows
 +                    .values()
++                    .filter(|window_ref| window_ref.is_visible())
 +                    .map(|window_ref| window_ref.window.clone())
 +                    .collect();
 +                for window in windows {
@@ -88,12 +103,47 @@
 +                        only_if_dirty: true,
 +                        ..RequestFrameOptions::default()
 +                    });
-+                }
-+            }
+                 }
+             }
          }
-         Ok(())
-     }
-@@ -1515,16 +1559,19 @@
+@@ -965,20 +1015,28 @@
+                 {
+                     drop(state);
+                 } else {
+-                    let focused_window_id = state.keyboard_focused_window?;
++                    // lst patch: root modifier events are not input for a hidden
++                    // window, even if its focus-out notification was filtered.
++                    // Dispatching them can force a layout before the draw guard.
++                    let focused_window = state
++                        .keyboard_focused_window
++                        .and_then(|id| state.windows.get(&id))
++                        .filter(|window| window.is_visible())
++                        .map(|window| window.window.clone());
+                     state.modifiers = modifiers;
+                     state.last_modifiers_changed_event = modifiers;
+                     state.capslock = capslock;
+                     state.last_capslock_changed_event = capslock;
+                     drop(state);
+
+-                    let focused_window = self.get_window(focused_window_id)?;
+-                    focused_window.handle_input(PlatformInput::ModifiersChanged(
+-                        ModifiersChangedEvent {
+-                            modifiers,
+-                            capslock,
+-                        },
+-                    ));
++                    if let Some(focused_window) = focused_window {
++                        focused_window.handle_input(PlatformInput::ModifiersChanged(
++                            ModifiersChangedEvent {
++                                modifiers,
++                                capslock,
++                            },
++                        ));
++                    }
+                 }
+
+                 if new_layout != old_layout {
+@@ -1515,17 +1573,20 @@
          };
 
          state.cursor_styles.insert(focused_window, style);
@@ -112,16 +162,44 @@
                  },
 -            ),
 -        )
+-        .log_err();
 +            )
 +            .map(|cookie| cookie.ignore_error())
 +            .map_err(|error| anyhow!("Failed to set cursor style: {error:?}"))
-         .log_err();
++            .log_err();
          state.xcb_connection.flush().log_err();
      }
-@@ -1740,21 +1787,29 @@
-                 // Ideally this would be re-queried when the window changes screens, but there
-                 // doesn't seem to be an efficient / straightforward way to do this. Should also be
-                 // updated when screen configurations change.
+
+@@ -1699,8 +1760,7 @@
+         let Some(window_ref) = self.windows.get_mut(&x_window) else {
+             return;
+         };
+-        let is_visible = window_ref.is_mapped
+-            && !matches!(window_ref.last_visibility, Visibility::FULLY_OBSCURED);
++        let is_visible = window_ref.is_visible();
+         match (is_visible, window_ref.refresh_state.take()) {
+             (false, refresh_state @ Some(RefreshState::Hidden { .. }))
+             | (false, refresh_state @ None)
+@@ -1728,41 +1788,36 @@
+                 });
+             }
+             (true, None) => {
+-                let Some(screen_resources) = get_reply(
++                // lst patch: absent RandR, failed replies and invalid mode timings
++                // all use the same positive fallback; a visible window always gets
++                // a timer. Retain the fastest valid active CRTC's refresh period.
++                let refresh_rate = get_reply(
+                     || "Failed to get screen resources",
+                     self.xcb_connection
+                         .randr_get_screen_resources_current(x_window),
+                 )
+-                .log_err() else {
+-                    return;
+-                };
+-
+-                // Ideally this would be re-queried when the window changes screens, but there
+-                // doesn't seem to be an efficient / straightforward way to do this. Should also be
+-                // updated when screen configurations change.
 -                let mode_info = screen_resources.crtcs.iter().find_map(|crtc| {
 -                    let crtc_info = self
 -                        .xcb_connection
@@ -132,37 +210,43 @@
 -
 -                    screen_resources
 -                        .modes
--                        .iter()
++                .log_err()
++                .and_then(|resources| {
++                    resources
++                        .crtcs
+                         .iter()
 -                        .find(|m| m.id == crtc_info.mode)
 -                });
 -                let refresh_rate = match mode_info {
 -                    Some(mode_info) => mode_refresh_rate(mode_info),
-+                // lst patch: tick at the fastest active CRTC's rate rather than
-+                // the first CRTC's, so a window on a high-refresh monitor is not
-+                // capped by a slower secondary display.
-+                let refresh_rate = screen_resources
-+                    .crtcs
-+                    .iter()
-+                    .filter_map(|crtc| {
-+                        let crtc_info = self
-+                            .xcb_connection
-+                            .randr_get_crtc_info(*crtc, x11rb::CURRENT_TIME)
-+                            .ok()?
-+                            .reply()
-+                            .ok()?;
-+
-+                        screen_resources
-+                            .modes
-+                            .iter()
-+                            .find(|m| m.id == crtc_info.mode)
-+                            .map(mode_refresh_rate)
-+                    })
-+                    .min();
-+                let refresh_rate = match refresh_rate {
-+                    Some(refresh_rate) => refresh_rate,
-                     None => {
-                         log::error!(
-                             "Failed to get screen mode info from xrandr, \
+-                    None => {
+-                        log::error!(
+-                            "Failed to get screen mode info from xrandr, \
+-                            defaulting to 60hz refresh rate."
+-                        );
+-                        Duration::from_micros(1_000_000 / 60)
+-                    }
+-                };
++                        .filter_map(|crtc| {
++                            let info = self
++                                .xcb_connection
++                                .randr_get_crtc_info(*crtc, x11rb::CURRENT_TIME)
++                                .ok()?
++                                .reply()
++                                .ok()?;
++                            let mode = resources.modes.iter().find(|mode| mode.id == info.mode)?;
++                            super::refresh::mode_refresh_period(
++                                mode.dot_clock,
++                                mode.htotal,
++                                mode.vtotal,
++                            )
++                        })
++                        .min()
++                })
++                .unwrap_or(IDLE_REFRESH_PERIOD);
+
+                 let event_loop_token = self.start_refresh_loop(x_window, refresh_rate);
+                 let Some(window_ref) = self.windows.get_mut(&x_window) else {
 @@ -1796,16 +1851,30 @@
                              window.refresh(RequestFrameOptions {
                                  require_presentation: expose_event_received,
@@ -179,8 +263,8 @@
 +                    // re-presentation after input can be running. Otherwise
 +                    // tick at 60 Hz, the cadence the unpatched client used
 +                    // on this host, so an idle window costs no extra wakeups.
-+                    let recently_active = client.0.borrow().last_event_batch.elapsed()
-+                        < Duration::from_millis(1_200);
++                    let recently_active =
++                        client.0.borrow().last_event_batch.elapsed() < Duration::from_millis(1_200);
 +                    let period = if recently_active {
 +                        refresh_rate
 +                    } else {
@@ -195,9 +279,87 @@
                      }
                      calloop::timer::TimeoutAction::ToInstant(instant)
                  }
+@@ -1884,19 +1953,6 @@
+         self.cursor_cache.insert(style, cursor);
+         cursor
+     }
+-}
+-
+-// Adapted from:
+-// https://docs.rs/winit/0.29.11/src/winit/platform_impl/linux/x11/monitor.rs.html#103-111
+-pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+-    if mode.dot_clock == 0 || mode.htotal == 0 || mode.vtotal == 0 {
+-        return Duration::from_millis(16);
+-    }
+-
+-    let millihertz = mode.dot_clock as u64 * 1_000 / (mode.htotal as u64 * mode.vtotal as u64);
+-    let micros = 1_000_000_000 / millihertz;
+-    log::info!("Refreshing every {}ms", micros / 1_000);
+-    Duration::from_micros(micros)
+ }
+
+ fn fp3232_to_f32(value: xinput::Fp3232) -> f32 {
 --- a/src/platform/linux/x11/window.rs
 +++ b/src/platform/linux/x11/window.rs
-@@ -1074,13 +1074,15 @@
+@@ -84,6 +84,38 @@
+     }
+ }
+
++// lst patch: EWMH titles are UTF-8; legacy STRING titles are Latin-1. Sending
++// UTF-8 bytes as STRING produces mojibake. Keep one writer for creation/updates
++// and do not wait for property replies on the painting path.
++fn set_window_title(
++    xcb: &XCBConnection,
++    window: xproto::Window,
++    atoms: &XcbAtoms,
++    title: &str,
++) -> anyhow::Result<()> {
++    let legacy: Vec<u8> = title
++        .chars()
++        .map(|ch| u8::try_from(ch as u32).unwrap_or(b'?'))
++        .collect();
++    xcb.change_property8(
++        xproto::PropMode::REPLACE,
++        window,
++        xproto::AtomEnum::WM_NAME,
++        xproto::AtomEnum::STRING,
++        &legacy,
++    )?
++    .ignore_error();
++    xcb.change_property8(
++        xproto::PropMode::REPLACE,
++        window,
++        atoms._NET_WM_NAME,
++        atoms.UTF8_STRING,
++        title.as_bytes(),
++    )?
++    .ignore_error();
++    Ok(())
++}
++
+ fn query_render_extent(
+     xcb: &Rc<XCBConnection>,
+     x_window: xproto::Window,
+@@ -521,16 +553,8 @@
+             if let Some(titlebar) = params.titlebar
+                 && let Some(title) = titlebar.title
+             {
+-                check_reply(
+-                    || "X11 ChangeProperty8 on window title failed.",
+-                    xcb.change_property8(
+-                        xproto::PropMode::REPLACE,
+-                        x_window,
+-                        xproto::AtomEnum::WM_NAME,
+-                        xproto::AtomEnum::STRING,
+-                        title.as_bytes(),
+-                    ),
+-                )?;
++                // lst patch: initial titles use the same UTF-8 properties as updates.
++                set_window_title(&xcb, x_window, &atoms, &title)?;
+             }
+
+             if params.kind == WindowKind::PopUp {
+@@ -1074,13 +1098,15 @@
 
      pub fn set_bounds(&self, bounds: Bounds<i32>) -> anyhow::Result<()> {
          let mut resize_args = None;
@@ -216,7 +378,7 @@
 
              // If it's a resize event (only width/height changed), we ignore `bounds.origin`
              // because it contains wrong values.
-@@ -1091,7 +1093,10 @@
+@@ -1091,7 +1117,10 @@
              }
 
              let gpu_size = query_render_extent(&self.xcb, self.x_window)?;
@@ -228,7 +390,7 @@
                  state.renderer.update_drawable_size(size(
                      DevicePixels(gpu_size.width as i32),
                      DevicePixels(gpu_size.height as i32),
-@@ -1113,7 +1118,7 @@
+@@ -1113,7 +1142,7 @@
              fun(content_size, scale_factor)
          }
 
@@ -237,52 +399,40 @@
              fun();
          }
 
-@@ -1324,29 +1329,33 @@
+@@ -1324,27 +1353,12 @@
      }
 
      fn set_title(&mut self, title: &str) {
 -        check_reply(
 -            || "X11 ChangeProperty8 on WM_NAME failed.",
 -            self.0.xcb.change_property8(
-+        // lst patch: a title change is two property writes; waiting for each
-+        // reply stalled the first frame by 15-30 ms while the server was
-+        // still mapping the window, and every later title change by a round
-+        // trip. Send both and flush; a failed write only affects the title.
-+        self.0
-+            .xcb
-+            .change_property8(
-                 xproto::PropMode::REPLACE,
-                 self.0.x_window,
-                 xproto::AtomEnum::WM_NAME,
-                 xproto::AtomEnum::STRING,
-                 title.as_bytes(),
+-                xproto::PropMode::REPLACE,
+-                self.0.x_window,
+-                xproto::AtomEnum::WM_NAME,
+-                xproto::AtomEnum::STRING,
+-                title.as_bytes(),
 -            ),
 -        )
 -        .log_err();
-+            )
-+            .map(|cookie| cookie.ignore_error())
-+            .log_err();
-
+-
 -        check_reply(
 -            || "X11 ChangeProperty8 on _NET_WM_NAME failed.",
 -            self.0.xcb.change_property8(
-+        self.0
-+            .xcb
-+            .change_property8(
-                 xproto::PropMode::REPLACE,
-                 self.0.x_window,
-                 self.0.state.borrow().atoms._NET_WM_NAME,
-                 self.0.state.borrow().atoms.UTF8_STRING,
-                 title.as_bytes(),
+-                xproto::PropMode::REPLACE,
+-                self.0.x_window,
+-                self.0.state.borrow().atoms._NET_WM_NAME,
+-                self.0.state.borrow().atoms.UTF8_STRING,
+-                title.as_bytes(),
 -            ),
--        )
--        .log_err();
-+            )
-+            .map(|cookie| cookie.ignore_error())
-+            .log_err();
++        // lst patch: share encoding with window creation, without synchronous replies.
++        set_window_title(
++            &self.0.xcb,
++            self.0.x_window,
++            &self.0.state.borrow().atoms,
++            title,
+         )
+         .log_err();
          xcb_flush(&self.0.xcb);
-     }
-
 --- a/src/platform/windows/events.rs
 +++ b/src/platform/windows/events.rs
 @@ -1196,6 +1196,8 @@
@@ -859,3 +1009,67 @@
  fn create_path_intermediate_texture(
      gpu: &gpu::Context,
      format: gpu::TextureFormat,
+--- a/src/platform/linux/x11.rs
++++ b/src/platform/linux/x11.rs
+@@ -2,6 +2,8 @@
+ mod clipboard;
+ mod display;
+ mod event;
++// lst patch: validate external monitor timings before scheduling refresh.
++mod refresh;
+ mod window;
+ mod xim_handler;
+
+--- /dev/null
++++ b/src/platform/linux/x11/refresh.rs
+@@ -0,0 +1,50 @@
++// lst patch: one checked boundary for XRandR mode timings. Invalid input falls
++// back at the caller; zero periods must never reach the timer catch-up loop.
++use std::time::Duration;
++
++pub(super) fn mode_refresh_period(dot_clock: u32, htotal: u16, vtotal: u16) -> Option<Duration> {
++    if dot_clock == 0 || htotal == 0 || vtotal == 0 {
++        return None;
++    }
++    // Compute the period directly: rounding to millihertz first can produce
++    // a zero divisor. The full product fits u64 for XRandR's field widths.
++    let micros = u64::from(htotal) * u64::from(vtotal) * 1_000_000 / u64::from(dot_clock);
++    (micros > 0).then(|| Duration::from_micros(micros))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn normal_modes_preserve_their_refresh_period() {
++        assert_eq!(
++            mode_refresh_period(148_500_000, 2200, 1125),
++            Some(Duration::from_micros(16_666))
++        );
++        assert_eq!(
++            mode_refresh_period(297_000_000, 2200, 1125),
++            Some(Duration::from_micros(8_333))
++        );
++    }
++
++    #[test]
++    fn invalid_and_sub_microsecond_timings_are_rejected() {
++        for fields in [
++            (0, 2200, 1125),
++            (148_500_000, 0, 1125),
++            (148_500_000, 2200, 0),
++            (u32::MAX, 1, 1),
++        ] {
++            assert_eq!(mode_refresh_period(fields.0, fields.1, fields.2), None);
++        }
++    }
++
++    #[test]
++    fn extreme_fields_cannot_overflow_or_round_the_divisor_to_zero() {
++        assert_eq!(
++            mode_refresh_period(1, u16::MAX, u16::MAX),
++            Some(Duration::from_micros(4_294_836_225_000_000))
++        );
++    }
++}

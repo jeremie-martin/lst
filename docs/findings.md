@@ -395,18 +395,27 @@ are noted where they matter. Resolutions name their regression coverage.
 
 ### Rendering, runtime and boundaries
 
-- [ ] **Reproduced:** Non-UTF-8 command-line arguments can panic during launch. (C1)
+- [x] **Implemented (2026-10-25):** Non-UTF-8 command-line arguments can panic during launch. (C1)
+  Resolution: Launch parsing preserves OS-string bytes for paths and validates UTF-8
+  only for textual title options. Real X11 opens, edits and saves a non-UTF-8 filename;
+  boundary tests cover both scratchpad-directory forms and malformed text options.
 
-- [ ] **Reproduced:** The build script repeatedly recompiles the app when its watched
+- [x] **Implemented (2026-10-25):** The build script repeatedly recompiles the app when its watched
   Git ref is packed or belongs to a linked worktree. (C30)
   Review: A throwaway Git/Cargo fixture using current build.rs rebuilds because
   .git/refs/heads/main is missing after pack-refs. The linked-worktree path also joins
   refs under the wrong Git directory; that part was source-checked.
+  Resolution: Git resolves common/worktree metadata paths. Missing ref paths watch
+  their existing parent; optional packed refs are watched only when present. Metadata
+  reads do not refresh the index. Real Git/Cargo fixtures cover packed refs, linked
+  worktrees, detached HEAD, dirty/deleted tracked files and fresh unchanged rebuilds.
 
-- [ ] **Reproduced:** Non-ASCII window titles are displayed incorrectly. (C59)
+- [x] **Implemented (2026-10-25):** Non-ASCII window titles are displayed incorrectly. (C59)
   Review: Real X11 launch with a Japanese/en-dash --title has no _NET_WM_NAME and its
   WM_NAME contains UTF-8 bytes decoded as Latin-1. This affects launch overrides, not
   ordinary title updates.
+  Resolution: Creation and updates share asynchronous title writes: UTF-8 EWMH
+  and Latin-1 legacy fallback. The real-app test reads both properties.
 
 - [x] **Resolved (2026-10-25):** Tab-switch cursor reveal can use old geometry and finish
   while the caret is still off-screen after resizing or zooming another tab. (C61)
@@ -438,12 +447,18 @@ are noted where they matter. Resolutions name their regression coverage.
   resize case requires status columns to match actual wrapped rows without another
   input.
 
-- [ ] **Reproduced:** Post-input drawing can refresh hidden/obscured windows during
+- [x] **Implemented (2026-10-25):** Post-input drawing can refresh hidden/obscured windows during
   activity elsewhere. The verifier rejected the destroyed-window part of this claim.
   (C69)
   Review: On a private Xvfb server, a root modifier event causes another app frame after
   the window is unmapped and its trace is quiet. Window attributes still report
   IsUnmapped.
+  Resolution: Immediate draws and root modifier routing share the periodic timer
+  visibility predicate. A real-app case proves no frames while unmapped despite
+  modifier input, then edits successfully after remapping. A separate Xvfb probe
+  with Composite disabled confirms FULLY_OBSCURED stops frames. Composite-enabled
+  ARGB windows in this environment do not report physical occlusion; this fix uses
+  server-reported visibility and does not introduce compositor occlusion tracking.
 
 - [x] **Resolved (2026-10-25):** Drag autoscroll speed depends on mouse event rate and
   changes when the refresh rate drops after inactivity. (C74)
@@ -460,11 +475,15 @@ are noted where they matter. Resolutions name their regression coverage.
   Review: Real app: type abc, erase it, close/reopen the palette, then Ctrl+Z. The
   screenshot shows a restored a in the newly opened palette.
 
-- [ ] **Source-confirmed:** SIGTERM/SIGHUP can leave nested-display child processes,
+- [x] **Implemented (2026-10-25):** SIGTERM/SIGHUP can leave nested-display child processes,
   including the private D-Bus daemon, running. (23/V13)
   Review: The entry points install no SIGTERM/SIGHUP handlers. Children use separate
   process sessions and normal cleanup is in the context manager/KeyboardInterrupt path,
   which default termination bypasses.
+  Resolution: Both entry points unwind on termination signals and always reap
+  owned command groups, including descendants after leader exit. Tests cover both
+  signals, both command runners and a descendant ignoring SIGTERM. Full nested-runner
+  probes leave no Xephyr, lwm, private D-Bus or command process alive.
 
 - [x] **Implemented (2026-10-25):** Optional startup warm-up can panic through
   infallible thread spawning. (C5)
@@ -521,11 +540,14 @@ are noted where they matter. Resolutions name their regression coverage.
   IDs, clusters, and positions with full shaping for 12:30 and additional mixed tokens.
   Nonuniform tokens still fall back to whole-segment shaping.
 
-- [ ] **Source-confirmed:** Degenerate monitor timing can yield a zero refresh period.
+- [x] **Implemented (2026-10-25):** Degenerate monitor timing can yield a zero refresh period.
   (C77)
   Review: mode_refresh_rate guards zero fields but not a zero computed millihertz or
   microsecond period. Representable mode values can divide by zero or yield a
   nonadvancing timer. No real monitor emitting such data was observed.
+  Resolution: One checked timing conversion computes a positive period directly;
+  unusable inputs select the existing 60 Hz fallback. Three isolated tests cover
+  normal modes, zero/submicrosecond values and maximum field widths.
 
 ## Confirmed costs
 
@@ -727,33 +749,43 @@ not demonstrate the missing observations.
   Resolution: The existing paste-application count is read before either start
   timestamp; both clocks start immediately before Ctrl+V injection.
 
-- [ ] **Source-confirmed:** Killing a test while arrow keys are held can leave them
+- [x] **Implemented (2026-10-25):** Killing a test while arrow keys are held can leave them
   pressed for later tests; existing stale-key cleanup releases only modifiers. (October
   24 H8)
   Review: HeldKeys releases in Drop only; signal termination skips it. The next test
   releases modifiers only, not held arrows. The server-side stuck-key case is relevant
   to teardown even when ordinary tests pass.
+  Resolution: Before spawning the next app, the harness releases every pressed
+  key reported by X11. The real-app test kills an input process holding two arrows
+  and Shift, verifies the stuck state, then verifies recovery and saved editing.
 
-- [ ] **Source-confirmed:** The stock nested runner is incompatible with this host's
+- [x] **Implemented (2026-10-25):** The stock nested runner is incompatible with this host's
   installed lwm command line and configuration schema.
   Review: It passes the fixture as a positional argument; current lwm requires --config.
   The fixture also contains the removed workspaces.count key. The passing audit used an
   external shim and a temporary fixture, not a repository fix. State the supported
   version or resolve compatibility.
+  Resolution: Use --config, --check-config and --log-target stderr with the
+  current workspace-names fixture. Focused acceptance and signal probes pass against
+  installed stock lwm 0.1.0, without the earlier compatibility shim.
 
 ## Claims requiring evidence before implementation
 
-These eight claims remain unconfirmed in the stated sense. Establish an
+The unchecked claims below remain unconfirmed in the stated sense. Establish an
 applicable failure, a required contract or a material measurement error before
 changing code. Rejection is a valid outcome.
 
-- [ ] **Needs evidence:** The claim that every diff hunk needs another lst patch marker
+- [x] **Reviewed (2026-10-25):** The claim that every diff hunk needs another lst patch marker
   is not established by the repository rule. Check logical patch coverage before adding
   vendor comments. (23/CV1, CV5; October 24 K1, K3)
   Review: The reported missing-hunk counts overstate the evidence. Existing field/helper
   comments mark the logical cache/scanner changes, and manifests describe them. Identify
   a logical change without a covering marker before requiring repetitive vendor
   comments.
+  Disposition: Audited all three patches against their pinned crates.io archives.
+  Each applies and reproduces the vendored source exactly (Blade also includes an
+  added license file). Logical changes have source markers and manifest coverage.
+  Repeating a marker on every hunk would add noise without identifying a missing patch.
 
 - [ ] **Needs evidence:** Clipboard preservation checks may finish before a late
   clipboard owner overwrites the selection. This race remains plausible. (23/B3-6)
@@ -790,10 +822,14 @@ changing code. Rejection is a valid outcome.
   starvation under sustained input has not been demonstrated. A scheduling rewrite is
   not yet justified.
 
-- [ ] **Needs evidence:** RandR failure can leave the app without a refresh timer. (C78)
+- [x] **Implemented (2026-10-25):** RandR failure can leave the app without a refresh timer. (C78)
   Review: The screen-resource error branch returns without installing a refresh timer.
   End-to-end reachability/impact after successful window creation was not reproduced;
   keep this as a specific display-failure case to establish.
+  Resolution: Reproduced with RANDR disabled on a private Xvfb server: the mapped,
+  focused baseline stops at two frames; the fixed app continues periodic frames.
+  Resource-query errors, absent extension and unusable modes now share a positive
+  fallback instead of returning without a timer.
 
 ## Optional improvements
 
@@ -879,12 +915,16 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   for the broad cleanup group. Specific shortcut, invalidation and metadata defects
   retain their own entries.
 
-- **Optional:** Physical-display test clipboard sentinel owners are not cleaned up.
+- [x] **Retained and documented (2026-10-25):** Physical-display selection owners
+  retain the last clipboard contents.
   (October 24 H7)
   Review: Physical-display tests intentionally replace selections. The last X11 owner
   must stay alive to serve its clipboard; merely killing it would not restore the user
   clipboard. Nested teardown isolates this. Treat desktop restoration/documentation as
   test hygiene, not a demonstrated growing owner leak.
+  Disposition: Documented physical focus/selection side effects and nested isolation.
+  Killing the final owner would lose the copied contents; restoring arbitrary prior
+  clipboard formats would add a separate desktop-restoration feature. Retain ownership.
 
 - **Optional:** Microphone sample-format support excludes usable device formats. (C12)
   Review: Unsupported default formats already produce an explicit error. No affected
@@ -928,12 +968,39 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   their range expressions would obscure that distinction. The confirmed stale syntax
   defects were subsequently addressed in the syntax and text presentation checkpoint.
 
+## Upstream alignment after the runtime boundary batch
+
+After completing and committing the current runtime boundary batch, review
+upstream updates and carry out justified upgrades autonomously. If no upgrade is
+warranted, record why and continue directly with the remaining findings and
+optional assessments; resume that work after any upgrades as well. The focused
+typing-performance follow-up remains deferred until the foundation work is done.
+
+- [ ] **Upstream review and rebasing:** Review the latest upstream releases and
+  relevant unreleased fixes for the patched dependencies (`gpui`, `blade-graphics`
+  and `tree-sitter`). Prefer staying aligned with maintained upstream versions
+  while preserving the editor's accepted behavior and measured performance.
+
+Compare each local patch with upstream: remove changes already incorporated or
+made unnecessary, adapt and revalidate changes still needed, and record the
+upstream status and removal criterion of every retained patch. Reassess old
+performance justifications on the current app rather than assuming they still
+hold. Evaluate compatible dependency upgrades together where required; do not
+carry obsolete local implementations forward mechanically.
+
+Use the real-app regression and applicable visual lanes, plus controlled
+before/after performance comparisons, to validate each coherent upgrade. Keep
+patch markers, manifests and reproducible patch files synchronized. Record the
+chosen versions and any concrete reason an upgrade must wait. Use that dependency
+baseline when the later typing-performance follow-up is reached.
+
 ## Deferred performance follow-up
 
 Schedule this after the remaining nonoptional findings have been addressed and
 the open optional improvements have each been implemented or given a reasoned
 disposition. Those changes may alter the relevant paths; measure the resulting
-foundation before choosing further optimizations.
+foundation, including the upstream-alignment review above, before choosing
+further optimizations.
 
 - [ ] **Measured regression to revisit:** Reduce avoidable sustained-typing overhead
   introduced by the syntax and text presentation changes in `87729c9`, while
@@ -1101,6 +1168,23 @@ intentional behavior as a defect.
   hold up. (23/V14)
 
 ## Verification and evidence
+
+### Implementation checkpoint: launch and X11 runtime boundaries (2026-10-25)
+
+- Ten runtime/tooling entries implemented or audited; physical clipboard-owner
+  hygiene assessed and documented. The broader acceptance and environment
+  qualification gates remain pending at this implementation checkpoint.
+- Four new real-app cases pass. Fast all-feature tests, harness tests, the ten
+  Python tooling tests and the three standalone vendor timing tests pass; Clippy
+  reports only existing warnings. All three vendor patches apply to the pinned
+  archives and reproduce their source changes.
+- Separate probes verify continued redraw without RandR, server-reported occlusion
+  without Composite, and complete nested-runner teardown on SIGTERM and SIGHUP.
+  The standard hidden-window test uses unmapping because Composite ARGB windows
+  on this server continue to report unobscured visibility beneath another window.
+- Evidence and final broad-gate results will be appended before this batch is
+  considered accepted. Upstream alignment follows this batch; performance
+  optimization remains deferred until the remaining foundation work is assessed.
 
 ### Implementation checkpoint: syntax and text presentation (2026-10-25)
 

@@ -84,6 +84,38 @@ x11rb::atom_manager! {
     }
 }
 
+// lst patch: EWMH titles are UTF-8; legacy STRING titles are Latin-1. Sending
+// UTF-8 bytes as STRING produces mojibake. Keep one writer for creation/updates
+// and do not wait for property replies on the painting path.
+fn set_window_title(
+    xcb: &XCBConnection,
+    window: xproto::Window,
+    atoms: &XcbAtoms,
+    title: &str,
+) -> anyhow::Result<()> {
+    let legacy: Vec<u8> = title
+        .chars()
+        .map(|ch| u8::try_from(ch as u32).unwrap_or(b'?'))
+        .collect();
+    xcb.change_property8(
+        xproto::PropMode::REPLACE,
+        window,
+        xproto::AtomEnum::WM_NAME,
+        xproto::AtomEnum::STRING,
+        &legacy,
+    )?
+    .ignore_error();
+    xcb.change_property8(
+        xproto::PropMode::REPLACE,
+        window,
+        atoms._NET_WM_NAME,
+        atoms.UTF8_STRING,
+        title.as_bytes(),
+    )?
+    .ignore_error();
+    Ok(())
+}
+
 fn query_render_extent(
     xcb: &Rc<XCBConnection>,
     x_window: xproto::Window,
@@ -521,16 +553,8 @@ impl X11WindowState {
             if let Some(titlebar) = params.titlebar
                 && let Some(title) = titlebar.title
             {
-                check_reply(
-                    || "X11 ChangeProperty8 on window title failed.",
-                    xcb.change_property8(
-                        xproto::PropMode::REPLACE,
-                        x_window,
-                        xproto::AtomEnum::WM_NAME,
-                        xproto::AtomEnum::STRING,
-                        title.as_bytes(),
-                    ),
-                )?;
+                // lst patch: initial titles use the same UTF-8 properties as updates.
+                set_window_title(&xcb, x_window, &atoms, &title)?;
             }
 
             if params.kind == WindowKind::PopUp {
@@ -1329,33 +1353,14 @@ impl PlatformWindow for X11Window {
     }
 
     fn set_title(&mut self, title: &str) {
-        // lst patch: a title change is two property writes; waiting for each
-        // reply stalled the first frame by 15-30 ms while the server was
-        // still mapping the window, and every later title change by a round
-        // trip. Send both and flush; a failed write only affects the title.
-        self.0
-            .xcb
-            .change_property8(
-                xproto::PropMode::REPLACE,
-                self.0.x_window,
-                xproto::AtomEnum::WM_NAME,
-                xproto::AtomEnum::STRING,
-                title.as_bytes(),
-            )
-            .map(|cookie| cookie.ignore_error())
-            .log_err();
-
-        self.0
-            .xcb
-            .change_property8(
-                xproto::PropMode::REPLACE,
-                self.0.x_window,
-                self.0.state.borrow().atoms._NET_WM_NAME,
-                self.0.state.borrow().atoms.UTF8_STRING,
-                title.as_bytes(),
-            )
-            .map(|cookie| cookie.ignore_error())
-            .log_err();
+        // lst patch: share encoding with window creation, without synchronous replies.
+        set_window_title(
+            &self.0.xcb,
+            self.0.x_window,
+            &self.0.state.borrow().atoms,
+            title,
+        )
+        .log_err();
         xcb_flush(&self.0.xcb);
     }
 

@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import sys
 
-from x11_nested import NestedDisplay, NestedDisplayError, REPO_ROOT
+from x11_nested import NestedDisplay, NestedDisplayError, REPO_ROOT, termination_signals
 
 
 def parse_args() -> argparse.Namespace:
@@ -119,4 +119,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    with termination_signals():
+        raise SystemExit(main())

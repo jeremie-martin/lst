@@ -23,6 +23,7 @@ from x11_nested import (
     REPO_ROOT,
     host_x11_env,
     terminate_process,
+    termination_signals,
 )
 
 
@@ -90,9 +91,9 @@ def run_logged(
                 print(line, end="", flush=True)
                 log.write(line)
             return process.wait()
-        except KeyboardInterrupt:
+        finally:
             terminate_process(process)
-            raise
+            process.stdout.close()
 
 
 def x11_test_exists(test_binary: str, test_name: str) -> bool:
@@ -567,4 +568,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    with termination_signals():
+        raise SystemExit(main())
