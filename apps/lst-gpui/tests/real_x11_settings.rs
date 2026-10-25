@@ -273,13 +273,16 @@ fn scratchpad_directory_setting_chooses_where_scratchpads_are_created() -> TestR
 #[ignore = "requires a real X11 display plus xclip"]
 fn failed_config_reload_is_reported_and_not_overwritten_by_settings_changes() -> TestResult {
     support::run_x11_test("settings-invalid-reload", |session| {
-        let settings_path = session.seed_settings("version = 1\n[editor]\nword_wrap = true\n")?;
+        let settings_path =
+            session.seed_settings("version = 1\n[editor]\nword_wrap = false\nmulti_cursor_limit = 7\n")?;
         let (mut editor, _path) = session.open("settings-invalid-reload")?;
 
         let broken = "version = 1\n[editor\nword_wrap = false\n";
         fs::write(&settings_path, broken)?;
         editor.wait_state("reload failure reported", secs(5), |record| {
-            record.status_message.starts_with("Settings reload failed") && record.word_wrap_enabled
+            record.status_message.starts_with("Settings reload failed")
+                && !record.word_wrap_enabled
+                && record.editor_polish.multi_cursor_limit == 7
         })?;
 
         editor.keys("<C-,><tab>")?;
@@ -289,6 +292,175 @@ fn failed_config_reload_is_reported_and_not_overwritten_by_settings_changes() ->
         editor.keys("<enter>")?;
         editor.wait_state("input mode changed", secs(2), |record| record.input_mode == "vim")?;
         assert_eq!(fs::read_to_string(&settings_path)?, broken);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn changing_one_setting_preserves_other_values_comments_and_keybindings() -> TestResult {
+    support::run_x11_test("settings-preserve-toml", |session| {
+        let original = "# personal configuration\nversion = 1\n[editor]\nfont_size = 0x11 # hexadecimal\nfont_family = 'TX-02'\nword_wrap = true # wrapping\n[appearance]\ntheme = 'light'\n[keybindings]\n# Optional shortcut:\n# 'file.save' = ['ctrl-s']\n'edit.duplicate_line' = [ 'ctrl-shift-d' ] # keep binding\n";
+        let settings_path = session.seed_settings(original)?;
+        let (mut editor, _) = session.open("preserve-toml")?;
+        editor.keys("<C-,>word wrap<tab><space>")?;
+        editor.wait_state("wrap changed", secs(5), |s| !s.word_wrap_enabled)?;
+        editor.expect_file(
+            &settings_path,
+            &original.replace("word_wrap = true", "word_wrap = false"),
+        )?;
+        Ok(())
+    })
+}
+
+struct RestorePermissions(std::path::PathBuf, fs::Permissions);
+impl Drop for RestorePermissions {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(&self.0, self.1.clone());
+    }
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn failed_reset_keeps_active_settings_and_failed_saves_stay_visible_until_recovery() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    support::run_x11_test("settings-failure-recovery", |session| {
+        let original =
+            "version = 1\n[editor]\nword_wrap = false\nmulti_cursor_limit = 7\n[appearance]\nzoom_level = 1\n";
+        let settings_path = session.seed_settings(original)?;
+        let parent = settings_path.parent().unwrap().to_path_buf();
+        let restore = RestorePermissions(parent.clone(), fs::metadata(&parent)?.permissions());
+        let screenshot = session.root().join("settings-save-error.ppm");
+        let (mut editor, _) = session.open_vim("failure-recovery")?;
+        editor.wait_state("nondefault settings loaded", secs(5), |s| {
+            !s.word_wrap_enabled && s.editor_polish.multi_cursor_limit == 7
+        })?;
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o555))?;
+        editor.keys("<C-,>reset<tab><enter><tab><enter>")?;
+        let failed = editor.wait_state("reset failure", secs(5), |s| {
+            s.status_message.starts_with("Settings were not reset")
+        })?;
+        assert_eq!(failed.editor_polish.multi_cursor_limit, 7);
+        assert_eq!(failed.input_mode, "vim");
+        assert!(!failed.word_wrap_enabled);
+        assert!(failed
+            .settings_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("Settings were not reset")));
+        editor.expect_file(&settings_path, original)?;
+        editor.keys("/<C-a>word wrap<tab><space>")?;
+        editor.wait_state("active but unsaved change", secs(5), |s| {
+            s.word_wrap_enabled
+                && s.settings_error
+                    .as_deref()
+                    .is_some_and(|error| error.starts_with("Changes are active but not saved"))
+        })?;
+        editor.wait_quiet(std::time::Duration::from_millis(150), secs(3))?;
+        editor.screenshot()?.write_ppm(screenshot)?;
+        editor.expect_file(&settings_path, original)?;
+        drop(restore);
+        editor.keys("<space>")?;
+        editor.wait_state("persistence recovers", secs(5), |s| {
+            !s.word_wrap_enabled && s.settings_error.is_none()
+        })?;
+        editor.keys("/<C-a>reset<tab><enter><tab><enter>")?;
+        editor.wait_state("successful reset applies defaults", secs(5), |s| {
+            s.word_wrap_enabled
+                && s.input_mode == "standard"
+                && s.editor_polish.multi_cursor_limit == 10_000
+                && s.settings_error.is_none()
+        })?;
+        editor.expect_file(&settings_path, "version = 1\n")?;
+        editor.keys("<esc>")?;
+        fs::write(&settings_path, "version = 1\n[editor]\ninput_mode = 'vim'\n")?;
+        editor.wait_state("mode reload still works after reset", secs(5), |s| {
+            s.input_mode == "vim"
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn settings_updates_follow_symlinks_and_preserve_private_permissions() -> TestResult {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    support::run_x11_test("settings-symlink", |session| {
+        let settings_path = session.seed_settings("version = 1\n[editor]\nword_wrap = true\n")?;
+        let target = settings_path.with_file_name("personal.toml");
+        fs::rename(&settings_path, &target)?;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))?;
+        symlink("personal.toml", &settings_path)?;
+        let (mut editor, _) = session.open("symlink")?;
+        editor.keys("<C-,>word wrap<tab><space>")?;
+        editor.wait_state("wrap changed", secs(5), |s| !s.word_wrap_enabled)?;
+        editor.expect_file(&target, "version = 1\n[editor]\nword_wrap = false\n")?;
+        assert_eq!(fs::read_link(&settings_path)?, Path::new("personal.toml"));
+        assert_eq!(fs::metadata(&target)?.permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::read_dir(settings_path.parent().unwrap())?.count(), 2);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn home_relative_note_directory_is_resolved_and_invalid_reload_keeps_active_settings() -> TestResult {
+    support::run_x11_test("settings-note-path", |session| {
+        let original = "version = 1\n[editor]\nword_wrap = false\nmulti_cursor_limit = 7\n[files]\nscratchpad_directory = '~/notes' # portable\n";
+        let settings_path = session.seed_settings(original)?;
+        let expected = session.root().join("home/notes");
+        let mut editor = session.open_files("note-path", &[])?;
+        let state = editor.read_state()?;
+        assert_eq!(
+            Path::new(state.active_tab_path.as_deref().unwrap()).parent(),
+            Some(expected.as_path())
+        );
+        editor.keys("<C-,>word wrap<tab><space>")?;
+        editor.wait_state("wrap changed", secs(5), |s| s.word_wrap_enabled)?;
+        editor.expect_file(
+            &settings_path,
+            &original.replace("word_wrap = false", "word_wrap = true"),
+        )?;
+        let invalid = "version = 1\n[files]\nscratchpad_directory = 'relative/notes'\n";
+        fs::write(&settings_path, invalid)?;
+        editor.wait_state("invalid path is visible and old settings survive", secs(5), |s| {
+            s.settings_error
+                .as_deref()
+                .is_some_and(|error| error.contains("must be absolute"))
+                && s.editor_polish.multi_cursor_limit == 7
+                && s.word_wrap_enabled
+        })?;
+        editor.keys("<esc><C-n>")?;
+        let created = editor.wait_state("new note uses last valid directory", secs(5), |s| {
+            s.active_tab_id != state.active_tab_id
+        })?;
+        assert_eq!(
+            Path::new(created.active_tab_path.as_deref().unwrap()).parent(),
+            Some(expected.as_path())
+        );
+        editor.expect_file(&settings_path, invalid)?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn invalid_xdg_config_roots_fall_back_to_the_absolute_home_directory() -> TestResult {
+    use std::ffi::OsStr;
+    support::run_x11_test("settings-xdg-root", |session| {
+        let fallback = session.root().join("home/.config/lst/config.toml");
+        fs::create_dir_all(fallback.parent().unwrap())?;
+        fs::write(
+            &fallback,
+            "version = 1\n[editor]\nword_wrap = false\nmulti_cursor_limit = 9\n",
+        )?;
+        let path = session.seed_file("document.txt", "unchanged")?;
+        for (label, root) in [("empty-xdg", ""), ("relative-xdg", "relative-config")] {
+            let mut editor =
+                session.open_file_with_env(label, &path, &[(OsStr::new("XDG_CONFIG_HOME"), OsStr::new(root))])?;
+            editor.wait_state("fallback settings loaded", secs(5), |s| {
+                !s.word_wrap_enabled && s.editor_polish.multi_cursor_limit == 9
+            })?;
+        }
         Ok(())
     })
 }

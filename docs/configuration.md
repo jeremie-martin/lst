@@ -4,13 +4,27 @@ Open Settings with `Ctrl+,`. Use the category sidebar to browse, or search acros
 all settings and keyboard shortcuts. `Tab` selects a result, arrow keys adjust it,
 and `Esc` returns to the editor. Changes are applied immediately and written to:
 
-- `$XDG_CONFIG_HOME/lst/config.toml` when `XDG_CONFIG_HOME` is set
-- `~/.config/lst/config.toml` otherwise
+- `$XDG_CONFIG_HOME/lst/config.toml` when `XDG_CONFIG_HOME` is an absolute path
+- `$HOME/.config/lst/config.toml` otherwise, if HOME is absolute
+
+Empty or relative configuration roots are ignored. If neither root is usable,
+Settings reports that preferences cannot be persisted.
 
 The file is versioned and reloads while `lst` is running. A valid partial file
 uses defaults for omitted fields. When the application writes settings, it
-preserves unrelated keys and comments. It reports malformed files instead of
-overwriting them; a malformed live update leaves the previous settings active.
+patches only changed values, preserving unrelated keys, comments, keybinding
+examples, and the spelling of unchanged values. Omitted defaults stay omitted.
+It reports malformed files instead of overwriting them; an invalid live update
+leaves the previous settings active.
+
+A failed save leaves your changes active and displays the error in Settings. A
+failed reset leaves the existing preferences active; defaults take effect only
+after their configuration has been saved successfully. A later successful save
+or valid external reload clears the error.
+
+Writes replace the file atomically and preserve its permissions. An existing
+symlink remains a symlink: its target is updated. Dangling links, non-file targets,
+and read-only files produce an error. Failed writes clean up their temporary file.
 
 ## Schema
 
@@ -56,6 +70,11 @@ language = "en"                           # auto or language code
 
 [keybindings]
 ```
+
+Custom `scratchpad_directory` and voice `directory` values must be absolute paths
+or start with `~/`, which expands using an absolute HOME directory. Other shell
+or environment-variable expansion is unsupported. Invalid paths are reported in
+Settings and never resolved relative to the launch working directory.
 
 `autosave = "scratchpads"` never autosaves ordinary files. `autosave = "all"`
 also autosaves ordinary files. Scratchpads always use their timestamped backing

@@ -133,6 +133,7 @@ pub(crate) struct StateTraceRecord {
     pub settings_search_input: Option<TraceInputField>,
     pub settings_value_editor_item: Option<&'static str>,
     pub settings_value_error: Option<String>,
+    pub settings_error: Option<String>,
     pub editor_polish: TraceEditorPolish,
     pub word_wrap_enabled: bool,
     pub close_prompt_file: Option<String>,
@@ -433,6 +434,9 @@ impl LstGpuiApp {
                 _ => None,
             },
             settings_value_error: self.settings_value_error.clone(),
+            settings_error: (self.workspace_surface == WorkspaceSurface::Settings)
+                .then(|| self.settings.error().map(ToOwned::to_owned))
+                .flatten(),
             editor_polish: TraceEditorPolish {
                 match_brackets: match self.settings.settings.editor.match_brackets {
                     crate::settings::MatchBracketsSetting::Never => "never",

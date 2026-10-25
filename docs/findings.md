@@ -89,10 +89,14 @@ with `23/` refer to October 23. Duplicate findings share an item.
   and cached text. At an exact midpoint choose the earlier boundary. Clicking the right
   half of the final character places the caret after it. (C62)
 
-- [ ] **Configuration paths:** expand a leading `~/`, require custom note directories to
-  resolve to absolute paths, and display invalid-path errors in Settings. General shell
-  and environment-variable expansion is unsupported. The destination must be independent
-  of the launch working directory. (C51)
+- [x] **Configuration paths (implemented 2026-10-25):** expand a leading `~/`,
+  require custom note directories to resolve to absolute paths, and display invalid-path
+  errors in Settings. General shell and environment-variable expansion is unsupported.
+  The destination is independent of the launch working directory. (C51)
+  Resolution: deserialization validates both custom note directories before settings
+  enter the app; unchanged `~/` spelling remains in TOML. The real-app note-path case
+  checks creation under HOME, preservation on save, and rejection of an invalid reload
+  while retaining the last valid directory. Boundary tests cover both directory fields.
 
 - [ ] **Prompt results and tab switches:** keep an improvement result available when its
   target document is unchanged, even if another tab is active. Apply must still refuse a
@@ -188,29 +192,47 @@ are noted where they matter. Resolutions name their regression coverage.
 
 ### Settings
 
-- [ ] **Reproduced:** Saving an unrelated setting removes inline comments and value
-  formatting. (C48)
+- [x] **Implemented (2026-10-25):** Saving an unrelated setting removes inline comments
+  and value formatting. (C48)
+  Resolution: the typed settings schema drives a diff applied to the original TOML.
+  Unchanged values keep their spelling; changed values keep key/value comments.
+  `changing_one_setting_preserves_other_values_comments_and_keybindings` checks exact
+  saved bytes; a boundary test also covers inline tables and quoted keys.
 
-- [ ] **Reproduced:** Saving an unrelated setting removes comments and commented-out
-  entries from `[keybindings]`. (C49)
+- [x] **Implemented (2026-10-25):** Saving an unrelated setting removes comments and
+  commented-out entries from `[keybindings]`. (C49)
+  Resolution: settings writes no longer clear/rebuild the table. The same saved-file
+  regression preserves a commented-out shortcut, array formatting, and inline comment.
 
-- [ ] **Reproduced:** A failed reset changes the settings store before writing succeeds,
-  leaving the store, running app and disk inconsistent. (C29)
+- [x] **Implemented (2026-10-25):** A failed reset changes the settings store before
+  writing succeeds, leaving the store, running app and disk inconsistent. (C29)
+  Resolution: reset commits its settings, document, and reload baseline only after a
+  successful write. Reset and reload share application of loaded values; resetting zoom
+  no longer invokes a second save. The real-app failure/recovery case checks nondefault
+  values, failed writes, recovery, reset defaults, and reload after clearing launch overrides.
 
-- [ ] **Source-confirmed:** Save/reset errors are hidden behind Settings while the page
-  says “Saved automatically.” Applied-but-unsaved settings need visible feedback. (C50)
+- [x] **Implemented (2026-10-25):** Save/reset errors are hidden behind Settings while
+  the page says “Saved automatically.” (C50)
+  Resolution: the store owns persistence errors, displayed above the Settings results
+  independently of search and scrolling. Failed-reset confirmation dismisses to reveal
+  the error. Failed ordinary saves explicitly say changes are active but unsaved; a
+  successful save or valid reload clears the error. Covered by failure/recovery and an
+  inspected screenshot; the sidebar no longer claims automatic saving during an error.
 
-- [ ] **Reproduced:** Atomic settings writes mishandle symlinks, permissions or
-  temporary-file cleanup. (C32)
-  Review: Current settings.rs changed a 0600 file to the temporary file default mode,
-  replaced a symlink without updating its target, and left the temp file after a failed
-  rename. Permission/cleanup behavior is actionable; decide intended symlink semantics
-  explicitly before changing it.
+- [x] **Implemented (2026-10-25):** Atomic settings writes mishandle symlinks,
+  permissions or temporary-file cleanup. (C32)
+  Resolution: preserve existing symlinks and update their resolved file targets; reject
+  dangling links, non-files, and read-only files. A same-directory temporary file owns
+  cleanup, preserves existing permissions, syncs its contents, and atomically replaces
+  the target. Real-app coverage checks a relative symlink and mode 0600; boundary tests
+  cover failed writes, dangling links, non-files, read-only targets, and absence of debris.
 
-- [ ] **Reproduced:** Empty/relative `XDG_CONFIG_HOME` is used without validation. (C52)
-  Review: The current config-path helper returns lst/config.toml for empty
-  XDG_CONFIG_HOME and a cwd-relative path for relative values. This is a
-  configuration-boundary issue.
+- [x] **Implemented (2026-10-25):** Empty/relative `XDG_CONFIG_HOME` is used without
+  validation. (C52)
+  Resolution: only absolute configuration roots are accepted. Empty/relative XDG roots
+  fall back to an absolute HOME; otherwise persistence is unavailable with a visible
+  error. The real app loads distinct nondefault fallback settings for both invalid XDG
+  cases; boundary tests include unusable HOME and a valid XDG root.
 
 ### Voice
 
@@ -485,8 +507,10 @@ not demonstrate the missing observations.
 - [ ] **Source-confirmed:** Multi-cursor goal tests give every cursor the same goal, so
   they cannot prove independent preferred columns. (23/B3-2)
 
-- [ ] **Source-confirmed:** Malformed-settings reload coverage uses default values and
-  cannot prove that nondefault active settings survive. (23/B3-3)
+- [x] **Implemented (2026-10-25):** Malformed-settings reload coverage uses default
+  values and cannot prove that nondefault active settings survive. (23/B3-3)
+  Resolution: the malformed-reload acceptance case now starts with wrapping disabled
+  and a cursor limit of seven, and requires both to survive the rejected reload.
 
 - [ ] **Source-confirmed:** The below-document click test clicks far right of the last
   short line, making two different hit-test behaviors indistinguishable. (23/B3-4)
@@ -933,6 +957,34 @@ intentional behavior as a defect.
   hold up. (23/V14)
 
 ## Verification and evidence
+
+### Implementation checkpoint: settings persistence (2026-10-25)
+
+- Closed configuration paths (C51), the six Settings findings (C48, C49, C29,
+  C50, C32, C52), and malformed-reload coverage (23/B3-3): eight checklist entries.
+  The remaining checklist stays in scope.
+- The typed settings schema now drives targeted TOML updates instead of a second
+  hand-maintained assignment list. Saves preserve unchanged formatting and comments;
+  omitted defaults stay omitted. Reset and reload share application of settings, and
+  reset commits once before applying defaults.
+- Five added real-app regressions fail against the preserved pre-change binary.
+  All 14 focused settings tests passed. The final reset/reload refactor passed the
+  strengthened failure/recovery case with nondefault zoom, a launch override, and
+  subsequent external reload. Full-suite results below validate the final code.
+- The malformed-reload case now starts with nondefault wrap and cursor-limit values.
+  Boundary tests cover inline-table preservation, path resolution, symlinks, mode
+  preservation, read-only and non-file targets, dangling links, and temporary cleanup.
+- The inspected screenshot shows the active preference and visible unsaved-change
+  error together. The error remains above the results regardless of search/scrolling;
+  the sidebar does not claim saving succeeded. No visual baseline was replaced.
+- `cargo test --all-features`: 200 passed, zero failed. The harness's own suite passed
+  all 32 tests. Formatting, whitespace checks, and `cargo clippy --all-targets
+  --all-features` passed with existing warnings only.
+- Full serial nested X11 lane: 306 passed, zero failed, with no retries. Production
+  code stayed unchanged throughout the 2,670-second run. The run used the same
+  temporary newer-lwm compatibility shim and software Vulkan as earlier checkpoints. Physical-display visual tests are outside this run; runner
+  compatibility remains open. Logs, baseline results, screenshot, and the final patch
+  are retained externally under `foundation-settings-2026-10-25`.
 
 ### Implementation checkpoint: captured Find scope (2026-10-25)
 

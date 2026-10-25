@@ -1,10 +1,11 @@
 use serde::{de, Deserialize, Deserializer, Serialize};
 use std::{
     collections::BTreeMap,
-    env, fs, io,
+    env, fs,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
-use toml_edit::{value, Array, DocumentMut, Item, Table};
+use toml_edit::{value, DocumentMut, Item, TableLike};
 
 pub(crate) const CONFIG_VERSION: u32 = 1;
 
@@ -175,6 +176,7 @@ pub(crate) struct FileSettings {
     pub(crate) autosave: AutosaveMode,
     pub(crate) trim_trailing_whitespace: bool,
     pub(crate) ensure_final_newline: bool,
+    #[serde(deserialize_with = "deserialize_directory")]
     pub(crate) scratchpad_directory: Option<PathBuf>,
 }
 
@@ -193,6 +195,7 @@ impl Default for FileSettings {
 #[serde(default)]
 pub(crate) struct VoiceSettings {
     pub(crate) language: String,
+    #[serde(deserialize_with = "deserialize_directory")]
     pub(crate) directory: Option<PathBuf>,
 }
 
@@ -234,6 +237,7 @@ pub(crate) struct SettingsStore {
     path: Option<PathBuf>,
     document: DocumentMut,
     parse_error: Option<String>,
+    write_error: Option<String>,
     /// The config file content as last read from or written to disk. Reload
     /// detection compares against this — not `document.to_string()`, which
     /// never matches for content that does not round-trip (parse errors,
@@ -251,9 +255,10 @@ impl SettingsStore {
         let Some(path_ref) = path.clone() else {
             return Self {
                 path,
+                write_error: None,
                 document: DocumentMut::new(),
                 parse_error: Some(
-                    "HOME and XDG_CONFIG_HOME are unavailable; settings cannot be persisted.".to_string(),
+                    "Neither HOME nor XDG_CONFIG_HOME provides an absolute settings directory.".to_string(),
                 ),
                 source: String::new(),
                 settings: AppSettings::default(),
@@ -265,6 +270,7 @@ impl SettingsStore {
             Err(error) => {
                 return Self {
                     path,
+                    write_error: None,
                     document: DocumentMut::new(),
                     parse_error: Some(format!("Failed to read {}: {error}", path_ref.display())),
                     source: String::new(),
@@ -275,6 +281,7 @@ impl SettingsStore {
         if source.trim().is_empty() {
             return Self {
                 path,
+                write_error: None,
                 document: DocumentMut::new(),
                 parse_error: None,
                 source,
@@ -287,6 +294,7 @@ impl SettingsStore {
         ) {
             (Ok(document), Ok(settings)) if settings.version == CONFIG_VERSION => Self {
                 path,
+                write_error: None,
                 document,
                 parse_error: None,
                 source,
@@ -294,6 +302,7 @@ impl SettingsStore {
             },
             (Ok(document), Ok(settings)) => Self {
                 path,
+                write_error: None,
                 document,
                 parse_error: Some(format!(
                     "Unsupported settings version {}; expected {}.",
@@ -304,6 +313,7 @@ impl SettingsStore {
             },
             (Ok(document), Err(error)) => Self {
                 path,
+                write_error: None,
                 document,
                 parse_error: Some(format!("Invalid settings in {}: {error}", path_ref.display())),
                 source,
@@ -311,6 +321,7 @@ impl SettingsStore {
             },
             (Err(error), _) => Self {
                 path,
+                write_error: None,
                 document: DocumentMut::new(),
                 parse_error: Some(format!("Invalid settings in {}: {error}", path_ref.display())),
                 source,
@@ -324,10 +335,19 @@ impl SettingsStore {
     }
 
     pub(crate) fn error(&self) -> Option<&str> {
-        self.parse_error.as_deref()
+        self.write_error.as_deref().or(self.parse_error.as_deref())
     }
 
     pub(crate) fn save(&mut self) -> io::Result<()> {
+        let result = self.save_current();
+        self.write_error = result
+            .as_ref()
+            .err()
+            .map(|error| format!("Changes are active but not saved: {error}"));
+        result
+    }
+
+    fn save_current(&mut self) -> io::Result<()> {
         if let Some(error) = &self.parse_error {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -349,29 +369,41 @@ impl SettingsStore {
                 )));
             }
         }
-        self.write()
+        let settings = self.settings.clone().normalized();
+        let mut document = self.document.clone();
+        write_settings_to_document(&mut document, &settings)?;
+        self.commit(settings, document)
     }
 
-    /// Writes the current settings over the file, whatever it holds now.
-    fn write(&mut self) -> io::Result<()> {
-        self.settings = self.settings.clone().normalized();
-        write_settings_to_document(&mut self.document, &self.settings);
+    /// Only a successful disk replacement commits the persisted state.
+    fn commit(&mut self, settings: AppSettings, document: DocumentMut) -> io::Result<()> {
         let path = self
             .path
             .as_deref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "settings path unavailable"))?;
-        let serialized = self.document.to_string();
+        let serialized = document.to_string();
         atomic_write(path, serialized.as_bytes())?;
+        self.settings = settings;
+        self.document = document;
         self.source = serialized;
+        self.parse_error = None;
         Ok(())
     }
 
     pub(crate) fn reset(&mut self) -> io::Result<()> {
-        self.settings = AppSettings::default();
-        self.document = DocumentMut::new();
-        self.parse_error = None;
-        // Resetting is an explicit request to replace the file.
-        self.write()
+        // Reset explicitly replaces the file, but failure leaves active values
+        // and the previous parse/reload state intact.
+        let result = (|| {
+            let settings = AppSettings::default();
+            let mut document = DocumentMut::new();
+            write_settings_to_document(&mut document, &settings)?;
+            self.commit(settings, document)
+        })();
+        self.write_error = result
+            .as_ref()
+            .err()
+            .map(|error| format!("Settings were not reset: {error}"));
+        result
     }
 
     pub(crate) fn reloaded_if_changed(&self) -> Option<Self> {
@@ -391,6 +423,7 @@ impl SettingsStore {
     pub(crate) fn mark_source_seen(&mut self, reloaded: Self) {
         self.source = reloaded.source;
         self.parse_error = reloaded.parse_error;
+        self.write_error = None;
     }
 }
 
@@ -408,97 +441,137 @@ impl AppSettings {
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Some(config_home) = env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(config_home).join("lst").join("config.toml"));
-    }
-    env::var_os("HOME").map(|home| PathBuf::from(home).join(".config").join("lst").join("config.toml"))
-}
-
-fn write_settings_to_document(document: &mut DocumentMut, settings: &AppSettings) {
-    document["version"] = value(i64::from(CONFIG_VERSION));
-    ensure_table(document, "editor");
-    document["editor"]["input_mode"] = enum_value(settings.editor.input_mode);
-    document["editor"]["word_wrap"] = value(settings.editor.word_wrap);
-    document["editor"]["line_numbers"] = enum_value(settings.editor.line_numbers);
-    document["editor"]["cursor_blink"] = value(settings.editor.cursor_blink);
-    document["editor"]["smooth_cursor"] = value(settings.editor.smooth_cursor);
-    document["editor"]["font_family"] = value(&settings.editor.font_family);
-    document["editor"]["font_size"] = value(i64::from(settings.editor.font_size));
-    document["editor"]["match_brackets"] = enum_value(settings.editor.match_brackets);
-    document["editor"]["bracket_pair_colorization"] = value(settings.editor.bracket_pair_colorization);
-    document["editor"]["bracket_pair_guides"] = enum_value(settings.editor.bracket_pair_guides);
-    document["editor"]["bracket_pair_horizontal_guides"] = enum_value(settings.editor.bracket_pair_horizontal_guides);
-    document["editor"]["indent_guides"] = value(settings.editor.indent_guides);
-    document["editor"]["highlight_active_indent_guide"] = value(settings.editor.highlight_active_indent_guide);
-    document["editor"]["render_whitespace"] = enum_value(settings.editor.render_whitespace);
-    document["editor"]["render_control_characters"] = value(settings.editor.render_control_characters);
-    let mut rulers = Array::new();
-    for &column in settings.editor.rulers.as_slice() {
-        rulers.push(i64::from(column));
-    }
-    document["editor"]["rulers"] = Item::Value(rulers.into());
-    document["editor"]["smart_select_subwords"] = value(settings.editor.smart_select_subwords);
-    document["editor"]["smart_select_include_whitespace"] = value(settings.editor.smart_select_include_whitespace);
-    document["editor"]["multi_cursor_limit"] =
-        value(i64::try_from(settings.editor.multi_cursor_limit).unwrap_or(10_000));
-
-    ensure_table(document, "appearance");
-    document["appearance"]["theme"] = enum_value(settings.appearance.theme);
-    document["appearance"]["zoom_level"] = value(i64::from(settings.appearance.zoom_level));
-
-    ensure_table(document, "files");
-    document["files"]["autosave"] = enum_value(settings.files.autosave);
-    document["files"]["trim_trailing_whitespace"] = value(settings.files.trim_trailing_whitespace);
-    document["files"]["ensure_final_newline"] = value(settings.files.ensure_final_newline);
-    if let Some(path) = &settings.files.scratchpad_directory {
-        document["files"]["scratchpad_directory"] = value(path.to_string_lossy().as_ref());
-    } else if let Some(files) = document.get_mut("files").and_then(Item::as_table_mut) {
-        files.remove("scratchpad_directory");
-    }
-
-    ensure_table(document, "voice");
-    document["voice"]["language"] = value(&settings.voice.language);
-    if let Some(path) = &settings.voice.directory {
-        document["voice"]["directory"] = value(path.to_string_lossy().as_ref());
-    } else if let Some(table) = document["voice"].as_table_mut() {
-        table.remove("directory");
-    }
-
-    ensure_table(document, "keybindings");
-    let table = document["keybindings"].as_table_mut().expect("keybindings is a table");
-    table.clear();
-    for (command, bindings) in &settings.keybindings {
-        let mut array = Array::new();
-        for binding in bindings {
-            array.push(binding.as_str());
-        }
-        table.insert(command, Item::Value(array.into()));
-    }
-}
-
-/// Writes a setting enum under the same name serde reads it by.
-fn enum_value(setting: impl Serialize) -> Item {
-    Item::Value(
-        setting
-            .serialize(toml_edit::ser::ValueSerializer::new())
-            .expect("setting enums serialize to strings"),
+    config_path_from(
+        env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        env::var_os("HOME").map(PathBuf::from),
     )
 }
 
-fn ensure_table(document: &mut DocumentMut, key: &str) {
-    if !document.get(key).is_some_and(Item::is_table) {
-        document[key] = Item::Table(Table::new());
+fn config_path_from(config_home: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+    config_home
+        .filter(|path| path.is_absolute())
+        .or_else(|| home.filter(|path| path.is_absolute()).map(|path| path.join(".config")))
+        .map(|path| path.join("lst/config.toml"))
+}
+
+fn deserialize_directory<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<PathBuf>, D::Error> {
+    Option::<PathBuf>::deserialize(deserializer)?
+        .map(|path| {
+            resolve_directory(path, env::var_os("HOME").map(PathBuf::from).as_deref()).map_err(de::Error::custom)
+        })
+        .transpose()
+}
+
+fn resolve_directory(path: PathBuf, home: Option<&Path>) -> Result<PathBuf, String> {
+    let path = if path.as_os_str().as_encoded_bytes().starts_with(b"~/") {
+        home.filter(|home| home.is_absolute())
+            .ok_or("Cannot expand ~/ without an absolute HOME directory")?
+            .join(path.strip_prefix("~").expect("leading ~/"))
+    } else {
+        path
+    };
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err("Note directories must be absolute paths or start with ~/".into())
+    }
+}
+
+fn write_settings_to_document(document: &mut DocumentMut, settings: &AppSettings) -> io::Result<()> {
+    // Compare typed values, not their spelling in TOML. This retains quotes,
+    // numeric formats, comments, and ~/ paths for every unchanged setting.
+    let previous = toml_edit::de::from_document::<AppSettings>(document.clone())
+        .unwrap_or_default()
+        .normalized();
+    let before = toml_edit::ser::to_document(&previous).map_err(io::Error::other)?;
+    let after = toml_edit::ser::to_document(settings).map_err(io::Error::other)?;
+    patch_settings_table(document.as_table_mut(), before.as_table(), after.as_table());
+    if !document.contains_key("version") {
+        document["version"] = value(i64::from(CONFIG_VERSION));
+    }
+    Ok(())
+}
+
+fn patch_settings_table(target: &mut dyn TableLike, before: &dyn TableLike, after: &dyn TableLike) {
+    // Only remove fields belonging to the typed settings schema. Unknown user
+    // keys and comments remain untouched; reset starts with a fresh document.
+    for (key, _) in before.iter() {
+        if !after.contains_key(key) {
+            target.remove(key);
+        }
+    }
+    for (key, next) in after.iter() {
+        let previous = before.get(key);
+        if previous.is_some_and(|previous| previous.to_string() == next.to_string()) {
+            continue;
+        }
+        if let Some(next_table) = next.as_table_like() {
+            if !target.get(key).is_some_and(|item| item.is_table_like()) {
+                target.insert(key, Item::Table(toml_edit::Table::new()));
+            }
+            let empty = toml_edit::Table::new();
+            patch_settings_table(
+                target.get_mut(key).unwrap().as_table_like_mut().unwrap(),
+                previous.and_then(Item::as_table_like).unwrap_or(&empty),
+                next_table,
+            );
+        } else {
+            let mut next = next.clone();
+            if let (Some(old), Some(new)) = (target.get(key).and_then(Item::as_value), next.as_value_mut()) {
+                *new.decor_mut() = old.decor().clone();
+            }
+            if let Some(slot) = target.get_mut(key) {
+                *slot = next;
+            } else {
+                target.insert(key, next);
+            }
+        }
     }
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let parent = path
+    // Existing symlinks keep their identity; a dangling link is an error rather
+    // than permission to replace the link or guess a missing chain's target.
+    let target = match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(path)?,
+        Ok(_) => path.to_path_buf(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(error) => return Err(error),
+    };
+    let permissions = match fs::metadata(&target) {
+        Ok(meta) if !meta.is_file() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "settings target is not a regular file",
+            ))
+        }
+        Ok(meta) if meta.permissions().readonly() => {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "settings file is read-only",
+            ))
+        }
+        Ok(meta) => Some(meta.permissions()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let parent = target
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "settings path has no parent"))?;
     fs::create_dir_all(parent)?;
-    let temp = parent.join(format!(".config.toml.tmp-{}", std::process::id()));
-    fs::write(&temp, bytes)?;
-    fs::rename(temp, path)
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("Cannot write in {}: {}", parent.display(), error.kind()),
+        )
+    })?;
+    temp.write_all(bytes)?;
+    if let Some(permissions) = permissions {
+        temp.as_file().set_permissions(permissions)?;
+    }
+    temp.as_file().sync_all()?;
+    temp.persist(&target).map_err(|error| error.error)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -511,8 +584,74 @@ mod tests {
 
     fn written(settings: &AppSettings) -> String {
         let mut document = DocumentMut::new();
-        write_settings_to_document(&mut document, settings);
+        write_settings_to_document(&mut document, settings).unwrap();
         document.to_string()
+    }
+
+    #[test]
+    fn configuration_roots_and_note_paths_cannot_depend_on_the_working_directory() {
+        for root in [None, Some(PathBuf::new()), Some("relative".into())] {
+            assert_eq!(
+                config_path_from(root, Some("/home/person".into())),
+                Some("/home/person/.config/lst/config.toml".into())
+            );
+        }
+        assert_eq!(
+            config_path_from(Some("/config".into()), Some("relative".into())),
+            Some("/config/lst/config.toml".into())
+        );
+        assert!(config_path_from(None, Some("relative".into())).is_none());
+        let home = Path::new("/home/person");
+        assert_eq!(
+            resolve_directory("~/notes".into(), Some(home)).unwrap(),
+            home.join("notes")
+        );
+        assert_eq!(
+            resolve_directory("/notes".into(), None).unwrap(),
+            PathBuf::from("/notes")
+        );
+        for invalid in ["", "notes", "$HOME/notes", "~someone/notes"] {
+            assert!(resolve_directory(invalid.into(), Some(home)).is_err(), "{invalid}");
+        }
+        assert!(resolve_directory("~/notes".into(), None).is_err());
+        for section in ["[files]\nscratchpad_directory", "[voice]\ndirectory"] {
+            assert!(parse(&format!("{section} = 'relative'\n")).is_err());
+        }
+    }
+
+    #[test]
+    fn settings_replacement_preserves_symlinks_modes_and_leaves_no_temporary_files() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("actual.toml");
+        let link = dir.path().join("config.toml");
+        fs::write(&target, "old").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        symlink("actual.toml", &link).unwrap();
+        atomic_write(&link, b"new").unwrap();
+        assert_eq!(fs::read_link(&link).unwrap(), PathBuf::from("actual.toml"));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+        assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o600);
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(atomic_write(&link, b"read-only").is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+        fs::remove_file(&target).unwrap();
+        assert!(atomic_write(&link, b"missing").is_err());
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        fs::create_dir(&target).unwrap();
+        assert!(atomic_write(&target, b"directory").is_err());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn changes_preserve_inline_tables_key_spelling_and_value_comments() {
+        let original = "version = 1\neditor = { word_wrap = true, font_size = 0x11 } # editor\n[keybindings]\n# disabled example\n# 'file.save' = ['ctrl-s']\n'edit.duplicate_line' = [ 'ctrl-shift-d' ] # binding\n";
+        let mut document: DocumentMut = original.parse().unwrap();
+        let mut settings = parse(original).unwrap();
+        settings.editor.word_wrap = false;
+        write_settings_to_document(&mut document, &settings).unwrap();
+        let output = document.to_string();
+        assert_eq!(output, original.replace("word_wrap = true", "word_wrap = false"));
     }
 
     #[test]
@@ -563,7 +702,7 @@ mod tests {
         let mut document: DocumentMut = written(&settings).parse().unwrap();
         settings.files.scratchpad_directory = None;
         settings.voice.directory = None;
-        write_settings_to_document(&mut document, &settings);
+        write_settings_to_document(&mut document, &settings).unwrap();
         assert_eq!(parse(&document.to_string()).unwrap(), settings);
     }
 
@@ -621,7 +760,7 @@ mod tests {
         let mut document: DocumentMut = "# keep me\ncustom = 'value'\n[editor]\n# font comment\nfont_size = 12\n"
             .parse()
             .unwrap();
-        write_settings_to_document(&mut document, &AppSettings::default());
+        write_settings_to_document(&mut document, &AppSettings::default()).unwrap();
         let output = document.to_string();
         assert!(output.contains("# keep me"));
         assert!(output.contains("custom = 'value'"));

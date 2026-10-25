@@ -58,6 +58,8 @@ pub struct StateTraceRecord {
     #[serde(default)]
     pub settings_value_error: Option<String>,
     #[serde(default)]
+    pub settings_error: Option<String>,
+    #[serde(default)]
     pub editor_polish: TraceEditorPolish,
     #[serde(default)]
     pub word_wrap_enabled: bool,

@@ -139,8 +139,12 @@ than scattering fallback checks through the core.
 - `runtime.rs` and `runtime/` execute file, autosave, clipboard, close, and quit
   workflows. Saves use file stamps and generation tickets so stale or
   conflicting writes cannot silently replace a newer version.
-- `settings.rs` owns the versioned TOML boundary; `recent.rs` owns recent and
-  recently closed file state.
+- `settings.rs` owns the versioned TOML boundary, path validation, and persistence
+  errors. Typed settings define the schema; saves patch changed values into the
+  original TOML without rebuilding unrelated fields. The persisted document and
+  reload baseline change only after a successful atomic write. Ordinary preference
+  changes remain active on save failure; reset applies defaults only after success.
+  `recent.rs` owns recent and recently closed file state.
 - `syntax/` owns tree-sitter parsers, highlighting, injections, and structural
   snapshots. Parser-derived ranges cross into `lst-editor` only as validated
   character-coordinate types.

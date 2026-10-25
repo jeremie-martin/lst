@@ -366,9 +366,15 @@ impl LstGpuiApp {
             cx.notify();
             return;
         }
-        let values = settings.settings.clone();
         self.settings_generation = self.settings_generation.wrapping_add(1);
         self.settings = settings;
+        self.apply_current_settings(cx);
+        self.cleanup_message = Some("Settings reloaded.".to_string());
+    }
+
+    /// Apply a loaded or successfully reset configuration without writing it again.
+    fn apply_current_settings(&mut self, cx: &mut Context<Self>) {
+        let values = self.settings.settings.clone();
         self.scratchpad_dir = self
             .scratchpad_dir_cli_override
             .clone()
@@ -398,7 +404,6 @@ impl LstGpuiApp {
             cx,
         );
         self.reload_keybindings(cx);
-        self.cleanup_message = Some("Settings reloaded.".to_string());
         cx.refresh_windows();
     }
 
@@ -632,28 +637,16 @@ impl LstGpuiApp {
         self.settings_generation = self.settings_generation.wrapping_add(1);
         if let Err(error) = self.settings.reset() {
             self.cleanup_message = Some(format!("Settings were not reset: {error}"));
+            self.dismiss_settings_overlay(window, cx);
             cx.notify();
             return;
         }
-        let settings = self.settings.settings.clone();
         // Reset returns to the defaults, launch overrides included.
         self.scratchpad_dir_cli_override = None;
-        self.scratchpad_dir = settings.files.scratchpad_directory.clone();
-        typography::set_primary_font_family(&settings.editor.font_family);
-        metrics::set_code_font_size(f32::from(settings.editor.font_size));
-        self.invalidate_editor_typography();
-        self.update_model(cx, true, |model| {
-            model.set_input_mode(InputMode::Standard);
-            model.set_show_wrap(settings.editor.word_wrap);
-            model.set_gutter_mode(GutterMode::Absolute);
-            model.set_multi_cursor_limit(settings.editor.multi_cursor_limit);
-        });
-        self.set_theme(
-            theme_for_preference(settings.appearance.theme, cx.window_appearance()),
-            cx,
-        );
-        self.set_zoom_level(settings.appearance.zoom_level, window, cx);
-        self.reload_keybindings(cx);
+        self.input_mode_cli_override = false;
+        self.apply_current_settings(cx);
+        window.set_rem_size(self.ui_px(metrics::BASE_REM_SIZE));
+        self.cleanup_message = Some("Settings reset.".to_string());
         self.settings_overlay = SettingsOverlay::None;
         self.settings_selection.clear();
         self.settings_search_input
@@ -1588,16 +1581,6 @@ impl LstGpuiApp {
                 scale,
             ));
         }
-        if let Some(error) = settings_error {
-            content.push(settings_content_item(
-                div()
-                    .py_2()
-                    .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
-                    .text_color(rgb(theme.role.error_text))
-                    .child(error),
-                scale,
-            ));
-        }
         if show_reset {
             item_scroll_indices.insert(SettingsItem::Reset, content.len());
             content.push(settings_content_item(
@@ -1689,6 +1672,21 @@ impl LstGpuiApp {
                             ),
                     ),
             )
+            .when_some(settings_error.clone(), |surface, error| {
+                surface.child(
+                    div()
+                        .id("settings-error")
+                        .flex_none()
+                        .w_full()
+                        .max_w(metrics::px_for_scale(960.0, scale))
+                        .mx_auto()
+                        .px_5()
+                        .py_2()
+                        .text_size(metrics::px_for_scale(metrics::UI_TEXT_MD, scale))
+                        .text_color(rgb(theme.role.error_text))
+                        .child(error),
+                )
+            })
             .child(
                 div()
                     .w_full()
@@ -1742,7 +1740,11 @@ impl LstGpuiApp {
                                     .pb_2()
                                     .text_size(metrics::px_for_scale(metrics::UI_TEXT_SM, scale))
                                     .text_color(rgb(theme.role.text_muted))
-                                    .child("Saved automatically"),
+                                    .child(if settings_error.is_some() {
+                                        "Settings need attention"
+                                    } else {
+                                        "Saved automatically"
+                                    }),
                             ),
                     )
                     .child(
