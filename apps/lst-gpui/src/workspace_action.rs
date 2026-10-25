@@ -287,6 +287,7 @@ const BINDINGS: &[WorkspaceBinding] = &[
 ];
 
 const UNBOUND_BINDINGS: &[WorkspaceBinding] = &[
+    b("", WS, WorkspaceCommand::CleanupText),
     b("", WS, WorkspaceCommand::NewVoiceNote),
     b("", WS, WorkspaceCommand::ToggleVoice),
     b("", WS, WorkspaceCommand::FinishVoice),
@@ -337,7 +338,15 @@ pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> V
                 WorkspaceAction {
                     command: default.command,
                 },
-                Some(default.context),
+                Some(
+                    if default.command == model(Command::FindPrev)
+                        && Keystroke::parse(keystroke).is_ok_and(|key| key == Keystroke::parse("shift-enter").unwrap())
+                    {
+                        FIND
+                    } else {
+                        default.context
+                    },
+                ),
             ));
         }
     }
@@ -557,18 +566,6 @@ pub(crate) fn command_specs(overrides: &BTreeMap<String, Vec<String>>) -> Vec<Co
             category: command_category(id),
             command: binding.command,
             shortcuts: overrides.get(id).cloned().unwrap_or_default(),
-        });
-    }
-    // Commands intentionally discoverable only through the palette live here
-    // rather than carrying a hidden or misleading default shortcut.
-    let cleanup_id = command_id(WorkspaceCommand::CleanupText);
-    if !indices.contains_key(cleanup_id) {
-        specs.push(CommandSpec {
-            id: cleanup_id,
-            title: command_title(cleanup_id),
-            category: command_category(cleanup_id),
-            command: WorkspaceCommand::CleanupText,
-            shortcuts: overrides.get(cleanup_id).cloned().unwrap_or_default(),
         });
     }
     specs.sort_by(|left, right| {
@@ -861,8 +858,7 @@ mod tests {
         // Overrides and palette rows are keyed by ID, so two commands sharing
         // one would make an override rebind or hide the other.
         let mut commands = BTreeMap::new();
-        let palette_only = b("", WS, WorkspaceCommand::CleanupText);
-        for binding in BINDINGS.iter().chain(UNBOUND_BINDINGS).chain([&palette_only]) {
+        for binding in BINDINGS.iter().chain(UNBOUND_BINDINGS) {
             let id = command_id(binding.command);
             let first = *commands.entry(id).or_insert(binding.command);
             assert_eq!(first, binding.command, "{id} names two commands");

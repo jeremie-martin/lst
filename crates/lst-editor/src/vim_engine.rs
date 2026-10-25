@@ -196,7 +196,7 @@ impl EditorModel {
                 // `2dd` is `dj`, whose cursor_down fails on the last line.
                 return true;
             }
-            return self.vim_apply_lines_span(op, first, first + count.saturating_sub(1));
+            return self.vim_apply_lines_span(op, first, first.saturating_add(count.saturating_sub(1)));
         }
         if motion == "gg" {
             let explicit_count = op_count > 1 || rest.as_bytes()[1..].first().is_some_and(u8::is_ascii_digit);
@@ -238,7 +238,7 @@ impl EditorModel {
                 // Vim's cursor_down fails on the last line, cancelling the operator.
                 return true;
             }
-            let last = (first + count - 1).min(self.active_tab().line_count() - 1);
+            let last = (first.saturating_add(count - 1)).min(self.active_tab().line_count() - 1);
             let range = self.cursor_offset()..self.line_end(last);
             if op == Op::Delete && self.vim_delete_is_linewise(&range, last) {
                 return self.vim_apply_lines_span(op, first, last);
@@ -299,8 +299,21 @@ impl EditorModel {
                 }
             }),
             "0" => self.line_start(self.cursor().line),
-            "^" => self.line_first_nonblank(self.cursor().line),
-            "$" => self.line_last(self.cursor().line),
+            "^" => self
+                .line_first_nonblank(self.cursor().line)
+                .min(self.line_last(self.cursor().line)),
+            "$" => {
+                let line = self
+                    .cursor()
+                    .line
+                    .saturating_add(n - 1)
+                    .min(self.active_tab().line_count() - 1);
+                if self.vim_in_visual() {
+                    self.line_end(line)
+                } else {
+                    self.line_last(line)
+                }
+            }
             "w" | "W" => self.word_forward_motion(n, cmd == "W", operator),
             "e" | "E" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.word_end(off, cmd == "E")),
             "b" | "B" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.word_backward(off, cmd == "B")),
@@ -316,18 +329,17 @@ impl EditorModel {
                 return Some(self.vertical(if down { delta } else { -delta }, operator));
             }
             "G" => {
-                let cur = self.cursor();
                 // Any typed count names a line, `1G` included; only a bare
                 // `G` goes to the last line. The pending command still holds
                 // every digit typed for this motion and its operator.
                 let counted = self.vim.pending.bytes().any(|byte| byte.is_ascii_digit());
-                let at = self.line_col_offset(
+                let at = self.line_screen_column(
                     if counted {
                         n - 1
                     } else {
                         self.active_tab().line_count() - 1
                     },
-                    cur.column,
+                    self.vim_goal_column(),
                 );
                 return Some(Motion {
                     at,
@@ -336,15 +348,21 @@ impl EditorModel {
                 });
             }
             "%" => {
-                let at = self.percent_or_match(n);
-                if at == self.cursor_offset() && self.active_tab().buffer().get_char(at).and_then(bracket_dir).is_none()
+                let counted = self.vim.pending.bytes().any(|byte| byte.is_ascii_digit());
+                if counted && n > 100 {
+                    return None;
+                }
+                let at = self.percent_or_match(n, counted);
+                if !counted
+                    && at == self.cursor_offset()
+                    && self.active_tab().buffer().get_char(at).and_then(bracket_dir).is_none()
                 {
                     return None;
                 }
                 return Some(Motion {
                     at,
-                    linewise: operator && count > 1,
-                    inclusive: count == 1,
+                    linewise: operator && counted,
+                    inclusive: !counted,
                 });
             }
             "H" | "M" | "L" => {
@@ -356,7 +374,7 @@ impl EditorModel {
                 };
                 return Some(self.screen_motion(line, operator));
             }
-            ";" | "," => return self.repeat_char_find(cmd == ";", operator),
+            ";" | "," => return self.repeat_char_find(n, cmd == ";", operator),
             _ if cmd.starts_with(['f', 'F', 't', 'T']) && cmd.chars().count() == 2 => {
                 let mut chars = cmd.chars();
                 return self.vim_char_motion(n, chars.next().unwrap(), chars.next().unwrap(), operator);
@@ -382,16 +400,14 @@ impl EditorModel {
         if !rest.is_empty() {
             return true;
         }
-        let count = count.min(self.active_tab().line_count());
-        let half_page = if pending.is_empty() {
-            self.viewport.half_page()
-        } else {
-            count
-        };
+        if matches!(ch, 'd' | 'u') && !pending.is_empty() {
+            self.vim.half_page_rows = Some(count.min(self.viewport.rows));
+        }
+        let half_page = self.vim.half_page_rows.unwrap_or_else(|| self.viewport.half_page());
         let page = self.viewport.page().saturating_mul(count);
         let delta = match ch {
-            'd' => half_page as isize,
-            'u' => -(half_page as isize),
+            'd' => half_page.min(self.active_tab().line_count()) as isize,
+            'u' => -(half_page.min(self.active_tab().line_count()) as isize),
             'f' => page.min(self.active_tab().line_count()) as isize,
             _ => -(page.min(self.active_tab().line_count()) as isize),
         };
@@ -407,7 +423,7 @@ impl EditorModel {
 
     fn vim_special(&mut self, count: usize, rest: &str) -> bool {
         match rest {
-            "gg" => self.vim_move_to(self.line_col_offset(count.saturating_sub(1), self.cursor().column)),
+            "gg" => self.vim_move_to(self.line_screen_column(count.saturating_sub(1), self.vim_goal_column())),
             "g;" => {
                 if let Some(pos) = self.active_tab().last_edit_position() {
                     self.move_to_char(pos, false, None);
@@ -423,8 +439,16 @@ impl EditorModel {
             "zz" => self.queue_reveal(RevealIntent::Center),
             "zt" => self.queue_reveal(RevealIntent::Top),
             "zb" => self.queue_reveal(RevealIntent::Bottom),
-            ">>" => self.vim_indent_lines(self.cursor().line, self.cursor().line + count.saturating_sub(1), true),
-            "<<" => self.vim_indent_lines(self.cursor().line, self.cursor().line + count.saturating_sub(1), false),
+            ">>" => self.vim_indent_lines(
+                self.cursor().line,
+                self.cursor().line.saturating_add(count.saturating_sub(1)),
+                true,
+            ),
+            "<<" => self.vim_indent_lines(
+                self.cursor().line,
+                self.cursor().line.saturating_add(count.saturating_sub(1)),
+                false,
+            ),
             _ => {}
         }
         true
@@ -466,7 +490,7 @@ impl EditorModel {
                     if op == Op::Yank {
                         self.active_tab_mut().move_to(range.start);
                     }
-                    return self.vim_apply_lines_span(op, start_pos.line, end_pos.line - 1);
+                    return self.vim_apply_lines_span_with_column(op, start_pos.line, end_pos.line - 1, None);
                 }
                 range.end = self.line_end(end_pos.line - 1);
             }
@@ -545,10 +569,22 @@ impl EditorModel {
     }
 
     fn vim_apply_lines_span(&mut self, op: Op, first: usize, last: usize) -> bool {
-        let (first, last) = ordered_lines(first, last);
+        self.vim_apply_lines_span_with_column(op, first, last, Some(self.vim_goal_column()))
+    }
+
+    // An exclusive motion ending in column zero uses first-nonblank placement;
+    // other linewise operators preserve the screen column (`nostartofline`).
+    fn vim_apply_lines_span_with_column(&mut self, op: Op, first: usize, last: usize, column: Option<usize>) -> bool {
+        let end = self.active_tab().line_count() - 1;
+        let (first, last) = ordered_lines(first.min(end), last.min(end));
         let range = self.line_span(first, last);
         self.vim.register = vim::Register::Line(self.lines_text(first, last));
         if op == Op::Yank {
+            let at = column.map_or_else(
+                || self.line_first_nonblank(first).min(self.line_last(first)),
+                |col| self.line_screen_column(first, col),
+            );
+            self.vim_move_to(at);
             return true;
         }
         let indent = if op == Op::Change {
@@ -568,7 +604,19 @@ impl EditorModel {
                 TextChange::delete(range)
             }
         });
-        let cursor = Position::new(first, indent.chars().count());
+        let cursor = if op == Op::Change {
+            Position::new(first, indent.chars().count())
+        } else if first == 0 && last == end {
+            Position::new(0, 0)
+        } else {
+            let source = if last < end { last + 1 } else { first - 1 };
+            let at = column.map_or_else(
+                || self.line_first_nonblank(source).min(self.line_last(source)),
+                |col| self.line_screen_column(source, col),
+            );
+            let col = char_to_position(self.active_tab().buffer(), at).column;
+            Position::new(if last < end { first } else { first - 1 }, col)
+        };
         let request = if op == Op::Change {
             EditRequest::from_changes(EditKind::Insert, UndoBoundary::Break, TextChangeSet::single(change))
                 .with_selection_after(SelectionAfter::CursorPosition(cursor))
@@ -631,7 +679,7 @@ impl EditorModel {
                 let line = self.cursor().line + usize::from(after);
                 let indent = lines
                     .first()
-                    .map_or(0, |first| first.chars().take_while(|c| c.is_whitespace()).count());
+                    .map_or(0, |first| first.chars().take_while(|c| matches!(c, ' ' | '\t')).count());
                 if let Some(change) = line_edit::insert_lines_change(self.active_tab(), line, &lines) {
                     self.apply_active_edit_request(
                         EditRequest::single_other_at_position(change, Position::new(line, indent)),
@@ -825,7 +873,9 @@ impl EditorModel {
         } else {
             line_edit::outdent_request(self.active_tab(), first, last)
         };
+        let goal = self.vim_goal_column();
         self.apply_optional_edit_request(req, Some(RevealIntent::NearestEdge));
+        self.vim_move_to(self.line_screen_column(first, goal));
     }
 
     fn vim_delete_counted_chars(&mut self, count: usize, forward: bool) -> bool {
@@ -892,10 +942,10 @@ impl EditorModel {
         let first = self.cursor().line;
         let lines = self.active_tab().line_count();
         let requested = count.max(2);
-        if first + requested > lines && requested == 2 {
+        if first.saturating_add(requested) > lines && requested == 2 {
             return true;
         }
-        let last = (first + requested - 1).min(lines - 1);
+        let last = (first.saturating_add(requested - 1)).min(lines - 1);
         if last <= first {
             return true;
         }
@@ -948,6 +998,10 @@ impl EditorModel {
             navigated: false,
         };
         self.vim.search_backward = backward;
+        self.find.whole_word = false;
+        self.find.case_sensitive = true;
+        self.find.use_regex = false;
+        self.reindex_find_matches();
         self.find.visible = true;
         self.find.show_replace = false;
         self.queue_focus(FocusTarget::FindQuery);
@@ -1199,30 +1253,42 @@ impl EditorModel {
             till: matches!(cmd, 't' | 'T'),
         };
         self.vim.char_find = Some(find);
-        self.char_find_motion(count, find, operator)
+        self.char_find_motion(count, find, operator, false)
     }
 
-    fn repeat_char_find(&mut self, same: bool, operator: bool) -> Option<Motion> {
+    fn repeat_char_find(&mut self, count: usize, same: bool, operator: bool) -> Option<Motion> {
         let mut find = self.vim.char_find?;
         if !same {
             find.forward = !find.forward;
         }
-        self.char_find_motion(1, find, operator)
+        self.char_find_motion(count, find, operator, count == 1)
     }
 
-    fn char_find_motion(&self, count: usize, find: vim::CharFind, operator: bool) -> Option<Motion> {
+    fn char_find_motion(
+        &self,
+        count: usize,
+        find: vim::CharFind,
+        operator: bool,
+        skip_adjacent: bool,
+    ) -> Option<Motion> {
         let line = self.cursor().line;
         let body = line_display_text(self.active_tab().buffer(), line);
         let cur_col = self.cursor().column;
+        let skip = usize::from(skip_adjacent && find.till);
         let hits: Vec<_> = body
             .chars()
             .enumerate()
             .filter_map(|(i, ch)| (ch == find.target).then_some(i))
             .collect();
         let target = if find.forward {
-            hits.into_iter().filter(|i| *i > cur_col).nth(count - 1)?
+            hits.into_iter()
+                .filter(|i| *i > cur_col.saturating_add(skip))
+                .nth(count - 1)?
         } else {
-            hits.into_iter().rev().filter(|i| *i < cur_col).nth(count - 1)?
+            hits.into_iter()
+                .rev()
+                .filter(|i| i.saturating_add(skip) < cur_col)
+                .nth(count - 1)?
         };
         let found = match (find.forward, find.till, operator) {
             (true, true, false) => target.saturating_sub(1),
@@ -1245,8 +1311,8 @@ impl EditorModel {
         } else {
             (pos.line + delta as usize).min(last)
         };
-        let goal = self.vim.preferred_column.unwrap_or(pos.column);
-        let at = self.line_col_offset(line, goal);
+        let goal = self.vim_goal_column();
+        let at = self.line_screen_column(line, goal);
         self.vim.preferred_column = Some(goal);
         Motion {
             at,
@@ -1334,7 +1400,7 @@ impl EditorModel {
     /// they are linewise under an operator.
     fn screen_motion(&mut self, line: usize, operator: bool) -> Motion {
         let line = line.min(self.active_tab().line_count() - 1);
-        let at = self.line_first_nonblank(line);
+        let at = self.line_first_nonblank(line).min(self.line_last(line));
         self.queue_reveal(RevealIntent::NearestEdge);
         Motion {
             at,
@@ -1343,11 +1409,11 @@ impl EditorModel {
         }
     }
 
-    fn percent_or_match(&self, count: usize) -> usize {
-        if count > 1 {
-            let line = ((self.active_tab().line_count() * count).saturating_sub(1) / 100)
+    fn percent_or_match(&self, count: usize, counted: bool) -> usize {
+        if counted {
+            let line = ((self.active_tab().line_count().saturating_mul(count)).saturating_sub(1) / 100)
                 .min(self.active_tab().line_count() - 1);
-            return self.line_col_offset(line, self.cursor().column);
+            return self.line_screen_column(line, self.vim_goal_column());
         }
         let text = self.active_tab().buffer_text();
         let chars: Vec<char> = text.chars().collect();
@@ -1426,7 +1492,43 @@ impl EditorModel {
     }
     fn line_first_nonblank(&self, line: usize) -> usize {
         let body = line_display_text(self.active_tab().buffer(), line);
-        self.line_start(line) + body.chars().take_while(|c| c.is_whitespace()).count()
+        self.line_start(line) + body.chars().take_while(|c| matches!(c, ' ' | '\t')).count()
+    }
+    fn vim_goal_column(&self) -> usize {
+        self.vim.preferred_column.unwrap_or_else(|| {
+            let pos = self.cursor();
+            let width = self.active_tab().language_config().indent.width();
+            let mut chars = self.active_tab().buffer().line(pos.line).chars();
+            let col = chars
+                .by_ref()
+                .take(pos.column)
+                .fold(0, |col, ch| col + if ch == '\t' { width - col % width } else { 1 });
+            // A Normal-mode caret occupies the final screen cell of a tab.
+            col + if chars.next() == Some('\t') {
+                width - col % width - 1
+            } else {
+                0
+            }
+        })
+    }
+    fn line_screen_column(&self, line: usize, goal: usize) -> usize {
+        if goal == 0 {
+            return self.line_start(line);
+        }
+        let line = line.min(self.active_tab().line_count() - 1);
+        let width = self.active_tab().language_config().indent.width();
+        let mut screen = 0;
+        let mut column = 0;
+        for ch in self.active_tab().buffer().line(line).chars() {
+            let next = screen + if ch == '\t' { width - screen % width } else { 1 };
+            if next > goal || matches!(ch, '\r' | '\n') {
+                break;
+            }
+            screen = next;
+            column += 1;
+        }
+        let at = self.line_col_offset(line, column);
+        selection::floor_grapheme_boundary(self.active_tab().buffer(), at)
     }
     fn line_col_offset(&self, line: usize, col: usize) -> usize {
         let buffer = self.active_tab().buffer();
@@ -1451,7 +1553,7 @@ impl EditorModel {
     fn indent_of(&self, line: usize) -> String {
         line_display_text(self.active_tab().buffer(), line)
             .chars()
-            .take_while(|c| c.is_whitespace())
+            .take_while(|c| matches!(c, ' ' | '\t'))
             .collect()
     }
     fn next_grapheme(&self, at: usize) -> usize {
@@ -1669,7 +1771,14 @@ fn count_prefix(s: &str) -> (usize, &str) {
     while ix < bytes.len() && bytes[ix].is_ascii_digit() && !(ix == 0 && bytes[ix] == b'0') {
         ix += 1;
     }
-    (s[..ix].parse().unwrap_or(1), &s[ix..])
+    (
+        if ix == 0 {
+            1
+        } else {
+            s[..ix].parse().unwrap_or(usize::MAX)
+        },
+        &s[ix..],
+    )
 }
 fn is_pending_prefix(rest: &str) -> bool {
     matches!(

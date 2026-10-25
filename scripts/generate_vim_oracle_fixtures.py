@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate checked-in Vim oracle fixtures from local nvim."""
+"""Generate checked-in Vim oracle fixtures from an isolated Neovim reference."""
 
 from __future__ import annotations
 
@@ -835,6 +835,34 @@ def build_cases() -> list[dict]:
         ("search repeat after an edit takes the next match", "foo\nbar\nfoo\nbaz\nfoo\nqux", (0, 0), "/foo<enter>ggxn"),
     ]:
         cases.append(case(name, "search", text, cursor, keys, assert_search=True))
+    # Exercise the boundaries shared by counted motions and operators, including
+    # cursor placement and the unnamed register, not only the resulting text.
+    for text_name, text in [
+        ("plain", "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel"),
+        ("indented", "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel"),
+        ("blank", "alpha beta\n   \n\t\n  golf hotel"),
+        ("unicode-space", "\u2003alpha beta\n\u00a0charlie delta\n  echo foxtrot\n  golf hotel"),
+    ]:
+        for op in ["d", "c", "y"]:
+            for line, col, motion in [(2, 3, "k"), (2, 3, "gg"), (1, 1, "j"), (1, 1, "G"), (0, 1, "2$"), (1, 0, "b")]:
+                col = min(col, max(0, len(text.split("\n")[line]) - 1))
+                cases.append(case(f"linewise {text_name} {op}{motion} from {line}:{col}", "operators", text, (line, col), op + motion + ("Z<esc>" if op == "c" else ""), assert_register=True))
+        for keys in ["2$", "9$", "v2$", "v9$"]:
+            cases.append(case(f"counted end {text_name} {keys}", "motions", text, (0, 1), keys, assert_selection=keys.startswith("v")))
+        for keys in ["^", "I", "d^", "y^"]:
+            cases.append(case(f"first nonblank {text_name} {keys}", "motions", text, (1, 1), keys + ("Z<esc>" if keys == "I" else ""), assert_register=keys[0] in "dy"))
+
+    for command in ["f", "t", "F", "T"]:
+        start = (0, 0 if command.islower() else 18)
+        for tail in ["x;", "iZ<esc>;", "aZ<esc>,", ";", "2;", ";,", "d;", "y2;"]:
+            cases.append(case(f"repeat {command} after {tail}", "char_find", "a-b-c-d-e-f-g-h-i-j", start, command + "-" + tail, assert_register=tail.startswith(("d", "y"))))
+    for count in ["1", "100", "101", "18446744073709551615", "184467440737095516160"]:
+        for command in ["$", "%", "j", "k", "dd", "yy", ">>", "d$", "dw", "rZ", "J"]:
+            cases.append(case(f"count boundary {count}{command}", "counts", "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel", (1, 3), count + command, assert_register=True))
+    for search in ["*", "#"]:
+        for query in ["foo", "Foo", "oo"]:
+            cases.append(case(f"explicit search after {search}: {query}", "search", "foo Food food foo\nFOO foot", (0, 0), search + "/" + query + "<Enter>", assert_search=True))
+
     return cases
 
 
@@ -862,6 +890,14 @@ local function split_lines(text)
   return lines
 end
 
+local function char_column(line, byte_column)
+  return vim.str_utfindex(line, "utf-32", byte_column, false)
+end
+
+local function byte_column(line, character_column)
+  return vim.str_byteindex(line, "utf-32", character_column, false)
+end
+
 local function mode_name(mode)
   if mode == "n" or mode == "no" then
     return "Normal"
@@ -873,10 +909,6 @@ local function mode_name(mode)
     return "VisualLine"
   end
   return mode
-end
-
-local function has_map(lhs)
-  return vim.fn.maparg(lhs, "n") ~= ""
 end
 
 local function register_state()
@@ -917,6 +949,9 @@ local function visual_selection_text(mode, lines)
     return table.concat(selected, "\n")
   end
 
+  -- getpos() points to the first byte of the final selected character.
+  local final_line = lines[end_line] or ""
+  end_col = byte_column(final_line, char_column(final_line, end_col - 1) + 1)
   if start_line == end_line then
     return string.sub(lines[start_line] or "", start_col, end_col)
   end
@@ -936,18 +971,33 @@ local function visual_state(mode)
   local anchor = vim.fn.getpos("v")
   local head = vim.api.nvim_win_get_cursor(0)
   return {
-    anchor = { line = anchor[2] - 1, column = anchor[3] - 1 },
-    head = { line = head[1] - 1, column = head[2] },
+    anchor = { line = anchor[2] - 1, column = char_column(vim.fn.getline(anchor[2]), anchor[3] - 1) },
+    head = { line = head[1] - 1, column = char_column(vim.fn.getline(head[1]), head[2]) },
   }
 end
 
-local version = vim.version()
+-- Explicit, configuration-independent policy for the supported Vim surface.
+vim.o.selection = "inclusive"
+vim.o.selectmode = ""
+vim.o.virtualedit = ""
+vim.o.whichwrap = "b,s"
+vim.o.startofline = false
+vim.o.ignorecase = false
+vim.o.smartcase = false
+vim.o.wrapscan = true
+vim.o.joinspaces = true
+vim.o.clipboard = ""
+vim.o.iskeyword = "@,48-57,_,192-255"
+vim.o.expandtab = true
+vim.o.shiftwidth = 2
+vim.o.tabstop = 2
+vim.o.softtabstop = 2
 
 local out = {
   metadata = {
     generator = input.generator,
-    oracle_profile = "user_config",
-    nvim_version = string.format("NVIM v%d.%d.%d", version.major, version.minor, version.patch),
+    oracle_profile = "isolated",
+    nvim_version = input.nvim_version,
     options = {
       selection = vim.o.selection,
       selectmode = vim.o.selectmode,
@@ -958,6 +1008,11 @@ local out = {
       shiftwidth = vim.bo.shiftwidth,
       tabstop = vim.bo.tabstop,
       softtabstop = vim.bo.softtabstop,
+      startofline = vim.o.startofline,
+      ignorecase = vim.o.ignorecase,
+      smartcase = vim.o.smartcase,
+      wrapscan = vim.o.wrapscan,
+      joinspaces = vim.o.joinspaces,
     },
     editor_indent_policy = {
       expandtab = true,
@@ -970,6 +1025,8 @@ local out = {
 }
 
 for _, case in ipairs(input.cases) do
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, true, true), "nx", false)
+  vim.fn.setcharsearch({ char = "", forward = 1, ["until"] = 0 })
   vim.cmd("silent! %bwipeout!")
   vim.cmd("enew!")
   vim.bo.buftype = "nofile"
@@ -978,7 +1035,7 @@ for _, case in ipairs(input.cases) do
   vim.api.nvim_buf_set_lines(0, 0, -1, true, split_lines(case.initial_text))
   vim.cmd("setlocal undolevels=-1")
   vim.cmd("setlocal undolevels=1000")
-  vim.api.nvim_win_set_cursor(0, { case.cursor.line + 1, case.cursor.column })
+  vim.api.nvim_win_set_cursor(0, { case.cursor.line + 1, byte_column(vim.fn.getline(case.cursor.line + 1), case.cursor.column) })
   vim.fn.setreg('"', "")
   vim.fn.setreg("/", "")
   vim.bo.expandtab = true
@@ -987,7 +1044,7 @@ for _, case in ipairs(input.cases) do
   vim.bo.softtabstop = 2
 
   local keys = vim.api.nvim_replace_termcodes(case.keys, true, true, true)
-  vim.api.nvim_feedkeys(keys, "mx", false)
+  vim.api.nvim_feedkeys(keys, "nx", false)
   vim.cmd("redraw")
 
   local cursor = vim.api.nvim_win_get_cursor(0)
@@ -995,7 +1052,7 @@ for _, case in ipairs(input.cases) do
   local mode = vim.api.nvim_get_mode().mode
   local expected = {
     text = table.concat(lines, "\n"),
-    cursor = { line = cursor[1] - 1, column = cursor[2] },
+    cursor = { line = cursor[1] - 1, column = char_column(lines[cursor[1]], cursor[2]) },
     mode = mode_name(mode),
   }
   if case.assert_register then
@@ -1062,9 +1119,10 @@ def canonical_order(value: object) -> object:
     return value
 
 
-def generate(output: Path) -> None:
+def generate(output: Path, nvim: str = "nvim") -> None:
     payload = {
         "generator": "scripts/generate_vim_oracle_fixtures.py",
+        "nvim_version": subprocess.check_output([nvim, "--version"], text=True).splitlines()[0],
         "cases": build_cases(),
     }
 
@@ -1078,8 +1136,10 @@ def generate(output: Path) -> None:
 
         result = subprocess.run(
             [
-                "nvim",
+                nvim,
                 "--headless",
+                "-u", "NONE",
+                "--noplugin",
                 "-i",
                 "NONE",
                 "-n",
@@ -1113,8 +1173,9 @@ def main() -> None:
         default=DEFAULT_OUTPUT,
         help=f"fixture path to write (default: {DEFAULT_OUTPUT})",
     )
+    parser.add_argument("--nvim", default="nvim", help="Neovim executable; its exact version is recorded")
     args = parser.parse_args()
-    generate(args.output)
+    generate(args.output, args.nvim)
 
 
 if __name__ == "__main__":

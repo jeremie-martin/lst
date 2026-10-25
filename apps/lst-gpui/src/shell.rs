@@ -1499,7 +1499,7 @@ impl LstGpuiApp {
             }
         }
 
-        if self.maybe_handle_recent_modifier_key_action(event, window, cx) {
+        if self.maybe_handle_modifier_key_action(event, window, cx) {
             return;
         }
         if self.maybe_handle_unmodified_key_action(event, window, cx) {
@@ -1826,8 +1826,13 @@ impl Render for LstGpuiApp {
                         let entity = mouse_focus_entity.clone();
                         // Capture before child handlers, even when a surface occludes the root hitbox.
                         window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
-                            if phase.capture() && event.button == MouseButton::Left {
-                                let _ = entity.update(cx, |this, _| this.pending_focus = None);
+                            if phase.capture() {
+                                let _ = entity.update(cx, |this, _| {
+                                    this.clear_x11_modifier_chord_state();
+                                    if event.button == MouseButton::Left {
+                                        this.pending_focus = None;
+                                    }
+                                });
                             }
                         });
                     },

@@ -55,19 +55,23 @@ with `23/` refer to October 23. Duplicate findings share an item.
   `f3_and_shift_f3_search_from_the_current_caret_and_wrap` and
   `zero_width_regex_matches_navigate_and_replace_without_stalling`.
 
-- [ ] **Supported Vim commands:** match a pinned Neovim reference for the supported
-  single-cursor commands, including counts, register types, failed motions and resulting
-  cursor positions. Document intentional exceptions.
+- [x] **Supported Vim commands (implemented 2026-10-25):** match the pinned
+  Neovim 0.12.6 profile for supported single-cursor commands, including counts,
+  registers, failed motions and cursor placement. The 1,109-case oracle is isolated
+  from user configuration; intentional differences and the nightly comparison are
+  documented in [Vim mode](vim.md).
 
-- [ ] **Vim Ctrl+D/U:** remember an explicit count for the current editor viewport,
-  following the reference's resize behavior. Initially use half a viewport. Ctrl+F/B
-  counts remain page counts. With enough text, `5<C-d><C-d>` moves five lines twice.
-  Review: Fresh model probe with eight viewport rows: 5<C-d><C-d> reaches line 9,
-  showing that the second movement uses the default four lines.
+- [x] **Vim Ctrl+D/U (implemented 2026-10-25):** remember an explicit count for the
+  editor viewport, capped at its height. Resizing resets it to half the new height;
+  changing tabs or using Ctrl+F/B does not. The reference probe, model workflow and
+  `vim_counted_half_pages_remember_the_count_across_opposite_directions` cover this.
 
-- [ ] **Vim and multiple cursors:** entering Vim keeps the primary selection and removes
-  secondary selections. Adding cursors in Vim is unavailable with a visible explanation.
-  Single-selection Visual mode remains supported.
+- [x] **Vim and multiple cursors (implemented 2026-10-25):** entering Vim retains
+  each tab's primary selection. The model enforces one selection through mode changes,
+  undo/redo and external sets, and rejects cursor additions with visible feedback.
+  `entering_vim_retains_the_primary_selection_and_reports_unavailable_cursor_additions`
+  covers mode entry, feedback, editing and undo in the real app; the model workflow
+  also checks inactive tabs and direct APIs.
 
 - [x] **Find in Selection (implemented 2026-10-25):** capture all nonempty selected ranges in the active tab.
   Search only within their union, leaving intervening text untouched. Search navigation
@@ -310,56 +314,66 @@ are noted where they matter. Resolutions name their regression coverage.
 
 ### Vim and shortcuts
 
-- [ ] **Reproduced:** Normal/Visual counted `$` ignores the count. `2$` stays on the
-  current line instead of reaching the following line. Operator counted `$` was fixed
-  separately. (C28)
-  Review: Fresh public-model probes reproduce the stated text/cursor/search discrepancy;
-  the current Vim regression suite still passes, so those cases need coverage.
+- [x] **Resolved 2026-10-25:** Normal/Visual counted `$` reaches the counted line,
+  including Visual's end-of-line endpoint. (C28)
+  Resolution: counted-end oracle rows cover plain, indented, blank and Unicode text.
 
-- [ ] **Reproduced:** Backward linewise yanks leave the cursor on the wrong line. (C67)
+- [x] **Resolved 2026-10-25:** backward linewise yanks place the cursor on the first
+  operated line with the reference's intended column, including tabs. (C67)
+  Resolution: the linewise oracle grid checks cursor, text and register together.
 
-- [ ] **Reproduced:** Some deletes converted to linewise leave the cursor at column zero
-  instead of the reference's first nonblank or preserved column. (C68)
+- [x] **Resolved 2026-10-25:** linewise deletes preserve the intended column;
+  exclusive motions converted at column zero use first-nonblank placement. (C68)
+  Resolution: linewise placement is shared by explicit and converted operators;
+  the oracle grid covers both directions, indentation and buffer boundaries.
 
-- [ ] **Reproduced:** `^` and related first-nonblank motions land past whitespace-only
-  lines, causing subsequent commands to do nothing or act on the wrong blank. (C90)
+- [x] **Resolved 2026-10-25:** `^` and screen first-nonblank motions stop at the last
+  character of whitespace-only lines; `I` still inserts after their indentation. (C90)
+  Resolution: first-nonblank oracle rows and the viewport model case cover both roles.
 
-- [ ] **Reproduced:** Unicode indentation can cause `db` and related operators to become
-  linewise and delete more text than intended. (C83)
-  Review: Fresh public-model probes reproduce the stated text/cursor/search discrepancy;
-  the current Vim regression suite still passes, so those cases need coverage.
+- [x] **Resolved 2026-10-25:** Vim indentation tests recognize ASCII spaces/tabs,
+  so Unicode whitespace no longer incorrectly converts deletes to linewise. (C83)
+  Resolution: Unicode-space operator rows preserve the reference text and register.
 
-- [ ] **Reproduced:** Editing forgets the previous `f/F/t/T`, so `;` and `,` cannot
-  repeat it.
+- [x] **Resolved 2026-10-25:** editing no longer forgets `f/F/t/T`; counted `;` and
+  `,` preserve direction/till semantics. Character-find history is separate from
+  transient pending/Visual state. Oracle rows cover edits and repeated searches.
 
-- [ ] **Reproduced:** `*`/`#` leave whole-word/case/regex flags affecting subsequent `/`
-  and `?` searches, silently excluding matches. (23/V9)
-  Review: Fresh public-model probes reproduce the stated text/cursor/search discrepancy;
-  the current Vim regression suite still passes, so those cases need coverage.
+- [x] **Resolved 2026-10-25:** explicit `/` and `?` searches initialize the pinned
+  profile's case-sensitive literal policy, clearing whole-word and regex settings
+  and reindexing the retained query. `*`/`#` cannot silently restrict them. (23/V9)
+  Resolution: mixed-case/subword oracle queries follow both word-search directions.
 
-- [ ] **Reproduced:** An Improve Prompt shortcut appears in Settings/palette but is
-  never bound. (C15)
+- [x] **Resolved 2026-10-25:** Improve Prompt uses the same configurable command
+  registry as other optional shortcuts. (C15)
+  Resolution: `configured_improve_prompt_shortcut_opens_confirmation` drives the
+  configured shortcut into the real confirmation UI.
 
-- [ ] **Reproduced:** A `find.previous` override containing Shift+Enter is bound in the
-  wrong context and can intercept newline insertion in the editor. (C41)
+- [x] **Resolved 2026-10-25:** an overridden Shift+Enter for `find.previous` retains
+  Find-only context, while Shift+F3 remains available from the editor. (C41)
+  Resolution: `overridden_shift_enter_finds_previous_only_in_find_fields` checks
+  newline insertion and navigation from both contexts; it fails on the old binary.
 
-- [ ] **Reproduced:** The released-Ctrl workaround can replay Vim Ctrl+D/U/F/B for
-  ordinary letters within its timing window. The plain `q`/`w` issue was fixed
-  separately. (C53)
-  Review: Real X11 input: release Ctrl, then plain d in Normal mode moves from line 3 to
-  line 25 with no pending operator.
+- [x] **Resolved 2026-10-25:** released Ctrl no longer turns ordinary Vim letters
+  into Ctrl+D/U/F/B. The expired-chord timer/state and replay path are removed. (C53)
+  Resolution: `released_ctrl_then_plain_d_starts_a_vim_operator` fails on the old
+  binary and passes now; real held Ctrl paging retains separate acceptance coverage.
 
-- [ ] **Source-confirmed:** Custom arrow bindings accepted with nonlowercase spelling
-  can be ignored by held-arrow handling. (C84)
+- [x] **Resolved 2026-10-25:** held-arrow capture recognizes parsed custom arrow
+  bindings regardless of accepted spelling or position in a key sequence. (C84)
+  Resolution: `mixed_case_arrow_override_runs_the_configured_command` verifies the
+  overridden action changes the real document.
 
-- [ ] **Source-confirmed:** A pending Ctrl+K prefix survives pointer interaction,
-  unexpectedly turning a later Ctrl+D into Skip Next Occurrence. (23/AL7)
+- [x] **Resolved 2026-10-25:** root mouse capture clears pending keyboard chord state
+  before pointer handlers, including occluding surfaces. (23/AL7)
+  Resolution: `pointer_interaction_cancels_the_select_next_skip_prefix` verifies
+  subsequent Ctrl+D adds the next occurrence instead of skipping it.
 
-- [ ] **Reproduced:** Extremely large Vim counts can overflow or reverse direction;
-  recheck after the committed motion changes. (C56)
-  Review: From line 2 of a four-line document, 18446744073709551615dd panics at
-  vim_engine.rs:199 in debug. j/k counts are now bounded; the broad old
-  direction-reversal claim was narrowed to remaining arithmetic paths.
+- [x] **Resolved 2026-10-25:** overflowing parsed counts saturate; line arithmetic is
+  bounded, percentages above 100 fail, and explicit `1%` is a percentage. (C56)
+  Resolution: oracle boundary rows cover motions, deletes, yanks, indentation,
+  replacement and joins at 1, 100, 101, u64::MAX and beyond; huge-count replay no
+  longer panics. Scroll model checks also cover a count beyond u64::MAX.
 
 ### Rendering, runtime and boundaries
 
@@ -607,12 +621,12 @@ not demonstrate the missing observations.
 - [ ] **Source-confirmed:** Partial syntax-cache checks miss the injected-language cases
   that still produce stale visible results.
 
-- [ ] **Source-confirmed:** The 23 new oracle rows need verification against the
-  intended pinned Neovim version/options. All 889 older rows are unchanged; metadata
-  moved from 0.12.5 to the locally installed 0.9.5.
-  Review: Compared fixture JSON again: all 889 older rows are unchanged; 23 additions
-  and the metadata use local Neovim 0.9.5. Version/config provenance needs resolving,
-  not automatic fixture regeneration.
+- [x] **Resolved 2026-10-25:** all 912 existing oracle rows, including the 23
+  additions, regenerate unchanged on stable Neovim 0.12.6. The explicit profile
+  records the formerly implicit `nostartofline` behavior. User configuration and
+  persisted state are excluded; UTF-8 byte columns are converted at the boundary.
+  Resolution: repeated and reversed-order generation agree. Latest-nightly comparison
+  and the four undo-cursor differences are recorded in [Vim mode](vim.md).
 
 - [ ] **Source-confirmed:** Settings tests use fixed, unscaled pixels; the older-schema
   find helper also estimates field positions. (23/CV2, CV3)
@@ -980,6 +994,44 @@ intentional behavior as a defect.
   hold up. (23/V14)
 
 ## Verification and evidence
+
+### Implementation checkpoint: Vim semantics and input contracts (2026-10-25)
+
+- Addressed all 13 retained Vim/shortcut defects, the three agreed Vim contracts,
+  and oracle provenance: 17 checklist entries. The remaining findings stay in scope.
+- Installed official stable Neovim 0.12.6 and the newest available nightly,
+  `v0.13.0-dev-1946+g659164699f`, checking release-asset SHA256 digests. Stable is the
+  pinned reference. All 912 previous oracle cases reproduce unchanged; 197 additions
+  exercise counts, linewise cursor/register behavior, Unicode indentation, character
+  finds and search-state transitions. Repeated and reversed-order generation agree
+  with a deliberately failing personal config excluded. Nightly differs in four
+  undo cursor positions, documented in `docs/vim.md`; text and registers agree.
+- The model owns Vim's single-selection invariant and remembered viewport distance.
+  Operator cursor placement is shared rather than patched at individual commands.
+  The app removes released-modifier replay and puts optional shortcuts through the
+  existing command registry. Root pointer capture cancels pending chord state.
+- Seven focused X11 checks pass. Three fail against preserved `481dfdd`: mode entry
+  with multiple selections, released Ctrl followed by plain Vim `d`, and an overridden
+  Shift+Enter intercepting editor newline insertion. The corrected released-Ctrl test
+  replaces an older test that explicitly expected the faulty replay behavior.
+- Same-workload Criterion comparisons against the pre-change baseline: column-zero
+  vertical motion improves 25–32% (1,024 motions per iteration); the delete/next-key
+  workload improves about 3%, and whole-document delete/undo about 2%. Other measured
+  workloads range from about 3% faster to 3% slower. Small copy/paste is about 1.8%
+  slower (148.6 microseconds for 16 cycles); large word search is about 3% slower
+  (7.7 milliseconds for 32 cycles). These are model microbenchmarks, not end-to-end
+  typing claims. Expanded oracle replay is excluded from before/after timing because
+  its workload changed. Logs retain both the initial tab-column regression and the
+  final simple column-zero fast path.
+- Final verification: `cargo test --all-features` (208 passed), harness tests
+  (32 passed), Clippy, formatting and diff checks, and the full nested-X11 gate
+  (320/320 passed in 2,790 seconds). Existing compiler/vendor warnings remain. The lane uses the same
+  temporary wmctrl/xsel tools and compatible lwm wrapper as earlier checkpoints;
+  the stock-runner compatibility item remains open.
+- Evidence: `/home/holo/agent-exports/foundation-vim-2026-10-25` contains release
+  provenance, oracle comparisons, reference scroll probe, regression logs and
+  benchmark output.
+
 
 ### Implementation checkpoint: voice and prompt lifecycle (2026-10-25)
 

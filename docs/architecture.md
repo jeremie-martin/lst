@@ -213,11 +213,12 @@ UI state should have one geometric and visual owner:
 Exact-pixel X11 baselines are regression checks, not design approval. Inspect a
 changed image before updating a baseline.
 
-## Accepted behavior awaiting implementation
+## Behavior contracts
 
-Vim currently permits multiple active cursors without defined semantics. The
-accepted target in [Findings and agreed changes](findings.md) is single-cursor
-Vim, retaining the primary selection on entry.
+Vim permits one selection per tab. The model's effective selection limit retains
+each primary selection when entering Vim and applies to restored history and
+external selection sets. Cursor-addition commands and gestures report that they
+are unavailable. Standard mode keeps its independently configured cursor limit.
 
 Implement the recorded contracts with real-X11 acceptance coverage; incidental
 current behavior does not supersede those decisions.

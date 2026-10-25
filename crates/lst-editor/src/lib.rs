@@ -347,6 +347,7 @@ impl EditorModel {
         }
         self.input_mode = input_mode;
         self.vim = vim::VimState::new();
+        self.limit_all_tab_selections();
         self.status = match input_mode {
             InputMode::Standard => "Standard editing enabled.",
             InputMode::Vim => "Vim editing enabled.",
@@ -385,6 +386,7 @@ impl EditorModel {
     }
     fn active_tab_changed(&mut self) {
         self.vim.on_tab_switch();
+        self.enforce_multi_cursor_limit();
         self.active_tab_mut().clear_preferred_column();
         self.sync_find_with_active_document();
     }
@@ -1018,7 +1020,11 @@ impl EditorModel {
         self.viewport
     }
     pub fn set_viewport_rows(&mut self, rows: usize) {
-        self.viewport.rows = rows.max(1);
+        let rows = rows.max(1);
+        if self.viewport.rows != rows {
+            self.viewport.rows = rows;
+            self.vim.half_page_rows = None;
+        }
     }
     pub fn set_viewport_top(&mut self, row: usize) {
         self.viewport.top_visual_row = row;
@@ -1033,11 +1039,24 @@ impl EditorModel {
 
     pub fn set_multi_cursor_limit(&mut self, limit: usize) {
         self.multi_cursor_limit = limit.clamp(1, 10_000);
+        self.limit_all_tab_selections();
+    }
+
+    fn selection_limit(&self) -> usize {
+        if self.input_mode == InputMode::Vim {
+            1
+        } else {
+            self.multi_cursor_limit
+        }
+    }
+
+    fn limit_all_tab_selections(&mut self) {
+        let limit = self.selection_limit();
         let limited_tabs: Vec<(TabId, SelectionSet)> = self
             .tabs()
             .iter()
             .filter_map(|tab| {
-                Self::selection_set_limited_to(tab.selection_set(), self.multi_cursor_limit)
+                Self::selection_set_limited_to(tab.selection_set(), limit)
                     .map(|selection_set| (tab.id(), selection_set))
             })
             .collect();
@@ -1047,10 +1066,7 @@ impl EditorModel {
                 .set_selection_set(selection_set.clone());
         }
         if !limited_tabs.is_empty() {
-            self.status = format!(
-                "Multi-cursor limit reached; kept {} selections.",
-                self.multi_cursor_limit
-            );
+            self.report_selection_limit();
         }
     }
 
@@ -1131,14 +1147,29 @@ impl EditorModel {
 
     fn enforce_multi_cursor_limit(&mut self) -> bool {
         let set = self.active_tab().selection_set();
-        let Some(limited) = Self::selection_set_limited_to(set, self.multi_cursor_limit) else {
+        let Some(limited) = Self::selection_set_limited_to(set, self.selection_limit()) else {
             return false;
         };
         self.active_tab_mut().set_selection_set(limited);
-        self.status = format!(
-            "Multi-cursor limit reached; kept {} selections.",
-            self.multi_cursor_limit
-        );
+        self.report_selection_limit();
+        true
+    }
+
+    fn report_selection_limit(&mut self) {
+        if !self.reject_vim_multiple_selections() {
+            self.status = format!(
+                "Multi-cursor limit reached; kept {} selections.",
+                self.multi_cursor_limit
+            );
+        }
+    }
+
+    fn reject_vim_multiple_selections(&mut self) -> bool {
+        if self.input_mode != InputMode::Vim {
+            return false;
+        }
+        self.status =
+            "Multiple selections are unavailable in Vim mode; switch to Standard editing to add cursors.".to_string();
         true
     }
 
@@ -1453,6 +1484,9 @@ impl EditorModel {
         self.add_selection_to_active_set(Selection::from_range(range, reversed));
     }
     fn add_selection_to_active_set(&mut self, selection: Selection) {
+        if self.reject_vim_multiple_selections() {
+            return;
+        }
         let before = self.active_tab().selection_state().clone();
         let after = before.with_added_selection(selection);
         if after != before {
@@ -1511,6 +1545,9 @@ impl EditorModel {
         }
     }
     pub fn set_rectangular_column_selection(&mut self, anchor: usize, head: usize) {
+        if self.reject_vim_multiple_selections() {
+            return;
+        }
         let head = char_to_position(self.active_tab().buffer(), head);
         let Some(selection_set) = multi_selection::rectangular_selection_set(self.active_tab(), anchor, head) else {
             return;

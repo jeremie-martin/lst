@@ -1,18 +1,23 @@
 {
   "metadata": {
     "generator": "scripts/generate_vim_oracle_fixtures.py",
-    "oracle_profile": "user_config",
-    "nvim_version": "NVIM v0.9.5",
+    "oracle_profile": "isolated",
+    "nvim_version": "NVIM v0.12.6",
     "options": {
       "selection": "inclusive",
-      "expandtab": false,
+      "expandtab": true,
+      "ignorecase": false,
       "iskeyword": "@,48-57,_,192-255",
+      "joinspaces": true,
       "selectmode": "",
-      "shiftwidth": 8,
-      "softtabstop": 0,
-      "tabstop": 8,
+      "shiftwidth": 2,
+      "smartcase": false,
+      "softtabstop": 2,
+      "startofline": false,
+      "tabstop": 2,
       "virtualedit": "",
-      "whichwrap": "b,s"
+      "whichwrap": "b,s",
+      "wrapscan": true
     },
     "editor_indent_policy": {
       "expandtab": true,
@@ -19352,6 +19357,4218 @@
         },
         "mode": "Normal",
         "search_query": "foo"
+      }
+    },
+    {
+      "name": "linewise plain dk from 2:3",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "dk",
+      "expected": {
+        "text": "alpha beta\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\necho foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise plain dgg from 2:3",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "dgg",
+      "expected": {
+        "text": "golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "alpha beta\ncharlie delta\necho foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise plain dj from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "dj",
+      "expected": {
+        "text": "alpha beta\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\necho foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise plain dG from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "dG",
+      "expected": {
+        "text": "alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\necho foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise plain d2$ from 0:1",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "d2$",
+      "expected": {
+        "text": "a\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "lpha beta\ncharlie delta"
+        }
+      }
+    },
+    {
+      "name": "linewise plain db from 1:0",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "db",
+      "expected": {
+        "text": "alpha \ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "linewise plain ck from 2:3",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "ckZ<esc>",
+      "expected": {
+        "text": "alpha beta\nZ\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\necho foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise plain cgg from 2:3",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "cggZ<esc>",
+      "expected": {
+        "text": "Z\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "alpha beta\ncharlie delta\necho foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise plain cj from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "cjZ<esc>",
+      "expected": {
+        "text": "alpha beta\nZ\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\necho foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise plain cG from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "cGZ<esc>",
+      "expected": {
+        "text": "alpha beta\nZ",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\necho foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise plain c2$ from 0:1",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "c2$Z<esc>",
+      "expected": {
+        "text": "aZ\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "lpha beta\ncharlie delta"
+        }
+      }
+    },
+    {
+      "name": "linewise plain cb from 1:0",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "cbZ<esc>",
+      "expected": {
+        "text": "alpha Z\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "linewise plain yk from 2:3",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "yk",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\necho foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise plain ygg from 2:3",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "ygg",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "alpha beta\ncharlie delta\necho foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise plain yj from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "yj",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\necho foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise plain yG from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "yG",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\necho foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise plain y2$ from 0:1",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "y2$",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "lpha beta\ncharlie delta"
+        }
+      }
+    },
+    {
+      "name": "linewise plain yb from 1:0",
+      "area": "operators",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "yb",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "counted end plain 2$",
+      "area": "motions",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "2$",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 12
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "counted end plain 9$",
+      "area": "motions",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "9$",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 9
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "counted end plain v2$",
+      "area": "motions",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "v2$",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 13
+        },
+        "mode": "Visual",
+        "selection": "lpha beta\ncharlie delta",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 1
+          },
+          "head": {
+            "line": 1,
+            "column": 13
+          }
+        }
+      }
+    },
+    {
+      "name": "counted end plain v9$",
+      "area": "motions",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "v9$",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 10
+        },
+        "mode": "Visual",
+        "selection": "lpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 1
+          },
+          "head": {
+            "line": 3,
+            "column": 10
+          }
+        }
+      }
+    },
+    {
+      "name": "first nonblank plain ^",
+      "area": "motions",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "^",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "first nonblank plain I",
+      "area": "motions",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "IZ<esc>",
+      "expected": {
+        "text": "alpha beta\nZcharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "first nonblank plain d^",
+      "area": "motions",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "d^",
+      "expected": {
+        "text": "alpha beta\nharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "c"
+        }
+      }
+    },
+    {
+      "name": "first nonblank plain y^",
+      "area": "motions",
+      "initial_text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "y^",
+      "expected": {
+        "text": "alpha beta\ncharlie delta\necho foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "c"
+        }
+      }
+    },
+    {
+      "name": "linewise indented dk from 2:3",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "dk",
+      "expected": {
+        "text": "  alpha beta\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "\tcharlie delta\n   echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise indented dgg from 2:3",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "dgg",
+      "expected": {
+        "text": "  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise indented dj from 1:1",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "dj",
+      "expected": {
+        "text": "  alpha beta\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "\tcharlie delta\n   echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise indented dG from 1:1",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "dG",
+      "expected": {
+        "text": "  alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "\tcharlie delta\n   echo foxtrot\n  golf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise indented d2$ from 0:1",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "d2$",
+      "expected": {
+        "text": "   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "  alpha beta\n\tcharlie delta"
+        }
+      }
+    },
+    {
+      "name": "linewise indented db from 1:0",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "db",
+      "expected": {
+        "text": "  alpha \n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 7
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "linewise indented ck from 2:3",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "ckZ<esc>",
+      "expected": {
+        "text": "  alpha beta\n\tZ\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "\tcharlie delta\n   echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise indented cgg from 2:3",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "cggZ<esc>",
+      "expected": {
+        "text": "  Z\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise indented cj from 1:1",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "cjZ<esc>",
+      "expected": {
+        "text": "  alpha beta\n\tZ\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "\tcharlie delta\n   echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise indented cG from 1:1",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "cGZ<esc>",
+      "expected": {
+        "text": "  alpha beta\n\tZ",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "\tcharlie delta\n   echo foxtrot\n  golf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise indented c2$ from 0:1",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "c2$Z<esc>",
+      "expected": {
+        "text": " Z\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": " alpha beta\n\tcharlie delta"
+        }
+      }
+    },
+    {
+      "name": "linewise indented cb from 1:0",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "cbZ<esc>",
+      "expected": {
+        "text": "  alpha Z\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 8
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "linewise indented yk from 2:3",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "yk",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "\tcharlie delta\n   echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise indented ygg from 2:3",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "ygg",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise indented yj from 1:1",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "yj",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "\tcharlie delta\n   echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise indented yG from 1:1",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "yG",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "\tcharlie delta\n   echo foxtrot\n  golf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise indented y2$ from 0:1",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "y2$",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": " alpha beta\n\tcharlie delta"
+        }
+      }
+    },
+    {
+      "name": "linewise indented yb from 1:0",
+      "area": "operators",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "yb",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 8
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "counted end indented 2$",
+      "area": "motions",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "2$",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 13
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "counted end indented 9$",
+      "area": "motions",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "9$",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 11
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "counted end indented v2$",
+      "area": "motions",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "v2$",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 14
+        },
+        "mode": "Visual",
+        "selection": " alpha beta\n\tcharlie delta",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 1
+          },
+          "head": {
+            "line": 1,
+            "column": 14
+          }
+        }
+      }
+    },
+    {
+      "name": "counted end indented v9$",
+      "area": "motions",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "v9$",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 12
+        },
+        "mode": "Visual",
+        "selection": " alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 1
+          },
+          "head": {
+            "line": 3,
+            "column": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "first nonblank indented ^",
+      "area": "motions",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "^",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "first nonblank indented I",
+      "area": "motions",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "IZ<esc>",
+      "expected": {
+        "text": "  alpha beta\n\tZcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "first nonblank indented d^",
+      "area": "motions",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "d^",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "first nonblank indented y^",
+      "area": "motions",
+      "initial_text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "y^",
+      "expected": {
+        "text": "  alpha beta\n\tcharlie delta\n   echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "linewise blank dk from 2:0",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "dk",
+      "expected": {
+        "text": "alpha beta\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "   \n\t"
+        }
+      }
+    },
+    {
+      "name": "linewise blank dgg from 2:0",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "dgg",
+      "expected": {
+        "text": "  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "alpha beta\n   \n\t"
+        }
+      }
+    },
+    {
+      "name": "linewise blank dj from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "dj",
+      "expected": {
+        "text": "alpha beta\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "   \n\t"
+        }
+      }
+    },
+    {
+      "name": "linewise blank dG from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "dG",
+      "expected": {
+        "text": "alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "   \n\t\n  golf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise blank d2$ from 0:1",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "d2$",
+      "expected": {
+        "text": "a\n\t\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "lpha beta\n   "
+        }
+      }
+    },
+    {
+      "name": "linewise blank db from 1:0",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "db",
+      "expected": {
+        "text": "alpha \n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "linewise blank ck from 2:0",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "ckZ<esc>",
+      "expected": {
+        "text": "alpha beta\n   Z\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "   \n\t"
+        }
+      }
+    },
+    {
+      "name": "linewise blank cgg from 2:0",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "cggZ<esc>",
+      "expected": {
+        "text": "Z\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "alpha beta\n   \n\t"
+        }
+      }
+    },
+    {
+      "name": "linewise blank cj from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "cjZ<esc>",
+      "expected": {
+        "text": "alpha beta\n   Z\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "   \n\t"
+        }
+      }
+    },
+    {
+      "name": "linewise blank cG from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "cGZ<esc>",
+      "expected": {
+        "text": "alpha beta\n   Z",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "   \n\t\n  golf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise blank c2$ from 0:1",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "c2$Z<esc>",
+      "expected": {
+        "text": "aZ\n\t\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "lpha beta\n   "
+        }
+      }
+    },
+    {
+      "name": "linewise blank cb from 1:0",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "cbZ<esc>",
+      "expected": {
+        "text": "alpha Z\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "linewise blank yk from 2:0",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "yk",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "   \n\t"
+        }
+      }
+    },
+    {
+      "name": "linewise blank ygg from 2:0",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "ygg",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "alpha beta\n   \n\t"
+        }
+      }
+    },
+    {
+      "name": "linewise blank yj from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "yj",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "   \n\t"
+        }
+      }
+    },
+    {
+      "name": "linewise blank yG from 1:1",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "yG",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "   \n\t\n  golf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise blank y2$ from 0:1",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "y2$",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "lpha beta\n   "
+        }
+      }
+    },
+    {
+      "name": "linewise blank yb from 1:0",
+      "area": "operators",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "yb",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "counted end blank 2$",
+      "area": "motions",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "2$",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "counted end blank 9$",
+      "area": "motions",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "9$",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 11
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "counted end blank v2$",
+      "area": "motions",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "v2$",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Visual",
+        "selection": "lpha beta\n   ",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 1
+          },
+          "head": {
+            "line": 1,
+            "column": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "counted end blank v9$",
+      "area": "motions",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "v9$",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 12
+        },
+        "mode": "Visual",
+        "selection": "lpha beta\n   \n\t\n  golf hotel",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 1
+          },
+          "head": {
+            "line": 3,
+            "column": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "first nonblank blank ^",
+      "area": "motions",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "^",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "first nonblank blank I",
+      "area": "motions",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "IZ<esc>",
+      "expected": {
+        "text": "alpha beta\n   Z\n\t\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "first nonblank blank d^",
+      "area": "motions",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "d^",
+      "expected": {
+        "text": "alpha beta\n  \n\t\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": " "
+        }
+      }
+    },
+    {
+      "name": "first nonblank blank y^",
+      "area": "motions",
+      "initial_text": "alpha beta\n   \n\t\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "y^",
+      "expected": {
+        "text": "alpha beta\n   \n\t\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": " "
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space dk from 2:3",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "dk",
+      "expected": {
+        "text": " alpha beta\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " charlie delta\n  echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space dgg from 2:3",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "dgg",
+      "expected": {
+        "text": "  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " alpha beta\n charlie delta\n  echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space dj from 1:1",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "dj",
+      "expected": {
+        "text": " alpha beta\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " charlie delta\n  echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space dG from 1:1",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "dG",
+      "expected": {
+        "text": " alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " charlie delta\n  echo foxtrot\n  golf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space d2$ from 0:1",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "d2$",
+      "expected": {
+        "text": " \n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha beta\n charlie delta"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space db from 1:0",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "db",
+      "expected": {
+        "text": " alpha \n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space ck from 2:3",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "ckZ<esc>",
+      "expected": {
+        "text": " alpha beta\nZ\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " charlie delta\n  echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space cgg from 2:3",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "cggZ<esc>",
+      "expected": {
+        "text": "Z\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " alpha beta\n charlie delta\n  echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space cj from 1:1",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "cjZ<esc>",
+      "expected": {
+        "text": " alpha beta\nZ\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " charlie delta\n  echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space cG from 1:1",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "cGZ<esc>",
+      "expected": {
+        "text": " alpha beta\nZ",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " charlie delta\n  echo foxtrot\n  golf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space c2$ from 0:1",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "c2$Z<esc>",
+      "expected": {
+        "text": " Z\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha beta\n charlie delta"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space cb from 1:0",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "cbZ<esc>",
+      "expected": {
+        "text": " alpha Z\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 7
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space yk from 2:3",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "yk",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " charlie delta\n  echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space ygg from 2:3",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 2,
+        "column": 3
+      },
+      "keys": "ygg",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " alpha beta\n charlie delta\n  echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space yj from 1:1",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "yj",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " charlie delta\n  echo foxtrot"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space yG from 1:1",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "yG",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": " charlie delta\n  echo foxtrot\n  golf hotel"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space y2$ from 0:1",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "y2$",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "alpha beta\n charlie delta"
+        }
+      }
+    },
+    {
+      "name": "linewise unicode-space yb from 1:0",
+      "area": "operators",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "yb",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 7
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "beta"
+        }
+      }
+    },
+    {
+      "name": "counted end unicode-space 2$",
+      "area": "motions",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "2$",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 13
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "counted end unicode-space 9$",
+      "area": "motions",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "9$",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 11
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "counted end unicode-space v2$",
+      "area": "motions",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "v2$",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 14
+        },
+        "mode": "Visual",
+        "selection": "alpha beta\n charlie delta",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 1
+          },
+          "head": {
+            "line": 1,
+            "column": 14
+          }
+        }
+      }
+    },
+    {
+      "name": "counted end unicode-space v9$",
+      "area": "motions",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "v9$",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 12
+        },
+        "mode": "Visual",
+        "selection": "alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "visual_state": {
+          "anchor": {
+            "line": 0,
+            "column": 1
+          },
+          "head": {
+            "line": 3,
+            "column": 12
+          }
+        }
+      }
+    },
+    {
+      "name": "first nonblank unicode-space ^",
+      "area": "motions",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "^",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "first nonblank unicode-space I",
+      "area": "motions",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "IZ<esc>",
+      "expected": {
+        "text": " alpha beta\nZ charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "first nonblank unicode-space d^",
+      "area": "motions",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "d^",
+      "expected": {
+        "text": " alpha beta\ncharlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": " "
+        }
+      }
+    },
+    {
+      "name": "first nonblank unicode-space y^",
+      "area": "motions",
+      "initial_text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "y^",
+      "expected": {
+        "text": " alpha beta\n charlie delta\n  echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": " "
+        }
+      }
+    },
+    {
+      "name": "repeat f after x;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "f-x;",
+      "expected": {
+        "text": "ab-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat f after iZ<esc>;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "f-iZ<esc>;",
+      "expected": {
+        "text": "aZ-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat f after aZ<esc>,",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "f-aZ<esc>,",
+      "expected": {
+        "text": "a-Zb-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat f after ;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "f-;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat f after 2;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "f-2;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 5
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat f after ;,",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "f-;,",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat f after d;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "f-d;",
+      "expected": {
+        "text": "ac-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "-b-"
+        }
+      }
+    },
+    {
+      "name": "repeat f after y2;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "f-y2;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "-b-c-"
+        }
+      }
+    },
+    {
+      "name": "repeat t after x;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "t-x;",
+      "expected": {
+        "text": "-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat t after iZ<esc>;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "t-iZ<esc>;",
+      "expected": {
+        "text": "Za-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat t after aZ<esc>,",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "t-aZ<esc>,",
+      "expected": {
+        "text": "aZ-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat t after ;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "t-;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat t after 2;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "t-2;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat t after ;,",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "t-;,",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat t after d;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "t-d;",
+      "expected": {
+        "text": "-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "a-b"
+        }
+      }
+    },
+    {
+      "name": "repeat t after y2;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "t-y2;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "a-b"
+        }
+      }
+    },
+    {
+      "name": "repeat F after x;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "F-x;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-ij",
+        "cursor": {
+          "line": 0,
+          "column": 15
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat F after iZ<esc>;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "F-iZ<esc>;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-iZ-j",
+        "cursor": {
+          "line": 0,
+          "column": 15
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat F after aZ<esc>,",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "F-aZ<esc>,",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-Zj",
+        "cursor": {
+          "line": 0,
+          "column": 18
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat F after ;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "F-;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 15
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat F after 2;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "F-2;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 13
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat F after ;,",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "F-;,",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 17
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat F after d;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "F-d;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-j",
+        "cursor": {
+          "line": 0,
+          "column": 15
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "-i"
+        }
+      }
+    },
+    {
+      "name": "repeat F after y2;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "F-y2;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 13
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "-h-i"
+        }
+      }
+    },
+    {
+      "name": "repeat T after x;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "T-x;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-",
+        "cursor": {
+          "line": 0,
+          "column": 16
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat T after iZ<esc>;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "T-iZ<esc>;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-Zj",
+        "cursor": {
+          "line": 0,
+          "column": 16
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat T after aZ<esc>,",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "T-aZ<esc>,",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-jZ",
+        "cursor": {
+          "line": 0,
+          "column": 19
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat T after ;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "T-;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 16
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat T after 2;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "T-2;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 16
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat T after ;,",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "T-;,",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 16
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "repeat T after d;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "T-d;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-j",
+        "cursor": {
+          "line": 0,
+          "column": 16
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "i-"
+        }
+      }
+    },
+    {
+      "name": "repeat T after y2;",
+      "area": "char_find",
+      "initial_text": "a-b-c-d-e-f-g-h-i-j",
+      "cursor": {
+        "line": 0,
+        "column": 18
+      },
+      "keys": "T-y2;",
+      "expected": {
+        "text": "a-b-c-d-e-f-g-h-i-j",
+        "cursor": {
+          "line": 0,
+          "column": 16
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "i-"
+        }
+      }
+    },
+    {
+      "name": "count boundary 1$",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1$",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 12
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 1%",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1%",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 1j",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1j",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 2,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 1k",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1k",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 1dd",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1dd",
+      "expected": {
+        "text": "  alpha beta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta"
+        }
+      }
+    },
+    {
+      "name": "count boundary 1yy",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1yy",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta"
+        }
+      }
+    },
+    {
+      "name": "count boundary 1>>",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1>>",
+      "expected": {
+        "text": "  alpha beta\n  charlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 1d$",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1d$",
+      "expected": {
+        "text": "  alpha beta\ncha\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "rlie delta"
+        }
+      }
+    },
+    {
+      "name": "count boundary 1dw",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1dw",
+      "expected": {
+        "text": "  alpha beta\nchadelta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "rlie "
+        }
+      }
+    },
+    {
+      "name": "count boundary 1rZ",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1rZ",
+      "expected": {
+        "text": "  alpha beta\nchaZlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 1J",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "1J",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 13
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 100$",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100$",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 9
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 100%",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100%",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 100j",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100j",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 100k",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100k",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 100dd",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100dd",
+      "expected": {
+        "text": "  alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 100yy",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100yy",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 100>>",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100>>",
+      "expected": {
+        "text": "  alpha beta\n  charlie delta\n    echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 100d$",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100d$",
+      "expected": {
+        "text": "  alpha beta\ncha",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "rlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 100dw",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100dw",
+      "expected": {
+        "text": "  alpha beta\ncha",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "rlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 100rZ",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100rZ",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 100J",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "100J",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta echo foxtrot golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 26
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 101$",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101$",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 9
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 101%",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101%",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 101j",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101j",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 101k",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101k",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 101dd",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101dd",
+      "expected": {
+        "text": "  alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 101yy",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101yy",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 101>>",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101>>",
+      "expected": {
+        "text": "  alpha beta\n  charlie delta\n    echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 101d$",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101d$",
+      "expected": {
+        "text": "  alpha beta\ncha",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "rlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 101dw",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101dw",
+      "expected": {
+        "text": "  alpha beta\ncha",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "rlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 101rZ",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101rZ",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 101J",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "101J",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta echo foxtrot golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 26
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615$",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615$",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 9
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615%",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615%",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615j",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615j",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615k",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615k",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615dd",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615dd",
+      "expected": {
+        "text": "  alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615yy",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615yy",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615>>",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615>>",
+      "expected": {
+        "text": "  alpha beta\n  charlie delta\n    echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615d$",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615d$",
+      "expected": {
+        "text": "  alpha beta\ncha",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "rlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615dw",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615dw",
+      "expected": {
+        "text": "  alpha beta\ncha",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "rlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615rZ",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615rZ",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 18446744073709551615J",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "18446744073709551615J",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta echo foxtrot golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 26
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160$",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160$",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 9
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160%",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160%",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160j",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160j",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 3,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160k",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160k",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160dd",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160dd",
+      "expected": {
+        "text": "  alpha beta",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160yy",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160yy",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "charlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160>>",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160>>",
+      "expected": {
+        "text": "  alpha beta\n  charlie delta\n    echo foxtrot\n  golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160d$",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160d$",
+      "expected": {
+        "text": "  alpha beta\ncha",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "rlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160dw",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160dw",
+      "expected": {
+        "text": "  alpha beta\ncha",
+        "cursor": {
+          "line": 1,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "rlie delta\n  echo foxtrot\ngolf hotel"
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160rZ",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160rZ",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "count boundary 184467440737095516160J",
+      "area": "counts",
+      "initial_text": "  alpha beta\ncharlie delta\n  echo foxtrot\ngolf hotel",
+      "cursor": {
+        "line": 1,
+        "column": 3
+      },
+      "keys": "184467440737095516160J",
+      "expected": {
+        "text": "  alpha beta\ncharlie delta echo foxtrot golf hotel",
+        "cursor": {
+          "line": 1,
+          "column": 26
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "explicit search after *: foo",
+      "area": "search",
+      "initial_text": "foo Food food foo\nFOO foot",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "*/foo<Enter>",
+      "expected": {
+        "text": "foo Food food foo\nFOO foot",
+        "cursor": {
+          "line": 1,
+          "column": 4
+        },
+        "mode": "Normal",
+        "search_query": "foo"
+      }
+    },
+    {
+      "name": "explicit search after *: Foo",
+      "area": "search",
+      "initial_text": "foo Food food foo\nFOO foot",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "*/Foo<Enter>",
+      "expected": {
+        "text": "foo Food food foo\nFOO foot",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal",
+        "search_query": "Foo"
+      }
+    },
+    {
+      "name": "explicit search after *: oo",
+      "area": "search",
+      "initial_text": "foo Food food foo\nFOO foot",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "*/oo<Enter>",
+      "expected": {
+        "text": "foo Food food foo\nFOO foot",
+        "cursor": {
+          "line": 0,
+          "column": 15
+        },
+        "mode": "Normal",
+        "search_query": "oo"
+      }
+    },
+    {
+      "name": "explicit search after #: foo",
+      "area": "search",
+      "initial_text": "foo Food food foo\nFOO foot",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "#/foo<Enter>",
+      "expected": {
+        "text": "foo Food food foo\nFOO foot",
+        "cursor": {
+          "line": 1,
+          "column": 4
+        },
+        "mode": "Normal",
+        "search_query": "foo"
+      }
+    },
+    {
+      "name": "explicit search after #: Foo",
+      "area": "search",
+      "initial_text": "foo Food food foo\nFOO foot",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "#/Foo<Enter>",
+      "expected": {
+        "text": "foo Food food foo\nFOO foot",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal",
+        "search_query": "Foo"
+      }
+    },
+    {
+      "name": "explicit search after #: oo",
+      "area": "search",
+      "initial_text": "foo Food food foo\nFOO foot",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "#/oo<Enter>",
+      "expected": {
+        "text": "foo Food food foo\nFOO foot",
+        "cursor": {
+          "line": 0,
+          "column": 15
+        },
+        "mode": "Normal",
+        "search_query": "oo"
       }
     }
   ]

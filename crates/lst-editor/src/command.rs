@@ -93,6 +93,23 @@ impl EditorModel {
     pub fn execute(&mut self, command: EditorCommand) {
         use EditorCommand::*;
 
+        if matches!(
+            command,
+            SelectNextOccurrence
+                | SelectAllOccurrences
+                | SelectAllFindMatches
+                | SkipNextOccurrence
+                | AddCursorAbove
+                | AddCursorBelow
+                | AddCursorsToSelectedLineEnds
+                | ColumnSelectLeft
+                | ColumnSelectRight
+                | ColumnSelectUp
+                | ColumnSelectDown
+        ) && self.reject_vim_multiple_selections()
+        {
+            return;
+        }
         match command {
             RequestOpenFiles => self.request_open_files(),
             RequestSave => self.request_save(),

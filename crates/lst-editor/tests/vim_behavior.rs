@@ -1,5 +1,5 @@
 //! Vim behavior the Neovim oracle (`vim_oracle.rs`) cannot express: grapheme-aware
-//! editing, lst-specific policy, viewport-dependent motions, and `g;`/`gi`. ASCII
+//! editing, lst-specific policy, viewport-dependent motions, and `g;`/`gi`. Supported
 //! Normal and Visual parity cases belong in `scripts/generate_vim_oracle_fixtures.py`.
 
 mod support;
@@ -515,4 +515,96 @@ fn page_motions_take_a_count_and_cancel_a_pending_operator() {
     harness.expect_cursor(0, 0);
     harness.keys("w");
     harness.expect_text(&text);
+}
+
+#[test]
+fn half_page_count_belongs_to_the_viewport_and_resets_only_when_its_height_changes() {
+    let text = (0..200).map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
+    let mut h = VimHarness::with_two_tabs(&text, &text);
+    h.keys("<esc>");
+    h.model.set_viewport_rows(8);
+    h.keys("5<C-d><C-d>");
+    h.expect_cursor(10, 0);
+    h.model.set_viewport_rows(8);
+    h.keys("<C-u>");
+    h.expect_cursor(5, 0);
+    let second = h.model.tab_id_at(1).unwrap();
+    h.model.set_active_tab(second);
+    h.keys("<C-d>");
+    h.expect_cursor(5, 0);
+    h.keys("2<C-f><C-d>");
+    h.expect_cursor(22, 0);
+    h.model.set_viewport_rows(12);
+    h.keys("<C-d>");
+    h.expect_cursor(28, 0);
+    h.keys("184467440737095516160<C-d><C-d>");
+    h.expect_cursor(52, 0);
+}
+
+#[test]
+fn vim_selection_invariant_covers_tabs_external_sets_and_restored_history() {
+    use lst_editor::{InputMode, Selection, SelectionSet};
+    let mut h = VimHarness::with_two_tabs("abc abc abc", "def def def");
+    h.model.set_input_mode(InputMode::Standard);
+    let first = h.model.active_tab_id();
+    let second = h.model.tab_id_at(1).unwrap();
+    let multiple = SelectionSet::from_selections(vec![Selection::new(0, 3), Selection::new(4, 7)], 1).unwrap();
+    h.model.set_selection_set(multiple.clone());
+    h.model.replace_text_from_input(None, "X".into());
+    h.model.set_active_tab(second);
+    h.model.set_selection_set(multiple.clone());
+    h.model.set_input_mode(InputMode::Vim);
+    assert_eq!(h.model.selection_set().as_slice(), &[multiple.primary()]);
+    h.model.set_active_tab(first);
+    assert_eq!(h.model.selection_set().as_slice().len(), 1);
+    h.model.execute(EditorCommand::Undo);
+    assert_eq!(h.model.selection_set().as_slice(), &[multiple.primary()]);
+    h.model.execute(EditorCommand::Redo);
+    assert_eq!(h.model.selection_set().as_slice().len(), 1);
+    let retained = h.model.selection();
+    for command in [
+        EditorCommand::SelectNextOccurrence,
+        EditorCommand::SelectAllOccurrences,
+        EditorCommand::SelectAllFindMatches,
+        EditorCommand::AddCursorAbove,
+        EditorCommand::AddCursorBelow,
+        EditorCommand::AddCursorsToSelectedLineEnds,
+        EditorCommand::ColumnSelectDown,
+    ] {
+        h.model.execute(command);
+        assert_eq!(h.model.selection(), retained);
+        assert!(h.model.status().contains("unavailable in Vim"));
+    }
+    h.model.add_cursor_at_char(0);
+    h.model.add_selection_range(0..1, false);
+    h.model.set_rectangular_column_selection(0, 3);
+    assert_eq!(h.model.selection(), retained);
+    h.model.set_selection_set(multiple);
+    assert_eq!(h.model.selection_set().as_slice().len(), 1);
+    h.model.set_multi_cursor_limit(10);
+    assert_eq!(h.model.selection_set().as_slice().len(), 1);
+    h.model.set_input_mode(InputMode::Standard);
+    h.model.add_cursor_at_char(0);
+    assert_eq!(h.model.selection_set().as_slice().len(), 2);
+
+    // The retained primary invalidates expansion history from a larger set.
+    let mut h = VimHarness::new("abc def");
+    h.model.set_input_mode(InputMode::Standard);
+    h.model
+        .set_selection_set(SelectionSet::from_selections(vec![Selection::new(0, 1), Selection::new(4, 5)], 1).unwrap());
+    assert!(h.model.smart_expand_selection_with_candidates(&[], false, false));
+    assert_eq!(h.model.selection_set().as_slice().len(), 2);
+    h.model.set_input_mode(InputMode::Vim);
+    assert!(!h.model.smart_shrink_selection_from_history());
+    assert_eq!(h.model.selection_set().as_slice().len(), 1);
+}
+
+#[test]
+fn screen_motions_stop_on_the_last_blank_of_a_whitespace_only_line() {
+    let mut h = VimHarness::normal_at("   \n\t\nend", 2, 0);
+    h.model.set_viewport_rows(3);
+    h.model.set_viewport_top(0);
+    h.keys("Hx");
+    h.expect_text("  \n\t\nend");
+    h.expect_cursor(0, 1);
 }

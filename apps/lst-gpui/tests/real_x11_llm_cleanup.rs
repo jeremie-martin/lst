@@ -641,3 +641,20 @@ fn prompt_arrival_waits_for_another_documents_close_decision() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn configured_improve_prompt_shortcut_opens_confirmation() -> TestResult {
+    support::run_x11_test("cleanup-configured-shortcut", |session| {
+        session.seed_settings("version = 1\n[keybindings]\n'tools.cleanup_text' = ['alt-i']\n")?;
+        let path = session.seed_file("shortcut.txt", "Please improve this prompt.")?;
+        let mut editor = session.open_file("shortcut", &path)?;
+        editor.keys("<A-i>")?;
+        editor.wait_state("shortcut opens confirmation", secs(3), |s| {
+            s.cleanup_confirmation_open && s.focused_input == "cleanup_confirmation"
+        })?;
+        editor.keys("<esc>")?;
+        editor.expect_file(&path, "Please improve this prompt.")?;
+        Ok(())
+    })
+}

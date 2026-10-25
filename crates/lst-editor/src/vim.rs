@@ -88,6 +88,7 @@ pub struct VimState {
     pub(crate) char_find: Option<CharFind>,
     pub(crate) search_backward: bool,
     pub(crate) preferred_column: Option<usize>,
+    pub(crate) half_page_rows: Option<usize>,
 }
 
 impl Default for VimState {
@@ -106,6 +107,7 @@ impl VimState {
             char_find: None,
             search_backward: false,
             preferred_column: None,
+            half_page_rows: None,
         }
     }
 
@@ -121,7 +123,6 @@ impl VimState {
     pub(crate) fn clear_transient(&mut self) {
         self.visual = None;
         self.pending.clear();
-        self.char_find = None;
         self.preferred_column = None;
     }
 

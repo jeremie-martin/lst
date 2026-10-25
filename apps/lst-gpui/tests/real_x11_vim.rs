@@ -12,7 +12,7 @@ use std::thread;
 
 use lst_x11_harness::{ChordMods, Key};
 
-use support::{secs, EditorTestExt, FindInput, TestResult};
+use support::{secs, EditorTestExt, FindInput, SelectionTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
@@ -399,7 +399,7 @@ fn vim_normal_mode_ctrl_f_b_d_u_page_instead_of_running_editor_shortcuts() -> Te
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
-fn vim_ctrl_d_in_normal_mode_keeps_vim_half_page_motion() -> TestResult {
+fn released_ctrl_then_plain_d_starts_a_vim_operator() -> TestResult {
     support::run_x11_test("regression-vim-ctrl-d", |session| {
         let text = (0..80)
             .map(|line| format!("foo line {line:02}"))
@@ -412,9 +412,10 @@ fn vim_ctrl_d_in_normal_mode_keeps_vim_half_page_motion() -> TestResult {
         editor.send_keys_settle("<esc>")?;
         editor.expect_vim_mode("NORMAL")?;
         editor.key_after_released_modifiers(ChordMods::CTRL, Key::Char('d'))?;
-        editor.wait_state("vim Ctrl-D moved down", secs(5), |record| {
+        editor.wait_state("released Ctrl leaves plain d pending", secs(5), |record| {
             record.vim_mode == "NORMAL"
-                && matches!(record.cursors.as_slice(), [cursor] if cursor.is_collapsed() && cursor.head_line > 0)
+                && record.vim_pending == "d"
+                && matches!(record.cursors.as_slice(), [cursor] if cursor.is_collapsed() && cursor.head_line == 0)
         })?;
         Ok(())
     })
@@ -432,6 +433,58 @@ fn ignored_insert_mode_recent_ctrl_does_not_poison_next_vim_key() -> TestResult 
         editor.wait_state("plain vim d pending", secs(2), |record| {
             record.vim_mode == "NORMAL" && record.vim_pending == "d"
         })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn vim_counted_half_pages_remember_the_count_across_opposite_directions() -> TestResult {
+    support::run_x11_test("vim-remember-scroll", |session| {
+        let text = (0..100)
+            .map(|line| format!("line {line:03}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let path = session.seed_file("scroll.txt", &text)?;
+        let mut editor = session.open_vim_file("scroll", &path)?;
+        editor.keys("<esc>gg05<C-d><C-d>")?;
+        editor.expect_cursor_heads(&[(10, 0)])?;
+        editor.keys("<C-u>")?;
+        editor.expect_cursor_heads(&[(5, 0)])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn entering_vim_retains_the_primary_selection_and_reports_unavailable_cursor_additions() -> TestResult {
+    support::run_x11_test("vim-single-selection", |session| {
+        let path = session.seed_file("single.txt", "foo foo foo")?;
+        let mut editor = session.open_file("single", &path)?;
+        editor.keys("<C-home><C-d><C-d>")?;
+        let before = editor.wait_state("two selected words", secs(2), |s| s.cursors.len() == 2)?;
+        let primary = before
+            .cursors
+            .get(before.primary_cursor_index)
+            .ok_or("missing primary cursor")?;
+        let expected = (
+            (primary.anchor_line, primary.anchor_col),
+            (primary.head_line, primary.head_col),
+        );
+        editor.keys("<C-,><tab><enter>")?;
+        editor.wait_state("Vim enabled", secs(2), |s| s.input_mode == "vim")?;
+        editor.keys("<esc>")?;
+        editor.expect_selections(&[expected])?;
+        editor.keys("<C-A-down>")?;
+        editor.wait_state("cursor addition explained", secs(2), |s| {
+            s.status_message.contains("unavailable in Vim")
+        })?;
+        editor.expect_selections(&[expected])?;
+        editor.keys("X<esc>")?;
+        editor.save_then_expect_file(&path, "foo X foo")?;
+        editor.keys("u")?;
+        editor.save_then_expect_file(&path, "foo foo foo")?;
+        editor.expect_cursor_heads(&[(0, 4)])?;
         Ok(())
     })
 }

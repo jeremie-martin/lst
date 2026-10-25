@@ -10,7 +10,7 @@ mod support;
 
 use lst_x11_harness::{ChordMods, Key, KeyChord};
 
-use support::{secs, EditorTestExt, TestResult};
+use support::{secs, EditorTestExt, SelectionTestExt, TestResult};
 
 #[test]
 #[ignore = "requires a real X11 display plus xclip"]
@@ -206,6 +206,50 @@ fn ctrl_alt_shift_arrows_duplicate_the_line_above_and_below() -> TestResult {
         editor.keys("<C-A-S-down>")?;
         editor.expect_cursor_heads(&[(2, 2)])?;
         editor.save_then_expect_file(&path, "alpha\nbeta\nbeta\nbeta")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn pointer_interaction_cancels_the_select_next_skip_prefix() -> TestResult {
+    support::run_x11_test("pointer-clears-prefix", |session| {
+        let path = session.seed_file("prefix.txt", "foo foo foo")?;
+        let mut editor = session.open_file("prefix", &path)?;
+        editor.keys("<C-home><C-d><C-k>")?;
+        editor.click_at_text(0, 0)?;
+        editor.keys("<C-d><C-d>")?;
+        editor.expect_selections(&[((0, 0), (0, 3)), ((0, 4), (0, 7))])?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn mixed_case_arrow_override_runs_the_configured_command() -> TestResult {
+    support::run_x11_test("mixed-case-arrow", |session| {
+        session.seed_settings("version = 1\n[keybindings]\n'edit.duplicate_line' = ['Right']\n")?;
+        let path = session.seed_file("arrow.txt", "alpha\nbeta")?;
+        let mut editor = session.open_file("arrow", &path)?;
+        editor.keys("<C-home><right>")?;
+        editor.save_then_expect_file(&path, "alpha\nalpha\nbeta")?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn overridden_shift_enter_finds_previous_only_in_find_fields() -> TestResult {
+    support::run_x11_test("find-previous-context", |session| {
+        session.seed_settings("version = 1\n[keybindings]\n'find.previous' = ['shift-enter', 'shift-f3']\n")?;
+        let path = session.seed_file("context.txt", "foo foo foo")?;
+        let mut editor = session.open_file("context", &path)?;
+        editor.keys("<C-home><S-enter>")?;
+        editor.save_then_expect_file(&path, "\nfoo foo foo")?;
+        editor.keys("<C-f>foo<S-enter>")?;
+        editor.expect_cursor_heads(&[(1, 8)])?;
+        editor.keys("<esc><S-f3>")?;
+        editor.expect_cursor_heads(&[(1, 4)])?;
         Ok(())
     })
 }

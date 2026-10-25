@@ -128,7 +128,11 @@ impl LstGpuiApp {
         let custom_arrows = commands
             .iter()
             .any(|command| overrides.contains_key(command_id(*command)))
-            || overrides.values().flatten().any(|key| HeldArrows::bit(key) != 0);
+            || overrides.values().flatten().any(|sequence| {
+                sequence.split_whitespace().any(|key| {
+                    gpui::Keystroke::parse(key).is_ok_and(|key| HeldArrows::bit(&key.key.to_ascii_lowercase()) != 0)
+                })
+            });
         if !self.editor_input_is_focused(window)
             || !window.is_window_active()
             || self.model.input_mode() != InputMode::Standard
@@ -619,31 +623,25 @@ fn drag_horizontal_autoscroll_delta(position: Point<Pixels>, bounds: Bounds<Pixe
     }
 }
 
-const X11_SYNTHETIC_MODIFIER_CHORD_WINDOW_MS: u128 = 500;
-
 impl LstGpuiApp {
     pub(crate) fn clear_x11_modifier_chord_state(&mut self) {
-        self.recent_modifier_chord = None;
         self.modifier_chord_accumulated = Modifiers::default();
         self.x11_ctrl_k_pending = false;
     }
 
-    fn clear_recent_x11_modifier_chord(&mut self) {
-        self.recent_modifier_chord = None;
+    fn clear_current_modifier_chord(&mut self) {
         self.modifier_chord_accumulated = Modifiers::default();
     }
 
     pub(crate) fn note_modifiers_changed_for_text_input(&mut self, event: &ModifiersChangedEvent) {
         if modifiers_active(event.modifiers) {
             self.modifier_chord_accumulated = merge_modifiers(self.modifier_chord_accumulated, event.modifiers);
-            self.recent_modifier_chord = None;
         } else if modifiers_active(self.modifier_chord_accumulated) {
-            self.recent_modifier_chord = Some((self.modifier_chord_accumulated, Instant::now()));
             self.modifier_chord_accumulated = Modifiers::default();
         }
     }
 
-    pub(crate) fn maybe_handle_recent_modifier_key_action(
+    pub(crate) fn maybe_handle_modifier_key_action(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
@@ -655,14 +653,10 @@ impl LstGpuiApp {
 
         let vim_enabled = self.model.input_mode() == InputMode::Vim;
         let insert_mode = !vim_enabled || self.model.vim_mode() == vim::Mode::Insert;
-        let modifiers = if insert_mode {
-            self.effective_current_modifiers(event.keystroke.modifiers, window)
-        } else {
-            self.effective_modifier_chord(event.keystroke.modifiers, window)
-        };
+        let modifiers = self.effective_current_modifiers(event.keystroke.modifiers, window);
         if !modifiers_active(modifiers) {
             if insert_mode {
-                self.clear_recent_x11_modifier_chord();
+                self.clear_current_modifier_chord();
             }
             return false;
         }
@@ -671,7 +665,7 @@ impl LstGpuiApp {
         if insert_mode && key == "enter" {
             self.x11_ctrl_k_pending = false;
             self.execute_model_command(cx, EditorCommand::InsertNewline);
-            self.clear_recent_x11_modifier_chord();
+            self.clear_current_modifier_chord();
             cx.stop_propagation();
             return true;
         }
@@ -679,20 +673,12 @@ impl LstGpuiApp {
             self.x11_ctrl_k_pending = false;
             return false;
         }
-        // A released chord only completes the Vim chords above. Any other key
-        // pressed without a modifier in Normal or Visual mode is a Vim command.
-        if !insert_mode && !modifiers_active(self.effective_current_modifiers(event.keystroke.modifiers, window)) {
-            self.clear_recent_x11_modifier_chord();
-            return false;
-        }
-
         if let Some(command) = workspace_fallback_command(&key, modifiers, &self.settings.settings.keybindings) {
             self.dispatch_workspace_command(command, window, cx);
             cx.stop_propagation();
             true
         } else {
             if !modifiers.shift || modifiers.control || modifiers.alt || modifiers.platform {
-                self.recent_modifier_chord = None;
                 self.modifier_chord_accumulated = Modifiers::default();
                 self.x11_ctrl_k_pending = false;
             }
@@ -737,7 +723,7 @@ impl LstGpuiApp {
             return false;
         }
 
-        let effective_modifiers = self.effective_modifier_chord(event.keystroke.modifiers, window);
+        let effective_modifiers = self.effective_current_modifiers(event.keystroke.modifiers, window);
         let mods = gpui_modifiers_to_vim(effective_modifiers);
         let key = gpui_key_to_vim(event);
         let plain_vim_key = !effective_modifiers.control && !effective_modifiers.alt && !effective_modifiers.platform;
@@ -772,7 +758,7 @@ impl LstGpuiApp {
             if modified_enter {
                 self.x11_ctrl_k_pending = false;
                 self.execute_model_command(cx, EditorCommand::InsertNewline);
-                self.clear_recent_x11_modifier_chord();
+                self.clear_current_modifier_chord();
                 cx.stop_propagation();
                 return true;
             }
@@ -866,7 +852,7 @@ impl EntityInputHandler for LstGpuiApp {
             model.replace_text_from_input(range, text.to_string());
         });
         if !text.is_empty() {
-            self.clear_recent_x11_modifier_chord();
+            self.clear_current_modifier_chord();
         }
         self.record_operation("text_input", None, elapsed_ms(apply_started));
     }
@@ -897,7 +883,7 @@ impl EntityInputHandler for LstGpuiApp {
             model.replace_and_mark_text(range, new_text.to_string(), selected_range);
         });
         if !new_text.is_empty() {
-            self.clear_recent_x11_modifier_chord();
+            self.clear_current_modifier_chord();
         }
         self.record_operation("ime_text_input", None, elapsed_ms(apply_started));
     }
@@ -942,14 +928,6 @@ impl EntityInputHandler for LstGpuiApp {
 }
 
 impl LstGpuiApp {
-    fn effective_modifier_chord(&self, event_modifiers: Modifiers, window: &Window) -> Modifiers {
-        let mut modifiers = self.effective_current_modifiers(event_modifiers, window);
-        if let Some(recent) = self.recent_modifier_chord() {
-            modifiers = merge_modifiers(modifiers, recent);
-        }
-        modifiers
-    }
-
     fn effective_current_modifiers(&self, event_modifiers: Modifiers, window: &Window) -> Modifiers {
         let mut modifiers = merge_modifiers(event_modifiers, self.modifier_chord_accumulated);
         // GPUI normalizes Shift out of symbol keystrokes. Its window modifier
@@ -968,12 +946,6 @@ impl LstGpuiApp {
             modifiers.shift |= window_modifiers.shift;
         }
         modifiers
-    }
-
-    fn recent_modifier_chord(&self) -> Option<Modifiers> {
-        self.recent_modifier_chord
-            .filter(|(_, released_at)| released_at.elapsed().as_millis() <= X11_SYNTHETIC_MODIFIER_CHORD_WINDOW_MS)
-            .map(|(modifiers, _)| modifiers)
     }
 
     /// Vim Normal and Visual modes own Ctrl+D/U/F/B for paging.

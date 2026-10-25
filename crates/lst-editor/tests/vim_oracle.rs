@@ -66,10 +66,10 @@ struct FixturePosition {
 fn nvim_oracle_fixtures_match_editor_model() {
     let fixture: Fixture = serde_json::from_str(FIXTURE).expect("valid vim oracle fixture");
 
-    assert_eq!(fixture.metadata.oracle_profile, "user_config");
-    assert!(
-        fixture.metadata.nvim_version.starts_with("NVIM v"),
-        "fixture should record the nvim version that generated it"
+    assert_eq!(fixture.metadata.oracle_profile, "isolated");
+    assert_eq!(
+        fixture.metadata.nvim_version, "NVIM v0.12.6",
+        "update the pinned reference deliberately"
     );
 
     let mut failures = Vec::new();
