@@ -976,23 +976,23 @@ warranted, record why and continue directly with the remaining findings and
 optional assessments; resume that work after any upgrades as well. The focused
 typing-performance follow-up remains deferred until the foundation work is done.
 
-- [ ] **Upstream review and rebasing:** Review the latest upstream releases and
-  relevant unreleased fixes for the patched dependencies (`gpui`, `blade-graphics`
-  and `tree-sitter`). Prefer staying aligned with maintained upstream versions
-  while preserving the editor's accepted behavior and measured performance.
+- [ ] **Upstream review and rebasing:** Implementation candidate prepared; acceptance
+  remains pending the full display gates and controlled performance comparison.
+  - GPUI 0.2.2 is still the newest non-yanked registry release. Retain that released
+    base and its documented patches; upstream main now splits platform work into
+    additional workspace crates, requiring a separate unreleased-platform migration.
+  - Upgrade Blade graphics 0.7.1 to 0.9.0 and blade-util 0.3.0 to 0.5.0. The released
+    ray-tracing opt-in replaces our backport, allowing removal of the entire Blade
+    vendor copy and workspace override. GPUI needs only explicit descriptor fields,
+    optional device selection, wait-result adaptation and two WGSL validation fixes.
+  - Upgrade Tree-sitter 0.26.8 to 0.27.1. Its parser/query and Rust API fixes are useful;
+    grammar ABIs remain supported. The changed-range optimization applies unchanged
+    and remains absent from upstream master, so retain that single patch.
+  - All-feature tests pass on the candidate. Real-app launch exposed and verified the
+    WGSL adjustments; focused runtime/presentation checks pass except one resize
+    timeout whose three isolated reruns pass. Do not count the upgrade accepted until
+    the broad gates, visual review and performance evidence are complete.
 
-Compare each local patch with upstream: remove changes already incorporated or
-made unnecessary, adapt and revalidate changes still needed, and record the
-upstream status and removal criterion of every retained patch. Reassess old
-performance justifications on the current app rather than assuming they still
-hold. Evaluate compatible dependency upgrades together where required; do not
-carry obsolete local implementations forward mechanically.
-
-Use the real-app regression and applicable visual lanes, plus controlled
-before/after performance comparisons, to validate each coherent upgrade. Keep
-patch markers, manifests and reproducible patch files synchronized. Record the
-chosen versions and any concrete reason an upgrade must wait. Use that dependency
-baseline when the later typing-performance follow-up is reached.
 
 ## Deferred performance follow-up
 

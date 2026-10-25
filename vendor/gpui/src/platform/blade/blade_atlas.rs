@@ -47,6 +47,8 @@ impl BladeAtlas {
             gpu: Arc::clone(gpu),
             upload_belt: BufferBelt::new(BufferBeltDescriptor {
                 memory: gpu::Memory::Upload,
+                // lst patch: texture uploads use the released Blade data-buffer target.
+                target: gpu::BufferTarget::Data,
                 min_chunk_size: 0x10000,
                 alignment: 64, // Vulkan `optimalBufferCopyOffsetAlignment` on Intel XE
             }),

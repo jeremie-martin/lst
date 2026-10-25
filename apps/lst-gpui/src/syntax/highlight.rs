@@ -1727,7 +1727,7 @@ fn collect_rope_captures(
     });
     while let Some(query_match) = matches.next() {
         let pattern_index = query_match.pattern_index as u16;
-        for capture in query_match.captures {
+        for capture in query_match.captures() {
             let Some(role) = config.capture_roles.get(capture.index as usize).copied().flatten() else {
                 continue;
             };
@@ -1817,7 +1817,7 @@ fn collect_rope_injections_at(
     while let Some(query_match) = matches.next() {
         let mut content_node = None;
         let mut language_text = None;
-        for capture in query_match.captures {
+        for capture in query_match.captures() {
             if Some(capture.index) == content_index {
                 content_node = Some(capture.node);
             } else if Some(capture.index) == language_index {
@@ -1918,7 +1918,7 @@ fn collect_captures(
     let mut matches = cursor.matches(&config.highlights, tree.root_node(), source);
     while let Some(m) = matches.next() {
         let pattern_index = m.pattern_index as u16;
-        for capture in m.captures {
+        for capture in m.captures() {
             let Some(role) = config.capture_roles.get(capture.index as usize).copied().flatten() else {
                 continue;
             };
@@ -1984,7 +1984,7 @@ fn collect_injection_matches(
     while let Some(m) = matches.next() {
         let mut content_node = None;
         let mut language_text: Option<&str> = None;
-        for capture in m.captures {
+        for capture in m.captures() {
             if Some(capture.index) == content_index {
                 content_node = Some(capture.node);
             } else if Some(capture.index) == language_index {

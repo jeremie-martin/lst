@@ -1,6 +1,6 @@
-# lst patches to tree-sitter 0.26.8
+# lst patches to tree-sitter 0.27.1
 
-This is the crates.io 0.26.8 source (the Rust binding and the C library it
+This is the crates.io 0.27.1 source (the Rust binding and the C library it
 compiles), selected through the workspace patch table. `lst.patch` is the exact
 diff against the crates.io sources. Every change is marked `lst patch`.
 
@@ -28,3 +28,18 @@ byte-identical ranges and trees.
 
 Remove this vendor copy when a tree-sitter release includes an equivalent
 change.
+
+## Upstream rebase (2026-10-25)
+
+Rebased from 0.26.8 to released 0.27.1, upstream revision
+`10eb5ac119eec9cb4267a8e035066473983f5f3a`. The release includes parser recovery,
+query matching and Rust API safety fixes. The app uses the new `captures()`
+accessor. Existing language grammar versions remain compatible with its ABI.
+The changed-range implementation is unchanged upstream, so our single patch
+applies without modification; the current upstream master also still performs
+eager last-external-token traversal. Retain the patch until an equivalent
+upstream optimization ships, then compare correctness and performance before
+removing it.
+
+Sources: [0.27.0 release notes](https://github.com/tree-sitter/tree-sitter/releases/tag/v0.27.0),
+[0.27.1 release notes](https://github.com/tree-sitter/tree-sitter/releases/tag/v0.27.1).

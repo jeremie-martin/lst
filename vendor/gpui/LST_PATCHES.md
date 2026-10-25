@@ -4,7 +4,8 @@ This directory is the `gpui` 0.2.2 crates.io release (docs, examples, and
 tests removed) with the changes below. The workspace selects it through
 `[patch.crates-io]` in the root `Cargo.toml`; delete that section to build
 against the unpatched release. `lst.patch` is the exact diff against the
-crates.io sources, for re-applying to a newer gpui.
+crates.io sources, for re-applying to a newer gpui. The adapter uses released
+`blade-graphics` 0.9.0 and `blade-util` 0.5.0; Blade no longer needs a vendor copy.
 
 Every change is marked `lst patch` in the source.
 
@@ -124,3 +125,24 @@ Every change is marked `lst patch` in the source.
 The `Cargo.toml` here also drops the crate's example and test targets whose
 sources are not vendored. It suppresses upstream dead-code and unreachable-code
 warnings that become visible when a registry dependency is built as a path dependency.
+
+## Released dependency alignment (2026-10-25)
+
+GPUI 0.2.2 remains the latest non-yanked crates.io release. Zed main has split
+platform code into separate workspace crates; adopting that unreleased platform
+migration is a separate GPUI upgrade, not a drop-in release rebase. The numbered
+local patches remain on the released base, with their removal criteria above.
+
+The Blade adapter now uses `blade-graphics` 0.9.0 and `blade-util` 0.5.0.
+The released `ContextDesc::ray_tracing` option supersedes our c7edf7b6 backport,
+so `vendor/blade-graphics` and its workspace override are removed. The adapter
+uses optional device selection, WGSL shader input, automatic pass barriers and
+data-buffer targets explicitly. Device wait errors retain the old retry policy;
+this upgrade does not add a device-recovery architecture. These small changes
+are marked `lst patch` in the manifest, context, renderer and atlas. The newer
+shader validator also requires a non-shadowing gradient local and explicit flat
+interpolation for the path vertex ID; both preserve the intended shader behavior.
+
+Sources: [GPUI releases](https://crates.io/crates/gpui),
+[Blade 0.9.0](https://crates.io/crates/blade-graphics/0.9.0),
+[Blade upstream revision](https://github.com/kvark/blade/tree/866de2c37acbcf1e54c3a21f3213dae4f2f45746).

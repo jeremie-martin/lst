@@ -28,7 +28,8 @@ impl BladeContext {
                     // lst patch: GPUI uses rasterization, not ray queries.
                     ray_tracing: false,
                     validation: false,
-                    device_id: device_id_forced.unwrap_or(0),
+                    // lst patch: current Blade uses an explicit optional device selection.
+                    device_id: device_id_forced,
                     ..Default::default()
                 })
             }

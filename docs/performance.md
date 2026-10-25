@@ -150,12 +150,12 @@ behaviour that bounds what the app can improve.
 
 The workspace builds against `vendor/gpui`, the gpui 0.2.2 release with the
 platform and rendering patches listed in `vendor/gpui/LST_PATCHES.md`. The
-workspace also backports Blade's explicit Vulkan ray-tracing opt-in; GPUI
-uses raster rendering only (see `vendor/blade-graphics/LST_PATCHES.md`).
+GPUI adapter uses released Blade 0.9 with Vulkan ray tracing disabled; the former
+Blade backport and vendor copy have been retired.
 `vendor/tree-sitter` makes `changed_ranges` cheaper without changing its
-result (see `vendor/tree-sitter/LST_PATCHES.md`). Each patch records the measurement that motivated it; re-measure with the
-`[patch.crates-io]` section of the root `Cargo.toml` removed to compare
-against the unpatched release.
+result (see `vendor/tree-sitter/LST_PATCHES.md`). Each patch records the measurement that motivated it. Compare an individual
+patch against the same dependency version and adapter: removing the GPUI override
+also changes its Blade version, which would confound that comparison.
 
 ## Framework-neutral benchmarks
 

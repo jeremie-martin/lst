@@ -15,9 +15,9 @@ The root `Cargo.toml` is a workspace manifest. It has three members:
 The app and editor are `default-members`. The X11 harness is compiled only when
 selected directly or used by the app's integration tests.
 
-`vendor/gpui` carries documented platform/rendering changes. A narrow upstream
-backport in `vendor/blade-graphics` lets GPUI decline unused Vulkan ray-tracing
-capabilities. `vendor/tree-sitter` makes `changed_ranges` stop descending into
+`vendor/gpui` carries documented platform/rendering changes and a small adapter
+for released Blade 0.9 APIs. Blade is an ordinary registry dependency; its released
+ray-tracing opt-in replaces our former backport. `vendor/tree-sitter` makes `changed_ranges` stop descending into
 every subtree it skips. Each vendor directory records its exact diff,
 rationale, and removal criteria in `lst.patch` and `LST_PATCHES.md`.
 

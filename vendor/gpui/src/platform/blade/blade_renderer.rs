@@ -143,6 +143,8 @@ impl BladePipelines {
         );
         let shader = gpu.create_shader(gpu::ShaderDesc {
             source: include_str!("shaders.wgsl"),
+            // lst patch: keep WGSL parsing with the released Blade API.
+            naga_module: None,
         });
         shader.check_struct_size::<GlobalParams>();
         shader.check_struct_size::<SurfaceParams>();
@@ -363,6 +365,8 @@ impl BladeRenderer {
         let command_encoder = context.gpu.create_command_encoder(gpu::CommandEncoderDesc {
             name: "main",
             buffer_count: 2,
+            // lst patch: retain automatic pass barriers with current Blade.
+            manual_barriers: false,
         });
         let rendering_parameters = RenderingParameters::from_env(context);
         let pipelines = BladePipelines::new(
@@ -372,6 +376,8 @@ impl BladeRenderer {
         );
         let instance_belt = BufferBelt::new(BufferBeltDescriptor {
             memory: gpu::Memory::Shared,
+            // lst patch: these are shader data, not index buffers.
+            target: gpu::BufferTarget::Data,
             min_chunk_size: 0x1000,
             alignment: 0x40, // Vulkan `minStorageBufferOffsetAlignment` on Intel Xe
         });
@@ -409,9 +415,14 @@ impl BladeRenderer {
         })
     }
 
+    // lst patch: current Blade distinguishes device errors from timeouts; both
+    // retain GPUI's existing wait/retry policy before resources can be reused.
     fn wait_for_gpu(&mut self) {
         if let Some(last_sp) = self.last_sync_point.take()
-            && !self.gpu.wait_for(&last_sp, MAX_FRAME_TIME_MS)
+            && !self
+                .gpu
+                .wait_for(&last_sp, MAX_FRAME_TIME_MS)
+                .unwrap_or(false)
         {
             log::error!("GPU hung");
             #[cfg(target_os = "linux")]
@@ -427,7 +438,11 @@ impl BladeRenderer {
                 "your device information is: {:?}",
                 self.gpu.device_information()
             );
-            while !self.gpu.wait_for(&last_sp, MAX_FRAME_TIME_MS) {}
+            while !self
+                .gpu
+                .wait_for(&last_sp, MAX_FRAME_TIME_MS)
+                .unwrap_or(false)
+            {}
         }
     }
 
@@ -902,7 +917,11 @@ impl PathTarget {
         Self {
             resolved: create_path_intermediate_texture(gpu, format, size.width, size.height),
             multisampled: create_msaa_texture_if_needed(
-                gpu, format, size.width, size.height, sample_count,
+                gpu,
+                format,
+                size.width,
+                size.height,
+                sample_count,
             ),
         }
     }

@@ -516,20 +516,20 @@
                  let next_frame_callbacks = next_frame_callbacks.take();
                  if !next_frame_callbacks.is_empty() {
                      handle
-@@ -1034,13 +1058,6 @@
+@@ -1033,13 +1057,6 @@
+                         })
                          .log_err();
                  }
-
+-
 -                // Keep presenting the current scene for 1 extra second since the
 -                // last input to prevent the display from underclocking the refresh rate.
 -                let needs_present = request_frame_options.require_presentation
 -                    || needs_present.get()
 -                    || (active.get()
 -                        && last_input_timestamp.get().elapsed() < Duration::from_secs(1));
--
+
                  if invalidator.is_dirty() || request_frame_options.force_render {
                      measure("frame duration", || {
-                         handle
 @@ -1211,6 +1228,7 @@
              platform_window,
              display_id,
@@ -577,15 +577,19 @@
                  size: tile.bounds.size.map(Into::into),
 --- a/src/platform/blade/blade_context.rs
 +++ b/src/platform/blade/blade_context.rs
-@@ -25,6 +25,8 @@
+@@ -25,8 +25,11 @@
              unsafe {
                  gpu::Context::init(gpu::ContextDesc {
                      presentation: true,
 +                    // lst patch: GPUI uses rasterization, not ray queries.
 +                    ray_tracing: false,
                      validation: false,
-                     device_id: device_id_forced.unwrap_or(0),
+-                    device_id: device_id_forced.unwrap_or(0),
++                    // lst patch: current Blade uses an explicit optional device selection.
++                    device_id: device_id_forced,
                      ..Default::default()
+                 })
+             }
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -104,130 +104,6 @@
@@ -719,7 +723,47 @@
  [dependencies.anyhow]
  version = "1.0.86"
 
-@@ -747,3 +623,9 @@
+@@ -239,7 +115,8 @@
+ optional = true
+
+ [dependencies.blade-graphics]
+-version = "0.7.0"
++# lst patch: follow released Blade APIs; the ray-tracing opt-in is upstream.
++version = "0.9.0"
+ optional = true
+
+ [dependencies.blade-macros]
+@@ -247,7 +124,8 @@
+ optional = true
+
+ [dependencies.blade-util]
+-version = "0.3.0"
++# lst patch: follow released Blade APIs; the ray-tracing opt-in is upstream.
++version = "0.5.0"
+ optional = true
+
+ [dependencies.bytemuck]
+@@ -461,7 +339,8 @@
+ default-features = false
+
+ [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.blade-graphics]
+-version = "0.7.0"
++# lst patch: follow released Blade APIs; the ray-tracing opt-in is upstream.
++version = "0.9.0"
+ optional = true
+
+ [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.blade-macros]
+@@ -469,7 +348,8 @@
+ optional = true
+
+ [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.blade-util]
+-version = "0.3.0"
++# lst patch: follow released Blade APIs; the ray-tracing opt-in is upstream.
++version = "0.5.0"
+ optional = true
+
+ [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.bytemuck]
+@@ -747,3 +627,9 @@
  [lints.rust.unexpected_cfgs]
  level = "allow"
  priority = 0
@@ -771,7 +815,16 @@
              };
 --- a/src/platform/blade/blade_renderer.rs
 +++ b/src/platform/blade/blade_renderer.rs
-@@ -336,10 +336,8 @@
+@@ -143,6 +143,8 @@
+         );
+         let shader = gpu.create_shader(gpu::ShaderDesc {
+             source: include_str!("shaders.wgsl"),
++            // lst patch: keep WGSL parsing with the released Blade API.
++            naga_module: None,
+         });
+         shader.check_struct_size::<GlobalParams>();
+         shader.check_struct_size::<SurfaceParams>();
+@@ -336,10 +338,8 @@
      atlas_sampler: gpu::Sampler,
      #[cfg(target_os = "macos")]
      core_video_texture_cache: CVMetalTextureCache,
@@ -784,10 +837,29 @@
      rendering_parameters: RenderingParameters,
  }
 
-@@ -385,23 +383,6 @@
+@@ -365,6 +365,8 @@
+         let command_encoder = context.gpu.create_command_encoder(gpu::CommandEncoderDesc {
+             name: "main",
+             buffer_count: 2,
++            // lst patch: retain automatic pass barriers with current Blade.
++            manual_barriers: false,
+         });
+         let rendering_parameters = RenderingParameters::from_env(context);
+         let pipelines = BladePipelines::new(
+@@ -374,6 +376,8 @@
+         );
+         let instance_belt = BufferBelt::new(BufferBeltDescriptor {
+             memory: gpu::Memory::Shared,
++            // lst patch: these are shader data, not index buffers.
++            target: gpu::BufferTarget::Data,
+             min_chunk_size: 0x1000,
+             alignment: 0x40, // Vulkan `minStorageBufferOffsetAlignment` on Intel Xe
+         });
+@@ -384,23 +388,6 @@
+             min_filter: gpu::FilterMode::Linear,
              ..Default::default()
          });
-
+-
 -        let (path_intermediate_texture, path_intermediate_texture_view) =
 -            create_path_intermediate_texture(
 -                &context.gpu,
@@ -804,11 +876,10 @@
 -                rendering_parameters.path_sample_count,
 -            )
 -            .unzip();
--
+
          #[cfg(target_os = "macos")]
          let core_video_texture_cache = unsafe {
-             CVMetalTextureCache::new(
-@@ -422,10 +403,8 @@
+@@ -422,17 +409,20 @@
              atlas_sampler,
              #[cfg(target_os = "macos")]
              core_video_texture_cache,
@@ -821,7 +892,33 @@
              rendering_parameters,
          })
      }
-@@ -479,41 +458,16 @@
+
++    // lst patch: current Blade distinguishes device errors from timeouts; both
++    // retain GPUI's existing wait/retry policy before resources can be reused.
+     fn wait_for_gpu(&mut self) {
+         if let Some(last_sp) = self.last_sync_point.take()
+-            && !self.gpu.wait_for(&last_sp, MAX_FRAME_TIME_MS)
++            && !self
++                .gpu
++                .wait_for(&last_sp, MAX_FRAME_TIME_MS)
++                .unwrap_or(false)
+         {
+             log::error!("GPU hung");
+             #[cfg(target_os = "linux")]
+@@ -448,7 +438,11 @@
+                 "your device information is: {:?}",
+                 self.gpu.device_information()
+             );
+-            while !self.gpu.wait_for(&last_sp, MAX_FRAME_TIME_MS) {}
++            while !self
++                .gpu
++                .wait_for(&last_sp, MAX_FRAME_TIME_MS)
++                .unwrap_or(false)
++            {}
+         }
+     }
+
+@@ -479,41 +473,16 @@
              self.surface_config.size = gpu_size;
              self.gpu
                  .reconfigure_surface(&mut self.surface, self.surface_config);
@@ -867,7 +964,7 @@
              self.surface_config.transparent = transparent;
              self.gpu
                  .reconfigure_surface(&mut self.surface, self.surface_config);
-@@ -560,28 +514,45 @@
+@@ -560,28 +529,45 @@
          objc2::rc::Retained::as_ptr(&self.surface.metal_layer()) as *mut _
      }
 
@@ -924,7 +1021,7 @@
                  init_op: gpu::InitOp::Clear(gpu::TextureColor::TransparentBlack),
                  finish_op: gpu::FinishOp::Store,
              }
-@@ -619,6 +590,8 @@
+@@ -619,6 +605,8 @@
              );
              encoder.draw(0, vertices.len() as u32, 0, 1);
          }
@@ -933,7 +1030,7 @@
      }
 
      pub fn destroy(&mut self) {
-@@ -629,15 +602,8 @@
+@@ -629,15 +617,8 @@
          self.gpu.destroy_command_encoder(&mut self.command_encoder);
          self.pipelines.destroy(&self.gpu);
          self.gpu.destroy_surface(&mut self.surface);
@@ -951,7 +1048,7 @@
      }
 
      pub fn draw(&mut self, scene: &Scene) {
-@@ -707,7 +673,8 @@
+@@ -707,7 +688,8 @@
                          continue;
                      };
                      drop(pass);
@@ -961,7 +1058,7 @@
                          paths,
                          self.surface_config.size.width as f32,
                          self.surface_config.size.height as f32,
-@@ -751,7 +718,7 @@
+@@ -751,7 +733,7 @@
                          0,
                          &ShaderPathsData {
                              globals,
@@ -970,7 +1067,7 @@
                              s_sprite: self.atlas_sampler,
                              b_path_sprites: instance_buf,
                          },
-@@ -918,6 +885,38 @@
+@@ -918,6 +900,42 @@
      }
  }
 
@@ -991,7 +1088,11 @@
 +        Self {
 +            resolved: create_path_intermediate_texture(gpu, format, size.width, size.height),
 +            multisampled: create_msaa_texture_if_needed(
-+                gpu, format, size.width, size.height, sample_count,
++                gpu,
++                format,
++                size.width,
++                size.height,
++                sample_count,
 +            ),
 +        }
 +    }
@@ -1073,3 +1174,44 @@
 +        );
 +    }
 +}
+--- a/src/platform/blade/blade_atlas.rs
++++ b/src/platform/blade/blade_atlas.rs
+@@ -47,6 +47,8 @@
+             gpu: Arc::clone(gpu),
+             upload_belt: BufferBelt::new(BufferBeltDescriptor {
+                 memory: gpu::Memory::Upload,
++                // lst patch: texture uploads use the released Blade data-buffer target.
++                target: gpu::BufferTarget::Data,
+                 min_chunk_size: 0x10000,
+                 alignment: 64, // Vulkan `optimalBufferCopyOffsetAlignment` on Intel XE
+             }),
+--- a/src/platform/blade/shaders.wgsl
++++ b/src/platform/blade/shaders.wgsl
+@@ -992,7 +992,8 @@
+ struct PathRasterizationVarying {
+     @builtin(position) position: vec4<f32>,
+     @location(0) st_position: vec2<f32>,
+-    @location(1) vertex_id: u32,
++    // lst patch: integer varyings require explicit flat interpolation in current WGSL.
++    @location(1) @interpolate(flat) vertex_id: u32,
+     //TODO: use `clip_distance` once Naga supports it
+     @location(3) clip_distances: vec4<f32>,
+ }
+@@ -1031,14 +1032,15 @@
+         let distance = f / length(gradient);
+         alpha = saturate(0.5 - distance);
+     }
+-    let gradient_color = prepare_gradient_color(
++    // lst patch: newer WGSL validation rejects shadowing the function called below.
++    let prepared_gradient = prepare_gradient_color(
+         background.tag,
+         background.color_space,
+         background.solid,
+         background.colors,
+     );
+     let color = gradient_color(background, input.position.xy, bounds,
+-        gradient_color.solid, gradient_color.color0, gradient_color.color1);
++        prepared_gradient.solid, prepared_gradient.color0, prepared_gradient.color1);
+     return vec4<f32>(color.rgb * color.a * alpha, color.a * alpha);
+ }
+

@@ -10,17 +10,17 @@
 +  // than by descending into every subtree the iterator skips.
 +  Subtree prev_external_token_subtree;
  } Iterator;
- 
+
  static Iterator iterator_new(
-@@ -162,10 +165,31 @@
+@@ -162,8 +165,29 @@
      .language = language,
      .visible_depth = 1,
      .in_padding = false,
 -    .prev_external_token = NULL_SUBTREE,
 +    .prev_external_token_subtree = NULL_SUBTREE,
    };
- }
- 
++}
++
 +static Subtree iterator_prev_external_token(const Iterator *self) {
 +  return self->prev_external_token_subtree.ptr
 +    ? ts_subtree_last_external_token(self->prev_external_token_subtree)
@@ -40,13 +40,11 @@
 +    iterator_prev_external_token(old_iter),
 +    iterator_prev_external_token(new_iter)
 +  );
-+}
-+
- static bool iterator_done(Iterator *self) {
-   return self->cursor.stack.size == 0;
  }
+
+ static bool iterator_done(Iterator *self) {
 @@ -280,9 +304,8 @@
- 
+
        position = child_right;
        if (!ts_subtree_extra(*child)) structural_child_index++;
 -      Subtree last_external_token = ts_subtree_last_external_token(*child);
@@ -58,7 +56,7 @@
      }
    } while (did_descend);
 @@ -308,9 +331,8 @@
- 
+
      const Subtree *parent = array_back(&self->cursor.stack)->subtree;
      uint32_t child_index = entry.child_index + 1;
 -    Subtree last_external_token = ts_subtree_last_external_token(*entry.subtree);
