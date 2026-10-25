@@ -3,7 +3,8 @@
 Address applicable findings from the October 23 and 24 reviews and the
 subsequent reconciliation. The desired result is a correct, simple, lean,
 maintainable and efficient editor. This checklist describes issues and agreed
-behavior; it does not prescribe an implementation or an order of work.
+behavior; it does not prescribe an implementation. The performance follow-up
+below is explicitly deferred until the remaining foundation work is addressed.
 
 **Completion criterion:** the whole checklist remains the scope of this work.
 Working through one coherent area at a time does not narrow that scope. Address
@@ -796,10 +797,13 @@ changing code. Rejection is a valid outcome.
 
 ## Optional improvements
 
-Unchecked opportunities below are not required fixes. Checked entries record an
-explicit disposition. Some duplication is real,
-but shared code may be more complex or join boundaries with different semantics.
-No blanket refactoring or new subsystem is implied.
+Every open opportunity below deserves a concrete assessment as part of the
+foundation work. Implement improvements that demonstrably simplify ownership,
+reduce unnecessary work, improve usability or strengthen coverage. Otherwise,
+record why retaining the current design is preferable; the optional label alone
+is not a disposition. Checked entries record completed assessments or changes.
+Some duplication is real, but shared code may be more complex or join boundaries
+with different semantics. No blanket refactoring or new subsystem is implied.
 
 - **Optional:** Passive-occurrence refresh is duplicated during focus handling and can
   recreate a query that was just cleared. (23/S4)
@@ -922,7 +926,39 @@ No blanket refactoring or new subsystem is implied.
   edited-text window, invalidation window, and layout window serve different consumers;
   a full highlight invalidation can still permit a narrow layout update. Combining
   their range expressions would obscure that distinction. The confirmed stale syntax
-  defects remain open in their own entries.
+  defects were subsequently addressed in the syntax and text presentation checkpoint.
+
+## Deferred performance follow-up
+
+Schedule this after the remaining nonoptional findings have been addressed and
+the open optional improvements have each been implemented or given a reasoned
+disposition. Those changes may alter the relevant paths; measure the resulting
+foundation before choosing further optimizations.
+
+- [ ] **Measured regression to revisit:** Reduce avoidable sustained-typing overhead
+  introduced by the syntax and text presentation changes in `87729c9`, while
+  preserving their correctness guarantees and the simpler ownership model.
+  The controlled Rust and injected-Markdown runs became slower; injected-Markdown
+  paste improved. Throughput measurements do not establish individual-key latency
+  or everyday perceptibility. The checkpoint and external evidence bundle retain
+  the original comparison, including the pre-change `e063af7` baseline.
+
+1. Reconfirm the regression on the completed foundation using the same isolated
+   runner, corpora, viewport and build profile for both sides, following
+   [Performance](performance.md). Keep historical results separate from new runs
+   and repeat enough measurements to distinguish persistent cost from variation.
+2. Profile the remaining cost before selecting a change. Attribute time to query
+   discovery, structural verification, parsing, layout and painting; do not assume
+   the subtree cache is still the dominant cause after the intervening work.
+3. Prefer removing redundant work or simplifying ownership. Preserve complete
+   injection discovery, incremental/fresh equivalence, grapheme behavior and
+   visible correctness. Any additional cache or fast path must earn its complexity
+   through a measured benefit and a clear validity rule.
+4. Verify sustained throughput and individual-key latency separately, including
+   slower samples, then check paste responsiveness and memory for tradeoffs.
+   Record the comparison and required regression checks. Close this follow-up with
+   either a verified improvement or an explicit, evidence-backed explanation of
+   any remaining cost; do not treat the current regression as inherently necessary.
 
 ## Closed, already resolved or outside current scope
 
