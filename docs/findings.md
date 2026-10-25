@@ -69,15 +69,21 @@ with `23/` refer to October 23. Duplicate findings share an item.
   secondary selections. Adding cursors in Vim is unavailable with a visible explanation.
   Single-selection Visual mode remains supported.
 
-- [ ] **Find in Selection:** capture all nonempty selected ranges in the active tab.
+- [x] **Find in Selection (implemented 2026-10-25):** capture all nonempty selected ranges in the active tab.
   Search only within their union, leaving intervening text untouched. Search navigation
   must not redefine the captured scope. Keep the scope aligned through edits and
   undo/redo; switching tabs clears it. Disable activation without a nonempty selection.
   Matches must fit wholly within one range; empty regex matches must not be duplicated
   at shared boundaries.
-  Review: Current FindScope captures one primary range with fixed offsets. A fresh
-  insertion leaves that captured range unchanged; all-selection, edit-tracking behavior
-  is additional agreed work.
+  Resolution: `CapturedFindScope` is document-owned and maps through the same offset
+  maps used by text transactions. History retains compact position maps and exact
+  scoped snapshots, including for edits before capture and retained redo branches.
+  Disabling a scope clears its saved ranges; later captures cannot revive them.
+  The scope chip accepts any nonempty selection, including a secondary one with an
+  empty primary caret. Six `captured_scope_*` real-X11 cases cover the accepted
+  behavior, saved bytes, navigation, replacement, and history. Source-side invariants
+  cover range unions, map inversion/compaction, and the bounded-history fallback:
+  a disconnected old branch keeps an empty scope instead of searching the document.
 
 - [ ] **Mouse placement:** choose the nearest grapheme boundary consistently for shaped
   and cached text. At an exact midpoint choose the earlier boundary. Clicking the right
@@ -927,6 +933,38 @@ intentional behavior as a defect.
   hold up. (23/V14)
 
 ## Verification and evidence
+
+### Implementation checkpoint: captured Find scope (2026-10-25)
+
+- Implemented the Find-in-Selection contract. The capture belongs to the document,
+  includes every nonempty selection, and stays stable through navigation, query
+  changes, edits, undo/redo, and retained alternate history branches. Switching tabs
+  clears it. The remaining checklist stays in scope.
+- Transactions own one invertible position map shared by selection, bookmark, and
+  scope updates, then transferred to history. Single edits store their map inline;
+  ordinary typing and deletion compact within undo groups. Saved ranges are released
+  when their capture ends, preventing older scopes from reappearing.
+- All six new real-app regressions fail against the preserved pre-change binary.
+  Eight focused scope/replacement cases passed before the final map optimization;
+  the full desktop gate validates the final implementation. Source invariants cover
+  range union, both mapping affinities, inversion, compaction, cache normalization,
+  and a disconnected old branch retaining empty scope until undo restores it.
+- The inspected screenshot shows the enabled In Sel chip with a nonempty secondary
+  selection and an empty primary caret. No visual baseline was replaced.
+- Isolated CPU-pinned model benchmarks in both run orders show typing about 6%
+  slower (approximately 0.05 microseconds per character) and 1,000-cursor deletion
+  about 1% slower (approximately 1 microsecond per operation). These are model
+  measurements, not end-to-end latency. Earlier larger regressions were removed by
+  sharing the derived map and simplifying right-affinity lookup. Raw measurements,
+  commands, host details, screenshot, and verification logs are retained in the
+  external `foundation-scope-2026-10-25` evidence directory.
+- `cargo test --all-features`: 197 passed, zero failed. The harness's own suite
+  passed all 32 tests. Formatting, whitespace checks, and `cargo clippy --all-targets
+  --all-features` passed with existing warnings only.
+- Full serial nested X11 lane: 301 passed, zero failed, with no retries. Production
+  code was unchanged throughout the 2,633-second run. The run used the same temporary newer-lwm compatibility shim and software Vulkan
+  as the earlier checkpoints. Physical-display visual tests remain outside this run;
+  the runner compatibility finding remains open.
 
 ### Implementation checkpoint: line boundaries and Find navigation (2026-10-25)
 

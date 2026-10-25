@@ -38,8 +38,15 @@ impl LstGpuiApp {
         let case_sensitive = find.case_sensitive;
         let whole_word = find.whole_word;
         let use_regex = find.use_regex;
-        let in_selection = find.scope.is_selection_for(self.model.active_tab_id());
-        let selection_chip_enabled = in_selection || self.model.active_tab().has_selection();
+        let in_selection = self.model.active_tab().find_in_selection();
+        let selection_chip_enabled = in_selection
+            || self
+                .model
+                .active_tab()
+                .selection_set()
+                .as_slice()
+                .iter()
+                .any(|s| s.has_selection());
         let error = find.error.clone();
         let show_replace = find.show_replace;
         let actions_enabled = !find.matches.is_empty() && error.is_none();

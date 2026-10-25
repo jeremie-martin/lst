@@ -16,7 +16,6 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use gpui::{App, Bounds, Pixels, Window};
-use lst_editor::find::FindScope;
 use serde::Serialize;
 
 use crate::{
@@ -377,9 +376,10 @@ impl LstGpuiApp {
                 case_sensitive: find.case_sensitive,
                 whole_word: find.whole_word,
                 use_regex: find.use_regex,
-                scope: match find.scope {
-                    FindScope::Document => "document",
-                    FindScope::Selection { .. } => "selection",
+                scope: if self.model.active_tab().find_in_selection() {
+                    "selection"
+                } else {
+                    "document"
                 },
                 match_count: find.matches.len(),
                 active_index: find.active,

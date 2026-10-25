@@ -3,7 +3,7 @@ use crate::{
     selection::{Position, SelectionSet},
 };
 use ropey::Rope;
-use std::ops::Range;
+use std::{cell::OnceCell, ops::Range};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct EditOutcome {
@@ -48,42 +48,117 @@ impl TextChange {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct TextChangeSet {
     changes: Vec<TextChange>,
     primary: usize,
+    offset_map: OnceCell<TextChangeOffsetMap>,
 }
 
-/// A temporary index for mapping many positions through one immutable edit.
-/// Prefix lengths are computed once; queries may arrive in any order.
-pub(crate) struct TextChangeOffsetMap<'a> {
-    changes: &'a [TextChange],
-    inserted_ends: Vec<usize>,
+impl PartialEq for TextChangeSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.changes == other.changes && self.primary == other.primary
+    }
+}
+impl Eq for TextChangeSet {}
+
+/// Position-only mapping for one simultaneous edit batch. The before/after
+/// ranges are ordered in their respective documents; replacement text is not
+/// retained. History can invert this same map without reconstructing edits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TextChangeOffsetMap {
+    Single((Range<usize>, Range<usize>)),
+    Batch(Vec<(Range<usize>, Range<usize>)>),
 }
 
-impl TextChangeOffsetMap<'_> {
-    /// Keep a position before text inserted at that position; positions
-    /// inside replaced text collapse to the start of the replacement.
+impl TextChangeOffsetMap {
+    fn for_changes(changes: &[TextChange]) -> Self {
+        if let [change] = changes {
+            let start = change.range.start;
+            return Self::Single((change.range.clone(), start..start + change.replacement.chars().count()));
+        }
+        let mut delta = 0isize;
+        Self::Batch(
+            changes
+                .iter()
+                .map(|change| {
+                    let inserted = change.replacement.chars().count();
+                    let start = offset_with_delta(change.range.start, delta);
+                    delta += inserted as isize - change.range.len() as isize;
+                    (change.range.clone(), start..start + inserted)
+                })
+                .collect(),
+        )
+    }
+
+    fn ranges(&self) -> &[(Range<usize>, Range<usize>)] {
+        match self {
+            Self::Single(change) => std::slice::from_ref(change),
+            Self::Batch(changes) => changes,
+        }
+    }
+
     pub(crate) fn map_offset_before(&self, offset: usize) -> usize {
-        let after = self.changes.partition_point(|change| change.range.start < offset);
-        let Some(index) = after.checked_sub(1) else {
+        let end = self.ranges().partition_point(|(before, _)| before.start < offset);
+        let Some(index) = end.checked_sub(1) else {
             return offset;
         };
-        let change = &self.changes[index];
-        if offset < change.range.end {
-            self.inserted_ends[index] - change.replacement.chars().count()
+        let (before, result) = &self.ranges()[index];
+        if offset < before.end {
+            result.start
         } else {
-            self.inserted_ends[index] + offset - change.range.end
+            result.end + (offset - before.end)
         }
     }
 
     pub(crate) fn map_offset(&self, offset: usize) -> usize {
-        let after = self.changes.partition_point(|change| change.range.start <= offset);
-        let Some(index) = after.checked_sub(1) else {
+        let end = self.ranges().partition_point(|(before, _)| before.start <= offset);
+        let Some(index) = end.checked_sub(1) else {
             return offset;
         };
-        // At a shared boundary, the last change wins, including insertions.
-        self.inserted_ends[index] + offset.saturating_sub(self.changes[index].range.end)
+        let (before, result) = &self.ranges()[index];
+        result.end + offset.saturating_sub(before.end)
+    }
+
+    pub(crate) fn inverted(&self) -> Self {
+        match self {
+            Self::Single((before, after)) => Self::Single((after.clone(), before.clone())),
+            Self::Batch(changes) => Self::Batch(
+                changes
+                    .iter()
+                    .map(|(before, after)| (after.clone(), before.clone()))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Streaming typing/backspace can be retained as one position change.
+    /// Other edits keep their batch boundaries and endpoint affinities.
+    pub(crate) fn extend_streaming(&mut self, next: &Self) -> bool {
+        let (Self::Single((before, after)), Self::Single((next_before, next_after))) = (self, next) else {
+            return false;
+        };
+        if before.is_empty() && next_before.is_empty() && next_before.start == after.end {
+            after.end = next_after.end;
+            true
+        } else if after.is_empty() && next_after.is_empty() && next_before.start == before.start {
+            before.end += next_before.len();
+            true
+        } else if after.is_empty() && next_after.is_empty() && next_before.end == before.start {
+            before.start = next_before.start;
+            *after = next_after.clone();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + match self {
+                Self::Single(_) => 0,
+                Self::Batch(changes) => changes.capacity() * std::mem::size_of::<(Range<usize>, Range<usize>)>(),
+            }
     }
 }
 
@@ -92,6 +167,7 @@ impl TextChangeSet {
         Self {
             changes: vec![change.with_ordered_range()],
             primary: 0,
+            offset_map: OnceCell::new(),
         }
     }
 
@@ -104,45 +180,44 @@ impl TextChangeSet {
     /// silently normalized.
     pub(crate) fn try_new(changes: Vec<TextChange>, primary: usize) -> Option<Self> {
         let changes: Vec<TextChange> = changes.into_iter().map(TextChange::with_ordered_range).collect();
-        (primary < changes.len() && valid_change_order(&changes)).then_some(Self { changes, primary })
+        (primary < changes.len() && valid_change_order(&changes)).then_some(Self {
+            changes,
+            primary,
+            offset_map: OnceCell::new(),
+        })
     }
 
     pub(crate) fn as_slice(&self) -> &[TextChange] {
         &self.changes
     }
 
-    pub(crate) fn offset_map(&self) -> TextChangeOffsetMap<'_> {
-        let mut delta = 0isize;
-        let inserted_ends = self
-            .changes
-            .iter()
-            .map(|change| {
-                let inserted_len = change.replacement.chars().count();
-                let end = offset_with_delta(change.range.start, delta) + inserted_len;
-                delta += inserted_len as isize - (change.range.end - change.range.start) as isize;
-                end
-            })
-            .collect();
-        TextChangeOffsetMap {
-            changes: &self.changes,
-            inserted_ends,
-        }
+    pub(crate) fn offset_map(&self) -> &TextChangeOffsetMap {
+        self.offset_map
+            .get_or_init(|| TextChangeOffsetMap::for_changes(&self.changes))
     }
 
     pub(crate) fn normalized_for_len(mut self, len: usize) -> Self {
-        for change in &mut self.changes {
-            change.range = clamped_range(change.range.clone(), len);
+        // Ordered disjoint ranges make the final endpoint the maximum.
+        if self.changes.last().expect("non-empty changes").range.end > len {
+            for change in &mut self.changes {
+                change.range = clamped_range(change.range.clone(), len);
+            }
+            self.offset_map.take();
         }
         self
     }
 
     pub(crate) fn primary_inserted_range(&self) -> Range<usize> {
-        inserted_range_for_change(&self.changes, self.primary)
+        self.offset_map().ranges()[self.primary].1.clone()
     }
 
-    /// Transfers normalized changes to the tab without copying replacement buffers.
-    pub(crate) fn into_changes(self) -> Vec<TextChange> {
-        self.changes
+    /// Transfer both the edits and their single derived position map.
+    pub(crate) fn into_parts(self) -> (Vec<TextChange>, TextChangeOffsetMap) {
+        let map = self
+            .offset_map
+            .into_inner()
+            .unwrap_or_else(|| TextChangeOffsetMap::for_changes(&self.changes));
+        (self.changes, map)
     }
 }
 
@@ -247,20 +322,6 @@ pub(crate) fn offset_with_delta(offset: usize, delta: isize) -> usize {
     }
 }
 
-fn inserted_range_for_change(changes: &[TextChange], primary: usize) -> Range<usize> {
-    let mut delta = 0isize;
-    for change in &changes[..primary] {
-        let inserted_len = change.replacement.chars().count();
-        let removed_len = change.range.end - change.range.start;
-        delta += inserted_len as isize - removed_len as isize;
-    }
-
-    let change = &changes[primary];
-    let inserted_start = offset_with_delta(change.range.start, delta);
-    let inserted_len = change.replacement.chars().count();
-    inserted_start..inserted_start + inserted_len
-}
-
 pub(crate) fn clamped_range(range: Range<usize>, len: usize) -> Range<usize> {
     ordered_range(range.start.min(len), range.end.min(len))
 }
@@ -282,6 +343,18 @@ pub(crate) fn ordered_range(start: usize, end: usize) -> Range<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clamping_changes_refreshes_derived_positions_without_changing_value_equality() {
+        let changes = TextChangeSet::single(TextChange::replace(2..8, "é"));
+        let untouched = changes.clone();
+        assert_eq!(changes.offset_map().map_offset(9), 4);
+        assert_eq!(changes, untouched);
+        let bounded = changes.normalized_for_len(4);
+        assert_eq!(bounded.offset_map().map_offset(5), 4);
+        assert_eq!(bounded.primary_inserted_range(), 2..3);
+        assert_eq!(bounded, TextChangeSet::single(TextChange::replace(2..4, "é")));
+    }
 
     #[test]
     fn positions_can_stay_before_insertions_and_collapse_into_deleted_text() {
@@ -320,6 +393,52 @@ mod tests {
         mapped.unwrap_or_else(|| offset_with_delta(offset, delta))
     }
 
+    fn map_offset_before_linear(changes: &[TextChange], offset: usize) -> usize {
+        let mut delta = 0isize;
+        for change in changes {
+            if offset <= change.range.start {
+                break;
+            }
+            if offset < change.range.end {
+                return offset_with_delta(change.range.start, delta);
+            }
+            delta += change.replacement.chars().count() as isize - change.range.len() as isize;
+        }
+        offset_with_delta(offset, delta)
+    }
+
+    #[test]
+    fn streaming_compaction_preserves_both_affinities_in_both_directions() {
+        for (first, next) in [
+            (TextChange::insert(2, "ab"), TextChange::insert(4, "xyz")),
+            (TextChange::delete(2..4), TextChange::delete(2..5)),
+            (TextChange::delete(4..6), TextChange::delete(2..4)),
+        ] {
+            let first = TextChangeSet::single(first).into_parts().1;
+            let next = TextChangeSet::single(next).into_parts().1;
+            let mut combined = first.clone();
+            assert!(combined.extend_streaming(&next));
+            for offset in 0..12 {
+                assert_eq!(combined.map_offset(offset), next.map_offset(first.map_offset(offset)));
+                assert_eq!(
+                    combined.map_offset_before(offset),
+                    next.map_offset_before(first.map_offset_before(offset))
+                );
+                let inverse = combined.inverted();
+                assert_eq!(
+                    inverse.map_offset(offset),
+                    first.inverted().map_offset(next.inverted().map_offset(offset))
+                );
+                assert_eq!(
+                    inverse.map_offset_before(offset),
+                    first
+                        .inverted()
+                        .map_offset_before(next.inverted().map_offset_before(offset))
+                );
+            }
+        }
+    }
+
     #[test]
     fn indexed_offsets_match_linear_mapping_at_every_boundary() {
         // Include touching replacements, repeated zero-length insertions,
@@ -340,6 +459,26 @@ mod tests {
                                 );
                                 let map = changes.offset_map();
                                 for offset in (0..=8).rev().chain(0..=8) {
+                                    assert_eq!(
+                                        map.map_offset_before(offset),
+                                        map_offset_before_linear(changes.as_slice(), offset)
+                                    );
+                                    let inverse = map.inverted();
+                                    let inverse_changes: Vec<_> = map
+                                        .ranges()
+                                        .iter()
+                                        .map(|(before, after)| {
+                                            TextChange::replace(after.clone(), "x".repeat(before.len()))
+                                        })
+                                        .collect();
+                                    assert_eq!(
+                                        inverse.map_offset(offset),
+                                        map_offset_to_inserted_end(&inverse_changes, offset)
+                                    );
+                                    assert_eq!(
+                                        inverse.map_offset_before(offset),
+                                        map_offset_before_linear(&inverse_changes, offset)
+                                    );
                                     assert_eq!(
                                         map.map_offset(offset),
                                         map_offset_to_inserted_end(changes.as_slice(), offset),

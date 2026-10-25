@@ -1,11 +1,12 @@
 use crate::{
     document::{char_to_position, position_to_char},
+    find_scope::CapturedFindScope,
     history::{EditHistory, HistorySnapshot},
     language::{self, Language},
     selection::{CursorGoal, Position, Selection, SelectionSet, SelectionState},
     transaction::{
         apply_change_to_buffer, clamped_range, inserted_relative_range, EditOutcome, EditRequest, SelectionAfter,
-        TextChange, TextChangeSet,
+        TextChange, TextChangeOffsetMap, TextChangeSet,
     },
 };
 use ropey::Rope;
@@ -232,6 +233,7 @@ pub struct EditorTab {
     selection: SelectionState,
     revision: u64,
     history: EditHistory,
+    find_scope: Option<CapturedFindScope>,
     last_edit_position: Option<usize>,
     marked_range: Option<Range<usize>>,
     /// Bookmarked logical lines, sorted ascending. Stored as raw line
@@ -291,6 +293,7 @@ impl EditorTab {
             selection: SelectionState::single(Selection::collapsed(0)),
             revision: 0,
             history: EditHistory::new(),
+            find_scope: None,
             last_edit_position: None,
             marked_range: None,
             bookmarks: Vec::new(),
@@ -498,6 +501,25 @@ impl EditorTab {
     pub fn selected_range(&self) -> Range<usize> {
         self.selection().range()
     }
+    pub fn find_in_selection(&self) -> bool {
+        self.find_scope.is_some()
+    }
+    pub(crate) fn find_scope(&self) -> Option<&CapturedFindScope> {
+        self.find_scope.as_ref()
+    }
+    pub(crate) fn clear_find_scope(&mut self) {
+        if self.find_scope.take().is_some() {
+            self.history.clear_find_scopes();
+        }
+    }
+    pub(crate) fn toggle_find_in_selection(&mut self) {
+        if self.find_in_selection() {
+            self.clear_find_scope();
+        } else {
+            self.find_scope = CapturedFindScope::capture(self.selection_set());
+        }
+        self.history.break_current_group();
+    }
     pub fn has_selection(&self) -> bool {
         self.selection().has_selection()
     }
@@ -586,21 +608,19 @@ impl EditorTab {
         let changes_text = changes_modify_text(&self.buffer, normalized_changes.as_slice());
         let selection_before = self.selection.clone();
         let marked_range_before = self.marked_range.clone();
-        if changes_text {
-            let snapshot_before = self
-                .history
-                .needs_snapshot(request.kind, request.boundary)
-                .then(|| self.history_snapshot());
-            self.history
-                .record_edit(request.kind, request.boundary, snapshot_before);
-        }
-        self.apply_normalized_change(
+        let snapshot_before = (changes_text && self.history.needs_snapshot(request.kind, request.boundary))
+            .then(|| self.history_snapshot());
+        let map = self.apply_normalized_change(
             normalized_changes,
             changes_text,
             primary_inserted_range,
             request.selection_after,
             request.marked_range_after,
         );
+        if changes_text {
+            self.history
+                .record_edit(request.kind, request.boundary, snapshot_before, map, self.content_epoch);
+        }
         EditOutcome {
             text_changed: changes_text,
             selection_changed: self.selection != selection_before,
@@ -614,8 +634,11 @@ impl EditorTab {
         primary_inserted_range: Range<usize>,
         selection_after: SelectionAfter,
         marked_range_after: Option<Range<usize>>,
-    ) {
+    ) -> TextChangeOffsetMap {
         if changes_text {
+            if let Some(scope) = &mut self.find_scope {
+                scope.map_edit(&changes);
+            }
             // Map line-start anchors in the old document, then let Rope
             // resolve the new lines (including CRLF formed across edits).
             let bookmark_offsets = if self.bookmarks.is_empty() {
@@ -645,16 +668,19 @@ impl EditorTab {
         );
         self.selection.replace_set(selection);
         self.marked_range = marked_range_after_edit(marked_range_after, primary_inserted_range, self.len_chars());
+        let (edits, map) = changes.into_parts();
         if changes_text {
-            self.record_edits(changes.into_changes());
+            self.record_edits(edits);
             self.last_edit_position = Some(self.selection().head().min(self.len_chars()));
             self.touch_text_content();
         }
+        map
     }
     pub fn last_edit_position(&self) -> Option<usize> {
         self.last_edit_position.map(|pos| pos.min(self.len_chars()))
     }
     pub(crate) fn reset_from_disk(&mut self, text: &str) {
+        self.clear_find_scope();
         self.buffer = Rope::from_str(text);
         self.move_to(0);
         self.touch_text_content();
@@ -748,6 +774,7 @@ impl EditorTab {
             selection: self.selection.clone(),
             content_epoch: self.content_epoch,
             bookmarks: self.bookmarks.clone(),
+            find_scope: self.find_scope.clone(),
         }
     }
     fn restore_history_snapshot(&mut self, snapshot: HistorySnapshot) {
@@ -756,6 +783,7 @@ impl EditorTab {
         self.content_epoch = snapshot.content_epoch;
         self.next_content_epoch = self.next_content_epoch.max(snapshot.content_epoch.saturating_add(1));
         self.bookmarks = snapshot.bookmarks;
+        self.find_scope = snapshot.find_scope;
         self.marked_range = None;
         self.touch_content();
         self.record_full_replace();

@@ -1071,6 +1071,7 @@ impl EditorModel {
             return true;
         }
         let word = self.active_tab().buffer().slice(range).to_string();
+        self.active_tab_mut().clear_find_scope();
         let tab = self.active_tab().clone();
         if let Some(pos) = self.find.search_word_from(&tab, word, self.cursor(), forward) {
             self.vim.search_backward = !forward;

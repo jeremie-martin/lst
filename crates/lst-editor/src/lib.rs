@@ -1,6 +1,7 @@
 mod command;
 mod document;
 pub mod find;
+mod find_scope;
 mod history;
 pub mod language;
 mod line_edit;
@@ -158,7 +159,7 @@ impl GutterMode {
 }
 use crate::{
     document::char_to_position,
-    find::{FindScope, FindState},
+    find::FindState,
     selection::{
         char_at_line_column, display_line_char_len as buffer_display_line_char_len, line_range_at_char,
         word_range_at_char, CursorGoal, SelectionTransform,
@@ -488,22 +489,10 @@ impl EditorModel {
     }
     // No-op when toggling on without a selection (UI grays the chip).
     fn toggle_find_in_selection(&mut self) {
-        let active_tab_id = self.active_tab_id();
-        if self.find.scope.is_selection_for(active_tab_id) {
-            self.find.scope = FindScope::Document;
-            self.reindex_find_matches_to_nearest();
-            return;
-        }
-        let sel = self.active_tab().selected_range();
-        if sel.start < sel.end {
-            self.find.scope = FindScope::Selection {
-                tab_id: active_tab_id,
-                start_char: sel.start,
-                end_char: sel.end,
-            };
-            self.reindex_find_matches_to_nearest();
-        }
+        self.active_tab_mut().toggle_find_in_selection();
+        self.reindex_find_matches_to_nearest();
     }
+
     pub fn update_goto_line(&mut self, text: String) {
         self.goto_line = Some(text);
     }

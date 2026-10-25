@@ -43,6 +43,9 @@ impl TabSet {
         if index >= self.tabs.len() {
             return false;
         }
+        if self.active != index {
+            self.active_mut().clear_find_scope();
+        }
         self.active = index;
         true
     }

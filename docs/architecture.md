@@ -88,6 +88,26 @@ match supplies its start as the origin, so backward navigation advances past
 that match too. Empty regex matches participate in the ordered index; strict
 next/previous position comparisons ensure progress.
 
+Find-in-selection belongs to the document. It captures the union of all
+nonempty selections, independently of later caret movement, query changes,
+or closing the Find bar. Matches must fit wholly inside that union; shared
+boundaries do not duplicate empty regex matches. Text transactions map its
+character ranges with left affinity at the start and right affinity at the
+end, so replacement text stays inside the captured region.
+
+Each transaction owns one derived position map, shared by selection, bookmark,
+and scope updates and then transferred to history. Single edits store their
+map inline. History keeps these compact, invertible maps alongside its existing Rope
+snapshots. This supports scopes captured after earlier edits and movement
+between retained redo branches without guessing a diff from repeated text.
+Snapshots restore exact scoped ranges after deletion; ordinary typing and
+repeated deletion compact their position maps. Mapping storage and saved
+scope ranges count toward the existing undo budget. Disabling a capture or
+switching tabs releases its saved ranges, so an older capture cannot reappear.
+Disk reload also clears the capture. If a branch's connecting history has been
+evicted, its scope stays empty rather than widening to the document; undoing
+that jump restores the prior capture.
+
 Core collections encode their invariants:
 
 - `TabSet` always contains a tab and owns active-index and tab-ID validity.
@@ -182,14 +202,9 @@ changed image before updating a baseline.
 
 ## Accepted behavior awaiting implementation
 
-Two existing surfaces still have behavior that differs from the accepted
-contracts in [Findings and agreed changes](findings.md):
-
-- Vim currently permits multiple active cursors without defined semantics. The
-  accepted target is single-cursor Vim, retaining the primary selection on entry.
-- Find-in-selection currently captures one primary range with fixed offsets.
-  The accepted target captures all nonempty ranges and tracks them through edits
-  and history.
+Vim currently permits multiple active cursors without defined semantics. The
+accepted target in [Findings and agreed changes](findings.md) is single-cursor
+Vim, retaining the primary selection on entry.
 
 Implement the recorded contracts with real-X11 acceptance coverage; incidental
 current behavior does not supersede those decisions.

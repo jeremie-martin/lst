@@ -3,7 +3,6 @@ use crate::{
     selection::{cell_partition_by_byte, cells_of_str, line_display_text, Position, Selection, SelectionSet},
     tab::EditorTab,
     transaction::{EditRequest, SelectionAfter, TextChange, TextChangeSet},
-    TabId,
 };
 use memchr::{memchr, memchr2};
 use regex::{Regex, RegexBuilder};
@@ -43,35 +42,6 @@ impl MatchPos {
     }
 }
 
-// `Selection` freezes a char range captured at toggle-on. Edits before
-// the captured range do not shift it — the user re-toggles to refresh.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FindScope {
-    Document,
-    Selection {
-        tab_id: TabId,
-        start_char: usize,
-        end_char: usize,
-    },
-}
-
-impl FindScope {
-    pub fn is_selection_for(self, tab_id: TabId) -> bool {
-        self.selection_range_for(tab_id).is_some()
-    }
-
-    fn selection_range_for(self, tab_id: TabId) -> Option<Range<usize>> {
-        match self {
-            FindScope::Selection {
-                tab_id: owner,
-                start_char,
-                end_char,
-            } if owner == tab_id => Some(start_char..end_char),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct FindState {
     pub visible: bool,
@@ -83,7 +53,6 @@ pub struct FindState {
     pub case_sensitive: bool,
     pub whole_word: bool,
     pub use_regex: bool,
-    pub scope: FindScope,
     pub error: Option<String>,
     indexed_revision: Option<u64>,
 }
@@ -117,7 +86,6 @@ impl FindState {
             case_sensitive: false,
             whole_word: false,
             use_regex: false,
-            scope: FindScope::Document,
             error: None,
             indexed_revision: None,
         }
@@ -274,12 +242,10 @@ impl FindState {
             return;
         }
         self.compute_matches_in_rope(tab.buffer());
-        if let Some(scope) = self.scope.selection_range_for(tab.id()) {
+        if let Some(scope) = tab.find_scope() {
             let buffer = tab.buffer();
-            let len = buffer.len_chars();
-            let scope = scope.start.min(len)..scope.end.min(len);
             self.matches
-                .retain(|m| scope_contains(&scope, &m.indexed_char_range_in(buffer)));
+                .retain(|m| scope.contains(&m.indexed_char_range_in(buffer)));
             match (self.matches.is_empty(), self.active) {
                 (true, _) => self.active = None,
                 (false, Some(index)) => self.active = Some(index.min(self.matches.len() - 1)),
@@ -346,7 +312,6 @@ impl FindState {
         self.whole_word = true;
         self.case_sensitive = true;
         self.use_regex = false;
-        self.scope = FindScope::Document;
         self.reindex_for_tab(tab);
         if forward {
             self.next_from(position)
@@ -400,10 +365,6 @@ impl FindState {
         let m = self.matches[index];
         Some(Position::new(m.line, m.col))
     }
-}
-
-fn scope_contains(scope: &Range<usize>, range: &Range<usize>) -> bool {
-    range.start >= scope.start && range.end <= scope.end
 }
 
 impl Default for FindState {
