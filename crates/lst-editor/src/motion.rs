@@ -70,7 +70,7 @@ pub(crate) fn display_rows(
     map(tab, |index, selection| {
         let position = char_to_position(tab.buffer(), selection.cursor());
         let goal = goal_for(tab, index, selection);
-        let preferred = display_preferred(tab, wrap_columns, position, goal);
+        let preferred = display_preferred(tab, wrap_columns, index, position, goal);
         let row_target = wrap::display_row_target_in_rope(
             tab.buffer(),
             position.line,
@@ -83,10 +83,11 @@ pub(crate) fn display_rows(
             .map(|target| position_to_char(tab.buffer(), Position::new(target.line, target.column)))
             .or_else(|| snap.then(|| vertical_boundary_target(tab, delta)).flatten())
             .unwrap_or(selection.cursor());
-        let goal = if tab.selection_set().has_multiple() {
-            goal
-        } else {
-            CursorGoal::Column(preferred)
+        // Every cursor keeps the in-row column it moved with; only an
+        // additional cursor's line-end goal stays a line-end goal.
+        let goal = match goal {
+            CursorGoal::LineEnd if tab.selection_set().has_multiple() => goal,
+            _ => CursorGoal::Column(preferred),
         };
         transform_with_goal(selection, target, select, goal)
     })
@@ -96,7 +97,7 @@ pub(crate) fn display_rows(
 pub(crate) fn diagonal(tab: &EditorTab, backward: bool, rows: isize, wrap_columns: usize) -> Option<SelectionState> {
     map(tab, |index, selection| {
         let position = char_to_position(tab.buffer(), selection.cursor());
-        let preferred = display_preferred(tab, wrap_columns, position, goal_for(tab, index, selection));
+        let preferred = display_preferred(tab, wrap_columns, index, position, goal_for(tab, index, selection));
         let preferred = if backward {
             preferred.saturating_sub(1)
         } else {
@@ -110,11 +111,9 @@ pub(crate) fn diagonal(tab: &EditorTab, backward: bool, rows: isize, wrap_column
             rows,
             wrap_columns,
         );
-        let (line, probe_column) = row_target.map_or((position.line, position.column), |target| {
-            // A positive column clamped to a wrapped row's end belongs to that
-            // row, even though the shared boundary normally names the next row.
-            (target.line, target.column.saturating_sub(usize::from(preferred > 0)))
-        });
+        // The display-row target always lies on the row it names.
+        let (line, probe_column) =
+            row_target.map_or((position.line, position.column), |target| (target.line, target.column));
         let text = crate::selection::line_display_text(tab.buffer(), line);
         let segments = wrap::wrap_segments(&text, wrap_columns);
         let row = wrap::cursor_visual_row_in_line(&text, probe_column, wrap_columns).min(segments.len() - 1);
@@ -266,8 +265,22 @@ fn vertical_boundary_target(tab: &EditorTab, delta: isize) -> Option<usize> {
 fn transform_with_goal(selection: Selection, target: usize, select: bool, goal: CursorGoal) -> SelectionTransform {
     SelectionTransform::with_goal(selection_to(selection, target, select), goal)
 }
-fn display_preferred(tab: &EditorTab, wrap_columns: usize, position: Position, goal: CursorGoal) -> usize {
-    if !tab.selection_set().has_multiple() && tab.preferred_column().is_none() {
+/// The column within its display row that a cursor moves with. A cursor
+/// without a stored goal uses where it sits in its row, not in its line, so
+/// cursors on continuation rows of a wrapped line keep their visual column.
+fn display_preferred(
+    tab: &EditorTab,
+    wrap_columns: usize,
+    index: usize,
+    position: Position,
+    goal: CursorGoal,
+) -> usize {
+    let stored = if tab.selection_set().has_multiple() {
+        tab.preferred_goal_for_selection(index).is_some()
+    } else {
+        tab.preferred_column().is_some()
+    };
+    if !stored {
         return current_visual_column(tab.buffer(), wrap_columns, position);
     }
     match goal {
@@ -357,5 +370,40 @@ mod diagonal_tests {
         assert_eq!(tab.cursor_char(), 2);
         step(&mut tab, false, 1, usize::MAX);
         assert_eq!(tab.cursor_char(), 3);
+    }
+}
+
+#[cfg(test)]
+mod display_row_tests {
+    use super::*;
+    use crate::selection::{SelectionSet, SelectionState};
+    use crate::tab::TabId;
+
+    #[test]
+    fn every_cursor_keeps_its_column_within_a_wrapped_row() {
+        // At 10 columns line 0 wraps as "aaaaaaaaa " | "bbbbbbbbb " | "cccccccc".
+        let text = "aaaaaaaaa bbbbbbbbb cccccccc\nzzzzzzzzzz\nyyyyyyyyyy";
+        let mut tab = EditorTab::from_path_with_stamp(TabId::from_raw(1), "rows.txt".into(), text, None);
+        let line_one = tab.buffer().line_to_char(1);
+        let cursors = vec![Selection::collapsed(12), Selection::collapsed(line_one + 2)];
+        tab.set_selection_state(SelectionState::from_set(
+            SelectionSet::from_selections(cursors, 0).unwrap(),
+        ));
+        let heads = |tab: &EditorTab| -> Vec<Position> {
+            tab.selection_set()
+                .as_slice()
+                .iter()
+                .map(|selection| char_to_position(tab.buffer(), selection.head()))
+                .collect()
+        };
+        for expected in [
+            [Position::new(0, 22), Position::new(2, 2)],
+            [Position::new(1, 2), Position::new(2, 2)],
+        ] {
+            if let Some(state) = display_rows(&tab, 10, 1, false, false) {
+                tab.set_selection_state(state);
+            }
+            assert_eq!(heads(&tab), expected);
+        }
     }
 }

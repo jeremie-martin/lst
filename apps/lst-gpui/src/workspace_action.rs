@@ -646,11 +646,24 @@ fn command_title(id: &str) -> String {
         .join(" ")
 }
 
-pub(crate) fn workspace_fallback_command(key: &str, modifiers: Modifiers) -> Option<WorkspaceCommand> {
+/// The command a released-modifier X11 chord stands for. It must agree with
+/// the keymap: a default chord that a `[keybindings]` override dropped stays
+/// unbound here too, and only the chords the override lists still apply.
+pub(crate) fn workspace_fallback_command(
+    key: &str,
+    modifiers: Modifiers,
+    overrides: &BTreeMap<String, Vec<String>>,
+) -> Option<WorkspaceCommand> {
     let keystroke = fallback_keystroke(key, modifiers)?;
     BINDINGS
         .iter()
-        .find(|binding| binding.x11_fallback && binding.keystroke == keystroke)
+        .find(|binding| {
+            binding.x11_fallback
+                && binding.keystroke == keystroke
+                && overrides
+                    .get(command_id(binding.command))
+                    .is_none_or(|keystrokes| keystrokes.iter().any(|bound| bound == binding.keystroke))
+        })
         .map(|binding| binding.command)
 }
 
@@ -890,13 +903,39 @@ mod tests {
             ..Modifiers::default()
         };
 
+        let defaults = BTreeMap::new();
         assert_eq!(
-            workspace_fallback_command("?", modifiers),
+            workspace_fallback_command("?", modifiers, &defaults),
             Some(WorkspaceCommand::Model(Command::ToggleBlockComment))
         );
         assert_eq!(
-            workspace_fallback_command("|", modifiers),
+            workspace_fallback_command("|", modifiers, &defaults),
             Some(WorkspaceCommand::Model(Command::JumpToBracket))
+        );
+    }
+
+    #[test]
+    fn x11_fallback_follows_keybinding_overrides() {
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        let close_tab = Some(WorkspaceCommand::CloseActiveTab);
+        let overrides = |keys: &[&str]| {
+            BTreeMap::from([(
+                "file.close_tab".to_string(),
+                keys.iter().map(|key| key.to_string()).collect::<Vec<_>>(),
+            )])
+        };
+        assert_eq!(workspace_fallback_command("w", ctrl, &BTreeMap::new()), close_tab);
+        assert_eq!(workspace_fallback_command("w", ctrl, &overrides(&[])), None);
+        assert_eq!(
+            workspace_fallback_command("w", ctrl, &overrides(&["ctrl-shift-w"])),
+            None
+        );
+        assert_eq!(
+            workspace_fallback_command("w", ctrl, &overrides(&["ctrl-w", "ctrl-shift-w"])),
+            close_tab
         );
     }
 }

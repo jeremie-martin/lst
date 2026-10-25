@@ -432,3 +432,61 @@ fn screen_motions_are_linewise_under_operators() {
         harness.expect_text(text);
     }
 }
+
+#[test]
+fn screen_motions_target_the_lines_shown_between_soft_wrapped_rows() {
+    // At the harness's 80 columns every 200-character line takes three rows,
+    // so visual rows 30..=53 show lines 10..=17.
+    let text = vec!["x".repeat(200); 30].join("\n");
+    let mut harness = VimHarness::normal_at(&text, 12, 0);
+    harness.model.set_viewport_rows(24);
+    harness.model.set_viewport_top(30);
+    for (keys, line) in [("H", 10), ("M", 13), ("L", 17)] {
+        harness.keys(keys);
+        harness.expect_cursor(line, 0);
+    }
+    // A line scrolled partly above the top is not the first line on screen.
+    harness.model.set_viewport_top(31);
+    harness.keys("H");
+    harness.expect_cursor(11, 0);
+
+    let mut harness = VimHarness::normal_at(&text, 12, 0);
+    harness.model.set_viewport_rows(24);
+    harness.model.set_viewport_top(30);
+    harness.keys("dL");
+    harness.expect_text(&vec!["x".repeat(200); 24].join("\n"));
+
+    // With fewer lines than rows, `M` takes the middle of the lines shown.
+    let mut harness = VimHarness::normal_at("a\nb\nc", 0, 0);
+    harness.model.set_viewport_rows(24);
+    harness.keys("M");
+    harness.expect_cursor(1, 0);
+}
+
+#[test]
+fn page_motions_take_a_count_and_cancel_a_pending_operator() {
+    let text = (0..40).map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
+    let mut harness = VimHarness::normal_at(&text, 0, 0);
+    harness.model.set_viewport_rows(8);
+    harness.keys("5<C-d>");
+    harness.expect_cursor(5, 0);
+    harness.expect_pending("");
+    harness.keys("2<C-f>");
+    harness.expect_cursor(17, 0);
+    harness.keys("dd");
+    harness.expect_text(
+        &(0..40)
+            .filter(|line| *line != 17)
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+
+    let mut harness = VimHarness::normal_at(&text, 0, 0);
+    harness.model.set_viewport_rows(8);
+    harness.keys("d<C-d>");
+    harness.expect_pending("");
+    harness.expect_cursor(0, 0);
+    harness.keys("w");
+    harness.expect_text(&text);
+}

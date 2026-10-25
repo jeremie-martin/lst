@@ -33,8 +33,14 @@ struct PositionRange {
     end: Position,
 }
 
+struct ScreenLines {
+    top: usize,
+    middle: usize,
+    bottom: usize,
+}
+
 impl EditorModel {
-    pub(crate) fn vim_handle_key(&mut self, key: Key, mods: vim::Modifiers, _wrap_columns: usize) -> bool {
+    pub(crate) fn vim_handle_key(&mut self, key: Key, mods: vim::Modifiers, wrap_columns: usize) -> bool {
         if mods.command && !mods.control && matches!(&key, Key::Named(_)) {
             return false;
         }
@@ -48,12 +54,12 @@ impl EditorModel {
                 }
                 use vim::NamedKey::*;
                 let motion = match named {
-                    ArrowLeft => self.vim_motion_command(1, "h", false),
-                    ArrowRight => self.vim_motion_command(1, "l", false),
-                    ArrowUp => self.vim_motion_command(1, "k", false),
-                    ArrowDown => self.vim_motion_command(1, "j", false),
-                    Home => self.vim_motion_command(1, "0", false),
-                    End => self.vim_motion_command(1, "$", false),
+                    ArrowLeft => self.vim_motion_command(1, "h", false, wrap_columns),
+                    ArrowRight => self.vim_motion_command(1, "l", false, wrap_columns),
+                    ArrowUp => self.vim_motion_command(1, "k", false, wrap_columns),
+                    ArrowDown => self.vim_motion_command(1, "j", false, wrap_columns),
+                    Home => self.vim_motion_command(1, "0", false, wrap_columns),
+                    End => self.vim_motion_command(1, "$", false, wrap_columns),
                     PageUp | PageDown => Some(self.vertical(
                         if named == PageDown {
                             self.viewport.page() as isize
@@ -88,7 +94,7 @@ impl EditorModel {
             return false;
         }
         self.vim.pending.push(ch);
-        self.vim_dispatch_pending()
+        self.vim_dispatch_pending(wrap_columns)
     }
 
     pub(crate) fn vim_escape(&mut self) -> bool {
@@ -105,14 +111,14 @@ impl EditorModel {
         true
     }
 
-    fn vim_dispatch_pending(&mut self) -> bool {
+    fn vim_dispatch_pending(&mut self, wrap_columns: usize) -> bool {
         let pending = self.vim.pending.clone();
         let (count, rest) = count_prefix(&pending);
         if rest.is_empty() {
             return true;
         }
         if self.vim.mode != vim::Mode::Normal {
-            return self.vim_visual_command(count, rest);
+            return self.vim_visual_command(count, rest, wrap_columns);
         }
         if let Some(op) = match rest.as_bytes()[0] {
             b'd' => Some(Op::Delete),
@@ -120,7 +126,7 @@ impl EditorModel {
             b'y' => Some(Op::Yank),
             _ => None,
         } {
-            if self.vim_operator(count, rest, op) {
+            if self.vim_operator(count, rest, op, wrap_columns) {
                 self.vim.pending.clear();
             }
             return true;
@@ -164,7 +170,7 @@ impl EditorModel {
             "/" | "?" => self.vim_open_search(rest == "?"),
             "gg" | "g;" | "gi" | "zz" | "zt" | "zb" | ">>" | "<<" => self.vim_special(count, rest),
             _ => {
-                if let Some(motion) = self.vim_motion_command(count, rest, false) {
+                if let Some(motion) = self.vim_motion_command(count, rest, false, wrap_columns) {
                     self.vim_move_to(motion.at);
                     true
                 } else {
@@ -178,7 +184,7 @@ impl EditorModel {
         true
     }
 
-    fn vim_operator(&mut self, op_count: usize, rest: &str, op: Op) -> bool {
+    fn vim_operator(&mut self, op_count: usize, rest: &str, op: Op, wrap_columns: usize) -> bool {
         let (motion_count, motion) = count_prefix(&rest[1..]);
         let count = op_count.saturating_mul(motion_count).max(1);
         if motion.is_empty() || matches!(motion, "g" | "i" | "a") {
@@ -186,6 +192,10 @@ impl EditorModel {
         }
         if motion == &rest[..1] {
             let first = self.cursor().line;
+            if count > 1 && first + 1 >= self.active_tab().line_count() {
+                // `2dd` is `dj`, whose cursor_down fails on the last line.
+                return true;
+            }
             return self.vim_apply_lines_span(op, first, first + count.saturating_sub(1));
         }
         if motion == "gg" {
@@ -235,13 +245,13 @@ impl EditorModel {
             }
             return self.vim_apply_range(op, range);
         }
-        if let Some(m) = self.vim_motion_command(count, motion, true) {
+        if let Some(m) = self.vim_motion_command(count, motion, true, wrap_columns) {
             return self.vim_apply_motion(op, m);
         }
         true
     }
 
-    fn vim_visual_command(&mut self, count: usize, rest: &str) -> bool {
+    fn vim_visual_command(&mut self, count: usize, rest: &str, wrap_columns: usize) -> bool {
         let done = match rest {
             "v" => self.vim_toggle_visual(false),
             "V" => self.vim_toggle_visual(true),
@@ -258,7 +268,7 @@ impl EditorModel {
                 if let Some(range) = self.vim_text_object(rest, count) {
                     self.vim_set_visual_range(range);
                     true
-                } else if let Some(motion) = self.vim_motion_command(count, rest, false) {
+                } else if let Some(motion) = self.vim_motion_command(count, rest, false, wrap_columns) {
                     self.vim_extend_visual(motion.at);
                     true
                 } else {
@@ -272,26 +282,50 @@ impl EditorModel {
         true
     }
 
-    fn vim_motion_command(&mut self, count: usize, cmd: &str, operator: bool) -> Option<Motion> {
+    fn vim_motion_command(&mut self, count: usize, cmd: &str, operator: bool, wrap_columns: usize) -> Option<Motion> {
         let n = count.max(1);
         let at = match cmd {
-            "h" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.prev_grapheme(off)),
-            "l" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.next_normal_grapheme(off)),
+            // `h` and `l` stay on the cursor's line (Vim's default whichwrap).
+            // Under an operator `l` may reach the line end, so `dl` on the
+            // last character deletes it (nv_right makes the motion inclusive).
+            "h" => repeat_offset(self, self.cursor_offset(), n, |s, off| {
+                s.prev_grapheme(off).max(s.line_start(s.cursor().line))
+            }),
+            "l" => repeat_offset(self, self.cursor_offset(), n, |s, off| {
+                if operator {
+                    s.next_grapheme(off).min(s.line_end(s.cursor().line))
+                } else {
+                    s.next_normal_grapheme(off)
+                }
+            }),
             "0" => self.line_start(self.cursor().line),
             "^" => self.line_first_nonblank(self.cursor().line),
             "$" => self.line_last(self.cursor().line),
             "w" | "W" => self.word_forward_motion(n, cmd == "W", operator),
             "e" | "E" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.word_end(off, cmd == "E")),
             "b" | "B" => repeat_offset(self, self.cursor_offset(), n, |s, off| s.word_backward(off, cmd == "B")),
-            "j" => return Some(self.vertical(n as isize, operator)),
-            "k" => return Some(self.vertical(-(n as isize), operator)),
+            "j" | "k" => {
+                let line = self.cursor().line;
+                let down = cmd == "j";
+                if operator && ((down && line + 1 >= self.active_tab().line_count()) || (!down && line == 0)) {
+                    // Vim's cursor_down/cursor_up fail at the buffer edge,
+                    // cancelling the operator.
+                    return None;
+                }
+                let delta = n.min(self.active_tab().line_count()) as isize;
+                return Some(self.vertical(if down { delta } else { -delta }, operator));
+            }
             "G" => {
                 let cur = self.cursor();
+                // Any typed count names a line, `1G` included; only a bare
+                // `G` goes to the last line. The pending command still holds
+                // every digit typed for this motion and its operator.
+                let counted = self.vim.pending.bytes().any(|byte| byte.is_ascii_digit());
                 let at = self.line_col_offset(
-                    if count == 1 {
-                        self.active_tab().line_count() - 1
-                    } else {
+                    if counted {
                         n - 1
+                    } else {
+                        self.active_tab().line_count() - 1
                     },
                     cur.column,
                 );
@@ -313,9 +347,15 @@ impl EditorModel {
                     inclusive: count == 1,
                 });
             }
-            "H" => return Some(self.screen_motion(self.viewport.screen_top_row(), operator)),
-            "M" => return Some(self.screen_motion(self.viewport.screen_middle_row(), operator)),
-            "L" => return Some(self.screen_motion(self.viewport.screen_bottom_row(), operator)),
+            "H" | "M" | "L" => {
+                let lines = self.screen_lines(wrap_columns);
+                let line = match cmd {
+                    "H" => lines.top,
+                    "M" => lines.middle,
+                    _ => lines.bottom,
+                };
+                return Some(self.screen_motion(line, operator));
+            }
             ";" | "," => return self.repeat_char_find(cmd == ";", operator),
             _ if cmd.starts_with(['f', 'F', 't', 'T']) && cmd.chars().count() == 2 => {
                 let mut chars = cmd.chars();
@@ -332,12 +372,28 @@ impl EditorModel {
     }
 
     fn vim_control(&mut self, ch: char) -> bool {
+        if !matches!(ch, 'd' | 'u' | 'f' | 'b') {
+            return false;
+        }
+        // Scrolling cancels a pending operator, as Vim's checkclearop does,
+        // and consumes a typed count: lines for Ctrl+D/U, pages for Ctrl+F/B.
+        let pending = std::mem::take(&mut self.vim.pending);
+        let (count, rest) = count_prefix(&pending);
+        if !rest.is_empty() {
+            return true;
+        }
+        let count = count.min(self.active_tab().line_count());
+        let half_page = if pending.is_empty() {
+            self.viewport.half_page()
+        } else {
+            count
+        };
+        let page = self.viewport.page().saturating_mul(count);
         let delta = match ch {
-            'd' => self.viewport.half_page() as isize,
-            'u' => -(self.viewport.half_page() as isize),
-            'f' => self.viewport.page() as isize,
-            'b' => -(self.viewport.page() as isize),
-            _ => return false,
+            'd' => half_page as isize,
+            'u' => -(half_page as isize),
+            'f' => page.min(self.active_tab().line_count()) as isize,
+            _ => -(page.min(self.active_tab().line_count()) as isize),
         };
         let motion = self.vertical(delta, false);
         if self.vim_in_visual() {
@@ -389,7 +445,9 @@ impl EditorModel {
         let cur = self.cursor_offset();
         let at = motion.at;
         let mut range = if at >= cur { cur..at } else { at..cur };
-        if motion.inclusive && at >= cur {
+        // An inclusive motion covers the character at its far end, which is
+        // the cursor's own character when it moved backward (`d%` from `)`).
+        if motion.inclusive {
             range.end = self.next_grapheme(range.end);
         }
         // Vim's exclusive-motion rule (:h exclusive-linewise) adjusts the end of
@@ -988,11 +1046,21 @@ impl EditorModel {
         } else {
             !self.vim.search_backward
         };
+        // `n`/`N` search from the cursor, wherever motions or edits left it,
+        // not from the match visited last.
+        self.ensure_find_matches_current();
+        if self.find.matches.is_empty() {
+            return true;
+        }
+        self.refresh_vim_search_anchor();
+        let cursor = self.cursor();
         if backward {
-            self.find_step(false)
+            self.find.prev_from(cursor);
         } else {
-            self.find_step(true)
-        };
+            self.find.next_from(cursor);
+        }
+        self.move_to_current_find_match();
+        self.record_vim_search_cursor(true);
         true
     }
 
@@ -1162,7 +1230,8 @@ impl EditorModel {
         Some(Motion {
             at: char_at_line_column(self.active_tab().buffer(), line, found),
             linewise: false,
-            inclusive: !find.till,
+            // `f` is inclusive; `t`, and the backward `F` and `T`, are exclusive.
+            inclusive: find.forward && !find.till,
         })
     }
 
@@ -1192,11 +1261,78 @@ impl EditorModel {
         self.vim_finish_normal();
     }
 
-    /// `H`, `M` and `L` move to a screen row's first non-blank; like `G`,
+    /// The logical lines `H`, `M` and `L` target. The viewport speaks in
+    /// visual rows, which soft wrap makes differ from lines, so walk the rows
+    /// with the wrap rules the app paints with (`wrap_columns` is `usize::MAX`
+    /// when lines do not wrap). Like Vim, `H` takes the first line that starts
+    /// on screen, `L` the last line shown whole, and `M` the line holding the
+    /// middle of the rows that show text.
+    fn screen_lines(&self, wrap_columns: usize) -> ScreenLines {
+        let buffer = self.active_tab().buffer();
+        let last = buffer.len_lines().saturating_sub(1);
+        let top_row = self.viewport.top_visual_row;
+        let bottom_row = top_row.saturating_add(self.viewport.rows.max(1) - 1);
+        let wrapped = self.show_wrap && wrap_columns != usize::MAX;
+        let rows_of = |line: usize| {
+            if wrapped {
+                crate::wrap::visual_line_count_for_rope_line(buffer.line(line), wrap_columns)
+            } else {
+                1
+            }
+        };
+        // The line holding the top row, and that line's first row.
+        let (holder, holder_row) = if wrapped {
+            let (mut line, mut row) = (0, 0);
+            while line < last {
+                let next = row + rows_of(line);
+                if next > top_row {
+                    break;
+                }
+                row = next;
+                line += 1;
+            }
+            (line, row)
+        } else {
+            let line = top_row.min(last);
+            (line, line)
+        };
+        let (mut top, mut bottom, mut shown_end) = (None, holder, top_row);
+        let (mut line, mut row) = (holder, holder_row);
+        while row <= bottom_row {
+            let end = row + rows_of(line);
+            shown_end = shown_end.max(end.min(bottom_row + 1));
+            if row >= top_row {
+                top.get_or_insert(line);
+                if end - 1 <= bottom_row {
+                    bottom = line;
+                }
+            }
+            if line == last {
+                break;
+            }
+            line += 1;
+            row = end;
+        }
+        let shown_rows = shown_end.saturating_sub(top_row).max(1);
+        let middle_row = top_row + shown_rows.div_ceil(2) - 1;
+        let (mut middle, mut row) = (holder, holder_row);
+        while middle < last && row + rows_of(middle) <= middle_row {
+            row += rows_of(middle);
+            middle += 1;
+        }
+        let top = top.unwrap_or(holder);
+        ScreenLines {
+            top,
+            middle: middle.clamp(top.min(bottom), bottom.max(top)),
+            bottom: bottom.max(top),
+        }
+    }
+
+    /// `H`, `M` and `L` move to a screen line's first non-blank; like `G`,
     /// they are linewise under an operator.
-    fn screen_motion(&mut self, row: usize, operator: bool) -> Motion {
-        let row = row.min(self.active_tab().line_count() - 1);
-        let at = self.line_first_nonblank(row);
+    fn screen_motion(&mut self, line: usize, operator: bool) -> Motion {
+        let line = line.min(self.active_tab().line_count() - 1);
+        let at = self.line_first_nonblank(line);
         self.queue_reveal(RevealIntent::NearestEdge);
         Motion {
             at,

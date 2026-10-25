@@ -1095,15 +1095,22 @@ impl LstGpuiApp {
         self.request_close_tab_at(index, cx);
     }
 
+    /// A prompt, review or confirmation is waiting for the user's answer.
+    /// Closing and quitting must not open a second decision underneath it:
+    /// keys go to whichever surface is checked first, not the one on top.
+    fn decision_pending(&self) -> bool {
+        self.close_prompt.is_some()
+            || self.quit_review.is_some()
+            || self.pending_exit_save.is_some()
+            || self.prompt_review.is_some()
+            || self.cleanup_confirmation.is_some()
+    }
+
     pub(crate) fn request_close_tab_at(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.voice_blocks_close(self.model.tab_id_at(index), cx) {
             return;
         }
-        if self.close_prompt.is_some()
-            || self.quit_review.is_some()
-            || self.pending_exit_save.is_some()
-            || self.prompt_review.is_some()
-        {
+        if self.decision_pending() {
             return;
         }
         self.hovered_tab = None;
@@ -1155,11 +1162,7 @@ impl LstGpuiApp {
         if self.voice_blocks_close(None, cx) {
             return;
         }
-        if self.close_prompt.is_some()
-            || self.quit_review.is_some()
-            || self.pending_exit_save.is_some()
-            || self.prompt_review.is_some()
-        {
+        if self.decision_pending() {
             return;
         }
         if self.cleanup_in_flight {

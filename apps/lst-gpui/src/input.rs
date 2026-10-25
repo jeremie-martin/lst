@@ -686,7 +686,7 @@ impl LstGpuiApp {
             return false;
         }
 
-        if let Some(command) = workspace_fallback_command(&key, modifiers) {
+        if let Some(command) = workspace_fallback_command(&key, modifiers, &self.settings.settings.keybindings) {
             self.dispatch_workspace_command(command, window, cx);
             cx.stop_propagation();
             true
@@ -714,7 +714,11 @@ impl LstGpuiApp {
             return false;
         }
 
-        if let Some(command) = workspace_fallback_command(event.keystroke.key.as_str(), Modifiers::default()) {
+        if let Some(command) = workspace_fallback_command(
+            event.keystroke.key.as_str(),
+            Modifiers::default(),
+            &self.settings.settings.keybindings,
+        ) {
             self.dispatch_workspace_command(command, window, cx);
             cx.stop_propagation();
             true

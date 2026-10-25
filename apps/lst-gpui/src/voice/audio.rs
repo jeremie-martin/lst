@@ -127,6 +127,7 @@ fn capture(stop: Arc<AtomicBool>, ready: Arc<AtomicBool>, level: Arc<AtomicU32>)
     let mut stopping_at = None;
     let mut captured_through = Instant::now();
     let mut warning = None;
+    let mut write_failed = false;
     loop {
         if stop.load(Ordering::Acquire) {
             // Drain until device timestamps cover the stop request, rather
@@ -155,9 +156,10 @@ fn capture(stop: Arc<AtomicBool>, ready: Arc<AtomicBool>, level: Arc<AtomicU32>)
         match rx.recv_timeout(Duration::from_millis(20)) {
             Ok(block) => {
                 captured_through = block.captured_through;
-                samples += block.pcm.len() as u64;
-                for sample in block.pcm {
-                    writer.write_sample(sample)?;
+                if let Err(error) = write_pcm(&mut writer, &block.pcm, &mut samples) {
+                    write_failed = true;
+                    warning = Some(write_failure_warning(&error));
+                    break;
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -168,18 +170,40 @@ fn capture(stop: Arc<AtomicBool>, ready: Arc<AtomicBool>, level: Arc<AtomicU32>)
         }
     }
     drop(stream);
-    for block in rx.try_iter() {
-        samples += block.pcm.len() as u64;
-        for sample in block.pcm {
-            writer.write_sample(sample)?;
+    if !write_failed {
+        for block in rx.try_iter() {
+            if let Err(error) = write_pcm(&mut writer, &block.pcm, &mut samples) {
+                warning = Some(write_failure_warning(&error));
+                break;
+            }
         }
     }
+    // A failed sample write (a full or failing temp filesystem) ends the
+    // segment like the other stop paths: finalize what was written so the
+    // audio captured so far is still transcribed instead of deleted.
     writer.finalize()?;
     Ok(Audio {
         file,
         duration: Duration::from_secs_f64(samples as f64 / f64::from(rate)),
         warning,
     })
+}
+
+/// Appends samples to the WAV, counting only the ones written.
+fn write_pcm<W: std::io::Write + std::io::Seek>(
+    writer: &mut hound::WavWriter<W>,
+    pcm: &[i16],
+    samples: &mut u64,
+) -> hound::Result<()> {
+    for &sample in pcm {
+        writer.write_sample(sample)?;
+        *samples += 1;
+    }
+    Ok(())
+}
+
+fn write_failure_warning(error: &hound::Error) -> String {
+    format!("Recording stopped: could not write audio ({error}). Captured audio was retained.")
 }
 
 fn build<T>(

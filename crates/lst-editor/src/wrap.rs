@@ -260,16 +260,26 @@ pub fn display_row_target_in_rope(
     } else {
         wrap_segments(&crate::selection::line_display_text(buffer, target_line), wrap_columns)
     };
-    let target_segment = target_segments
-        .get(target_row_in_line)
-        .or_else(|| target_segments.last())
-        .expect("wrap_segments always returns at least one segment");
-    let target_column = target_segment.start_col + preferred_column.min(target_segment.text.chars().count());
+    let target_row = target_row_in_line.min(target_segments.len() - 1);
+    let target_segment = &target_segments[target_row];
+    let target_column = target_segment.start_col
+        + preferred_column.min(row_caret_limit(target_segment, target_row + 1 < target_segments.len()));
     Some(DisplayRowTarget {
         line: target_line,
         column: target_column,
         preferred_column,
     })
+}
+
+/// The furthest caret column within a row. A non-final row ends where the
+/// next row starts, and that shared boundary belongs to the next row, so the
+/// caret stops on the row's last grapheme instead.
+fn row_caret_limit(segment: &WrappedSegment, continues: bool) -> usize {
+    if continues {
+        cells_of_str(&segment.text).last().map_or(0, |cell| cell.char_start)
+    } else {
+        segment.text.chars().count()
+    }
 }
 
 /// Walks `remaining` rows down from `row_in_line` of `line`, whose row count
@@ -668,14 +678,37 @@ mod tests {
         let target_text = crate::selection::line_display_text(buffer, target_line);
         let target_segments = wrap_segments(&target_text, wrap_columns);
         let row_in_line = target_visual_row - layout.row_start(target_line).unwrap();
-        let segment = target_segments
-            .get(row_in_line)
-            .or_else(|| target_segments.last())
-            .unwrap();
+        let row = row_in_line.min(target_segments.len() - 1);
+        let segment = &target_segments[row];
         Some((
             target_line,
-            segment.start_col + preferred.min(segment.text.chars().count()),
+            segment.start_col + preferred.min(row_caret_limit(segment, row + 1 < target_segments.len())),
         ))
+    }
+
+    #[test]
+    fn display_row_motion_visits_every_row_with_a_goal_past_short_rows() {
+        fn walk(text: &str, start: (usize, usize), delta: isize, wrap_columns: usize) -> Vec<(usize, usize)> {
+            let buffer = Rope::from_str(text);
+            let (mut position, mut preferred, mut visited) = (start, None, Vec::new());
+            // A stuck caret keeps reporting a move, so bound the walk.
+            for _ in 0..8 {
+                let Some(target) =
+                    display_row_target_in_rope(&buffer, position.0, position.1, preferred, delta, wrap_columns)
+                else {
+                    break;
+                };
+                position = (target.line, target.column);
+                preferred = Some(target.preferred_column);
+                visited.push(position);
+            }
+            visited
+        }
+        // Line 1 wraps as "aa " | "bbbbbbbbbb" | "bbb"; each stop must be on
+        // its own row, never on the boundary that starts the next row.
+        let text = "first line\naa bbbbbbbbbbbbb\nlast line";
+        assert_eq!(walk(text, (2, 5), -1, 10), [(1, 16), (1, 8), (1, 2), (0, 5)]);
+        assert_eq!(walk(text, (0, 9), 1, 10), [(1, 2), (1, 12), (1, 16), (2, 9)]);
     }
 
     #[test]

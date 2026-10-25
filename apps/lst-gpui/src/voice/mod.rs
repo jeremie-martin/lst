@@ -89,12 +89,13 @@ impl LstGpuiApp {
             .and_then(|_| session.transcript())
             .map(str::to_owned);
         if let Some(text) = text {
+            // The note is a scratchpad, so autosave persists the segment
+            // verbatim once the note is idle. An explicit save would apply
+            // the trim and final-newline options and replace the text under
+            // a user who is still typing in it.
             let mut accepted = false;
             self.update_model(cx, true, |model| {
                 accepted = model.append_text_to_tab(tab, &text);
-                if accepted {
-                    model.request_save_tab(tab);
-                }
             });
             if accepted {
                 self.voice.session.as_mut().expect("active session").accept_transcript();

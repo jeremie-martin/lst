@@ -2,7 +2,7 @@
   "metadata": {
     "generator": "scripts/generate_vim_oracle_fixtures.py",
     "oracle_profile": "user_config",
-    "nvim_version": "NVIM v0.12.5",
+    "nvim_version": "NVIM v0.9.5",
     "options": {
       "selection": "inclusive",
       "expandtab": false,
@@ -18855,6 +18855,503 @@
           "kind": "char",
           "text": "alpha"
         }
+      }
+    },
+    {
+      "name": "delete percent from closing bracket includes it",
+      "area": "operators",
+      "initial_text": "call(foo) x",
+      "cursor": {
+        "line": 0,
+        "column": 8
+      },
+      "keys": "d%",
+      "expected": {
+        "text": "call x",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "(foo)"
+        }
+      }
+    },
+    {
+      "name": "change percent from closing bracket replaces the pair",
+      "area": "operators",
+      "initial_text": "call(foo) x",
+      "cursor": {
+        "line": 0,
+        "column": 8
+      },
+      "keys": "c%X<esc>",
+      "expected": {
+        "text": "callX x",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "(foo)"
+        }
+      }
+    },
+    {
+      "name": "yank percent from closing bracket",
+      "area": "operators",
+      "initial_text": "call(foo) x",
+      "cursor": {
+        "line": 0,
+        "column": 8
+      },
+      "keys": "y%",
+      "expected": {
+        "text": "call(foo) x",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "(foo)"
+        }
+      }
+    },
+    {
+      "name": "delete percent from closing brace across lines",
+      "area": "operators",
+      "initial_text": "fn x() {\n  a\n}\nz",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "d%",
+      "expected": {
+        "text": "fn x() \nz",
+        "cursor": {
+          "line": 0,
+          "column": 6
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "{\n  a\n}"
+        }
+      }
+    },
+    {
+      "name": "delete percent from closing paren on own line is linewise",
+      "area": "operators",
+      "initial_text": "(\n  a\n)\nz",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "d%",
+      "expected": {
+        "text": "z",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "(\n  a\n)"
+        }
+      }
+    },
+    {
+      "name": "delete backward find excludes cursor char",
+      "area": "operators",
+      "initial_text": "abcdef",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "dFb",
+      "expected": {
+        "text": "aef",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "bcd"
+        }
+      }
+    },
+    {
+      "name": "delete backward till excludes both ends",
+      "area": "operators",
+      "initial_text": "abcdef",
+      "cursor": {
+        "line": 0,
+        "column": 4
+      },
+      "keys": "dTb",
+      "expected": {
+        "text": "abef",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "cd"
+        }
+      }
+    },
+    {
+      "name": "repeat backward find under operator is exclusive",
+      "area": "operators",
+      "initial_text": "abcabc",
+      "cursor": {
+        "line": 0,
+        "column": 5
+      },
+      "keys": "Fb$d;",
+      "expected": {
+        "text": "abcac",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "b"
+        }
+      }
+    },
+    {
+      "name": "left at line start stays on the line",
+      "area": "operators",
+      "initial_text": "abc\ndef",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "h",
+      "expected": {
+        "text": "abc\ndef",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete left at line start below empty line is noop",
+      "area": "operators",
+      "initial_text": "\ndef",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "dh",
+      "expected": {
+        "text": "\ndef",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete left at line start below blank line is noop",
+      "area": "operators",
+      "initial_text": "  \ndef",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "dh",
+      "expected": {
+        "text": "  \ndef",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete counted left stops at line start",
+      "area": "operators",
+      "initial_text": "abc\ndef",
+      "cursor": {
+        "line": 1,
+        "column": 1
+      },
+      "keys": "3dh",
+      "expected": {
+        "text": "abc\nef",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "d"
+        }
+      }
+    },
+    {
+      "name": "delete right on last char deletes it",
+      "area": "operators",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 2
+      },
+      "keys": "dl",
+      "expected": {
+        "text": "ab",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "c"
+        }
+      }
+    },
+    {
+      "name": "change right on last char replaces it",
+      "area": "operators",
+      "initial_text": "abc",
+      "cursor": {
+        "line": 0,
+        "column": 2
+      },
+      "keys": "clX<esc>",
+      "expected": {
+        "text": "abX",
+        "cursor": {
+          "line": 0,
+          "column": 2
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "c"
+        }
+      }
+    },
+    {
+      "name": "delete counted right stops at line end",
+      "area": "operators",
+      "initial_text": "abc\ndef",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "d5l",
+      "expected": {
+        "text": "a\ndef",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "bc"
+        }
+      }
+    },
+    {
+      "name": "delete down on last line is noop",
+      "area": "operators",
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "dj",
+      "expected": {
+        "text": "one\ntwo\nthree",
+        "cursor": {
+          "line": 2,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete up on first line is noop",
+      "area": "operators",
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "dk",
+      "expected": {
+        "text": "one\ntwo\nthree",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete counted lines on last line is noop",
+      "area": "operators",
+      "initial_text": "one\ntwo\nthree",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "2dd",
+      "expected": {
+        "text": "one\ntwo\nthree",
+        "cursor": {
+          "line": 2,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "go to line one with explicit count",
+      "area": "operators",
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "line": 2,
+        "column": 1
+      },
+      "keys": "1G",
+      "expected": {
+        "text": "one\ntwo\nthree\nfour",
+        "cursor": {
+          "line": 0,
+          "column": 1
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete to line one with explicit count",
+      "area": "operators",
+      "initial_text": "one\ntwo\nthree\nfour",
+      "cursor": {
+        "line": 2,
+        "column": 0
+      },
+      "keys": "d1G",
+      "expected": {
+        "text": "four",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "line",
+          "text": "one\ntwo\nthree"
+        }
+      }
+    },
+    {
+      "name": "search repeat continues from the moved cursor",
+      "area": "search",
+      "initial_text": "foo\nbar\nfoo\nbaz\nfoo\nqux",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "/foo<enter>ggn",
+      "expected": {
+        "text": "foo\nbar\nfoo\nbaz\nfoo\nqux",
+        "cursor": {
+          "line": 2,
+          "column": 0
+        },
+        "mode": "Normal",
+        "search_query": "foo"
+      }
+    },
+    {
+      "name": "search reverse repeat continues from the moved cursor",
+      "area": "search",
+      "initial_text": "foo\nbar\nfoo\nbaz\nfoo\nqux",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "/foo<enter>GN",
+      "expected": {
+        "text": "foo\nbar\nfoo\nbaz\nfoo\nqux",
+        "cursor": {
+          "line": 4,
+          "column": 0
+        },
+        "mode": "Normal",
+        "search_query": "foo"
+      }
+    },
+    {
+      "name": "search repeat after an edit takes the next match",
+      "area": "search",
+      "initial_text": "foo\nbar\nfoo\nbaz\nfoo\nqux",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "/foo<enter>ggxn",
+      "expected": {
+        "text": "oo\nbar\nfoo\nbaz\nfoo\nqux",
+        "cursor": {
+          "line": 2,
+          "column": 0
+        },
+        "mode": "Normal",
+        "search_query": "foo"
       }
     }
   ]

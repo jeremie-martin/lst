@@ -803,6 +803,38 @@ def build_cases() -> list[dict]:
     ]:
         cases.append(case(name, "undo", text, cursor, keys, assert_register=assert_register))
 
+    # Motions that must fail at a buffer edge, stay on the cursor's line, count
+    # an explicit 1, or include the cursor's own character when they move
+    # backward.
+    for name, text, cursor, keys in [
+        ("delete percent from closing bracket includes it", "call(foo) x", (0, 8), "d%"),
+        ("change percent from closing bracket replaces the pair", "call(foo) x", (0, 8), "c%X<esc>"),
+        ("yank percent from closing bracket", "call(foo) x", (0, 8), "y%"),
+        ("delete percent from closing brace across lines", "fn x() {\n  a\n}\nz", (2, 0), "d%"),
+        ("delete percent from closing paren on own line is linewise", "(\n  a\n)\nz", (2, 0), "d%"),
+        ("delete backward find excludes cursor char", "abcdef", (0, 4), "dFb"),
+        ("delete backward till excludes both ends", "abcdef", (0, 4), "dTb"),
+        ("repeat backward find under operator is exclusive", "abcabc", (0, 5), "Fb$d;"),
+        ("left at line start stays on the line", "abc\ndef", (1, 0), "h"),
+        ("delete left at line start below empty line is noop", "\ndef", (1, 0), "dh"),
+        ("delete left at line start below blank line is noop", "  \ndef", (1, 0), "dh"),
+        ("delete counted left stops at line start", "abc\ndef", (1, 1), "3dh"),
+        ("delete right on last char deletes it", "abc", (0, 2), "dl"),
+        ("change right on last char replaces it", "abc", (0, 2), "clX<esc>"),
+        ("delete counted right stops at line end", "abc\ndef", (0, 1), "d5l"),
+        ("delete down on last line is noop", "one\ntwo\nthree", (2, 0), "dj"),
+        ("delete up on first line is noop", "one\ntwo\nthree", (0, 0), "dk"),
+        ("delete counted lines on last line is noop", "one\ntwo\nthree", (2, 0), "2dd"),
+        ("go to line one with explicit count", "one\ntwo\nthree\nfour", (2, 1), "1G"),
+        ("delete to line one with explicit count", "one\ntwo\nthree\nfour", (2, 0), "d1G"),
+    ]:
+        cases.append(case(name, "operators", text, cursor, keys, assert_register=True))
+    for name, text, cursor, keys in [
+        ("search repeat continues from the moved cursor", "foo\nbar\nfoo\nbaz\nfoo\nqux", (0, 0), "/foo<enter>ggn"),
+        ("search reverse repeat continues from the moved cursor", "foo\nbar\nfoo\nbaz\nfoo\nqux", (0, 0), "/foo<enter>GN"),
+        ("search repeat after an edit takes the next match", "foo\nbar\nfoo\nbaz\nfoo\nqux", (0, 0), "/foo<enter>ggxn"),
+    ]:
+        cases.append(case(name, "search", text, cursor, keys, assert_search=True))
     return cases
 
 

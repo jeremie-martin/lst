@@ -369,7 +369,10 @@ impl LstGpuiApp {
         let values = settings.settings.clone();
         self.settings_generation = self.settings_generation.wrapping_add(1);
         self.settings = settings;
-        self.scratchpad_dir = values.files.scratchpad_directory.clone();
+        self.scratchpad_dir = self
+            .scratchpad_dir_cli_override
+            .clone()
+            .or_else(|| values.files.scratchpad_directory.clone());
         typography::set_primary_font_family(&values.editor.font_family);
         metrics::set_code_font_size(f32::from(values.editor.font_size));
         self.invalidate_editor_typography();
@@ -413,6 +416,7 @@ impl LstGpuiApp {
         let Some(path) = dialog.pick_folder() else {
             return;
         };
+        self.scratchpad_dir_cli_override = None;
         self.scratchpad_dir = Some(path.clone());
         self.settings.settings.files.scratchpad_directory = Some(path);
         self.persist_settings(cx);
@@ -632,6 +636,8 @@ impl LstGpuiApp {
             return;
         }
         let settings = self.settings.settings.clone();
+        // Reset returns to the defaults, launch overrides included.
+        self.scratchpad_dir_cli_override = None;
         self.scratchpad_dir = settings.files.scratchpad_directory.clone();
         typography::set_primary_font_family(&settings.editor.font_family);
         metrics::set_code_font_size(f32::from(settings.editor.font_size));

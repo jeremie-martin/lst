@@ -393,6 +393,9 @@ struct LstGpuiApp {
     closed_tabs_history: Vec<ClosedTabRecord>,
     settings: SettingsStore,
     input_mode_cli_override: bool,
+    /// `--scratchpad-dir` keeps choosing the scratchpad directory for this
+    /// launch when the settings file reloads, until Settings picks another.
+    scratchpad_dir_cli_override: Option<PathBuf>,
     _shell_subscriptions: Vec<Subscription>,
 }
 
@@ -617,6 +620,7 @@ impl LstGpuiApp {
             status_details_rendered: String::new(),
             closed_tabs_history: Vec::new(),
             input_mode_cli_override: launch.input_mode.is_some(),
+            scratchpad_dir_cli_override: launch.scratchpad_dir.clone(),
             settings,
             _shell_subscriptions: Vec::new(),
         };
