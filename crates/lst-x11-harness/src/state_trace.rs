@@ -311,7 +311,9 @@ impl TraceViewport {
         }
         let row = covering.or(first)?;
         let col_in_row = target_char.saturating_sub(row.line_start_char);
-        let x = self.code_origin_x_px + (col_in_row as f32) * self.char_width_px + self.char_width_px * 0.5;
+        // Stay inside the leading half of the requested cell. An exact
+        // boundary can round into the gutter; the midpoint is ambiguous.
+        let x = self.code_origin_x_px + (col_in_row as f32 + 0.2) * self.char_width_px;
         let y = row.top_px + self.line_height_px * 0.5;
         let scale = if self.scale_factor > 0.0 {
             self.scale_factor

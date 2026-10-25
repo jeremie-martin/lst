@@ -56,6 +56,7 @@ const BUTTON_WHEEL_DOWN: u8 = 5;
 const KEYSYM_ALT_L: u32 = 0xffe9;
 const KEYSYM_CONTROL_L: u32 = 0xffe3;
 const KEYSYM_DOWN: u32 = 0xff54;
+const KEYSYM_UP: u32 = 0xff52;
 const KEYSYM_ENTER: u32 = 0xff0d;
 const KEYSYM_LEFT: u32 = 0xff51;
 const KEYSYM_RIGHT: u32 = 0xff53;
@@ -98,6 +99,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ticks_per_second: clock_ticks_per_second()?,
         session_env,
         editor,
+        profiles: tempfile::tempdir()?,
     };
 
     for scenario in args.scenario.measured_cases() {
@@ -481,6 +483,7 @@ struct Bench {
     ticks_per_second: u64,
     session_env: SessionEnv,
     editor: PathBuf,
+    profiles: tempfile::TempDir,
 }
 
 impl Bench {
@@ -572,14 +575,13 @@ impl Bench {
 
             if let Some((width, height)) = expected_window {
                 if metrics.window_size != (width, height) {
-                    // Multi-monitor window managers may place runs on
-                    // different screens; the summary reports the first size.
-                    eprintln!(
-                        "warning: {} window size changed: expected {width}x{height}, got {}x{}",
+                    return Err(format!(
+                        "{} window size changed: expected {width}x{height}, got {}x{}; refusing to combine unlike runs",
                         scenario.as_str(),
                         metrics.window_size.0,
                         metrics.window_size.1
-                    );
+                    )
+                    .into());
                 }
             } else {
                 expected_window = Some(metrics.window_size);
@@ -713,11 +715,11 @@ impl Bench {
                 (select_all_ms, copy_clipboard_ms, elapsed_ms(tab_started))
             };
 
-            let paste_started = Instant::now();
-            let paste_started_epoch_us = epoch_micros(SystemTime::now())?;
             let paste_apply_count = read_editor_trace(&trace_path)?
                 .count("paste_clipboard_apply_ms")
                 .unwrap_or(0);
+            let paste_started = Instant::now();
+            let paste_started_epoch_us = epoch_micros(SystemTime::now())?;
             inject_ctrl_chord(&self.conn, self.root, self.keycodes.control_l, self.keycodes.v)?;
             wait_for_trace_count(
                 &trace_path,
@@ -852,12 +854,7 @@ impl Bench {
                 for metric in [
                     "syntax_structure_root_injections",
                     "syntax_structure_root_collect_ms",
-                    "syntax_structure_markdown_inline_ranges",
-                    "syntax_structure_markdown_inline_parse_ms",
-                    "syntax_structure_markdown_inline_collect_ms",
-                    "syntax_structure_markdown_inline_regions_ms",
-                    "syntax_structure_other_injections",
-                    "syntax_structure_other_injections_ms",
+                    "syntax_structure_injections_ms",
                     "syntax_structure_assemble_ms",
                 ] {
                     add_trace_last_or_zero(&mut metrics, &paste_trace, metric, metric);
@@ -1586,10 +1583,9 @@ impl Bench {
             )?;
             reset_editor_trace(&trace_path)?;
             let text_keycode = self.keycodes.text_keycode('x').expect("benchmark resolves lowercase x");
-            let keycode = match scenario {
-                Scenario::LatencyNavigation | Scenario::LatencyEditNavigation => self.keycodes.down,
-                _ => text_keycode,
-            };
+            if matches!(scenario, Scenario::LatencyNavigation | Scenario::LatencyEditNavigation) && corpus.lines < 2 {
+                return Err("navigation latency requires at least two lines".into());
+            }
 
             let before = proc_sample(pid)?;
             let mut samples = Vec::with_capacity(LATENCY_SAMPLES);
@@ -1597,7 +1593,18 @@ impl Bench {
             let mut to_frame_end = Vec::with_capacity(LATENCY_SAMPLES);
             let mut to_damage = Vec::with_capacity(LATENCY_SAMPLES);
             let cycle_started = Instant::now();
-            for _ in 0..LATENCY_SAMPLES {
+            for sample in 0..LATENCY_SAMPLES {
+                // Alternate real movements around the requested location, including EOF.
+                let keycode = match scenario {
+                    Scenario::LatencyNavigation | Scenario::LatencyEditNavigation => {
+                        if (sample % 2 == 0) == (position.operation_line(corpus.lines) == 0) {
+                            self.keycodes.down
+                        } else {
+                            self.keycodes.up
+                        }
+                    }
+                    _ => text_keycode,
+                };
                 if scenario == Scenario::LatencyEditNavigation {
                     // Navigation right after an edit is the common case and
                     // the one where revision-keyed caches have just been
@@ -1977,7 +1984,21 @@ impl Bench {
     }
 
     fn spawn_editor(&self, files: &[&Path], title: &str, trace_path: Option<&Path>) -> Result<Child, Box<dyn Error>> {
+        let profile = self.profiles.path().join(title);
+        let home = profile.join("home");
+        fs::create_dir_all(&home)?;
         let mut command = Command::new(&self.editor);
+        for (variable, directory) in [
+            ("XDG_CONFIG_HOME", "config"),
+            ("XDG_DATA_HOME", "data"),
+            ("XDG_CACHE_HOME", "cache"),
+            ("XDG_STATE_HOME", "state"),
+        ] {
+            let path = profile.join(directory);
+            fs::create_dir_all(&path)?;
+            command.env(variable, path);
+        }
+        command.env("HOME", home);
         command
             .arg("--title")
             .arg(title)
@@ -2265,12 +2286,7 @@ fn metric_order(scenario: Scenario) -> &'static [&'static str] {
             "syntax_highlight_cache_ms",
             "syntax_structure_root_injections",
             "syntax_structure_root_collect_ms",
-            "syntax_structure_markdown_inline_ranges",
-            "syntax_structure_markdown_inline_parse_ms",
-            "syntax_structure_markdown_inline_collect_ms",
-            "syntax_structure_markdown_inline_regions_ms",
-            "syntax_structure_other_injections",
-            "syntax_structure_other_injections_ms",
+            "syntax_structure_injections_ms",
             "syntax_structure_assemble_ms",
             "plain_structure_update_ms",
             "post_paste_first_key_ms",
@@ -3800,6 +3816,7 @@ struct Keycodes {
     alt_l: xproto::Keycode,
     control_l: xproto::Keycode,
     down: xproto::Keycode,
+    up: xproto::Keycode,
     enter: xproto::Keycode,
     left: xproto::Keycode,
     right: xproto::Keycode,
@@ -3844,6 +3861,7 @@ impl Keycodes {
             alt_l: find_keycode(&reply, setup.min_keycode, KEYSYM_ALT_L, active_group)?,
             control_l: find_keycode(&reply, setup.min_keycode, KEYSYM_CONTROL_L, active_group)?,
             down: find_keycode(&reply, setup.min_keycode, KEYSYM_DOWN, active_group)?,
+            up: find_keycode(&reply, setup.min_keycode, KEYSYM_UP, active_group)?,
             enter: find_keycode(&reply, setup.min_keycode, KEYSYM_ENTER, active_group)?,
             left: find_keycode(&reply, setup.min_keycode, KEYSYM_LEFT, active_group)?,
             right: find_keycode(&reply, setup.min_keycode, KEYSYM_RIGHT, active_group)?,

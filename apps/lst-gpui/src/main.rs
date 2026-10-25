@@ -56,7 +56,8 @@ use std::{
     time::Instant,
 };
 use syntax::{
-    syntax_mode_for_language, CachedSyntaxHighlights, SyntaxInvalidation, SyntaxLanguage, SyntaxMode, TabSyntaxState,
+    syntax_mode_for_language, CachedSyntaxHighlights, LineInvalidation, SyntaxInvalidation, SyntaxLanguage, SyntaxMode,
+    TabSyntaxState,
 };
 use viewport::{scroll_to_left, ViewportCache, ViewportGeometry};
 use workspace_action::editor_keybindings;
@@ -309,6 +310,7 @@ impl EditorTabView {
 
     fn invalidate_visual_state(&mut self) {
         self.cache.borrow_mut().invalidate_content_layout();
+        self.geometry.borrow_mut().layout_valid = false;
         // geometry is intentionally NOT reset here: every field gets
         // overwritten by the next viewport prepare anyway, and resetting
         // makes the status bar paint one frame of stale "no painted
@@ -1030,6 +1032,11 @@ impl LstGpuiApp {
             self.dismiss_focus_surfaces(cx);
         }
         self.sync_tab_views(old_show_wrap);
+        if new_primary_state.0 != old_primary_state.0 {
+            // An inactive tab may retain geometry from before a resize or
+            // settings change. Let its next layout consume the reveal.
+            self.active_view().geometry.borrow_mut().layout_valid = false;
+        }
         self.sync_active_syntax_state(cx);
         let effects = self.model.drain_effects();
         self.sync_find_inputs_if_changed(old_find_state.clone(), cx);
@@ -1103,7 +1110,14 @@ impl LstGpuiApp {
                 if let Some(state) = view.syntax_state.as_ref() {
                     let state = state.borrow();
                     let mut cache = view.cache.borrow_mut();
-                    refresh_syntax_cache(&mut cache, &state, &buffer, revision, SyntaxInvalidation::Full, false);
+                    refresh_syntax_cache(
+                        &mut cache,
+                        &state,
+                        &buffer,
+                        revision,
+                        SyntaxInvalidation::HIGHLIGHTS_ONLY,
+                        false,
+                    );
                 }
             }
             return;
@@ -1118,7 +1132,7 @@ impl LstGpuiApp {
                 let _ = delta;
                 view.syntax_state = TabSyntaxState::parse_initial(syntax_lang, &buffer, revision)
                     .map(|state| Rc::new(RefCell::new(state)));
-                (SyntaxInvalidation::Full, false)
+                (SyntaxInvalidation::FULL, false)
             }
             Some(state) => {
                 let mut state = state.borrow_mut();
@@ -1198,7 +1212,7 @@ impl LstGpuiApp {
                     &state,
                     &current_buffer,
                     revision,
-                    SyntaxInvalidation::Full,
+                    SyntaxInvalidation::HIGHLIGHTS_ONLY,
                     false,
                 );
                 view.syntax_state = Some(Rc::new(RefCell::new(state)));
@@ -1491,7 +1505,7 @@ fn sync_plain_view_state(
         view.structure_key = (language, revision);
         let mut cache = view.cache.borrow_mut();
         let previous_line_count = cache.wrap_layout.as_ref().map(|layout| layout.layout.line_count());
-        let invalidation = SyntaxInvalidation::from_buffer_delta(buffer, delta, previous_line_count);
+        let invalidation = LineInvalidation::from_buffer_delta(buffer, delta, previous_line_count);
         cache.patch_wrap_layout(buffer, revision, &invalidation);
         cache.patch_unwrapped_line_width(revision, &invalidation, buffer.len_lines());
         let invalidated_lines = invalidation.line_range(buffer.len_lines());
@@ -1510,7 +1524,7 @@ fn sync_plain_view_state(
 
     let mut cache = view.cache.borrow_mut();
     let previous_line_count = cache.wrap_layout.as_ref().map(|layout| layout.layout.line_count());
-    let invalidation = SyntaxInvalidation::from_buffer_delta(buffer, delta, previous_line_count);
+    let invalidation = LineInvalidation::from_buffer_delta(buffer, delta, previous_line_count);
     cache.patch_wrap_layout(buffer, revision, &invalidation);
     cache.patch_unwrapped_line_width(revision, &invalidation, buffer.len_lines());
     if cache.syntax_highlights.is_some() {
@@ -1528,9 +1542,9 @@ fn refresh_syntax_cache(
     structure_remapped: bool,
 ) {
     let line_count = buffer.len_lines();
-    cache.patch_wrap_layout(buffer, revision, &invalidation);
-    cache.patch_unwrapped_line_width(revision, &invalidation, line_count);
-    let can_patch = !invalidation.is_full()
+    cache.patch_wrap_layout(buffer, revision, &invalidation.text);
+    cache.patch_unwrapped_line_width(revision, &invalidation.text, line_count);
+    let can_patch = !invalidation.highlights.is_full()
         && cache.syntax_highlights.as_ref().is_some_and(|highlights| {
             highlights.language == state.language
                 && highlights.lines.len() == line_count
@@ -1538,7 +1552,7 @@ fn refresh_syntax_cache(
                 && highlights.valid_lines.len() == line_count
         });
     let line_range = if can_patch {
-        invalidation.line_range(line_count)
+        invalidation.highlights.line_range(line_count)
     } else {
         0..line_count
     };
@@ -1558,7 +1572,7 @@ fn refresh_syntax_cache(
             valid_lines: vec![false; line_count],
         });
     }
-    cache.clear_text_lines_in(line_range.clone());
+    cache.clear_text_lines_in(invalidation.text.line_range(line_count));
     if can_patch && structure_remapped {
         cache.clear_code_lines_in(line_range);
     } else {
@@ -1710,6 +1724,155 @@ mod syntax_cache_tests {
     use lst_editor::{BufferDelta, BufferEdit};
 
     #[test]
+    fn lazy_syntax_cache_matches_fresh_parses_through_fragmented_edit_histories() {
+        for (language, source) in [
+            (SyntaxLanguage::Rust, "fn main() { let s = \"é\"; call(1); }\n"),
+            (
+                SyntaxLanguage::JavaScript,
+                "const x = html`<div>(a)</div>`;\nfunction f() { return `x${1}`; }\n",
+            ),
+            (
+                SyntaxLanguage::Markdown,
+                "# Title\n\n[a](url) `x` and **text**\n\n```rust\nfn f() { call(1); }\n```\n",
+            ),
+            (
+                SyntaxLanguage::Html,
+                "<div>text</div>\n<script>const x = \"é\"; f(1);</script>\n<style>a {color:red}</style>\n",
+            ),
+        ] {
+            let mut buffer = Rope::from_str(source);
+            let mut state = TabSyntaxState::parse_initial(language, &buffer, 0).unwrap();
+            let mut cache = ViewportCache::default();
+            refresh_syntax_cache(&mut cache, &state, &buffer, 0, SyntaxInvalidation::FULL, false);
+            ensure_syntax_cache_for_lines(&mut cache, &state, 0, 0..usize::MAX);
+            let mut random = 0x291ac7u64;
+            let mut undo = Vec::new();
+            for step in 0..64 {
+                let edit = if step < 32 {
+                    random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let at = random as usize % (buffer.len_chars() + 1);
+                    let end = (at + usize::from(step % 3 == 0)).min(buffer.len_chars());
+                    let inserted = ["x", "`", "/*", "\n", "'", "界", ")", ""][step % 8];
+                    undo.push(BufferEdit {
+                        range: at..at + inserted.chars().count(),
+                        replacement: buffer.slice(at..end).to_string(),
+                    });
+                    BufferEdit {
+                        range: at..end,
+                        replacement: inserted.into(),
+                    }
+                } else {
+                    undo.pop().unwrap()
+                };
+                buffer.remove(edit.range.clone());
+                buffer.insert(edit.range.start, &edit.replacement);
+                let revision = step as u64 + 1;
+                let invalidation = state.update(&buffer, BufferDelta::Edits(vec![edit]), revision);
+                refresh_syntax_cache(
+                    &mut cache,
+                    &state,
+                    &buffer,
+                    revision,
+                    invalidation,
+                    state.structure_was_remapped(),
+                );
+                for line in (0..buffer.len_lines()).rev() {
+                    ensure_syntax_cache_for_lines(&mut cache, &state, revision, line..line + 1);
+                }
+                let fresh = TabSyntaxState::parse_initial(language, &buffer, revision).unwrap();
+                let (lines, lens) = fresh.compute_spans_for_lines(0..usize::MAX);
+                let cached = cache.syntax_highlights.as_ref().unwrap();
+                assert_eq!(cached.lines, lines, "{language:?} step {step}: {buffer}");
+                assert_eq!(cached.line_byte_lens, lens);
+                assert_eq!(
+                    *state.shared_structure().borrow(),
+                    *fresh.shared_structure().borrow(),
+                    "{language:?} step {step}: {buffer}"
+                );
+            }
+            assert_eq!(buffer.to_string(), source);
+        }
+    }
+
+    #[test]
+    fn partial_injected_highlights_match_fresh_results_across_edits_and_undo() {
+        for (language, source, marker, inserted) in [
+            (
+                SyntaxLanguage::Markdown,
+                "# T\n\n```rust\nfn a() {\n    let x = 1;\n    let y = 2;\n    let z = 3; */\n}\n```\n",
+                "let x",
+                "/* ",
+            ),
+            (
+                SyntaxLanguage::Markdown,
+                "**bold start\nmiddle text\nend here\n",
+                " here",
+                "**",
+            ),
+            (
+                SyntaxLanguage::Markdown,
+                "```\nx = 1\ndef f():\n    return 2\n```\n",
+                "\nx =",
+                "python",
+            ),
+            (
+                SyntaxLanguage::Html,
+                "<html>\n<script>\nlet a = 1;\nlet b = 2;\nlet c = 3; */\n</script>\n</html>\n",
+                "let a",
+                "/* ",
+            ),
+            (
+                SyntaxLanguage::Html,
+                "<style>\na {color: red;}\nb {color: blue;}\nc {color: green;} */\n</style>\n",
+                "a {",
+                "/* ",
+            ),
+        ] {
+            let mut buffer = Rope::from_str(source);
+            let mut state = TabSyntaxState::parse_initial(language, &buffer, 0).unwrap();
+            let mut cache = ViewportCache::default();
+            refresh_syntax_cache(&mut cache, &state, &buffer, 0, SyntaxInvalidation::FULL, false);
+            ensure_syntax_cache_for_lines(&mut cache, &state, 0, 0..usize::MAX);
+            let at = buffer.byte_to_char(source.find(marker).unwrap());
+            for (step, edit) in [
+                BufferEdit {
+                    range: at..at,
+                    replacement: inserted.into(),
+                },
+                BufferEdit {
+                    range: at..at + inserted.chars().count(),
+                    replacement: String::new(),
+                },
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                buffer.remove(edit.range.clone());
+                buffer.insert(edit.range.start, &edit.replacement);
+                let revision = step as u64 + 1;
+                let invalidation = state.update(&buffer, BufferDelta::Edits(vec![edit]), revision);
+                refresh_syntax_cache(
+                    &mut cache,
+                    &state,
+                    &buffer,
+                    revision,
+                    invalidation,
+                    state.structure_was_remapped(),
+                );
+                // Exercise lazy, separately requested windows, including previously valid lines.
+                for line in (0..buffer.len_lines()).rev() {
+                    ensure_syntax_cache_for_lines(&mut cache, &state, revision, line..line + 1);
+                }
+                let fresh = TabSyntaxState::parse_initial(language, &buffer, revision).unwrap();
+                let (lines, lens) = fresh.compute_spans_for_lines(0..usize::MAX);
+                let actual = cache.syntax_highlights.as_ref().unwrap();
+                assert_eq!(actual.lines, lines, "{language:?}, {marker:?}, step {step}");
+                assert_eq!(actual.line_byte_lens, lens);
+            }
+        }
+    }
+
+    #[test]
     fn partial_syntax_refresh_recomputes_edited_lines_to_match_a_fresh_parse() {
         let source = (0..6)
             .map(|line| format!("fn item_{line}() {{ let value = {line}; }}\n"))
@@ -1717,7 +1880,7 @@ mod syntax_cache_tests {
         let mut buffer = Rope::from_str(&source);
         let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Rust, &buffer, 0).unwrap();
         let mut cache = ViewportCache::default();
-        refresh_syntax_cache(&mut cache, &state, &buffer, 0, SyntaxInvalidation::Full, false);
+        refresh_syntax_cache(&mut cache, &state, &buffer, 0, SyntaxInvalidation::FULL, false);
         ensure_syntax_cache_for_lines(&mut cache, &state, 0, 0..usize::MAX);
 
         // Turning a number into a string changes one line's spans without
@@ -1730,7 +1893,10 @@ mod syntax_cache_tests {
         buffer.remove(edit.range.clone());
         buffer.insert(edit.range.start, &edit.replacement);
         let invalidation = state.update(&buffer, BufferDelta::Edits(vec![edit]), 1);
-        assert!(matches!(invalidation, SyntaxInvalidation::Lines(_)), "{invalidation:?}");
+        assert!(
+            matches!(invalidation.highlights, LineInvalidation::Lines(_)),
+            "{invalidation:?}"
+        );
         let structure_remapped = state.structure_was_remapped();
         refresh_syntax_cache(&mut cache, &state, &buffer, 1, invalidation, structure_remapped);
         ensure_syntax_cache_for_lines(&mut cache, &state, 1, 0..usize::MAX);

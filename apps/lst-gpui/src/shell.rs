@@ -1987,18 +1987,20 @@ impl Render for LstGpuiApp {
                                                             started.elapsed().as_secs_f64() * 1000.0,
                                                         );
                                                     }
-                                                    if previous_wrap_columns
+                                                    let chrome_changed = previous_wrap_columns
                                                         != viewport_geometry.borrow().painted_wrap_columns
-                                                    {
-                                                        diagnostics::record_notify("wrap_columns");
-                                                        cx.notify(prepare_entity.entity_id());
+                                                        || prepare_entity.read(cx).status_details()
+                                                            != prepare_entity.read(cx).status_details_rendered;
+                                                    if chrome_changed {
+                                                        // A notification during prepaint is absorbed by
+                                                        // the frame being drawn. Chrome was rendered using
+                                                        // the previous geometry; redraw after this paint.
+                                                        let entity = prepare_entity.clone();
+                                                        window.on_next_frame(move |_, cx| {
+                                                            diagnostics::record_notify("viewport_chrome");
+                                                            cx.notify(entity.entity_id());
+                                                        });
                                                     }
-                                                    prepare_entity.update(cx, |this, cx| {
-                                                        if this.status_details() != this.status_details_rendered {
-                                                            diagnostics::record_notify("status_details");
-                                                            cx.notify();
-                                                        }
-                                                    });
                                                     let search_matches = if show_search_decorations {
                                                         let visible_chars = paint_state
                                                             .rows

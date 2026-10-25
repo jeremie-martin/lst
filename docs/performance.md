@@ -29,6 +29,14 @@ prints the median `primary_value`, individual runs, and secondary CPU, memory,
 render, trace, and verification metrics. Run it with `--help` for the
 authoritative scenario, corpus, and option list.
 
+Each launched app gets a fresh temporary HOME and XDG configuration, data,
+state, and cache directories. Measurements use default editor settings and do
+not update personal recent files. Display authentication and the desktop
+session remain inherited. Compare both binaries with this same isolated runner;
+older measurements that inherited personal settings are not a controlled
+baseline. A viewport-size mismatch aborts the scenario instead of combining
+unlike runs into a median.
+
 Choose the scenario whose primary metric matches the problem:
 
 | Scenario | Primary metric | Surface |
@@ -82,6 +90,10 @@ the subsequent layout and painting separately.
 `--position top|middle|end` helps distinguish local work from document-size
 work. `--keep-temp` preserves the per-run trace files, whose `notify=<reason>`
 and `startup_*_ms` lines attribute frames and startup phases.
+Navigation-latency scenarios alternate Up/Down around the chosen location
+(Down/Up at the first line), so every timed key moves even near EOF. Paste
+timing starts after reading the preceding trace count, immediately before
+injecting Ctrl+V.
 
 The app records per-frame `frame_wall_ms` and `frame_cpu_ms` from root render
 through completion of root painting, including chrome and overlays. Wall-clock

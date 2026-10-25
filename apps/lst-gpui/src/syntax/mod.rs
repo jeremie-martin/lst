@@ -2,8 +2,8 @@ mod catalog;
 mod highlight;
 
 pub(crate) use highlight::{
-    plain_structural_snapshot, update_plain_structural_snapshot, StructuralPair, StructuralSnapshot, StructuralToken,
-    SyntaxInvalidation, TabSyntaxState,
+    plain_structural_snapshot, update_plain_structural_snapshot, LineInvalidation, StructuralPair, StructuralSnapshot,
+    StructuralToken, SyntaxInvalidation, TabSyntaxState,
 };
 
 use crate::ui::theme::SyntaxRole;
@@ -40,7 +40,7 @@ impl SyntaxLanguage {
             Language::Markdown => Some(Self::Markdown),
             Language::Html => Some(Self::Html),
             Language::Css | Language::Scss => Some(Self::Css),
-            _ => None,
+            Language::Shell | Language::Bash | Language::Zsh => None,
         }
     }
 }
@@ -177,6 +177,36 @@ mod tests {
             update_plain_structural_snapshot(structure, &after, revision, pairs, &BufferDelta::Edits(vec![edit]));
         assert_eq!(*structure, plain_structural_snapshot(&after, revision, pairs));
         remapped
+    }
+
+    #[test]
+    fn every_editor_language_selects_its_supported_syntax_backend() {
+        for (language, expected) in [
+            (Language::Rust, Some(SyntaxLanguage::Rust)),
+            (Language::Python, Some(SyntaxLanguage::Python)),
+            (Language::JavaScript, Some(SyntaxLanguage::JavaScript)),
+            (Language::Jsx, Some(SyntaxLanguage::Jsx)),
+            (Language::TypeScript, Some(SyntaxLanguage::TypeScript)),
+            (Language::Tsx, Some(SyntaxLanguage::Tsx)),
+            (Language::Json, Some(SyntaxLanguage::Json)),
+            (Language::Jsonc, Some(SyntaxLanguage::Json)),
+            (Language::Toml, Some(SyntaxLanguage::Toml)),
+            (Language::Yaml, Some(SyntaxLanguage::Yaml)),
+            (Language::Markdown, Some(SyntaxLanguage::Markdown)),
+            (Language::Html, Some(SyntaxLanguage::Html)),
+            (Language::Css, Some(SyntaxLanguage::Css)),
+            (Language::Scss, Some(SyntaxLanguage::Css)),
+            (Language::Shell, None),
+            (Language::Bash, None),
+            (Language::Zsh, None),
+        ] {
+            assert_eq!(SyntaxLanguage::from_language(language), expected, "{language:?}");
+            assert_eq!(
+                syntax_mode_for_language(Some(language)),
+                expected.map_or(SyntaxMode::Plain, SyntaxMode::TreeSitter)
+            );
+        }
+        assert_eq!(syntax_mode_for_language(None), SyntaxMode::Plain);
     }
 
     #[test]
@@ -465,6 +495,75 @@ mod tests {
     }
 
     #[test]
+    fn reused_markdown_blocks_match_fresh_queries_when_section_wrappers_change() {
+        let source = (0..8)
+            .map(|i| {
+                format!("# Section {i}\n\n[link](url) and **text**\n\n```rust\nfn f_{i}() {{ call(1); }}\n```\n\n")
+            })
+            .collect::<String>();
+        let mut buffer = Rope::from_str(&source);
+        let mut state = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &buffer, 0).unwrap();
+        for step in 0..32 {
+            // Unicode before retained blocks shifts byte and character origins
+            // differently; a damaged closing fence changes the last injection.
+            let (at, inserted) = if step % 2 == 0 {
+                (2, "é")
+            } else {
+                (buffer.line_to_char(buffer.len_lines() - 3), "x")
+            };
+            let edit = BufferEdit {
+                range: at..at,
+                replacement: inserted.into(),
+            };
+            buffer = apply(&buffer, std::slice::from_ref(&edit));
+            state.update(&buffer, BufferDelta::Edits(vec![edit]), step + 1);
+            let fresh = TabSyntaxState::parse_initial(SyntaxLanguage::Markdown, &buffer, step + 1).unwrap();
+            assert_eq!(spans(&state), spans(&fresh), "edit {step}");
+            assert_eq!(
+                *state.shared_structure().borrow(),
+                *fresh.shared_structure().borrow(),
+                "edit {step}"
+            );
+        }
+    }
+
+    #[test]
+    fn template_and_backtick_edit_histories_match_fresh_structure() {
+        for (language, source, history) in [
+            (
+                SyntaxLanguage::JavaScript,
+                " x`t${a}`html`<div>(</div>`function f() {'s('html`<div>(</div>`",
+                vec![vec![(43, 44, ""), (59, 60, "<")], vec![(43, 43, "$")]],
+            ),
+            (
+                SyntaxLanguage::Markdown,
+                "*em* x# T\n[link](u)`code (`text (a) [b]```\n\n- item [x]\ntext (a) [b]<div>(</div>fn f() { g(1) }\n",
+                vec![vec![(92, 92, "```")]],
+            ),
+        ] {
+            let mut buffer = Rope::from_str(source);
+            let mut state = TabSyntaxState::parse_initial(language, &buffer, 0).unwrap();
+            for (step, changes) in history.into_iter().enumerate() {
+                let edits = changes
+                    .into_iter()
+                    .map(|(start, end, text)| BufferEdit {
+                        range: start..end,
+                        replacement: text.into(),
+                    })
+                    .collect::<Vec<_>>();
+                buffer = apply(&buffer, &edits);
+                state.update(&buffer, BufferDelta::Edits(edits), step as u64 + 1);
+                let fresh = TabSyntaxState::parse_initial(language, &buffer, step as u64 + 1).unwrap();
+                assert_eq!(
+                    *state.shared_structure().borrow(),
+                    *fresh.shared_structure().borrow(),
+                    "{language:?}, step {step}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn an_unclosed_tag_adds_no_delimiter_for_its_missing_end() {
         // Tree-sitter ends `<div` with an empty, missing `/>`.
         let source = "<div\n";
@@ -503,11 +602,11 @@ mod tests {
             {
                 buffer = apply(&buffer, std::slice::from_ref(&edit));
                 let invalidation = state.update(&buffer, BufferDelta::Edits(vec![edit]), revision as u64 + 1);
-                match invalidation {
-                    SyntaxInvalidation::Full | SyntaxInvalidation::LineTopology(_) => {
+                match invalidation.highlights {
+                    LineInvalidation::Full | LineInvalidation::LineTopology(_) => {
                         (cached_lines, cached_lens) = spans(&state)
                     }
-                    SyntaxInvalidation::Lines(lines) => {
+                    LineInvalidation::Lines(lines) => {
                         let (new_lines, new_lens) = state.compute_spans_for_lines(lines.clone());
                         cached_lines.splice(lines.clone(), new_lines);
                         cached_lens.splice(lines, new_lens);
@@ -535,7 +634,7 @@ mod tests {
             .collect::<String>();
         let (state, invalidation) =
             incremental_matches_fresh(SyntaxLanguage::Rust, &before, vec![edit_at(&before, "_100 =", 0, "x")]);
-        let SyntaxInvalidation::Lines(changed_lines) = invalidation else {
+        let LineInvalidation::Lines(changed_lines) = invalidation.highlights else {
             panic!("single-line typing should preserve line topology");
         };
         assert!(changed_lines.len() <= 4, "unexpected invalidation: {changed_lines:?}");
@@ -554,7 +653,7 @@ mod tests {
             before,
             vec![edit_at(before, "fn second", 0, "// inserted\n")],
         );
-        assert!(invalidation.is_full());
+        assert!(invalidation.highlights.is_full());
     }
 
     #[test]

@@ -9,13 +9,16 @@ pub(crate) struct CursorMotion {
     motion: Option<Motion>,
 }
 
-#[derive(PartialEq)]
-struct MotionContext {
-    tab: TabId,
-    bounds: Bounds<Pixels>,
-    scroll: Point<Pixels>,
-    scale: f32,
-    row_height: Pixels,
+#[derive(Clone, PartialEq)]
+pub(crate) struct MotionContext {
+    pub(crate) tab: TabId,
+    pub(crate) bounds: Bounds<Pixels>,
+    pub(crate) scroll: Point<Pixels>,
+    pub(crate) scale: f32,
+    pub(crate) row_height: Pixels,
+    pub(crate) font: gpui::Font,
+    pub(crate) code_pad: Pixels,
+    pub(crate) wrap_columns: Option<usize>,
 }
 
 // One spring moves the entire caret, preserving its shape in every direction.
@@ -81,10 +84,9 @@ impl Motion {
 
     fn retarget(&mut self, target: Bounds<Pixels>, now: Instant) {
         self.advance(now);
-        if self.target.size != target.size {
-            *self = Self::new(target, now);
-            return;
-        }
+        // Width follows the current glyph immediately. Small shaping
+        // differences must not discard an ongoing positional spring.
+        self.target.size = target.size;
         if self.target.origin != target.origin {
             let rows = length(target.origin - self.target.origin) / f32::from(target.size.height).max(1.0);
             // Continuous distance response: a visible but brisk single-step
@@ -113,31 +115,20 @@ impl CursorMotion {
         self.motion = None;
     }
 
-    pub(crate) fn prepare(
-        &mut self,
-        tab: TabId,
-        bounds: Bounds<Pixels>,
-        scroll: Point<Pixels>,
-        scale: f32,
-        row_height: Pixels,
-    ) {
-        let context = MotionContext {
-            tab,
-            bounds,
-            scroll,
-            scale,
-            row_height,
-        };
+    pub(crate) fn prepare(&mut self, context: MotionContext) {
         if let Some(previous) = self.context.as_ref() {
-            if previous.tab == tab
-                && previous.bounds == bounds
-                && previous.scale == scale
-                && previous.row_height == row_height
+            if previous.tab == context.tab
+                && previous.bounds == context.bounds
+                && previous.scale == context.scale
+                && previous.row_height == context.row_height
+                && previous.font == context.font
+                && previous.code_pad == context.code_pad
+                && previous.wrap_columns == context.wrap_columns
             {
                 if let Some(motion) = self.motion.as_mut() {
                     // Keep motion in document space when cursor reveal scrolls
                     // the viewport. Scrolling itself does not start an animation.
-                    motion.translate(scroll - previous.scroll);
+                    motion.translate(context.scroll - previous.scroll);
                 }
             } else {
                 self.reset();
@@ -187,6 +178,63 @@ mod tests {
 
     fn rect(x: f32, y: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(x), px(y)), size(px(2.0), px(18.0)))
+    }
+
+    #[test]
+    fn layout_changes_reset_motion_but_scrolling_translates_it() {
+        let initial = MotionContext {
+            tab: TabId::from_raw(1),
+            bounds: rect(0.0, 0.0),
+            scroll: point(px(0.0), px(0.0)),
+            scale: 1.0,
+            row_height: px(18.0),
+            font: gpui::font("monospace"),
+            code_pad: px(40.0),
+            wrap_columns: Some(80),
+        };
+        for change in 0..7 {
+            let mut motion = CursorMotion::default();
+            motion.prepare(initial.clone());
+            motion.motion = Some(Motion::new(rect(100.0, 100.0), Instant::now()));
+            let mut next = initial.clone();
+            match change {
+                0 => next.tab = TabId::from_raw(2),
+                1 => next.bounds.size.width += px(10.0),
+                2 => next.scale = 1.5,
+                3 => next.row_height = px(20.0),
+                4 => next.font = gpui::font("other"),
+                5 => next.code_pad = px(48.0),
+                _ => next.wrap_columns = None,
+            }
+            motion.prepare(next);
+            assert!(motion.motion.is_none(), "layout change {change}");
+        }
+        let mut motion = CursorMotion::default();
+        motion.prepare(initial.clone());
+        motion.motion = Some(Motion::new(rect(100.0, 100.0), Instant::now()));
+        motion.prepare(MotionContext {
+            scroll: point(px(0.0), px(-18.0)),
+            ..initial
+        });
+        assert_eq!(motion.motion.unwrap().frame(), rect(100.0, 82.0));
+    }
+
+    #[test]
+    fn glyph_width_changes_preserve_the_positional_spring() {
+        let now = Instant::now();
+        let mut motion = Motion::new(rect(100.0, 100.0), now);
+        motion.retarget(rect(180.0, 100.0), now);
+        let later = now + Duration::from_millis(24);
+        motion.advance(later);
+        let position = motion.spring.position;
+        let velocity = motion.spring.velocity;
+        let mut target = rect(190.0, 100.0);
+        target.size.width += px(0.0001);
+        motion.retarget(target, later);
+        assert_eq!(motion.spring.position, position);
+        assert_eq!(motion.spring.velocity, velocity);
+        assert!(motion.active());
+        assert_eq!(motion.frame().size, target.size);
     }
 
     #[test]

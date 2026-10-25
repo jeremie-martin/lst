@@ -89,9 +89,14 @@ with `23/` refer to October 23. Duplicate findings share an item.
   cover range unions, map inversion/compaction, and the bounded-history fallback:
   a disconnected old branch keeps an empty scope instead of searching the document.
 
-- [ ] **Mouse placement:** choose the nearest grapheme boundary consistently for shaped
+- [x] **Mouse placement (implemented 2026-10-25):** choose the nearest grapheme boundary consistently for shaped
   and cached text. At an exact midpoint choose the earlier boundary. Clicking the right
   half of the final character places the caret after it. (C62)
+  Resolution: One nearest-grapheme rule covers shaped text and cached ASCII cells,
+  including the trailing boundary and earlier-boundary midpoint ties. The input adapter
+  no longer subtracts half a cell. The real-app presentation click case covers ASCII,
+  accented text, and combining clusters; the cell algorithm checks exact ties and the
+  font probe checks shaped ties.
 
 - [x] **Configuration paths (implemented 2026-10-25):** expand a leading `~/`,
   require custom note directories to resolve to absolute paths, and display invalid-path
@@ -175,26 +180,38 @@ are noted where they matter. Resolutions name their regression coverage.
 
 ### Syntax
 
-- [ ] **Reproduced:** Injected highlights stay stale after edits outside the narrow
+- [x] **Resolved (2026-10-25):** Injected highlights stay stale after edits outside the narrow
   refreshed window: Markdown code fences, multiline inline spans and HTML script/style
   content are affected. (C80; 23/A3-3)
   Review: Reran the saved cases with the current production syntax module. The
   partial-cache probe and JS/Markdown structure comparisons still differ from fresh
   results. Rust host highlighting provides a passing control.
+  Resolution: Each parsed revision supplies one complete injection inventory. Changed,
+  added, and removed regions widen highlight invalidation. Actual lazy-cache tests cover
+  fences, multiline inline spans, script/style content, edits and undo, plus 256
+  fragmented edit/undo steps across four languages. The real-app injected-comment case
+  compares distant rendered pixels and their restoration on undo.
 
-- [ ] **Reproduced:** The remaining JavaScript edit history produces incremental bracket
+- [x] **Resolved (2026-10-25):** The remaining JavaScript edit history produces incremental bracket
   structure different from a fresh parse. Reproduced after the first review's fixes.
   (23/A3-4 residual JavaScript counterexample)
   Review: Reran the saved cases with the current production syntax module. The
   partial-cache probe and JS/Markdown structure comparisons still differ from fresh
   results. Rust host highlighting provides a passing control.
+  Resolution: Structural reuse validates the complete current injection inventory and
+  verifies changed injected bracket streams. The retained two-step counterexample and
+  the broader edit/undo cache-equivalence suite now agree with fresh parsing.
 
-- [ ] **Reproduced:** The remaining Markdown backtick example also produces incremental
+- [x] **Resolved (2026-10-25):** The remaining Markdown backtick example also produces incremental
   bracket structure different from a fresh parse. This is separate from stale colours.
   (23/A3-4 residual Markdown counterexample)
   Review: Reran the saved cases with the current production syntax module. The
   partial-cache probe and JS/Markdown structure comparisons still differ from fresh
   results. Rust host highlighting provides a passing control.
+  Resolution: Fresh and incremental structure now parse each inline node independently,
+  matching the grammar adapter and the existing highlight path. The combined inline
+  parser and its special collection path were removed. The retained backtick history and
+  fragmented edit/undo cases agree with fresh parsing.
 
 ### Settings
 
@@ -390,24 +407,35 @@ are noted where they matter. Resolutions name their regression coverage.
   WM_NAME contains UTF-8 bytes decoded as Latin-1. This affects launch overrides, not
   ordinary title updates.
 
-- [ ] **Source-confirmed:** Tab-switch cursor reveal can use old geometry and finish
+- [x] **Resolved (2026-10-25):** Tab-switch cursor reveal can use old geometry and finish
   while the caret is still off-screen after resizing or zooming another tab. (C61)
   Review: Per-tab geometry survives invalidation. The immediate reveal reads that old
   geometry and can clear the pending reveal before the new prepaint writes current
   bounds.
+  Resolution: Geometry retains display measurements for chrome but explicitly loses
+  layout validity on activation and layout invalidation. Reveal waits for current
+  geometry. The real-app return-to-tab case resizes and zooms the other tab, then
+  requires the restored caret to be inside the new viewport.
 
-- [ ] **Source-confirmed:** Smooth Vim carets can snap because tiny floating-point size
+- [x] **Resolved (2026-10-25):** Smooth Vim carets can snap because tiny floating-point size
   differences reset their animation. (C46)
   Review: Motion::retarget resets on exact size inequality. Widths formed by subtracting
   two floating-point positions need not be bitwise equal across columns. The symptom
   depends on font, zoom and position.
+  Resolution: Glyph width changes update the caret shape without discarding its
+  positional spring. The motion test retains both position and velocity across a
+  fractional-width change; layout changes still reset motion through its context.
 
-- [ ] **Source-confirmed:** Geometry-dependent status-bar details can remain stale until
+- [x] **Resolved (2026-10-25):** Geometry-dependent status-bar details can remain stale until
   another unrelated event. (C65)
   Review: Status props are collected before viewport prepaint updates geometry;
   correction notifies during prepaint. The current GPUI notify path marks dirty_views
   there without scheduling an ordinary subsequent draw. Existing verifier probe supports
   the same mechanism.
+  Resolution: Geometry changes schedule chrome correction after the current paint. The
+  trace now reports rendered status text, so it can detect stale props. The real-app
+  resize case requires status columns to match actual wrapped rows without another
+  input.
 
 - [ ] **Reproduced:** Post-input drawing can refresh hidden/obscured windows during
   activity elsewhere. The verifier rejected the destroyed-window part of this claim.
@@ -416,11 +444,15 @@ are noted where they matter. Resolutions name their regression coverage.
   the window is unmapped and its trace is quiet. Window attributes still report
   IsUnmapped.
 
-- [ ] **Source-confirmed:** Drag autoscroll speed depends on mouse event rate and
+- [x] **Resolved (2026-10-25):** Drag autoscroll speed depends on mouse event rate and
   changes when the refresh rate drops after inactivity. (C74)
   Review: Document drag autoscroll applies a fixed distance per callback. Dirty
   post-input draws also run next-frame callbacks; there is no elapsed-time
   normalization. The magnitude under different devices was not remeasured.
+  Resolution: Both axes share an edge-velocity rule integrated over elapsed time,
+  including callback work. The real-app held-drag case compares speed during and after
+  the post-input refresh period and checks that release stops scrolling and selection
+  growth.
 
 - [ ] **Reproduced:** Reopening an input field with unchanged text preserves undo
   history from its previous use. (C86)
@@ -458,22 +490,35 @@ are noted where they matter. Resolutions name their regression coverage.
   Resolution: AGENTS.md now names prompt-add process execution and voice transcription
   at the app boundary; the architecture document records their actual ownership.
 
-- [ ] **Reproduced:** Wide CJK characters count incorrectly in wrapping. (C57)
+- [x] **Resolved (2026-10-25):** Wide CJK characters count incorrectly in wrapping. (C57)
   Review: Current wrapping counts each non-tab grapheme as one cell. Current GPUI
   shaping with JetBrains Mono produces an 80-character CJK row wider than the computed
   80-cell viewport; the default-font control does not show it.
+  Resolution: Row counts, segmentation, and cursor navigation share one traversal using
+  Unicode grapheme display widths. Wide CJK and emoji clusters occupy two cells and
+  remain indivisible in narrow viewports. Algorithm and real-app tests cover row
+  boundaries and navigation; the explicitly loaded JetBrains Mono probe confirms the
+  retained CJK example fits. This remains a monospace cell policy, not font-specific
+  pixel wrapping.
 
-- [ ] **Source-confirmed:** Cursor animation does not reset on some font/gutter/wrap
+- [x] **Resolved (2026-10-25):** Cursor animation does not reset on some font/gutter/wrap
   changes. (C63)
   Review: MotionContext resets on tab/bounds/scale/row height, but omits some layout
   changes. Typography invalidation clears caches without resetting motion. The
   documented layout-reset contract is broader; visible impact was not freshly recorded.
+  Resolution: Motion context includes font identity, code padding/gutter geometry, and
+  wrap columns alongside tab, bounds, scale, and row height. The motion algorithm checks
+  each reset and separately verifies scroll translation.
 
-- [ ] **Reproduced:** Glyph-cell tokenization loses contextual alternates across
+- [x] **Resolved (2026-10-25):** Glyph-cell tokenization loses contextual alternates across
   classes. (C64)
   Review: With JetBrains Mono, 12:30 has different full versus token-shaped glyphs; 1+2
   and the installed default font agree. The current actual cell builder accepts the
   affected fast path. Narrow the claim to demonstrated font/text combinations.
+  Resolution: Cached tokens keep entire non-space runs; GPUI retains ownership of
+  shaping boundaries within them. Explicit JetBrains Mono probes compare cached glyph
+  IDs, clusters, and positions with full shaping for 12:30 and additional mixed tokens.
+  Nonuniform tokens still fall back to whole-segment shaping.
 
 - [ ] **Source-confirmed:** Degenerate monitor timing can yield a zero refresh period.
   (C77)
@@ -500,11 +545,16 @@ add caching, pooling or another layer.
   Review: Every tab label scans all other tabs during prop construction, even when the
   cached child is reused. Quadratic work is present; material cost depends on tab count.
 
-- [ ] **Cost confirmed; impact unmeasured:** Syntax changes can unnecessarily remeasure
+- [x] **Resolved (2026-10-25):** Syntax changes can unnecessarily remeasure
   unchanged layout through the end of a large construct. (23/AL2; October 24 EF1)
   Review: SyntaxInvalidation::Lines supplies a syntax-widened window to the layout
   caches. The unnecessary remeasurement mechanism remains; no new end-to-end timing was
   taken.
+  Resolution: Syntax invalidation carries separate text and highlight windows. Layout
+  and display-text caches consume only text changes, including when highlighting widens
+  over an injected block. A cache test proves distant unchanged text retains its
+  allocation. Background highlight completion does not invalidate text. Performance
+  comparisons are recorded in the presentation checkpoint.
 
 - [ ] **Cost confirmed; impact unmeasured:** Wrapped H/M/L scans the lines above the
   viewport on every invocation, making its cost grow with document depth.
@@ -549,19 +599,25 @@ not demonstrate the missing observations.
   Resolution: the malformed-reload acceptance case now starts with wrapping disabled
   and a cursor limit of seven, and requires both to survive the rejected reload.
 
-- [ ] **Source-confirmed:** The below-document click test clicks far right of the last
+- [x] **Resolved (2026-10-25):** The below-document click test clicks far right of the last
   short line, making two different hit-test behaviors indistinguishable. (23/B3-4)
   Review: The helper clicks the horizontal center of a wide viewport below a
   seven-character final line. Both end-of-document and x-clamped-last-row behavior
   return the same position.
+  Resolution: The real-app test now clicks near the left edge below the final row and
+  still requires end-of-document placement, distinguishing it from x-clamping to the
+  last row.
 
 - [x] **Resolved (2026-10-25):** Save-trimming tests typed Tab keys that inserted spaces; actual
   tab characters were untested. (23/B3-5)
   Resolution: the mixed-ending save regression seeds actual tab characters in its
   file fixture and checks the saved bytes, undo, and redo.
 
-- [ ] **Source-confirmed:** Language-to-syntax mapping coverage was removed for several
+- [x] **Resolved (2026-10-25):** Language-to-syntax mapping coverage was removed for several
   languages. Language detection tests do not cover that separate mapping. (23/B3-7)
+  Resolution: The mapping match explicitly handles every Language variant, including
+  plain shell variants, so new variants require a decision. A boundary test covers all
+  17 languages, shared JSON/JSONC and CSS/SCSS backends, and the no-language case.
 
 - [ ] **Source-confirmed:** Held-chord repetition tests cannot distinguish three
   successful presses from one. (23/B3-8; October 24 AT4)
@@ -618,8 +674,12 @@ not demonstrate the missing observations.
   their nested keys never enter field_paths. App/harness field definitions currently
   agree.
 
-- [ ] **Source-confirmed:** Partial syntax-cache checks miss the injected-language cases
+- [x] **Resolved (2026-10-25):** Partial syntax-cache checks miss the injected-language cases
   that still produce stale visible results.
+  Resolution: Tests now exercise ViewportCache and lazy line requests after injected-
+  language edits and undo, comparing all materialized highlights and structural
+  snapshots with fresh parsing. The visible injected-color/undo test protects the
+  corresponding user behavior.
 
 - [x] **Resolved 2026-10-25:** all 912 existing oracle rows, including the 23
   additions, regenerate unchanged on stable Neovim 0.12.6. The explicit profile
@@ -634,26 +694,37 @@ not demonstrate the missing observations.
   find-field fallback is limited to older schemas and is intentional compatibility
   behavior; that part is not a current-schema defect.
 
-- [ ] **Source-confirmed:** Navigation benchmarks at `--position end` mostly time no-op
+- [x] **Resolved (2026-10-25):** Navigation benchmarks at `--position end` mostly time no-op
   Down keys. (October 24 H1)
   Review: operation_line(End) starts near EOF and the latency loop always presses Down,
   sixty times. Most samples become no-ops even though frames are still produced.
+  Resolution: Navigation latency alternates real movements around the selected location,
+  starting downward only at line zero. A state-traced run verifies that all 60 timed
+  arrows move near EOF.
 
-- [ ] **Source-confirmed:** Benchmarks inherit personal settings and write temporary
+- [x] **Resolved (2026-10-25):** Benchmarks inherit personal settings and write temporary
   corpus files into the real recent-files list. (October 24 H2)
   Review: spawn_editor sets display/trace variables but inherits HOME and XDG paths;
   ordinary startup records corpus paths in recent files. This is a real isolation
   problem.
+  Resolution: Every app launch receives private temporary HOME and XDG
+  config/data/cache/state directories. A hostile-parent-profile run verifies default
+  input/wrap settings, distinct child paths, and byte-for-byte preservation of parent
+  settings and recent-file sentinels.
 
-- [ ] **Source-confirmed:** Benchmark medians can mix viewport sizes while reporting the
+- [x] **Resolved (2026-10-25):** Benchmark medians can mix viewport sizes while reporting the
   first run's size. (October 24 H5)
   Review: A window-size mismatch only warns and both sizes still enter the same median;
   the reported size can come from the unmeasured priming run.
+  Resolution: A size mismatch now aborts the scenario before emitting a combined median;
+  priming and measured runs must have the same client dimensions.
 
-- [ ] **Source-confirmed:** Paste timing includes trace reading/parsing before input
+- [x] **Resolved (2026-10-25):** Paste timing includes trace reading/parsing before input
   injection. (October 24 H6)
   Review: The paste start timestamp precedes read_editor_trace, so unrelated trace I/O
   is included before Ctrl+V is injected.
+  Resolution: The existing paste-application count is read before either start
+  timestamp; both clocks start immediately before Ctrl+V injection.
 
 - [ ] **Source-confirmed:** Killing a test while arrow keys are held can leave them
   pressed for later tests; existing stale-key cleanup releases only modifiers. (October
@@ -994,6 +1065,56 @@ intentional behavior as a defect.
   hold up. (23/V14)
 
 ## Verification and evidence
+
+### Implementation checkpoint: syntax and text presentation (2026-10-25)
+
+- Addressed 19 checklist entries: the nearest-grapheme mouse contract; three
+  residual syntax defects; tab reveal, caret motion, status, drag speed, wide
+  wrapping and shaping context; text-layout invalidation; three coverage gaps;
+  and four benchmark defects. This brings the ledger to 106 checked entries,
+  with 34 nonoptional entries and 16 optional improvements still open.
+- Each parse owns a complete injection inventory. Unchanged Tree-sitter subtrees
+  reuse query results; changed containers are queried again, and non-rooted query
+  patterns retain a full-query fallback. This replaces overlapping edit-proximity
+  heuristics. Tests compare the cached inventory with an independent whole-tree
+  query after every tested update. Fresh and incremental Markdown structure now
+  share individual inline parses, removing the combined-inline special path.
+- Text and highlight invalidation have separate owners, so distant color changes
+  preserve unchanged text measurements. Actual lazy-cache checks cover injected
+  edits and undo, including 256 fragmented edit/undo steps across four languages.
+  A separate Markdown history exercises recreated section wrappers and Unicode
+  shifts. Both retained structural counterexamples agree with fresh parsing.
+- Counting, segmentation and cursor navigation share one wrapping traversal with
+  Unicode grapheme cell widths. This is a monospace cell contract, not font-specific
+  pixel wrapping. Shaped and cached hit testing share nearest-boundary semantics;
+  cached glyph tokens preserve context across identifier/punctuation boundaries.
+  Explicitly loaded JetBrains Mono probes compare glyph IDs, clusters and positions
+  with full shaping; presentation screenshots were visually inspected.
+- Six new real-input cases cover nearest-grapheme clicks, distant injected colors
+  and undo, wide wrapping/navigation, resized-tab reveal, rendered status after
+  resize, and held-drag speed/release. The preserved pre-change app reproduces the
+  first, second and fourth defects. Its wide-text comparison stopped during resize
+  setup and is inconclusive; its old computed status trace cannot verify rendered
+  chrome. The below-document mouse case now distinguishes end-of-document placement
+  from clamping to the last row at a large x coordinate.
+- Both release binaries were measured with the same corrected, isolated benchmark
+  runner, corpus, viewport and three measured repetitions after priming. Injected
+  Markdown paste improved; large paste stayed close to baseline. Sustained Rust
+  and injected-Markdown typing became slower. The measured absolute costs and
+  individual runs are retained in the evidence bundle, including the earlier
+  regression that prompted the subtree cache. These are host-specific comparisons,
+  not a general performance claim. A separate traced run verifies that all 60 EOF
+  navigation samples move and that hostile parent settings/recent files are untouched.
+- Final verification: `cargo test --all-features` (217 passed), harness tests
+  (32 passed), Clippy with existing warnings, and focused X11 checks (22/22, then
+  6/6 including held drag). The full nested-X11 gate passed all 326 cases in
+  2,759 seconds. Formatting and diff checks pass.
+  The same temporary host-tool compatibility wrapper and software Vulkan are used;
+  stock-runner compatibility and physical-display visual baselines remain outside
+  this batch.
+- Evidence: `/home/holo/agent-exports/foundation-presentation-2026-10-25` contains
+  comparison metadata and logs, regression checks, the isolated syntax/font probes,
+  profile-isolation evidence and screenshots.
 
 ### Implementation checkpoint: Vim semantics and input contracts (2026-10-25)
 

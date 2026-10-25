@@ -1,5 +1,7 @@
 use crate::selection::{cells_of_str, GraphemeCell};
 use ropey::{Rope, RopeSlice};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 const TAB_WIDTH: usize = 8;
 
@@ -12,38 +14,7 @@ pub fn visual_line_count(line: &str, max_cols: usize) -> usize {
         return 1;
     }
 
-    let mut lines = 1usize;
-    let mut col = 0usize;
-    let mut idx = 0usize;
-
-    while idx < cells.len() {
-        let token_end = token_end(&cells, idx);
-        let token_width = span_width(&cells[idx..token_end], col);
-
-        if col > 0 && token_width > max_cols.saturating_sub(col) {
-            lines += 1;
-            col = 0;
-        }
-
-        while idx < token_end {
-            let mut width = cell_width(cells[idx].repr, col);
-            if col > 0 && col + width > max_cols {
-                lines += 1;
-                col = 0;
-                width = cell_width(cells[idx].repr, col);
-            }
-
-            col += width;
-            while col > max_cols {
-                lines += 1;
-                col -= max_cols;
-            }
-
-            idx += 1;
-        }
-    }
-
-    lines
+    visit_wrapped_cells(&cells, line, max_cols, |_, _, _| {}) + 1
 }
 
 pub fn cursor_visual_row_in_line(line: &str, column: usize, max_cols: usize) -> usize {
@@ -350,7 +321,7 @@ pub fn wrap_segments(line: &str, max_cols: usize) -> Vec<WrappedSegment> {
     }
 
     let cells = cells_of_str(line);
-    let layout = line_layout_from_cells(&cells, max_cols);
+    let layout = line_layout_from_cells(&cells, line, max_cols);
     let total_chars = layout.cursor_rows.len().saturating_sub(1);
     let mut segments = Vec::new();
     let mut start_char = 0usize;
@@ -402,10 +373,10 @@ struct LineLayout {
 }
 
 fn line_layout(line: &str, max_cols: usize) -> LineLayout {
-    line_layout_from_cells(&cells_of_str(line), max_cols)
+    line_layout_from_cells(&cells_of_str(line), line, max_cols)
 }
 
-fn line_layout_from_cells(cells: &[GraphemeCell], max_cols: usize) -> LineLayout {
+fn line_layout_from_cells(cells: &[GraphemeCell], line: &str, max_cols: usize) -> LineLayout {
     let char_count: usize = cells.iter().map(|cell| cell.char_len).sum();
     if char_count == 0 || max_cols == 0 {
         return LineLayout {
@@ -414,43 +385,52 @@ fn line_layout_from_cells(cells: &[GraphemeCell], max_cols: usize) -> LineLayout
     }
 
     let mut cursor_rows = vec![0; char_count + 1];
-    let mut row = 0usize;
-    let mut col = 0usize;
-    let mut idx = 0usize;
+    visit_wrapped_cells(cells, line, max_cols, |cell, row, end_row| {
+        mark_cluster_rows(&mut cursor_rows, cell, row);
+        cursor_rows[cell.char_start + cell.char_len] = end_row;
+    });
+    LineLayout { cursor_rows }
+}
 
+/// One row policy serves counting, segmentation, and cursor navigation.
+fn visit_wrapped_cells(
+    cells: &[GraphemeCell],
+    line: &str,
+    max_cols: usize,
+    mut visit: impl FnMut(&GraphemeCell, usize, usize),
+) -> usize {
+    let mut row = 0;
+    let mut col = 0;
+    let mut idx = 0;
     while idx < cells.len() {
         let token_end = token_end(cells, idx);
-
-        if col > 0 && span_width(&cells[idx..token_end], col) > max_cols.saturating_sub(col) {
+        if col > 0 && span_width(&cells[idx..token_end], line, col) > max_cols.saturating_sub(col) {
             row += 1;
             col = 0;
-            mark_cluster_rows(&mut cursor_rows, &cells[idx], row);
         }
-
         while idx < token_end {
-            let cell = cells[idx];
-            mark_cluster_rows(&mut cursor_rows, &cell, row);
-
-            let mut width = cell_width(cell.repr, col);
+            let cell = &cells[idx];
+            let mut width = cell_width(cell, line, col);
             if col > 0 && col + width > max_cols {
                 row += 1;
                 col = 0;
-                mark_cluster_rows(&mut cursor_rows, &cell, row);
-                width = cell_width(cell.repr, col);
+                width = cell_width(cell, line, col);
             }
-
+            let start_row = row;
             col += width;
-            while col > max_cols {
-                row += 1;
-                col -= max_cols;
+            // A grapheme is indivisible even when wider than the viewport.
+            // Tabs retain the existing continuation-row policy.
+            if cell.repr == '\t' {
+                while col > max_cols {
+                    row += 1;
+                    col -= max_cols;
+                }
             }
-
+            visit(cell, start_row, row);
             idx += 1;
-            cursor_rows[cell.char_start + cell.char_len] = row;
         }
     }
-
-    LineLayout { cursor_rows }
+    row
 }
 
 fn mark_cluster_rows(cursor_rows: &mut [usize], cell: &GraphemeCell, row: usize) {
@@ -478,26 +458,56 @@ fn token_end(cells: &[GraphemeCell], start: usize) -> usize {
     end
 }
 
-fn span_width(cells: &[GraphemeCell], start_col: usize) -> usize {
+fn span_width(cells: &[GraphemeCell], line: &str, start_col: usize) -> usize {
     let mut col = start_col;
     for cell in cells {
-        col += cell_width(cell.repr, col);
+        col += cell_width(cell, line, col);
     }
     col - start_col
 }
 
-fn cell_width(repr: char, col: usize) -> usize {
-    if repr == '\t' {
+fn cell_width(cell: &GraphemeCell, line: &str, col: usize) -> usize {
+    if cell.repr == '\t' {
         let tab_stop = TAB_WIDTH - (col % TAB_WIDTH);
         tab_stop.max(1)
-    } else {
+    } else if cell.repr.is_ascii() && cell.char_len == 1 {
         1
+    } else {
+        line[cell.byte_start..]
+            .graphemes(true)
+            .next()
+            .map_or(1, UnicodeWidthStr::width)
+            .max(1)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_graphemes_share_one_row_policy_for_counts_segments_and_cursors() {
+        for (text, columns, expected) in [
+            ("界界界", 4, vec!["界界", "界"]),
+            ("a界b界", 4, vec!["a界b", "界"]),
+            ("e\u{301}界x", 3, vec!["e\u{301}界", "x"]),
+            ("👩‍👩‍👧‍👦👩‍👩‍👧‍👦x", 4, vec!["👩‍👩‍👧‍👦👩‍👩‍👧‍👦", "x"]),
+            ("界界", 1, vec!["界", "界"]),
+        ] {
+            let segments = wrap_segments(text, columns);
+            assert_eq!(
+                segments.iter().map(|segment| segment.text.as_str()).collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(visual_line_count(text, columns), expected.len());
+            let mut character = 0;
+            for (row, segment) in expected.iter().enumerate() {
+                assert_eq!(cursor_visual_row_in_line(text, character, columns), row);
+                character += segment.chars().count();
+            }
+            assert_eq!(cursor_visual_row_in_line(text, character, columns), expected.len() - 1);
+        }
+    }
 
     #[test]
     fn logical_terminators_do_not_add_a_wrapped_row_at_the_column_limit() {

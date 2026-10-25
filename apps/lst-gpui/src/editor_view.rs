@@ -456,6 +456,9 @@ impl LstGpuiApp {
         let view = self.active_view();
         let viewport_bounds = {
             let geometry = view.geometry.borrow();
+            if !geometry.layout_valid {
+                return false;
+            }
             let Some(bounds) = geometry.bounds else {
                 return false;
             };
@@ -633,8 +636,7 @@ impl LstGpuiApp {
         };
 
         if let Some(code_line) = row.code_line.as_ref() {
-            let hit_x = (x - geometry.painted_char_width * 0.5).max(px(0.0));
-            let line_char = code_line.closest_char_for_x(hit_x);
+            let line_char = code_line.closest_char_for_x(x);
             (row.line_start_char + line_char).min(row.display_end_char)
         } else {
             row.line_start_char

@@ -240,7 +240,15 @@ fn click_below_last_line_moves_caret_to_document_end() -> TestResult {
         let mut editor = session.open_file("below", &path)?;
 
         editor.place_cursor_at_document_start()?;
-        editor.click_below_last_row()?;
+        let state = editor.read_state()?;
+        let viewport = &state.viewport;
+        let last = viewport.first_row_for_line(2).ok_or("last row missing")?;
+        // Near the left edge distinguishes document-end placement from
+        // clamping the same x coordinate to the final text row.
+        editor.click_at(
+            ((viewport.code_origin_x_px + viewport.char_width_px * 0.2) * viewport.scale_factor).round() as i32,
+            ((last.top_px + viewport.line_height_px * 3.0) * viewport.scale_factor).round() as i32,
+        )?;
         editor.expect_selections(&[((2, 7), (2, 7))])?;
         Ok(())
     })

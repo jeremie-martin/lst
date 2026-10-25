@@ -26,7 +26,7 @@ use std::{
 };
 
 use crate::syntax::{
-    CachedSyntaxHighlights, StructuralPair, StructuralSnapshot, StructuralToken, SyntaxInvalidation, SyntaxMode,
+    CachedSyntaxHighlights, LineInvalidation, StructuralPair, StructuralSnapshot, StructuralToken, SyntaxMode,
     SyntaxSpan, TabSyntaxState,
 };
 
@@ -206,7 +206,7 @@ impl ViewportCache {
     pub(crate) fn patch_unwrapped_line_width(
         &mut self,
         revision: u64,
-        invalidation: &SyntaxInvalidation,
+        invalidation: &LineInvalidation,
         line_count: usize,
     ) {
         // Syntax refreshes do not change text extents. Font changes clear the
@@ -225,8 +225,7 @@ impl ViewportCache {
         };
         // Pending windows use the previous document's line coordinates. A
         // second topology change before measurement needs a fresh index.
-        if matches!(invalidation, SyntaxInvalidation::LineTopology(_))
-            && self.unwrapped_line_width_invalidation.is_some()
+        if matches!(invalidation, LineInvalidation::LineTopology(_)) && self.unwrapped_line_width_invalidation.is_some()
         {
             self.max_unwrapped_line_width = None;
             self.unwrapped_line_width_invalidation = None;
@@ -262,7 +261,7 @@ impl ViewportCache {
     /// Advance a cached wrapped-row index after an edit.
     /// Only changed lines are remeasured; later row starts receive one cheap
     /// integer shift instead of re-tokenizing every line in the document.
-    pub(crate) fn patch_wrap_layout(&mut self, buffer: &Rope, revision: u64, invalidation: &SyntaxInvalidation) {
+    pub(crate) fn patch_wrap_layout(&mut self, buffer: &Rope, revision: u64, invalidation: &LineInvalidation) {
         let started = diagnostics::trace_enabled().then(Instant::now);
         self.patch_wrap_layout_inner(buffer, revision, invalidation);
         if let Some(started) = started {
@@ -270,7 +269,7 @@ impl ViewportCache {
         }
     }
 
-    fn patch_wrap_layout_inner(&mut self, buffer: &Rope, revision: u64, invalidation: &SyntaxInvalidation) {
+    fn patch_wrap_layout_inner(&mut self, buffer: &Rope, revision: u64, invalidation: &LineInvalidation) {
         // Syntax can change without a text edit (for example, a completed
         // background parse). The row index only depends on text and geometry.
         if self
@@ -400,6 +399,7 @@ pub(crate) struct PaintedRow {
 }
 
 pub(crate) struct ViewportPaintState {
+    wrap_columns: Option<usize>,
     pub(crate) rows: Rc<[PaintedRow]>,
     pub(crate) occurrence_highlights: Rc<[Range<usize>]>,
     pub(crate) selection_match_highlights: Rc<[Range<usize>]>,
@@ -431,6 +431,9 @@ struct PaintMarker {
 
 #[derive(Default)]
 pub(crate) struct ViewportGeometry {
+    /// Last paint is still usable for layout-dependent actions. Status may
+    /// display the previous measurements while a new layout is pending.
+    pub(crate) layout_valid: bool,
     pub(crate) bounds: Option<Bounds<Pixels>>,
     /// Buffer revision the `rows` below were painted at. Geometry is carried
     /// across edits (see `invalidate_visual_state`), so consumers that read
@@ -2281,6 +2284,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
 
     let rows: Rc<[PaintedRow]> = rows.into();
     *viewport_geometry.borrow_mut() = ViewportGeometry {
+        layout_valid: true,
         bounds: Some(bounds),
         painted_revision: revision,
         rows: rows.clone(),
@@ -2302,6 +2306,7 @@ pub(crate) fn prepare_viewport_paint_state(input: ViewportPreparation<'_>, windo
     };
 
     ViewportPaintState {
+        wrap_columns: show_wrap.then_some(layout.wrap_columns()),
         rows,
         occurrence_highlights,
         selection_match_highlights,
@@ -2462,6 +2467,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         char_width,
     } = input;
     let ViewportPaintState {
+        wrap_columns,
         rows,
         occurrence_highlights,
         selection_match_highlights,
@@ -2650,7 +2656,16 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         }
     });
 
-    cursor_motion.prepare(cursor_tab, bounds, scroll_offset, scale, row_height);
+    cursor_motion.prepare(crate::cursor_motion::MotionContext {
+        tab: cursor_tab,
+        bounds,
+        scroll: scroll_offset,
+        scale,
+        row_height,
+        font: typography::primary_font(),
+        code_pad: layout_metrics.code_origin_pad(),
+        wrap_columns,
+    });
     let animate_cursor = smooth_cursor && focused && selections.len() == 1 && !selections[0].has_selection();
     let mut painted_primary = false;
     // Outlines and carets, in one layer above the text.
@@ -2790,6 +2805,48 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn distant_highlight_changes_retain_unchanged_text_layout() {
+        let source = format!("```rust\n{}*/\n```\n", "let x = 1;\n".repeat(100));
+        let mut buffer = Rope::from_str(&source);
+        let mut state = TabSyntaxState::parse_initial(crate::syntax::SyntaxLanguage::Markdown, &buffer, 0).unwrap();
+        let mut cache = ViewportCache::default();
+        crate::refresh_syntax_cache(
+            &mut cache,
+            &state,
+            &buffer,
+            0,
+            crate::syntax::SyntaxInvalidation::FULL,
+            false,
+        );
+        let retained = cached_line_display_text(&mut cache, &buffer, 80);
+        buffer.insert(8, "/* ");
+        let invalidation = state.update(
+            &buffer,
+            lst_editor::BufferDelta::Edits(vec![lst_editor::BufferEdit {
+                range: 8..8,
+                replacement: "/* ".into(),
+            }]),
+            1,
+        );
+        assert!(invalidation.highlights.line_range(buffer.len_lines()).contains(&80));
+        assert!(!invalidation.text.line_range(buffer.len_lines()).contains(&80));
+        crate::refresh_syntax_cache(
+            &mut cache,
+            &state,
+            &buffer,
+            1,
+            invalidation,
+            state.structure_was_remapped(),
+        );
+        let after = cached_line_display_text(&mut cache, &buffer, 80);
+        assert_eq!(
+            retained.as_ptr(),
+            after.as_ptr(),
+            "unchanged display text should survive syntax widening"
+        );
     }
 
     #[test]
@@ -3003,7 +3060,7 @@ mod tests {
                     };
 
                     let full_window = invalidated_lines == (0..after_buffer.len_lines());
-                    cache.patch_wrap_layout(&after_buffer, 1, &SyntaxInvalidation::Lines(invalidated_lines));
+                    cache.patch_wrap_layout(&after_buffer, 1, &LineInvalidation::Lines(invalidated_lines));
                     if full_window {
                         assert!(
                             cache.wrap_layout.is_none(),
@@ -3035,7 +3092,7 @@ mod tests {
                 }),
                 ..Default::default()
             };
-            cache.patch_wrap_layout(&buffer, 7, &SyntaxInvalidation::Full);
+            cache.patch_wrap_layout(&buffer, 7, &LineInvalidation::Full);
             let actual = cache.wrap_layout.expect("unchanged text keeps its row index");
             assert_eq!(actual.revision, 7);
             assert_eq!(*actual.layout, expected);
@@ -3152,8 +3209,8 @@ mod tests {
             ..Default::default()
         };
 
-        cache.patch_unwrapped_line_width(8, &SyntaxInvalidation::Lines(10..12), 100);
-        cache.patch_unwrapped_line_width(8, &SyntaxInvalidation::Lines(0..0), 100);
+        cache.patch_unwrapped_line_width(8, &LineInvalidation::Lines(10..12), 100);
+        cache.patch_unwrapped_line_width(8, &LineInvalidation::Lines(0..0), 100);
         assert_eq!(
             cache
                 .max_unwrapped_line_width
@@ -3163,7 +3220,7 @@ mod tests {
             7,
             "an empty render-path sync must not hide pending line measurements"
         );
-        cache.patch_unwrapped_line_width(9, &SyntaxInvalidation::Lines(20..22), 100);
+        cache.patch_unwrapped_line_width(9, &LineInvalidation::Lines(20..22), 100);
 
         let pending = cache
             .unwrapped_line_width_invalidation
@@ -3173,7 +3230,7 @@ mod tests {
         assert_eq!(pending.revision, 9);
         assert_eq!(pending.lines, 10..22);
 
-        cache.patch_unwrapped_line_width(10, &SyntaxInvalidation::Full, 100);
+        cache.patch_unwrapped_line_width(10, &LineInvalidation::Full, 100);
         assert!(cache.max_unwrapped_line_width.is_none());
         assert!(cache.unwrapped_line_width_invalidation.is_none());
     }
@@ -3194,7 +3251,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        cache.patch_unwrapped_line_width(7, &SyntaxInvalidation::Full, 100);
+        cache.patch_unwrapped_line_width(7, &LineInvalidation::Full, 100);
         assert_eq!(
             cache.max_unwrapped_line_width.as_ref().unwrap().widths.values.len(),
             100
@@ -3216,12 +3273,12 @@ mod tests {
             }),
             ..Default::default()
         };
-        cache.patch_unwrapped_line_width(8, &SyntaxInvalidation::LineTopology(10..13), 101);
+        cache.patch_unwrapped_line_width(8, &LineInvalidation::LineTopology(10..13), 101);
         assert_eq!(
             cache.max_unwrapped_line_width.as_ref().unwrap().widths.values.len(),
             100
         );
-        cache.patch_unwrapped_line_width(9, &SyntaxInvalidation::LineTopology(20..23), 102);
+        cache.patch_unwrapped_line_width(9, &LineInvalidation::LineTopology(20..23), 102);
         assert!(cache.max_unwrapped_line_width.is_none());
         assert!(cache.unwrapped_line_width_invalidation.is_none());
     }

@@ -11,6 +11,7 @@
 
 use gpui::{point, px, App, Font, FontId, GlyphId, Hsla, Pixels, ShapedLine, SharedString, TextRun, Window};
 use std::{collections::HashMap, ops::Range, rc::Rc};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Cells a ligature glyph may extend past the cell it starts in; glyphs
 /// starting this far left of the visible range are still painted.
@@ -57,13 +58,31 @@ impl CodeLine {
     /// Character boundary closest to `x`, relative to the line origin.
     pub(crate) fn closest_char_for_x(&self, x: Pixels) -> usize {
         match self {
-            Self::Shaped(line) => byte_index_to_char(line.text.as_ref(), line.closest_index_for_x(x)),
+            Self::Shaped(line) => {
+                // A glyph cluster can contain several scalars; only grapheme
+                // boundaries are caret stops. Include the trailing boundary,
+                // and retain the earlier one on an exact distance tie.
+                let mut best = (0, f32::INFINITY);
+                let mut character = 0;
+                for (byte, grapheme) in line
+                    .text
+                    .grapheme_indices(true)
+                    .chain(std::iter::once((line.text.len(), "")))
+                {
+                    let distance = f32::from(line.x_for_index(byte) - x).abs();
+                    if distance < best.1 {
+                        best = (character, distance);
+                    }
+                    character += grapheme.chars().count();
+                }
+                best.0
+            }
             Self::Cells(line) => {
                 let width = f32::from(line.char_width);
                 if width <= 0.0 {
                     return 0;
                 }
-                ((f32::from(x) / width).round().max(0.0) as usize).min(line.text.len())
+                ((f32::from(x) / width - 0.5).ceil().max(0.0) as usize).min(line.text.len())
             }
         }
     }
@@ -146,9 +165,9 @@ struct TokenGlyphs {
     descent: Pixels,
 }
 
-/// Shaped tokens for one font and size. Tokens are maximal runs of
-/// identifier characters or of punctuation, mirroring the word boundaries
-/// cosmic-text shapes within, so ligatures inside punctuation survive.
+/// Shaped tokens for one font and size. Keeping non-space text together
+/// preserves contextual alternates across identifier/punctuation boundaries.
+/// GPUI applies its own word boundaries inside each token.
 #[derive(Default)]
 pub(crate) struct GlyphTokenCache {
     key: Option<(Font, Pixels)>,
@@ -233,8 +252,7 @@ pub(crate) fn is_cell_text(text: &str) -> bool {
 /// How `build_cell_line` splits text into shaped tokens.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CellTokens {
-    /// Maximal runs of identifier characters or of punctuation, as
-    /// cosmic-text's word boundaries, so ligatures survive.
+    /// Non-space runs, preserving the shaper's full contextual input.
     Words,
     /// One token per character: for text with no ligatures, such as gutter
     /// line numbers, every distinct string then shares a handful of glyphs.
@@ -295,32 +313,17 @@ fn cell_tokens(text: &str, tokens: CellTokens) -> impl Iterator<Item = Range<usi
     let bytes = text.as_bytes();
     let mut start = 0;
     std::iter::from_fn(move || loop {
-        let class = token_class(*bytes.get(start)?);
+        let space = *bytes.get(start)? == b' ';
         let mut end = start + 1;
-        while tokens == CellTokens::Words && end < bytes.len() && token_class(bytes[end]) == class {
+        while tokens == CellTokens::Words && end < bytes.len() && (bytes[end] == b' ') == space {
             end += 1;
         }
         let range = start..end;
         start = end;
-        if class != TokenClass::Space {
+        if !space {
             return Some(range);
         }
     })
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TokenClass {
-    Space,
-    Word,
-    Punctuation,
-}
-
-fn token_class(byte: u8) -> TokenClass {
-    match byte {
-        b' ' => TokenClass::Space,
-        b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'_' => TokenClass::Word,
-        _ => TokenClass::Punctuation,
-    }
 }
 
 fn char_to_byte(text: &str, char_offset: usize) -> usize {
@@ -328,10 +331,6 @@ fn char_to_byte(text: &str, char_offset: usize) -> usize {
         .nth(char_offset)
         .map(|(i, _)| i)
         .unwrap_or(text.len())
-}
-
-pub(crate) fn byte_index_to_char(text: &str, byte_index: usize) -> usize {
-    text[..byte_index.min(text.len())].chars().count()
 }
 
 #[cfg(test)]
@@ -363,16 +362,19 @@ mod tests {
         let line = cell_line("abcd", 8.0);
         assert_eq!(line.closest_char_for_x(px(-5.0)), 0);
         assert_eq!(line.closest_char_for_x(px(3.9)), 0);
+        assert_eq!(line.closest_char_for_x(px(4.0)), 0);
         assert_eq!(line.closest_char_for_x(px(4.1)), 1);
+        assert_eq!(line.closest_char_for_x(px(28.0)), 3);
+        assert_eq!(line.closest_char_for_x(px(28.1)), 4);
         assert_eq!(line.closest_char_for_x(px(19.0)), 2);
         assert_eq!(line.closest_char_for_x(px(500.0)), 4);
     }
 
     #[test]
-    fn cell_tokens_group_word_and_punctuation_runs_and_skip_spaces() {
+    fn cell_tokens_preserve_cross_class_shaping_context_and_skip_spaces() {
         let text = "let x = foo(&bar)->baz;  ";
         let words: Vec<_> = cell_tokens(text, CellTokens::Words).map(|range| &text[range]).collect();
-        assert_eq!(words, ["let", "x", "=", "foo", "(&", "bar", ")->", "baz", ";"]);
+        assert_eq!(words, ["let", "x", "=", "foo(&bar)->baz;"]);
         let chars: Vec<_> = cell_tokens("12 3", CellTokens::Chars)
             .map(|range| &"12 3"[range])
             .collect();

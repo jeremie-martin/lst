@@ -331,7 +331,7 @@ impl LstGpuiApp {
             .cleanup_message
             .clone()
             .unwrap_or_else(|| self.model.status().to_string());
-        let status_bar = self.status_details();
+        let status_bar = self.status_details_rendered.clone();
         let recent_page = self.recent.page();
         let recent_panel_selected_path = recent_page
             .selected_index

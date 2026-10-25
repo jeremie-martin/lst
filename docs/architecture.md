@@ -120,6 +120,10 @@ Core collections encode their invariants:
 - `WrapLayout` owns wrapped row offsets and the no-wrap identity mapping.
   Its checked update operations keep line counts, row starts, and wrap widths
   consistent; the app owns cache revisions and supplies invalidated ranges.
+  Row counting, segmentation, and cursor navigation share one traversal.
+  Non-tab graphemes use Unicode display-cell widths (at least one cell); wide
+  CJK and emoji clusters occupy two cells. Graphemes remain indivisible in
+  narrow viewports. This is a monospace cell policy, not font-specific shaping.
   `LineChange` validates corresponding old/new windows when line counts change,
   shared by wrapped-row and measured-width updates.
 
@@ -202,6 +206,22 @@ UI state should have one geometric and visual owner:
   publish their current geometry during prepaint, before root trace observation.
   Field selections own their pointer drag beyond hitbox bounds and schedule
   horizontal autoscroll only while that drag can make progress.
+  Document drag autoscroll integrates velocity over elapsed time. Hit testing
+  chooses the nearest grapheme boundary, with ties going to the earlier one.
+  Inactive or invalidated tab geometry cannot complete a cursor reveal.
+  Geometry-dependent chrome requests its correction after the current paint;
+  the status trace reports the rendered text.
+- Syntax updates distinguish text changes from highlight invalidation. Only
+  text changes invalidate text measurements; a changed injected-language span
+  can invalidate colors throughout its region. Each parse owns one complete
+  root-injection inventory. Rooted queries reuse results only for unchanged
+  subtree identities below a two-level partition; container-level matches are
+  queried separately and non-rooted patterns use the full query. Source tests compare this cache with
+  whole-tree queries. Fresh structure and reuse verification parse
+  individual injections the same way, including Markdown inline nodes.
+- Cached ASCII glyphs retain full non-space shaping context, including across
+  identifier and punctuation boundaries. Nonuniform advances fall back to
+  shaping the whole segment.
 - Give each border or separator one owner.
 - Use the stable UI font for chrome and the configured editor font for document
   text and gutter digits.

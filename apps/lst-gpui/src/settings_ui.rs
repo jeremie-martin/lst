@@ -609,6 +609,7 @@ impl LstGpuiApp {
     fn invalidate_editor_typography(&mut self) {
         for view in self.tab_views.values_mut() {
             view.cache.borrow_mut().invalidate_typography();
+            view.geometry.borrow_mut().layout_valid = false;
         }
     }
 

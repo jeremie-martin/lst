@@ -8,7 +8,10 @@ use lst_editor::{
     EditorCommand, InputMode, RevealIntent, Selection, SelectionDragToken, SelectionSet,
 };
 use ropey::Rope;
-use std::{ops::Range, time::Instant};
+use std::{
+    ops::Range,
+    time::{Duration, Instant},
+};
 
 use crate::{
     elapsed_ms,
@@ -48,7 +51,7 @@ pub(crate) struct ActiveDragSelection {
     mode: DragSelectionMode,
     anchor_point: Point<Pixels>,
     last_point: Point<Pixels>,
-    autoscroll_active: bool,
+    autoscroll_started: Option<Instant>,
 }
 
 impl ActiveDragSelection {
@@ -57,7 +60,7 @@ impl ActiveDragSelection {
             mode,
             anchor_point: last_point,
             last_point,
-            autoscroll_active: false,
+            autoscroll_started: None,
         }
     }
 }
@@ -479,71 +482,64 @@ impl LstGpuiApp {
     }
 
     fn schedule_drag_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.schedule_drag_autoscroll_from(Instant::now(), window, cx);
+    }
+
+    fn schedule_drag_autoscroll_from(&mut self, since: Instant, window: &mut Window, cx: &mut Context<Self>) {
         let Some(drag) = self.selection_drag.as_ref() else {
             return;
         };
         if matches!(&drag.mode, DragSelectionMode::PendingMove { .. }) {
             return;
         }
-        if drag.autoscroll_active
-            || (self.drag_autoscroll_target().is_none() && self.drag_horizontal_autoscroll_target().is_none())
-        {
+        if drag.autoscroll_started.is_some() || self.drag_autoscroll_target(Duration::from_secs(1)).is_none() {
             return;
         }
-        if let Some(drag) = self.selection_drag.as_mut() {
-            drag.autoscroll_active = true;
-        }
+        self.selection_drag.as_mut().unwrap().autoscroll_started = Some(since);
         cx.on_next_frame(window, |this, window, cx| {
             this.run_drag_autoscroll(window, cx);
         });
     }
 
     fn run_drag_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(drag) = self.selection_drag.as_mut() else {
+        let Some(started) = self
+            .selection_drag
+            .as_mut()
+            .and_then(|drag| drag.autoscroll_started.take())
+        else {
             return;
         };
-        drag.autoscroll_active = false;
-
-        let vertical = self.drag_autoscroll_target();
-        let horizontal = self.drag_horizontal_autoscroll_target();
-        if let Some(target) = vertical {
-            scroll_to_top(&self.active_view().scroll, target);
-        }
-        if let Some(target) = horizontal {
-            scroll_to_left(&self.active_view().scroll, target);
-        }
-        if vertical.is_some() || horizontal.is_some() {
+        let now = Instant::now();
+        if let Some(target) = self.drag_autoscroll_target(now.duration_since(started)) {
+            let view = self.active_view();
+            scroll_to_top(&view.scroll, target.y);
+            scroll_to_left(&view.scroll, target.x);
             if let Some(position) = self.selection_drag.as_ref().map(|drag| drag.last_point) {
                 self.apply_drag_selection_at_point(position, cx);
                 cx.notify();
             }
         }
-        self.schedule_drag_autoscroll(window, cx);
+        // Include this callback's work in the next elapsed interval.
+        self.schedule_drag_autoscroll_from(now, window, cx);
     }
 
-    fn drag_autoscroll_target(&self) -> Option<Pixels> {
+    fn drag_autoscroll_target(&self, elapsed: Duration) -> Option<Point<Pixels>> {
         let position = self.selection_drag.as_ref()?.last_point;
-        let geometry = self.active_view().geometry.borrow();
-        let bounds = geometry.bounds?;
-        let delta = drag_autoscroll_delta(position, bounds, self.ui_scale())?;
         let view = self.active_view();
-        let current = scroll_top_for(&view.scroll);
-        let max = view.scroll.max_offset().height.max(px(0.0));
-        let target = (current + delta).max(px(0.0)).min(max);
-        (target != current).then_some(target)
-    }
-
-    fn drag_horizontal_autoscroll_target(&self) -> Option<Pixels> {
-        if self.model.show_wrap() {
-            return None;
-        }
-        let position = self.selection_drag.as_ref()?.last_point;
-        let bounds = self.active_view().geometry.borrow().bounds?;
-        let delta = drag_horizontal_autoscroll_delta(position, bounds, self.ui_scale())?;
-        let view = self.active_view();
-        let current = scroll_left_for(&view.scroll);
-        let max = view.scroll.max_offset().width.max(px(0.0));
-        let target = (current + delta).max(px(0.0)).min(max);
+        let bounds = view.geometry.borrow().bounds?;
+        let current = point(scroll_left_for(&view.scroll), scroll_top_for(&view.scroll));
+        let maximum = view.scroll.max_offset();
+        let seconds = elapsed.as_secs_f32();
+        let vertical = drag_scroll_velocity(position.y, bounds.top(), bounds.bottom(), self.ui_scale());
+        let horizontal = if self.model.show_wrap() {
+            px(0.0)
+        } else {
+            drag_scroll_velocity(position.x, bounds.left(), bounds.right(), self.ui_scale())
+        };
+        let target = point(
+            (current.x + horizontal * seconds).clamp(px(0.0), maximum.width.max(px(0.0))),
+            (current.y + vertical * seconds).clamp(px(0.0), maximum.height.max(px(0.0))),
+        );
         (target != current).then_some(target)
     }
 
@@ -581,46 +577,22 @@ fn drag_threshold_reached(from: Point<Pixels>, to: Point<Pixels>, scale: f32) ->
     (to.x - from.x).abs() >= threshold || (to.y - from.y).abs() >= threshold
 }
 
-pub(crate) fn drag_autoscroll_delta(position: Point<Pixels>, bounds: Bounds<Pixels>, scale: f32) -> Option<Pixels> {
-    const EDGE_PX: f32 = 36.0;
-    let edge = metrics::px_for_scale(EDGE_PX, scale);
-    let top_edge = bounds.top() + edge;
-    let bottom_edge = bounds.bottom() - edge;
-
-    if position.y < top_edge {
-        let distance = ((top_edge - position.y) / px(1.0)).min(EDGE_PX * scale * 2.0);
-        let rows = 0.5 + distance / (EDGE_PX * scale);
-        Some(-metrics::px_for_scale(
-            (metrics::row_height() * rows).min(metrics::row_height() * 3.0),
-            scale,
-        ))
-    } else if position.y > bottom_edge {
-        let distance = ((position.y - bottom_edge) / px(1.0)).min(EDGE_PX * scale * 2.0);
-        let rows = 0.5 + distance / (EDGE_PX * scale);
-        Some(metrics::px_for_scale(
-            (metrics::row_height() * rows).min(metrics::row_height() * 3.0),
-            scale,
-        ))
+/// Pixels per second along either axis. Retain the former 60 Hz speed,
+/// independent of refresh rate or extra callbacks during pointer activity.
+fn drag_scroll_velocity(position: Pixels, start: Pixels, end: Pixels, scale: f32) -> Pixels {
+    let edge = metrics::px_for_scale(36.0, scale);
+    let distance = if position < start + edge {
+        position - (start + edge)
+    } else if position > end - edge {
+        position - (end - edge)
     } else {
-        None
-    }
-}
-
-fn drag_horizontal_autoscroll_delta(position: Point<Pixels>, bounds: Bounds<Pixels>, scale: f32) -> Option<Pixels> {
-    const EDGE_PX: f32 = 36.0;
-    let edge = metrics::px_for_scale(EDGE_PX, scale);
-    let left_edge = bounds.left() + edge;
-    let right_edge = bounds.right() - edge;
-    let max_step = metrics::px_for_scale(metrics::row_height() * 3.0, scale);
-    if position.x < left_edge {
-        let distance = ((left_edge - position.x) / px(1.0)).min(EDGE_PX * scale * 2.0);
-        Some(-metrics::px_for_scale(metrics::row_height() * (0.5 + distance / (EDGE_PX * scale)), scale).min(max_step))
-    } else if position.x > right_edge {
-        let distance = ((position.x - right_edge) / px(1.0)).min(EDGE_PX * scale * 2.0);
-        Some(metrics::px_for_scale(metrics::row_height() * (0.5 + distance / (EDGE_PX * scale)), scale).min(max_step))
-    } else {
-        None
-    }
+        return px(0.0);
+    };
+    let normalized = distance / edge;
+    metrics::px_for_scale(
+        metrics::row_height() * 60.0 * normalized.signum() * (0.5 + normalized.abs().min(2.0)),
+        scale,
+    )
 }
 
 impl LstGpuiApp {
