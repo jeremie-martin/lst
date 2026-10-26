@@ -1004,13 +1004,20 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   files. The physical-display case passes; remove its source-side workflow duplicate.
   Keep small algorithm and representation tests in their current lanes.
 
-- **Optional:** Additional duplicated logic was reported in code-line builders,
+- **Partially assessed (2026-10-26):** Additional duplication in code-line builders,
   command-modifier declarations, settings metadata, line-edit builders and invalidation
-  sequences. Assess each concrete duplication without presuming a new abstraction.
-  (October 24 S4, S6-S8, K6, R8)
-  Review: Similar builders/switches remain, but no independent failure was established
-  for the broad cleanup group. Specific shortcut, invalidation and metadata defects
-  retain their own entries.
+  sequences. (October 24 S4, S6-S8, K6, R8)
+  Keep the gutter and code-segment cache adapters: gutter keys are logical lines and
+  use per-digit tokens; code keys include segment bounds and preserve word shaping
+  with syntax runs. Both already share glyph construction and delegate shaping to GPUI.
+  A generic cache/key adapter would add parameters without simplifying those owners.
+  Command fallback already reads the same BINDINGS table as GPUI key dispatch and
+  honors overrides. Keep its shifted-X11-keysym normalization at the input boundary.
+  Line deletion, insertion and swapping share TextChange/EditRequest construction,
+  but deliberately differ in ownership of the preceding/final newline and selection
+  mapping. Keep these contracts explicit rather than combine them behind mode flags.
+  Settings labels/search metadata and repeated text-layout invalidation sequences
+  remain open for a focused assessment; this partial disposition does not close them.
 
 - [x] **Retained and documented (2026-10-25):** Physical-display selection owners
   retain the last clipboard contents.
