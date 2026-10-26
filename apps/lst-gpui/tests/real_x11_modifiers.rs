@@ -253,3 +253,22 @@ fn overridden_shift_enter_finds_previous_only_in_find_fields() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn keybinding_overrides_replace_defaults_and_skip_invalid_entries() -> TestResult {
+    support::run_x11_test("keybinding-validation", |session| {
+        session.seed_settings("version = 1\n[keybindings]\n'edit.undo' = ['alt-u', 'ctrl-foo-bar', '  ']\n'no.such_command' = ['alt-n']\n")?;
+        let path = session.seed_file("override.txt", "alpha")?;
+        let mut editor = session.open_file("override", &path)?;
+        editor.keys("<C-end>X")?;
+        // The removed shortcut must not change state; saving fences its input.
+        editor.send_keys_settle("<C-z>")?;
+        editor.save_then_expect_file(&path, "alphaX")?;
+        editor.keys("<A-u>")?;
+        editor.save_then_expect_file(&path, "alpha")?;
+        editor.send_keys_settle("<A-n>")?;
+        editor.save_then_expect_file(&path, "alpha")?;
+        Ok(())
+    })
+}

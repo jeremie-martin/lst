@@ -852,7 +852,7 @@ impl InputField {
 
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.state.commit_composition();
         let offset = self.index_for_mouse_position(event.position);
         if event.click_count >= 3 {
@@ -1270,7 +1270,14 @@ impl Element for TextElement {
         }
         let line = prepaint.line.take().expect("input line prepainted");
         let paint_origin = point(bounds.origin.x - prepaint.horizontal_scroll, bounds.origin.y);
-        let _ = line.paint(paint_origin, bounds.size.height, window, cx);
+        let _ = line.paint(
+            paint_origin,
+            bounds.size.height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
         if focus_handle.is_focused(window) {
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);

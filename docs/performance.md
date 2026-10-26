@@ -113,6 +113,12 @@ app-side frame metrics and `open_to_first_frame_ms` over `*_to_quiet` metrics
 when judging editor work; the quiet metrics include that one-second
 re-presentation.
 
+The idle scenario first focuses the editor through a real Go to Line interaction,
+then waits 1.4 seconds for post-input presentation to settle before sampling. X11
+window focus alone can leave startup caret state different across backends. Compare
+both app binaries with this same runner and inspect blink paint counts; old idle
+results without the focus interaction are not directly comparable.
+
 `scroll_frames_per_second` counts app-rendered frames, not distinct refreshes
 shown by the monitor. Redundant window notifications can increase this count
 without improving presentation, and can skew mean frame cost toward cheap
@@ -148,14 +154,13 @@ behaviour that bounds what the app can improve.
 
 ## Patched dependencies
 
-The workspace builds against `vendor/gpui`, the gpui 0.2.2 release with the
-platform and rendering patches listed in `vendor/gpui/LST_PATCHES.md`. The
-GPUI adapter uses released Blade 0.9 with Vulkan ray tracing disabled; the former
-Blade backport and vendor copy have been retired.
-`vendor/tree-sitter` makes `changed_ranges` cheaper without changing its
-result (see `vendor/tree-sitter/LST_PATCHES.md`). Each patch records the measurement that motivated it. Compare an individual
-patch against the same dependency version and adapter: removing the GPUI override
-also changes its Blade version, which would confound that comparison.
+The app uses the exact `gpui-pre` 0.3.10 snapshot family, with X11 fixes in
+`vendor/gpui-linux` and a path-allocation patch in `vendor/gpui-wgpu`. Each
+`LST_PATCHES.md` records its rationale and removal criteria. The renderer is now
+wgpu, so Blade-specific optimizations must be reassessed rather than copied.
+`vendor/tree-sitter` makes `changed_ranges` cheaper without changing its result
+(see `vendor/tree-sitter/LST_PATCHES.md`). Compare individual patches against the
+same dependency version, app adapter and production feature set.
 
 ## Framework-neutral benchmarks
 

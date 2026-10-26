@@ -410,7 +410,7 @@ impl LstGpuiApp {
                 // keys typed after returning.
                 this.clear_x11_modifier_chord_state();
             }));
-        let view = cx.entity();
+        let view = cx.entity().downgrade();
         window
             .spawn(cx, async move |cx| loop {
                 cx.background_executor().timer(Duration::from_millis(500)).await;
@@ -435,7 +435,7 @@ impl LstGpuiApp {
             })
             .detach();
 
-        let view = cx.entity();
+        let view = cx.entity().downgrade();
         window
             .spawn(cx, async move |cx| loop {
                 cx.background_executor().timer(Duration::from_millis(500)).await;

@@ -268,7 +268,7 @@ impl LstGpuiApp {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    window.focus(&this.goto_line_input.read(cx).focus_handle());
+                    window.focus(&this.goto_line_input.read(cx).focus_handle(), cx);
                     cx.stop_propagation();
                 }),
             )
@@ -710,7 +710,7 @@ impl LstGpuiApp {
             .relative()
             .flex()
             .flex_col()
-            .flex_grow()
+            .flex_grow(1.0)
             .flex_basis(px(crate::RECENT_CARD_BASIS))
             .min_w(px(220.0))
             .max_w(px(420.0))
@@ -864,7 +864,7 @@ impl LstGpuiApp {
                     move |this, _, window, cx| {
                         this.reload_file_conflict(tab_id, cx);
                         this.set_focus(FocusTarget::Editor);
-                        window.focus(&this.focus_handle);
+                        window.focus(&this.focus_handle, cx);
                         cx.stop_propagation();
                     },
                 )),
@@ -885,7 +885,7 @@ impl LstGpuiApp {
                     move |this, _, window, cx| {
                         this.keep_file_conflict_local(tab_id, cx);
                         this.set_focus(FocusTarget::Editor);
-                        window.focus(&this.focus_handle);
+                        window.focus(&this.focus_handle, cx);
                         cx.stop_propagation();
                     },
                 )),
@@ -906,7 +906,7 @@ impl LstGpuiApp {
                     move |this, _, window, cx| {
                         this.save_file_conflict_as(tab_id, cx);
                         this.set_focus(FocusTarget::Editor);
-                        window.focus(&this.focus_handle);
+                        window.focus(&this.focus_handle, cx);
                         cx.stop_propagation();
                     },
                 )),
@@ -924,7 +924,7 @@ impl LstGpuiApp {
                     move |this, _, window, cx| {
                         this.dismiss_file_conflict(tab_id, cx);
                         this.set_focus(FocusTarget::Editor);
-                        window.focus(&this.focus_handle);
+                        window.focus(&this.focus_handle, cx);
                         cx.stop_propagation();
                     },
                 )),
@@ -1403,7 +1403,7 @@ impl LstGpuiApp {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                             this.cancel_cleanup_confirmation(cx);
                                             this.set_focus(FocusTarget::Editor);
-                                            window.focus(&this.focus_handle);
+                                            window.focus(&this.focus_handle, cx);
                                         })),
                             )
                             .child(
@@ -1417,7 +1417,7 @@ impl LstGpuiApp {
                                 .on_click(cx.listener(|this, _, window, cx| {
                                         this.confirm_cleanup_whole_document(cx);
                                         this.set_focus(FocusTarget::Editor);
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     })),
                             ),
                     ),
@@ -1869,7 +1869,7 @@ impl Render for LstGpuiApp {
             .child(
                 div()
                     .id("buffer-viewport")
-                    .flex_grow()
+                    .flex_grow(1.0)
                     .relative()
                     .overflow_hidden()
                     .bg(rgb(theme.role.editor_bg))
@@ -1917,7 +1917,7 @@ impl Render for LstGpuiApp {
                                     // phase this listener runs first and can stop the
                                     // container's instant per-detent jump in favor of
                                     // the smooth-scroll animation.
-                                    .on_scroll_wheel(cx.listener(Self::on_editor_scroll_wheel))
+                                    .on_scroll(cx.listener(Self::on_editor_scroll_wheel))
                                     .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
                                     .on_mouse_down(
                                         MouseButton::Right,

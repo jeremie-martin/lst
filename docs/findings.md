@@ -1109,7 +1109,7 @@ typing-performance follow-up remains deferred until the foundation work is done.
     all-feature, behavior, visual and fault-detection results are recorded below.
 
 - [ ] **Reopened GPUI upstream assessment (2026-10-26):** The previous review checked
-  the `gpui` release channel too narrowly. The app directly uses our patched Zed
+  the `gpui` release channel too narrowly. At the review baseline the app directly used our patched Zed
   GPUI 0.2.2; neither GPUI Kit nor its component/base crates are dependencies.
   Longbridge's GPUI Kit 0.8.0 was published on October 19. Its UI components and
   editor integration are a separate adoption decision, not our framework upgrade.
@@ -1141,10 +1141,13 @@ typing-performance follow-up remains deferred until the foundation work is done.
   its fit for lst's virtualized code viewport still needs evidence.
   Compare total maintained complexity, including adapters, duplicate state, local
   patches and upgrade burden, as well as usability, accessibility and performance.
-  The existing editor contracts and acceptance cases provide the comparison baseline;
-  implementations may change where that demonstrably improves the design. Prototype
-  representative field/popup interaction and document rendering before selecting a
-  stack. Keep editor-domain ownership explicit, and require individual patch
+  Preserve the existing look and feel, features and behavior in full; the application,
+  acceptance cases and visual baselines are the reference, without a separate exercise
+  selecting which features to retain. Start by migrating the current application to
+  the exact 0.3.10 snapshot family. Evaluate simpler, cleaner maintained code and
+  measured whole-application performance; a version bump alone is not success.
+  Base/Kit adoption and Fast remain separate later evaluations, not prerequisites
+  for this migration. Keep editor-domain ownership explicit, and require individual patch
   dispositions, real-app acceptance and controlled rendering, input, clipboard,
   startup and memory comparisons before adopting a candidate. Fast's retained
   rendering also requires checking our interior-mutable caches and notifications;
@@ -1161,6 +1164,11 @@ typing-performance follow-up remains deferred until the foundation work is done.
   [retained rendering](https://github.com/longbridge/gpui-fast/blob/main/docs/retained-mode.md).
   Registry metadata and inspected package sources are retained in
   `/home/holo/agent-exports/foundation-gpui-review-2026-10-26`.
+
+  The 0.3.10 migration is implemented on `upgrade-gpui-0310`; its acceptance and
+  performance evidence is recorded below. Keep this assessment open: hardware
+  GPU measurements and the latency/memory tradeoff still need a disposition.
+  Base/Kit and Fast remain separate evaluations.
 
 
 ## Deferred performance follow-up
@@ -1352,6 +1360,100 @@ intentional behavior as a defect.
   hold up. (23/V14)
 
 ## Verification and evidence
+
+### GPUI 0.3.10 migration candidate (2026-10-26)
+
+The isolated `upgrade-gpui-0310` branch replaces patched GPUI 0.2.2 with the exact
+`gpui-pre` / `gpui-pre-platform` 0.3.10 snapshot. Editor-domain code is unchanged.
+The app follows the new focus, scroll, text-paint and cached-view APIs, uses the
+framework's fallible keybinding loader, and holds weak references in recurring
+window tasks. Production builds do not enable GPUI's test-support feature.
+The existing X11 backend remains explicit; Wayland desktops need XWayland.
+Grayscale text rendering preserves the previous rendering preference.
+
+GPUI core is now unmodified registry source. The two small vendored platform and
+renderer crates carry the remaining local work. Their patch ledgers explain each
+retained, replaced and retired patch. The combined patch is 697 lines, compared
+with 1,217 before migration; these are diff sizes, not production source counts.
+In particular, path textures use upstream's resource lifecycle with one lazy
+allocation guard. The old glyph-tile cache is not copied into an atlas that can
+be cleared on recovery. Frame scheduling uses upstream hooks without changing
+GPUI core. Texture-based sprite sorting is already upstream.
+
+Evidence is retained in
+`/home/holo/agent-exports/foundation-gpui-migration-2026-10-26`:
+
+- `baseline.json` identifies the preserved production baseline and toolchain.
+  `qualified/hashes.json` identifies the final candidate executable and runner.
+- `vendor-patch-check.json` records reconstruction of both vendored sources from
+  pristine published archives using their checked-in patches.
+- `corrected-fast.log` and `corrected-clippy.log` cover the final all-feature
+  workspace checks (217 tests passed; real-X11 cases are deliberately ignored
+  in this lane). `format-check.log` records the formatting check.
+  `refresh-tests.log` covers the checked RandR conversion. `wgpu-tests-final.log`
+  records all 47 renderer tests, including path rendering after text-only frames,
+  resize and target invalidation. The renderer tests use the pinned upstream font
+  fixtures; no test-support feature is added to lst's production dependencies.
+- `full-nested.log` records the complete real-app acceptance run. Its new
+  keybinding test initially incorrectly required a state change from a deliberately
+  disabled shortcut; the corrected test settles that input and fences it with Save.
+  The full run passed 336 of 337 cases. `corrected-keybindings.log` then passed
+  all 14 modifier cases on each of three runs, including the corrected case,
+  against the same production executable. All 337 cases therefore pass across
+  the full run and targeted rerun; the original failure log remains available.
+- `visual-comparison.json` and `visual-comparison-*.png` compare ten scenarios
+  against the preserved old renderer at the same 1200 × 900 client size.
+  Differences affect 0.6–4.3% of pixels, chiefly glyph rasterization and edges;
+  layouts and controls remain consistent. The candidate is exactly repeatable
+  across three fresh launches per scenario. Old-renderer pixel equality does not
+  pass and is not claimed. Checked-in visual baselines remain unchanged.
+  `qualified-visual-repeatability.log` verifies all ten scenarios again on the
+  final executable. `qualified-visual-host-restored.json` confirms the temporary
+  window-manager configuration was restored byte for byte.
+
+Controlled performance comparisons use software Vulkan, the same nested display,
+corpus, geometry and runner, with one priming run and three measured runs. The
+host NVIDIA driver is unavailable, so these results do not establish hardware
+GPU performance. Final executable results (`final-*.log`, summarized with hashes
+in `final-comparison.json`); both app versions use the identical benchmark binary:
+
+| Measurement | Patched 0.2.2 | 0.3.10 candidate |
+| --- | ---: | ---: |
+| Focused idle CPU, 2 seconds / four caret paints | 630 ms | 650 ms |
+| Focused idle peak RSS | 170.2 MiB | 221.9 MiB |
+| Paced typing key-to-display p50 | 17.2 ms | 19.2 ms |
+| Paced typing key-to-app-frame-end p50 | 2.5 ms | 5.3 ms |
+| Paced typing total CPU | 54.41 s | 11.75 s |
+| Large-buffer typing, time per character | 1.653 ms | 1.372 ms |
+| Large-buffer typing total CPU | 1.07 s | 1.32 s |
+| Plain scrolling total CPU | 38.98 s | 37.14 s |
+| Plain scrolling application frames / second | 57.0 | 129.7 |
+
+Typing throughput improves and paced typing consumes substantially less CPU;
+latency and memory regress, and large-buffer throughput uses more total CPU.
+The earlier demand-scheduling runs (`iteration4-*`) showed 1.647 versus 1.348 ms
+per character, 15.3 versus 19.6 ms key-to-display p50, and 580 versus 590 ms idle
+CPU. Preserve that variation rather than claiming a precise two-millisecond
+latency penalty or an idle improvement. Faster average scrolling frames are not sufficient
+evidence of a scrolling win because the candidate also draws more frames. The
+generation-based demand refinement did not measurably reduce that frame count.
+Window discovery timing is not first-visible-frame startup evidence; the existing
+startup timestamp limitation remains open.
+
+The idle runner now focuses the actual editor through Go to Line and waits out
+the input presentation tail before sampling. Previously the old binary could
+start without caret blinking while the new binary blinked, making their apparent
+0-versus-680 ms idle CPU comparison invalid. A real-X11 test verifies blinking
+after input stops, and that disabling blinking leaves caret pixels stable; it
+passes on both versions. With equivalent setup both paint the caret four times.
+The final candidate also preserves keyboard-layout notifications when global
+modifier input targets a hidden window. Reproduction drivers are retained in the
+evidence directory's `reproduction` subdirectory.
+
+This is a working migration candidate, not a declaration that every metric is
+better. Keep the production baseline available while evaluating the measured
+latency/memory tradeoff and hardware GPU behavior. A later optimization should
+have a measured target and preserve the simpler ownership established here.
 
 ### Combined checkpoint: runtime, upstream alignment and follow-up work (2026-10-26)
 

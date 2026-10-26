@@ -1488,6 +1488,11 @@ impl Bench {
             // A focused editor with a visible caret is the realistic idle
             // state: any blink, poll, or redraw loop shows up here.
             focus_window_for_keyboard(&self.conn, &window)?;
+            // Establish editor focus through real input on every backend. Merely
+            // focusing the X window can leave startup caret state different.
+            self.position_editor(0, &trace_path, damage.damage(), window.id, &mut child)?;
+            // Exclude the renderer's post-input presentation tail from idle cost.
+            thread::sleep(Duration::from_millis(1400));
             let _ = wait_for_damage_quiet(
                 &self.conn,
                 damage.damage(),

@@ -1,0 +1,71 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -189,3 +189,8 @@
+ [lints.rust.unexpected_cfgs]
+ level = "allow"
+ priority = 0
++
++# lst patch: the published manifest omits the shader-validation test dependency.
++[dev-dependencies.naga]
++version = "30.0.0"
++features = ["wgsl-in"]
+--- a/src/wgpu_renderer.rs
++++ b/src/wgpu_renderer.rs
+@@ -1429,7 +1429,12 @@
+         );
+
+         self.atlas.before_frame();
+-        self.ensure_intermediate_textures(size);
++        // lst patch: ordinary text scenes need no full-window path raster targets.
++        // Resize and recovery already invalidate these resources; the first path
++        // scene recreates them using the current size, format and sampling mode.
++        if !scene.paths.is_empty() {
++            self.ensure_intermediate_textures(size);
++        }
+
+         let gamma_params = GammaParams {
+             gamma_ratios: self.rendering_params.gamma_ratios,
+@@ -2668,6 +2673,43 @@
+     const BLUE: [u8; 4] = [0, 0, 255, 255];
+     #[cfg(target_os = "linux")]
+     const BLACK: [u8; 4] = [0, 0, 0, 255];
++
++    // lst patch: exercise lazy targets with real GPU output across size changes
++    // and resource invalidation, not merely whether the allocation branch ran.
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn paths_render_after_text_only_frames_resize_and_target_invalidation() -> anyhow::Result<()> {
++        let mut renderer = WgpuHeadlessRenderer::new()?;
++        let empty = Scene::default();
++        renderer.render_scene_to_image(&empty, device_size(32, 32))?;
++        assert!(renderer.core.resources.path_intermediate_texture.is_none());
++        assert!(renderer.core.resources.path_msaa_texture.is_none());
++
++        let mut builder = gpui::PathBuilder::fill();
++        builder.move_to(gpui::point(gpui::px(4.), gpui::px(4.)));
++        builder.line_to(gpui::point(gpui::px(24.), gpui::px(4.)));
++        builder.line_to(gpui::point(gpui::px(4.), gpui::px(24.)));
++        builder.close();
++        let mut path = builder.build()?;
++        path.color = gpui::red().into();
++        path.content_mask = ContentMask { bounds: path.bounds };
++        let mut scene = Scene::default();
++        scene.insert_primitive(path.scale(1.0));
++        scene.finish();
++
++        for size in [device_size(32, 32), device_size(48, 40), device_size(32, 32)] {
++            let image = renderer.render_scene_to_image(&scene, size)?;
++            assert_pixel(&image, 8, 8, RED);
++            assert_pixel(&image, 28, 28, BLACK);
++            renderer.core.resources.invalidate_intermediate_textures();
++            let image = renderer.render_scene_to_image(&empty, size)?;
++            assert_pixel(&image, 8, 8, BLACK);
++            assert!(renderer.core.resources.path_intermediate_texture.is_none());
++            let image = renderer.render_scene_to_image(&scene, size)?;
++            assert_pixel(&image, 8, 8, RED);
++        }
++        Ok(())
++    }
+
+     #[cfg(target_os = "linux")]
+     #[test]

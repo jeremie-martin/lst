@@ -32,5 +32,6 @@ strip = false
 # Measured platform/rendering patches and a tree-sitter changed-ranges fix. See each vendored crate's LST_PATCHES.md for
 # rationale and removal criteria.
 [patch.crates-io]
-gpui = { path = "vendor/gpui" }
+gpui-pre-linux = { path = "vendor/gpui-linux" }
+gpui-pre-wgpu = { path = "vendor/gpui-wgpu" }
 tree-sitter = { path = "vendor/tree-sitter" }

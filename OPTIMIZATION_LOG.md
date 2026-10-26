@@ -90,7 +90,8 @@ in its paired check: 29.383 → 29.412 ms.
 
 ## Vendor decisions and remaining costs
 
-Retained GPUI patches are documented in [the patch ledger](vendor/gpui/LST_PATCHES.md),
+Retained GPUI patches are documented in [the X11 patch ledger](vendor/gpui-linux/LST_PATCHES.md) and
+[the renderer patch ledger](vendor/gpui-wgpu/LST_PATCHES.md),
 with exact diffs in `lst.patch`. Both vendor reverse-application checks pass.
 The GPU worker is restricted to Vulkan; GLES retains its thread-bound context.
 Glyph-cache lifetime and sprite ordering were reviewed against atlas ownership

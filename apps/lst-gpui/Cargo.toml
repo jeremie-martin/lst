@@ -16,7 +16,8 @@ name = "bench_editor_x11"
 test = true
 
 [dependencies]
-gpui = { version = "0.2.2", default-features = false, features = ["x11"] }
+gpui = { package = "gpui-pre", version = "=0.3.10", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", default-features = false, features = ["x11"] }
 libc = "0.2"
 lst-editor = { path = "../../crates/lst-editor" }
 lucide-icons = "1.23"

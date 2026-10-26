@@ -3,7 +3,7 @@ use std::time::Instant;
 use gpui::{
     canvas, div, point, prelude::*, px, App, Bounds, ClipboardItem, Context, CursorStyle, HitboxBehavior,
     InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
-    ScrollDelta, ScrollHandle, ScrollWheelEvent, Size, Styled, Window,
+    ScrollDelta, ScrollEvent, ScrollHandle, Size, Styled, Window,
 };
 use lst_editor::{EditorCommand as Command, EditorTab as ModelEditorTab, RevealIntent};
 
@@ -280,12 +280,7 @@ impl LstGpuiApp {
     /// deltas that are already smooth, so those keep GPUI's stock instant
     /// handling: the event is left to propagate to the scroll container, and
     /// any running animation yields to it.
-    pub(crate) fn on_editor_scroll_wheel(
-        &mut self,
-        event: &ScrollWheelEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn on_editor_scroll_wheel(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ScrollDelta::Lines(_) = event.delta else {
             self.smooth_scroll = None;
             return;
@@ -420,7 +415,7 @@ impl LstGpuiApp {
             return;
         };
 
-        let max_scroll = self.active_view().scroll.max_offset();
+        let max_scroll = self.active_view().scroll.max_offset().into();
         if self.try_reveal_active_cursor(intent, max_scroll, window, cx) {
             diagnostics::record_notify("reveal_applied");
             cx.notify();
@@ -653,8 +648,8 @@ fn scrollbar_id(axis: ScrollbarAxis) -> &'static str {
 
 fn scrollbar_max_offset(axis: ScrollbarAxis, scroll: &ScrollHandle) -> Pixels {
     match axis {
-        ScrollbarAxis::Vertical => scroll.max_offset().height.max(px(0.0)),
-        ScrollbarAxis::Horizontal => scroll.max_offset().width.max(px(0.0)),
+        ScrollbarAxis::Vertical => scroll.max_offset().y.max(px(0.0)),
+        ScrollbarAxis::Horizontal => scroll.max_offset().x.max(px(0.0)),
     }
 }
 
@@ -748,7 +743,7 @@ impl LstGpuiApp {
                         }
 
                         let focus_handle = entity_for_down.read(cx).focus_handle.clone();
-                        window.focus(&focus_handle);
+                        window.focus(&focus_handle, cx);
                         let pointer = axis.pointer_offset(event.position);
                         let current = scrollbar_current_offset(axis, &scroll_for_down);
                         let on_thumb = layout.thumb_bounds.contains(&event.position);

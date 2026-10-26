@@ -13,7 +13,7 @@ GPUI application; the repository root is only a Cargo workspace.
   process execution, and voice transcription.
 - `crates/lst-x11-harness` drives the production app with real X11 input. It is
   a workspace member but is excluded from `default-members`.
-- `vendor/gpui` and `vendor/tree-sitter` are pinned
+- `vendor/gpui-linux`, `vendor/gpui-wgpu`, and `vendor/tree-sitter` are pinned
   releases with lst's patches, selected through `[patch.crates-io]`. Keep every
   change there marked `lst patch`, described in the directory's
   `LST_PATCHES.md`, and reflected in its `lst.patch`.

@@ -40,7 +40,7 @@ pub(crate) struct TabStrip {
 }
 
 impl LstGpuiApp {
-    pub(crate) fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> AnyView {
+    pub(crate) fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> gpui::ViewElement<AnyView> {
         let props = TabStripProps {
             theme: self.theme(cx),
             zoom_level: self.zoom_level,
@@ -88,7 +88,7 @@ impl LstGpuiApp {
         if changed {
             // Notifications raised during the parent render are processed on
             // the next draw. Render changed props immediately in this frame.
-            view
+            view.into_element()
         } else {
             view.cached(StyleRefinement::default().w_full().h(self.ui_px(metrics::TAB_HEIGHT)))
         }
@@ -171,7 +171,7 @@ impl TabStrip {
                         model.set_active_tab(id);
                     }
                 });
-                window.focus(&this.focus_handle);
+                window.focus(&this.focus_handle, cx);
                 cx.notify();
             }))
             .on_mouse_up(
@@ -179,7 +179,7 @@ impl TabStrip {
                 self.listener(move |this, _: &MouseUpEvent, window, cx| {
                     this.set_focus(FocusTarget::Editor);
                     this.request_close_tab_at(ix, cx);
-                    window.focus(&this.focus_handle);
+                    window.focus(&this.focus_handle, cx);
                     cx.stop_propagation();
                 }),
             )

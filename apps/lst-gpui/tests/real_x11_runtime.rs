@@ -178,3 +178,37 @@ os.kill(os.getpid(), signal.SIGKILL)
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn cursor_blink_keeps_presenting_after_input_stops_and_can_be_disabled() -> TestResult {
+    support::run_x11_test("runtime-idle-caret", |session| {
+        let path = session.seed_file("caret.txt", "")?;
+        for blink in [true, false] {
+            session.seed_settings(&format!("version = 1\n[editor]\ncursor_blink = {blink}\n"))?;
+            let mut editor = session.open_file(&format!("idle-caret-{blink}"), &path)?;
+            editor.keys("<C-home>")?;
+            let state = editor.read_state()?;
+            let view = &state.viewport;
+            let row = view.rows.first().ok_or("empty document row missing")?;
+            let x = (view.code_origin_x_px * view.scale_factor).round() as usize;
+            let y = ((row.top_px + view.line_height_px * 0.5) * view.scale_factor).round() as usize;
+            // Go beyond the renderer's post-input presentation tail, then
+            // observe actual caret pixels rather than the timer's model state.
+            thread::sleep(Duration::from_millis(1400));
+            let mut samples = std::collections::BTreeSet::new();
+            for _ in 0..30 {
+                let image = editor.screenshot()?;
+                let start = (y * usize::from(image.width) + x.saturating_sub(1)) * 3;
+                samples.insert(image.rgb_pixels[start..start + 18].to_vec());
+                thread::sleep(Duration::from_millis(50));
+            }
+            if blink {
+                assert!(samples.len() >= 2, "idle caret must visibly blink without more input");
+            } else {
+                assert_eq!(samples.len(), 1, "disabled blinking must leave stable caret pixels");
+            }
+        }
+        Ok(())
+    })
+}

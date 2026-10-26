@@ -62,7 +62,7 @@ impl LstGpuiApp {
         self.command_palette_scroll.scroll_to_item(0);
         self.command_palette_input.update(cx, |input, cx| input.reset("", cx));
         let focus = self.command_palette_input.read(cx).focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         cx.notify();
     }
 
@@ -76,7 +76,7 @@ impl LstGpuiApp {
             self.settings_selection.clear();
             self.settings_search_input.update(cx, |input, cx| input.reset("", cx));
             self.settings_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
-            window.focus(&self.settings_search_input.read(cx).focus_handle());
+            window.focus(&self.settings_search_input.read(cx).focus_handle(), cx);
             cx.notify();
         }
     }

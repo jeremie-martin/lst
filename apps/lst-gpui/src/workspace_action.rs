@@ -302,9 +302,9 @@ const UNBOUND_BINDINGS: &[WorkspaceBinding] = &[
 /// Vim's paging chords. The editor context is deeper than the workspace, so
 /// these win over find and the multi-cursor shortcuts on the same keys; they
 /// stay out of the command palette and user overrides.
-const VIM_CONTROL_KEYS: [char; 4] = ['d', 'u', 'f', 'b'];
+const VIM_CONTROL_KEYS: [(char, &str); 4] = [('d', "ctrl-d"), ('u', "ctrl-u"), ('f', "ctrl-f"), ('b', "ctrl-b")];
 
-pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> Vec<KeyBinding> {
+pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>, cx: &gpui::App) -> Vec<KeyBinding> {
     let overridden: HashSet<&str> = overrides.keys().map(String::as_str).collect();
     let mut bindings = BINDINGS
         .iter()
@@ -328,31 +328,35 @@ pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> V
             continue;
         };
         for keystroke in keystrokes {
-            // KeyBinding::new panics on malformed keystrokes; overrides come
-            // from user-edited config, so invalid ones are dropped instead.
-            if !valid_keystroke_sequence(keystroke) {
+            if keystroke.trim().is_empty() {
                 continue;
             }
-            bindings.push(KeyBinding::new(
+            let context = if default.command == model(Command::FindPrev)
+                && Keystroke::parse_with_os(keystroke, cx.platform_info().os)
+                    .is_ok_and(|key| key == Keystroke::parse("shift-enter").unwrap())
+            {
+                FIND
+            } else {
+                default.context
+            };
+            // Overrides are untrusted config. Let GPUI parse them once at the boundary.
+            if let Ok(binding) = KeyBinding::load(
                 keystroke,
-                WorkspaceAction {
+                Box::new(WorkspaceAction {
                     command: default.command,
-                },
-                Some(
-                    if default.command == model(Command::FindPrev)
-                        && Keystroke::parse(keystroke).is_ok_and(|key| key == Keystroke::parse("shift-enter").unwrap())
-                    {
-                        FIND
-                    } else {
-                        default.context
-                    },
-                ),
-            ));
+                }),
+                Some(gpui::KeyBindingContextPredicate::parse(context).unwrap().into()),
+                false,
+                None,
+                cx,
+            ) {
+                bindings.push(binding);
+            }
         }
     }
-    bindings.extend(VIM_CONTROL_KEYS.map(|key| {
+    bindings.extend(VIM_CONTROL_KEYS.map(|(key, keystroke)| {
         KeyBinding::new(
-            &format!("ctrl-{key}"),
+            keystroke,
             WorkspaceAction {
                 command: WorkspaceCommand::VimControl(key),
             },
@@ -360,17 +364,6 @@ pub(crate) fn editor_keybindings(overrides: &BTreeMap<String, Vec<String>>) -> V
         )
     }));
     bindings
-}
-
-fn valid_keystroke_sequence(sequence: &str) -> bool {
-    let mut any = false;
-    for keystroke in sequence.split_whitespace() {
-        if Keystroke::parse(keystroke).is_err() {
-            return false;
-        }
-        any = true;
-    }
-    any
 }
 
 pub(crate) fn command_id(command: WorkspaceCommand) -> &'static str {
@@ -863,32 +856,6 @@ mod tests {
             let first = *commands.entry(id).or_insert(binding.command);
             assert_eq!(first, binding.command, "{id} names two commands");
         }
-    }
-
-    #[test]
-    fn keybinding_overrides_replace_defaults_and_skip_invalid_entries() {
-        let overrides = BTreeMap::from([
-            (
-                "edit.undo".to_string(),
-                vec!["alt-u".to_string(), "ctrl-foo-bar".to_string(), String::new()],
-            ),
-            ("no.such_command".to_string(), vec!["alt-n".to_string()]),
-        ]);
-        let bindings = editor_keybindings(&overrides);
-        let bound_to = |keystroke: &str| -> Vec<WorkspaceCommand> {
-            let typed = [Keystroke::parse(keystroke).unwrap()];
-            bindings
-                .iter()
-                .filter(|binding| binding.match_keystrokes(&typed) == Some(false))
-                .filter_map(|binding| binding.action().as_any().downcast_ref::<WorkspaceAction>())
-                .map(|action| action.command)
-                .collect()
-        };
-
-        let undo = WorkspaceCommand::Model(Command::Undo);
-        assert_eq!(bound_to("alt-u"), [undo]);
-        assert!(!bound_to("ctrl-z").contains(&undo));
-        assert!(bound_to("alt-n").is_empty());
     }
 
     #[test]

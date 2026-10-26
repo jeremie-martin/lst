@@ -626,10 +626,10 @@ pub(crate) fn scroll_left_for(scroll: &ScrollHandle) -> Pixels {
     (-scroll.offset().x).max(px(0.0))
 }
 pub(crate) fn max_scroll_top(scroll: &ScrollHandle) -> Pixels {
-    scroll.max_offset().height.max(px(0.0))
+    scroll.max_offset().y.max(px(0.0))
 }
 pub(crate) fn max_scroll_left(scroll: &ScrollHandle) -> Pixels {
-    scroll.max_offset().width.max(px(0.0))
+    scroll.max_offset().x.max(px(0.0))
 }
 
 /// Sets scroll position, clamped to `[0, max_offset]`, preserving the other axis.
@@ -2654,7 +2654,14 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
                 + structure.markers[marker_first..].partition_point(|marker| row_contains_cursor(row, marker.at));
             for marker in &structure.markers[marker_first..marker_last] {
                 let x = code_origin_x + x_for_global_char(row, marker.at).unwrap_or_else(|| px(0.0));
-                let _ = marker.shaped.paint(point(x, row.row_top), line_height, window, cx);
+                let _ = marker.shaped.paint(
+                    point(x, row.row_top),
+                    line_height,
+                    gpui::TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
             }
         }
     });
@@ -2812,7 +2819,12 @@ mod tests {
 
     #[test]
     fn distant_highlight_changes_retain_unchanged_text_layout() {
-        let source = format!("```rust\n{}*/\n```\n", "let x = 1;\n".repeat(100));
+        // GPUI stores short strings inline. Use heap-backed text so pointer
+        // identity checks allocation retention rather than where a clone lives.
+        let source = format!(
+            "```rust\n{}*/\n```\n",
+            "let sufficiently_long_identifier_for_shared_storage = 1;\n".repeat(100)
+        );
         let mut buffer = Rope::from_str(&source);
         let mut state = TabSyntaxState::parse_initial(crate::syntax::SyntaxLanguage::Markdown, &buffer, 0).unwrap();
         let mut cache = ViewportCache::default();

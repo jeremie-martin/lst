@@ -1,6 +1,6 @@
 use gpui::{
-    prelude::*, px, size, App, Application, Bounds, Context, Entity, FocusHandle, Focusable, Modifiers, Pixels, Point,
-    ScrollHandle, Subscription, Window, WindowAppearance, WindowBounds, WindowOptions,
+    prelude::*, px, size, App, Bounds, Context, Entity, FocusHandle, Focusable, Modifiers, Pixels, Point, ScrollHandle,
+    Subscription, Window, WindowAppearance, WindowBounds, WindowOptions,
 };
 
 mod build_info;
@@ -821,7 +821,7 @@ impl LstGpuiApp {
         };
         if let Some(handle) = surface_handle {
             if !handle.is_focused(window) {
-                window.focus(&handle);
+                window.focus(&handle, cx);
             }
             return;
         }
@@ -845,7 +845,7 @@ impl LstGpuiApp {
         let handle = self.handle_for(target, cx);
         if !handle.is_focused(window) {
             diagnostics::record_notify("focus_apply");
-            window.focus(&handle);
+            window.focus(&handle, cx);
             diagnostics::record_label("focus_applied", focus_trace_label(target));
         }
         if target == FocusTarget::Editor {
@@ -1632,10 +1632,10 @@ fn main() {
     diagnostics::install();
 
     let launch = parse_launch_args();
-    let has_graphical_env = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let has_x11_display = std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty());
 
-    if !has_graphical_env {
-        eprintln!("lst requires a graphical session. Run it from a real X11 or Wayland desktop.");
+    if !has_x11_display {
+        eprintln!("lst requires an X11 display, including XWayland on a Wayland desktop.");
         process::exit(1);
     }
 
@@ -1654,8 +1654,10 @@ fn main() {
             .ok()
     };
 
-    Application::new().run(move |cx: &mut App| {
+    gpui_platform::linux(gpui::WindowingModes::X11).run(move |cx: &mut App| {
         diagnostics::record_startup_mark("app_init");
+        // Preserve lst's grayscale text appearance across the renderer upgrade.
+        cx.set_text_rendering_mode(gpui::TextRenderingMode::Grayscale);
         if let Err(error) = cx
             .text_system()
             .add_fonts(vec![Cow::Borrowed(lucide_icons::LUCIDE_FONT_BYTES)])
@@ -1666,9 +1668,9 @@ fn main() {
         diagnostics::record_startup_mark("settings_loaded");
         typography::set_primary_font_family(&settings.settings.editor.font_family);
         warm_first_frame_caches(&launch, cx);
-        cx.bind_keys(editor_keybindings(&settings.settings.keybindings));
+        cx.bind_keys(editor_keybindings(&settings.settings.keybindings, cx));
         cx.bind_keys(input_keybindings());
-        cx.on_window_closed(|cx| {
+        cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
             }
@@ -1723,7 +1725,7 @@ fn main() {
                     });
                     false
                 });
-                window.focus(&view.focus_handle(cx));
+                window.focus(&view.focus_handle(cx), cx);
                 window.activate_window();
                 cx.activate(true);
                 view.start_background_tasks(window, cx);

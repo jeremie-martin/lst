@@ -133,7 +133,8 @@ impl LstGpuiApp {
             .any(|command| overrides.contains_key(command_id(*command)))
             || overrides.values().flatten().any(|sequence| {
                 sequence.split_whitespace().any(|key| {
-                    gpui::Keystroke::parse(key).is_ok_and(|key| HeldArrows::bit(&key.key.to_ascii_lowercase()) != 0)
+                    gpui::Keystroke::parse_with_os(key, cx.platform_info().os)
+                        .is_ok_and(|key| HeldArrows::bit(&key.key.to_ascii_lowercase()) != 0)
                 })
             });
         if !self.editor_input_is_focused(window)
@@ -162,7 +163,7 @@ impl LstGpuiApp {
 
     pub(crate) fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.set_focus(FocusTarget::Editor);
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         let index = self.active_char_index_for_point(event.position);
         let gutter_click = {
             let geometry = self.active_view().geometry.borrow();
@@ -302,7 +303,7 @@ impl LstGpuiApp {
 
     pub(crate) fn on_middle_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.set_focus(FocusTarget::Editor);
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.cancel_drag_selection();
 
         let index = self.active_char_index_for_point(event.position);
@@ -537,8 +538,8 @@ impl LstGpuiApp {
             drag_scroll_velocity(position.x, bounds.left(), bounds.right(), self.ui_scale())
         };
         let target = point(
-            (current.x + horizontal * seconds).clamp(px(0.0), maximum.width.max(px(0.0))),
-            (current.y + vertical * seconds).clamp(px(0.0), maximum.height.max(px(0.0))),
+            (current.x + horizontal * seconds).clamp(px(0.0), maximum.x.max(px(0.0))),
+            (current.y + vertical * seconds).clamp(px(0.0), maximum.y.max(px(0.0))),
         );
         (target != current).then_some(target)
     }

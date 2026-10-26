@@ -15,11 +15,14 @@ The root `Cargo.toml` is a workspace manifest. It has three members:
 The app and editor are `default-members`. The X11 harness is compiled only when
 selected directly or used by the app's integration tests.
 
-`vendor/gpui` carries documented platform/rendering changes and a small adapter
-for released Blade 0.9 APIs. Blade is an ordinary registry dependency; its released
-ray-tracing opt-in replaces our former backport. `vendor/tree-sitter` makes `changed_ranges` stop descending into
-every subtree it skips. Each vendor directory records its exact diff,
-rationale, and removal criteria in `lst.patch` and `LST_PATCHES.md`.
+GPUI core and platform packages use the exact `gpui-pre` 0.3.10 snapshot family
+(Zed revision `08cbb88a152c3751a43e853425a70e9f631a5918`). The app selects the X11
+platform explicitly. Linux rendering uses wgpu; Blade is no longer a dependency.
+`vendor/gpui-linux` retains X11 boundary fixes, and `vendor/gpui-wgpu` avoids path
+render-target allocation for scenes without paths. GPUI core uses the published
+package. `vendor/tree-sitter` makes `changed_ranges` stop descending into every
+subtree it skips. Each vendor directory records its exact diff, rationale and
+removal criteria in `lst.patch` and `LST_PATCHES.md`.
 
 ## Runtime data flow
 

@@ -409,7 +409,8 @@ impl LstGpuiApp {
 
     fn reload_keybindings(&self, cx: &mut Context<Self>) {
         cx.clear_key_bindings();
-        cx.bind_keys(editor_keybindings(&self.settings.settings.keybindings));
+        let bindings = editor_keybindings(&self.settings.settings.keybindings, cx);
+        cx.bind_keys(bindings);
         cx.bind_keys(input_keybindings());
     }
 
@@ -522,7 +523,7 @@ impl LstGpuiApp {
         self.settings_value_error = None;
         self.settings_overlay = SettingsOverlay::ValueEditor { item };
         self.settings_value_input.update(cx, |input, cx| input.reset(&text, cx));
-        window.focus(&self.settings_value_input.read(cx).focus_handle());
+        window.focus(&self.settings_value_input.read(cx).focus_handle(), cx);
         cx.notify();
     }
 
@@ -656,7 +657,7 @@ impl LstGpuiApp {
 
     fn focus_settings_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_selection.clear();
-        window.focus(&self.settings_search_input.read(cx).focus_handle());
+        window.focus(&self.settings_search_input.read(cx).focus_handle(), cx);
     }
 
     fn visible_settings_items(&self, cx: &Context<Self>) -> Vec<SettingsItem> {
@@ -743,7 +744,7 @@ impl LstGpuiApp {
             }
         };
         if self.settings_overlay.wants_surface_focus() {
-            window.focus(&self.surface_focus_handle);
+            window.focus(&self.surface_focus_handle, cx);
         } else {
             self.focus_settings_search(window, cx);
         }
@@ -754,7 +755,7 @@ impl LstGpuiApp {
         self.settings_overlay = SettingsOverlay::ResetConfirmation {
             selected: ResetConfirmationChoice::Cancel,
         };
-        window.focus(&self.surface_focus_handle);
+        window.focus(&self.surface_focus_handle, cx);
         cx.notify();
     }
 
@@ -762,7 +763,7 @@ impl LstGpuiApp {
         self.settings_overlay = SettingsOverlay::None;
         self.settings_value_error = None;
         if self.settings_selection.is_active() {
-            window.focus(&self.surface_focus_handle);
+            window.focus(&self.surface_focus_handle, cx);
         } else {
             self.focus_settings_search(window, cx);
         }

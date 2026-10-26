@@ -27,7 +27,7 @@ pub(crate) struct StatusBar {
 }
 
 impl LstGpuiApp {
-    pub(crate) fn render_status_bar(&mut self, cx: &mut Context<Self>) -> AnyView {
+    pub(crate) fn render_status_bar(&mut self, cx: &mut Context<Self>) -> gpui::ViewElement<AnyView> {
         let scale = self.ui_scale();
         let theme = self.theme(cx);
         self.theme_name_rendered = theme.name.to_string();
@@ -70,7 +70,7 @@ impl LstGpuiApp {
         if changed {
             // A notification from parent render dirties the next draw.
             // Changed props must already be visible in this one.
-            view
+            view.into_element()
         } else {
             // Match the intrinsic height: tallest control, vertical padding,
             // and the unscaled one-pixel top border.

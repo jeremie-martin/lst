@@ -101,7 +101,7 @@ impl CodeLine {
     ) {
         match self {
             Self::Shaped(line) => {
-                let _ = line.paint(origin, line_height, window, cx);
+                let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
             }
             Self::Cells(line) => line.paint(origin, line_height, visible, window),
         }
