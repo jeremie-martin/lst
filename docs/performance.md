@@ -37,6 +37,13 @@ older measurements that inherited personal settings are not a controlled
 baseline. A viewport-size mismatch aborts the scenario instead of combining
 unlike runs into a median.
 
+Record the actual rendering device when comparing hardware and software paths.
+A Vulkan ICD override only constrains Vulkan; a renderer may still select GL.
+Confirm the selected adapter or process-specific DRM render-engine activity,
+rather than inferring hardware use from available devices or loaded libraries.
+Keep physical and nested display measurements separate, and distinguish process
+RSS from total memory including GPU buffers.
+
 Choose the scenario whose primary metric matches the problem:
 
 | Scenario | Primary metric | Surface |

@@ -1166,8 +1166,9 @@ typing-performance follow-up remains deferred until the foundation work is done.
   `/home/holo/agent-exports/foundation-gpui-review-2026-10-26`.
 
   The 0.3.10 migration is implemented on `upgrade-gpui-0310`; its acceptance and
-  performance evidence is recorded below. Keep this assessment open: hardware
-  GPU measurements and the latency/memory tradeoff still need a disposition.
+  performance evidence is recorded below, including Intel hardware rendering.
+  Keep this assessment open: the software-rendering tradeoffs and remaining
+  hardware acceptance still need a disposition.
   Base/Kit and Fast remain separate evaluations.
 
 
@@ -1411,10 +1412,12 @@ Evidence is retained in
   final executable. `qualified-visual-host-restored.json` confirms the temporary
   window-manager configuration was restored byte for byte.
 
-Controlled performance comparisons use software Vulkan, the same nested display,
+The initial controlled comparisons use software Vulkan, the same nested display,
 corpus, geometry and runner, with one priming run and three measured runs. The
-host NVIDIA driver is unavailable, so these results do not establish hardware
-GPU performance. Final executable results (`final-*.log`, summarized with hashes
+host NVIDIA driver is unavailable, but the initial investigation missed the
+working Intel integrated GPU. These initial results do not establish hardware
+GPU performance; the follow-up below corrects that omission. Final executable
+software results (`final-*.log`, summarized with hashes
 in `final-comparison.json`); both app versions use the identical benchmark binary:
 
 | Measurement | Patched 0.2.2 | 0.3.10 candidate |
@@ -1452,8 +1455,75 @@ evidence directory's `reproduction` subdirectory.
 
 This is a working migration candidate, not a declaration that every metric is
 better. Keep the production baseline available while evaluating the measured
-latency/memory tradeoff and hardware GPU behavior. A later optimization should
+tradeoffs and completing hardware acceptance. A later optimization should
 have a measured target and preserve the simpler ownership established here.
+
+### Intel hardware follow-up (2026-10-26)
+
+The laptop has Intel Alder Lake-P integrated graphics (PCI `8086:4626`, i915)
+and an NVIDIA T600 (PCI `10de:1fb6`). NVIDIA has no active driver, but Intel is
+working: the existing X11 desktop reports accelerated Mesa Intel graphics and
+Vulkan enumerates the Intel device. The lid is closed while the desktop and GPU
+remain active; opening it is not required for these tests. The earlier inference
+that hardware rendering was unavailable was incorrect.
+
+The preserved old executable fails with `NoSupportedDeviceFound` when limited to
+Intel Vulkan, on both the nested display and the physical desktop. Inspection of
+Blade 0.9.0's `vulkan/init.rs` explains the incompatibility: `detect_gpu_vendors`
+scans PCI sysfs, and `is_presentation_broken` rejects Intel on X11 whenever both
+Intel and NVIDIA vendors are present. This does not depend on NVIDIA having a
+working driver. Do not patch the baseline or present an old-versus-new Intel
+comparison that the unchanged old binary cannot run.
+
+The unchanged 0.3.10 candidate runs in the physical desktop session using Intel.
+`intel-physical-device-proof.json` records its loaded Intel Vulkan library,
+absence of Lavapipe, i915 device handles, allocated GPU buffers and nonzero
+render-engine execution counters. Merely restricting Vulkan ICDs did not establish
+hardware rendering in the nested display: that probe had no observed GPU work and
+is not counted as a hardware benchmark. GPUI can also consider a GL adapter.
+
+The physical comparison uses the same 1200 × 900 floating window, corpus and
+runner for old/software, new/software and new/Intel, with one priming run and
+three measured runs. It preserves the existing binaries and changes only the
+backend environment. These numbers must not be mixed with the larger nested
+display's absolute measurements. Process RSS does not account for all GPU buffer
+memory and must not be presented as total system memory use.
+
+All twelve physical benchmark combinations passed. The medians are:
+
+| Measurement | Old / software | New / software | New / Intel |
+| --- | ---: | ---: | ---: |
+| Focused idle CPU, 2 seconds / four caret paints | 470 ms | 460 ms | 30 ms |
+| Focused idle process peak RSS | 155.0 MiB | 207.2 MiB | 158.5 MiB |
+| Paced typing key-to-damage p50 | 12.8 ms | 24.7 ms | 19.7 ms |
+| Paced typing key-to-app-frame-end p50 | 2.9 ms | 4.8 ms | 4.9 ms |
+| Paced typing total CPU | 45.24 s | 8.58 s | 0.44 s |
+| Large-buffer typing, time per character | 1.353 ms | 1.203 ms | 1.153 ms |
+| Large-buffer typing total CPU | 0.96 s | 1.02 s | 0.38 s |
+| Plain scrolling total CPU | 35.90 s | 39.43 s | 1.60 s |
+| Plain scrolling application frames / second | 66.0 | 166.7 | 215.3 |
+
+Intel substantially reduces rendering CPU cost and improves the new version's
+typing throughput and observed presentation latency. The old software-rendered
+binary still has lower key-to-damage latency in this comparison. XDamage is an
+observation of window updates, not a measurement of photons on the panel.
+Application scrolling frame counts above the 60 Hz display rate are not additional
+visible refreshes; scheduling and presentation remain concrete optimization
+targets. The similar old/software and new/Intel process RSS does not prove equal
+total memory consumption. This is evidence for efficient hardware operation on
+this laptop, not a same-GPU framework comparison or full hardware acceptance.
+
+Raw results are `intel-physical-final-*.log`, summarized with executable hashes in
+`intel-physical-comparison.json`. `intel-hardware-inventory.log` records the
+hardware and Mesa version; the inspected Blade initialization source is preserved
+as `blade-0.9.0-vulkan-init.rs`. The reproduction scripts are retained alongside
+the earlier drivers. `intel-physical-final-host-restored.json` confirms the
+temporary floating-window rule was removed and the original configuration
+restored byte for byte. No driver, production executable or application code was
+changed for this follow-up.
+An additional physical idle smoke test also passed with the Vulkan driver and
+software-rendering overrides removed (`intel-default-smoke-qualified.log`);
+normal launch does not require those benchmark settings.
 
 ### Combined checkpoint: runtime, upstream alignment and follow-up work (2026-10-26)
 
