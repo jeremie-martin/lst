@@ -93,17 +93,17 @@ fn captured_scope_keeps_disjoint_ranges_through_navigation_edits_and_history() -
         editor.keys("<enter><enter><enter>")?;
         expect_scoped_matches(&mut editor, "foo", 2)?;
         editor.keys("<esc><C-home>prefix ")?;
-        expect_scoped_matches(&mut editor, "foo", 2)?;
+        expect_reopened_scoped_matches(&mut editor, "foo", 2)?;
         editor.keys("<C-h><tab>longer<C-A-enter>")?;
         expect_scoped_matches(&mut editor, "foo", 0)?;
         editor.save_then_expect_file(&path, "prefix longer foo longer")?;
         editor.keys("<C-f><C-a>longer")?;
         expect_scoped_matches(&mut editor, "longer", 2)?;
         editor.keys("<esc><C-z>")?;
-        expect_scoped_matches(&mut editor, "longer", 0)?;
+        expect_reopened_scoped_matches(&mut editor, "longer", 0)?;
         editor.save_then_expect_file(&path, "prefix foo foo foo")?;
         editor.keys("<C-y>")?;
-        expect_scoped_matches(&mut editor, "longer", 2)?;
+        expect_reopened_scoped_matches(&mut editor, "longer", 2)?;
         editor.save_then_expect_file(&path, "prefix longer foo longer")?;
         Ok(())
     })
@@ -119,7 +119,7 @@ fn captured_scope_tracks_history_from_before_capture_and_restores_deleted_ranges
         editor.keys("<C-home><C-v><C-g>1:12<enter><S-right><S-right><S-right>")?;
         editor.expect_selection_ranges(&[(11, 14)])?;
         editor.keys("<C-h><A-s><esc><C-z>")?;
-        expect_scoped_matches(&mut editor, "foo", 1)?;
+        expect_reopened_scoped_matches(&mut editor, "foo", 1)?;
         editor.keys("<f3>")?;
         editor.expect_cursor_heads(&[(0, 4)])?;
         editor.save_then_expect_file(&path, "foo foo foo")?;
@@ -127,19 +127,19 @@ fn captured_scope_tracks_history_from_before_capture_and_restores_deleted_ranges
         editor.expect_cursor_heads(&[(0, 11)])?;
         editor.save_then_expect_file(&path, "prefix foo foo foo")?;
         editor.keys("<S-right><S-right><S-right><bs>")?;
-        expect_scoped_matches(&mut editor, "foo", 0)?;
+        expect_reopened_scoped_matches(&mut editor, "foo", 0)?;
         editor.save_then_expect_file(&path, "prefix foo  foo")?;
         editor.keys("<C-z>")?;
-        expect_scoped_matches(&mut editor, "foo", 1)?;
+        expect_reopened_scoped_matches(&mut editor, "foo", 1)?;
         editor.save_then_expect_file(&path, "prefix foo foo foo")?;
         editor.keys("<C-y>")?;
-        expect_scoped_matches(&mut editor, "foo", 0)?;
-        editor.keys("<C-f><A-s><esc><C-z>")?;
+        expect_reopened_scoped_matches(&mut editor, "foo", 0)?;
+        editor.keys("<C-f><A-s><esc><C-z><C-f><C-a>foo")?;
         editor.wait_state("undo does not reactivate a disabled scope", secs(5), |record| {
             record.find.scope == "document" && record.find.match_count == 3
         })?;
-        editor.keys("<C-g>1:8<enter><S-right><S-right><S-right><C-h><A-s><esc><C-y>")?;
-        expect_scoped_matches(&mut editor, "foo", 1)?;
+        editor.keys("<esc><C-g>1:8<enter><S-right><S-right><S-right><C-h><A-s><esc><C-y>")?;
+        expect_reopened_scoped_matches(&mut editor, "foo", 1)?;
         editor.keys("<f3>")?;
         editor.expect_cursor_heads(&[(0, 7)])?;
         editor.save_then_expect_file(&path, "prefix foo  foo")?;
@@ -156,7 +156,7 @@ fn captured_scope_clears_on_tab_switch_and_cannot_activate_without_selected_text
         let mut editor = session.open_files("scope-tab-switch", &[a, b])?;
         editor.keys("<C-home><C-d><C-h><A-s>")?;
         expect_scoped_matches(&mut editor, "foo", 1)?;
-        editor.keys("<esc><C-tab>")?;
+        editor.keys("<esc><C-tab><C-f><C-a>foo")?;
         editor.wait_state("tab switch clears captured scope", secs(5), |record| {
             record.active_tab_index == 1 && record.find.scope == "document" && record.find.match_count == 3
         })?;
@@ -164,7 +164,7 @@ fn captured_scope_clears_on_tab_switch_and_cannot_activate_without_selected_text
         editor.wait_state("empty selections cannot enable scope", secs(5), |record| {
             record.find.query == "foo!" && record.find.scope == "document"
         })?;
-        editor.keys("<C-a>foo<esc><C-S-tab>")?;
+        editor.keys("<C-a>foo<esc><C-S-tab><C-f><C-a>foo")?;
         editor.wait_state("returning does not resurrect the old capture", secs(5), |record| {
             record.active_tab_index == 0 && record.find.scope == "document" && record.find.match_count == 2
         })?;
@@ -203,7 +203,7 @@ fn captured_scope_follows_an_alternate_redo_branch_from_a_different_fork_positio
         editor.keys("<C-v><C-g>1:11<enter><S-right><S-right><S-right>")?;
         editor.expect_selection_ranges(&[(10, 13)])?;
         editor.keys("<C-h><A-s><esc><C-A-y><C-y>")?;
-        expect_scoped_matches(&mut editor, "foo", 1)?;
+        expect_reopened_scoped_matches(&mut editor, "foo", 1)?;
         editor.keys("<f3>")?;
         editor.expect_cursor_heads(&[(0, 8)])?;
         editor.save_then_expect_file(&path, "old foo foo")?;
@@ -215,6 +215,16 @@ fn captured_scope_follows_an_alternate_redo_branch_from_a_different_fork_positio
         editor.save_then_expect_file(&path, "old foo foo")?;
         Ok(())
     })
+}
+
+// Hidden Find retains its query and captured scope, but computes results on demand.
+// Observe the reopened panel, then return focus to the document for history/editing.
+fn expect_reopened_scoped_matches(editor: &mut Editor<'_>, query: &str, count: usize) -> SupportResult<()> {
+    editor.keys("<C-f><C-a>")?;
+    editor.keys(query)?;
+    expect_scoped_matches(editor, query, count)?;
+    editor.keys("<esc>")?;
+    Ok(())
 }
 
 fn expect_scoped_matches(editor: &mut Editor<'_>, query: &str, count: usize) -> SupportResult<()> {

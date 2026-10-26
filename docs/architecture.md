@@ -86,7 +86,10 @@ existing line-ending style, with LF as the default for a document without one.
 Find navigation searches from the current caret and wraps. An exactly selected
 match supplies its start as the origin, so backward navigation advances past
 that match too. Empty regex matches participate in the ordered index; strict
-next/previous position comparisons ensure progress.
+next/previous position comparisons ensure progress. Hidden Find retains its query,
+but document changes clear obsolete result ranges instead of rescanning the buffer.
+Opening the panel, navigating matches, or explicitly selecting matches validates
+and rebuilds the revision-keyed index on demand.
 
 Find-in-selection belongs to the document. It captures the union of all
 nonempty selections, independently of later caret movement, query changes,

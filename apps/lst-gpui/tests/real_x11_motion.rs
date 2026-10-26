@@ -290,14 +290,15 @@ fn smooth_cursor_diagonal_navigation_lands_and_stops_repainting() -> TestResult 
 #[ignore = "requires a real X11 display plus xclip"]
 fn held_perpendicular_arrows_repeat_on_both_axes_and_release_cleanly() -> TestResult {
     support::run_x11_test("held-diagonal-arrows", |session| {
-        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\nsmooth_cursor = true\n")?;
+        session
+            .seed_settings("version = 1\n[editor]\ncursor_blink = false\nsmooth_cursor = true\nword_wrap = false\n")?;
         let text = format!("{}\n", "x".repeat(100)).repeat(80);
         let path = session.seed_file("held-arrows.txt", &text)?;
         let mut editor = session.open_file("held-arrows", &path)?;
         for (horizontal, dx) in [(XK_LEFT, -1isize), (XK_RIGHT, 1)] {
             for (vertical, dy) in [(XK_UP, -1isize), (XK_DOWN, 1)] {
                 for horizontal_first in [true, false] {
-                    editor.keys(&format!("<C-home>{}{}", "<down>".repeat(15), "<right>".repeat(15)))?;
+                    editor.keys("<C-g>16:16<enter>")?;
                     let initial = editor.expect_cursor_heads(&[(15, 15)])?.cursors[0];
                     let (first, second) = if horizontal_first {
                         (horizontal, vertical)
@@ -343,11 +344,12 @@ fn held_perpendicular_arrows_repeat_on_both_axes_and_release_cleanly() -> TestRe
 #[ignore = "requires a real X11 display plus xclip"]
 fn held_diagonal_arrows_cross_blank_lines_without_cancelling_vertical_motion() -> TestResult {
     support::run_x11_test("held-arrows-blank-lines", |session| {
-        session.seed_settings("version = 1\n[editor]\ncursor_blink = false\nsmooth_cursor = true\n")?;
+        session
+            .seed_settings("version = 1\n[editor]\ncursor_blink = false\nsmooth_cursor = true\nword_wrap = false\n")?;
         let text = format!("{}\n\n", "x".repeat(100)).repeat(20);
         let path = session.seed_file("paragraphs.txt", &text)?;
         let mut editor = session.open_file("held-arrows-blank-lines", &path)?;
-        editor.keys(&format!("<C-home>{}{}", "<down>".repeat(12), "<right>".repeat(15)))?;
+        editor.keys("<C-g>13:16<enter>")?;
         editor.expect_cursor_heads(&[(12, 15)])?;
 
         let mut held = HeldKeys::new()?;
