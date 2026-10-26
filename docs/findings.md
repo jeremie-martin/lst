@@ -575,7 +575,7 @@ add caching, pooling or another layer.
   No retained cache, invalidation protocol or extra source lines were added. Isolated
   release measurements at 10/50/200/1,000 unique tabs show the computation improves
   across the range; this does not claim an end-to-end frame speedup. Fast all-feature
-  tests pass; combined X11 acceptance remains pending. Source, individual runs and
+  tests pass; final combined X11 results are recorded below. Source, individual runs and
   methodology: `/home/holo/agent-exports/foundation-costs-2026-10-25`.
 
 - [x] **Resolved (2026-10-25):** Syntax changes can unnecessarily remeasure
@@ -1082,8 +1082,9 @@ warranted, record why and continue directly with the remaining findings and
 optional assessments; resume that work after any upgrades as well. The focused
 typing-performance follow-up remains deferred until the foundation work is done.
 
-- [ ] **Upstream review and rebasing:** Implementation candidate prepared; acceptance
-  remains pending the full display gates. Controlled comparison is complete:
+- [x] **Implemented and validated (2026-10-26):** Released dependency alignment is
+  accepted with the combined verification and fixture corrections recorded below.
+  Controlled comparison is complete:
   typing latency medians 20.445 → 18.179 ms, large typing 1.529 → 1.309 ms/character,
   Markdown paste 50.625 → 51.470 ms, idle CPU zero in both. One priming and three
   measured runs used the same runner and software Vulkan display, without concurrent
@@ -1100,10 +1101,11 @@ typing-performance follow-up remains deferred until the foundation work is done.
   - Upgrade Tree-sitter 0.26.8 to 0.27.1. Its parser/query and Rust API fixes are useful;
     grammar ABIs remain supported. The changed-range optimization applies unchanged
     and remains absent from upstream master, so retain that single patch.
-  - All-feature tests pass on the candidate. Real-app launch exposed and verified the
-    WGSL adjustments; focused runtime/presentation checks pass except one resize
-    timeout whose three isolated reruns pass. Do not count the upgrade accepted until
-    the broad gates, visual review and performance evidence are complete.
+  - Real-app launch exposed and verified the WGSL adjustments. The initial focused
+    resize timeout and three successful isolated reruns remain in the evidence.
+    The harness now distinguishes an unchanged-size request from a resize requiring
+    new painted geometry; repeated-size coverage passes on both displays. Final
+    all-feature, behavior, visual and fault-detection results are recorded below.
 
 
 ## Deferred performance follow-up
@@ -1296,6 +1298,52 @@ intentional behavior as a defect.
 
 ## Verification and evidence
 
+### Combined checkpoint: runtime, upstream alignment and follow-up work (2026-10-26)
+
+- Committed the runtime boundary batch, released Blade/Tree-sitter alignment, fresh
+  field sessions and stronger acceptance observations. Continued with borrowed,
+  single-pass tab labels; on-demand hidden Find indexing; shared ASCII line-ending
+  scanning; supported microphone formats and credential normalization; and readable
+  selected Settings labels. Optional assessments retain their individual dispositions
+  above. The remaining unchecked findings and unassessed opportunities stay in scope.
+- Production source stayed at `cdb4697` throughout combined validation. Later commits
+  changed only the harness, tests and documentation. Final all-feature tests: 218
+  passed, zero failed. Harness tests: 32 passed. Formatting, whitespace checks and
+  all-target/all-feature Clippy pass with existing warnings only.
+- Full nested behavior run: 335 passed, zero failed, no retries, in 3,006 seconds.
+  It used the corrected tests from `e73d88b` and the same production binary as the
+  physical run. Both use software Vulkan; these are acceptance results, not timings
+  suitable for a performance comparison.
+- Full physical behavior run: 329 passed and six failed in 3,934 seconds. Two held-arrow
+  fixtures unintentionally wrapped at this display width; four captured-scope cases
+  asserted materialized matches while Find was hidden. The corrected fixtures set
+  their intended unwrapped geometry and observe results through the reopened panel,
+  while retaining saved-text, replacement, navigation and history assertions.
+  All six pass in the focused physical rerun and in the full nested run. The focused
+  physical run passed nine tests; its final unchanged document-scope replacement case
+  was deliberately cancelled to avoid lock-wait interference. That unchanged case
+  passed in both full runs. There is no unexplained behavior-test failure remaining.
+- All ten physical visual scenarios match the pre-change `187c120` binary exactly
+  and repeat across three fresh launches. Both binaries were captured at 1200×900
+  on this host; the repository's differently sized baseline images were not replaced.
+  Separate Dark/Light Settings captures document the intentional contrast improvement.
+  The pre-change fractional-height border observation remains open above.
+- Six deliberately broken binaries produce all 36 expected observations across the
+  physical and nested displays: 14 targeted failures and 22 passing controls. The
+  temporary, test-window-only floating rule was removed and the host window-manager
+  configuration restored byte-for-byte. Nested resources were torn down normally.
+- The original combined qualification report remains failed because it includes the
+  six original physical fixture failures. It has not been overwritten or relabeled as
+  a clean run. `reconciled-validation.json` records the successful corrections, exact
+  source revisions and evidence hashes, and checks that production source is unchanged.
+  Logs, JUnit reports, baseline captures and the reconciliation script are retained in
+  `/home/holo/agent-exports/foundation-combined-2026-10-26`.
+- Controlled upgrade measurements remain in `foundation-upstream-2026-10-25`;
+  isolated tab-label/Find measurements in `foundation-costs-2026-10-25`; Settings
+  comparisons in `foundation-polish-2026-10-26`. These establish the specific results
+  described above, not a general speedup. Startup timing remains unqualified, and
+  the focused sustained-typing follow-up remains deferred.
+
 ### Implementation checkpoint: field sessions and observable acceptance (2026-10-25)
 
 - Fresh field sessions clear local history; ordinary model synchronization preserves it.
@@ -1309,8 +1357,8 @@ intentional behavior as a defect.
 - All 219 fast all-feature tests, 32 harness tests, Clippy and formatting pass (only
   existing warnings). The first close-prompt check used the wrong input helper and
   timed out waiting for an intentionally absent state change; the corrected case
-  uses send_keys_settle plus the resize observation and passes. Full combined
-  acceptance and runtime environment qualification remain pending.
+  uses send_keys_settle plus the resize observation and passes. Final combined
+  acceptance and runtime environment results are recorded in the checkpoint above.
 - Evidence: `/home/holo/agent-exports/foundation-acceptance-2026-10-26` contains
   focused/scaled logs, the old-binary failure and fast/tooling results.
 - The final save boundary also checks that an external version written after staging
@@ -1320,8 +1368,8 @@ intentional behavior as a defect.
 ### Implementation checkpoint: launch and X11 runtime boundaries (2026-10-25)
 
 - Ten runtime/tooling entries implemented or audited; physical clipboard-owner
-  hygiene assessed and documented. The broader acceptance and environment
-  qualification gates remain pending at this implementation checkpoint.
+  hygiene assessed and documented. The final combined checkpoint above records
+  broader acceptance and environment verification, including fixture corrections.
 - Four new real-app cases pass. Fast all-feature tests, harness tests, the ten
   Python tooling tests and the three standalone vendor timing tests pass; Clippy
   reports only existing warnings. All three vendor patches apply to the pinned
@@ -1330,9 +1378,10 @@ intentional behavior as a defect.
   without Composite, and complete nested-runner teardown on SIGTERM and SIGHUP.
   The standard hidden-window test uses unmapping because Composite ARGB windows
   on this server continue to report unobscured visibility beneath another window.
-- Evidence and final broad-gate results will be appended before this batch is
-  considered accepted. Upstream alignment follows this batch; performance
-  optimization remains deferred until the remaining foundation work is assessed.
+- Runtime probes are retained in `foundation-runtime-2026-10-25`; final broad-gate
+  results are recorded above. Upstream alignment and subsequent foundation work are
+  committed. Focused typing optimization remains deferred until the remaining
+  foundation work is assessed.
 
 ### Implementation checkpoint: syntax and text presentation (2026-10-25)
 
