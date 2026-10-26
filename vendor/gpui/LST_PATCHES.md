@@ -79,10 +79,10 @@ Every change is marked `lst patch` in the source.
    paint 0.34 -> 0.22 ms per frame; scrolling CPU -18%. Pixel-identical.
 
 8. **Raster-only GPU context** (`src/platform/blade/blade_context.rs`). GPUI
-   does not use ray tracing. Explicitly disable it using the narrow upstream
-   Blade backport documented in `../blade-graphics/LST_PATCHES.md`, avoiding
-   unnecessary driver initialization. Keep this flag when upgrading Blade;
-   the backport itself can then be removed.
+   does not use ray tracing. Explicitly disable it using released Blade 0.9's
+   `ContextDesc::ray_tracing` option, avoiding unnecessary driver initialization.
+   The former Blade backport and vendor copy have been removed. Retain the flag
+   while using the Blade backend; reassess it if migrating to another renderer.
 
 9. **Ignore unchanged X11 geometry** (`src/platform/linux/x11/window.rs`).
    Some WMs repeatedly send identical synthetic ConfigureNotify messages.
@@ -128,10 +128,18 @@ warnings that become visible when a registry dependency is built as a path depen
 
 ## Released dependency alignment (2026-10-25)
 
-GPUI 0.2.2 remains the latest non-yanked crates.io release. Zed main has split
-platform code into separate workspace crates; adopting that unreleased platform
-migration is a separate GPUI upgrade, not a drop-in release rebase. The numbered
-local patches remain on the released base, with their removal criteria above.
+GPUI 0.2.2 remains the latest non-yanked release under the exact crates.io package
+name `gpui`, published on 2025-10-22. Follow-up review on 2026-10-26 found newer
+published upstream snapshots under `gpui-pre-*` (currently 0.3.10). They split
+platform code into separate crates and use wgpu on Linux. Migrating is a separate
+GPUI upgrade, not a drop-in version bump. The numbered local patches remain on
+the existing base until that migration is assessed in `docs/findings.md`.
+
+The inspected 0.3.10 snapshot already sorts sprites by texture, so patch 5 has an
+upstream equivalent. Blade-specific resource changes need fresh assessment against
+wgpu rather than mechanical porting. Clipboard polling, RandR resource-query failure
+and legacy title encoding still warrant attention in the inspected X11 source.
+These observations do not establish candidate behavior or performance in lst.
 
 The Blade adapter now uses `blade-graphics` 0.9.0 and `blade-util` 0.5.0.
 The released `ContextDesc::ray_tracing` option supersedes our c7edf7b6 backport,

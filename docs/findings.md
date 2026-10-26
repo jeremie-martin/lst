@@ -1082,7 +1082,7 @@ warranted, record why and continue directly with the remaining findings and
 optional assessments; resume that work after any upgrades as well. The focused
 typing-performance follow-up remains deferred until the foundation work is done.
 
-- [x] **Implemented and validated (2026-10-26):** Released dependency alignment is
+- [x] **Implemented and validated (2026-10-26):** Blade and Tree-sitter release alignment is
   accepted with the combined verification and fixture corrections recorded below.
   Controlled comparison is complete:
   typing latency medians 20.445 → 18.179 ms, large typing 1.529 → 1.309 ms/character,
@@ -1091,9 +1091,10 @@ typing-performance follow-up remains deferred until the foundation work is done.
   tests/builds. These short runs establish no clear regression, not a speedup claim.
   Startup first-present still times out on the baseline and remains unqualified.
   Evidence: `/home/holo/agent-exports/foundation-upstream-2026-10-25`.
-  - GPUI 0.2.2 is still the newest non-yanked registry release. Retain that released
-    base and its documented patches; upstream main now splits platform work into
-    additional workspace crates, requiring a separate unreleased-platform migration.
+  - GPUI 0.2.2 remains the newest non-yanked release under the exact package name
+    `gpui`, but that release dates to 2025-10-22. This does not establish current
+    upstream alignment: newer published snapshots use the `gpui-pre-*` names.
+    The existing base remains in use pending the separate migration assessment below.
   - Upgrade Blade graphics 0.7.1 to 0.9.0 and blade-util 0.3.0 to 0.5.0. The released
     ray-tracing opt-in replaces our backport, allowing removal of the entire Blade
     vendor copy and workspace override. GPUI needs only explicit descriptor fields,
@@ -1106,6 +1107,60 @@ typing-performance follow-up remains deferred until the foundation work is done.
     The harness now distinguishes an unchanged-size request from a resize requiring
     new painted geometry; repeated-size coverage passes on both displays. Final
     all-feature, behavior, visual and fault-detection results are recorded below.
+
+- [ ] **Reopened GPUI upstream assessment (2026-10-26):** The previous review checked
+  the `gpui` release channel too narrowly. The app directly uses our patched Zed
+  GPUI 0.2.2; neither GPUI Kit nor its component/base crates are dependencies.
+  Longbridge's GPUI Kit 0.8.0 was published on October 19. Its UI components and
+  editor integration are a separate adoption decision, not our framework upgrade.
+  Its release pins gpui-pre 0.3.9; the registry now publishes gpui-pre and
+  gpui-pre-platform 0.3.10, released October 26. Published metadata identifies the
+  snapshot as Zed `08cbb88a152c3751a43e853425a70e9f631a5918`.
+  Source inspection confirms separate platform crates, Linux's migration from Blade
+  to wgpu, and upstream texture-based sprite sorting matching our local optimization.
+  This provides concrete reasons to evaluate migration and retire superseded patches.
+  The snapshot still has a 1 ms clipboard polling sleep, returns without a refresh
+  timer on a RandR resource-query error, and writes UTF-8 bytes to legacy WM_NAME;
+  do not discard our corresponding contracts merely because the base is newer.
+  These are source observations, not fresh end-to-end failures on the candidate.
+  GPUI Fast 0.1.11 is also published: a separate experimental fork with incremental
+  layout/rendering and scroll retention. Assess it separately against current upstream
+  and lst workloads; its published benchmark results do not establish gains for lst.
+  Treat this as an architecture assessment: the current patched stack, current
+  upstream GPUI, GPUI Fast, and adoption of Base/Kit components are candidates.
+  Core selection and component adoption are separate decisions; Kit supports an
+  optional Fast backend. Existing implementation effort does not favor retaining a
+  design, and activity/version numbers alone do not favor replacing it.
+  Base supplies reusable interaction behavior with application-owned presentation;
+  Component supplies styled controls; Kit bundles these layers. Ordinary inputs,
+  menus, dialogs, lists and Settings are concrete reuse opportunities. lst's shared
+  input-field module alone is about 1,600 lines including its tests; this is an
+  inventory observation, not an estimate of removable code. Kit's external-editor
+  host accepts a BlockNode tree and returns leaf geometry while the host keeps its
+  document model. It explicitly is not a complete visual-caret navigation API, so
+  its fit for lst's virtualized code viewport still needs evidence.
+  Compare total maintained complexity, including adapters, duplicate state, local
+  patches and upgrade burden, as well as usability, accessibility and performance.
+  The existing editor contracts and acceptance cases provide the comparison baseline;
+  implementations may change where that demonstrably improves the design. Prototype
+  representative field/popup interaction and document rendering before selecting a
+  stack. Keep editor-domain ownership explicit, and require individual patch
+  dispositions, real-app acceptance and controlled rendering, input, clipboard,
+  startup and memory comparisons before adopting a candidate. Fast's retained
+  rendering also requires checking our interior-mutable caches and notifications;
+  its dependency tracking does not automatically observe every external mutation.
+  Snapshot families must be pinned together at exact versions. Kit's current pin is
+  not evidence that a newer snapshot passes its tests: its publishing policy reports
+  compatibility results but permits snapshot publication even when validation fails.
+  Sources: [Kit 0.8.0](https://github.com/longbridge/gpui-kit/releases/tag/v0.8.0),
+  [snapshot policy](https://github.com/longbridge/gpui-kit/blob/main/CONTRIBUTING.md#gpui-and-gpui-kit),
+  [gpui-pre 0.3.10](https://crates.io/crates/gpui-pre/0.3.10),
+  [Base architecture](https://github.com/longbridge/gpui-kit/blob/main/docs/ARCHITECTURE.md),
+  [external editor host](https://github.com/longbridge/gpui-kit/blob/main/crates/base/src/text/editor_host.rs),
+  [GPUI Fast](https://github.com/longbridge/gpui-fast),
+  [retained rendering](https://github.com/longbridge/gpui-fast/blob/main/docs/retained-mode.md).
+  Registry metadata and inspected package sources are retained in
+  `/home/holo/agent-exports/foundation-gpui-review-2026-10-26`.
 
 
 ## Deferred performance follow-up
