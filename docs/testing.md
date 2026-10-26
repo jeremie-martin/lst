@@ -108,6 +108,20 @@ replace CLIPBOARD and PRIMARY; they do not restore the user's prior selections.
 A selection owner must remain alive to serve its last contents. Nested-display
 teardown ends those owners along with the private display.
 
+The physical window manager must allow the tests' client-size requests. A tiled
+window can correctly ignore `wmctrl` resizing, which is an environment mismatch,
+not an editor timeout. For LWM, a temporary floating rule can match only class
+`^lst$` and title `^lst-real-x11-.*$`; restore the configuration afterward. LWM
+matches the complete title, so a prefix alone does not match. The nested fixture
+already provides floating test windows.
+
+Visual comparisons also require the same window size, scale and renderer. If the
+host differs from the checked-in baseline environment, capture the pre-change
+application into a separate `LST_VISUAL_BASELINE_DIR`, verify its repeatability,
+then compare the candidate against that directory. Record both binary hashes and
+the display setup. Do not regenerate expected images from the candidate merely
+to accommodate a mismatched host.
+
 SIGTERM and SIGHUP unwind both runner entry points through normal cleanup,
 including their command groups, window manager, Xephyr and private D-Bus daemon.
 SIGKILL cannot run cleanup. The harness releases server-reported pressed keys

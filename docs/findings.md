@@ -860,6 +860,13 @@ changing code. Rejection is a valid outcome.
   action. No new missed-action failure was established. Avoid inventing a general
   acknowledgement layer without a reproducer.
 
+- [x] **Implemented (2026-10-26):** Clipboard retry coverage waited for a scratchpad
+  to remain dirty after typing, racing its correct autosave. Discovered on the
+  physical qualification lane. The trace and file contained the complete new
+  payload, but the transient modified flag had already cleared. The test now
+  verifies the new saved bytes and cleared quit warning before requesting quit
+  again; the subsequent renewed warning still proves the old bypass was invalidated.
+
 - [x] **Implemented (2026-10-26):** An unchanged window-size request can time out
   waiting for viewport dimensions to change. Discovered during qualification review.
   Resolution: check actual server geometry before requesting the resize. A no-op
@@ -882,6 +889,15 @@ changing code. Rejection is a valid outcome.
   Review: Adding draws inside the drain loop can prolong it, but actual foreground-task
   starvation under sustained input has not been demonstrated. A scheduling rewrite is
   not yet justified.
+
+- [ ] **Observed on the pre-change binary (2026-10-26):** Physical Light screenshots
+  can differ by one status-border row between fresh launches at 1100×800 and 150%
+  scale. The first five visual scenarios repeat exactly at 1200×900, which has an
+  integral logical height. Determine whether fractional geometry exposes cached
+  layout or rasterization drift; the cause is not yet established. Keep exact
+  comparisons rather than introduce a pixel tolerance. Failed captures and the
+  pre-change binary identity are retained under
+  `/home/holo/agent-exports/foundation-combined-2026-10-26`.
 
 - [x] **Implemented (2026-10-25):** RandR failure can leave the app without a refresh timer. (C78)
   Review: The screen-resource error branch returns without installing a refresh timer.
@@ -968,12 +984,16 @@ with different semantics. No blanket refactoring or new subsystem is implied.
   error is tracked separately; sharing helpers is optional.
   Disposition: Settings category and search clicks now use the existing shared click_trace_bounds_center helper. No new coordinate abstraction was introduced.
 
-- **Optional:** GraphemeCell's increased size adds per-cell memory cost. Assess its
-  impact; the suggested narrower integer representation is not a correctness
-  requirement. (23/EF7)
-  Review: Current GraphemeCell is 32 bytes on this 64-bit target. Narrowing offsets
-  introduces representable-size constraints; no current benefit justifies that choice by
-  itself.
+- [x] **Retained after review (2026-10-26):** GraphemeCell's wide offsets. (23/EF7)
+  Disposition: cells are temporary line-local working data, not a retained document
+  index. At 32 bytes per cell, 80 cells occupy 2.5 KiB of element storage; a million
+  cells occupy about 30.5 MiB, so very long lines remain a meaningful workload.
+  Ordinary short ASCII wrap counting skips cell construction, regex indexing builds
+  cells only for lines with matches, and word motions replace their current line's
+  cells as they traverse. Keep native offsets and unbounded grapheme lengths rather
+  than introduce narrower-type limits. If long-line memory is measured as a problem,
+  target materialization in the consuming algorithm, not arbitrary offset narrowing.
+  These are allocation-size calculations and source review, not peak-RSS measurements.
 
 - [x] **Assessed (2026-10-26):** Test boundaries reviewed individually. (October 24 K4, K5, K8)
   Disposition: retain public BufferDelta replay as a consumer-equivalence contract.

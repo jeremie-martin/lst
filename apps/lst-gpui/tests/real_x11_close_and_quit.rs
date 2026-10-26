@@ -334,8 +334,9 @@ fn clipboard_owner_retry_preserves_completed_discard_decisions() -> TestResult {
         // retry clipboard ownership rather than carrying the old bypass into
         // different scratchpad content.
         editor.keys(" changed after warning")?;
+        editor.expect_file(&scratchpad_path, "scratchpad clipboard fallback changed after warning")?;
         editor.wait_state("changed clipboard payload", secs(4), |record| {
-            record.active_tab_modified && !record.status_message.contains("Press Ctrl+Q again")
+            !record.status_message.contains("Press Ctrl+Q again")
         })?;
         editor.press(KeyChord::Ctrl(Key::Char('q')))?;
         editor.wait_state("discard is reviewed again for a new quit attempt", secs(4), |record| {
