@@ -866,6 +866,8 @@ changing code. Rejection is a valid outcome.
   payload, but the transient modified flag had already cleared. The test now
   verifies the new saved bytes and cleared quit warning before requesting quit
   again; the subsequent renewed warning still proves the old bypass was invalidated.
+  Removed the same redundant dirty-state wait from recent-file content coverage;
+  its saved-text and completed-autosave checks already establish the required state.
 
 - [x] **Implemented (2026-10-26):** An unchanged window-size request can time out
   waiting for viewport dimensions to change. Discovered during qualification review.

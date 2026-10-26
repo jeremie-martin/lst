@@ -203,7 +203,6 @@ fn recent_panel_content_query_finds_open_autosaved_scratchpad() -> TestResult {
         let scratchpad_text = path_text(&scratchpad);
 
         editor.keys("unique open scratchpad phrase")?;
-        editor.wait_state("scratchpad edit applied", secs(5), |record| record.active_tab_modified)?;
         editor.expect_file(&scratchpad, "unique open scratchpad phrase")?;
         editor.wait_state("open scratchpad autosaved", secs(5), |record| {
             !record.active_tab_modified
