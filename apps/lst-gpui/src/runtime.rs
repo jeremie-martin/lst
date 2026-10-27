@@ -5,7 +5,6 @@ use lst_editor::{
 };
 use rfd::FileDialog;
 use std::{
-    collections::HashSet,
     ffi::{OsStr, OsString},
     fs, io,
     io::Write,
@@ -28,9 +27,11 @@ use lst_editor::UndoBoundary;
 use std::ops::Range;
 
 mod clipboard;
+pub(crate) mod save_coordinator;
 mod scratchpad;
 
 use clipboard::persist_clipboards_after_exit;
+use save_coordinator::WriteKind;
 pub(crate) use scratchpad::create_scratchpad_note;
 use scratchpad::{remove_previous_scratchpad_after_save_as, remove_scratchpad_file_if_unreferenced};
 
@@ -247,7 +248,7 @@ enum SaveGuard {
 }
 
 #[derive(Debug)]
-pub(crate) struct QueuedSaveJob {
+struct QueuedSaveJob {
     tab_id: TabId,
     path: PathBuf,
     body: String,
@@ -533,13 +534,12 @@ impl LstGpuiApp {
         expectation: SaveExpectation,
         cx: &mut Context<Self>,
     ) {
-        if !can_start_autosave_job(self.model.tabs(), &self.autosave_inflight, tab_id, &path, revision) {
+        if !autosave_revision_is_current(self.model.tabs(), tab_id, &path, revision) {
             return;
         }
-        if self.save_inflight.contains_key(&path) || self.queued_saves.contains_key(&path) {
+        let Some(ticket) = self.saves.begin(&path, WriteKind::Autosave) else {
             return;
-        }
-        let ticket = self.issue_save_ticket(&path);
+        };
         let job = AutosaveJob {
             tab_id,
             path,
@@ -548,7 +548,6 @@ impl LstGpuiApp {
             expectation,
             ticket,
         };
-        self.autosave_inflight.insert(job.path.clone());
         let inflight_path = job.path.clone();
         let completion_ticket = job.ticket.clone();
         cx.spawn(async move |this, cx| {
@@ -566,7 +565,7 @@ impl LstGpuiApp {
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {
-                view.autosave_inflight.remove(&inflight_path);
+                view.saves.finish(&inflight_path, WriteKind::Autosave);
                 // A newer save can be issued after this job commits but
                 // before its background result reaches the UI thread. Do not
                 // let that older completion regress the model's saved body or
@@ -596,8 +595,8 @@ impl LstGpuiApp {
             revision,
             kind,
         };
-        if self.path_write_inflight(&job.path) {
-            self.queue_save_job(job);
+        if self.saves.busy(&job.path) {
+            self.saves.queue(job);
             cx.notify();
             return;
         }
@@ -605,8 +604,8 @@ impl LstGpuiApp {
     }
 
     fn start_save_job(&mut self, job: QueuedSaveJob, deferred: bool, cx: &mut Context<Self>) {
-        if self.path_write_inflight(&job.path) {
-            self.queue_save_job(job);
+        if self.saves.busy(&job.path) {
+            self.saves.queue(job);
             return;
         }
         let QueuedSaveJob {
@@ -638,8 +637,10 @@ impl LstGpuiApp {
             SaveKind::SaveAs { .. } => SaveExpectation::Unguarded,
         };
         let save_options = self.save_text_options();
-        let ticket = self.issue_save_ticket(&path);
-        self.begin_save_inflight(&path);
+        let ticket = self
+            .saves
+            .begin(&path, WriteKind::Save)
+            .expect("save path was checked for an active write");
         let save_started = Instant::now();
         let completion_ticket = ticket.clone();
         cx.spawn(async move |this, cx| {
@@ -663,59 +664,9 @@ impl LstGpuiApp {
         .detach();
     }
 
-    fn path_write_inflight(&self, path: &Path) -> bool {
-        self.save_inflight.contains_key(path) || self.autosave_inflight.contains(path)
-    }
-
-    fn queue_save_job(&mut self, mut job: QueuedSaveJob) {
-        if let Some(previous) = self.queued_saves.remove(&job.path) {
-            if let Some(exit_save) = previous.kind.exit_save() {
-                if previous.tab_id == job.tab_id && job.kind.exit_save().is_none() {
-                    job.kind.set_exit_save(exit_save);
-                } else if previous.tab_id != job.tab_id && job.kind.exit_save().is_none() {
-                    self.queued_saves.insert(previous.path.clone(), previous);
-                    return;
-                }
-            }
-        }
-        self.queued_saves.insert(job.path.clone(), job);
-    }
-
     fn start_queued_save_for_path(&mut self, path: &Path, cx: &mut Context<Self>) {
-        if self.path_write_inflight(path) {
-            return;
-        }
-        if let Some(job) = self.queued_saves.remove(path) {
+        if let Some(job) = self.saves.take_queued(path) {
             self.start_save_job(job, true, cx);
-        }
-    }
-
-    fn issue_save_ticket(&mut self, path: &Path) -> SaveTicket {
-        let current_generation = self
-            .save_ticket_generations
-            .entry(path.to_path_buf())
-            .or_insert_with(|| Arc::new(Mutex::new(0)));
-        SaveTicket::issue(current_generation)
-    }
-
-    fn save_generation_for_path(&self, path: &Path) -> u64 {
-        self.save_ticket_generations
-            .get(path)
-            .map(|generation| *lock_generation(generation))
-            .unwrap_or(0)
-    }
-
-    fn begin_save_inflight(&mut self, path: &Path) {
-        *self.save_inflight.entry(path.to_path_buf()).or_insert(0) += 1;
-    }
-
-    fn finish_save_inflight(&mut self, path: &Path) {
-        let Some(count) = self.save_inflight.get_mut(path) else {
-            return;
-        };
-        *count = count.saturating_sub(1);
-        if *count == 0 {
-            self.save_inflight.remove(path);
         }
     }
 
@@ -729,13 +680,11 @@ impl LstGpuiApp {
             .iter()
             .filter_map(|tab| {
                 let path = tab.path()?.clone();
-                (!self.path_write_inflight(&path) && !self.queued_saves.contains_key(&path)).then_some(
-                    ExternalFileRequest {
-                        tab_id: tab.id(),
-                        path,
-                        expected_stamp: tab.file_stamp(),
-                    },
-                )
+                (!self.saves.pending(&path)).then_some(ExternalFileRequest {
+                    tab_id: tab.id(),
+                    path,
+                    expected_stamp: tab.file_stamp(),
+                })
             })
             .collect::<Vec<_>>();
         if requests.is_empty() {
@@ -763,8 +712,7 @@ impl LstGpuiApp {
             };
             let current = self.model.tab_by_id(request.tab_id);
             if current.is_none_or(|tab| tab.path() != Some(&request.path) || tab.file_stamp() != request.expected_stamp)
-                || self.path_write_inflight(&request.path)
-                || self.queued_saves.contains_key(&request.path)
+                || self.saves.pending(&request.path)
             {
                 continue;
             }
@@ -843,7 +791,7 @@ impl LstGpuiApp {
             // edit must not fail silently: without feedback the status bar
             // keeps the last "Saved" text while nothing was written. A save
             // queued behind this one will re-raise the conflict itself.
-            if explicit_save && exit_save.is_none() && !self.queued_saves.contains_key(&path) {
+            if explicit_save && exit_save.is_none() && !self.saves.queued(&path) {
                 self.update_model(cx, false, |model| {
                     model.save_failed(path.clone(), "document changed while saving; save again".to_string());
                 });
@@ -1051,7 +999,7 @@ impl LstGpuiApp {
             );
             return;
         };
-        let expected_save_generation = self.save_generation_for_path(&path);
+        let expected_save_generation = self.saves.generation(&path);
         cx.spawn(async move |this, cx| {
             let read_path = path.clone();
             let result = cx
@@ -1065,9 +1013,8 @@ impl LstGpuiApp {
                             && tab.path() == Some(&path)
                             && tab.revision() == expected_revision
                             && tab.file_stamp() == expected_stamp
-                    }) && view.save_generation_for_path(&path) == expected_save_generation
-                        && !view.path_write_inflight(&path)
-                        && !view.queued_saves.contains_key(&path);
+                    }) && view.saves.generation(&path) == expected_save_generation
+                        && !view.saves.pending(&path);
                     if still_clean {
                         view.apply_clean_external_file(tab_id, path, text, observed_stamp, cx);
                         view.finish_exit_save_success(exit_save, cx);
@@ -1658,7 +1605,7 @@ impl LstGpuiApp {
         cx: &mut Context<Self>,
     ) {
         let inflight_path = result.path().to_path_buf();
-        self.finish_save_inflight(&inflight_path);
+        self.saves.finish(&inflight_path, WriteKind::Save);
         if !ticket.is_current() {
             self.finish_exit_save_failure(
                 kind.exit_save(),
@@ -2304,16 +2251,6 @@ pub(crate) fn read_file_with_stamp(path: &Path) -> std::io::Result<(String, File
         io::ErrorKind::WouldBlock,
         "file kept changing while it was being read",
     ))
-}
-
-fn can_start_autosave_job(
-    tabs: &[ModelEditorTab],
-    inflight: &HashSet<PathBuf>,
-    tab_id: TabId,
-    path: &Path,
-    revision: u64,
-) -> bool {
-    !inflight.contains(path) && autosave_revision_is_current(tabs, tab_id, path, revision)
 }
 
 pub(crate) fn autosave_revision_is_current(tabs: &[ModelEditorTab], tab_id: TabId, path: &Path, revision: u64) -> bool {

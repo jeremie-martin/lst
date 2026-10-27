@@ -148,7 +148,9 @@ than scattering fallback checks through the core.
   palette metadata; `input.rs` adapts text, IME, and pointer input.
 - `runtime.rs` and `runtime/` execute file, autosave, clipboard, close, and quit
   workflows. Saves use file stamps and generation tickets so stale or
-  conflicting writes cannot silently replace a newer version.
+  conflicting writes cannot silently replace a newer version. A per-path save
+  coordinator owns the active write, deferred explicit save, and generation
+  together, so explicit saves and autosaves cannot run concurrently for a path.
 - `settings.rs` owns the versioned TOML boundary, path validation, and persistence
   errors. Typed settings define the schema; saves patch changed values into the
   original TOML without rebuilding unrelated fields. The persisted document and

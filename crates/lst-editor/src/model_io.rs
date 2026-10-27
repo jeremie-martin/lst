@@ -34,24 +34,16 @@ impl EditorModel {
         let Some(tab) = self.tab_by_id(tab_id) else {
             return;
         };
-        let body = tab.buffer_text();
-        let revision = tab.revision();
         if let Some(path) = tab.path().cloned() {
             self.queue_effect(EditorEffect::SaveFile {
                 tab_id,
                 path,
-                body,
-                revision,
+                body: tab.buffer_text(),
+                revision: tab.revision(),
                 expectation: tab.save_expectation(),
             });
         } else {
-            self.queue_effect(EditorEffect::SaveFileAs {
-                tab_id,
-                suggested_name: tab.display_name().to_owned(),
-                body,
-                revision,
-                previous_scratchpad_path: tab.scratchpad_path().cloned(),
-            });
+            self.request_save_as_tab(tab_id);
         }
     }
 

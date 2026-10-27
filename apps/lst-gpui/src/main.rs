@@ -45,15 +45,7 @@ use ropey::Rope;
 use settings::{InputModeSetting, SettingsStore, ThemePreference};
 use state_trace::StateTraceEmitter;
 use std::{
-    borrow::Cow,
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    ops::Range,
-    path::PathBuf,
-    process,
-    rc::Rc,
-    sync::{Arc, Mutex},
-    time::Instant,
+    borrow::Cow, cell::RefCell, collections::HashMap, ops::Range, path::PathBuf, process, rc::Rc, time::Instant,
 };
 use syntax::{
     syntax_mode_for_language, CachedSyntaxHighlights, LineInvalidation, SyntaxInvalidation, SyntaxLanguage, SyntaxMode,
@@ -392,11 +384,8 @@ struct LstGpuiApp {
     reveal_scheduled: bool,
     smooth_scroll: Option<SmoothScroll>,
     smooth_scroll_scheduled: bool,
-    autosave_inflight: HashSet<PathBuf>,
     autosave_observed_revisions: HashMap<TabId, (u64, Instant)>,
-    save_inflight: HashMap<PathBuf, usize>,
-    queued_saves: HashMap<PathBuf, runtime::QueuedSaveJob>,
-    save_ticket_generations: HashMap<PathBuf, Arc<Mutex<u64>>>,
+    saves: runtime::save_coordinator::SaveCoordinator,
     file_conflicts: HashMap<TabId, FileConflictNotice>,
     autosave_started: bool,
     maintenance_inflight: bool,
@@ -633,11 +622,8 @@ impl LstGpuiApp {
             reveal_scheduled: false,
             smooth_scroll: None,
             smooth_scroll_scheduled: false,
-            autosave_inflight: HashSet::new(),
             autosave_observed_revisions: HashMap::new(),
-            save_inflight: HashMap::new(),
-            queued_saves: HashMap::new(),
-            save_ticket_generations: HashMap::new(),
+            saves: runtime::save_coordinator::SaveCoordinator::default(),
             file_conflicts: HashMap::new(),
             autosave_started: false,
             maintenance_inflight: false,

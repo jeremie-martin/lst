@@ -57,7 +57,7 @@ impl LstGpuiApp {
                         label,
                         modified: tab.modified(),
                         missing: tab.backing_file_missing(),
-                        saving: tab.path().is_some_and(|path| self.save_inflight.contains_key(path)),
+                        saving: tab.path().is_some_and(|path| self.saves.saving(path)),
                         active,
                         show_close: active || self.hovered_tab == Some(ix),
                     }
