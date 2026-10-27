@@ -10,10 +10,9 @@ impl EditorModel {
         let mut opened = 0;
         let mut last_opened = None;
         for (path, text, file_stamp) in files {
-            let id = self.alloc_tab_id();
             last_opened = Some(
                 self.tabs
-                    .push(EditorTab::from_path_with_stamp(id, path, &text, file_stamp)),
+                    .push_new(|id| EditorTab::from_path_with_stamp(id, path, &text, file_stamp)),
             );
             opened += 1;
         }
@@ -191,6 +190,9 @@ impl EditorModel {
             let Some(tab) = self.tab_mut_by_id(tab_id) else {
                 return false;
             };
+            if tab.path() != Some(&path) {
+                return false;
+            }
             let previous_position = tab.cursor_position();
             tab.reset_from_disk_at_path(path.clone(), &text, file_stamp);
             tab.set_cursor_position(previous_position, None);
@@ -203,9 +205,38 @@ impl EditorModel {
         true
     }
     pub fn suppress_file_conflict(&mut self, tab_id: TabId, path: PathBuf, stamp: FileStamp) {
-        if let Some(tab) = self.tab_mut_by_id(tab_id) {
+        if let Some(tab) = self.tab_mut_by_id(tab_id).filter(|tab| tab.path() == Some(&path)) {
             tab.suppress_file_conflict(stamp);
             self.status = format!("Kept local changes for {}.", path.display());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SaveTextOptions;
+
+    #[test]
+    fn old_path_results_cannot_reload_or_suppress_conflicts_after_save_as() {
+        let tab_id = TabId::from_raw(1);
+        let tab = EditorTab::from_path_with_stamp(tab_id, "old.txt".into(), "original", None);
+        let mut model = EditorModel::from_tabs(tab, Vec::new(), "Ready".into());
+        let revision = model.active_tab().revision();
+        let saved_stamp = FileStamp::from_raw(8, Some(1));
+        assert!(model.save_as_finished_for_tab(
+            tab_id,
+            "new.txt".into(),
+            revision,
+            saved_stamp,
+            SaveTextOptions::default().prepare("original".into()),
+        ));
+        let stale_stamp = FileStamp::from_raw(3, Some(2));
+        assert!(!model.reload_tab_from_disk(tab_id, "old.txt".into(), "old".into(), stale_stamp));
+        model.suppress_file_conflict(tab_id, "old.txt".into(), stale_stamp);
+        assert_eq!(model.active_tab().path(), Some(&PathBuf::from("new.txt")));
+        assert_eq!(model.active_tab().buffer_text(), "original");
+        assert_eq!(model.active_tab().file_stamp(), Some(saved_stamp));
+        assert!(!model.active_tab().conflict_suppressed_for(stale_stamp));
     }
 }

@@ -117,6 +117,8 @@ that jump restores the prior capture.
 Core collections encode their invariants:
 
 - `TabSet` always contains a tab and owns active-index and tab-ID validity.
+  It allocates IDs when inserting or replacing tabs and never reuses an ID
+  within a model, including IDs of initially supplied tabs that have closed.
 - `SelectionSet` is non-empty, ordered, non-overlapping, and has a valid primary
   selection.
 - `TextChangeSet` is non-empty, ordered, disjoint, and identifies its primary

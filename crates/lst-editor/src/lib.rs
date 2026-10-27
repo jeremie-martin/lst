@@ -259,9 +259,6 @@ impl EditorModel {
             column_selection: None,
         }
     }
-    fn alloc_tab_id(&mut self) -> TabId {
-        self.tabs.alloc_tab_id()
-    }
     pub fn active_tab(&self) -> &EditorTab {
         self.tabs.active()
     }
@@ -369,11 +366,10 @@ impl EditorModel {
     pub fn overtype(&self) -> bool {
         self.overtype
     }
-    fn new_empty_tab(&mut self) -> EditorTab {
+    fn next_untitled_name(&mut self) -> String {
         let name = format!("{UNTITLED_PREFIX}-{}", self.next_untitled_id);
         self.next_untitled_id += 1;
-        let id = self.alloc_tab_id();
-        EditorTab::empty(id, name)
+        name
     }
     fn activate_tab(&mut self, index: usize) -> bool {
         if !self.tabs.activate(index) {
@@ -591,8 +587,8 @@ impl EditorModel {
             return false;
         }
         if self.tabs.len() == 1 {
-            let tab = self.new_empty_tab();
-            self.tabs.replace_only(tab);
+            let name = self.next_untitled_name();
+            self.tabs.replace_only_with_new(|id| EditorTab::empty(id, name));
             self.active_tab_changed();
             self.queue_focus(FocusTarget::Editor);
             self.status = "Closed tab.".to_string();
@@ -933,15 +929,15 @@ impl EditorModel {
         }
     }
     pub fn new_tab(&mut self) {
-        let tab = self.new_empty_tab();
-        let index = self.tabs.push(tab);
+        let name = self.next_untitled_name();
+        let index = self.tabs.push_new(|id| EditorTab::empty(id, name));
         self.activate_tab(index);
         self.status = "Created a new tab.".to_string();
     }
     pub fn new_scratchpad_tab(&mut self, path: PathBuf, file_stamp: FileStamp) {
-        let id = self.alloc_tab_id();
-        let tab = EditorTab::scratchpad_with_stamp(id, path, file_stamp);
-        let index = self.tabs.push(tab);
+        let index = self
+            .tabs
+            .push_new(|id| EditorTab::scratchpad_with_stamp(id, path, file_stamp));
         self.activate_tab(index);
         self.status = "Created a new scratchpad.".to_string();
     }

@@ -4,7 +4,7 @@ use std::{collections::HashSet, ops::Deref};
 pub(crate) struct TabSet {
     tabs: Vec<EditorTab>,
     active: usize,
-    next_tab_id: u64,
+    ids: TabIds,
 }
 
 impl TabSet {
@@ -12,19 +12,9 @@ impl TabSet {
         let mut tabs = Vec::with_capacity(rest.len() + 1);
         tabs.push(first);
         tabs.extend(rest);
-        repair_duplicate_tab_ids(&mut tabs);
-        let next_tab_id = next_id_after(&tabs);
-        Self {
-            tabs,
-            active: 0,
-            next_tab_id,
-        }
-    }
-
-    pub(crate) fn alloc_tab_id(&mut self) -> TabId {
-        let id = TabId::from_raw(self.next_tab_id);
-        self.next_tab_id = self.next_tab_id.saturating_add(1);
-        id
+        let mut ids = TabIds::new(&tabs);
+        repair_duplicate_tab_ids(&mut tabs, &mut ids);
+        Self { tabs, active: 0, ids }
     }
 
     pub(crate) fn active(&self) -> &EditorTab {
@@ -50,16 +40,20 @@ impl TabSet {
         true
     }
 
-    pub(crate) fn push(&mut self, tab: EditorTab) -> usize {
+    pub(crate) fn push_new(&mut self, make_tab: impl FnOnce(TabId) -> EditorTab) -> usize {
         let index = self.tabs.len();
-        self.next_tab_id = self.next_tab_id.max(tab.id().get().saturating_add(1));
+        let id = self.ids.allocate();
+        let tab = make_tab(id);
+        assert_eq!(tab.id(), id, "new tab must use its allocated ID");
         self.tabs.push(tab);
         index
     }
 
-    pub(crate) fn replace_only(&mut self, tab: EditorTab) {
+    pub(crate) fn replace_only_with_new(&mut self, make_tab: impl FnOnce(TabId) -> EditorTab) {
+        let id = self.ids.allocate();
+        let tab = make_tab(id);
+        assert_eq!(tab.id(), id, "new tab must use its allocated ID");
         self.tabs.clear();
-        self.next_tab_id = self.next_tab_id.max(tab.id().get().saturating_add(1));
         self.tabs.push(tab);
         self.active = 0;
     }
@@ -115,27 +109,76 @@ impl Deref for TabSet {
     }
 }
 
-fn repair_duplicate_tab_ids(tabs: &mut [EditorTab]) {
-    let mut seen = HashSet::with_capacity(tabs.len());
-    let mut next_id = next_id_after(tabs);
-    for tab in tabs {
-        if seen.insert(tab.id()) {
-            continue;
+// Initial IDs stay reserved after their tabs close: asynchronous results may
+// still refer to them. Generated IDs are never reused during this model's life.
+struct TabIds {
+    initial: HashSet<TabId>,
+    start: u64,
+    next: Option<u64>,
+}
+
+impl TabIds {
+    fn new(tabs: &[EditorTab]) -> Self {
+        let initial: HashSet<_> = tabs.iter().map(EditorTab::id).collect();
+        let start = initial.iter().map(|id| id.get()).max().unwrap_or(0).wrapping_add(1);
+        Self {
+            initial,
+            start,
+            next: Some(start),
         }
-        while seen.contains(&TabId::from_raw(next_id)) {
-            next_id = next_id.saturating_add(1);
+    }
+
+    fn allocate(&mut self) -> TabId {
+        loop {
+            let raw = self.next.expect("tab ID space exhausted");
+            let following = raw.wrapping_add(1);
+            self.next = (following != self.start).then_some(following);
+            let id = TabId::from_raw(raw);
+            if !self.initial.contains(&id) {
+                return id;
+            }
         }
-        let repaired = TabId::from_raw(next_id);
-        tab.set_id(repaired);
-        seen.insert(repaired);
-        next_id = next_id.saturating_add(1);
     }
 }
 
-fn next_id_after(tabs: &[EditorTab]) -> u64 {
-    tabs.iter()
-        .map(|tab| tab.id().get())
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1)
+fn repair_duplicate_tab_ids(tabs: &mut [EditorTab], ids: &mut TabIds) {
+    let mut seen = HashSet::with_capacity(tabs.len());
+    for tab in tabs {
+        if !seen.insert(tab.id()) {
+            tab.set_id(ids.allocate());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tab(id: u64) -> EditorTab {
+        EditorTab::empty(TabId::from_raw(id), format!("tab-{id}"))
+    }
+
+    #[test]
+    fn duplicate_and_maximum_initial_ids_are_repaired_without_reusing_initial_ids() {
+        let mut tabs = TabSet::new(tab(u64::MAX), vec![tab(u64::MAX), tab(0), tab(1)]);
+        let ids: Vec<_> = tabs.iter().map(|tab| tab.id().get()).collect();
+        assert_eq!(ids, vec![u64::MAX, 2, 0, 1]);
+        tabs.remove(2);
+        tabs.push_new(|id| EditorTab::empty(id, "new".into()));
+        assert_eq!(tabs.last().unwrap().id().get(), 3);
+        assert_ne!(tabs.last().unwrap().id().get(), 0);
+    }
+
+    #[test]
+    fn allocation_wraps_once_without_reusing_closed_or_generated_ids() {
+        let mut tabs = TabSet::new(tab(u64::MAX - 1), vec![tab(0)]);
+        tabs.push_new(|id| EditorTab::empty(id, "first".into()));
+        assert_eq!(tabs.last().unwrap().id().get(), u64::MAX);
+        tabs.remove(1);
+        tabs.remove(1);
+        tabs.push_new(|id| EditorTab::empty(id, "second".into()));
+        assert_eq!(tabs.last().unwrap().id().get(), 1);
+        tabs.replace_only_with_new(|id| EditorTab::empty(id, "replacement".into()));
+        assert_eq!(tabs.active().id().get(), 2);
+    }
 }
