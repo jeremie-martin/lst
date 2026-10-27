@@ -215,6 +215,9 @@ UI state should have one geometric and visual owner:
   Document drag autoscroll integrates velocity over elapsed time. Hit testing
   chooses the nearest grapheme boundary, with ties going to the earlier one.
   Inactive or invalidated tab geometry cannot complete a cursor reveal.
+  Rendering and reveal scheduling share the document-viewport visibility rule.
+  Replacement surfaces retain pending reveals without retrying each frame;
+  the next document layout resumes them when the viewport returns.
   Geometry-dependent chrome requests its correction after the current paint;
   the status trace reports the rendered text.
 - Syntax updates distinguish text changes from highlight invalidation. Only

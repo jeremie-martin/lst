@@ -396,8 +396,14 @@ impl LstGpuiApp {
         }
     }
 
+    /// Whether the current surface includes the document viewport in layout.
+    pub(crate) fn editor_viewport_visible(&self) -> bool {
+        !(self.recent.is_open() && self.recent.presentation() == crate::recent::RecentPresentation::Cards)
+            && !self.prompt_review_visible()
+    }
+
     pub(crate) fn schedule_pending_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending_reveal.is_none() || self.reveal_scheduled {
+        if self.pending_reveal.is_none() || self.reveal_scheduled || !self.editor_viewport_visible() {
             return;
         }
 
@@ -411,6 +417,12 @@ impl LstGpuiApp {
     }
 
     fn flush_pending_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A replacement surface has no document layout to reveal against.
+        // Retain the intent until the viewport returns instead of scheduling
+        // frames that can never complete it.
+        if !self.editor_viewport_visible() {
+            return;
+        }
         let Some(intent) = self.pending_reveal.take() else {
             return;
         };

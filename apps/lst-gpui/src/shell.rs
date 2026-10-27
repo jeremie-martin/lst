@@ -1887,7 +1887,7 @@ impl Render for LstGpuiApp {
                     .when(self.prompt_review_visible(), |viewport| {
                         viewport.child(self.render_prompt_review(cx))
                     })
-                    .when(!recent_cards_open && !self.prompt_review_visible(), |viewport| {
+                    .when(self.editor_viewport_visible(), |viewport| {
                         viewport
                             .child(
                                 div()
