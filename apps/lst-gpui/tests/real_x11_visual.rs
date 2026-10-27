@@ -4,7 +4,7 @@
 //!
 //! Run with
 //!
-//!     cargo nextest run --profile x11 -p lst-gpui --test real_x11_visual --run-ignored only
+//!     GPUI_X11_SCALE_FACTOR=1.5 cargo nextest run --profile x11 -p lst-gpui --test real_x11_visual --run-ignored only
 //!
 //! Set `LST_VISUAL_SCENARIO=name` to run one scenario while reviewing or
 //! updating a focused baseline.
@@ -358,6 +358,8 @@ fn visual_screenshot(editor: &mut Editor<'_>) -> SupportResult<Screenshot> {
 
 fn prepare_visual_window(editor: &mut Editor<'_>) -> SupportResult<()> {
     editor.raise_and_focus()?;
+    // Reference images must not inherit the host desktop's window dimensions.
+    editor.resize(1200, 900)?;
     Ok(())
 }
 

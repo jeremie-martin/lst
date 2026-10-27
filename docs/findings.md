@@ -1108,7 +1108,7 @@ typing-performance follow-up remains deferred until the foundation work is done.
     new painted geometry; repeated-size coverage passes on both displays. Final
     all-feature, behavior, visual and fault-detection results are recorded below.
 
-- [ ] **Reopened GPUI upstream assessment (2026-10-26):** The previous review checked
+- [x] **GPUI upstream migration (adoption approved 2026-10-27):** The previous review checked
   the `gpui` release channel too narrowly. At the review baseline the app directly used our patched Zed
   GPUI 0.2.2; neither GPUI Kit nor its component/base crates are dependencies.
   Longbridge's GPUI Kit 0.8.0 was published on October 19. Its UI components and
@@ -1165,11 +1165,15 @@ typing-performance follow-up remains deferred until the foundation work is done.
   Registry metadata and inspected package sources are retained in
   `/home/holo/agent-exports/foundation-gpui-review-2026-10-26`.
 
-  The 0.3.10 migration is implemented on `upgrade-gpui-0310`; its acceptance and
-  performance evidence is recorded below, including Intel hardware rendering.
-  Keep this assessment open: the software-rendering tradeoffs and remaining
-  hardware acceptance still need a disposition.
-  Base/Kit and Fast remain separate evaluations.
+  The user accepted adoption of 0.3.10, including the documented performance
+  tradeoffs. The migration and Intel evidence is recorded below; the remaining
+  latency, frame-scheduling and memory questions stay open in the deferred
+  performance section. The adoption checkpoint records integration verification.
+
+- [ ] **Later framework reuse assessment:** Base/Kit components and GPUI Fast
+  remain separate evaluations. Their adoption is not required to complete the
+  accepted GPUI 0.3.10 migration. Use the inventory and criteria above to assess
+  concrete reductions in app-owned complexity without losing behavior.
 
 
 ## Deferred performance follow-up
@@ -1204,6 +1208,17 @@ further optimizations.
    Record the comparison and required regression checks. Close this follow-up with
    either a verified improvement or an explicit, evidence-backed explanation of
    any remaining cost; do not treat the current regression as inherently necessary.
+
+- [ ] **Measured GPUI follow-up after adoption:** The accepted 0.3.10 migration
+  reduces patch maintenance and enables Intel hardware rendering, but input
+  latency remains higher than the old software-rendered baseline in the physical
+  comparison. Attribute the extra app-frame and presentation time before changing
+  scheduling. Scrolling currently produces more app frames than the display can
+  show; assess redundant work without weakening immediate input, animation,
+  async invalidation or recovery. Retain software fallback comparisons and account
+  for GPU buffers when assessing memory. The migration and Intel checkpoints below
+  preserve the exact binaries, measurements and limitations. These are accepted
+  follow-up costs, not claims that the remaining overhead is necessary.
 
 ## Combined acceptance checkpoint — 2026-10-26
 
@@ -1361,6 +1376,47 @@ intentional behavior as a defect.
   hold up. (23/V14)
 
 ## Verification and evidence
+
+### GPUI adoption (2026-10-27)
+
+The user approved adopting the 0.3.10 migration as the maintained framework base,
+with its smaller patch surface and demonstrated Intel hardware support. The
+software latency/memory tradeoffs and the remaining scheduling work are accepted
+follow-ups, not blockers to this adoption or declarations that the overhead is
+unavoidable. Other foundation findings remain in scope.
+
+The complete Intel-backed physical run, at the desktop's 1.5 scale, passed 335
+of 337 behavior cases. The two prompt-review failures exposed repeated cursor
+reveal scheduling while a replacement surface omitted the document viewport.
+The original binary reproduced both failures under tracing. Commit `da76c67`
+makes rendering and reveal scheduling share one viewport-presence rule; pending
+intent survives the hidden interval and resumes with the document layout. It
+changes no editor-domain state or vendor code and does not relax test timeouts.
+Both affected workflows then passed in each of three stress iterations, and all
+67 hardware follow-up cases passed across prompt review, recent files, viewport,
+runtime, modifiers and chrome. The all-feature tests, Clippy and formatting pass.
+The final corrected executable also passes the complete nested behavior suite:
+337 cases, zero failures or retries (`final-nested.log`).
+
+All ten visual scenarios repeat exactly across three fresh launches on Intel at
+1200 × 900 and scale 1.5 (`canonical-visual.log`). Comparison against the accepted
+0.3.10 software-rendered captures at the same scale changes 0.16–0.72% of pixels,
+principally text and edge rasterization; both comparison sheets were reviewed.
+The checked-in references now contain those reviewed Intel captures. The visual
+test requests the fixed client size, and its documented reference command pins
+scale 1.5; ordinary behavior tests retain the host scale. Separate scale-1
+captures also repeat exactly but are not mixed into the reference comparison.
+`visual-reference.json` records the image hashes and font, and
+`visual-host-restored.json` confirms the temporary desktop rule was removed.
+
+Evidence is retained in
+`/home/holo/agent-exports/foundation-gpui-adoption-2026-10-27`.
+`hardware-acceptance.log` retains the original failures; `reveal-before.trace`
+and `reveal-after.trace` record the diagnosis and correction. `hardware-followup.log`
+and `reveal-after.log` record the passing checks. `hardware-device-proof.json`
+confirms Intel engine execution by the acceptance app. The original installed
+executable is preserved as `previous-installed-lst` with its hash in
+`previous-installation.json`.
 
 ### GPUI 0.3.10 migration candidate (2026-10-26)
 

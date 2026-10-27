@@ -12,8 +12,8 @@ handling.
 
 ## Run from source
 
-A Rust toolchain, a graphical session, and ALSA development headers
-(`libasound2-dev` on Debian/Ubuntu) are required.
+A Rust toolchain, an X11 display (including XWayland on a Wayland desktop), and
+ALSA development headers (`libasound2-dev` on Debian/Ubuntu) are required.
 
 ```sh
 cargo build --release -p lst-gpui

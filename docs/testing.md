@@ -122,6 +122,15 @@ then compare the candidate against that directory. Record both binary hashes and
 the display setup. Do not regenerate expected images from the candidate merely
 to accommodate a mismatched host.
 
+The visual scenarios request a 1200 × 900 client area before capture, so their
+geometry does not depend on the host's initial window placement. The adopted
+GPUI 0.3.10 references use scale 1.5, TX-02, grayscale text and Mesa Intel rendering.
+They replace the old-renderer references after migration review; changing a
+reference still requires inspecting the image and verifying fresh-launch
+repeatability. A tiled window manager must allow the requested resize.
+Use `GPUI_X11_SCALE_FACTOR=1.5` for this reference lane; normal behavior tests keep
+the desktop's scale so fractional-scale coverage is retained.
+
 SIGTERM and SIGHUP unwind both runner entry points through normal cleanup,
 including their command groups, window manager, Xephyr and private D-Bus daemon.
 SIGKILL cannot run cleanup. The harness releases server-reported pressed keys
