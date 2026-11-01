@@ -98,6 +98,19 @@ impl TabId {
         self.0
     }
 }
+/// Identifies the text and file identity from which a Save As was requested.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaveAsVersion {
+    revision: u64,
+    identity: u64,
+}
+
+impl SaveAsVersion {
+    pub fn revision(self) -> u64 {
+        self.revision
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveKind {
     Regular,
@@ -227,6 +240,7 @@ pub struct EditorTab {
     language: Option<Language>,
     language_mode: LanguageMode,
     buffer: Rope,
+    save_as_identity: u64,
     content_epoch: u64,
     saved_content_epoch: u64,
     next_content_epoch: u64,
@@ -287,6 +301,7 @@ impl EditorTab {
             language,
             language_mode: LanguageMode::Auto,
             buffer: Rope::from_str(text),
+            save_as_identity: 0,
             content_epoch: 0,
             saved_content_epoch: 0,
             next_content_epoch: 1,
@@ -803,18 +818,29 @@ impl EditorTab {
         self.mark_current_content_saved();
         true
     }
+    pub fn save_as_version(&self) -> SaveAsVersion {
+        SaveAsVersion {
+            revision: self.revision,
+            identity: self.save_as_identity,
+        }
+    }
+
     pub(crate) fn mark_saved_as_if_current(
         &mut self,
         path: PathBuf,
-        revision: u64,
+        version: SaveAsVersion,
         file_stamp: FileStamp,
         saved_body: &crate::PreparedSave,
     ) -> bool {
-        if self.revision != revision {
+        if self.save_as_version() != version {
             return false;
         }
         self.apply_saved_body(saved_body);
         self.origin.mark_saved_as(path, file_stamp);
+        self.save_as_identity = self
+            .save_as_identity
+            .checked_add(1)
+            .expect("save-as identity exhausted");
         self.refresh_language();
         self.mark_current_content_saved();
         true

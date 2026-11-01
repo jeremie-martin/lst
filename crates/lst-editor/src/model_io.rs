@@ -1,4 +1,4 @@
-use crate::{EditorEffect, EditorModel, EditorTab, FileStamp, RevealIntent, TabId};
+use crate::{EditorEffect, EditorModel, EditorTab, FileStamp, RevealIntent, SaveAsVersion, TabId};
 use std::path::PathBuf;
 
 impl EditorModel {
@@ -22,6 +22,11 @@ impl EditorModel {
             self.queue_reveal(RevealIntent::NearestEdge);
         }
     }
+    pub fn open_scratchpad_with_stamp(&mut self, path: PathBuf, text: String, stamp: FileStamp) {
+        self.new_scratchpad_tab(path.clone(), stamp);
+        self.reload_tab_from_disk(self.active_tab_id(), path, text, stamp);
+    }
+
     pub fn open_file_failed(&mut self, path: PathBuf, message: String) {
         self.status = format!("Failed to open {}: {message}", path.display());
     }
@@ -58,7 +63,7 @@ impl EditorModel {
             tab_id,
             suggested_name: tab.display_name().to_owned(),
             body: tab.buffer_text(),
-            revision: tab.revision(),
+            version: tab.save_as_version(),
             previous_scratchpad_path: tab.scratchpad_path().cloned(),
         });
     }
@@ -89,14 +94,14 @@ impl EditorModel {
         &mut self,
         tab_id: TabId,
         path: PathBuf,
-        revision: u64,
+        version: SaveAsVersion,
         file_stamp: FileStamp,
         saved_body: crate::PreparedSave,
     ) -> bool {
         let Some(tab) = self.tab_mut_by_id(tab_id) else {
             return false;
         };
-        if !tab.mark_saved_as_if_current(path.clone(), revision, file_stamp, &saved_body) {
+        if !tab.mark_saved_as_if_current(path.clone(), version, file_stamp, &saved_body) {
             return false;
         }
         if self.active_tab_id() == tab_id {
@@ -222,12 +227,12 @@ mod tests {
         let tab_id = TabId::from_raw(1);
         let tab = EditorTab::from_path_with_stamp(tab_id, "old.txt".into(), "original", None);
         let mut model = EditorModel::from_tabs(tab, Vec::new(), "Ready".into());
-        let revision = model.active_tab().revision();
+        let version = model.active_tab().save_as_version();
         let saved_stamp = FileStamp::from_raw(8, Some(1));
         assert!(model.save_as_finished_for_tab(
             tab_id,
             "new.txt".into(),
-            revision,
+            version,
             saved_stamp,
             SaveTextOptions::default().prepare("original".into()),
         ));
@@ -238,5 +243,18 @@ mod tests {
         assert_eq!(model.active_tab().buffer_text(), "original");
         assert_eq!(model.active_tab().file_stamp(), Some(saved_stamp));
         assert!(!model.active_tab().conflict_suppressed_for(stale_stamp));
+    }
+    #[test]
+    fn stale_save_as_cannot_retarget_a_tab_after_another_save_as() {
+        let tab_id = TabId::from_raw(1);
+        let tab = EditorTab::from_path_with_stamp(tab_id, "old.txt".into(), "original", None);
+        let mut model = EditorModel::from_tabs(tab, Vec::new(), "Ready".into());
+        let version = model.active_tab().save_as_version();
+        let body = || SaveTextOptions::default().prepare("original".into());
+        let stamp = FileStamp::from_raw(8, Some(1));
+        assert!(model.save_as_finished_for_tab(tab_id, "new.txt".into(), version, stamp, body()));
+        assert!(!model.save_as_finished_for_tab(tab_id, "stale.txt".into(), version, stamp, body()));
+        assert_eq!(model.active_tab().path(), Some(&PathBuf::from("new.txt")));
+        assert_eq!(model.active_tab().buffer_text(), "original");
     }
 }

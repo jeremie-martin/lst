@@ -131,3 +131,28 @@ fn failed_reopen_drops_bad_entry_so_older_closed_tab_can_reopen() -> TestResult 
         Ok(())
     })
 }
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a real X11 display plus xclip"]
+fn reopening_a_closed_path_that_now_aliases_an_open_file_reuses_the_tab() -> TestResult {
+    support::run_x11_test("recently-closed-alias", |session| {
+        let closed = session.seed_file("closed.txt", "one\n")?;
+        let existing = session.seed_file("existing.txt", "two\n")?;
+        let existing_path = path_text(&existing);
+        let mut editor = session.open_files("recently-closed-alias", &[closed.clone(), existing.clone()])?;
+        editor.place_cursor_at_document_start()?;
+        editor.keys("<right><C-w>")?;
+        let before = editor.wait_state("existing file active", secs(5), |record| {
+            record.active_tab_path.as_deref() == Some(&existing_path)
+        })?;
+        std::fs::remove_file(&closed)?;
+        std::os::unix::fs::symlink(&existing, &closed)?;
+        editor.keys("<C-S-t>")?;
+        editor.wait_state("existing tab reused with restored cursor", secs(5), |record| {
+            record.active_tab_id == before.active_tab_id
+                && record.cursors.first().is_some_and(|cursor| cursor.head_pos() == (0, 1))
+        })?;
+        Ok(())
+    })
+}

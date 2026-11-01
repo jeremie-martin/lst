@@ -1,7 +1,7 @@
 use gpui::{ClipboardItem, Context, Window};
 use lst_editor::{
-    EditorEffect, EditorTab as ModelEditorTab, FileStamp, PreparedSave, SaveExpectation, SaveTextOptions,
-    TabCloseRequest, TabId,
+    EditorEffect, EditorTab as ModelEditorTab, FileStamp, PreparedSave, SaveAsVersion, SaveExpectation,
+    SaveTextOptions, TabCloseRequest, TabId,
 };
 use rfd::FileDialog;
 use std::{
@@ -231,6 +231,7 @@ enum SaveKind {
         exit_save: Option<PendingExitSave>,
     },
     SaveAs {
+        version: SaveAsVersion,
         previous_scratchpad: Option<PathBuf>,
         exit_save: Option<PendingExitSave>,
     },
@@ -322,7 +323,7 @@ impl LstGpuiApp {
                     tab_id,
                     suggested_name,
                     body,
-                    revision,
+                    version,
                     previous_scratchpad_path,
                 } => {
                     let exit_save = self.pending_exit_save.filter(|pending| pending.tab_id == tab_id);
@@ -349,8 +350,9 @@ impl LstGpuiApp {
                         tab_id,
                         path,
                         body,
-                        revision,
+                        version.revision(),
                         SaveKind::SaveAs {
+                            version,
                             previous_scratchpad: previous_scratchpad_path,
                             exit_save,
                         },
@@ -1615,7 +1617,10 @@ impl LstGpuiApp {
             self.start_queued_save_for_path(&inflight_path, cx);
             return;
         }
-        let is_save_as = matches!(kind, SaveKind::SaveAs { .. });
+        let save_as_version = match &kind {
+            SaveKind::SaveAs { version, .. } => Some(*version),
+            SaveKind::Save { .. } => None,
+        };
         let exit_save = kind.exit_save();
         match result {
             FileWriteOutcome::Written {
@@ -1629,13 +1634,14 @@ impl LstGpuiApp {
                 let mut saved = false;
                 let mut record_recent = false;
                 self.update_model(cx, true, |model| {
-                    saved = if is_save_as {
-                        model.save_as_finished_for_tab(tab_id, path, revision, stamp, body)
+                    saved = if let Some(version) = save_as_version {
+                        model.save_as_finished_for_tab(tab_id, path, version, stamp, body)
                     } else {
                         model.save_finished_for_tab(tab_id, path, revision, stamp, body)
                     };
-                    record_recent =
-                        saved && (is_save_as || model.tab_by_id(tab_id).is_some_and(|tab| !tab.is_scratchpad()));
+                    record_recent = saved
+                        && (save_as_version.is_some()
+                            || model.tab_by_id(tab_id).is_some_and(|tab| !tab.is_scratchpad()));
                 });
                 if record_recent {
                     self.recent.record_with_origin(&saved_path, RecentOrigin::Regular);
@@ -1835,26 +1841,7 @@ impl LstGpuiApp {
         let Some(record) = self.closed_tabs_history.pop() else {
             return;
         };
-        let line = record.position.line;
-        let column = record.position.column;
-        let existing = self
-            .model
-            .tabs()
-            .iter()
-            .find(|tab| tab.path() == Some(&record.path))
-            .map(|tab| {
-                let origin = if tab.is_scratchpad() {
-                    RecentOrigin::Scratchpad
-                } else {
-                    RecentOrigin::Regular
-                };
-                (tab.id(), origin)
-            });
-        if let Some((tab_id, origin)) = existing {
-            self.update_model(cx, true, |model| {
-                model.set_active_tab(tab_id);
-                model.set_active_cursor_position(line, column);
-            });
+        if let Some(origin) = self.activate_existing_tab_for_path(&record.path, Some(record.position), cx) {
             self.recent.record_with_origin(&record.path, origin);
             return;
         }
@@ -1866,43 +1853,18 @@ impl LstGpuiApp {
                 .await;
             let _ = this.update(cx, |view, cx| match result {
                 Ok((text, stamp)) => {
-                    if let Some((tab_id, origin)) = view
-                        .model
-                        .tabs()
-                        .iter()
-                        .find(|tab| tab.path() == Some(&record.path))
-                        .map(|tab| {
-                            (
-                                tab.id(),
-                                if tab.is_scratchpad() {
-                                    RecentOrigin::Scratchpad
-                                } else {
-                                    RecentOrigin::Regular
-                                },
-                            )
-                        })
-                    {
-                        view.update_model(cx, true, |model| {
-                            model.set_active_tab(tab_id);
-                            model.set_active_cursor_position(line, column);
-                        });
+                    if let Some(origin) = view.activate_existing_tab_for_path(&record.path, Some(record.position), cx) {
                         view.recent.record_with_origin(&record.path, origin);
                         return;
                     }
-                    let opened_path = record.path.clone();
-                    view.update_model(cx, true, |model| {
-                        match record.origin {
-                            RecentOrigin::Regular => {
-                                model.open_files_with_stamps(vec![(opened_path, text, Some(stamp))]);
-                            }
-                            RecentOrigin::Scratchpad => {
-                                model.new_scratchpad_tab(opened_path.clone(), stamp);
-                                let tab_id = model.active_tab_id();
-                                model.reload_tab_from_disk(tab_id, opened_path, text, stamp);
-                            }
-                        }
-                        model.set_active_cursor_position(line, column);
-                    });
+                    view.open_recent_contents(
+                        record.path.clone(),
+                        record.origin,
+                        text,
+                        stamp,
+                        Some(record.position),
+                        cx,
+                    );
                     view.recent.record_with_origin(&record.path, record.origin);
                 }
                 Err(err) => {

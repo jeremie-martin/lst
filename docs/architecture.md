@@ -73,6 +73,9 @@ ordered, disjoint `TextChangeSet`. Applying one request determines the resulting
 selection and one undo boundary. Editing helpers return transactions instead of
 mutating unrelated model fields in stages.
 
+Save As requests carry a version of both document text and file identity, so a
+completion cannot retarget a tab after another Save As has succeeded.
+
 Save text policies also produce exact `TextChangeSet` edits in `lst-editor`.
 `PreparedSave` carries those edits with the bytes written by the app. A successful
 save applies them only to the requested revision, through the same transaction

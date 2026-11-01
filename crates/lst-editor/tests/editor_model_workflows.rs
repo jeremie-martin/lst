@@ -109,12 +109,12 @@ fn explicit_language_survives_save_as_and_auto_redetects_from_the_new_path() {
         .model
         .set_active_language_mode(LanguageMode::Language(Language::Markdown));
     let tab_id = harness.model.active_tab_id();
-    let revision = harness.model.active_tab().revision();
+    let version = harness.model.active_tab().save_as_version();
     let body = harness.model.active_tab().buffer_text();
     assert!(harness.model.save_as_finished_for_tab(
         tab_id,
         PathBuf::from("renamed.py"),
-        revision,
+        version,
         FileStamp::from_raw(body.len() as u64, Some(1)),
         lst_editor::SaveTextOptions::default().prepare(body),
     ));

@@ -25,7 +25,7 @@ pub use document::{
 pub use language::{IndentStyle, Language, LanguageConfig};
 pub use save::{PreparedSave, SaveTextOptions};
 pub use selection::{Position, Selection, SelectionSet, SelectionSetError};
-pub use tab::{BufferDelta, BufferEdit, EditorTab, FileStamp, LanguageMode, SaveExpectation, TabId};
+pub use tab::{BufferDelta, BufferEdit, EditorTab, FileStamp, LanguageMode, SaveAsVersion, SaveExpectation, TabId};
 pub use viewport::Viewport;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum InputMode {
@@ -115,7 +115,7 @@ pub enum EditorEffect {
         tab_id: TabId,
         suggested_name: String,
         body: String,
-        revision: u64,
+        version: SaveAsVersion,
         previous_scratchpad_path: Option<PathBuf>,
     },
     AutosaveFile {

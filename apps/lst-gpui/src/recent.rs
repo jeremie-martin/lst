@@ -1,9 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{self, ErrorKind, Read},
+    io::{self, ErrorKind, Read, Write},
     path::{Component, Path, PathBuf},
-    process,
     sync::{
         atomic::{AtomicBool, Ordering as AtomicOrdering},
         Arc,
@@ -245,9 +244,11 @@ impl RecentFiles {
             fs::create_dir_all(parent)?;
         }
 
-        let temp_path = atomic_temp_path(path);
-        fs::write(&temp_path, serialize_entries(&self.entries))?;
-        fs::rename(temp_path, path)
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+        temp.write_all(serialize_entries(&self.entries).as_bytes())?;
+        temp.persist(path).map_err(|error| error.error)?;
+        Ok(())
     }
 }
 
@@ -1014,14 +1015,6 @@ fn move_to_front(entries: &mut Vec<RecentEntry>, entry: RecentEntry) -> bool {
     true
 }
 
-fn atomic_temp_path(path: &Path) -> PathBuf {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("recent-files");
-    path.with_file_name(format!("{name}.tmp-{}", process::id()))
-}
-
 fn encode_path(path: &Path) -> String {
     let bytes = path_bytes(path);
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -1274,7 +1267,7 @@ impl LstGpuiApp {
     pub(crate) fn open_recent_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let path = normalize_recent_path(&path);
         let recorded_origin = self.recent.origin_for_path(&path).unwrap_or(RecentOrigin::Regular);
-        if let Some(open_origin) = self.activate_existing_tab_for_path(&path, cx) {
+        if let Some(open_origin) = self.activate_existing_tab_for_path(&path, None, cx) {
             self.recent.record_with_origin(&path, open_origin);
             self.close_recent_files_panel(cx);
             return;
@@ -1289,21 +1282,11 @@ impl LstGpuiApp {
                 .await;
             let _ = this.update(cx, |view, cx| match result {
                 Ok((text, stamp)) => {
-                    if let Some(open_origin) = view.activate_existing_tab_for_path(&path, cx) {
+                    if let Some(open_origin) = view.activate_existing_tab_for_path(&path, None, cx) {
                         view.recent.record_with_origin(&path, open_origin);
                         return;
                     }
-                    let opened_path = path.clone();
-                    view.update_model(cx, true, |model| match recorded_origin {
-                        RecentOrigin::Regular => {
-                            model.open_files_with_stamps(vec![(opened_path, text, Some(stamp))]);
-                        }
-                        RecentOrigin::Scratchpad => {
-                            model.new_scratchpad_tab(opened_path.clone(), stamp);
-                            let tab_id = model.active_tab_id();
-                            model.reload_tab_from_disk(tab_id, opened_path, text, stamp);
-                        }
-                    });
+                    view.open_recent_contents(path.clone(), recorded_origin, text, stamp, None, cx);
                     view.recent.record_with_origin(&path, recorded_origin);
                 }
                 Err(err) => {
@@ -1320,7 +1303,13 @@ impl LstGpuiApp {
         .detach();
     }
 
-    fn activate_existing_tab_for_path(&mut self, path: &Path, cx: &mut Context<Self>) -> Option<RecentOrigin> {
+    pub(crate) fn activate_existing_tab_for_path(
+        &mut self,
+        path: &Path,
+        position: Option<lst_editor::Position>,
+        cx: &mut Context<Self>,
+    ) -> Option<RecentOrigin> {
+        let path = normalize_recent_path(path);
         let (tab_id, origin) = self.model.tabs().iter().find_map(|tab| {
             let tab_path = tab.path()?;
             (normalize_recent_path(tab_path) == path).then_some((
@@ -1335,8 +1324,31 @@ impl LstGpuiApp {
 
         self.update_model(cx, true, |model| {
             model.set_active_tab(tab_id);
+            if let Some(position) = position {
+                model.set_active_cursor_position(position.line, position.column);
+            }
         });
         Some(origin)
+    }
+
+    pub(crate) fn open_recent_contents(
+        &mut self,
+        path: PathBuf,
+        origin: RecentOrigin,
+        text: String,
+        stamp: lst_editor::FileStamp,
+        position: Option<lst_editor::Position>,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_model(cx, true, |model| {
+            match origin {
+                RecentOrigin::Regular => model.open_files_with_stamps(vec![(path, text, Some(stamp))]),
+                RecentOrigin::Scratchpad => model.open_scratchpad_with_stamp(path, text, stamp),
+            }
+            if let Some(position) = position {
+                model.set_active_cursor_position(position.line, position.column);
+            }
+        });
     }
 }
 
@@ -1349,6 +1361,20 @@ mod tests {
             .iter()
             .map(|entry| (entry.path().to_path_buf(), entry.origin()))
             .collect()
+    }
+
+    #[test]
+    fn saving_history_does_not_overwrite_a_preexisting_temporary_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("recent-files");
+        let old_temp = directory
+            .path()
+            .join(format!("recent-files.tmp-{}", std::process::id()));
+        fs::write(&old_temp, "unrelated").unwrap();
+        let mut files = RecentFiles::load(Some(path.clone()));
+        files.record_with_origin(&directory.path().join("note.txt"), RecentOrigin::Regular);
+        assert_eq!(fs::read_to_string(old_temp).unwrap(), "unrelated");
+        assert_eq!(RecentFiles::load(Some(path)).typed_entries().len(), 1);
     }
 
     #[test]
@@ -1398,7 +1424,7 @@ mod tests {
         );
         let migrated = fs::read_to_string(&state_path).expect("migration should persist v2 state");
         assert!(migrated.starts_with(RECENT_FILE_HEADER_V2));
-        assert!(!atomic_temp_path(&state_path).exists());
+        assert_eq!(fs::read_dir(state.path()).unwrap().count(), 1);
     }
 
     #[test]
