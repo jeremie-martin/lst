@@ -292,19 +292,14 @@ impl FindState {
     /// replacement itself produced it (`$`, `\b`) or, when nothing changed
     /// (`^` replaced by nothing), it is the match just replaced.
     pub(crate) fn select_after_replacement(&mut self, end: Position) {
-        if self.matches.is_empty() {
-            self.active = None;
+        self.find_nearest(&end);
+        let Some(index) = self.active else {
             return;
+        };
+        let m = self.matches[index];
+        if m.char_len == 0 && Position::new(m.line, m.col) == end {
+            self.active = Some((index + 1) % self.matches.len());
         }
-        let mut index = self.matches.partition_point(|m| Position::new(m.line, m.col) < end);
-        if self
-            .matches
-            .get(index)
-            .is_some_and(|m| m.char_len == 0 && Position::new(m.line, m.col) == end)
-        {
-            index += 1;
-        }
-        self.active = Some(if index >= self.matches.len() { 0 } else { index });
     }
     pub(crate) fn sync_with_tab(&mut self, tab: &EditorTab) {
         if self.visible && !self.query.is_empty() {

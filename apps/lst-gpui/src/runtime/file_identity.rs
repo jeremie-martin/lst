@@ -47,14 +47,27 @@ impl FileIdentity {
     }
 }
 
-/// The paths tabs held when the UI took the snapshot.
-pub(crate) type TabPaths = Vec<(TabId, PathBuf)>;
+/// The paths tabs and pending writes held when the UI took the snapshot.
+#[derive(Clone, PartialEq, Eq)]
+struct Claims {
+    tabs: Vec<(TabId, PathBuf)>,
+    writes: Vec<PathBuf>,
+}
 
-/// The tab in `tabs` whose file `identity` is, resolving each tab's path.
-fn tab_holding(identity: &FileIdentity, tabs: &[(TabId, PathBuf)]) -> Option<TabId> {
+impl Claims {
+    /// Off the UI thread: each tab's file identity, resolved once.
+    fn tab_identities(&self) -> Vec<(FileIdentity, TabId)> {
+        self.tabs
+            .iter()
+            .map(|(tab_id, path)| (FileIdentity::of(path), *tab_id))
+            .collect()
+    }
+}
+
+fn holder(identity: &FileIdentity, tabs: &[(FileIdentity, TabId)]) -> Option<TabId> {
     tabs.iter()
-        .find(|(_, path)| FileIdentity::of(path) == *identity)
-        .map(|(tab_id, _)| *tab_id)
+        .find(|(held, _)| held == identity)
+        .map(|(_, tab_id)| *tab_id)
 }
 
 /// A document to open, or to bring forward when a tab already holds it.
@@ -86,13 +99,14 @@ enum Resolved {
 }
 
 /// Off the UI thread: reads each requested file no tab holds yet.
-fn resolve_open_requests(requests: &[OpenRequest], tabs: &[(TabId, PathBuf)]) -> Vec<Resolved> {
+fn resolve_open_requests(requests: &[OpenRequest], claims: &Claims) -> Vec<Resolved> {
+    let tabs = claims.tab_identities();
     let mut batch = Vec::new();
     requests
         .iter()
         .map(|request| {
             let identity = FileIdentity::of(&request.path);
-            if let Some(tab_id) = tab_holding(&identity, tabs) {
+            if let Some(tab_id) = holder(&identity, &tabs) {
                 return Resolved::InTab(tab_id);
             }
             if batch.contains(&identity) {
@@ -118,11 +132,11 @@ pub(super) enum SaveAsClaim {
 }
 
 /// Off the UI thread: who already claims the file `target` names.
-fn save_as_claim(target: &Path, tabs: &[(TabId, PathBuf)], writes: &[PathBuf]) -> SaveAsClaim {
+fn save_as_claim(target: &Path, claims: &Claims) -> SaveAsClaim {
     let identity = FileIdentity::of(target);
-    if let Some(tab_id) = tab_holding(&identity, tabs) {
+    if let Some(tab_id) = holder(&identity, &claims.tab_identities()) {
         SaveAsClaim::Tab(tab_id)
-    } else if writes.iter().any(|path| FileIdentity::of(path) == identity) {
+    } else if claims.writes.iter().any(|path| FileIdentity::of(path) == identity) {
         SaveAsClaim::Write
     } else {
         SaveAsClaim::Free
@@ -130,39 +144,63 @@ fn save_as_claim(target: &Path, tabs: &[(TabId, PathBuf)], writes: &[PathBuf]) -
 }
 
 impl LstGpuiApp {
-    pub(crate) fn tab_paths(&self) -> TabPaths {
-        self.model
-            .tabs()
-            .iter()
-            .filter_map(|tab| Some((tab.id(), tab.path()?.clone())))
-            .collect()
+    fn claims(&self) -> Claims {
+        Claims {
+            tabs: self
+                .model
+                .tabs()
+                .iter()
+                .filter_map(|tab| Some((tab.id(), tab.path()?.clone())))
+                .collect(),
+            writes: self.saves.write_targets(),
+        }
+    }
+
+    /// Runs `resolve` on a background thread against a snapshot of the
+    /// claims, then `apply` on the UI thread while the claims still match
+    /// that snapshot; otherwise resolves again.
+    fn resolve_against_claims<I, O>(
+        &mut self,
+        input: I,
+        resolve: impl Fn(&I, &Claims) -> O + Copy + Send + 'static,
+        apply: impl FnOnce(&mut Self, I, O, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) where
+        I: Send + 'static,
+        O: Send + 'static,
+    {
+        let claims = self.claims();
+        cx.spawn(async move |this, cx| {
+            let snapshot = claims.clone();
+            let (input, output) = cx
+                .background_executor()
+                .spawn(async move {
+                    let output = resolve(&input, &snapshot);
+                    (input, output)
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if view.claims() == claims {
+                    apply(view, input, output, cx);
+                } else {
+                    view.resolve_against_claims(input, resolve, apply, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// Opens each requested document in a new tab, or activates the tab that
     /// already holds its file.
     pub(crate) fn open_documents(&mut self, requests: Vec<OpenRequest>, cx: &mut Context<Self>) {
-        if requests.is_empty() {
-            return;
+        if !requests.is_empty() {
+            self.resolve_against_claims(
+                requests,
+                |requests: &Vec<_>, claims| resolve_open_requests(requests, claims),
+                Self::apply_opened_documents,
+                cx,
+            );
         }
-        let tabs = self.tab_paths();
-        cx.spawn(async move |this, cx| {
-            let snapshot = tabs.clone();
-            let (requests, resolved) = cx
-                .background_executor()
-                .spawn(async move {
-                    let resolved = resolve_open_requests(&requests, &snapshot);
-                    (requests, resolved)
-                })
-                .await;
-            let _ = this.update(cx, |view, cx| {
-                if view.tab_paths() == tabs {
-                    view.apply_opened_documents(requests, resolved, cx);
-                } else {
-                    view.open_documents(requests, cx);
-                }
-            });
-        })
-        .detach();
     }
 
     fn apply_opened_documents(&mut self, requests: Vec<OpenRequest>, resolved: Vec<Resolved>, cx: &mut Context<Self>) {
@@ -171,18 +209,13 @@ impl LstGpuiApp {
         for (request, resolved) in requests.into_iter().zip(resolved) {
             let origin = match resolved {
                 Resolved::InTab(tab_id) => {
-                    let scratchpad = self.model.tab_by_id(tab_id).is_some_and(|tab| tab.is_scratchpad());
                     self.update_model(cx, true, |model| {
                         model.set_active_tab(tab_id);
                         if let Some(position) = request.position {
                             model.set_active_cursor_position(position.line, position.column);
                         }
                     });
-                    if scratchpad {
-                        RecentOrigin::Scratchpad
-                    } else {
-                        RecentOrigin::Regular
-                    }
+                    RecentOrigin::of(self.model.active_tab())
                 }
                 Resolved::InBatch => continue,
                 Resolved::Read(text, stamp) => {
@@ -212,17 +245,20 @@ impl LstGpuiApp {
         if pruned {
             self.spawn_recent_previews(cx);
         }
-        match <[_; 1]>::try_from(failures) {
-            Ok([(path, message)]) => self.update_model(cx, true, |model| model.open_file_failed(path, message)),
-            Err(failures) if !failures.is_empty() => {
-                let failures = failures
+        match failures.as_slice() {
+            [] => {}
+            [(path, message)] => {
+                let (path, message) = (path.clone(), message.clone());
+                self.update_model(cx, true, |model| model.open_file_failed(path, message));
+            }
+            many => {
+                let failures = many
                     .iter()
                     .map(|(path, message)| format!("{}: {message}", path.display()))
                     .collect::<Vec<_>>();
                 self.cleanup_message = Some(format!("Some files could not be opened: {}", failures.join("; ")));
                 cx.notify();
             }
-            Err(_) => {}
         }
     }
 
@@ -235,31 +271,22 @@ impl LstGpuiApp {
         apply: impl FnOnce(&mut Self, PathBuf, SaveAsClaim, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
-        let claims = (self.tab_paths(), self.saves.write_targets());
-        cx.spawn(async move |this, cx| {
-            let (tabs, writes) = claims.clone();
-            let (target, claim) = cx
-                .background_executor()
-                .spawn(async move {
-                    let claim = save_as_claim(&target, &tabs, &writes);
-                    (target, claim)
-                })
-                .await;
-            let _ = this.update(cx, |view, cx| {
-                if (view.tab_paths(), view.saves.write_targets()) == claims {
-                    apply(view, target, claim, cx);
-                } else {
-                    view.resolve_save_as_target(target, apply, cx);
-                }
-            });
-        })
-        .detach();
+        self.resolve_against_claims(
+            target,
+            |target: &PathBuf, claims| save_as_claim(target, claims),
+            apply,
+            cx,
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn claims(tabs: Vec<(TabId, PathBuf)>, writes: Vec<PathBuf>) -> Claims {
+        Claims { tabs, writes }
+    }
 
     #[cfg(unix)]
     #[test]
@@ -274,15 +301,16 @@ mod tests {
         let dotted = dir.path().join("sub/../note.txt");
         fs::create_dir(dir.path().join("sub")).unwrap();
         let tab = TabId::from_raw(7);
-        let tabs = [(tab, file.clone())];
+        let tabs = claims(vec![(tab, file.clone())], vec![]);
 
         let requests = [&symlink, &hard_link, &dotted, &file]
-            .map(|path| OpenRequest::new(path.to_path_buf(), RecentOrigin::Regular));
+            .map(|path| OpenRequest::new(path.to_path_buf(), RecentOrigin::Regular))
+            .to_vec();
         for resolved in resolve_open_requests(&requests, &tabs) {
             assert!(matches!(resolved, Resolved::InTab(id) if id == tab));
         }
         for alias in [&symlink, &hard_link, &dotted] {
-            assert_eq!(save_as_claim(alias, &tabs, &[]), SaveAsClaim::Tab(tab));
+            assert_eq!(save_as_claim(alias, &tabs), SaveAsClaim::Tab(tab));
         }
     }
 
@@ -295,9 +323,10 @@ mod tests {
         let symlink = dir.path().join("symlink.txt");
         std::os::unix::fs::symlink(&file, &symlink).unwrap();
         let requests = [&file, &symlink, &dir.path().join("missing.txt")]
-            .map(|path| OpenRequest::new(path.to_path_buf(), RecentOrigin::Regular));
+            .map(|path| OpenRequest::new(path.to_path_buf(), RecentOrigin::Regular))
+            .to_vec();
 
-        let resolved = resolve_open_requests(&requests, &[]);
+        let resolved = resolve_open_requests(&requests, &claims(vec![], vec![]));
         assert!(matches!(&resolved[0], Resolved::Read(text, _) if text == "text"));
         assert!(matches!(resolved[1], Resolved::InBatch));
         assert!(matches!(&resolved[2], Resolved::Failed(error) if error.kind() == io::ErrorKind::NotFound));
@@ -308,9 +337,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("new.txt");
         let other = dir.path().join("other.txt");
-        assert_eq!(save_as_claim(&target, &[], &[other]), SaveAsClaim::Free);
+        assert_eq!(save_as_claim(&target, &claims(vec![], vec![other])), SaveAsClaim::Free);
         // The pending write has not created the file yet.
         let alias = dir.path().join(".").join("new.txt");
-        assert_eq!(save_as_claim(&target, &[], &[alias]), SaveAsClaim::Write);
+        assert_eq!(save_as_claim(&target, &claims(vec![], vec![alias])), SaveAsClaim::Write);
     }
 }

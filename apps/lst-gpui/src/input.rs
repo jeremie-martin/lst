@@ -166,10 +166,9 @@ impl LstGpuiApp {
         window.focus(&self.focus_handle, cx);
         let index = self.active_char_index_for_point(event.position);
         // Word selection and selection hits act on the character under the
-        // pointer, as does the Vim block cursor; a caret goes to the nearest
-        // boundary.
+        // pointer; the cursor goes where `caret_for_click` places it.
         let cell = self.active_cell_index_for_point(event.position);
-        let caret = if self.block_cursor_mode() { cell } else { index };
+        let caret = self.caret_for_click(cell, || index);
         let gutter_click = {
             let geometry = self.active_view().geometry.borrow();
             self.model.show_gutter()
@@ -286,10 +285,14 @@ impl LstGpuiApp {
         cx.notify();
     }
 
-    /// Vim Normal mode draws a block over the cursor's character, so a click
-    /// targets the character under the pointer rather than a boundary.
-    fn block_cursor_mode(&self) -> bool {
-        self.model.input_mode() == InputMode::Vim && self.model.vim_mode() == vim::Mode::Normal
+    /// Where a click places the cursor: a block cursor covers the character
+    /// under the pointer (`cell`), a caret takes the `nearest` boundary.
+    fn caret_for_click(&self, cell: usize, nearest: impl FnOnce() -> usize) -> usize {
+        if self.model.block_cursor() {
+            cell
+        } else {
+            nearest()
+        }
     }
 
     fn click_selection_mode_and_range(
@@ -343,11 +346,7 @@ impl LstGpuiApp {
             .iter()
             .any(|selection| selection.range().contains(&cell));
         if !inside_selection {
-            let caret = if self.block_cursor_mode() {
-                cell
-            } else {
-                self.active_char_index_for_point(event.position)
-            };
+            let caret = self.caret_for_click(cell, || self.active_char_index_for_point(event.position));
             self.update_model(cx, true, |model| model.move_to_char(caret, false, None));
         }
         self.open_context_menu(event.position, cx);
@@ -448,20 +447,19 @@ impl LstGpuiApp {
                     model.set_rectangular_column_selection(anchor, index);
                 });
             }
-            Some(DragSelectionMode::Word(anchor)) => {
+            Some(
+                DragSelectionMode::Word(ref anchor)
+                | DragSelectionMode::Line(ref anchor)
+                | DragSelectionMode::Paragraph(ref anchor),
+            ) => {
+                let unit_at = match mode {
+                    Some(DragSelectionMode::Word(_)) => word_range_at_char,
+                    Some(DragSelectionMode::Line(_)) => line_range_at_char,
+                    _ => paragraph_range_at_char,
+                };
                 let cell = self.active_cell_index_for_point(position);
-                let current = word_range_at_char(self.active_tab().buffer(), cell);
-                self.select_active_drag_range(anchor, current, cx);
-            }
-            Some(DragSelectionMode::Line(anchor)) => {
-                let cell = self.active_cell_index_for_point(position);
-                let current = line_range_at_char(self.active_tab().buffer(), cell);
-                self.select_active_drag_range(anchor, current, cx);
-            }
-            Some(DragSelectionMode::Paragraph(anchor)) => {
-                let cell = self.active_cell_index_for_point(position);
-                let current = paragraph_range_at_char(self.active_tab().buffer(), cell);
-                self.select_active_drag_range(anchor, current, cx);
+                let current = unit_at(self.active_tab().buffer(), cell);
+                self.select_active_drag_range(anchor.clone(), current, cx);
             }
             Some(DragSelectionMode::MovingSelection { .. }) => {
                 if let Some(drag) = self.selection_drag.as_mut() {

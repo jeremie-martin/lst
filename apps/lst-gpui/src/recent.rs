@@ -67,6 +67,14 @@ pub(crate) enum RecentOrigin {
 }
 
 impl RecentOrigin {
+    pub(crate) fn of(tab: &lst_editor::EditorTab) -> Self {
+        if tab.is_scratchpad() {
+            Self::Scratchpad
+        } else {
+            Self::Regular
+        }
+    }
+
     fn storage_tag(self) -> &'static str {
         match self {
             Self::Regular => "regular",
@@ -240,11 +248,8 @@ impl RecentFiles {
         let Some(path) = &self.state_path else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)?;
         let mut temp = tempfile::NamedTempFile::new_in(parent)?;
         temp.write_all(serialize_entries(&self.entries).as_bytes())?;
         temp.persist(path).map_err(|error| error.error)?;

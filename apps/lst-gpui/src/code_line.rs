@@ -93,13 +93,11 @@ impl CodeLine {
     pub(crate) fn char_at_x(&self, x: Pixels) -> usize {
         match self {
             Self::Shaped(line) => {
-                let mut under = 0;
-                for (character, boundary_x) in shaped_boundaries(line) {
-                    if boundary_x <= x {
-                        under = character;
-                    }
-                }
-                under
+                // Boundaries ascend in x: the last one at or before `x`.
+                shaped_boundaries(line)
+                    .take_while(|&(_, boundary_x)| boundary_x <= x)
+                    .last()
+                    .map_or(0, |(character, _)| character)
             }
             Self::Cells(line) => {
                 let width = f32::from(line.char_width);

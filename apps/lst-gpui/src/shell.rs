@@ -1788,7 +1788,7 @@ impl Render for LstGpuiApp {
         let focus_handle = self.focus_handle.clone();
         let entity = cx.entity();
         let prepare_entity = entity.clone();
-        let vim_mode = self.model.vim_mode();
+        let block_cursor = self.model.block_cursor();
         let cursor_visible = self.cursor_visible;
         let cursor_motion = self.cursor_motion.clone();
         let smooth_cursor = self.settings.settings.editor.smooth_cursor;
@@ -2038,7 +2038,7 @@ impl Render for LstGpuiApp {
                                                         selection_set: selection_set.clone(),
                                                         search_matches: &search_matches,
                                                         active_search_match: active_search_match.as_ref(),
-                                                        vim_mode,
+                                                        block_cursor,
                                                         focused: focus_handle.is_focused(window),
                                                         cursor_visible,
                                                         cursor_motion: &mut cursor_motion.borrow_mut(),

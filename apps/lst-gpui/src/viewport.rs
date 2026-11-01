@@ -13,7 +13,7 @@ use lst_editor::{
     selection::{
         exact_text_occurrence_ranges_in_text, identifier_occurrence_ranges_in_text, is_identifier_occurrence_char,
     },
-    vim, EditorTab, GutterMode, Selection, SelectionSet,
+    EditorTab, GutterMode, Selection, SelectionSet,
 };
 use ropey::Rope;
 use std::{
@@ -598,7 +598,8 @@ pub(crate) struct ViewportPaintInput<'a> {
     pub(crate) selection_set: SelectionSet,
     pub(crate) search_matches: &'a [Range<usize>],
     pub(crate) active_search_match: Option<&'a Range<usize>>,
-    pub(crate) vim_mode: vim::Mode,
+    /// `EditorModel::block_cursor`.
+    pub(crate) block_cursor: bool,
     pub(crate) focused: bool,
     pub(crate) cursor_visible: bool,
     pub(crate) cursor_motion: &'a mut crate::cursor_motion::CursorMotion,
@@ -2454,7 +2455,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
         selection_set,
         search_matches,
         active_search_match,
-        vim_mode,
+        block_cursor,
         focused,
         cursor_visible,
         cursor_motion,
@@ -2695,7 +2696,7 @@ pub(crate) fn paint_viewport(input: ViewportPaintInput<'_>, window: &mut Window,
             if focused {
                 for cursor in cursors_in_row(&cursors, row) {
                     let cursor_char = cursor.char;
-                    let block_cursor = vim_mode == vim::Mode::Normal && cursor.collapsed;
+                    let block_cursor = block_cursor && cursor.collapsed;
                     let cursor_x = code_origin_x
                         + x_for_global_char(row, cursor_char.min(row.display_end_char)).unwrap_or_else(|| px(0.0));
                     let cursor_width = if block_cursor {

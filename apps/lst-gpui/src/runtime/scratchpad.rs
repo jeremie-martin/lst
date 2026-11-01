@@ -68,16 +68,14 @@ fn remove_file_best_effort(path: &Path) {
 /// Deletes the scratchpad a Save As moved away from, unless the new path is
 /// that same file or another tab holds it. Two paths that were just written
 /// are compared by `FileIdentity`.
-pub(super) fn remove_previous_scratchpad_after_save_as(
-    previous_scratchpad_path: Option<PathBuf>,
-    path: &Path,
-    open_tabs: &[ModelEditorTab],
-) {
-    if let Some(old) = previous_scratchpad_path
-        .filter(|old| FileIdentity::of(old) != FileIdentity::of(path) && !held_by_another_tab(open_tabs, old, None))
-    {
-        remove_file_best_effort(&old);
+///
+/// Returns whether the scratchpad moved to a different file.
+pub(super) fn remove_previous_scratchpad_after_save_as(old: &Path, path: &Path, open_tabs: &[ModelEditorTab]) -> bool {
+    let moved = FileIdentity::of(old) != FileIdentity::of(path);
+    if moved && !held_by_another_tab(open_tabs, old, None) {
+        remove_file_best_effort(old);
     }
+    moved
 }
 
 pub(super) fn remove_scratchpad_file_if_unreferenced(open_tabs: &[ModelEditorTab], tab_id: TabId, path: &Path) {
@@ -127,21 +125,21 @@ mod tests {
         };
 
         let moved = scratchpad("moved.md");
-        remove_previous_scratchpad_after_save_as(Some(moved.clone()), &dir.path().join("saved.md"), &[]);
+        assert!(remove_previous_scratchpad_after_save_as(
+            &moved,
+            &dir.path().join("saved.md"),
+            &[]
+        ));
         assert!(!moved.exists(), "the scratchpad was saved elsewhere");
 
         let linked = scratchpad("linked.md");
         let link = dir.path().join("link.md");
         std::os::unix::fs::symlink(&linked, &link).unwrap();
-        remove_previous_scratchpad_after_save_as(Some(linked.clone()), &link, &[]);
+        assert!(!remove_previous_scratchpad_after_save_as(&linked, &link, &[]));
         assert!(linked.exists(), "the save target is the scratchpad itself");
 
         let shared = scratchpad("shared.md");
-        remove_previous_scratchpad_after_save_as(
-            Some(shared.clone()),
-            &dir.path().join("saved-copy.md"),
-            &[open_tab(2, &shared)],
-        );
+        remove_previous_scratchpad_after_save_as(&shared, &dir.path().join("saved-copy.md"), &[open_tab(2, &shared)]);
         assert!(shared.exists(), "another tab still edits the scratchpad");
     }
 }

@@ -354,6 +354,12 @@ impl EditorModel {
     pub fn vim_mode(&self) -> vim::Mode {
         self.vim.mode
     }
+    /// Whether a collapsed cursor is a block over its character (Vim Normal
+    /// mode) rather than a caret between characters. Painting and pointer
+    /// targeting both follow it.
+    pub fn block_cursor(&self) -> bool {
+        self.input_mode == InputMode::Vim && self.vim.mode == vim::Mode::Normal
+    }
     pub fn vim_register(&self) -> &vim::Register {
         &self.vim.register
     }

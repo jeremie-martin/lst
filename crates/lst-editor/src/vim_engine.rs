@@ -1370,13 +1370,16 @@ impl EditorModel {
         // The line holding the top row, and that line's first row: from the
         // UI's current layout, else (between an edit and its repaint) by
         // walking from the document start.
-        let anchor = self
+        let (holder, holder_row) = if !wrapped {
+            let line = top_row.min(last);
+            (line, line)
+        } else if let Some(anchor) = self
             .viewport
             .top_line
-            .filter(|&(line, row)| line <= last && row <= top_row && top_row < row + rows_of(line));
-        let (holder, holder_row) = if let Some(anchor) = anchor.filter(|_| wrapped) {
+            .filter(|&(line, row)| line <= last && row <= top_row && top_row < row + rows_of(line))
+        {
             anchor
-        } else if wrapped {
+        } else {
             let (mut line, mut row) = (0, 0);
             while line < last {
                 let next = row + rows_of(line);
@@ -1387,9 +1390,6 @@ impl EditorModel {
                 line += 1;
             }
             (line, row)
-        } else {
-            let line = top_row.min(last);
-            (line, line)
         };
         let (mut top, mut bottom, mut shown_end) = (None, holder, top_row);
         let (mut line, mut row) = (holder, holder_row);

@@ -1652,13 +1652,10 @@ impl LstGpuiApp {
                     previous_scratchpad, ..
                 } = kind
                 {
-                    if saved {
-                        if let Some(previous) = previous_scratchpad.as_deref() {
-                            if FileIdentity::of(previous) != FileIdentity::of(&saved_path) {
-                                self.recent.prune_path(previous);
-                            }
+                    if let Some(previous) = previous_scratchpad.filter(|_| saved) {
+                        if remove_previous_scratchpad_after_save_as(&previous, &saved_path, self.model.tabs()) {
+                            self.recent.prune_path(&previous);
                         }
-                        remove_previous_scratchpad_after_save_as(previous_scratchpad, &saved_path, self.model.tabs());
                     }
                 }
                 if saved {
@@ -1707,13 +1704,7 @@ impl LstGpuiApp {
                 body,
             } => {
                 let recent_path = path.clone();
-                let recent_origin = self.model.tab_by_id(tab_id).map(|tab| {
-                    if tab.is_scratchpad() {
-                        RecentOrigin::Scratchpad
-                    } else {
-                        RecentOrigin::Regular
-                    }
-                });
+                let recent_origin = self.model.tab_by_id(tab_id).map(RecentOrigin::of);
                 let body_is_blank = body.text().trim().is_empty();
                 let mut saved = false;
                 self.update_model_in_background(cx, true, |model| {
@@ -1810,11 +1801,7 @@ impl LstGpuiApp {
             Some((
                 tab.path()?.clone(),
                 tab.cursor_position(),
-                if tab.is_scratchpad() {
-                    RecentOrigin::Scratchpad
-                } else {
-                    RecentOrigin::Regular
-                },
+                RecentOrigin::of(tab),
                 tab.is_blank(),
             ))
         }) else {

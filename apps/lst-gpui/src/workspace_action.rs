@@ -650,6 +650,11 @@ pub(crate) fn workspace_fallback_command(
     os: OperatingSystem,
 ) -> Option<WorkspaceCommand> {
     let keystroke = fallback_keystroke(key, modifiers)?;
+    // Plain typing reaches here on every key: parse only once a default
+    // fallback chord matches.
+    let binding = BINDINGS
+        .iter()
+        .find(|binding| binding.x11_fallback && binding.keystroke == keystroke)?;
     let chord = Keystroke::parse_with_os(&keystroke, os).ok()?;
     let binds_chord = |sequence: &String| {
         let mut keys = sequence.split_whitespace();
@@ -658,21 +663,14 @@ pub(crate) fn workspace_fallback_command(
             (Some(key), None) if Keystroke::parse_with_os(key, os).is_ok_and(|key| key == chord)
         )
     };
-    BINDINGS
+    let id = command_id(binding.command);
+    let kept = overrides
+        .get(id)
+        .is_none_or(|sequences| sequences.iter().any(&binds_chord));
+    let claimed_elsewhere = overrides
         .iter()
-        .find(|binding| {
-            if !binding.x11_fallback || binding.keystroke != keystroke {
-                return false;
-            }
-            let id = command_id(binding.command);
-            overrides
-                .get(id)
-                .is_none_or(|sequences| sequences.iter().any(&binds_chord))
-                && !overrides
-                    .iter()
-                    .any(|(other, sequences)| other != id && sequences.iter().any(&binds_chord))
-        })
-        .map(|binding| binding.command)
+        .any(|(other, sequences)| other != id && sequences.iter().any(&binds_chord));
+    (kept && !claimed_elsewhere).then_some(binding.command)
 }
 
 pub(crate) fn attach_workspace_actions(root: Div, cx: &mut Context<LstGpuiApp>) -> Div {
