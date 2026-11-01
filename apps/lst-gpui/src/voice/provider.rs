@@ -43,7 +43,7 @@ impl Provider {
         let provider = self.clone();
         let (tx, result) = mpsc::channel();
         let (cancel, cancelled) = oneshot::channel::<()>();
-        std::thread::Builder::new().name("voice-transcribe".into()).spawn(move || {
+        super::workers::spawn("voice-transcribe", move || {
             let result = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                 Ok(runtime) => runtime.block_on(async {
                     tokio::select! {

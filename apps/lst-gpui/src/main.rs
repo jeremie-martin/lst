@@ -25,6 +25,7 @@ mod status_bar;
 mod syntax;
 mod tab_strip;
 mod ui;
+mod user_dirs;
 mod viewport;
 mod voice;
 mod workspace_action;

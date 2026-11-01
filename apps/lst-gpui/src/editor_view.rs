@@ -369,8 +369,21 @@ impl LstGpuiApp {
         let rows = ((bounds.size.height / row_height).floor() as usize).max(1);
         let scroll_top = scroll_top_for(&self.active_view().scroll);
         let top = (scroll_top / row_height).floor() as usize;
+        // The line at the top row, from the layout the rows were painted with
+        // while it still describes the document.
+        let top_line = self
+            .active_view()
+            .cache
+            .borrow()
+            .wrap_layout
+            .as_ref()
+            .filter(|cached| cached.revision == self.model.active_tab().revision())
+            .map(|cached| {
+                let line = lst_editor::wrap::line_for_visual_row(&cached.layout, top);
+                (line, cached.layout.row_start(line).unwrap_or(top))
+            });
         self.model.set_viewport_rows(rows);
-        self.model.set_viewport_top(top);
+        self.model.set_viewport_top(top, top_line);
     }
 
     pub(crate) fn queue_cursor_reveal(&mut self, intent: RevealIntent) {

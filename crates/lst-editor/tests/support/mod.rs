@@ -70,7 +70,7 @@ impl ModelHarness {
 
     pub fn configure_viewport(&mut self, rows: usize, top: usize) {
         self.model.set_viewport_rows(rows);
-        self.model.set_viewport_top(top);
+        self.model.set_viewport_top(top, None);
     }
 
     pub fn sync_effects(&mut self) {

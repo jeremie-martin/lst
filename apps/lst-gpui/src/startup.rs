@@ -1,11 +1,11 @@
 //! File preparation can overlap platform initialization. Scratchpad creation
 //! stays at the window boundary so a failed platform launch creates no notes.
 
-use std::{collections::HashSet, path::Path};
+use std::path::Path;
 
 use lst_editor::{EditorModel, EditorTab, TabId, UNTITLED_PREFIX};
 
-use crate::{recent::normalize_recent_path, runtime};
+use crate::runtime::{self, FileIdentity};
 
 pub(crate) struct LaunchFiles {
     tabs: Vec<EditorTab>,
@@ -16,11 +16,14 @@ impl LaunchFiles {
     pub(crate) fn load(paths: &[std::path::PathBuf]) -> Self {
         let mut tabs = Vec::new();
         let mut status = "Ready.".to_string();
-        let mut opened_paths = HashSet::new();
+        let mut opened_files = Vec::new();
         for path in paths {
-            if !opened_paths.insert(normalize_recent_path(path)) {
+            // One tab per file, as when opening documents later.
+            let identity = FileIdentity::of(path);
+            if opened_files.contains(&identity) {
                 continue;
             }
+            opened_files.push(identity);
             match runtime::read_file_with_stamp(path) {
                 Ok((text, file_stamp)) => tabs.push(EditorTab::from_path_with_stamp(
                     TabId::from_raw(tabs.len() as u64 + 1),

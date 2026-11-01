@@ -745,17 +745,18 @@ impl EditorModel {
     fn vim_open_line(&mut self, below: bool) -> bool {
         let line = self.cursor().line;
         let indent = self.indent_of(line);
-        let newline = crate::text_input::preferred_newline(self.active_tab());
+        let newline = crate::document::line_ending_style(self.active_tab().buffer());
         let at = if below {
             self.line_end(line)
         } else {
             self.line_start(line)
         };
-        let text = if below {
+        let mut text = if below {
             format!("{newline}{indent}")
         } else {
             format!("{indent}{newline}")
         };
+        crate::document::keep_line_breaks_apart(self.active_tab().buffer(), at..at, &mut text);
         let cursor = if below {
             Position::new(line + 1, indent.chars().count())
         } else {
@@ -1366,8 +1367,16 @@ impl EditorModel {
                 1
             }
         };
-        // The line holding the top row, and that line's first row.
-        let (holder, holder_row) = if wrapped {
+        // The line holding the top row, and that line's first row: from the
+        // UI's current layout, else (between an edit and its repaint) by
+        // walking from the document start.
+        let anchor = self
+            .viewport
+            .top_line
+            .filter(|&(line, row)| line <= last && row <= top_row && top_row < row + rows_of(line));
+        let (holder, holder_row) = if let Some(anchor) = anchor.filter(|_| wrapped) {
+            anchor
+        } else if wrapped {
             let (mut line, mut row) = (0, 0);
             while line < last {
                 let next = row + rows_of(line);

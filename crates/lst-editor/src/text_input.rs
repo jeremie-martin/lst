@@ -1,5 +1,7 @@
 use crate::{
-    document::{char_to_position, line_indent_prefix, EditKind, UndoBoundary},
+    document::{
+        char_to_position, keep_line_breaks_apart, line_ending_style, line_indent_prefix, EditKind, UndoBoundary,
+    },
     language::LanguageConfig,
     multi_selection::{self, request_for_each, SelectionEdit},
     selection::{
@@ -144,19 +146,11 @@ where
     Some(EditRequest::single(EditKind::Delete, boundary, range, String::new()))
 }
 pub(crate) fn newline_request(tab: &EditorTab) -> EditRequest {
-    let newline = preferred_newline(tab);
-    let buffer = tab.buffer();
-    let len_chars = tab.len_chars();
     let replacements: Vec<String> = tab
         .selection_set()
         .as_slice()
         .iter()
-        .map(|selection| {
-            format!(
-                "{newline}{}",
-                carried_indent(buffer, selection.range().start.min(len_chars))
-            )
-        })
+        .map(|selection| newline_replacement(tab, &selection.range(), false).0)
         .collect();
     multi_selection::replacement_request_by_index(tab, |index| replacements[index].clone(), UndoBoundary::Break)
         .unwrap_or_else(|| {
@@ -212,7 +206,7 @@ pub(crate) fn tab_request(tab: &EditorTab) -> EditRequest {
 
 pub(crate) fn linewise_paste_request(tab: &EditorTab, mut text: String) -> EditRequest {
     if !text.ends_with(crate::document::is_line_break) {
-        text.push_str(preferred_newline(tab));
+        text.push_str(line_ending_style(tab.buffer()));
     }
     let line_starts = tab
         .selection_set()
@@ -233,7 +227,11 @@ pub(crate) fn linewise_paste_request(tab: &EditorTab, mut text: String) -> EditR
     let changes = TextChangeSet::new(
         unique_starts
             .into_iter()
-            .map(|start| TextChange::insert(start, text.clone()))
+            .map(|start| {
+                let mut text = text.clone();
+                keep_line_breaks_apart(tab.buffer(), start..start, &mut text);
+                TextChange::insert(start, text)
+            })
             .collect(),
         primary_change,
     );
@@ -378,20 +376,6 @@ pub(crate) fn marked_text_request(
         request.with_marked_range_after(0..inserted_chars)
     }
 }
-pub(crate) fn preferred_newline(tab: &EditorTab) -> &'static str {
-    let line = tab.buffer().line(0);
-    let content_len = crate::line_content(line).len_chars();
-    match line.get_char(content_len) {
-        Some('\r') if line.len_chars() - content_len == 2 => "\r\n",
-        Some('\r') => "\r",
-        Some('\u{b}') => "\u{b}",
-        Some('\u{c}') => "\u{c}",
-        Some('\u{85}') => "\u{85}",
-        Some('\u{2028}') => "\u{2028}",
-        Some('\u{2029}') => "\u{2029}",
-        _ => "\n",
-    }
-}
 fn soft_tab_backspace_range_at(tab: &EditorTab, cursor: usize) -> Option<Range<usize>> {
     let cfg = tab.language_config();
     if cfg.indent.uses_tabs() {
@@ -430,19 +414,29 @@ fn carried_indent(buffer: &ropey::Rope, at: usize) -> String {
     line_indent_prefix(buffer, line).chars().take(column).collect()
 }
 
+/// The text Enter inserts in place of `range`, and the caret offset within it.
 fn newline_replacement(tab: &EditorTab, range: &Range<usize>, smart_pair: bool) -> (String, usize) {
-    let newline = preferred_newline(tab);
     let buffer = tab.buffer();
+    let newline = line_ending_style(buffer);
     let outer_indent = carried_indent(buffer, range.start);
-    if smart_pair && range.start == range.end && non_quote_auto_pair_at(tab, range.start).is_some() {
-        let inner_indent = format!("{outer_indent}{}", tab.language_config().indent.indent_unit());
-        let replacement = format!("{newline}{inner_indent}{newline}{outer_indent}");
-        let caret = newline.chars().count() + inner_indent.chars().count();
-        return (replacement, caret);
-    }
-
-    let replacement = format!("{newline}{outer_indent}");
-    let caret = replacement.chars().count();
+    let (mut replacement, caret) =
+        if smart_pair && range.start == range.end && non_quote_auto_pair_at(tab, range.start).is_some() {
+            let inner_indent = format!("{outer_indent}{}", tab.language_config().indent.indent_unit());
+            let caret = newline.chars().count() + inner_indent.chars().count();
+            (format!("{newline}{inner_indent}{newline}{outer_indent}"), caret)
+        } else {
+            let replacement = format!("{newline}{outer_indent}");
+            let caret = replacement.chars().count();
+            (replacement, caret)
+        };
+    let unwidened_len = replacement.chars().count();
+    let prepended = keep_line_breaks_apart(buffer, range.clone(), &mut replacement);
+    // A caret ending the text stays past a break widened at its end.
+    let caret = if caret == unwidened_len {
+        replacement.chars().count()
+    } else {
+        caret + prepended
+    };
     (replacement, caret)
 }
 

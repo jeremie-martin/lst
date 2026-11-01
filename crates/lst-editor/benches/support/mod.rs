@@ -145,7 +145,7 @@ impl ModelDriver {
 
     pub fn configure_viewport(&mut self) {
         self.model.set_viewport_rows(VIEWPORT_ROWS);
-        self.model.set_viewport_top(0);
+        self.model.set_viewport_top(0, None);
     }
 
     pub fn sync_effects(&mut self) {

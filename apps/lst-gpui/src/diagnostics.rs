@@ -216,7 +216,7 @@ pub(crate) fn install() {
 }
 
 fn log_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(CRASH_LOG_RELATIVE))
+    crate::user_dirs::home_dir().map(|home| home.join(CRASH_LOG_RELATIVE))
 }
 
 fn now() -> OffsetDateTime {

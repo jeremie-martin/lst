@@ -46,6 +46,18 @@ impl SaveCoordinator {
             .is_some_and(|state| state.inflight.is_some() || state.queued.is_some())
     }
 
+    /// Paths with a write in flight or queued, in a stable order.
+    pub(super) fn write_targets(&self) -> Vec<PathBuf> {
+        let mut targets = self
+            .paths
+            .iter()
+            .filter(|(_, state)| state.inflight.is_some() || state.queued.is_some())
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets
+    }
+
     pub(super) fn generation(&self, path: &Path) -> u64 {
         self.paths
             .get(path)

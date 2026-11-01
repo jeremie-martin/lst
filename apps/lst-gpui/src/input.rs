@@ -616,6 +616,13 @@ fn drag_scroll_velocity(position: Pixels, start: Pixels, end: Pixels, scale: f32
 }
 
 impl LstGpuiApp {
+    /// Forgets held arrows and the modifier chord in progress, which must not
+    /// apply to keys typed after the window stopped receiving input.
+    pub(crate) fn interrupt_held_input(&mut self) {
+        self.held_arrows.clear();
+        self.clear_x11_modifier_chord_state();
+    }
+
     pub(crate) fn clear_x11_modifier_chord_state(&mut self) {
         self.modifier_chord_accumulated = Modifiers::default();
         self.x11_ctrl_k_pending = false;

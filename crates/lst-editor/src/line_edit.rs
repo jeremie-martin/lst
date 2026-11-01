@@ -1,8 +1,7 @@
 use crate::{
-    document::{char_to_position, position_to_char, EditKind, UndoBoundary},
+    document::{char_to_position, keep_line_breaks_apart, line_ending_style, position_to_char, EditKind, UndoBoundary},
     selection::{display_line_char_len, line_display_text, line_range_at_char, Position, Selection, SelectionSet},
     tab::EditorTab,
-    text_input,
     transaction::{apply_change_to_buffer, EditRequest, SelectionAfter, TextChange, TextChangeSet},
 };
 use std::ops::Range;
@@ -47,6 +46,7 @@ fn span_change(
             replacement.push_str(newline);
         }
     }
+    keep_line_breaks_apart(buffer, range.clone(), &mut replacement);
     Some(TextChange::replace(range, replacement))
 }
 fn insert_change(buffer: &ropey::Rope, newline: &str, insert_at: usize, new_lines: &[String]) -> Option<TextChange> {
@@ -64,6 +64,7 @@ fn insert_change(buffer: &ropey::Rope, newline: &str, insert_at: usize, new_line
         }
         buffer.len_chars()
     };
+    keep_line_breaks_apart(buffer, offset..offset, &mut replacement);
     Some(TextChange::insert(offset, replacement))
 }
 pub(super) fn replace_lines_change(
@@ -72,7 +73,7 @@ pub(super) fn replace_lines_change(
     last: usize,
     new_lines: &[String],
 ) -> Option<TextChange> {
-    span_change(tab.buffer(), text_input::preferred_newline(tab), first, last, new_lines)
+    span_change(tab.buffer(), line_ending_style(tab.buffer()), first, last, new_lines)
 }
 fn replace_lines_in_place_change(
     tab: &EditorTab,
@@ -81,15 +82,16 @@ fn replace_lines_in_place_change(
     new_lines: &[String],
 ) -> Option<TextChange> {
     let (range, trailing_newline) = line_span_without_prefix(tab.buffer(), first, last)?;
-    let newline = text_input::preferred_newline(tab);
+    let newline = line_ending_style(tab.buffer());
     let mut replacement = new_lines.join(newline);
     if trailing_newline && !replacement.is_empty() {
         replacement.push_str(newline);
     }
+    keep_line_breaks_apart(tab.buffer(), range.clone(), &mut replacement);
     Some(TextChange::replace(range, replacement))
 }
 pub(super) fn insert_lines_change(tab: &EditorTab, insert_at: usize, new_lines: &[String]) -> Option<TextChange> {
-    insert_change(tab.buffer(), text_input::preferred_newline(tab), insert_at, new_lines)
+    insert_change(tab.buffer(), line_ending_style(tab.buffer()), insert_at, new_lines)
 }
 pub(crate) fn indent_request(tab: &EditorTab, first: usize, last: usize) -> Option<EditRequest> {
     if first > last || last >= tab.line_count() {

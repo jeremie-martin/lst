@@ -41,8 +41,8 @@ impl SaveTextOptions {
             let (line, rest) = remaining.split_at(end);
             let content = crate::line_content_str(line);
             let ending = &line[content.len()..];
-            if !ending.is_empty() {
-                preferred_ending.get_or_insert(ending);
+            if preferred_ending.is_none() {
+                preferred_ending = crate::document::line_ending_kind(ending);
             }
             let mut trimmed = if self.trim_trailing_whitespace {
                 content.trim_end_matches([' ', '\t'])
@@ -67,8 +67,8 @@ impl SaveTextOptions {
             remaining = rest;
         }
         if self.ensure_final_newline && !output.is_empty() && !output.ends_with(crate::document::is_line_break) {
-            // Preserve mixed endings. An added terminator uses the first
-            // existing style, or LF for a document with no line endings.
+            // Preserve mixed endings. An added terminator follows the editor's
+            // convention (`line_ending_style`): the first CR or LF style, else LF.
             let ending = preferred_ending.unwrap_or("\n");
             output.push_str(ending);
             changes.push(TextChange::insert(offset, ending));
@@ -96,7 +96,10 @@ mod tests {
                     ensure_final_newline: true,
                 }
                 .prepare(original.clone());
-                assert_eq!(prepared.text(), format!("é🦀{ending}second{ending}"));
+                // Only CR and LF terminators set the style of an added one.
+                let added = crate::document::line_ending_kind(ending).unwrap_or("\n");
+                let expected_end = if trailing.is_empty() { added } else { ending };
+                assert_eq!(prepared.text(), format!("é🦀{ending}second{expected_end}"));
                 let mut buffer = Rope::from_str(&original);
                 for change in prepared.changes().unwrap().as_slice().iter().rev() {
                     apply_change_to_buffer(&mut buffer, change);

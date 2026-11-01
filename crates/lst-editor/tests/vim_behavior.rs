@@ -30,9 +30,37 @@ fn logical_line_terminators_are_boundaries_for_vim_motions_and_edits() {
         h.expect_text("ab");
         h.keys("u");
         h.expect_text(&text);
+        // New lines follow the CR/LF convention. VT, FF, NEL, LS and PS
+        // separate lines but occur within content, so new lines use LF.
+        let new_line = if ["\n", "\r\n", "\r"].contains(&ending) {
+            ending
+        } else {
+            "\n"
+        };
         h.keys("Onew<esc>");
-        h.expect_text(&format!("ab{ending}new{ending}cd"));
+        h.expect_text(&format!("ab{ending}new{new_line}cd"));
     }
+}
+
+#[test]
+fn opened_lines_never_fuse_a_lone_cr_with_an_lf() {
+    // The first line sets a lone-CR convention; the second ends in LF.
+    for (keys, expected) in [
+        ("o", "x\ry\r\n\n\nz"),
+        ("jO", "x\ry\n\r\n\nz"),
+        ("A<enter>", "x\ry\r\n\n\nz"),
+    ] {
+        let mut h = VimHarness::normal_at("x\ry\n\nz", 1, 0);
+        h.keys(keys);
+        h.keys("<esc>");
+        h.expect_text(expected);
+        assert_eq!(h.model.active_tab().line_count(), 5, "{keys}");
+    }
+    // An LF convention cannot fuse with a lone CR before the new break.
+    let mut h = VimHarness::normal_at("a\nb\r", 1, 0);
+    h.keys("jonew<esc>");
+    h.expect_text("a\nb\r\r\nnew");
+    h.expect_cursor(3, 2);
 }
 
 #[test]
@@ -201,7 +229,7 @@ fn visual_selection_follows_viewport_motions() {
         .join("\n");
     let mut harness = VimHarness::normal_at(&text, 0, 0);
     harness.model.set_viewport_rows(7);
-    harness.model.set_viewport_top(4);
+    harness.model.set_viewport_top(4, None);
     harness.keys("vH");
     harness.expect_mode(vim::Mode::Visual);
     harness.expect_selection("line 0\nline 1\nline 2\nline 3\nl");
@@ -302,7 +330,7 @@ fn viewport_commands_emit_reveal_effects_and_move_to_visible_rows() {
         .join("\n");
     let mut harness = VimHarness::normal_at(&text, 0, 0);
     harness.model.set_viewport_rows(11);
-    harness.model.set_viewport_top(10);
+    harness.model.set_viewport_top(10, None);
     harness.clear_effects();
 
     harness.keys("H");
@@ -494,7 +522,7 @@ fn screen_motions_are_linewise_under_operators() {
     ] {
         let mut harness = VimHarness::normal_at("a\nb\nc\nd\ne\nf", line, 0);
         harness.model.set_viewport_rows(4);
-        harness.model.set_viewport_top(0);
+        harness.model.set_viewport_top(0, None);
         harness.keys(keys);
         harness.expect_text(text);
     }
@@ -507,19 +535,19 @@ fn screen_motions_target_the_lines_shown_between_soft_wrapped_rows() {
     let text = vec!["x".repeat(200); 30].join("\n");
     let mut harness = VimHarness::normal_at(&text, 12, 0);
     harness.model.set_viewport_rows(24);
-    harness.model.set_viewport_top(30);
+    harness.model.set_viewport_top(30, None);
     for (keys, line) in [("H", 10), ("M", 13), ("L", 17)] {
         harness.keys(keys);
         harness.expect_cursor(line, 0);
     }
     // A line scrolled partly above the top is not the first line on screen.
-    harness.model.set_viewport_top(31);
+    harness.model.set_viewport_top(31, None);
     harness.keys("H");
     harness.expect_cursor(11, 0);
 
     let mut harness = VimHarness::normal_at(&text, 12, 0);
     harness.model.set_viewport_rows(24);
-    harness.model.set_viewport_top(30);
+    harness.model.set_viewport_top(30, None);
     harness.keys("dL");
     harness.expect_text(&vec!["x".repeat(200); 24].join("\n"));
 
@@ -528,6 +556,30 @@ fn screen_motions_target_the_lines_shown_between_soft_wrapped_rows() {
     harness.model.set_viewport_rows(24);
     harness.keys("M");
     harness.expect_cursor(1, 0);
+}
+
+#[test]
+fn screen_motions_from_the_painted_layout_match_a_walk_from_the_document_start() {
+    // Mixed row counts at the harness's 80 columns: 1, 2, 3, 1, 4, ... rows.
+    let text = (0..60)
+        .map(|line| "x".repeat([10, 120, 200, 0, 300][line % 5]))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let layout = lst_editor::wrap::build_wrap_layout_for_rope(&ropey::Rope::from_str(&text), 80, true);
+    for top in 0..layout.total_rows() {
+        let line = lst_editor::wrap::line_for_visual_row(&layout, top);
+        let anchor = (line, layout.row_start(line).unwrap());
+        for keys in ["H", "M", "L"] {
+            let land = |top_line| {
+                let mut harness = VimHarness::normal_at(&text, 0, 0);
+                harness.model.set_viewport_rows(7);
+                harness.model.set_viewport_top(top, top_line);
+                harness.keys(keys);
+                harness.model.active_tab().cursor_position()
+            };
+            assert_eq!(land(Some(anchor)), land(None), "{keys} with the top at row {top}");
+        }
+    }
 }
 
 #[test]
@@ -644,7 +696,7 @@ fn vim_selection_invariant_covers_tabs_external_sets_and_restored_history() {
 fn screen_motions_stop_on_the_last_blank_of_a_whitespace_only_line() {
     let mut h = VimHarness::normal_at("   \n\t\nend", 2, 0);
     h.model.set_viewport_rows(3);
-    h.model.set_viewport_top(0);
+    h.model.set_viewport_top(0, None);
     h.keys("Hx");
     h.expect_text("  \n\t\nend");
     h.expect_cursor(0, 1);

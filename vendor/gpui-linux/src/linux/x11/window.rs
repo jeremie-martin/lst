@@ -30,6 +30,7 @@ use x11rb::{
 };
 
 use std::{
+    // lst patch: `Cell` holds the per-window frame demand.
     cell::{Cell, RefCell},
     ffi::c_void,
     fmt::Display,
@@ -1385,6 +1386,7 @@ impl X11WindowStatePtr {
         };
 
         let mut callbacks = self.callbacks.borrow_mut();
+        // lst patch: notify resize and move only for actual changes.
         if is_resize && let Some(ref mut fun) = callbacks.resize {
             fun(content_size, scale_factor)
         }

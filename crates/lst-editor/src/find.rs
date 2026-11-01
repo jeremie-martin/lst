@@ -128,6 +128,16 @@ impl FindState {
         };
 
         for_each_text_line(buffer, |line_idx, line| {
+            if line.is_ascii() {
+                // Line content holds no CRLF, so every ASCII character is its
+                // own grapheme: byte offsets are columns, all aligned.
+                self.matches.extend(regex.find_iter(line).map(|m| MatchPos {
+                    line: line_idx,
+                    col: m.start(),
+                    char_len: m.len(),
+                }));
+                return;
+            }
             let line_byte_len = line.len();
             let mut cells = None;
             for m in regex.find_iter(line) {

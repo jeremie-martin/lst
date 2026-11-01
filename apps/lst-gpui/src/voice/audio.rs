@@ -32,13 +32,11 @@ impl Recorder {
         let level = Arc::new(AtomicU32::new(0));
         let (tx, result) = mpsc::channel();
         let (stopped, started, meter) = (stop.clone(), ready.clone(), level.clone());
-        std::thread::Builder::new()
-            .name("voice-capture".into())
-            .spawn(move || {
-                let result = capture(stopped, started, meter, &directory).map_err(|e| e.to_string());
-                let _ = tx.send(result);
-            })
-            .map_err(|e| e.to_string())?;
+        super::workers::spawn("voice-capture", move || {
+            let result = capture(stopped, started, meter, &directory).map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        })
+        .map_err(|e| e.to_string())?;
         Ok(Self {
             stop,
             ready,

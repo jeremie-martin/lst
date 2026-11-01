@@ -671,16 +671,7 @@ fn bounds_center_x(bounds: Bounds<Pixels>) -> f32 {
 }
 
 pub(crate) fn default_recent_files_path() -> Option<PathBuf> {
-    if let Some(state_home) = std::env::var_os("XDG_STATE_HOME") {
-        return Some(PathBuf::from(state_home).join("lst").join("recent-files"));
-    }
-    std::env::var_os("HOME").map(|home| {
-        PathBuf::from(home)
-            .join(".local")
-            .join("state")
-            .join("lst")
-            .join("recent-files")
-    })
+    crate::user_dirs::state_home().map(|state| state.join("lst/recent-files"))
 }
 
 pub(crate) fn normalize_recent_path(path: &Path) -> PathBuf {
@@ -1195,7 +1186,7 @@ impl LstGpuiApp {
         cx.notify();
     }
 
-    fn spawn_recent_previews(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn spawn_recent_previews(&mut self, cx: &mut Context<Self>) {
         for path in self.recent.paths_to_load_previews() {
             cx.spawn(async move |this, cx| {
                 let preview_path = path.clone();
@@ -1265,90 +1256,9 @@ impl LstGpuiApp {
     }
 
     pub(crate) fn open_recent_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let path = normalize_recent_path(&path);
-        let recorded_origin = self.recent.origin_for_path(&path).unwrap_or(RecentOrigin::Regular);
-        if let Some(open_origin) = self.activate_existing_tab_for_path(&path, None, cx) {
-            self.recent.record_with_origin(&path, open_origin);
-            self.close_recent_files_panel(cx);
-            return;
-        }
-
+        let origin = self.recent.origin_for_path(&path).unwrap_or(RecentOrigin::Regular);
         self.close_recent_files_panel(cx);
-        cx.spawn(async move |this, cx| {
-            let read_path = path.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move { crate::runtime::read_file_with_stamp(&read_path) })
-                .await;
-            let _ = this.update(cx, |view, cx| match result {
-                Ok((text, stamp)) => {
-                    if let Some(open_origin) = view.activate_existing_tab_for_path(&path, None, cx) {
-                        view.recent.record_with_origin(&path, open_origin);
-                        return;
-                    }
-                    view.open_recent_contents(path.clone(), recorded_origin, text, stamp, None, cx);
-                    view.recent.record_with_origin(&path, recorded_origin);
-                }
-                Err(err) => {
-                    if err.kind() == std::io::ErrorKind::NotFound {
-                        view.recent.prune_path(&path);
-                        view.spawn_recent_previews(cx);
-                    }
-                    view.update_model(cx, true, |model| {
-                        model.open_file_failed(path, err.to_string());
-                    });
-                }
-            });
-        })
-        .detach();
-    }
-
-    pub(crate) fn activate_existing_tab_for_path(
-        &mut self,
-        path: &Path,
-        position: Option<lst_editor::Position>,
-        cx: &mut Context<Self>,
-    ) -> Option<RecentOrigin> {
-        let path = normalize_recent_path(path);
-        let (tab_id, origin) = self.model.tabs().iter().find_map(|tab| {
-            let tab_path = tab.path()?;
-            (normalize_recent_path(tab_path) == path).then_some((
-                tab.id(),
-                if tab.is_scratchpad() {
-                    RecentOrigin::Scratchpad
-                } else {
-                    RecentOrigin::Regular
-                },
-            ))
-        })?;
-
-        self.update_model(cx, true, |model| {
-            model.set_active_tab(tab_id);
-            if let Some(position) = position {
-                model.set_active_cursor_position(position.line, position.column);
-            }
-        });
-        Some(origin)
-    }
-
-    pub(crate) fn open_recent_contents(
-        &mut self,
-        path: PathBuf,
-        origin: RecentOrigin,
-        text: String,
-        stamp: lst_editor::FileStamp,
-        position: Option<lst_editor::Position>,
-        cx: &mut Context<Self>,
-    ) {
-        self.update_model(cx, true, |model| {
-            match origin {
-                RecentOrigin::Regular => model.open_files_with_stamps(vec![(path, text, Some(stamp))]),
-                RecentOrigin::Scratchpad => model.open_scratchpad_with_stamp(path, text, stamp),
-            }
-            if let Some(position) = position {
-                model.set_active_cursor_position(position.line, position.column);
-            }
-        });
+        self.open_documents(vec![crate::runtime::OpenRequest::new(path, origin)], cx);
     }
 }
 

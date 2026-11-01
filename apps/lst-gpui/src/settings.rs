@@ -1,7 +1,7 @@
 use serde::{de, Deserialize, Deserializer, Serialize};
 use std::{
     collections::BTreeMap,
-    env, fs,
+    fs,
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -441,31 +441,18 @@ impl AppSettings {
 }
 
 fn config_path() -> Option<PathBuf> {
-    config_path_from(
-        env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-        env::var_os("HOME").map(PathBuf::from),
-    )
-}
-
-fn config_path_from(config_home: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
-    config_home
-        .filter(|path| path.is_absolute())
-        .or_else(|| home.filter(|path| path.is_absolute()).map(|path| path.join(".config")))
-        .map(|path| path.join("lst/config.toml"))
+    crate::user_dirs::config_home().map(|config| config.join("lst/config.toml"))
 }
 
 fn deserialize_directory<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<PathBuf>, D::Error> {
     Option::<PathBuf>::deserialize(deserializer)?
-        .map(|path| {
-            resolve_directory(path, env::var_os("HOME").map(PathBuf::from).as_deref()).map_err(de::Error::custom)
-        })
+        .map(|path| resolve_directory(path, crate::user_dirs::home_dir().as_deref()).map_err(de::Error::custom))
         .transpose()
 }
 
 fn resolve_directory(path: PathBuf, home: Option<&Path>) -> Result<PathBuf, String> {
     let path = if path.as_os_str().as_encoded_bytes().starts_with(b"~/") {
-        home.filter(|home| home.is_absolute())
-            .ok_or("Cannot expand ~/ without an absolute HOME directory")?
+        home.ok_or("Cannot expand ~/ without an absolute HOME directory")?
             .join(path.strip_prefix("~").expect("leading ~/"))
     } else {
         path
@@ -592,18 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn configuration_roots_and_note_paths_cannot_depend_on_the_working_directory() {
-        for root in [None, Some(PathBuf::new()), Some("relative".into())] {
-            assert_eq!(
-                config_path_from(root, Some("/home/person".into())),
-                Some("/home/person/.config/lst/config.toml".into())
-            );
-        }
-        assert_eq!(
-            config_path_from(Some("/config".into()), Some("relative".into())),
-            Some("/config/lst/config.toml".into())
-        );
-        assert!(config_path_from(None, Some("relative".into())).is_none());
+    fn note_directories_cannot_depend_on_the_working_directory() {
         let home = Path::new("/home/person");
         assert_eq!(
             resolve_directory("~/notes".into(), Some(home)).unwrap(),

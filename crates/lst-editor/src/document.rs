@@ -1,5 +1,6 @@
 use crate::selection::{self, line_display_text, Position};
 use ropey::{Rope, RopeSlice};
+use std::{borrow::Cow, ops::Range};
 
 pub(crate) fn is_line_break(ch: char) -> bool {
     matches!(ch, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}')
@@ -17,6 +18,44 @@ pub fn line_content(line: RopeSlice<'_>) -> RopeSlice<'_> {
         }
     }
     line.slice(..end)
+}
+
+/// The line break new lines use: the form of the document's first CR or LF
+/// terminator, or LF when it has none. VT, FF, NEL, LS and PS also end Rope
+/// lines but occur within content (a page break, a JavaScript string), so
+/// they never set the convention.
+pub(crate) fn line_ending_style(buffer: &Rope) -> &'static str {
+    buffer
+        .lines()
+        .find_map(|line| line_ending_kind(&Cow::from(line.slice(line_content(line).len_chars()..))))
+        .unwrap_or("\n")
+}
+
+/// The convention a terminator sets: CRLF, LF or a lone CR, else none.
+pub(crate) fn line_ending_kind(terminator: &str) -> Option<&'static str> {
+    match terminator {
+        "\r\n" => Some("\r\n"),
+        "\n" => Some("\n"),
+        "\r" => Some("\r"),
+        _ => None,
+    }
+}
+
+/// Keeps the line breaks at the edges of `text`, about to replace `range`,
+/// apart from their neighbors. Rope reads a CR directly followed by an LF as
+/// one CRLF terminator, so a leading LF after a lone CR, or a trailing lone
+/// CR before an LF, would fuse with it and the inserted line would vanish.
+/// Such an edge break widens to CRLF, which never fuses: line and column
+/// positions are unchanged. Returns how many characters were prepended.
+pub(crate) fn keep_line_breaks_apart(buffer: &Rope, range: Range<usize>, text: &mut String) -> usize {
+    if text.ends_with('\r') && buffer.get_char(range.end) == Some('\n') {
+        text.push('\n');
+    }
+    if text.starts_with('\n') && range.start > 0 && buffer.char(range.start - 1) == '\r' {
+        text.insert(0, '\r');
+        return 1;
+    }
+    0
 }
 
 /// String counterpart for callers visiting borrowed logical lines.

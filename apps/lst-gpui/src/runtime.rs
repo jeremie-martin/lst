@@ -18,19 +18,21 @@ use std::{
 };
 
 use crate::{
-    diagnostics, elapsed_ms,
-    recent::{normalize_recent_path, RecentOrigin},
-    ClosePrompt, ClosePromptIntent, ClosePromptStatus, ExitSaveContinuation, FileConflictNotice, LstGpuiApp,
-    PendingExitSave, QuitReview, QuitReviewDecision, QuitReviewItemStatus,
+    diagnostics, elapsed_ms, recent::RecentOrigin, ClosePrompt, ClosePromptIntent, ClosePromptStatus,
+    ExitSaveContinuation, FileConflictNotice, LstGpuiApp, PendingExitSave, QuitReview, QuitReviewDecision,
+    QuitReviewItemStatus,
 };
 use lst_editor::UndoBoundary;
 use std::ops::Range;
 
 mod clipboard;
+mod file_identity;
 pub(crate) mod save_coordinator;
 mod scratchpad;
 
 use clipboard::persist_clipboards_after_exit;
+use file_identity::SaveAsClaim;
+pub(crate) use file_identity::{FileIdentity, OpenRequest};
 use save_coordinator::WriteKind;
 pub(crate) use scratchpad::create_scratchpad_note;
 use scratchpad::{remove_previous_scratchpad_after_save_as, remove_scratchpad_file_if_unreferenced};
@@ -81,8 +83,6 @@ impl SaveTicket {
 fn lock_generation(generation: &Mutex<u64>) -> MutexGuard<'_, u64> {
     generation.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
-
-type OpenFileResults = (Vec<(PathBuf, String, Option<FileStamp>)>, Vec<(PathBuf, String)>);
 
 #[derive(Clone, Debug)]
 struct ExternalFileRequest {
@@ -331,30 +331,37 @@ impl LstGpuiApp {
                         self.finish_exit_save_failure(exit_save, "Save cancelled".to_string(), cx);
                         continue;
                     };
-                    let normalized = normalize_recent_path(&path);
-                    let existing = self.model.tabs().iter().find_map(|tab| {
-                        (tab.id() != tab_id
-                            && tab
-                                .path()
-                                .is_some_and(|open_path| normalize_recent_path(open_path) == normalized))
-                        .then_some(tab.id())
-                    });
-                    if let Some(existing_tab) = existing {
-                        self.update_model(cx, true, |model| model.set_active_tab(existing_tab));
-                        let message = format!("{} is already open in another tab.", path.display());
-                        self.cleanup_message = Some(message.clone());
-                        self.finish_exit_save_failure(exit_save, message, cx);
-                        continue;
-                    }
-                    self.spawn_save_job(
-                        tab_id,
+                    // One tab per file: the target may not be another tab's
+                    // file, nor one another tab's pending Save As is writing.
+                    self.resolve_save_as_target(
                         path,
-                        body,
-                        version.revision(),
-                        SaveKind::SaveAs {
-                            version,
-                            previous_scratchpad: previous_scratchpad_path,
-                            exit_save,
+                        move |view, path, claim, cx| {
+                            let message = match claim {
+                                SaveAsClaim::Tab(holder) if holder != tab_id => {
+                                    view.update_model(cx, true, |model| model.set_active_tab(holder));
+                                    format!("{} is already open in another tab.", path.display())
+                                }
+                                SaveAsClaim::Write => {
+                                    format!("{} is being saved from another tab.", path.display())
+                                }
+                                SaveAsClaim::Tab(_) | SaveAsClaim::Free => {
+                                    view.spawn_save_job(
+                                        tab_id,
+                                        path,
+                                        body,
+                                        version.revision(),
+                                        SaveKind::SaveAs {
+                                            version,
+                                            previous_scratchpad: previous_scratchpad_path,
+                                            exit_save,
+                                        },
+                                        cx,
+                                    );
+                                    return;
+                                }
+                            };
+                            view.cleanup_message = Some(message.clone());
+                            view.finish_exit_save_failure(exit_save, message, cx);
                         },
                         cx,
                     );
@@ -374,14 +381,11 @@ impl LstGpuiApp {
         let Some(paths) = FileDialog::new().pick_files() else {
             return;
         };
-        cx.spawn(async move |this, cx| {
-            let results = cx
-                .background_executor()
-                .spawn(async move { open_file_results(paths) })
-                .await;
-            let _ = this.update(cx, |view, cx| view.apply_open_file_results(results, cx));
-        })
-        .detach();
+        let requests = paths
+            .into_iter()
+            .map(|path| OpenRequest::new(path, RecentOrigin::Regular))
+            .collect();
+        self.open_documents(requests, cx);
     }
 
     pub(crate) fn start_background_tasks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -406,13 +410,14 @@ impl LstGpuiApp {
                     cx.notify();
                 }
             }));
+        // Held keys and modifier chords are known only from the key and
+        // modifier events this window receives. A window switch interrupts
+        // them, and so does hiding: X11 stops routing global modifier input to
+        // a window that is not visible, so a release then goes unseen.
         self._shell_subscriptions
-            .push(cx.observe_window_activation(window, |this, _, _| {
-                this.held_arrows.clear();
-                // A chord interrupted by a window switch must not apply to
-                // keys typed after returning.
-                this.clear_x11_modifier_chord_state();
-            }));
+            .push(cx.observe_window_activation(window, |this, _, _| this.interrupt_held_input()));
+        self._shell_subscriptions
+            .push(cx.observe_window_visibility(window, |this, _, _, _| this.interrupt_held_input()));
         let view = cx.entity().downgrade();
         window
             .spawn(cx, async move |cx| loop {
@@ -1160,8 +1165,7 @@ impl LstGpuiApp {
             .model
             .tabs()
             .iter()
-            .filter(|tab| !tab.is_scratchpad() && (tab.modified() || tab.backing_file_missing()))
-            .filter(|tab| self.exit_discarded_revisions.get(&tab.id()) != Some(&tab.revision()))
+            .filter(|tab| !tab.is_scratchpad() && self.unresolved_at_exit(tab))
             .map(ModelEditorTab::id)
             .collect::<Vec<_>>();
         if dirty_regular.len() >= 2 {
@@ -1382,8 +1386,7 @@ impl LstGpuiApp {
             .model
             .tabs()
             .iter()
-            .find(|tab| tab.is_scratchpad() && (tab.modified() || tab.backing_file_missing()) && !tab.is_blank())
-            .filter(|tab| self.exit_discarded_revisions.get(&tab.id()) != Some(&tab.revision()))
+            .find(|tab| tab.is_scratchpad() && !tab.is_blank() && self.unresolved_at_exit(tab))
             .map(ModelEditorTab::id);
         let Some(tab_id) = next else {
             self.finish_quit(cx);
@@ -1395,6 +1398,15 @@ impl LstGpuiApp {
             review.message = Some("Saving scratchpads…".to_string());
         }
         self.start_exit_save(tab_id, ExitSaveContinuation::QuitScratchpad, cx);
+    }
+
+    /// Whether quitting must still save this tab or ask about it: it holds
+    /// unsaved work, and the user has not discarded this exact revision.
+    /// Every stage of the quit sequence selects its next tab with this one
+    /// predicate, so a discarded tab is skipped rather than ending the search.
+    fn unresolved_at_exit(&self, tab: &ModelEditorTab) -> bool {
+        (tab.modified() || tab.backing_file_missing())
+            && self.exit_discarded_revisions.get(&tab.id()) != Some(&tab.revision())
     }
 
     fn remember_exit_discard(&mut self, tab_id: TabId) {
@@ -1440,7 +1452,10 @@ impl LstGpuiApp {
         // exit until the current frame releases it. The clipboard survives exit
         // through the external owner spawned above; in-process writes would
         // re-enter that same RefCell.
-        cx.defer(|_| process::exit(0));
+        cx.defer(|_| {
+            crate::voice::workers::wait_before_exit(Duration::from_secs(2));
+            process::exit(0)
+        });
     }
 
     fn finish_exit_save_success(&mut self, exit_save: Option<PendingExitSave>, cx: &mut Context<Self>) {
@@ -1583,35 +1598,6 @@ impl LstGpuiApp {
         }
     }
 
-    fn apply_open_file_results(&mut self, (opened, failed): OpenFileResults, cx: &mut Context<Self>) {
-        let failures = failed
-            .into_iter()
-            .map(|(path, message)| format!("{}: {message}", path.display()))
-            .collect::<Vec<_>>();
-
-        for (path, text, stamp) in opened {
-            let normalized = normalize_recent_path(&path);
-            let existing = self.model.tabs().iter().find_map(|tab| {
-                let tab_path = tab.path()?;
-                (normalize_recent_path(tab_path) == normalized).then_some(tab.id())
-            });
-            if let Some(tab_id) = existing {
-                self.update_model(cx, true, |model| model.set_active_tab(tab_id));
-            } else {
-                let opened_path = path.clone();
-                self.update_model(cx, true, |model| {
-                    model.open_files_with_stamps(vec![(opened_path, text, stamp)]);
-                });
-            }
-            self.recent.record_with_origin(&path, RecentOrigin::Regular);
-        }
-
-        if !failures.is_empty() {
-            self.cleanup_message = Some(format!("Some files could not be opened: {}", failures.join("; ")));
-            cx.notify();
-        }
-    }
-
     fn apply_save_outcome(
         &mut self,
         result: FileWriteOutcome,
@@ -1668,7 +1654,7 @@ impl LstGpuiApp {
                 {
                     if saved {
                         if let Some(previous) = previous_scratchpad.as_deref() {
-                            if normalize_recent_path(previous) != normalize_recent_path(&saved_path) {
+                            if FileIdentity::of(previous) != FileIdentity::of(&saved_path) {
                                 self.recent.prune_path(previous);
                             }
                         }
@@ -1854,47 +1840,22 @@ impl LstGpuiApp {
         let Some(record) = self.closed_tabs_history.pop() else {
             return;
         };
-        if let Some(origin) = self.activate_existing_tab_for_path(&record.path, Some(record.position), cx) {
-            self.recent.record_with_origin(&record.path, origin);
-            return;
-        }
-        cx.spawn(async move |this, cx| {
-            let read_path = record.path.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move { read_file_with_stamp(&read_path) })
-                .await;
-            let _ = this.update(cx, |view, cx| match result {
-                Ok((text, stamp)) => {
-                    if let Some(origin) = view.activate_existing_tab_for_path(&record.path, Some(record.position), cx) {
-                        view.recent.record_with_origin(&record.path, origin);
-                        return;
-                    }
-                    view.open_recent_contents(
-                        record.path.clone(),
-                        record.origin,
-                        text,
-                        stamp,
-                        Some(record.position),
-                        cx,
-                    );
-                    view.recent.record_with_origin(&record.path, record.origin);
-                }
-                Err(err) => {
-                    let failed_path = record.path;
-                    view.update_model(cx, true, |model| {
-                        model.open_file_failed(failed_path, err.to_string());
-                    });
-                }
-            });
-        })
-        .detach();
+        self.open_documents(
+            vec![OpenRequest {
+                path: record.path,
+                origin: record.origin,
+                position: Some(record.position),
+            }],
+            cx,
+        );
     }
 }
 
+/// How the quit review and traces name a tab. Display only: it touches no
+/// filesystem, unlike `FileIdentity`.
 pub(crate) fn tab_identity(tab: &ModelEditorTab) -> String {
     tab.path()
-        .map(|path| normalize_recent_path(path).to_string_lossy().into_owned())
+        .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| format!("{} (unsaved)", tab.display_name()))
 }
 
@@ -2066,18 +2027,6 @@ fn remove_temp_file(path: &Path) {
 
 fn stale_save_result(tab_id: TabId, path: PathBuf, revision: u64) -> FileWriteOutcome {
     FileWriteOutcome::Stale { tab_id, path, revision }
-}
-
-fn open_file_results(paths: impl IntoIterator<Item = PathBuf>) -> OpenFileResults {
-    let mut opened = Vec::new();
-    let mut failed = Vec::new();
-    for path in paths {
-        match read_file_with_stamp(&path) {
-            Ok((text, stamp)) => opened.push((path, text, Some(stamp))),
-            Err(err) => failed.push((path, err.to_string())),
-        }
-    }
-    (opened, failed)
 }
 
 fn observe_external_files(requests: Vec<ExternalFileRequest>) -> Vec<ExternalFileObservation> {

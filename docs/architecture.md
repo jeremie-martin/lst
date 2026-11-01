@@ -89,8 +89,13 @@ their resulting logical lines, including CRLF pairs formed at edit boundaries.
 Logical line boundaries follow Rope, including CRLF, CR, LF, VT, FF, NEL,
 LS, and PS. The editor's `line_content` helpers exclude the complete terminator
 for cursor bounds, display text, wrapping, and search. The app uses those same
-helpers when measuring and painting rows. Newline insertion preserves the first
-existing line-ending style, with LF as the default for a document without one.
+helpers when measuring and painting rows. New lines, from Enter, Vim `o`/`O`,
+line edits, linewise paste, and a save's final newline, follow the first CR or LF
+terminator's style (CRLF, LF, or CR), with LF when there is none. VT, FF, NEL,
+LS, and PS end lines but occur within content, so they never set the style.
+Rope reads a CR directly followed by an LF as one CRLF terminator, so an inserted
+break that would touch a lone CR before it or an LF after it widens to CRLF,
+which never fuses; the new line cannot vanish.
 
 Find navigation searches from the current caret and wraps. An exactly selected
 match supplies its start as the origin, so backward navigation advances past
@@ -162,7 +167,19 @@ than scattering fallback checks through the core.
   coordinator owns the active write, deferred explicit save, and generation
   together, so explicit saves and autosaves cannot run concurrently for a path.
   Autosave skips a tab whose close or quit decision is open, so Discard still
-  discards.
+  discards. One quit predicate selects every tab still needing a save or a
+  decision, so a discarded tab is skipped rather than ending the sequence.
+- `runtime/file_identity.rs` owns which file a path names: device and inode for
+  an existing file, else its normalized path. At most one tab holds each file.
+  Opening (dialog, recent files, reopening a closed tab) and Save As resolve
+  identities on a background thread against a snapshot of the tabs' paths, and
+  pending writes for Save As; the UI applies the result only while that snapshot
+  still holds and otherwise resolves again. The UI thread never canonicalizes a
+  tab's path, so a hung mount cannot freeze it. With one tab per file, the save
+  coordinator's path keys and scratchpad cleanup compare paths directly.
+- `user_dirs.rs` reads `HOME` and the XDG base directories once validated: unset,
+  empty, or relative values are ignored, so no path depends on the working
+  directory.
 - `settings.rs` owns the versioned TOML boundary, path validation, and persistence
   errors. Typed settings define the schema; saves patch changed values into the
   original TOML without rebuilding unrelated fields. The persisted document and
@@ -194,6 +211,9 @@ than scattering fallback checks through the core.
   audio files. Upload deadlines scale with the recorded byte count. WAV writes
   are buffered; failed finalization leaves recoverable bytes beside the note
   and reports their location without treating them as a transcribable segment.
+  Voice workers are registered, and quitting waits briefly for them, since
+  `process::exit` runs no destructors and a cancelled worker may still own a
+  temporary WAV.
   Background delivery preserves unrelated status and X11 PRIMARY ownership.
 - `prompt_add.rs` runs the installed prompt-add filter with a 60-second deadline
   covering input, output, and exit. Nonblocking pipes keep every phase bounded;
@@ -231,6 +251,11 @@ UI state should have one geometric and visual owner:
   one; a boundary inside a ligature is not a stop. Word selection, selection hit
   tests, and the Vim block cursor use the grapheme under the pointer instead.
   Inactive or invalidated tab geometry cannot complete a cursor reveal.
+  The viewport reports its top row together with that row's logical line, from
+  the wrap layout it paints while that layout matches the document, so Vim's
+  screen motions (`H`, `M`, `L`) visit only the rows on screen.
+  Held arrows and modifier chords are cleared when the window loses activation
+  or visibility, matching when X11 stops routing it modifier input.
   Rendering and reveal scheduling share the document-viewport visibility rule.
   Replacement surfaces retain pending reveals without retrying each frame;
   the next document layout resumes them when the viewport returns.

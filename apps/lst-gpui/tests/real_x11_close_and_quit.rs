@@ -296,6 +296,45 @@ fn discard_after_failed_scratchpad_quit_save_exits_without_retrying_forever() ->
     })
 }
 
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a real X11 display"]
+fn discarding_one_unsaveable_scratchpad_still_reviews_the_next_one() -> TestResult {
+    support::run_x11_test("quit-second-scratchpad-after-discard", |session| {
+        // Each file turns read-only before its text exists, so no autosave
+        // can write it first.
+        let (mut editor, first) = session.open("scratch")?;
+        fs::set_permissions(&first, fs::Permissions::from_mode(0o444))?;
+        editor.keys("first unsaveable note")?;
+        editor.press(KeyChord::Ctrl(Key::Char('n')))?;
+        let second = editor.wait_state("second scratchpad", secs(4), |record| {
+            record.active_tab_path.as_deref() != Some(path_text(&first).as_str())
+        })?;
+        let second = second
+            .active_tab_path
+            .map(PathBuf::from)
+            .ok_or("scratchpad should have a backing path")?;
+        fs::set_permissions(&second, fs::Permissions::from_mode(0o444))?;
+        editor.keys("second unsaveable note")?;
+
+        editor.press(KeyChord::Ctrl(Key::Char('q')))?;
+        editor.wait_state("first scratchpad save failure", secs(5), |record| {
+            record.close_prompt_status.as_deref() == Some("failed")
+                && record.close_prompt_file.as_deref() == Some(path_text(&first).as_str())
+        })?;
+        // Discarding the first must not end the quit: the second still holds
+        // unsaved text, so it is attempted and its failure reviewed too.
+        editor.press(KeyChord::Key(Key::Char('d')))?;
+        editor.wait_state("second scratchpad save failure", secs(5), |record| {
+            record.close_prompt_status.as_deref() == Some("failed")
+                && record.close_prompt_file.as_deref() == Some(path_text(&second).as_str())
+        })?;
+        editor.press(KeyChord::Key(Key::Char('d')))?;
+        editor.wait_for_successful_exit(secs(10))?;
+        Ok(())
+    })
+}
+
 #[test]
 #[ignore = "requires a real X11 display"]
 fn clipboard_owner_retry_preserves_completed_discard_decisions() -> TestResult {

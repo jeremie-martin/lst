@@ -1028,8 +1028,11 @@ impl EditorModel {
             self.vim.half_page_rows = None;
         }
     }
-    pub fn set_viewport_top(&mut self, row: usize) {
+    /// Sets the first visible row and, when the UI's layout is current, the
+    /// line holding it with that line's first row (`Viewport::top_line`).
+    pub fn set_viewport_top(&mut self, row: usize, top_line: Option<(usize, usize)>) {
         self.viewport.top_visual_row = row;
+        self.viewport.top_line = top_line;
     }
     pub fn set_selection(&mut self, selection: Selection) {
         self.assign_selection(selection);
@@ -1970,7 +1973,7 @@ fn linewise_clipboard_text(tab: &EditorTab, char_index: usize) -> String {
     let range = line_range_at_char(buffer, char_index);
     let mut text = buffer.slice(range).to_string();
     if !text.ends_with(['\n', '\r']) {
-        text.push_str(text_input::preferred_newline(tab));
+        text.push_str(document::line_ending_style(buffer));
     }
     text
 }

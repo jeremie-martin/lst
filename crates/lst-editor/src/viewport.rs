@@ -20,6 +20,11 @@ pub struct Viewport {
     pub rows: usize,
     /// First visible visual row. Echoed from the UI layer on scroll.
     pub top_visual_row: usize,
+    /// The logical line holding `top_visual_row` and that line's first row,
+    /// from the layout the UI paints, when that layout is current. Soft wrap
+    /// makes rows and lines differ; with this anchor, screen-relative motions
+    /// (`H`, `M`, `L`) visit only the rows on screen.
+    pub top_line: Option<(usize, usize)>,
     /// Minimum rows kept between the cursor and the viewport's vertical edges.
     pub scrolloff: usize,
     /// Minimum columns kept between the cursor and horizontal edges when
@@ -32,6 +37,7 @@ impl Default for Viewport {
         Self {
             rows: DEFAULT_VIEWPORT_ROWS,
             top_visual_row: 0,
+            top_line: None,
             scrolloff: DEFAULT_SCROLLOFF,
             sidescrolloff: DEFAULT_SIDESCROLLOFF,
         }

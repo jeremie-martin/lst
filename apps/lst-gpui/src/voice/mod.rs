@@ -3,10 +3,11 @@
 mod audio;
 mod provider;
 mod session;
+pub(crate) mod workers;
 
 use crate::LstGpuiApp;
 use gpui::{div, prelude::*, rgb, Context, IntoElement, Task};
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 #[derive(Default)]
 pub(crate) struct Voice {
@@ -55,8 +56,8 @@ impl LstGpuiApp {
                 .voice
                 .directory
                 .clone()
-                .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join("audio-notes")))
-                .ok_or("Cannot locate audio-notes: HOME is not set")?;
+                .or_else(|| crate::user_dirs::home_dir().map(|home| home.join("audio-notes")))
+                .ok_or("Cannot locate audio-notes: HOME is not an absolute directory")?;
             let (path, stamp) = crate::runtime::create_scratchpad_note(Some(&directory))
                 .map_err(|e| format!("Could not create voice note: {e}"))?;
             let directory = path.parent().expect("note directory").to_path_buf();
@@ -95,10 +96,12 @@ impl LstGpuiApp {
             .and_then(|_| session.transcript())
             .map(str::to_owned);
         if let Some(text) = text {
-            // The note is a scratchpad, so autosave persists the segment
-            // verbatim once the note is idle. An explicit save would apply
-            // the trim and final-newline options and replace the text under
-            // a user who is still typing in it.
+            // A segment is an ordinary edit, persisted like typed text: a
+            // scratchpad note autosaves it verbatim once idle, while a note
+            // saved under a regular name (Save As) follows the autosave
+            // setting and the unsaved-changes prompts. An explicit save here
+            // would apply the trim and final-newline options and replace the
+            // text under a user who is still typing in it.
             let mut accepted = false;
             self.update_model_in_background(cx, true, |model| {
                 accepted = model.append_text_to_tab(tab, &text);
