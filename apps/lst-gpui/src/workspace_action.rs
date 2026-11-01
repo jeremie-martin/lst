@@ -1,5 +1,5 @@
 use crate::voice::VoiceAction;
-use gpui::{Context, Div, InteractiveElement, KeyBinding, Keystroke, Modifiers, Window};
+use gpui::{Context, Div, InteractiveElement, KeyBinding, Keystroke, Modifiers, OperatingSystem, Window};
 use lst_editor::EditorCommand as Command;
 
 use crate::LstGpuiApp;
@@ -638,21 +638,39 @@ fn command_title(id: &str) -> String {
 
 /// The command a released-modifier X11 chord stands for. It must agree with
 /// the keymap: a default chord that a `[keybindings]` override dropped stays
-/// unbound here too, and only the chords the override lists still apply.
+/// unbound here too, only the chords the override lists still apply, and a
+/// chord another command's override claims belongs to that command, not to
+/// this fallback. Overrides are compared as GPUI parses them, so every
+/// spelling the keymap accepts (`Ctrl-w`, `secondary-w`, `shift-ctrl-w`)
+/// matches.
 pub(crate) fn workspace_fallback_command(
     key: &str,
     modifiers: Modifiers,
     overrides: &BTreeMap<String, Vec<String>>,
+    os: OperatingSystem,
 ) -> Option<WorkspaceCommand> {
     let keystroke = fallback_keystroke(key, modifiers)?;
+    let chord = Keystroke::parse_with_os(&keystroke, os).ok()?;
+    let binds_chord = |sequence: &String| {
+        let mut keys = sequence.split_whitespace();
+        matches!(
+            (keys.next(), keys.next()),
+            (Some(key), None) if Keystroke::parse_with_os(key, os).is_ok_and(|key| key == chord)
+        )
+    };
     BINDINGS
         .iter()
         .find(|binding| {
-            binding.x11_fallback
-                && binding.keystroke == keystroke
-                && overrides
-                    .get(command_id(binding.command))
-                    .is_none_or(|keystrokes| keystrokes.iter().any(|bound| bound == binding.keystroke))
+            if !binding.x11_fallback || binding.keystroke != keystroke {
+                return false;
+            }
+            let id = command_id(binding.command);
+            overrides
+                .get(id)
+                .is_none_or(|sequences| sequences.iter().any(&binds_chord))
+                && !overrides
+                    .iter()
+                    .any(|(other, sequences)| other != id && sequences.iter().any(&binds_chord))
         })
         .map(|binding| binding.command)
 }
@@ -868,14 +886,16 @@ mod tests {
 
         let defaults = BTreeMap::new();
         assert_eq!(
-            workspace_fallback_command("?", modifiers, &defaults),
+            workspace_fallback_command("?", modifiers, &defaults, LINUX),
             Some(WorkspaceCommand::Model(Command::ToggleBlockComment))
         );
         assert_eq!(
-            workspace_fallback_command("|", modifiers, &defaults),
+            workspace_fallback_command("|", modifiers, &defaults, LINUX),
             Some(WorkspaceCommand::Model(Command::JumpToBracket))
         );
     }
+
+    const LINUX: OperatingSystem = OperatingSystem::Linux;
 
     #[test]
     fn x11_fallback_follows_keybinding_overrides() {
@@ -890,15 +910,32 @@ mod tests {
                 keys.iter().map(|key| key.to_string()).collect::<Vec<_>>(),
             )])
         };
-        assert_eq!(workspace_fallback_command("w", ctrl, &BTreeMap::new()), close_tab);
-        assert_eq!(workspace_fallback_command("w", ctrl, &overrides(&[])), None);
         assert_eq!(
-            workspace_fallback_command("w", ctrl, &overrides(&["ctrl-shift-w"])),
+            workspace_fallback_command("w", ctrl, &BTreeMap::new(), LINUX),
+            close_tab
+        );
+        assert_eq!(workspace_fallback_command("w", ctrl, &overrides(&[]), LINUX), None);
+        assert_eq!(
+            workspace_fallback_command("w", ctrl, &overrides(&["ctrl-shift-w"]), LINUX),
             None
         );
         assert_eq!(
-            workspace_fallback_command("w", ctrl, &overrides(&["ctrl-w", "ctrl-shift-w"])),
+            workspace_fallback_command("w", ctrl, &overrides(&["ctrl-w", "ctrl-shift-w"]), LINUX),
             close_tab
         );
+        // The keymap accepts any spelling GPUI parses to the same chord.
+        for spelling in ["Ctrl-w", "secondary-w", "ctrl-W"] {
+            let expected = (spelling != "ctrl-W").then_some(WorkspaceCommand::CloseActiveTab);
+            assert_eq!(
+                workspace_fallback_command("w", ctrl, &overrides(&[spelling]), LINUX),
+                expected,
+                "{spelling}"
+            );
+        }
+        // A chord another command's override claims is not the default's.
+        let delete_word = BTreeMap::from([("edit.delete_word_left".to_string(), vec!["ctrl-w".to_string()])]);
+        assert_eq!(workspace_fallback_command("w", ctrl, &delete_word, LINUX), None);
+        let multi_key = BTreeMap::from([("edit.delete_word_left".to_string(), vec!["ctrl-w ctrl-x".to_string()])]);
+        assert_eq!(workspace_fallback_command("w", ctrl, &multi_key, LINUX), close_tab);
     }
 }

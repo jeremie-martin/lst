@@ -165,6 +165,11 @@ impl LstGpuiApp {
         self.set_focus(FocusTarget::Editor);
         window.focus(&self.focus_handle, cx);
         let index = self.active_char_index_for_point(event.position);
+        // Word selection and selection hits act on the character under the
+        // pointer, as does the Vim block cursor; a caret goes to the nearest
+        // boundary.
+        let cell = self.active_cell_index_for_point(event.position);
+        let caret = if self.block_cursor_mode() { cell } else { index };
         let gutter_click = {
             let geometry = self.active_view().geometry.borrow();
             self.model.show_gutter()
@@ -203,7 +208,7 @@ impl LstGpuiApp {
                 return;
             }
 
-            if let Some((_mode, range)) = self.click_selection_mode_and_range(event.click_count, index) {
+            if let Some((_mode, range)) = self.click_selection_mode_and_range(event.click_count, cell) {
                 self.cancel_drag_selection();
                 self.add_active_range(range, false, cx);
                 self.sync_primary_selection(cx);
@@ -242,20 +247,20 @@ impl LstGpuiApp {
         }
 
         if event.click_count == 1 {
-            if let Some(token) = self.model.selection_drag_token_at(index) {
+            if let Some(token) = self.model.selection_drag_token_at(cell) {
                 let source = self
                     .model
                     .selection_set()
                     .as_slice()
                     .iter()
-                    .find(|selection| selection.has_selection() && selection.range().contains(&index))
+                    .find(|selection| selection.has_selection() && selection.range().contains(&cell))
                     .expect("the drag token proves a selected target")
                     .range();
                 self.start_drag_selection(
                     DragSelectionMode::PendingMove {
                         token,
                         source,
-                        clicked: index,
+                        clicked: caret,
                     },
                     event.position,
                 );
@@ -264,7 +269,7 @@ impl LstGpuiApp {
             }
         }
 
-        if let Some((mode, range)) = self.click_selection_mode_and_range(event.click_count, index) {
+        if let Some((mode, range)) = self.click_selection_mode_and_range(event.click_count, cell) {
             self.start_drag_selection(mode, event.position);
             self.select_active_range(range, cx);
             self.sync_primary_selection(cx);
@@ -275,10 +280,16 @@ impl LstGpuiApp {
 
         self.start_drag_selection(DragSelectionMode::Character, event.position);
         self.update_model(cx, true, |model| {
-            model.move_to_char(index, event.modifiers.shift, None);
+            model.move_to_char(caret, event.modifiers.shift, None);
         });
         self.schedule_drag_autoscroll(window, cx);
         cx.notify();
+    }
+
+    /// Vim Normal mode draws a block over the cursor's character, so a click
+    /// targets the character under the pointer rather than a boundary.
+    fn block_cursor_mode(&self) -> bool {
+        self.model.input_mode() == InputMode::Vim && self.model.vim_mode() == vim::Mode::Normal
     }
 
     fn click_selection_mode_and_range(
@@ -324,15 +335,20 @@ impl LstGpuiApp {
 
     pub(crate) fn on_right_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         self.cancel_drag_selection();
-        let index = self.active_char_index_for_point(event.position);
+        let cell = self.active_cell_index_for_point(event.position);
         let inside_selection = self
             .model
             .selection_set()
             .as_slice()
             .iter()
-            .any(|selection| selection.range().contains(&index));
+            .any(|selection| selection.range().contains(&cell));
         if !inside_selection {
-            self.update_model(cx, true, |model| model.move_to_char(index, false, None));
+            let caret = if self.block_cursor_mode() {
+                cell
+            } else {
+                self.active_char_index_for_point(event.position)
+            };
+            self.update_model(cx, true, |model| model.move_to_char(caret, false, None));
         }
         self.open_context_menu(event.position, cx);
     }
@@ -433,15 +449,18 @@ impl LstGpuiApp {
                 });
             }
             Some(DragSelectionMode::Word(anchor)) => {
-                let current = word_range_at_char(self.active_tab().buffer(), index);
+                let cell = self.active_cell_index_for_point(position);
+                let current = word_range_at_char(self.active_tab().buffer(), cell);
                 self.select_active_drag_range(anchor, current, cx);
             }
             Some(DragSelectionMode::Line(anchor)) => {
-                let current = line_range_at_char(self.active_tab().buffer(), index);
+                let cell = self.active_cell_index_for_point(position);
+                let current = line_range_at_char(self.active_tab().buffer(), cell);
                 self.select_active_drag_range(anchor, current, cx);
             }
             Some(DragSelectionMode::Paragraph(anchor)) => {
-                let current = paragraph_range_at_char(self.active_tab().buffer(), index);
+                let cell = self.active_cell_index_for_point(position);
+                let current = paragraph_range_at_char(self.active_tab().buffer(), cell);
                 self.select_active_drag_range(anchor, current, cx);
             }
             Some(DragSelectionMode::MovingSelection { .. }) => {
@@ -646,7 +665,12 @@ impl LstGpuiApp {
             self.x11_ctrl_k_pending = false;
             return false;
         }
-        if let Some(command) = workspace_fallback_command(&key, modifiers, &self.settings.settings.keybindings) {
+        if let Some(command) = workspace_fallback_command(
+            &key,
+            modifiers,
+            &self.settings.settings.keybindings,
+            cx.platform_info().os,
+        ) {
             self.dispatch_workspace_command(command, window, cx);
             cx.stop_propagation();
             true
@@ -677,6 +701,7 @@ impl LstGpuiApp {
             event.keystroke.key.as_str(),
             Modifiers::default(),
             &self.settings.settings.keybindings,
+            cx.platform_info().os,
         ) {
             self.dispatch_workspace_command(command, window, cx);
             cx.stop_propagation();

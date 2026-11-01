@@ -63,7 +63,7 @@ pub(crate) struct CachedSyntaxHighlights {
     pub(crate) language: SyntaxLanguage,
     pub(crate) revision: u64,
     pub(crate) lines: Vec<Vec<SyntaxSpan>>,
-    /// Byte length of each line's *display* text (no trailing `\n` / `\r`) in
+    /// Byte length of each line's *display* text (no line terminator) in
     /// the source that produced `lines`. The renderer guards span reuse with
     /// this so that stale highlights from a prior revision are only painted
     /// onto lines whose bytes are still identical — keeping char/UTF-8
@@ -343,23 +343,18 @@ mod tests {
 
     #[test]
     fn line_byte_lens_match_display_line_lengths_for_mixed_line_endings() {
-        // Disagreement between line_bounds and EditorTab::display_line_from_rope
-        // would silently disable the renderer's cache-reuse guard for these
-        // lines. Mix LF, CRLF, lone CR, and a trailing line with no newline
-        // to lock the trim semantics in step.
-        let source = "a\nb\r\nc\rd\r\r\ne";
+        // Disagreement with the viewport's display text would silently
+        // disable the renderer's cache-reuse guard for these lines, leaving
+        // them uncolored. Mix every Rope terminator with content before it,
+        // and a trailing line with no terminator.
+        let source = "a\nb\r\nc\rd\r\r\nf;\u{b}g;\u{c}h;\u{85}i;\u{2028}j;\u{2029}e";
         let buffer = Rope::from_str(source);
         let (_lines, byte_lens) = spans(&parse(SyntaxLanguage::Rust, source));
         let display_lens: Vec<u32> = (0..buffer.len_lines())
-            .map(|i| {
-                let mut line = buffer.line(i).to_string();
-                while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
-                    line.pop();
-                }
-                line.len() as u32
-            })
+            .map(|i| lst_editor::line_content(buffer.line(i)).len_bytes() as u32)
             .collect();
         assert_eq!(byte_lens, display_lens);
+        assert_eq!(&display_lens[5..], [2, 2, 2, 2, 2, 1]);
     }
 
     #[test]

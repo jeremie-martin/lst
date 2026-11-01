@@ -470,10 +470,13 @@ fn resolve_directory(path: PathBuf, home: Option<&Path>) -> Result<PathBuf, Stri
     } else {
         path
     };
-    if path.is_absolute() {
-        Ok(path)
-    } else {
+    if !path.is_absolute() {
         Err("Note directories must be absolute paths or start with ~/".into())
+    } else if path.to_str().is_none() {
+        // A non-UTF-8 HOME can expand ~/ into a path TOML cannot store.
+        Err(format!("{} is not valid UTF-8", path.display()))
+    } else {
+        Ok(path)
     }
 }
 
@@ -614,6 +617,11 @@ mod tests {
             assert!(resolve_directory(invalid.into(), Some(home)).is_err(), "{invalid}");
         }
         assert!(resolve_directory("~/notes".into(), None).is_err());
+        // TOML can only store UTF-8: a non-UTF-8 HOME cannot expand ~/.
+        let latin1_home = Path::new(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(
+            b"/home/caf\xe9",
+        ));
+        assert!(resolve_directory("~/notes".into(), Some(latin1_home)).is_err());
         for section in ["[files]\nscratchpad_directory", "[voice]\ndirectory"] {
             assert!(parse(&format!("{section} = 'relative'\n")).is_err());
         }

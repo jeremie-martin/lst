@@ -266,6 +266,36 @@ impl FindState {
             self.reindex_for_tab(tab);
         }
     }
+    /// Validates the index and makes the exactly selected match, or else the
+    /// first match at or after the caret, current. Opening the panel presents
+    /// the search from where the user is, not where it last stopped: hidden
+    /// edits and tab switches clear the previous active match.
+    pub(crate) fn ensure_current_from_caret(&mut self, tab: &EditorTab) {
+        self.ensure_current(tab);
+        if !self.matches.is_empty() {
+            self.align_to_visible_match(tab);
+        }
+    }
+    /// Makes the first match at or after `end` current, wrapping to the first
+    /// match. `end` is where a replacement's inserted text ends. Like a regex
+    /// iterator after a match, an empty match exactly there is skipped: the
+    /// replacement itself produced it (`$`, `\b`) or, when nothing changed
+    /// (`^` replaced by nothing), it is the match just replaced.
+    pub(crate) fn select_after_replacement(&mut self, end: Position) {
+        if self.matches.is_empty() {
+            self.active = None;
+            return;
+        }
+        let mut index = self.matches.partition_point(|m| Position::new(m.line, m.col) < end);
+        if self
+            .matches
+            .get(index)
+            .is_some_and(|m| m.char_len == 0 && Position::new(m.line, m.col) == end)
+        {
+            index += 1;
+        }
+        self.active = Some(if index >= self.matches.len() { 0 } else { index });
+    }
     pub(crate) fn sync_with_tab(&mut self, tab: &EditorTab) {
         if self.visible && !self.query.is_empty() {
             self.reindex_to_nearest(tab);
@@ -394,7 +424,9 @@ pub(crate) fn build_query_regex(
     RegexBuilder::new(&pattern).case_insensitive(ignore_case).build()
 }
 
-pub(crate) fn replace_one_request(tab: &EditorTab, find: &FindState) -> Option<EditRequest> {
+/// The edit replacing the current match, and the character offset where its
+/// inserted text ends.
+pub(crate) fn replace_one_request(tab: &EditorTab, find: &FindState) -> Option<(EditRequest, usize)> {
     let (start, end) = find.current_match_range()?;
     let regex = find.use_regex.then(|| find.build_regex().ok()).flatten();
     let template = find.replacement.clone();
@@ -409,11 +441,10 @@ pub(crate) fn replace_one_request(tab: &EditorTab, find: &FindState) -> Option<E
             &template,
         )
     });
-    Some(EditRequest::single(
-        EditKind::Other,
-        UndoBoundary::Break,
-        range,
-        replacement,
+    let inserted_end = range.start + replacement.chars().count();
+    Some((
+        EditRequest::single(EditKind::Other, UndoBoundary::Break, range, replacement),
+        inserted_end,
     ))
 }
 

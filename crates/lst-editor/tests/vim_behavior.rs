@@ -4,7 +4,8 @@
 
 mod support;
 
-use lst_editor::{vim, EditorCommand, EditorEffect, FocusTarget, RevealIntent};
+use lst_editor::{vim, EditorCommand, EditorEffect, FileStamp, FocusTarget, RevealIntent, SaveTextOptions};
+use std::path::PathBuf;
 
 use support::{run_cursor_cases, run_text_cases, VimHarness};
 
@@ -427,6 +428,46 @@ fn enter_accepts_a_match_chosen_by_stepping_inside_the_search_prompt() {
     harness.expect_cursor(2, 0);
     harness.keys("<esc>");
     harness.expect_cursor(0, 1);
+}
+
+#[test]
+fn search_prompt_keeps_its_preview_and_origin_when_dictation_appends_text() {
+    for (finish, line, column) in [("<enter>", 2, 0), ("<esc>", 1, 1)] {
+        let mut harness = VimHarness::normal_at("foo\nfoo\nfoo\nfoo\nend", 1, 1);
+        harness.keys("/foo");
+        harness.expect_cursor(2, 0);
+        let tab = harness.model.active_tab_id();
+        assert!(harness.model.append_text_to_tab(tab, "spoken words"));
+        harness.sync_effects();
+        harness.keys(finish);
+        harness.expect_cursor(line, column);
+    }
+}
+
+#[test]
+fn normalizing_save_keeps_the_last_edit_jump_on_the_users_edit() {
+    let mut harness = VimHarness::normal_at("one  \ntwo\nthree\n", 2, 0);
+    harness.keys("A!<esc>gg");
+    let tab_id = harness.model.active_tab_id();
+    let revision = harness.model.active_tab().revision();
+    let saved = SaveTextOptions {
+        trim_trailing_whitespace: true,
+        ensure_final_newline: true,
+    }
+    .prepare(harness.text());
+    assert!(harness.model.save_finished_for_tab(
+        tab_id,
+        PathBuf::from("vim-spec.md"),
+        revision,
+        FileStamp::from_raw(15, Some(80)),
+        saved,
+    ));
+    harness.sync_effects();
+    harness.expect_text("one\ntwo\nthree!\n");
+    harness.keys("g;");
+    harness.expect_cursor(2, 6);
+    harness.keys("giX<esc>");
+    harness.expect_text("one\ntwo\nthree!X\n");
 }
 
 #[test]

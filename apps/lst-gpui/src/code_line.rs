@@ -16,8 +16,14 @@ use unicode_segmentation::UnicodeSegmentation;
 /// Cells a ligature glyph may extend past the cell it starts in; glyphs
 /// starting this far left of the visible range are still painted.
 const LIGATURE_CELL_MARGIN: usize = 8;
-/// Bound on cached tokens per viewport; the cache is cleared when reached.
+/// Bounds on cached tokens per viewport, by count and by text bytes (about
+/// one glyph each); the cache is cleared when either is reached.
 const MAX_CACHED_TOKENS: usize = 16 * 1024;
+const MAX_CACHED_TOKEN_BYTES: usize = 256 * 1024;
+/// Longer tokens, such as minified code or encoded data, rarely repeat. They
+/// are shaped for the segment that contains them, which the viewport caches,
+/// rather than retained here.
+const MAX_CACHED_TOKEN_LEN: usize = 128;
 /// Tolerance when checking that a token's shaped width is a whole number of
 /// cells, in pixels.
 const CELL_WIDTH_TOLERANCE: f32 = 0.05;
@@ -55,25 +61,19 @@ impl CodeLine {
         }
     }
 
-    /// Character boundary closest to `x`, relative to the line origin.
+    /// Character boundary closest to `x`, relative to the line origin: where
+    /// a click places the caret.
     pub(crate) fn closest_char_for_x(&self, x: Pixels) -> usize {
         match self {
             Self::Shaped(line) => {
-                // A glyph cluster can contain several scalars; only grapheme
-                // boundaries are caret stops. Include the trailing boundary,
-                // and retain the earlier one on an exact distance tie.
+                // Grapheme boundaries are the caret stops, including the
+                // trailing one; an exact distance tie keeps the earlier one.
                 let mut best = (0, f32::INFINITY);
-                let mut character = 0;
-                for (byte, grapheme) in line
-                    .text
-                    .grapheme_indices(true)
-                    .chain(std::iter::once((line.text.len(), "")))
-                {
-                    let distance = f32::from(line.x_for_index(byte) - x).abs();
+                for (character, boundary_x) in shaped_boundaries(line) {
+                    let distance = f32::from(boundary_x - x).abs();
                     if distance < best.1 {
                         best = (character, distance);
                     }
-                    character += grapheme.chars().count();
                 }
                 best.0
             }
@@ -83,6 +83,30 @@ impl CodeLine {
                     return 0;
                 }
                 ((f32::from(x) / width - 0.5).ceil().max(0.0) as usize).min(line.text.len())
+            }
+        }
+    }
+
+    /// First character of the grapheme painted under `x`, or the text length
+    /// past its end: what word selection, selection hit tests, and a block
+    /// cursor target, as opposed to the caret boundary nearest `x`.
+    pub(crate) fn char_at_x(&self, x: Pixels) -> usize {
+        match self {
+            Self::Shaped(line) => {
+                let mut under = 0;
+                for (character, boundary_x) in shaped_boundaries(line) {
+                    if boundary_x <= x {
+                        under = character;
+                    }
+                }
+                under
+            }
+            Self::Cells(line) => {
+                let width = f32::from(line.char_width);
+                if width <= 0.0 {
+                    return 0;
+                }
+                ((f32::from(x) / width).floor().max(0.0) as usize).min(line.text.len())
             }
         }
     }
@@ -172,6 +196,8 @@ struct TokenGlyphs {
 pub(crate) struct GlyphTokenCache {
     key: Option<(Font, Pixels)>,
     tokens: HashMap<Box<str>, Option<Rc<TokenGlyphs>>>,
+    /// Total text bytes of the cached tokens.
+    bytes: usize,
 }
 
 impl GlyphTokenCache {
@@ -182,11 +208,16 @@ impl GlyphTokenCache {
             .is_none_or(|(key_font, key_size)| key_font != font || *key_size != font_size)
         {
             self.key = Some((font.clone(), font_size));
-            self.tokens.clear();
+            self.clear();
         }
-        if self.tokens.len() >= MAX_CACHED_TOKENS {
-            self.tokens.clear();
+        if self.tokens.len() >= MAX_CACHED_TOKENS || self.bytes >= MAX_CACHED_TOKEN_BYTES {
+            self.clear();
         }
+    }
+
+    fn clear(&mut self) {
+        self.tokens.clear();
+        self.bytes = 0;
     }
 
     /// Returns `None` when the token is not a whole number of uniform cells
@@ -238,7 +269,10 @@ impl GlyphTokenCache {
                 descent: layout.descent,
             })
         });
-        self.tokens.insert(text.into(), token.clone());
+        if text.len() <= MAX_CACHED_TOKEN_LEN {
+            self.bytes += text.len();
+            self.tokens.insert(text.into(), token.clone());
+        }
         token
     }
 }
@@ -326,6 +360,32 @@ fn cell_tokens(text: &str, tokens: CellTokens) -> impl Iterator<Item = Range<usi
     })
 }
 
+/// Hit-testable grapheme boundaries of a shaped line, in text order, as
+/// `(char offset, x)` with the x that `ShapedLine::x_for_index` reports: that
+/// of the first glyph at or after the boundary. Each such glyph is at or
+/// after the previous boundary's, so one forward pass over the glyphs
+/// resolves every boundary instead of rescanning the line for each.
+///
+/// A boundary inside a multi-grapheme glyph cluster (a ligature) has no glyph
+/// of its own and would be painted at the cluster's end, so it is skipped:
+/// a click there could not place the caret where it is drawn.
+fn shaped_boundaries(line: &ShapedLine) -> impl Iterator<Item = (usize, Pixels)> + '_ {
+    let text = line.text.as_ref();
+    let width = line.width;
+    let mut glyphs = line.runs.iter().flat_map(|run| run.glyphs.iter()).peekable();
+    let mut character = 0;
+    text.grapheme_indices(true)
+        .chain(std::iter::once((text.len(), "")))
+        .filter_map(move |(byte, grapheme)| {
+            while glyphs.next_if(|glyph| glyph.index < byte).is_some() {}
+            let next = glyphs.peek();
+            let boundary = character;
+            character += grapheme.chars().count();
+            let starts_cluster = byte == 0 || byte == text.len() || next.is_some_and(|glyph| glyph.index == byte);
+            starts_cluster.then(|| (boundary, next.map_or(width, |glyph| glyph.position.x)))
+        })
+}
+
 fn char_to_byte(text: &str, char_offset: usize) -> usize {
     text.char_indices()
         .nth(char_offset)
@@ -355,6 +415,63 @@ mod tests {
         assert_eq!(line.x_for_char(0), px(0.0));
         assert_eq!(line.x_for_char(3), px(24.0));
         assert_eq!(line.x_for_char(50), px(72.0));
+    }
+
+    #[test]
+    fn cell_under_the_pointer_is_the_one_containing_it() {
+        let line = cell_line("abcd", 8.0);
+        assert_eq!(line.char_at_x(px(-5.0)), 0);
+        assert_eq!(line.char_at_x(px(7.9)), 0);
+        assert_eq!(line.char_at_x(px(8.0)), 1);
+        assert_eq!(line.char_at_x(px(31.9)), 3);
+        assert_eq!(line.char_at_x(px(32.0)), 4);
+        assert_eq!(line.char_at_x(px(500.0)), 4);
+    }
+
+    #[test]
+    fn shaped_hit_tests_skip_boundaries_inside_a_ligature() {
+        use gpui::{FontId, GlyphId, LineLayout, ShapedGlyph, ShapedRun};
+        // "é office": the shaper drew "ffi" (bytes 4..7, characters 3..6)
+        // as one glyph.
+        let text = "é office";
+        let glyph = |index: usize, x: f32| ShapedGlyph {
+            id: GlyphId(0),
+            position: point(px(x), px(0.0)),
+            index,
+            is_emoji: false,
+        };
+        let mut shaped = ShapedLine::default();
+        *shaped = std::sync::Arc::new(LineLayout {
+            font_size: px(14.0),
+            width: px(52.0),
+            ascent: px(10.0),
+            descent: px(3.0),
+            runs: vec![ShapedRun {
+                font_id: FontId(0),
+                glyphs: vec![
+                    glyph(0, 0.0),
+                    glyph(2, 8.0),
+                    glyph(3, 13.0),
+                    glyph(4, 21.0),
+                    glyph(7, 35.0),
+                    glyph(8, 43.0),
+                ],
+            }],
+            len: text.len(),
+        });
+        shaped.text = text.into();
+        let line = CodeLine::Shaped(Rc::new(shaped));
+        // A click near the ligature's end places the caret after it, where
+        // the caret is drawn, never between its letters.
+        assert_eq!(line.closest_char_for_x(px(34.0)), 6);
+        assert_eq!(line.closest_char_for_x(px(36.0)), 6);
+        assert_eq!(line.closest_char_for_x(px(22.0)), 3);
+        assert_eq!(line.closest_char_for_x(px(60.0)), 8);
+        // The grapheme under the pointer starts the cluster it falls in.
+        assert_eq!(line.char_at_x(px(34.0)), 3);
+        assert_eq!(line.char_at_x(px(35.0)), 6);
+        assert_eq!(line.char_at_x(px(9.0)), 1);
+        assert_eq!(line.char_at_x(px(60.0)), 8);
     }
 
     #[test]

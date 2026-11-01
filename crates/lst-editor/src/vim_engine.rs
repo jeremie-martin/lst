@@ -471,8 +471,11 @@ impl EditorModel {
         let mut range = if at >= cur { cur..at } else { at..cur };
         // An inclusive motion covers the character at its far end, which is
         // the cursor's own character when it moved backward (`d%` from `)`).
+        // A line break is never that character: `d$` on an empty line, or
+        // from a caret resting at the line end, covers no newline.
         if motion.inclusive {
-            range.end = self.next_grapheme(range.end);
+            let line = char_to_position(self.active_tab().buffer(), range.end).line;
+            range.end = self.next_grapheme(range.end).min(self.line_end(line));
         }
         // Vim's exclusive-motion rule (:h exclusive-linewise) adjusts the end of
         // the operated text whichever way the motion went: an end in column 0
@@ -1084,8 +1087,17 @@ impl EditorModel {
         }
     }
 
+    /// Re-stamps an open Vim prompt's anchor after an edit that moved neither
+    /// the cursor nor any position before the edited text.
+    pub(crate) fn restamp_vim_search_anchor(&mut self) {
+        let current = self.active_tab().revision();
+        if let crate::FindSubmit::Vim { revision, .. } = &mut self.find_submit {
+            *revision = current;
+        }
+    }
+
     /// Whether the open Vim search prompt still owns the cursor it last placed.
-    fn vim_search_anchor_current(&self) -> bool {
+    pub(crate) fn vim_search_anchor_current(&self) -> bool {
         matches!(
             self.find_submit,
             crate::FindSubmit::Vim { tab, revision, shown, .. }
@@ -1325,6 +1337,12 @@ impl EditorModel {
         if self.active_tab().has_selection() {
             let start = self.active_tab().selected_range().start;
             self.active_tab_mut().move_to(start);
+        }
+        // History can restore an Insert-mode caret after the last character;
+        // Normal mode never rests there (Vim's check_cursor).
+        let last = self.line_last(self.cursor().line);
+        if self.cursor_offset() > last {
+            self.active_tab_mut().move_to(last);
         }
         self.vim_finish_normal();
     }

@@ -800,6 +800,8 @@ def build_cases() -> list[dict]:
         ("undo change word before last word", "alpha beta", (0, 0), "cwX<esc>u", True),
         ("undo change line keeps following line", "alpha\nbeta", (0, 0), "ccX<esc>u", True),
         ("undo inner word yank paste", "alpha beta", (0, 0), "yiw$pu", True),
+        ("undo append rests on the last character", "alpha\nbeta", (0, 0), "AX<esc>u", False),
+        ("delete line end after undoing an append keeps the line break", "alpha\nbeta", (0, 0), "AX<esc>ud$", True),
     ]:
         cases.append(case(name, "undo", text, cursor, keys, assert_register=assert_register))
 
@@ -812,6 +814,9 @@ def build_cases() -> list[dict]:
         ("yank percent from closing bracket", "call(foo) x", (0, 8), "y%"),
         ("delete percent from closing brace across lines", "fn x() {\n  a\n}\nz", (2, 0), "d%"),
         ("delete percent from closing paren on own line is linewise", "(\n  a\n)\nz", (2, 0), "d%"),
+        ("delete line end on empty line keeps its break", "a\n\nb", (1, 0), "d$"),
+        ("change line end on empty line keeps its break", "a\n\nb", (1, 0), "c$X<esc>"),
+        ("delete counted line end onto an empty line keeps its break", "abc\n\nxyz", (0, 1), "2d$"),
         ("delete backward find excludes cursor char", "abcdef", (0, 4), "dFb"),
         ("delete backward till excludes both ends", "abcdef", (0, 4), "dTb"),
         ("repeat backward find under operator is exclusive", "abcabc", (0, 5), "Fb$d;"),

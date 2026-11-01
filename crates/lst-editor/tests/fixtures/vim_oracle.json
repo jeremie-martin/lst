@@ -18863,6 +18863,46 @@
       }
     },
     {
+      "name": "undo append rests on the last character",
+      "area": "undo",
+      "initial_text": "alpha\nbeta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "AX<esc>u",
+      "expected": {
+        "text": "alpha\nbeta",
+        "cursor": {
+          "line": 0,
+          "column": 4
+        },
+        "mode": "Normal"
+      }
+    },
+    {
+      "name": "delete line end after undoing an append keeps the line break",
+      "area": "undo",
+      "initial_text": "alpha\nbeta",
+      "cursor": {
+        "line": 0,
+        "column": 0
+      },
+      "keys": "AX<esc>ud$",
+      "expected": {
+        "text": "alph\nbeta",
+        "cursor": {
+          "line": 0,
+          "column": 3
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "a"
+        }
+      }
+    },
+    {
       "name": "delete percent from closing bracket includes it",
       "area": "operators",
       "initial_text": "call(foo) x",
@@ -18969,6 +19009,72 @@
         "register": {
           "kind": "line",
           "text": "(\n  a\n)"
+        }
+      }
+    },
+    {
+      "name": "delete line end on empty line keeps its break",
+      "area": "operators",
+      "initial_text": "a\n\nb",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "d$",
+      "expected": {
+        "text": "a\n\nb",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "change line end on empty line keeps its break",
+      "area": "operators",
+      "initial_text": "a\n\nb",
+      "cursor": {
+        "line": 1,
+        "column": 0
+      },
+      "keys": "c$X<esc>",
+      "expected": {
+        "text": "a\nX\nb",
+        "cursor": {
+          "line": 1,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": ""
+        }
+      }
+    },
+    {
+      "name": "delete counted line end onto an empty line keeps its break",
+      "area": "operators",
+      "initial_text": "abc\n\nxyz",
+      "cursor": {
+        "line": 0,
+        "column": 1
+      },
+      "keys": "2d$",
+      "expected": {
+        "text": "a\nxyz",
+        "cursor": {
+          "line": 0,
+          "column": 0
+        },
+        "mode": "Normal",
+        "register": {
+          "kind": "char",
+          "text": "bc\n"
         }
       }
     },

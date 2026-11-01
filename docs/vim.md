@@ -122,7 +122,7 @@ state are excluded. Review metadata and case diffs when deliberately updating th
 pin; the replay test requires the recorded stable version.
 
 All 912 previous cases regenerate unchanged under this profile; the expanded
-fixture contains 1,109 cases. Repeating generation with a hostile user configuration
+fixture contains 1,114 cases. Repeating generation with a hostile user configuration
 and reversing case order produce identical expectations. The same corpus was also
 run on the newest available nightly, `v0.13.0-dev-1946+g659164699f`. It differs in four
 undo cursor positions (append, yank/paste, visual paste and inner-word yank/paste),

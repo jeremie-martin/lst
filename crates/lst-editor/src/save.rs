@@ -44,11 +44,16 @@ impl SaveTextOptions {
             if !ending.is_empty() {
                 preferred_ending.get_or_insert(ending);
             }
-            let trimmed = if self.trim_trailing_whitespace {
+            let mut trimmed = if self.trim_trailing_whitespace {
                 content.trim_end_matches([' ', '\t'])
             } else {
                 content
             };
+            if trimmed.is_empty() && output.ends_with('\r') && ending.starts_with('\n') {
+                // Emptying a blank line between a lone CR and an LF would join
+                // them into one CRLF break and delete the line.
+                trimmed = content;
+            }
             let content_len = content.chars().count();
             if trimmed.len() != content.len() {
                 // Only ASCII spaces/tabs were removed, so their byte and
@@ -117,7 +122,9 @@ mod tests {
             ("x  ", true, false, "x"),
             ("x  ", false, true, "x  \n"),
             ("x \r\ny \nz\t", true, true, "x\r\ny\nz\r\n"),
-            ("x\r \ny", true, true, "x\r\ny\r"),
+            // Trimming the blank line would turn CR + LF into one CRLF break.
+            ("x\r \ny", true, true, "x\r \ny\r"),
+            ("x\r \t\ny\r\t\r", true, false, "x\r \t\ny\r\r"),
         ] {
             let saved = SaveTextOptions {
                 trim_trailing_whitespace: trim,

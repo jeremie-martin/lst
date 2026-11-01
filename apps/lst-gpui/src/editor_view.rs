@@ -597,7 +597,19 @@ impl LstGpuiApp {
         }
     }
 
+    /// The caret position nearest `point`: where a click places the caret.
     pub(crate) fn active_char_index_for_point(&self, point: Point<Pixels>) -> usize {
+        self.active_index_for_point(point, PointerTarget::Caret)
+    }
+
+    /// The character painted under `point`, for gestures that act on a
+    /// character rather than a caret position: word selection, hit tests
+    /// against a selection, and the Vim block cursor.
+    pub(crate) fn active_cell_index_for_point(&self, point: Point<Pixels>) -> usize {
+        self.active_index_for_point(point, PointerTarget::Character)
+    }
+
+    fn active_index_for_point(&self, point: Point<Pixels>, target: PointerTarget) -> usize {
         let active_view = self.active_view();
         let geometry = active_view.geometry.borrow();
         let Some(bounds) = geometry.bounds else {
@@ -643,12 +655,21 @@ impl LstGpuiApp {
         };
 
         if let Some(code_line) = row.code_line.as_ref() {
-            let line_char = code_line.closest_char_for_x(x);
+            let line_char = match target {
+                PointerTarget::Caret => code_line.closest_char_for_x(x),
+                PointerTarget::Character => code_line.char_at_x(x),
+            };
             (row.line_start_char + line_char).min(row.display_end_char)
         } else {
             row.line_start_char
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum PointerTarget {
+    Caret,
+    Character,
 }
 
 fn scrollbar_id(axis: ScrollbarAxis) -> &'static str {

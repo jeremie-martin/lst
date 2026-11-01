@@ -80,6 +80,9 @@ Save text policies also produce exact `TextChangeSet` edits in `lst-editor`.
 `PreparedSave` carries those edits with the bytes written by the app. A successful
 save applies them only to the requested revision, through the same transaction
 and undo boundary, mapping the current selections and refreshing Find results.
+Normalization is not the user's edit, so `g;` and `gi` keep their target. A save
+that waited behind one which already applied the same edits completes without
+editing again, because the buffer already holds exactly the written text.
 Bookmarks follow line-start character anchors through edits; Rope determines
 their resulting logical lines, including CRLF pairs formed at edit boundaries.
 
@@ -92,10 +95,12 @@ existing line-ending style, with LF as the default for a document without one.
 Find navigation searches from the current caret and wraps. An exactly selected
 match supplies its start as the origin, so backward navigation advances past
 that match too. Empty regex matches participate in the ordered index; strict
-next/previous position comparisons ensure progress. Hidden Find retains its query,
+next/previous position comparisons ensure progress, and Replace continues after
+the text it inserted, skipping an empty match there. Hidden Find retains its query,
 but document changes clear obsolete result ranges instead of rescanning the buffer.
 Opening the panel, navigating matches, or explicitly selecting matches validates
-and rebuilds the revision-keyed index on demand.
+and rebuilds the revision-keyed index on demand. Opening the panel also makes the
+exactly selected match, or else the first match at or after the caret, current.
 
 Find-in-selection belongs to the document. It captures the union of all
 nonempty selections, independently of later caret movement, query changes,
@@ -156,6 +161,8 @@ than scattering fallback checks through the core.
   conflicting writes cannot silently replace a newer version. A per-path save
   coordinator owns the active write, deferred explicit save, and generation
   together, so explicit saves and autosaves cannot run concurrently for a path.
+  Autosave skips a tab whose close or quit decision is open, so Discard still
+  discards.
 - `settings.rs` owns the versioned TOML boundary, path validation, and persistence
   errors. Typed settings define the schema; saves patch changed values into the
   original TOML without rebuilding unrelated fields. The persisted document and
@@ -219,8 +226,10 @@ UI state should have one geometric and visual owner:
   publish their current geometry during prepaint, before root trace observation.
   Field selections own their pointer drag beyond hitbox bounds and schedule
   horizontal autoscroll only while that drag can make progress.
-  Document drag autoscroll integrates velocity over elapsed time. Hit testing
-  chooses the nearest grapheme boundary, with ties going to the earlier one.
+  Document drag autoscroll integrates velocity over elapsed time. Caret hit
+  testing chooses the nearest grapheme boundary, with ties going to the earlier
+  one; a boundary inside a ligature is not a stop. Word selection, selection hit
+  tests, and the Vim block cursor use the grapheme under the pointer instead.
   Inactive or invalidated tab geometry cannot complete a cursor reveal.
   Rendering and reveal scheduling share the document-viewport visibility rule.
   Replacement surfaces retain pending reveals without retrying each frame;

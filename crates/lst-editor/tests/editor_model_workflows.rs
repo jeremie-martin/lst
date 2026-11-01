@@ -101,6 +101,89 @@ fn normalizing_save_completion_maps_the_current_selection_and_rejects_newer_text
 }
 
 #[test]
+fn a_save_waiting_behind_an_identical_normalizing_save_still_completes() {
+    let options = SaveTextOptions {
+        trim_trailing_whitespace: true,
+        ensure_final_newline: true,
+    };
+    let mut harness = ModelHarness::new("ab  \n");
+    let tab_id = harness.model.active_tab_id();
+    let revision = harness.model.active_tab().revision();
+    let version = harness.model.active_tab().save_as_version();
+    let requested = harness.text();
+    let stamp = |time| FileStamp::from_raw(3, Some(time));
+
+    assert!(harness.model.save_finished_for_tab(
+        tab_id,
+        "model-spec.rs".into(),
+        revision,
+        stamp(70),
+        options.prepare(requested.clone()),
+    ));
+    assert_eq!(harness.text(), "ab\n");
+    // A close-prompt save queued behind the first one wrote the same bytes.
+    assert!(harness.model.save_finished_for_tab(
+        tab_id,
+        "model-spec.rs".into(),
+        revision,
+        stamp(71),
+        options.prepare(requested.clone()),
+    ));
+    assert!(!harness.model.active_tab().modified());
+    assert_eq!(harness.model.active_tab().file_stamp(), Some(stamp(71)));
+    // So did a Save As requested before the first completion.
+    assert!(harness.model.save_as_finished_for_tab(
+        tab_id,
+        "renamed.rs".into(),
+        version,
+        stamp(72),
+        options.prepare(requested),
+    ));
+    assert_eq!(harness.model.active_tab().path(), Some(&PathBuf::from("renamed.rs")));
+    assert_eq!(harness.text(), "ab\n");
+}
+
+#[test]
+fn replacing_the_current_zero_width_match_moves_on_to_the_next_one() {
+    for (text, query, replacement, expected) in [("abc\ndef", "$", ";", "abc;\ndef;"), ("ab cd", r"\b", "|", "|ab| cd")]
+    {
+        let mut harness = ModelHarness::new(text);
+        harness.model.open_find_panel(true);
+        harness.execute(EditorCommand::ToggleFindRegex);
+        harness.model.update_find_query_and_activate(query.to_string());
+        harness.model.update_find_replacement(replacement.to_string());
+        harness.execute(EditorCommand::ReplaceCurrentMatch);
+        harness.execute(EditorCommand::ReplaceCurrentMatch);
+        assert_eq!(harness.text(), expected, "{query:?}");
+    }
+
+    // Replacing an empty match with nothing changes no text but still advances.
+    let mut harness = ModelHarness::new("ab\ncd");
+    harness.model.open_find_panel(true);
+    harness.execute(EditorCommand::ToggleFindRegex);
+    harness.model.update_find_query_and_activate("^".to_string());
+    harness.execute(EditorCommand::ReplaceCurrentMatch);
+    assert_eq!(harness.model.active_find_match_range(), Some(3..3));
+    assert_eq!(harness.cursor(), Position::new(1, 0));
+}
+
+#[test]
+fn reopening_find_after_hidden_edits_starts_from_the_caret() {
+    let mut harness = ModelHarness::new("foo\nx\nfoo\nx\nfoo\n");
+    harness.model.open_find_panel(true);
+    harness.model.update_find_query_and_activate("foo".to_string());
+    harness.model.update_find_replacement("bar".to_string());
+    harness.model.close_find_panel();
+    harness.set_cursor(Position::new(3, 0));
+    harness.paste_text("y");
+
+    harness.model.open_find_panel(true);
+    assert_eq!(harness.model.find().active, Some(2));
+    harness.execute(EditorCommand::ReplaceCurrentMatch);
+    assert_eq!(harness.text(), "foo\nx\nfoo\nyx\nbar\n");
+}
+
+#[test]
 fn explicit_language_survives_save_as_and_auto_redetects_from_the_new_path() {
     let mut harness = ModelHarness::new("print('hello')\n");
     assert_eq!(harness.model.active_tab().language(), Some(Language::Rust));

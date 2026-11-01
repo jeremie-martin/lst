@@ -809,10 +809,9 @@ impl EditorTab {
         file_stamp: FileStamp,
         saved_body: &crate::PreparedSave,
     ) -> bool {
-        if self.revision != revision || self.path() != Some(&path) {
+        if self.path() != Some(&path) || !self.accept_saved_body(revision, saved_body) {
             return false;
         }
-        self.apply_saved_body(saved_body);
         self.origin.mark_saved(path, file_stamp);
         self.refresh_language();
         self.mark_current_content_saved();
@@ -832,10 +831,9 @@ impl EditorTab {
         file_stamp: FileStamp,
         saved_body: &crate::PreparedSave,
     ) -> bool {
-        if self.save_as_version() != version {
+        if self.save_as_identity != version.identity || !self.accept_saved_body(version.revision, saved_body) {
             return false;
         }
-        self.apply_saved_body(saved_body);
         self.origin.mark_saved_as(path, file_stamp);
         self.save_as_identity = self
             .save_as_identity
@@ -845,11 +843,29 @@ impl EditorTab {
         self.mark_current_content_saved();
         true
     }
+    /// Whether a successful write of `saved_body`, prepared from `revision`,
+    /// describes this buffer. The requested revision receives the save's
+    /// normalization edits. A later revision can only already hold the same
+    /// text: an earlier save of that revision applied identical edits while
+    /// this one waited, so it completes without editing again.
+    fn accept_saved_body(&mut self, revision: u64, saved_body: &crate::PreparedSave) -> bool {
+        if self.revision != revision {
+            return self.buffer.slice(..) == saved_body.text();
+        }
+        self.apply_saved_body(saved_body);
+        true
+    }
     fn apply_saved_body(&mut self, saved_body: &crate::PreparedSave) {
         if let Some(changes) = saved_body.changes() {
+            // Normalization is not the user's edit: `g;` and `gi` keep
+            // returning to their last edit, mapped through it.
+            let last_edit = self
+                .last_edit_position
+                .map(|offset| changes.offset_map().map_offset_before(offset));
             self.apply_edit_request(
                 EditRequest::other_break(changes.clone()).with_selection_after(SelectionAfter::Map),
             );
+            self.last_edit_position = last_edit;
         }
         debug_assert!(self.buffer.slice(..) == saved_body.text());
     }

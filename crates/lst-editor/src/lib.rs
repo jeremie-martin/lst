@@ -431,7 +431,7 @@ impl EditorModel {
                 self.reindex_find_matches_to_nearest();
             }
         }
-        self.ensure_find_matches_current();
+        self.find.ensure_current_from_caret(self.tabs.active());
         self.queue_focus(FocusTarget::FindQuery);
     }
     pub fn set_find_replace_visible(&mut self, show_replace: bool) {
@@ -527,10 +527,15 @@ impl EditorModel {
     }
     fn replace_one(&mut self) -> bool {
         self.ensure_find_matches_current();
-        let Some(request) = find::replace_one_request(self.active_tab(), &self.find) else {
+        let Some((request, inserted_end)) = find::replace_one_request(self.active_tab(), &self.find) else {
             return false;
         };
         self.apply_active_edit_request(request, None);
+        // Continue after the replaced text rather than from the caret: an
+        // empty match there (`$`, `^`, `\b`) would select the same spot again.
+        self.ensure_find_matches_current();
+        let end = char_to_position(self.active_tab().buffer(), inserted_end);
+        self.find.select_after_replacement(end);
         self.move_to_current_find_match();
         self.queue_reveal(RevealIntent::Center);
         true
@@ -638,6 +643,9 @@ impl EditorModel {
     /// Each segment owns one undo boundary. Missing tabs are never substituted.
     pub fn append_text_to_tab(&mut self, tab_id: TabId, text: &str) -> bool {
         let follow_caret = self.input_mode == InputMode::Standard || self.vim.mode == vim::Mode::Insert;
+        // Text appended at the end moves no earlier position, so an open Vim
+        // search prompt on this tab keeps its origin and the match it shows.
+        let keeps_search_anchor = self.active_tab_id() == tab_id && self.vim_search_anchor_current();
         let text = text.trim();
         let Some(tab) = self.tab_mut_by_id(tab_id) else {
             return false;
@@ -669,6 +677,9 @@ impl EditorModel {
         tab.apply_edit_request(request);
         if self.active_tab_id() == tab_id {
             self.sync_find_after_edit();
+            if keeps_search_anchor && !follow_end {
+                self.restamp_vim_search_anchor();
+            }
             if follow_end {
                 self.queue_reveal(RevealIntent::NearestEdge);
             }

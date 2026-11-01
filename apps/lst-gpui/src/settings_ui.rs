@@ -422,6 +422,16 @@ impl LstGpuiApp {
         let Some(path) = dialog.pick_folder() else {
             return;
         };
+        // The TOML settings file can only store a UTF-8 path. Keeping an
+        // unsaveable value active would make every later settings save fail.
+        if path.to_str().is_none() {
+            self.cleanup_message = Some(format!(
+                "Settings can only store UTF-8 directory names; {} was not selected.",
+                path.display()
+            ));
+            cx.notify();
+            return;
+        }
         self.scratchpad_dir_cli_override = None;
         self.scratchpad_dir = Some(path.clone());
         self.settings.settings.files.scratchpad_directory = Some(path);

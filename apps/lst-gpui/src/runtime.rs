@@ -479,7 +479,7 @@ impl LstGpuiApp {
 
         let mut ready = Vec::new();
         for (tab_id, revision, modified, conflict_suppressed) in revisions {
-            if !modified || conflict_suppressed {
+            if !modified || conflict_suppressed || self.awaiting_exit_decision(tab_id) {
                 self.autosave_observed_revisions.remove(&tab_id);
                 continue;
             }
@@ -964,7 +964,9 @@ impl LstGpuiApp {
         let modified = tab.modified();
         let revision = tab.revision();
         self.file_conflicts.remove(&tab_id);
-        self.update_model(cx, true, |model| {
+        // Disk state, not input, drives this update. A message raised for
+        // another file in the same poll, such as a deletion notice, stays.
+        self.update_model_in_background(cx, true, |model| {
             if same_text && modified {
                 model.autosave_finished_for_tab(
                     tab_id,
@@ -1045,6 +1047,17 @@ impl LstGpuiApp {
     pub(crate) fn request_close_active_tab(&mut self, cx: &mut Context<Self>) {
         let index = self.model.active_index();
         self.request_close_tab_at(index, cx);
+    }
+
+    /// A tab whose close or quit decision is open or being carried out.
+    /// Autosave must leave it alone: the user may still choose to discard its
+    /// changes, and an exit save already writes them.
+    fn awaiting_exit_decision(&self, tab_id: TabId) -> bool {
+        self.close_prompt.as_ref().is_some_and(|prompt| prompt.tab_id == tab_id)
+            || self.quit_review.as_ref().is_some_and(|review| {
+                review.failed_scratchpad == Some(tab_id) || review.items.iter().any(|item| item.tab_id == tab_id)
+            })
+            || self.pending_exit_save.is_some_and(|pending| pending.tab_id == tab_id)
     }
 
     /// A prompt, review or confirmation is waiting for the user's answer.

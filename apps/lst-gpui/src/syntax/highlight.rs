@@ -630,10 +630,10 @@ impl TabSyntaxState {
             return (Vec::new(), Vec::new());
         }
         // Line topology must match the viewport's display lines (one per
-        // `Rope::line`, trailing \n/\r trimmed), otherwise the byte-
-        // length guard in viewport disables the cache for the wrong line
-        // indices on files containing lone CR or other Unicode separators
-        // that ropey treats as line breaks.
+        // `Rope::line`, its terminator excluded by `line_content`), otherwise
+        // the byte-length guard in viewport disables the cache for the wrong
+        // line indices on files containing lone CR or other Unicode
+        // separators that ropey treats as line breaks.
         let (line_starts, display_ends) = line_bounds_from_rope(&self.parsed_buffer, lines.clone());
         let line_byte_lens: Vec<u32> = line_starts
             .iter()
@@ -2129,26 +2129,16 @@ fn innermost_role(active: &[usize], captures: &[CapturedSpan]) -> Option<SyntaxR
 /// rope. Ropey treats LF, CR, CRLF, NEL, VT, FF, LS, PS as line
 /// separators by default, so naive `\n`-only scanning over the source
 /// string disagrees with the viewport's display lines on files containing lone
-/// CR (or other Unicode line terminators). Using `Rope::lines()` keeps
-/// the line indices and per-line lengths consistent with the renderer.
+/// CR (or other Unicode line terminators). `Rope::line` and the editor's
+/// `line_content`, which the viewport paints, keep line indices and per-line
+/// lengths consistent with the renderer.
 fn line_bounds_from_rope(buffer: &Rope, lines: Range<usize>) -> (Vec<usize>, Vec<usize>) {
     let mut line_starts = Vec::with_capacity(lines.len());
     let mut display_ends = Vec::with_capacity(lines.len());
     for line_ix in lines {
         let line_start = buffer.line_to_byte(line_ix);
-        let line = buffer.line(line_ix);
-        let mut trailing_break_bytes = 0;
-        let mut char_ix = line.len_chars();
-        while char_ix > 0 {
-            let character = line.char(char_ix - 1);
-            if !matches!(character, '\n' | '\r') {
-                break;
-            }
-            trailing_break_bytes += character.len_utf8();
-            char_ix -= 1;
-        }
         line_starts.push(line_start);
-        display_ends.push(line_start + line.len_bytes().saturating_sub(trailing_break_bytes));
+        display_ends.push(line_start + lst_editor::line_content(buffer.line(line_ix)).len_bytes());
     }
     (line_starts, display_ends)
 }
